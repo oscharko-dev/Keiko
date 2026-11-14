@@ -269,5 +269,6 @@ export async function modesAndReadableApproval(ctx, options = {}) {
       { ...readable, label: "Approval preview", covers: ["approval-readable"] },
     ],
     runs.map((run) => run.turn),
+    { unverifiedIsNotGreen: options.unverifiedIsNotGreen === true },
   );
 }

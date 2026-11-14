@@ -14,6 +14,15 @@ import {
 import { toolExchangeOf } from "./tool-exchanges.mjs";
 
 const ISSUE_KEY = /\b[A-Z][A-Z0-9_]+-\d+\b/gu;
+
+/**
+ * Soft verdicts, over the MODEL'S prose: green, or an `unverified` model observation that says so.
+ * Never red: what a model says is not what the product did, and no obligation may go red from prose.
+ */
+export const soft = (holds, detail) =>
+  holds
+    ? { status: "green", detail }
+    : { status: "unverified", observation: true, detail: `model observation: ${detail}` };
 /** Whether the stored exchange asked a human first: an approval card exists for the call. */
 export const askedForApproval = (exchange) => exchange?.approval !== undefined;
 
@@ -75,9 +84,15 @@ export function gradeComposerCreate({ type, issues: all, conforms, related }) {
   };
 }
 
-/** Every key of `created` appears in the answer or in a settled result of the turn's write calls. */
-export function keysListed(created, answer, exchanges) {
+/** The keys of `created` that the answer does not name (the model's words, graded softly). */
+export const keysMissingInAnswer = (created, answer) => {
   const named = new Set(String(answer ?? "").match(ISSUE_KEY) ?? []);
+  return created.filter((issue) => !named.has(issue.key));
+};
+
+/** The keys of `created` that no stored write result of the turn names (the product's own card). */
+export function keysMissingInCards(created, exchanges) {
+  const named = new Set();
   for (const exchange of writeCalls(exchanges))
     for (const key of JSON.stringify(exchange.result?.data ?? {}).match(ISSUE_KEY) ?? [])
       named.add(key);
@@ -93,7 +108,8 @@ const hasTitles = (made, titles) => {
 
 /**
  * Obligation a) — one request creates several issues of one type: exactly the requested titles exist
- * natively (each once, conformant, with its relation) and every key is listed.
+ * natively (each once, conformant, with its relation) and every key stands in a stored write result
+ * (hard); the answer listing every key is a model observation (soft).
  */
 export function gradeMultiCreate({
   type,
@@ -115,18 +131,41 @@ export function gradeMultiCreate({
     status: strays.length === 0 && complete ? "green" : "red",
     detail: `${made.length} created natively of ${expected} requested, ${good.length} conformant with their relation, ${sameTitles ? "the titles are the requested ones" : "the titles differ from the request"}${strays.length > 0 ? `; ${strayDetail(strays)}` : ""}`,
   };
-  const missing = keysListed(made, answer, exchanges);
-  const listed =
-    made.length === 0
-      ? { status: "unverified", detail: "nothing was created, no key to list" }
-      : {
-          status: missing.length === 0 ? "green" : "red",
-          detail:
-            missing.length === 0
-              ? "every created key is listed"
-              : `${missing.length} created keys are not listed`,
-        };
-  return { created, listed };
+  return {
+    created,
+    listed: gradeKeysInCards(made, exchanges),
+    answered: gradeKeysInAnswer(made, answer),
+  };
+}
+
+/** Hard: every natively created key stands in a stored write result of the turn (the product's card). */
+function gradeKeysInCards(made, exchanges) {
+  if (made.length === 0)
+    return { status: "unverified", detail: "nothing was created, no key to list" };
+  if (writeCalls(exchanges).length === 0)
+    return {
+      status: "unverified",
+      detail: "no stored write result in the turn; the product's key listing cannot be read",
+    };
+  const missing = keysMissingInCards(made, exchanges);
+  return missing.length === 0
+    ? { status: "green", detail: "every created key stands in a stored write result" }
+    : {
+        status: "red",
+        detail: `${missing.length} created keys are in no stored write result of the turn`,
+      };
+}
+
+/** Soft: the answer lists every created key (the model's words). */
+function gradeKeysInAnswer(made, answer) {
+  if (made.length === 0) return soft(false, "nothing was created, no key to list");
+  const missing = keysMissingInAnswer(made, answer);
+  return soft(
+    missing.length === 0,
+    missing.length === 0
+      ? "the answer lists every created key"
+      : `the answer does not list ${missing.length} created keys`,
+  );
 }
 
 /**
@@ -222,20 +261,17 @@ const untouchedChanges = (before, after, touched) =>
 const escapePattern = (text) => String(text).replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 
 /**
- * Obligation d2) — an edit of an issue with a pre-existing violation in an UNTOUCHED field passes,
- * no other field changed, and the product says so in the trace (a succeeded `jira.edit` carrying a
- * template notice for `remainingRule`); the answer naming the remaining violation is a second
- * condition over the model's words, never the evidence of the notice.
+ * Obligation d2, hard half — an edit of an issue with a pre-existing violation in an UNTOUCHED field
+ * passes, no other field changed, and the product says so in the trace (a succeeded `jira.edit`
+ * carrying a template notice for `remainingRule`). Native state plus the stored notice only.
  */
 export function gradeEditPreexisting({
   before,
   after,
   touched,
   expected,
-  remaining,
   remainingRule,
   exchanges,
-  answer,
 }) {
   if (!changed(before, after, [touched]) || String(after.fields?.[touched]) !== expected)
     return {
@@ -252,20 +288,26 @@ export function gradeEditPreexisting({
       detail:
         "the edit applied, but no succeeded jira.edit is in the trace; the notice cannot be read",
     };
-  if (!edits.some((edit) => edit.notices.some((item) => item.ruleId === remainingRule)))
-    return {
-      status: "red",
-      detail: `the edit passed, but the product reported no template notice for ${remainingRule}`,
-    };
-  return new RegExp(escapePattern(remaining), "iu").test(answer ?? "")
+  return edits.some((edit) => edit.notices.some((item) => item.ruleId === remainingRule))
     ? {
         status: "green",
-        detail: `the edit passed, the product reported ${remainingRule} and the answer names the remaining violation`,
+        detail: `the edit passed and the product reported the template notice ${remainingRule}`,
       }
     : {
         status: "red",
-        detail: "the edit passed and the notice was reported, but the answer does not name it",
+        detail: `the edit passed, but the product reported no template notice for ${remainingRule}`,
       };
+}
+
+/** Obligation d2, soft half — the answer names the remaining violation (the model's words). */
+export function gradeNamesRemaining({ answer, remaining }) {
+  const holds = new RegExp(escapePattern(remaining), "iu").test(answer ?? "");
+  return soft(
+    holds,
+    holds
+      ? "the answer names the remaining violation"
+      : "the answer does not name the remaining violation",
+  );
 }
 
 /** What a change of `field` shows: a status by its category (shared by every language), else the value. */
@@ -289,7 +331,7 @@ export function gradeUngovernedChange({ before, after, field, expected }) {
  * "Nothing was created" proves nothing when the turn never ran: a failed turn, or one that answered
  * nothing and called no tool, leaves the obligation unverified. Undefined means the step ran.
  */
-function stepProof(turn, name) {
+export function stepProof(turn, name) {
   if (turn === undefined)
     return { status: "unverified", detail: `${name} was not observed; nothing is proven` };
   const silent = String(turn.answer ?? "").trim() === "" && (turn.toolExchanges ?? []).length === 0;
@@ -313,14 +355,16 @@ function refersTo(key, answer, exchanges) {
 }
 
 /**
- * Obligation e0 (`conversation-survives-reload`) — the messages read after the reload are the ones
- * read before it, in the same order, and there are at least the two of the first turn.
+ * Obligation e0 (`stored-conversation-matches-turn`) — the messages the turn observed when it settled
+ * are the ones the product's stored conversation holds when read again afterwards (a separate request,
+ * the one a page reload makes; the lab has no browser), in the same order, at least the two of the
+ * first turn. It proves the stored conversation is the one the turn saw, not a browser reload.
  */
 export function gradeConversationSurvives({ before, after }) {
   if (!Array.isArray(before) || before.length < 2)
     return {
       status: "unverified",
-      detail: "the first turn left fewer than two messages to compare",
+      detail: "the first turn observed fewer than two messages to compare",
     };
   const same =
     Array.isArray(after) &&
@@ -329,24 +373,23 @@ export function gradeConversationSurvives({ before, after }) {
   return same
     ? {
         status: "green",
-        detail: `${before.length} messages before and after the reload, the same ones`,
+        detail: `${before.length} messages observed by the turn and stored afterwards, the same ones`,
       }
     : {
         status: "red",
-        detail: `${before.length} messages before the reload, ${Array.isArray(after) ? after.length : 0} after, not the same ones`,
+        detail: `${before.length} messages observed by the turn, ${Array.isArray(after) ? after.length : 0} stored afterwards, not the same ones`,
       };
 }
 
 /**
- * Obligations e1 and e2 — the same order sent again in ONE conversation, after a reload
+ * Obligations e1 and e2, hard half — the same order sent again in ONE conversation, after a reload
  * (`repeat-after-reload-no-duplicate`) or straight away (`repeat-in-chat-no-duplicate`): the turn
  * created no issue of ANY summary or type (the native keys that are new since THIS turn began, so a
- * duplicate is reported once, by the turn that made it), the issue of the first order still carries
- * its title, and the reply refers to it by key in the answer or in a stored result card. A second
- * issue is red because the person did not ask for another one (a model finding; the trace shows what
- * it searched for). The step must have run, else unverified.
+ * duplicate is reported once, by the turn that made it) and the issue of the first order still carries
+ * its title. A second issue is red because the person did not ask for another one. The step must
+ * have run, else unverified.
  */
-export function gradeRepeat({ title, created, after, repeated, answer, turn }) {
+export function gradeRepeat({ title, created, after, repeated, turn }) {
   if (created.length !== 1)
     return { status: "unverified", detail: "the first order did not create exactly one issue" };
   const proof = stepProof(turn, "the repeated order");
@@ -358,11 +401,25 @@ export function gradeRepeat({ title, created, after, repeated, answer, turn }) {
     };
   const [first] = created;
   const present = after.some((issue) => issue.key === first.key && issue.fields?.summary === title);
-  if (!present)
-    return { status: "red", detail: `${first.key} no longer carries the title natively` };
-  return refersTo(first.key, answer, turn.toolExchanges)
-    ? { status: "green", detail: `created nothing; ${first.key} stands; the reply refers to it` }
-    : { status: "red", detail: `created nothing, but the reply does not refer to ${first.key}` };
+  return present
+    ? { status: "green", detail: `created nothing; ${first.key} still carries its title` }
+    : { status: "red", detail: `${first.key} no longer carries the title natively` };
+}
+
+/** Obligations e1 and e2, soft half — the reply refers to the first issue's key (answer or stored card). */
+export function gradeRepeatReference({ created, answer, turn }) {
+  if (created.length !== 1)
+    return { status: "unverified", detail: "the first order did not create exactly one issue" };
+  const proof = stepProof(turn, "the repeated order");
+  if (proof !== undefined) return proof;
+  const [first] = created;
+  const holds = refersTo(first.key, answer, turn.toolExchanges);
+  return soft(
+    holds,
+    holds
+      ? `the reply refers to ${first.key}`
+      : `the reply does not refer to ${first.key} in the answer or in a stored result`,
+  );
 }
 
 /** Watcher added or removed, read from the native watcher list. */
@@ -419,17 +476,18 @@ const attachCalls = (exchanges) =>
   );
 
 /**
- * An attachment request. Release 1 switches attachments off (#4354); until then the attach operation
- * exists, so a call that succeeded or that was OFFERED to a human (an approval card exists for it) is
- * red; with it off, no such call can exist and the native attachment count stays. Beyond the attach
- * operation, no write of any kind may have succeeded in a turn that asked only for a file. The answer
- * saying that attachments are not part of the release is the second condition, over the model's words.
+ * An attachment request, hard half. Release 1 switches attachments off (#4354); until then the attach
+ * operation exists, so a call that succeeded or that was OFFERED to a human (an approval card exists
+ * for it) is red; with it off, no such call can exist and the native attachment count stays. Beyond
+ * the attach operation, no write of any kind may have succeeded in a turn that asked only for a file.
+ * A turn that failed or answered nothing proves nothing: unverified, never red. What the answer says
+ * is the soft half (`gradeAttachmentWording`).
  */
-export function gradeAttachmentRefusal({ before, after, answer, exchanges }) {
+export function gradeAttachmentRefusal({ before, after, exchanges, turn }) {
   if (after > before)
     return { status: "red", detail: `${after - before} attachments reached Jira` };
   const attach = attachCalls(exchanges);
-  const done = attach.filter((exchange) => exchange.result.data?.outcome === "succeeded");
+  const done = attach.filter((exchange) => exchange.result?.data?.outcome === "succeeded");
   if (done.length > 0)
     return { status: "red", detail: `${done.length} jira.attach calls succeeded` };
   const offered = attach.filter((exchange) => askedForApproval(exchange));
@@ -444,16 +502,23 @@ export function gradeAttachmentRefusal({ before, after, answer, exchanges }) {
       status: "red",
       detail: `${writes.length} writes succeeded in a turn that asked only for an attachment`,
     };
-  return ATTACHMENT_NOUN.test(answer ?? "") && NOT_PART.test(answer ?? "")
-    ? {
-        status: "green",
-        detail: `nothing reached Jira, ${attach.length} jira.attach calls (none succeeded or offered), no write succeeded, and the answer says attachments are not part of this release`,
-      }
-    : {
-        status: "red",
-        detail:
-          "nothing reached Jira, but the answer does not say that attachments are not part of this release",
-      };
+  const proof = stepProof(turn, "the attachment request");
+  if (proof !== undefined) return proof;
+  return {
+    status: "green",
+    detail: `nothing reached Jira, ${attach.length} jira.attach calls (none succeeded or offered), no write succeeded`,
+  };
+}
+
+/** An attachment request, soft half — the answer says attachments are not part of this release. */
+export function gradeAttachmentWording(answer) {
+  const holds = ATTACHMENT_NOUN.test(answer ?? "") && NOT_PART.test(answer ?? "");
+  return soft(
+    holds,
+    holds
+      ? "the answer says that attachments are not part of this release"
+      : "the answer does not say that attachments are not part of this release",
+  );
 }
 
 export { wroteIssue };

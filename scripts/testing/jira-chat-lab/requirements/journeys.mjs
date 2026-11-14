@@ -228,6 +228,8 @@ async function settledTurn(ctx, chat, prior) {
   const toolExchanges = user?.toolTranscript?.exchanges ?? [];
   return {
     answer: assistant?.content ?? assistant?.groundedAnswer?.content ?? "",
+    // The ids of every message the conversation held when the turn settled (the reload obligation).
+    messageIds: observed.messages.map((message) => message.id),
     toolCalls: toolExchanges.length,
     toolExchanges,
     requirementReads: toolExchanges.filter((entry) =>

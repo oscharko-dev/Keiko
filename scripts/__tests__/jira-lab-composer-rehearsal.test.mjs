@@ -189,10 +189,10 @@ describe("the whole rehearsal groups like a real run", () => {
 });
 
 describe("the flag on the scorecard", () => {
-  it("is refused without the Composer set and with a model, and lifts the global required field", () => {
-    expect(scorecard).toContain('rehearse: { type: "boolean", default: false }');
-    expect(scorecard).toContain("values.rehearse && (!composer || values.model)");
-    expect(scorecard).toContain("--rehearse needs --set composer and takes no --model");
+  // The refusals of the flag (no Composer set, a model) are proven by execution in
+  // jira-lab-scorecard-usage.test.mjs. What needs a live Jira cannot be executed here, so the
+  // bracket the two writing paths run in stays a source pin.
+  it("lifts the global required field around both writing paths", () => {
     // The rehearsal and the real Composer run both write REQ inside the field-lift bracket.
     expect(scorecard).toContain("withFixtureFieldOptional(session, () =>");
     expect(scorecard).toContain("composer ? withFixtureFieldOptional(session, runGroups)");

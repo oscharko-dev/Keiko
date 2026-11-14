@@ -2,7 +2,15 @@
 // One run per model says nothing about variance: with `--repeat N` a journey runs N times in fresh
 // Chats and the scenario reports each run, the pass rate over the valid runs and the invalid runs.
 
-const STATUSES = Object.freeze(["green", "red", "partial", "probe-only", "unchecked", "invalid"]);
+const STATUSES = Object.freeze([
+  "green",
+  "red",
+  "partial",
+  "unverified",
+  "probe-only",
+  "unchecked",
+  "invalid",
+]);
 
 /** The status counts of the scenario results; an unknown status fails closed. */
 export function countStatuses(results) {
@@ -14,6 +22,17 @@ export function countStatuses(results) {
     counts[result.status] += 1;
   }
   return counts;
+}
+
+/**
+ * The exit code of a model run: 0 only when every selected scenario is green. Red, partial,
+ * unverified, invalid, probe-only and unchecked all exit non-zero, and so does a report with no
+ * scenario at all, so a caller that chains on the exit code never reads an unproven run as a pass.
+ * (The no-model `--rehearse` has its own rule: it exits 0 when no journey stopped on a lab error.)
+ */
+export function runExitCode(report) {
+  const results = report.results ?? [];
+  return results.length > 0 && results.every((result) => result.status === "green") ? 0 : 1;
 }
 
 function intersection(lists) {
@@ -49,6 +68,10 @@ export function aggregateRuns(runs) {
     status,
     ...(status === "invalid" ? { reason: "insufficient-valid-runs" } : {}),
     covers: status === "green" ? intersection(valid.map((run) => run.covers ?? [])) : [],
+    // Runs that could not verify everything leave the scenario `unverified`, not partial.
+    ...(status === "unverified"
+      ? { unverifiedParts: valid.filter((run) => run.status !== "green").length }
+      : {}),
     detail,
     runs: runs.map(({ status: runStatus, reason, detail: runDetail, durationMs }) => ({
       status: runStatus,
@@ -68,7 +91,7 @@ export function aggregateRuns(runs) {
 
 /** The trend columns; an older file with another layout is kept aside by the scorecard. */
 export const TREND_HEADER =
-  "startedAt\tmodel\trepeat\tvalidity\tgreen\tred\tpartial\tprobeOnly\tunchecked\tinvalid\n";
+  "startedAt\tmodel\trepeat\tvalidity\tgreen\tred\tpartial\tprobeOnly\tunchecked\tinvalid\tunverified\n";
 
 /** A run with any invalid scenario is labelled invalid, so it is not read as a data point. */
 export function trendLine(report) {
@@ -85,5 +108,6 @@ export function trendLine(report) {
     counts["probe-only"],
     counts.unchecked,
     counts.invalid,
+    counts.unverified ?? 0,
   ].join("\t")}\n`;
 }

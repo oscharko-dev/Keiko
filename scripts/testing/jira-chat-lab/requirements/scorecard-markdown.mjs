@@ -17,6 +17,7 @@ export function scorecardMarkdown(report) {
     green: "🟢",
     red: "🔴",
     partial: "🟠",
+    unverified: "🟤",
     invalid: "⛔",
     "probe-only": "🟡",
     unchecked: "⚪",
@@ -34,9 +35,15 @@ export function scorecardMarkdown(report) {
           "",
         ]
       : []),
+    ...((report.counts.unverified ?? 0) > 0
+      ? [
+          "Unverified scenarios ran without a red verdict, but some of their parts could not be verified (a turn that never ran, evidence the product did not store, or a model observation); they are not passed.",
+          "",
+        ]
+      : []),
     ...(report.repeat > 1 ? [`Each journey ran ${report.repeat} times in fresh Chats.`, ""] : []),
     ...(limits.length > 0 ? [...limits, ""] : []),
-    `Green ${report.counts.green} · red ${report.counts.red} · partial ${report.counts.partial} · invalid ${invalid} · probe-only ${report.counts["probe-only"]} · unchecked ${report.counts.unchecked} of ${report.results.length}`,
+    `Green ${report.counts.green} · red ${report.counts.red} · partial ${report.counts.partial} · unverified ${report.counts.unverified ?? 0} · invalid ${invalid} · probe-only ${report.counts["probe-only"]} · unchecked ${report.counts.unchecked} of ${report.results.length}`,
     "",
     "| Scenario | Status | Requirement | Issue | Title | Evidence |",
     "| --- | --- | --- | --- | --- | --- |",

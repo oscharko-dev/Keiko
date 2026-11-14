@@ -103,14 +103,6 @@ describe("a German-language session", () => {
     ])
       expect(() => assertComposerLanguageFit("api", ids, selection)).toThrow("German-language");
   });
-
-  it("is checked by the scorecard before any journey runs", () => {
-    const source = readFileSync(
-      resolve(import.meta.dirname, "../testing/jira-chat-lab/requirements/scorecard.mjs"),
-      "utf8",
-    );
-    expect(source).toContain("assertComposerLanguageFit(");
-  });
 });
 
 describe("an empty selection never runs", () => {
@@ -129,14 +121,6 @@ describe("the reports C07 runs", () => {
     expect(composerSelectionOf({ parts: "s10,s11" })).toEqual({ parts: ["s10", "s11"] });
     expect(composerSelectionOf({})).toEqual({});
     expect(() => composerSelectionOf({ parts: "s12" })).toThrow("--parts names s12");
-  });
-
-  it("is wired into the scorecard options", () => {
-    const source = readFileSync(
-      resolve(import.meta.dirname, "../testing/jira-chat-lab/requirements/scorecard.mjs"),
-      "utf8",
-    );
-    expect(source).toContain('parts: { type: "string" }');
   });
 });
 

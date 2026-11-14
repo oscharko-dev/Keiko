@@ -25,7 +25,12 @@ import {
   gradeRepeat,
   gradeUngovernedChange,
   gradeWatcher,
-  keysListed,
+  gradeAttachmentWording,
+  gradeNamesRemaining,
+  gradeRepeatReference,
+  keysMissingInAnswer,
+  keysMissingInCards,
+  stepProof,
 } from "../testing/jira-chat-lab/requirements/composer-graders.mjs";
 import { COMPOSER_SCENARIOS } from "../testing/jira-chat-lab/requirements/composer-catalog.mjs";
 import {
@@ -52,6 +57,11 @@ import { turnIssues } from "../testing/jira-chat-lab/requirements/oracles.mjs";
 const { jiraTemplateViolationGuidance } = await import(
   pathToFileURL(
     join(import.meta.dirname, "../../packages/keiko-connectors/dist/jira-issue-template-check.js"),
+  ).href
+);
+const { JIRA_ALREADY_REFUSED_GUIDANCE } = await import(
+  pathToFileURL(
+    join(import.meta.dirname, "../../packages/keiko-server/dist/atlassian/jiraMutationResult.js"),
   ).href
 );
 
@@ -298,9 +308,24 @@ describe("obligation a) creation, one and several", () => {
     conformant(key, "Task", `Titel ${"ABC"[i]}`),
   );
 
-  it("creates all natively and lists every key in the answer", () => {
-    const grade = several(three, "Angelegt: REQ-5, REQ-6 und REQ-7");
-    expect([grade.created.status, grade.listed.status]).toEqual(["green", "green"]);
+  const cardOf = (keys) => ({
+    call: { id: "c", name: "jira_draft", arguments: {} },
+    result: {
+      toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
+      status: "completed",
+      data: { items: keys.map((issueKey) => ({ issueKey })) },
+    },
+  });
+
+  it("creates all natively; the keys in the stored result are hard, the keys in the answer are soft", () => {
+    const grade = several(three, "Angelegt: REQ-5, REQ-6 und REQ-7", [
+      cardOf(["REQ-5", "REQ-6", "REQ-7"]),
+    ]);
+    expect([grade.created.status, grade.listed.status, grade.answered.status]).toEqual([
+      "green",
+      "green",
+      "green",
+    ]);
   });
 
   it("is red when fewer than three exist natively, or one is not conformant", () => {
@@ -329,19 +354,22 @@ describe("obligation a) creation, one and several", () => {
     expect(stray.created.detail).toContain("REQ-8 (Bug)");
   });
 
-  it("is red when a created key is missing from the answer and the result, green via the result card", () => {
-    expect(several(three, "REQ-5 und REQ-6").listed).toMatchObject({ status: "red" });
-    const card = {
-      call: { id: "c", name: "jira_draft", arguments: {} },
-      result: {
-        toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
-        status: "completed",
-        data: { items: [{ issueKey: "REQ-5" }, { issueKey: "REQ-6" }, { issueKey: "REQ-7" }] },
-      },
-    };
-    expect(several(three, "Fertig.", [card]).listed.status).toBe("green");
-    expect(keysListed(turnOf(three).created, "REQ-5", [])).toHaveLength(2);
-    expect(several([], "").listed.status).toBe("unverified");
+  it("hard: a created key missing from every stored result is red; no stored result is unverified", () => {
+    const partial = several(three, "REQ-5 REQ-6 REQ-7", [cardOf(["REQ-5", "REQ-6"])]);
+    expect(partial.listed).toMatchObject({ status: "red" });
+    expect(partial.listed.detail).toContain("1 created keys are in no stored write result");
+    expect(several(three, "REQ-5 REQ-6 REQ-7", []).listed.status).toBe("unverified");
+    expect(several([], "", []).listed.status).toBe("unverified");
+  });
+
+  it("soft: an answer that misses a key is a model observation, never red, and never decides the hard half", () => {
+    const grade = several(three, "REQ-5 und REQ-6", [cardOf(["REQ-5", "REQ-6", "REQ-7"])]);
+    expect(grade.listed.status).toBe("green");
+    expect(grade.answered).toMatchObject({ status: "unverified", observation: true });
+    expect(grade.answered.detail).toContain("model observation");
+    expect(several([], "", []).answered.status).toBe("unverified");
+    expect(keysMissingInAnswer(turnOf(three).created, "REQ-5")).toHaveLength(2);
+    expect(keysMissingInCards(turnOf(three).created, [])).toHaveLength(3);
   });
 });
 
@@ -469,6 +497,8 @@ const PORTS = {
   allRuleIds: ["parent-type-mismatch", "section-missing", "template-missing"],
 };
 /** The product's stored refusal of a create, carrying the guidance the producer states for it. */
+/** A turn that ran to an answer: the proof the hard "nothing was created" needs. */
+const RAN = { answer: "Nichts passiert.", toolExchanges: [], failure: undefined };
 const storedRefusalOf = (ruleId, { subject = "REQ/Epic", guidance, extra = {} } = {}) => {
   const violations = [{ ruleId, subject, template: "REQ/Epic" }];
   return createExchange(
@@ -508,13 +538,42 @@ describe("obligation c) no template: hard from Jira and the stored refusal, soft
     );
   });
 
-  it("refused natively: green when nothing was created, red naming every key of any type otherwise", () => {
-    expect(
-      gradeNoTemplate({ created: [], exchanges: [], answer: "", ports: PORTS }).refused.status,
-    ).toBe("green");
-    const wrote = gradeNoTemplate({ created: created(2), exchanges: [], answer: "", ports: PORTS });
+  const noTemplate = (overrides) =>
+    gradeNoTemplate({
+      created: [],
+      exchanges: [storedRefusalOf("template-missing")],
+      answer: "",
+      turn: RAN,
+      ports: PORTS,
+      ...overrides,
+    });
+
+  it("refused natively: green when nothing was created AND a write was attempted or a refusal stored", () => {
+    expect(noTemplate().refused.status).toBe("green");
+    expect(noTemplate({ exchanges: [failedElsewhere()] }).refused.status).toBe("green");
+  });
+
+  it("refused natively: red naming every key of any type whatever the turn did", () => {
+    const wrote = noTemplate({ created: created(2) });
     expect(wrote.refused.status).toBe("red");
     expect(wrote.refused.detail).toContain("REQ-5, REQ-6");
+    const silent = noTemplate({
+      created: created(1),
+      exchanges: [],
+      turn: { answer: "", toolExchanges: [], failure: "boom" },
+    });
+    expect(silent.refused.status).toBe("red");
+  });
+
+  it("refused natively: unverified, never green, for a turn that only talked, stayed silent or failed", () => {
+    const talk = noTemplate({ exchanges: [], turn: { ...RAN, answer: "Ich kann das nicht." } });
+    expect(talk.refused.status).toBe("unverified");
+    expect(talk.refused.detail).toContain("the gate was not asked");
+    const silent = { answer: "", toolExchanges: [], failure: undefined };
+    expect(noTemplate({ exchanges: [], turn: silent }).refused.status).toBe("unverified");
+    const failed = { answer: "x", toolExchanges: [], failure: "timeout" };
+    expect(noTemplate({ turn: failed }).refused.status).toBe("unverified");
+    expect(noTemplate({ turn: undefined }).refused.status).toBe("unverified");
   });
 
   it("hint delivered: green when the stored refusal names a missing-template rule and carries the producer's text", () => {
@@ -559,12 +618,105 @@ describe("obligation c) no template: hard from Jira and the stored refusal, soft
     );
   });
 
+  it("hint delivered: the card and write reds stay reachable when the producer defines no refusal", () => {
+    const none = { ...PORTS, noTemplateRules: [] };
+    const card = { approval: { state: "pending", approvalId: "a" } };
+    const shown = hint({
+      ports: none,
+      exchanges: [storedRefusalOf("template-missing", { extra: card })],
+    });
+    expect(shown.status).toBe("red");
+    expect(shown.detail).toContain("approval cards");
+    const wrote = hint({ ports: none, exchanges: [success("REQ-5")] });
+    expect(wrote.status).toBe("red");
+    expect(wrote.detail).toContain("succeeded instead of");
+    expect(hint({ ports: none }).status).toBe("unverified");
+  });
+
+  it("hint delivered: the guidance is compared with the union of every violation of the exchange", () => {
+    const violations = [
+      { ruleId: "template-missing", subject: "a", template: "REQ/Epic" },
+      { ruleId: "section-missing", subject: "b", template: "REQ/Epic" },
+    ];
+    const draft = (guidance) => ({
+      call: { id: "d", name: "jira_draft", arguments: {} },
+      result: {
+        toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
+        status: "failed",
+        data: {
+          guidance,
+          items: violations.map((violation) => ({
+            state: "failed",
+            detail: { violations: [violation] },
+          })),
+        },
+      },
+    });
+    expect(hint({ exchanges: [draft(guidanceOf(violations))] }).status).toBe("green");
+    expect(hint({ exchanges: [draft(guidanceOf(violations.slice(0, 1)))] }).status).toBe("red");
+  });
+
+  it("hint delivered: a replayed refusal is unverified with its replay text checked, never red", () => {
+    const replayed = (guidance) => storedRefusalOf("template-missing", { guidance, extra: {} });
+    const withFlag = (guidance) => {
+      const exchange = replayed(guidance);
+      exchange.result.data.replayed = true;
+      return exchange;
+    };
+    const own = hint({ exchanges: [withFlag(JIRA_ALREADY_REFUSED_GUIDANCE)] });
+    expect(own.status).toBe("unverified");
+    expect(own.detail).toContain("replayed an earlier refusal with its own replay text");
+    const other = hint({ exchanges: [withFlag("Etwas anderes")] });
+    expect(other.status).toBe("unverified");
+    expect(other.detail).toContain("without its own replay text");
+    const item = (detail) => ({
+      call: { id: "d", name: "jira_draft", arguments: {} },
+      result: {
+        toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
+        status: "failed",
+        data: {
+          items: [
+            {
+              state: "failed",
+              detail: { violations: [{ ruleId: "template-missing", subject: "a" }], ...detail },
+            },
+          ],
+        },
+      },
+    });
+    expect(hint({ exchanges: [item({ replayed: true })] }).status).toBe("unverified");
+    expect(hint({ exchanges: [item({ fieldErrors: [{ fieldId: "x" }] })] }).detail).toContain(
+      "mixes item states",
+    );
+  });
+
+  // The producer of THIS build decides which of the next two runs; the switch needs no commit.
   it.runIf(PRODUCER_NO_TEMPLATE_RULES.length === 0)(
     "hint delivered: with the producer of this build, which has no such refusal yet, it is unverified",
     () => {
       const grade = gradeHintDelivered({ exchanges: [storedRefusalOf("template-missing")] });
       expect(grade.status).toBe("unverified");
       expect(grade.detail).toContain("defines no missing-template refusal");
+    },
+  );
+
+  it.runIf(PRODUCER_NO_TEMPLATE_RULES.length > 0)(
+    "hint delivered: with the producer of this build, the producer's own refusal and text are green",
+    () => {
+      const [ruleId] = PRODUCER_NO_TEMPLATE_RULES;
+      const violations = [{ ruleId, subject: "REQ/Epic", template: "REQ/Epic" }];
+      const exchange = createExchange(
+        {
+          outcome: "rejected",
+          reason: "field-validation",
+          violations,
+          guidance: jiraTemplateViolationGuidance(violations),
+        },
+        "failed",
+      );
+      expect(gradeHintDelivered({ exchanges: [exchange] }).status).toBe("green");
+      exchange.result.data.guidance = "Etwas anderes";
+      expect(gradeHintDelivered({ exchanges: [exchange] }).status).toBe("red");
     },
   );
 
@@ -599,6 +751,7 @@ describe("obligation c) no template: hard from Jira and the stored refusal, soft
       created: [],
       exchanges: [storedRefusalOf("template-missing")],
       answer: "Nichts passiert.",
+      turn: RAN,
       ports: PORTS,
     });
     expect([grade.refused.status, grade.hint.status, grade.mentions.status]).toEqual([
@@ -620,6 +773,7 @@ describe("the unrepairable request: hard from Jira and the stored refusal, soft 
       created: [],
       exchanges: [stored()],
       answer: "",
+      turn: RAN,
       ports: PORTS,
     });
     expect([grade.refused.status, grade.gate.status]).toEqual(["green", "green"]);
@@ -630,6 +784,7 @@ describe("the unrepairable request: hard from Jira and the stored refusal, soft 
       created: turnOf([conformant("REQ-9", "Sub-task")]).created,
       exchanges: [stored()],
       answer: "",
+      turn: RAN,
       ports: PORTS,
     });
     expect(made.refused.status).toBe("red");
@@ -668,9 +823,26 @@ describe("the unrepairable request: hard from Jira and the stored refusal, soft 
 
   it("no prose pattern can turn the hard half red or green", () => {
     const wording = "Die Teilaufgabe braucht eine Aufgabe als Eltern.";
-    const plain = gradeUnrepairable({ created: [], exchanges: [], answer: wording, ports: PORTS });
+    const turn = { answer: wording, toolExchanges: [failedElsewhere()], failure: undefined };
+    const plain = gradeUnrepairable({
+      created: [],
+      exchanges: turn.toolExchanges,
+      answer: wording,
+      turn,
+      ports: PORTS,
+    });
     expect(plain.gate.status).toBe("unverified");
     expect(plain.refused.status).toBe("green");
+    // Words alone never prove the gate was asked: a turn that only talked is unverified.
+    const talk = { answer: wording, toolExchanges: [], failure: undefined };
+    const only = gradeUnrepairable({
+      created: [],
+      exchanges: [],
+      answer: wording,
+      turn: talk,
+      ports: PORTS,
+    });
+    expect(only.refused.status).toBe("unverified");
   });
 });
 
@@ -714,24 +886,28 @@ describe("obligation d) the owner's edit rules, decided by native before and aft
   const edited = { ...damaged, fields: { ...damaged.fields, summary: "Neu" } };
 
   const notice = [{ ruleId: "section-missing", subject: "Testhinweise" }];
-  const preexisting = (after, answer, exchanges = [succeededEdit(notice)]) =>
+  const preexisting = (after, _answer, exchanges = [succeededEdit(notice)]) =>
     gradeEditPreexisting({
       before: damaged,
       after,
       touched: "summary",
       expected: "Neu",
-      remaining: "Testhinweise",
       remainingRule: "section-missing",
       exchanges,
-      answer,
     });
 
-  it("pre-existing violation: green needs the product's notice in the trace AND the answer naming it", () => {
-    expect(preexisting(edited, "Geändert. Es fehlt noch der Abschnitt Testhinweise.").status).toBe(
-      "green",
-    );
-    expect(preexisting(damaged, "Abgelehnt").status).toBe("red");
-    expect(preexisting(edited, "Geändert.").status).toBe("red");
+  it("pre-existing violation, hard: green needs the applied edit and the product's stored notice, never the answer", () => {
+    expect(preexisting(edited).status).toBe("green");
+    expect(preexisting(edited, "Geändert.").status).toBe("green");
+    expect(preexisting(damaged).status).toBe("red");
+  });
+
+  it("pre-existing violation, soft: the answer naming the remaining violation is a model observation", () => {
+    const names = (answer) => gradeNamesRemaining({ answer, remaining: "Testhinweise" });
+    expect(names("Es fehlt noch der Abschnitt Testhinweise.").status).toBe("green");
+    const missed = names("Geändert.");
+    expect(missed).toMatchObject({ status: "unverified", observation: true });
+    expect(missed.detail).toContain("model observation");
   });
 
   it("pre-existing violation: the notice is read from the trace, never from the wording", () => {
@@ -831,17 +1007,36 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
     },
   });
 
-  it("repeat: green when the same order again creates nothing, one issue carries the title and the reply refers to it", () => {
+  const referenceOf = (overrides) =>
+    gradeRepeatReference({
+      created: turnOf([task("REQ-5")]).created,
+      answer: "Den Vorgang gibt es schon: REQ-5.",
+      turn: { answer: "Den Vorgang gibt es schon: REQ-5.", toolExchanges: [] },
+      ...overrides,
+    });
+
+  it("repeat, hard: green when the same order again creates nothing and the first issue still carries its title", () => {
     expect(repeatOf({}).status).toBe("green");
+    // What the reply says never decides the hard half.
+    expect(repeatOf({ answer: "Erledigt." }).status).toBe("green");
   });
 
-  it("repeat: the key may be named in the answer or shown in a stored result card", () => {
+  it("repeat, soft: the key may be named in the answer or shown in a stored result card", () => {
     const viaCard = { answer: "Das gibt es bereits.", toolExchanges: [resultCard("REQ-5")] };
-    expect(repeatOf({ answer: viaCard.answer, turn: viaCard }).status).toBe("green");
+    expect(referenceOf({ answer: viaCard.answer, turn: viaCard }).status).toBe("green");
     // A key that only contains the digits of another one does not name it.
     const other = { answer: "Siehe REQ-55.", toolExchanges: [resultCard("REQ-55")] };
-    expect(repeatOf({ answer: other.answer, turn: other }).status).toBe("red");
-    expect(repeatOf({ answer: "Erledigt." }).status).toBe("red");
+    const miss = referenceOf({ answer: other.answer, turn: other });
+    expect(miss).toMatchObject({ status: "unverified", observation: true });
+    expect(miss.detail).toContain("model observation");
+    const talk = { answer: "Erledigt.", toolExchanges: [] };
+    expect(referenceOf({ answer: "Erledigt.", turn: talk }).status).toBe("unverified");
+  });
+
+  it("repeat, soft: unverified, without the observation flag, when the first order or the step did not run", () => {
+    expect(referenceOf({ created: [] }).observation).toBeUndefined();
+    expect(referenceOf({ turn: undefined }).status).toBe("unverified");
+    expect(referenceOf({ turn: { answer: "", toolExchanges: [] } }).observation).toBeUndefined();
   });
 
   it("repeat: red, as a model finding, for an extra issue of ANY summary or type, not only the same title", () => {
@@ -870,13 +1065,13 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
     );
   });
 
-  it("conversation: the messages read after the reload are the ones read before it", () => {
+  it("conversation: the messages the turn observed are the ones the stored conversation holds afterwards", () => {
     expect(gradeConversationSurvives({ before: ["u1", "a1"], after: ["u1", "a1"] }).status).toBe(
       "green",
     );
     const lost = gradeConversationSurvives({ before: ["u1", "a1"], after: ["u1"] });
     expect(lost.status).toBe("red");
-    expect(lost.detail).toContain("2 messages before the reload, 1 after");
+    expect(lost.detail).toContain("2 messages observed by the turn, 1 stored afterwards");
     expect(gradeConversationSurvives({ before: ["u1", "a1"], after: ["a1", "u1"] }).status).toBe(
       "red",
     );
@@ -898,6 +1093,7 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
     // A turn that only called a tool did run.
     const toolOnly = { answer: "", toolExchanges: [resultCard("REQ-5")] };
     expect(repeatOf({ answer: "", turn: toolOnly }).status).toBe("green");
+    expect(stepProof(toolOnly, "x")).toBeUndefined();
   });
 
   it("watcher: read from the native list in both directions", () => {
@@ -963,18 +1159,33 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
     ).toBe("green");
   });
 
-  it("attachment: nothing reaches Jira, no write succeeded, and the answer says it is not part of this release", () => {
-    const answer = "Anhänge sind nicht Teil dieses Releases.";
-    expect(gradeAttachmentRefusal({ before: 0, after: 0, answer, exchanges: [] }).status).toBe(
-      "green",
-    );
-    expect(gradeAttachmentRefusal({ before: 0, after: 1, answer, exchanges: [] }).status).toBe(
-      "red",
-    );
-    for (const text of ["Das geht nicht.", "Erledigt."])
-      expect(
-        gradeAttachmentRefusal({ before: 0, after: 0, answer: text, exchanges: [] }).status,
-      ).toBe("red");
+  const RAN_ATTACH = { answer: "Das geht nicht.", toolExchanges: [], failure: undefined };
+  const attachment = (overrides) =>
+    gradeAttachmentRefusal({ before: 0, after: 0, exchanges: [], turn: RAN_ATTACH, ...overrides });
+
+  it("attachment, hard: nothing reaches Jira, no attach or write succeeded, the turn ran", () => {
+    expect(attachment({}).status).toBe("green");
+    expect(attachment({ after: 1 }).status).toBe("red");
+    // What the answer says never decides the hard half.
+    expect(attachment({ turn: { ...RAN_ATTACH, answer: "Erledigt." } }).status).toBe("green");
+  });
+
+  it("attachment, hard: a turn that failed or answered nothing is unverified, never red", () => {
+    const failed = { answer: "x", toolExchanges: [], failure: "timeout" };
+    const silent = { answer: "", toolExchanges: [], failure: undefined };
+    for (const turn of [failed, silent, undefined])
+      expect(attachment({ turn }).status).toBe("unverified");
+    // An attachment that reached Jira is red whatever the turn did.
+    expect(attachment({ turn: failed, after: 1 }).status).toBe("red");
+  });
+
+  it("attachment, soft: the wording is a model observation, never red", () => {
+    expect(gradeAttachmentWording("Anhänge sind nicht Teil dieses Releases.").status).toBe("green");
+    for (const text of ["Das geht nicht.", "Erledigt.", undefined]) {
+      const grade = gradeAttachmentWording(text);
+      expect(grade).toMatchObject({ status: "unverified", observation: true });
+      expect(grade.detail).toContain("model observation");
+    }
   });
 
   const attachExchange = (data, extra = {}) => ({
@@ -988,8 +1199,7 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
   });
 
   it("attachment: a jira.attach call that succeeded, or was offered to a human, is red before #4354 switches it off", () => {
-    const answer = "Anhänge sind nicht Teil dieses Releases.";
-    const grade = (exchanges) => gradeAttachmentRefusal({ before: 0, after: 0, answer, exchanges });
+    const grade = (exchanges) => attachment({ exchanges });
     expect(grade([attachExchange({ outcome: "succeeded" })]).detail).toContain(
       "jira.attach calls succeeded",
     );
@@ -1005,19 +1215,10 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
   });
 
   it("attachment: a write that succeeded in the turn is red even with the right words and no file", () => {
-    const answer = "Anhänge sind nicht Teil dieses Releases.";
-    const written = gradeAttachmentRefusal({
-      before: 0,
-      after: 0,
-      answer,
-      exchanges: [succeededEdit(undefined)],
-    });
+    const written = attachment({ exchanges: [succeededEdit(undefined)] });
     expect(written.status).toBe("red");
     expect(written.detail).toContain("1 writes succeeded");
-    expect(
-      gradeAttachmentRefusal({ before: 0, after: 0, answer, exchanges: [failedElsewhere()] })
-        .status,
-    ).toBe("green");
+    expect(attachment({ exchanges: [failedElsewhere()] }).status).toBe("green");
   });
 });
 
@@ -1108,7 +1309,8 @@ function lane({ act, library = [], selection } = {}) {
       return {
         answer: played.answer ?? "",
         toolExchanges: played.toolExchanges ?? [],
-        failure: undefined,
+        failure: played.failure,
+        messageIds: played.messageIds ?? ["m1", "m2"],
         durationMs: 1000,
         toolCalls: (played.toolExchanges ?? []).length,
         approvals: {
@@ -1229,7 +1431,15 @@ describe("C01 creates every type, also several at once", () => {
       act: ({ content, add }) => {
         if (/drei Aufgaben/u.test(content)) {
           const keys = ["A", "B", "C"].map((n) => add("Task", {}, `Composer Teil ${n}`).key);
-          return { answer: `Angelegt: ${keys.join(", ")}` };
+          const card = {
+            call: { id: "d", name: "jira_draft", arguments: {} },
+            result: {
+              toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
+              status: "completed",
+              data: { items: keys.map((issueKey) => ({ issueKey, state: "created" })) },
+            },
+          };
+          return { answer: `Angelegt: ${keys.join(", ")}`, toolExchanges: [card] };
         }
         if (/unter Story/u.test(content)) {
           const violations = [
@@ -1261,6 +1471,7 @@ describe("C01 creates every type, also several at once", () => {
         "create-conformant-bug",
         "multi-create-all-created",
         "multi-create-keys-listed",
+        "multi-create-answer-keys",
         "unrepairable-refused-natively",
         "unrepairable-refused-by-gate",
         "unrepairable-answer-plain",
@@ -1382,8 +1593,28 @@ describe("C02 refuses violations in every mode", () => {
 
 describe("C03 without a template", () => {
   const hint = "Für diesen Typ gibt es keine Vorlage. Lege zuerst eine Vorlage an.";
+  // The refusal as THIS build's producer states it (its rule id and its own guidance text), so a
+  // producer that gains the rule ids needs no change here: the hard hint half turns green on its own.
+  const producerRefusal = () => {
+    const violations = [
+      {
+        ruleId: PRODUCER_NO_TEMPLATE_RULES[0] ?? "template-missing",
+        subject: "REQ/Epic",
+        template: "REQ/Epic",
+      },
+    ];
+    return createExchange(
+      {
+        outcome: "rejected",
+        reason: "field-validation",
+        violations,
+        guidance: jiraTemplateViolationGuidance(violations),
+      },
+      "failed",
+    );
+  };
   const attempt = ({ chat }) => ({
-    toolExchanges: [storedRefusalOf("template-missing")],
+    toolExchanges: [producerRefusal()],
     answer: hint,
     chat,
   });
@@ -1400,7 +1631,10 @@ describe("C03 without a template", () => {
   it("splits every case into three obligations; the stored-hint half is read from the producer of the build", async () => {
     const refusing = lane({ act: attempt });
     const check = await COMPOSER_JOURNEYS.C03(refusing, undefined);
-    expect(check.status).toBe("green");
+    // A producer without the missing-template refusal leaves the hard hint half unverified: the
+    // journey is `unverified`, never green; with it, everything is green.
+    expect(check.status).toBe(PRODUCER_NO_TEMPLATE_RULES.length === 0 ? "unverified" : "green");
+    expect(check.unverifiedParts ?? 0).toBe(PRODUCER_NO_TEMPLATE_RULES.length === 0 ? 15 : 0);
     expect(check.covers.filter((id) => id.startsWith("no-template-refused-"))).toHaveLength(15);
     expect(check.covers.filter((id) => id.startsWith("no-template-answer-"))).toHaveLength(15);
     // This build's producer defines no missing-template refusal yet: the hard hint half is unverified.
@@ -1410,15 +1644,26 @@ describe("C03 without a template", () => {
     );
   });
 
-  it("a model that only talks is a model observation: nothing created is green, the hint is not proven", async () => {
+  it("a model that only talks proves nothing: not green, nothing credited, the gate was not asked", async () => {
     const idle = lane({
       selection: { types: ["epic"], modes: ["ask"] },
       act: () => ({ answer: "Das geht nicht." }),
     });
     const check = await COMPOSER_JOURNEYS.C03(idle, undefined);
-    expect(check.covers).toEqual(["no-template-refused-epic-ask"]);
-    expect(check.detail).toContain("hint delivered: unverified");
+    expect(check.status).toBe("unverified");
+    expect(check.covers).toEqual([]);
+    expect(check.detail).toContain("nothing created: unverified");
+    expect(check.detail).toContain("the gate was not asked");
     expect(check.detail).toContain("model observation");
+  });
+
+  it("a silent or failed turn proves nothing either", async () => {
+    for (const act of [() => ({ answer: "" }), () => ({ answer: "x", failure: "timeout" })]) {
+      const ctx = lane({ selection: { types: ["epic"], modes: ["ask"] }, act });
+      const check = await COMPOSER_JOURNEYS.C03(ctx, undefined);
+      expect(check.covers).not.toContain("no-template-refused-epic-ask");
+      expect(check.status).not.toBe("green");
+    }
   });
 
   it("is red when any other type was written", async () => {
@@ -1496,6 +1741,7 @@ describe("C04 edit rules, through whichever tool", () => {
       "edit-breaking-refused-clear-field",
       "edit-breaking-refused-parent",
       "edit-preexisting-notice",
+      "edit-preexisting-answer",
       "edit-no-template-passes",
       "status-change-no-template-passes",
     ]);
@@ -1520,15 +1766,20 @@ describe("C04 edit rules, through whichever tool", () => {
       expect(check.detail).toContain(`${label}: red`);
   });
 
-  it("is red when the edit passes but the answer does not name the remaining violation", async () => {
+  it("a silent answer is a model observation: the hard notice stays green and the answer obligation is not credited", async () => {
     const silent = lane({
-      act: ({ content, ctx, add }) => ({
-        ...applyEdits({ content, ctx, add }),
-        answer: "Erledigt.",
-      }),
+      act: ({ content, ctx, add }) => {
+        if (/Beschreibung|Epic-Zuordnung/u.test(content))
+          return { toolExchanges: [refusedCall(content)] };
+        return { ...applyEdits({ content, ctx, add }), answer: "Erledigt." };
+      },
     });
     const check = await COMPOSER_JOURNEYS.C04(silent, undefined);
-    expect(check.detail).toContain("pre-existing violation in an untouched field: red");
+    expect(check.status).toBe("unverified");
+    expect(check.covers).toContain("edit-preexisting-notice");
+    expect(check.covers).not.toContain("edit-preexisting-answer");
+    expect(check.detail).toContain("pre-existing violation in an untouched field: green");
+    expect(check.detail).toContain("the answer names it: unverified");
   });
 
   it("is red when the edit passes and the answer names the violation but the product reported no notice", async () => {
@@ -1584,15 +1835,17 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
     const check = await COMPOSER_JOURNEYS.C05(ctx, undefined);
     expect(check.status).toBe("green");
     expect(check.covers).toEqual([
-      "conversation-survives-reload",
+      "stored-conversation-matches-turn",
       "repeat-after-reload-no-duplicate",
+      "repeat-after-reload-reply-refers",
       "repeat-in-chat-no-duplicate",
+      "repeat-in-chat-reply-refers",
     ]);
-    // One conversation: a single Chat carries all three turns, with one reload between the first two.
+    // One conversation: a single Chat carries all three turns.
     expect(ctx.calls.fresh).toHaveLength(1);
     expect(new Set(ctx.calls.turns.map((turn) => turn.chat.id)).size).toBe(1);
-    // The page showed the conversation after the first turn and again after the reload.
-    expect(ctx.calls.reloads).toBe(2);
+    // The turn observed the conversation when it settled; the stored conversation is read once more.
+    expect(ctx.calls.reloads).toBe(1);
     expect(ctx.calls.turns[0].content).toContain("Aufgabe");
     expect(ctx.calls.turns.map((turn) => turn.content)).toEqual(
       Array(3).fill(ctx.calls.turns[0].content),
@@ -1622,7 +1875,7 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
     const idle = lane({ act: () => ({ answer: "Gibt es schon." }) });
     await idle.nativeCreate(taskFields);
     const check = await COMPOSER_JOURNEYS.C05(idle, undefined);
-    expect(check.covers).toEqual(["conversation-survives-reload"]);
+    expect(check.covers).toEqual(["stored-conversation-matches-turn"]);
     expect(check.detail).toContain("same order again after a reload: unverified");
     expect(check.detail).toContain("same order again in the same chat: unverified");
   });
@@ -1652,22 +1905,34 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
     expect(check.detail).toContain("did not ask for another issue");
   });
 
-  it("is red when the conversation read after the reload is not the one before it", async () => {
-    const ctx = conversation(refer);
-    let reads = 0;
-    ctx.reloadChat = async () => (++reads === 1 ? ["m1", "m2"] : ["m1"]);
-    const check = await COMPOSER_JOURNEYS.C05(ctx, undefined);
+  it("is red when the stored conversation is not the one the turn observed", async () => {
+    const lost = conversation(refer);
+    lost.reloadChat = async () => ["m1"];
+    const check = await COMPOSER_JOURNEYS.C05(lost, undefined);
     expect(check.status).toBe("red");
-    expect(check.detail).toContain("conversation after the reload: red");
+    expect(check.detail).toContain("stored conversation matches the turn: red");
+    // The reference is what the TURN observed, not a second read: other ids on the turn are red too.
+    const other = conversation(refer);
+    const turn = other.turn;
+    other.turn = async (...args) => ({ ...(await turn(...args)), messageIds: ["x1", "x2"] });
+    expect((await COMPOSER_JOURNEYS.C05(other, undefined)).detail).toContain(
+      "stored conversation matches the turn: red",
+    );
   });
 
-  it("is red when the reply after the reload does not refer to the issue", async () => {
+  it("a reply that does not refer to the issue is a model observation: the hard half stays green", async () => {
     const check = await COMPOSER_JOURNEYS.C05(
       conversation({ again: () => ({ answer: "Ja, das ist erledigt." }) }),
       undefined,
     );
-    expect(check.status).toBe("red");
+    expect(check.status).toBe("unverified");
+    expect(check.covers).toEqual(
+      expect.arrayContaining(["repeat-after-reload-no-duplicate", "repeat-in-chat-no-duplicate"]),
+    );
+    expect(check.covers).not.toContain("repeat-after-reload-reply-refers");
     expect(check.detail).toContain("does not refer to");
+    expect(check.detail).toContain("model observation");
+    expect(check.unverifiedParts).toBe(2);
   });
 
   it("is unverified, never green, when the turn after the reload fails", async () => {
@@ -1709,6 +1974,19 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
     const wrong = await COMPOSER_JOURNEYS.C06(modes("wrong-full"), undefined);
     expect(wrong.status).toBe("red");
     expect(wrong.detail).toContain("write approvals asked in Full access");
+  });
+
+  it("C06 is unverified, never green, when no approval was shown to read", async () => {
+    const ctx = modes("right");
+    const turn = ctx.turn;
+    ctx.turn = async (...args) => {
+      const played = await turn(...args);
+      return { ...played, approvals: { ...played.approvals, records: [] } };
+    };
+    const check = await COMPOSER_JOURNEYS.C06(ctx, undefined);
+    expect(check.detail).toContain("Approval preview: unverified");
+    expect(check.status).not.toBe("green");
+    expect(check.status).not.toBe("red");
   });
 
   it("C06 runs the three modes with the Bug template active and a plain Bug request", async () => {

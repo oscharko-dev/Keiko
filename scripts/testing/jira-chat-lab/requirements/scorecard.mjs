@@ -13,6 +13,8 @@
 // labelled invalid in latest.md and trend.tsv and is not a data point.
 // With `--set composer --rehearse` no model is used: every journey of the selected scenarios runs with an
 // empty model turn against the live Jira, to prove the lane's own plumbing before a model is spent on it.
+// A model run exits 0 only when EVERY scenario is green (runExitCode); red, partial, unverified,
+// invalid, probe-only and unchecked all exit 1. `--rehearse` exits 0 when no journey hit a lab error.
 // With --repeat N every journey runs N times in fresh Chats; a scenario reports each run's status,
 // the pass rate over its valid runs and the number of invalid runs, and is green only when every
 // valid run is green and at least half the runs are valid (else invalid).
@@ -48,7 +50,7 @@ import { scenarioVerdict } from "./coverage.mjs";
 import { scorecardMarkdown } from "./scorecard-markdown.mjs";
 import { JOURNEY_IDS, runJourneys } from "./journeys.mjs";
 import { PROBES } from "./probes.mjs";
-import { TREND_HEADER, countStatuses, trendLine } from "./repeat.mjs";
+import { TREND_HEADER, countStatuses, runExitCode, trendLine } from "./repeat.mjs";
 import { gradeException } from "./validity.mjs";
 
 const { positionals, values } = parseArgs({
@@ -204,3 +206,5 @@ if (existsSync(trend) && !readFileSync(trend, "utf8").startsWith(TREND_HEADER)) 
 if (!existsSync(trend)) appendFileSync(trend, TREND_HEADER);
 appendFileSync(trend, trendLine(report));
 console.log(scorecardMarkdown(report));
+// A model run exits 0 only when every scenario is green; `--rehearse` exited above on its own rule.
+process.exitCode = runExitCode(report);

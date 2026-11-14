@@ -89,6 +89,12 @@ describe("scorecard usage errors, by execution", () => {
         [unrecorded, ...base, "--model", "m"],
         "no language.json",
       ],
+      // The language guard and the selection are checked by the script itself, before any Jira.
+      [
+        "a report part that does not exist",
+        [english, ...base, "--model", "m", "--parts", "s12"],
+        "--parts names s12",
+      ],
       ["a French session", [french, ...base, "--model", "m"], "neither en_* nor de_DE"],
       ["an Austrian-German session", [austrian, ...base, "--rehearse"], "neither en_* nor de_DE"],
     ];

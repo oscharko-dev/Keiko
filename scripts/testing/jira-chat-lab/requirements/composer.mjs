@@ -19,6 +19,7 @@ import {
 } from "./composer-templates.mjs";
 import {
   gradeAttachmentRefusal,
+  gradeAttachmentWording,
   gradeComment,
   gradeComposerCreate,
   gradeComposerRefusal,
@@ -26,7 +27,9 @@ import {
   gradeEditPreexisting,
   gradeMultiCreate,
   gradeConversationSurvives,
+  gradeNamesRemaining,
   gradeRepeat,
+  gradeRepeatReference,
   gradeUngovernedChange,
   gradeWatcher,
   composerRelation,
@@ -167,10 +170,12 @@ async function composerTurn(
 
 const part = (label, covers, grade) => ({ label, covers, ...grade });
 const slugOf = typeSlug;
+/** The parts of a journey as one check: a part that could not be verified keeps it `unverified`. */
 const parts = (runs) =>
   aggregateParts(
     runs.map((run) => run.part),
     runs.map((run) => run.turn),
+    { unverifiedIsNotGreen: true },
   );
 
 // ---------- journeys ----------
@@ -193,7 +198,7 @@ async function createEveryType(ctx) {
       });
       return { turn, part: part(`create ${type}`, [`create-conformant-${slugOf(type)}`], grade) };
     });
-    const several = types.includes("Task") ? [await createSeveralTasks(ctx, fixture)] : [];
+    const several = types.includes("Task") ? await createSeveralTasks(ctx, fixture) : [];
     const unrepairable = types.includes("Sub-task") ? await unrepairableRequest(ctx, fixture) : [];
     return parts([...singles, ...several, ...unrepairable]);
   });
@@ -208,6 +213,7 @@ async function unrepairableRequest(ctx, fixture) {
     created: issues.created,
     exchanges: turn.toolExchanges,
     answer: turn.answer,
+    turn,
   });
   // Hard from Jira and the stored refusal, soft from the prose; one turn serves all three.
   return [
@@ -242,21 +248,21 @@ async function createSeveralTasks(ctx, fixture) {
     answer: turn.answer,
     exchanges: turn.toolExchanges,
   });
-  return {
-    turn,
-    part: {
-      label: "create several Tasks",
-      covers: ["multi-create-all-created", "multi-create-keys-listed"],
-      ...mergeVerdicts(grade.created, grade.listed),
+  // Hard from Jira and the stored result card, soft from the answer; one turn serves all three.
+  return [
+    {
+      turn,
+      part: part("create several Tasks", ["multi-create-all-created"], grade.created),
     },
-  };
-}
-
-/** Two verdicts as one part: red beats unverified beats green; the obligations stay named. */
-function mergeVerdicts(...grades) {
-  const order = ["red", "unverified", "green"];
-  const status = order.find((entry) => grades.some((grade) => grade.status === entry));
-  return { status, detail: grades.map((grade) => `${grade.status}: ${grade.detail}`).join("; ") };
+    {
+      turn: NO_TURN,
+      part: part("several Tasks: keys in the result", ["multi-create-keys-listed"], grade.listed),
+    },
+    {
+      turn: NO_TURN,
+      part: part("several Tasks: keys in the answer", ["multi-create-answer-keys"], grade.answered),
+    },
+  ];
 }
 
 /** C02: a violating request is refused before any card or effect, per type and per mode. */
@@ -303,6 +309,7 @@ async function refuseWithoutTemplate(ctx) {
       created: issues.created,
       exchanges: turn.toolExchanges,
       answer: turn.answer,
+      turn,
     });
     const id = `${slugOf(type)}-${key}`;
     const name = `${type} in ${label}`;
@@ -391,11 +398,16 @@ function editCases(fixture, keys) {
           after,
           touched: "summary",
           expected: EDIT_TITLE,
-          remaining: "Testhinweise",
           remainingRule: "section-missing",
           exchanges: turn.toolExchanges,
-          answer: turn.answer,
         }),
+      // The answer naming the remaining violation is the model's words: its own, soft obligation.
+      soft: {
+        label: "pre-existing violation: the answer names it",
+        covers: "edit-preexisting-answer",
+        grade: ({ turn }) =>
+          gradeNamesRemaining({ answer: turn.answer, remaining: "Testhinweise" }),
+      },
     },
     {
       key: keys.bug,
@@ -431,12 +443,24 @@ async function editRules(ctx) {
     (await ctx.search(`key = ${key}`, `${composerFields(fixture.epicLink)},status`))[0];
   return withTemplates(ctx.http, governed, async () =>
     parts(
-      await sequentially(editCases(fixture, keys), async (edit) => {
-        const before = await read(edit.key);
-        const { turn } = await composerTurn(ctx, fixture, { prompt: edit.prompt });
-        const grade = edit.grade({ before, after: await read(edit.key), turn });
-        return { turn, part: part(edit.label, [edit.covers], grade) };
-      }),
+      (
+        await sequentially(editCases(fixture, keys), async (edit) => {
+          const before = await read(edit.key);
+          const { turn } = await composerTurn(ctx, fixture, { prompt: edit.prompt });
+          const grade = edit.grade({ before, after: await read(edit.key), turn });
+          return [
+            { turn, part: part(edit.label, [edit.covers], grade) },
+            ...(edit.soft === undefined
+              ? []
+              : [
+                  {
+                    turn: NO_TURN,
+                    part: part(edit.soft.label, [edit.soft.covers], edit.soft.grade({ turn })),
+                  },
+                ]),
+          ];
+        })
+      ).flat(),
     ),
   );
 }
@@ -454,8 +478,10 @@ async function reloadAndRepeat(ctx) {
     const created = ofType(one.issues, "Task").created.filter(
       (issue) => issue.fields?.summary === title,
     );
-    const before = await ctx.reloadChat(chat);
-    const after = await ctx.reloadChat(chat);
+    // What the first turn observed when it settled, and what the product's stored conversation holds
+    // when read again afterwards (the lab has no browser; this is the read a page reload makes).
+    const observed = one.turn.messageIds;
+    const stored = await ctx.reloadChat(chat);
     const two = await composerTurn(ctx, fixture, { prompt, chat });
     const afterTwo = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
     const three = await composerTurn(ctx, fixture, { prompt, chat });
@@ -468,27 +494,41 @@ async function reloadAndRepeat(ctx) {
       answer: run.turn.answer,
       turn: run.turn,
     });
+    const runs = [
+      {
+        turn: one.turn,
+        part: part(
+          "stored conversation matches the turn",
+          ["stored-conversation-matches-turn"],
+          gradeConversationSurvives({ before: observed, after: stored }),
+        ),
+      },
+      ...repeatParts("after a reload", "repeat-after-reload", graded(two, afterTwo)),
+      ...repeatParts("in the same chat", "repeat-in-chat", graded(three, afterThree)),
+    ];
+    // The turns of the journey, once each: the first order and the two repeats.
     return aggregateParts(
-      [
-        part(
-          "conversation after the reload",
-          ["conversation-survives-reload"],
-          gradeConversationSurvives({ before, after }),
-        ),
-        part(
-          "same order again after a reload",
-          ["repeat-after-reload-no-duplicate"],
-          gradeRepeat(graded(two, afterTwo)),
-        ),
-        part(
-          "same order again in the same chat",
-          ["repeat-in-chat-no-duplicate"],
-          gradeRepeat(graded(three, afterThree)),
-        ),
-      ],
-      [one.turn, NO_TURN, two.turn, three.turn],
+      runs.map((run) => run.part),
+      [one.turn, two.turn, three.turn],
+      { unverifiedIsNotGreen: true },
     );
   });
+}
+
+/** The repeated order's two parts: hard (nothing created, the first issue stands), soft (reply names it). */
+function repeatParts(label, id, grading) {
+  return [
+    {
+      part: part(`same order again ${label}`, [`${id}-no-duplicate`], gradeRepeat(grading)),
+    },
+    {
+      part: part(
+        `same order again ${label}: the reply refers to the first issue`,
+        [`${id}-reply-refers`],
+        gradeRepeatReference(grading),
+      ),
+    },
+  ];
 }
 
 /** C06: the three modes and a readable approval, with the document lane's grader and a plain Bug request. */
@@ -499,6 +539,7 @@ async function modesAndApproval(ctx) {
   return withTemplates(ctx.http, bug, () =>
     modesAndReadableApproval(ctx, {
       query: typeQuery("Bug"),
+      unverifiedIsNotGreen: true,
       promptFor: (run) => createPrompt("Bug", `Composer Modus ${run.label}`, fixture),
     }),
   );
@@ -518,6 +559,7 @@ async function reportsOnJiraPodOnly(ctx) {
   return aggregateParts(
     results,
     results.map(() => NO_TURN),
+    { unverifiedIsNotGreen: true },
   );
 }
 
@@ -585,10 +627,21 @@ async function attachmentRefused(ctx) {
   const grade = gradeAttachmentRefusal({
     before,
     after: await count(),
-    answer: turn.answer,
     exchanges: turn.toolExchanges,
+    turn,
   });
-  return aggregateParts([part("attach a file", ["attachment-refused"], grade)], [turn]);
+  return aggregateParts(
+    [
+      part("attach a file", ["attachment-refused"], grade),
+      part(
+        "attach a file: the answer",
+        ["attachment-answer-readable"],
+        gradeAttachmentWording(turn.answer),
+      ),
+    ],
+    [turn],
+    { unverifiedIsNotGreen: true },
+  );
 }
 
 export const COMPOSER_JOURNEYS = Object.freeze({

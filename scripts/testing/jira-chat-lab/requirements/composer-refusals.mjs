@@ -7,7 +7,14 @@
 // MODEL OBSERVATION (status `unverified`, never red) that the scorecard shows as such.
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { askedForApproval, namesRule, ruleNames, writeCalls } from "./composer-graders.mjs";
+import {
+  askedForApproval,
+  namesRule,
+  ruleNames,
+  soft,
+  stepProof,
+  writeCalls,
+} from "./composer-graders.mjs";
 import { templateRefusals } from "./templates.mjs";
 
 const REPO = join(import.meta.dirname, "..", "..", "..", "..");
@@ -16,6 +23,9 @@ const { JIRA_TEMPLATE_RULE_IDS } = await import(
 );
 const { jiraTemplateViolationGuidance } = await import(
   pathToFileURL(join(REPO, "packages/keiko-connectors/dist/jira-issue-template-check.js")).href
+);
+const { JIRA_ALREADY_REFUSED_GUIDANCE } = await import(
+  pathToFileURL(join(REPO, "packages/keiko-server/dist/atlassian/jiraMutationResult.js")).href
 );
 
 /** The closed rule ids that say no template governs a create, as far as THIS build defines them. */
@@ -36,39 +46,76 @@ const producerPorts = {
   allRuleIds: JIRA_TEMPLATE_RULE_IDS,
 };
 
-/** Soft verdicts: green, or an `unverified` model observation that says so. Never red. */
-const soft = (holds, detail) =>
-  holds
-    ? { status: "green", detail }
-    : { status: "unverified", observation: true, detail: `model observation: ${detail}` };
-
 /**
- * Nothing was created in Jira by this turn (the native read of new keys only). Hard. It does not
- * say the gate ran: that is the hint obligation's.
+ * Nothing was created in Jira by this turn (the native read of new keys only), and the turn showed
+ * the gate was asked: it ran to an answer or a call (`stepProof`) AND attempted a write or stored a
+ * refusal. An issue that exists is red whatever the turn did; a turn that only talked, stayed silent
+ * or failed proves nothing about the gate, so it is `unverified`, never green.
  */
-function gradeRefusedNatively(created, what) {
-  return created.length === 0
-    ? { status: "green", detail: `nothing was created natively (${what})` }
+export function gradeRefusedNatively({ created, what, turn, exchanges }) {
+  if (created.length > 0)
+    return {
+      status: "red",
+      detail: `${created.length} issues were created natively although ${what}: ${created.map((issue) => issue.key).join(", ")}`,
+    };
+  const proof = stepProof(turn, "the request");
+  if (proof !== undefined) return proof;
+  const attempted = writeCalls(exchanges).length > 0 || templateRefusals(exchanges).length > 0;
+  return attempted
+    ? { status: "green", detail: `nothing was created natively (${what}); a write was attempted` }
     : {
-        status: "red",
-        detail: `${created.length} issues were created natively although ${what}: ${created.map((issue) => issue.key).join(", ")}`,
+        status: "unverified",
+        detail: `nothing was created natively (${what}), but no write was attempted and no refusal is stored; the gate was not asked`,
       };
 }
 
-/** The first stored refusal naming one of `rules`, with the exchange that carries it. */
+/**
+ * The stored refusal of the first exchange that names one of `rules`: the union of every violation
+ * of that exchange (a draft carries one refusal per failed item), whether the product replayed an
+ * earlier refusal, and whether the exchange mixes in item states with guidance of their own.
+ */
 function storedRefusal(exchanges, rules) {
-  const [first] = namesRule(templateRefusals(exchanges), rules);
-  return first === undefined
-    ? undefined
-    : { refusal: first, data: exchanges[first.index]?.result?.data };
+  const all = templateRefusals(exchanges);
+  const [first] = namesRule(all, rules);
+  if (first === undefined) return undefined;
+  const data = exchanges[first.index]?.result?.data;
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const violations = all
+    .filter((refusal) => refusal.index === first.index)
+    .flatMap((refusal) => refusal.violations);
+  return {
+    refusal: { ...first, violations },
+    data,
+    replayed: data?.replayed === true || items.some((item) => item?.detail?.replayed === true),
+    mixed: items.some(
+      (item) =>
+        item?.state === "uncertain" ||
+        item?.state === "pending" ||
+        (item?.state === "failed" && (item.detail?.fieldErrors ?? item.detail?.messages)),
+    ),
+  };
 }
 
 /**
- * The product's own words arrived: the stored `guidance` of the refusal equals what the producer's
- * `jiraTemplateViolationGuidance` returns for the refusal's own violations. No guidance from the
- * producer, or none stored, is not a green.
+ * The product's own words arrived: the stored `guidance` equals what the producer returns for the
+ * union of the exchange's violations. A replayed refusal carries the producer's replay text instead
+ * and cannot show the violation guidance: unverified, with the replay text checked. No guidance
+ * from the producer for the union, or a mixed draft, is not a green either.
  */
 function gradeGuidance(stored, guidance) {
+  if (stored.replayed)
+    return {
+      status: "unverified",
+      detail:
+        stored.data?.guidance === JIRA_ALREADY_REFUSED_GUIDANCE
+          ? "the product replayed an earlier refusal with its own replay text; the violation guidance was shown earlier"
+          : "the product replayed an earlier refusal without its own replay text",
+    };
+  if (stored.mixed)
+    return {
+      status: "unverified",
+      detail: "the draft mixes item states whose guidance outranks the violation guidance",
+    };
   const expected = guidance(stored.refusal.violations);
   if (expected === undefined)
     return { status: "unverified", detail: "the producer states no guidance for this refusal" };
@@ -92,26 +139,28 @@ export function gradeHintDelivered({ exchanges, ports = producerPorts }) {
       status: "unverified",
       detail: "no stored write exchange in the turn; nothing to read",
     };
-  if (ports.noTemplateRules.length === 0)
-    return {
-      status: "unverified",
-      detail:
-        "the producer of this build defines no missing-template refusal (template-missing / template-not-activated); the expected value cannot be derived",
-    };
+  // The two reds need no producer rule: a card for a write that can never pass, and a write that
+  // succeeded although no template governs the type, are wrong in every build.
   const cards = attempts.filter((exchange) => askedForApproval(exchange)).length;
   if (cards > 0)
     return {
       status: "red",
       detail: `${cards} approval cards were shown for a write that can never pass`,
     };
+  if (attempts.some((exchange) => exchange.result?.data?.outcome === "succeeded"))
+    return {
+      status: "red",
+      detail: "the write succeeded instead of the closed missing-template refusal",
+    };
+  if (ports.noTemplateRules.length === 0)
+    return {
+      status: "unverified",
+      detail:
+        "the producer of this build defines no missing-template refusal (template-missing / template-not-activated); the expected value cannot be derived",
+    };
   const stored = storedRefusal(exchanges, ports.noTemplateRules);
-  if (stored !== undefined) return gradeGuidance(stored, ports.guidance);
-  const wrote = attempts.some((exchange) => exchange.result?.data?.outcome === "succeeded");
-  return wrote
-    ? {
-        status: "red",
-        detail: "the write succeeded instead of the closed missing-template refusal",
-      }
+  return stored !== undefined
+    ? gradeGuidance(stored, ports.guidance)
     : {
         status: "unverified",
         detail: `a write was attempted, but no stored refusal names ${ports.noTemplateRules.join(" or ")}`,
@@ -142,9 +191,14 @@ export function gradeMentionsTemplate(answer) {
 }
 
 /** The three obligations of a create without a template: hard, hard, soft. */
-export function gradeNoTemplate({ created, exchanges, answer, ports }) {
+export function gradeNoTemplate({ created, exchanges, answer, turn, ports }) {
   return {
-    refused: gradeRefusedNatively(created, "no template governs the type"),
+    refused: gradeRefusedNatively({
+      created,
+      what: "no template governs the type",
+      turn,
+      exchanges,
+    }),
     hint: gradeHintDelivered({ exchanges, ports }),
     mentions: gradeMentionsTemplate(answer),
   };
@@ -203,9 +257,14 @@ export function gradeParentAnswer(answer, ports = producerPorts) {
 }
 
 /** The two obligations of the unrepairable request, with the native first obligation: hard, hard, soft. */
-export function gradeUnrepairable({ created, exchanges, answer, ports }) {
+export function gradeUnrepairable({ created, exchanges, answer, turn, ports }) {
   return {
-    refused: gradeRefusedNatively(created, "the parent type is not allowed"),
+    refused: gradeRefusedNatively({
+      created,
+      what: "the parent type is not allowed",
+      turn,
+      exchanges,
+    }),
     gate: gradeParentRefusal({ exchanges, ports }),
     plain: gradeParentAnswer(answer, ports),
   };

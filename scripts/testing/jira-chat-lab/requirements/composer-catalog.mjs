@@ -19,6 +19,7 @@ export const COMPOSER_SCENARIOS = Object.freeze([
       ...slugs.map((slug) => `create-conformant-${slug}`),
       "multi-create-all-created",
       "multi-create-keys-listed",
+      "multi-create-answer-keys",
       "unrepairable-refused-natively",
       "unrepairable-refused-by-gate",
       "unrepairable-answer-plain",
@@ -57,6 +58,7 @@ export const COMPOSER_SCENARIOS = Object.freeze([
       "edit-breaking-refused-clear-field",
       "edit-breaking-refused-parent",
       "edit-preexisting-notice",
+      "edit-preexisting-answer",
       "edit-no-template-passes",
       "status-change-no-template-passes",
     ],
@@ -68,9 +70,11 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     title:
       "The same order sent again in one conversation, after a reload and without, creates no duplicate",
     obligations: [
-      "conversation-survives-reload",
+      "stored-conversation-matches-turn",
       "repeat-after-reload-no-duplicate",
+      "repeat-after-reload-reply-refers",
       "repeat-in-chat-no-duplicate",
+      "repeat-in-chat-reply-refers",
     ],
   },
   {
@@ -99,6 +103,6 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     requirement: "composer",
     issue: 4354,
     title: "An attachment request is refused readably and nothing reaches Jira",
-    obligations: ["attachment-refused"],
+    obligations: ["attachment-refused", "attachment-answer-readable"],
   },
 ]);

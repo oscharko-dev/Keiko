@@ -65,12 +65,22 @@ function verdictOf(red, greenParts) {
  * otherwise it is green for the obligations of its green parts only, so a part that could not be
  * verified leaves its obligations uncovered (the scenario stays partial); no green part at all is
  * `unverified`, which credits nothing.
+ *
+ * With `unverifiedIsNotGreen` (the Composer lane) a check with ANY unverified part is itself
+ * `unverified` and never logs `green`: the green parts still credit their own obligations
+ * (`unverifiedParts` tells the scenario verdict why), the scenario reports `unverified`, and a
+ * journey that could not verify everything cannot read as passed.
  */
-export function aggregateParts(parts, turns) {
+export function aggregateParts(parts, turns, { unverifiedIsNotGreen = false } = {}) {
   const green = parts.filter((part) => part.status === "green");
   const red = parts.some((part) => part.status === "red");
-  const status = verdictOf(red, green.length);
+  const unverified = parts.filter((part) => part.status === "unverified").length;
+  let status = verdictOf(red, green.length);
+  if (unverifiedIsNotGreen && !red && unverified > 0) status = "unverified";
   const covers = (red ? parts : green).flatMap((part) => part.covers);
   const detail = parts.map((part) => `${part.label}: ${part.status} (${part.detail})`).join("; ");
-  return result(status, sumTurns(turns), detail, covers);
+  return {
+    ...result(status, sumTurns(turns), detail, covers),
+    ...(unverifiedIsNotGreen && unverified > 0 ? { unverifiedParts: unverified } : {}),
+  };
 }
