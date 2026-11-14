@@ -463,10 +463,10 @@ describe("startUninstallHelper", () => {
     }
   });
 
-  it("waits up to thirty seconds for the helper to report, before anything is deleted", () => {
+  it("waits up to two minutes for the helper to report, before anything is deleted", () => {
     expect(
       readFileSync(new URL("./uninstall-windows-helper.ts", import.meta.url), "utf8"),
-    ).toContain("const HELPER_READY_TIMEOUT_MS = 30_000;");
+    ).toContain("const HELPER_READY_TIMEOUT_MS = 120_000;");
   });
 
   it("refuses a registration path that holds the list delimiter", async () => {
@@ -476,5 +476,55 @@ describe("startUninstallHelper", () => {
       "not a plain path",
     );
     expect(readdirSync(parent)).toEqual([]);
+  });
+
+  it("tells the person once, after a few seconds, that it is preparing the removal", async () => {
+    const parent = tempParent();
+    let notices = 0;
+    let polls = 0;
+    const { deps: base } = deps(parent, () => undefined);
+    const result = await startUninstallHelper(
+      ROOT,
+      env,
+      {
+        ...base,
+        readyTimeoutMs: 8000,
+        pollMs: 500,
+        // the helper reports on the twelfth poll, six seconds in
+        sleep: () => {
+          polls += 1;
+          if (polls === 12) {
+            writeFileSync(join(parent, readdirSync(parent)[0] ?? "", "ready"), "4711");
+          }
+          return Promise.resolve();
+        },
+        onPreparing: () => {
+          notices += 1;
+        },
+      },
+      EXTERNALS,
+    );
+    expect(result.kind).toBe("ready");
+    expect(notices).toBe(1);
+  });
+
+  it("says nothing when the helper is quick", async () => {
+    const parent = tempParent();
+    let notices = 0;
+    const { deps: base } = deps(parent, (_o, dir) => {
+      writeFileSync(join(dir, "ready"), "4711");
+    });
+    await startUninstallHelper(
+      ROOT,
+      env,
+      {
+        ...base,
+        onPreparing: () => {
+          notices += 1;
+        },
+      },
+      EXTERNALS,
+    );
+    expect(notices).toBe(0);
   });
 });

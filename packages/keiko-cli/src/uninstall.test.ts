@@ -2178,6 +2178,42 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
     ]);
   });
 
+  it("says once that it is preparing the removal while a slow helper starts, then removes nothing until it is ready", async () => {
+    const { root, home, managedRoot, env } = await installReal();
+    const helper = helperSeam(root, false);
+    let polls = 0;
+    const c = makeIo();
+
+    const code = await runUninstallCli(
+      ["--state"],
+      c.io,
+      { ...env, ...WIN },
+      {
+        cwd: root,
+        homedir: () => home,
+        ...insideCopy(managedRoot),
+        managedRemoval: {
+          helper: {
+            ...helper.seam,
+            readyTimeoutMs: 8000,
+            pollMs: 500,
+            // never reports: the run refuses after the bound, having said what it waited for
+            sleep: () => {
+              polls += 1;
+              return Promise.resolve();
+            },
+          },
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(polls).toBeGreaterThan(6);
+    expect(c.out().match(/preparing the removal/gu)).toHaveLength(1);
+    expect(c.err()).toContain("nothing was removed");
+    expect(existsSync(join(managedRoot, "Keiko.exe"))).toBe(true);
+  });
+
   it("starts no helper on another platform or on a dry run, and a dry run names the handoff", async () => {
     const { root, home, managedRoot, env } = await installReal();
     const helper = helperSeam(root, true);

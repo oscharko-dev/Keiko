@@ -35,9 +35,12 @@ import {
 const HELPER_READY_FILE = "ready";
 const HELPER_LIST_FILE = "residue.txt";
 const HELPER_REFUSED_FILE = "refused";
-// Before any deletion, so a long bound costs nothing: an attached, hidden PowerShell took four to five
-// seconds on an unloaded machine, and the real helper is started by a second one.
-const HELPER_READY_TIMEOUT_MS = 30_000;
+// Before any deletion, so a long bound costs nothing when the helper is quick. Measured on Windows
+// PowerShell 5.1: four to five seconds unloaded, 19 s for one start and up to 58 s for the two stages
+// beside other work, so the bound is two minutes; after a few seconds the person is told what the
+// command is waiting for, so a long wait is not silence.
+const HELPER_READY_TIMEOUT_MS = 120_000;
+const HELPER_NOTICE_AFTER_MS = 3000;
 const HELPER_POLL_MS = 100;
 // How long the helper waits for the committed list, and then for this process to end. The first is
 // generous: this process removes thousands of files first. The second is short: the list is
@@ -192,6 +195,8 @@ export interface UninstallHelperDeps {
   readonly sleep?: ((ms: number) => Promise<void>) | undefined;
   readonly identityCheck?: WindowsSystemDirectoryIdentityCheck | undefined;
   readonly existsAsFile?: WindowsBinaryExistsCheck | undefined;
+  /** Called once when the helper has not reported after a few seconds. */
+  readonly onPreparing?: (() => void) | undefined;
   /** Whether a process id names a running process; the platform probe unless a test names one. */
   readonly isProcessAlive?: ((pid: number) => boolean) | undefined;
 }
@@ -234,7 +239,9 @@ function createHandle(
 
 // What the real helper reported: its process id (the ready file holds nothing else), a refusal of its
 // own start check, or nothing yet.
-function readReport(directory: string): number | "refused" | undefined {
+type HelperReport = number | "refused" | undefined;
+
+function readReport(directory: string): HelperReport {
   if (existsSync(join(directory, HELPER_REFUSED_FILE))) return "refused";
   const readyPath = join(directory, HELPER_READY_FILE);
   if (!existsSync(readyPath)) return undefined;
@@ -248,16 +255,21 @@ function waitForReport(
   directory: string,
   failed: () => boolean,
   deps: UninstallHelperDeps,
-): Promise<number | "refused" | undefined> {
+): Promise<HelperReport> {
   const sleep = deps.sleep ?? defaultSleep;
   const pollMs = deps.pollMs ?? HELPER_POLL_MS;
   const attempts = Math.max(
     1,
     Math.ceil((deps.readyTimeoutMs ?? HELPER_READY_TIMEOUT_MS) / pollMs),
   );
-  const check = (attempt: number): Promise<number | "refused" | undefined> => {
+  let noticed = false;
+  const check = (attempt: number): Promise<HelperReport> => {
     const report = readReport(directory);
     if (report !== undefined) return Promise.resolve(report);
+    if (!noticed && attempt * pollMs >= HELPER_NOTICE_AFTER_MS) {
+      noticed = true;
+      deps.onPreparing?.();
+    }
     if (failed() || attempt >= attempts) return Promise.resolve(undefined);
     return sleep(pollMs).then(() => check(attempt + 1));
   };
@@ -267,12 +279,8 @@ function waitForReport(
 // The first stage ends quickly and on purpose; only a failing exit code says it did not start the
 // real helper.
 function firstStageFailed(child: WindowsHelperChild | undefined): boolean {
-  return (
-    child !== undefined &&
-    child.exitCode !== undefined &&
-    child.exitCode !== null &&
-    child.exitCode !== 0
-  );
+  const code = child?.exitCode;
+  return code !== undefined && code !== null && code !== 0;
 }
 
 function recordRefusal(
@@ -284,6 +292,40 @@ function recordRefusal(
   return error === undefined
     ? { kind: "refused", reason }
     : { kind: "refused", reason, failureKind: securityErrorKind(error) };
+}
+
+interface FirstStageInputs {
+  readonly directory: string;
+  readonly installRoot: string;
+  readonly externals: readonly string[];
+}
+
+// Starts the first stage, which starts the real helper; it is not waited for.
+function launchFirstStage(
+  system: WindowsHelperSystem,
+  env: NodeJS.ProcessEnv,
+  inputs: FirstStageInputs,
+  deps: UninstallHelperDeps,
+  onError: () => void,
+): WindowsHelperChild {
+  const child = startOutlivingWindowsHelper(
+    {
+      system,
+      env,
+      script: HELPER_SCRIPT,
+      extraEnv: {
+        KEIKO_UNINSTALL_DIR: inputs.directory,
+        KEIKO_UNINSTALL_PID: String(deps.pid),
+        KEIKO_UNINSTALL_ROOT: inputs.installRoot,
+        KEIKO_UNINSTALL_EXTERNALS: inputs.externals.join("|"),
+        KEIKO_UNINSTALL_EXTERNALS_COUNT: String(inputs.externals.length),
+      },
+    },
+    deps.spawnFn,
+  );
+  child.on("error", onError);
+  child.unref();
+  return child;
 }
 
 /**
@@ -315,37 +357,16 @@ export async function startUninstallHelper(
   }
   const state: { spawnFailed: boolean; child?: WindowsHelperChild } = { spawnFailed: false };
   try {
-    const child = startOutlivingWindowsHelper(
-      {
-        system,
-        env,
-        script: HELPER_SCRIPT,
-        extraEnv: {
-          KEIKO_UNINSTALL_DIR: directory,
-          KEIKO_UNINSTALL_PID: String(deps.pid),
-          KEIKO_UNINSTALL_ROOT: installRoot,
-          KEIKO_UNINSTALL_EXTERNALS: externals.join("|"),
-          KEIKO_UNINSTALL_EXTERNALS_COUNT: String(externals.length),
-        },
-      },
-      deps.spawnFn,
-    );
-    child.on("error", () => {
+    state.child = launchFirstStage(system, env, { directory, installRoot, externals }, deps, () => {
       state.spawnFailed = true;
     });
-    state.child = child;
-    child.unref();
   } catch (error) {
     return recordRefusal("spawn-failed", directory, error);
   }
-  const report = await waitForReport(
-    directory,
-    () => state.spawnFailed || firstStageFailed(state.child),
-    deps,
-  );
+  const failed = (): boolean => state.spawnFailed || firstStageFailed(state.child);
+  const report = await waitForReport(directory, failed, deps);
   if (typeof report !== "number") {
-    const failedToStart = state.spawnFailed || firstStageFailed(state.child);
-    return recordRefusal(failedToStart ? "spawn-failed" : "not-ready", directory);
+    return recordRefusal(failed() ? "spawn-failed" : "not-ready", directory);
   }
   // The real helper's own process id: it is what must be alive when the list is committed. The first
   // stage has ended long before, and its end says nothing about the helper.

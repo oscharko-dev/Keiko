@@ -855,8 +855,21 @@ installation, it first starts a helper outside it, before the first deletion: th
 PowerShell, started attached with a hidden window through the one visible-helper start the browser
 opener and the launcher's message boxes use (a detached PowerShell showed no browser and no box on
 the Windows guest, #4358). That start gives every helper an explicit working directory, the system
-directory, so a helper never holds a folder of the installation. The helper reports ready by writing
-a file. If it does not, nothing is removed and the person is told to run the uninstall from the
+directory, so a helper never holds a folder of the installation. libuv ends every attached child
+with the process that started it (all of them join one job object that is closed with the parent;
+confirmed on the Windows guest: such a PowerShell is gone three seconds after its Node process ends),
+and the uninstall helper must outlive that process. It therefore starts in two stages: the attached,
+hidden first PowerShell only starts the real helper as its own process (a hidden window) and ends, and
+the real helper, a grandchild outside the job, survives (confirmed on the guest, also for a message
+box). The helper's text, flags and inputs reach it through its environment, so nothing of it is ever
+quoted. The failure alert, which is shown just before the keiko process ends, starts the same way; the
+setup notice is shown for as long as the setup runs, which is the process that starts it, and keeps
+the single stage; the browser opener needs no second stage, because the browser is already a
+grandchild. The real helper reports ready by writing its own process id into a file (and a refusal of
+its own start check into another), which the command reads before it ends and probes again when it
+commits. The ready wait is two minutes, measured at up to 58 seconds for the two stages beside other
+work; after a few seconds the command says once that it is preparing the removal. If the helper does
+not report, nothing is removed and the person is told to run the uninstall from the
 downloaded release package, whose runtime lies outside the installation. The command then removes
 what it can and commits the remainder, as a list written atomically; a helper that has already ended
 is not handed a list, and the run reports the residue and keeps the installation registered. That is

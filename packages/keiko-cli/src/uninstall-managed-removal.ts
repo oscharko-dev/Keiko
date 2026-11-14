@@ -112,6 +112,9 @@ const NOOP_IO: CliIo = {
   err: (_text: string): void => undefined,
 };
 const MAX_REPORTED_RESIDUE = 20;
+// Said once while the helper that finishes the removal is still starting: nothing is removed yet.
+const PREPARING_NOTICE =
+  "keiko uninstall: preparing the removal; on a slow machine this can take up to two minutes. Nothing has been removed yet.\n";
 
 function registrationInput(
   record: ManagedRecord,
@@ -194,7 +197,13 @@ export async function planManagedRemoval(
   const started = await startUninstallHelper(
     record.layout.installRoot,
     context.env,
-    { ...deps.helper, pid: deps.pid },
+    {
+      ...deps.helper,
+      pid: deps.pid,
+      onPreparing: () => {
+        context.io.out(PREPARING_NOTICE);
+      },
+    },
     helperExternals(artifacts, context.stateDir),
   );
   if (started.kind === "refused") {

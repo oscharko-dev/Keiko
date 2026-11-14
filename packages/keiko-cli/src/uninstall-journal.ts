@@ -34,6 +34,10 @@ export function writeUninstallJournal(stateDir: string, journal: UninstallJourna
   });
 }
 
+function isSha256(value: unknown): boolean {
+  return typeof value === "string" && SHA256.test(value);
+}
+
 function isJournal(value: unknown): value is UninstallJournal {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -41,12 +45,9 @@ function isJournal(value: unknown): value is UninstallJournal {
     record.schemaVersion === 1 &&
     typeof record.platformTarget === "string" &&
     isPortableTarget(record.platformTarget) &&
-    typeof record.setupManifestSha256 === "string" &&
-    SHA256.test(record.setupManifestSha256) &&
-    typeof record.installRootIdentitySha256 === "string" &&
-    SHA256.test(record.installRootIdentitySha256) &&
-    typeof record.installRootFoldedSha256 === "string" &&
-    SHA256.test(record.installRootFoldedSha256)
+    isSha256(record.setupManifestSha256) &&
+    isSha256(record.installRootIdentitySha256) &&
+    isSha256(record.installRootFoldedSha256)
   );
 }
 
