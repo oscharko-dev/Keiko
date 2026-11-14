@@ -5481,7 +5481,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.report": "Compute Jira progress, compliance and coverage report",
   "atlassianConnectors.action.jira.draft-stage": "Stage part of a Jira backlog draft",
   "atlassianConnectors.action.jira.draft-batch": "Draft Jira issues from requirements",
-  "chat.jira.report.estimateField": "Estimate field: {name} ({id})",
+  "chat.jira.report.estimateField": "Estimate field: {name}",
   "chat.jira.report.estimateUnavailable": "Estimate unavailable: {reason}",
   "chat.jira.report.estimateReason.project-not-specified": "no project was specified",
   "chat.jira.report.estimateReason.field-not-found":
@@ -5510,6 +5510,11 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.report.done": "Done",
   "chat.jira.report.donePercent": "{percent}% done",
   "chat.jira.report.compliance": "{issues} of {checked} issues deviate ({count} deviations)",
+  "chat.jira.report.templateNone":
+    "No issue was checked against a template: no template exists for {types}.",
+  "chat.jira.report.templatePartial":
+    "{checked} of {total} issues were checked against a template; {without} were not: no template for {types}.",
+  "chat.jira.report.requiredFieldsClean": "Required fields: {judged} issues checked, no deviation.",
   "chat.jira.report.coverage":
     "{epics} epics without members, {orphans} issues without an epic or parent",
   "chat.jira.report.coverageUnobserved":

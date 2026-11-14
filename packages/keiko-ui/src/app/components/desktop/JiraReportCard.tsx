@@ -6,6 +6,7 @@ import type {
   JiraReportFailureReason,
   JiraReportEstimateUnavailableReason,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { useLocale } from "@/lib/i18n";
 import {
   useOptionalWidgetTranslate as useTranslate,
   type WidgetMessageKey,
@@ -47,7 +48,7 @@ function EstimateField({
   return (
     <p>
       {estimate.available
-        ? t("chat.jira.report.estimateField", { name: estimate.fieldName, id: estimate.fieldId })
+        ? t("chat.jira.report.estimateField", { name: estimate.fieldName })
         : t("chat.jira.report.estimateUnavailable", {
             reason: t(ESTIMATE_REASON_KEYS[estimate.reason]),
           })}
@@ -93,12 +94,68 @@ function ReportStatus({ view }: { readonly view: JiraReportView }): ReactNode {
   );
 }
 
+/** A percentage in the number format of the person's language: German writes 20,4, not 20.4. */
+function percentText(value: number, locale: string): string {
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value);
+}
+
+/** The issue types a template does not cover: the first few by name, then that there are more. */
+const TYPES_SHOWN = 5;
+function typesText(types: readonly string[]): string {
+  const shown = types.slice(0, TYPES_SHOWN).join(", ");
+  return types.length > TYPES_SHOWN ? `${shown} …` : shown;
+}
+
+type CardFigures = NonNullable<JiraReportView["figures"]>;
+
+/**
+ * What the compliance check covered (#4356). Issues no template governs were not checked against
+ * one: a deviation count of 0 beside them would read as a clean result, so it is shown only when
+ * there is a deviation or nothing is uncovered. The required-field rules, which judged those issues,
+ * keep their own plain line.
+ */
+function Compliance({ figures }: { readonly figures: CardFigures }): ReactNode {
+  const t = useTranslate();
+  const uncovered = figures.issuesWithoutTemplate;
+  const types = typesText(figures.typesWithoutTemplate);
+  const showDeviations = uncovered === 0 || figures.deviationCount > 0;
+  return (
+    <>
+      {uncovered === 0 ? null : (
+        <p>
+          {uncovered >= figures.total
+            ? t("chat.jira.report.templateNone", { types })
+            : t("chat.jira.report.templatePartial", {
+                checked: figures.issuesChecked,
+                total: figures.total,
+                without: uncovered,
+                types,
+              })}
+        </p>
+      )}
+      {showDeviations ? (
+        <p>
+          {t("chat.jira.report.compliance", {
+            issues: figures.issuesWithDeviations,
+            checked: figures.issuesJudged,
+            count: figures.deviationCount,
+          })}
+        </p>
+      ) : null}
+      {!showDeviations && figures.requiredFieldRules === "applied" ? (
+        <p>{t("chat.jira.report.requiredFieldsClean", { judged: figures.issuesJudged })}</p>
+      ) : null}
+    </>
+  );
+}
+
 function Figures({
   figures,
 }: {
   readonly figures: NonNullable<JiraReportView["figures"]>;
 }): ReactNode {
   const t = useTranslate();
+  const locale = useLocale();
   return (
     <>
       <dl className={styles.cmpFigures}>
@@ -116,14 +173,10 @@ function Figures({
           </div>
         ))}
       </dl>
-      <p>{t("chat.jira.report.donePercent", { percent: figures.donePercent })}</p>
       <p>
-        {t("chat.jira.report.compliance", {
-          issues: figures.issuesWithDeviations,
-          checked: figures.issuesJudged,
-          count: figures.deviationCount,
-        })}
+        {t("chat.jira.report.donePercent", { percent: percentText(figures.donePercent, locale) })}
       </p>
+      <Compliance figures={figures} />
       <p>
         {figures.containerRoles === "unobserved"
           ? t("chat.jira.report.coverageUnobserved", { orphans: figures.orphans })
