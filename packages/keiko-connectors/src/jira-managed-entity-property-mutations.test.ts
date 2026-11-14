@@ -823,3 +823,45 @@ describe("the sentence of a binding that failed", () => {
     ).toEqual({ ok: false, reason: "not-found", detail: { messages: ["Jira's words"] } });
   });
 });
+
+// #4357 AC3: a board or sprint Jira itself refused keeps the closed fact that Jira refused it; the
+// binding failure is rebuilt from the failed read, which cannot carry the fact in its model data.
+it.each([
+  ["jira.set-board-property", "board", { boardId: "7" }],
+  ["jira.set-sprint-property", "sprint", { sprintId: "8" }],
+] as const)(
+  "keeps the fact that Jira refused the %s binding, with its explanation",
+  async (name, prefix, entity) => {
+    const scenario = CASES.find((candidate) => candidate.prefix === prefix);
+    if (scenario === undefined) throw new TypeError("Missing scenario");
+    const f = fixture(scenario, [
+      {
+        ok: false,
+        reason: "not-found",
+        httpStatus: 404,
+        remote: { fromJira: true, messages: ["No such entity."] },
+      },
+    ]);
+    const attempt = await mutate(
+      name,
+      { ...entity, propertyKey: KEY, expectAbsent: true, valueNodes: FALSE_NODES },
+      f.ports,
+    );
+    expect(attempt).toEqual({
+      ok: false,
+      reason: "not-found",
+      detail: { fromJira: true, messages: ["No such entity."] },
+    });
+    expect(effects(f.selected)).toEqual([]);
+  },
+);
+it("leaves a binding Keiko found unreadable without that fact", async () => {
+  const f = fixture(ISSUE_SCENARIO, [reply({})]);
+  const attempt = await mutate(
+    "jira.delete-issue-property",
+    { issueIdOrKey: "syn-2", propertyKey: KEY, expectedValueNodes: OLD_NODES },
+    f.ports,
+  );
+  expect(attempt.ok).toBe(false);
+  expect(JSON.stringify(attempt)).not.toContain("fromJira");
+});

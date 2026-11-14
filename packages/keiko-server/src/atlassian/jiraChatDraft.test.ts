@@ -41,6 +41,7 @@ import {
   jiraDraftGuidance,
   JIRA_DRAFT_MIXED_REFUSAL_GUIDANCE,
   JIRA_DRAFT_PARTLY_LOCAL_REFUSAL_GUIDANCE,
+  JIRA_DRAFT_UNKNOWN_SOURCE_REFUSAL_GUIDANCE,
   JIRA_DRAFT_UNTRACED_GUIDANCE,
   JIRA_DRAFT_EXISTING_GUIDANCE,
   JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE,
@@ -1317,14 +1318,14 @@ describe("the draft connection carries the customer's issue templates (#4177)", 
 describe("what a draft run tells the model about items it could not create (#4357 AC3)", () => {
   const failed = (
     ref: string,
-    refusedBy: "jira" | "keiko",
+    refusedBy: "jira" | "keiko" | undefined,
     issueKey?: string,
   ): Parameters<typeof jiraDraftGuidance>[0][number] => ({
     ref,
     state: "failed",
     ...(issueKey === undefined ? {} : { issueKey }),
     detail: { messages: ["m"] },
-    refusedBy,
+    ...(refusedBy === undefined ? {} : { refusedBy }),
   });
   const created = (ref: string): Parameters<typeof jiraDraftGuidance>[0][number] => ({
     ref,
@@ -1343,6 +1344,11 @@ describe("what a draft run tells the model about items it could not create (#435
     expect(jiraDraftGuidance([created("1"), failed("a", "jira")])).toBe(
       JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE,
     );
+  });
+  it("names neither source for an item whose source is not known, and never calls it Keiko's", () => {
+    for (const items of [[failed("a", undefined)], [failed("a", "jira"), failed("b", undefined)]])
+      expect(jiraDraftGuidance(items)).toBe(JIRA_DRAFT_UNKNOWN_SOURCE_REFUSAL_GUIDANCE);
+    expect(JIRA_DRAFT_UNKNOWN_SOURCE_REFUSAL_GUIDANCE).not.toMatch(/Jira refused|Keiko refused/u);
   });
   it("names both when Keiko refused one item and Jira another, created or not", () => {
     for (const items of [

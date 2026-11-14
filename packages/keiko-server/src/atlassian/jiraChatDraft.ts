@@ -47,8 +47,8 @@ import { JIRA_DRAFT_UNLISTED_GUIDANCE, listIssueKeys } from "./jiraDraftKeyRange
 import {
   JIRA_ALREADY_REFUSED_GUIDANCE,
   JIRA_LOCAL_REFUSAL_GUIDANCE,
-  JIRA_PERMISSION_GUIDANCE,
   JIRA_REJECTED_GUIDANCE,
+  jiraRefusalSource,
   JIRA_UNCERTAIN_GUIDANCE,
 } from "./jiraMutationResult.js";
 import {
@@ -191,18 +191,22 @@ function keyOf(value: unknown): string | undefined {
  * A refusal that names an issue (an existing item still missing links) keeps its key: the issue
  * exists, so its dependents proceed and the model repairs it instead of creating it again.
  */
-function failedItem(ref: string, result: ManagedMcpToolResult): DraftItemResult {
+function failedItem(
+  ref: string,
+  result: ManagedMcpToolResult,
+  attempt: JiraMutationAttempt | undefined,
+): DraftItemResult {
   const issueKey = keyOf(result.data.issueKey);
-  const guidance = result.data.guidance;
+  // The source comes from the attempt's own detail through the one closed function; an item with no
+  // attempt (a replayed settlement) has no known source and is never assumed to be Keiko's.
+  const refusedBy =
+    attempt?.ok === false ? jiraRefusalSource("rejected", attempt.detail) : undefined;
   return {
     ref,
     state: "failed",
     ...(issueKey === undefined ? {} : { issueKey }),
     detail: failureDetail(result.data),
-    refusedBy:
-      guidance === JIRA_REJECTED_GUIDANCE || guidance === JIRA_PERMISSION_GUIDANCE
-        ? "jira"
-        : "keiko",
+    ...(refusedBy === undefined ? {} : { refusedBy }),
   };
 }
 /** Journal outcome first; the attempt only names the key a reconciliation found. */
@@ -220,7 +224,8 @@ function settledItem(
     const issueKey = keyOf(attempt.receipt.issueKey);
     return { ref, state: "existing", ...(issueKey === undefined ? {} : { issueKey }) };
   }
-  if (outcome === "rejected" || outcome === "not-dispatched") return failedItem(ref, result);
+  if (outcome === "rejected" || outcome === "not-dispatched")
+    return failedItem(ref, result, attempt);
   // A partial effect names the issue it did create, so it is never created again.
   const partialKey = keyOf(result.data.issueKey);
   return {
@@ -676,6 +681,15 @@ export const JIRA_DRAFT_PARTLY_LOCAL_REFUSAL_GUIDANCE =
   "Do what each failed item's messages say, then send the corrected draft once: " +
   "issues already in Jira are recognised, so nothing is created twice. " +
   "Tell the user in plain language which issues were created and which item was refused and why.";
+/**
+ * Failed items whose refusal source is not known (a replayed settlement keeps no attempt): neither
+ * "Jira refused" nor "Keiko refused" would be true of them, so the words name neither.
+ */
+export const JIRA_DRAFT_UNKNOWN_SOURCE_REFUSAL_GUIDANCE =
+  "The items marked failed were refused and not created; the items with an issueKey, if any, are in Jira. " +
+  "Do what each failed item's fieldErrors or messages say, then send the corrected draft once: " +
+  "issues already in Jira are recognised, so nothing is created twice. " +
+  "Tell the user in plain language what was created, if anything, and which item was refused and why.";
 /** The words for failed items that carry an explanation, by who refused them. */
 function explainedDraftGuidance(
   items: readonly DraftItemResult[],
@@ -683,7 +697,9 @@ function explainedDraftGuidance(
 ): string {
   const created = items.some((item) => item.issueKey !== undefined);
   const jira = explained.some((item) => item.refusedBy === "jira");
-  const keiko = explained.some((item) => item.refusedBy !== "jira");
+  const keiko = explained.some((item) => item.refusedBy === "keiko");
+  if (explained.some((item) => item.refusedBy === undefined))
+    return JIRA_DRAFT_UNKNOWN_SOURCE_REFUSAL_GUIDANCE;
   if (jira && keiko) return JIRA_DRAFT_MIXED_REFUSAL_GUIDANCE;
   if (jira) return created ? JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE : JIRA_REJECTED_GUIDANCE;
   return created ? JIRA_DRAFT_PARTLY_LOCAL_REFUSAL_GUIDANCE : JIRA_LOCAL_REFUSAL_GUIDANCE;

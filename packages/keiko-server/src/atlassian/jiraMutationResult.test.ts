@@ -13,6 +13,7 @@ import {
   jiraLinkCounts,
   jiraLinkCountsOfResult,
   jiraMutationToolResult,
+  jiraRefusalSource,
   validJiraMutationAttempt,
 } from "./jiraMutationResult.js";
 
@@ -1145,16 +1146,21 @@ describe("the guidance of a refusal says who refused it and what to do (#4357 AC
       refuse("field-validation", { fieldErrors: [{ fieldId: "summary", message: "m" }] }),
     ).toBe(JIRA_LOCAL_REFUSAL_GUIDANCE);
   });
-  it("does not tell a permission refusal to correct fields, from Jira or from a read", () => {
-    for (const fromJira of [true, undefined]) {
-      const guidance = refuse("permission-denied", {
-        ...(fromJira === undefined ? {} : { fromJira }),
-        messages: ["You do not have permission."],
-      });
-      expect(guidance).toBe(JIRA_PERMISSION_GUIDANCE);
-      expect(guidance).not.toMatch(/Correct the fields|Jira refused this change/u);
-      expect(guidance).toContain("Do not retry it.");
-    }
+  it("gives a permission refusal the permission words only when Jira said it", () => {
+    const fromJira = refuse("permission-denied", { fromJira: true, messages: ["No permission."] });
+    expect(fromJira).toBe(JIRA_PERMISSION_GUIDANCE);
+    expect(fromJira).not.toMatch(/Correct the fields|Jira refused this change/u);
+    expect(fromJira).toContain("Do not retry it.");
+    // A permission-denied Keiko made (no Jira document behind it) is Keiko's refusal, in Keiko's words.
+    expect(refuse("permission-denied", { messages: ["m"] })).toBe(JIRA_LOCAL_REFUSAL_GUIDANCE);
+  });
+  it("names the source of a refusal from the closed fact alone, one function for everyone", () => {
+    expect(jiraRefusalSource("rejected", { fromJira: true, messages: ["m"] })).toBe("jira");
+    expect(jiraRefusalSource("rejected", { messages: ["m"] })).toBe("keiko");
+    expect(jiraRefusalSource("rejected", undefined)).toBe("keiko");
+    expect(jiraRefusalSource("not-dispatched", { messages: ["m"] })).toBe("keiko");
+    for (const outcome of ["succeeded", "unknown", "pending"] as const)
+      expect(jiraRefusalSource(outcome, { fromJira: true, messages: ["m"] })).toBeUndefined();
   });
   it("never sends the closed fact to the model", () => {
     const data = jiraAttemptToolResult("rejected", {

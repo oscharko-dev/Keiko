@@ -797,13 +797,31 @@ export function jiraResultGuidance(
     ? explainedRefusalGuidance(reason, detail)
     : undefined;
 }
-/** Who refused, and why, decides what the model is told to do (#4357 AC3). */
+export type JiraRefusalSource = "jira" | "keiko";
+/**
+ * Who refused a change that was refused, from the closed fact the detail carries and nothing else
+ * (#4357 AC3): Jira, when its own error document was parsed (`detail.fromJira`), otherwise Keiko. The
+ * guidance of a result and the draft's per-item source both come from this one function. A result
+ * that is not a refusal has no source.
+ */
+export function jiraRefusalSource(
+  outcome: JiraMutationResultState,
+  detail: JiraMutationFailureDetail | undefined,
+): JiraRefusalSource | undefined {
+  if (outcome !== "rejected" && outcome !== "not-dispatched") return undefined;
+  return detail?.fromJira === true ? "jira" : "keiko";
+}
+/**
+ * What the model is told to do after an explained refusal. Only Jira's own refusal can be a
+ * permission one: a Keiko-made `permission-denied` (a read Jira denied before the write) is Keiko's
+ * refusal and gets Keiko's words.
+ */
 function explainedRefusalGuidance(
   reason: AtlassianConnectorWriteFailureReason | undefined,
   detail: JiraMutationFailureDetail | undefined,
 ): string {
-  if (reason === "permission-denied") return JIRA_PERMISSION_GUIDANCE;
-  return detail?.fromJira === true ? JIRA_REJECTED_GUIDANCE : JIRA_LOCAL_REFUSAL_GUIDANCE;
+  if (jiraRefusalSource("rejected", detail) !== "jira") return JIRA_LOCAL_REFUSAL_GUIDANCE;
+  return reason === "permission-denied" ? JIRA_PERMISSION_GUIDANCE : JIRA_REJECTED_GUIDANCE;
 }
 function uncertainOutcome(
   outcome: JiraMutationResultState,
