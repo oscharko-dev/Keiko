@@ -1,8 +1,6 @@
 // The no-model rehearsal of the Composer lane (#4369): every journey runs with an empty model turn,
 // the rehearsal is green only when none stopped on a lab error, leftovers are removed also after a
 // failure, and the flag cannot be combined with a model.
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   EMPTY_TURN,
@@ -14,11 +12,6 @@ import {
   rehearseLane,
 } from "../testing/jira-chat-lab/requirements/composer-rehearsal.mjs";
 import { COMPOSER_JOURNEY_IDS } from "../testing/jira-chat-lab/requirements/composer.mjs";
-
-const scorecard = readFileSync(
-  resolve(import.meta.dirname, "../testing/jira-chat-lab/requirements/scorecard.mjs"),
-  "utf8",
-);
 
 describe("the rehearsal's context replaces only the model", () => {
   it("answers every turn with nothing and creates Chats that need no product", async () => {
@@ -33,9 +26,9 @@ describe("the rehearsal's context replaces only the model", () => {
     });
     expect((await ctx.freshChat("supervised-coding")).id).toBe("rehearsal-2");
     expect(ctx.composerSelection).toEqual({ types: ["task"] });
-    // Chats that exist nowhere cannot be read back: no stored message, no reload failure.
+    // Chats that exist nowhere cannot be read back: no stored message, no read failure.
     expect(await ctx.storedAnswer({ id: "rehearsal-1" })).toBeUndefined();
-    expect(await ctx.reloadChat({ id: "rehearsal-1" })).toHaveLength(2);
+    expect(await ctx.readStoredConversation({ id: "rehearsal-1" })).toHaveLength(2);
     expect(ctx.http).toBe("kept");
   });
 });
@@ -185,16 +178,5 @@ describe("the whole rehearsal groups like a real run", () => {
     expect(baselineAtStart).toEqual(["default", "off"]);
     expect(summary).toMatchObject({ passed: true, exercised: ["C01", "C07", "C03"] });
     expect(env.KEIKO_JIRA_LAB_BASELINE_TEMPLATES).toBeUndefined();
-  });
-});
-
-describe("the flag on the scorecard", () => {
-  // The refusals of the flag (no Composer set, a model) are proven by execution in
-  // jira-lab-scorecard-usage.test.mjs. What needs a live Jira cannot be executed here, so the
-  // bracket the two writing paths run in stays a source pin.
-  it("lifts the global required field around both writing paths", () => {
-    // The rehearsal and the real Composer run both write REQ inside the field-lift bracket.
-    expect(scorecard).toContain("withFixtureFieldOptional(session, () =>");
-    expect(scorecard).toContain("composer ? withFixtureFieldOptional(session, runGroups)");
   });
 });

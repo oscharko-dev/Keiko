@@ -18,18 +18,10 @@
 // With --repeat N every journey runs N times in fresh Chats; a scenario reports each run's status,
 // the pass rate over its valid runs and the number of invalid runs, and is green only when every
 // valid run is green and at least half the runs are valid (else invalid).
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { loadSession } from "../lab-client.mjs";
-import { withFixtureFieldOptional } from "../seed-fields.mjs";
 import { SCENARIOS } from "./catalog.mjs";
 import { COMPOSER_SCENARIOS } from "./composer-catalog.mjs";
 import { COMPOSER_JOURNEY_IDS } from "./composer.mjs";
@@ -47,10 +39,9 @@ import { rehearseLane } from "./composer-rehearsal.mjs";
 import { ensureLicenseWindow } from "./license-window.mjs";
 import { registerLane } from "./lab-lanes.mjs";
 import { scenarioVerdict } from "./coverage.mjs";
-import { scorecardMarkdown } from "./scorecard-markdown.mjs";
 import { JOURNEY_IDS, runJourneys } from "./journeys.mjs";
 import { PROBES } from "./probes.mjs";
-import { TREND_HEADER, countStatuses, runExitCode, trendLine } from "./repeat.mjs";
+import { finishRun, withComposerFieldLift } from "./scorecard-finish.mjs";
 import { gradeException } from "./validity.mjs";
 
 const { positionals, values } = parseArgs({
@@ -132,7 +123,7 @@ if (values.rehearse) {
     readFileSync(join(session.directory, "requirements-truth.json"), "utf8"),
   );
   // A session that ran qualify-fields.mjs holds a field required in every project: lifted for the run.
-  const summary = await withFixtureFieldOptional(session, () =>
+  const summary = await withComposerFieldLift(true, session, () =>
     rehearseLane({
       session,
       ids: scenarios.map((scenario) => scenario.id),
@@ -185,26 +176,11 @@ if (values.model) {
       );
   };
   // The Composer lane writes the work project; a field required in every project is lifted for the run.
-  await (composer ? withFixtureFieldOptional(session, runGroups) : runGroups());
+  await withComposerFieldLift(composer, session, runGroups);
 }
 for (const scenario of scenarios) report.results.push(await runChecks(scenario, journeys));
-report.counts = countStatuses(report.results);
-report.valid = report.counts.invalid === 0;
-
 const output = composer
   ? join(session.directory, "composer-scorecard", reportDirectoryName(values.model))
   : join(session.directory, "requirements-scorecard");
-mkdirSync(output, { recursive: true, mode: 0o700 });
-const stamp = report.startedAt.replaceAll(":", "-");
-writeFileSync(join(output, `${stamp}.json`), JSON.stringify(report, null, 2), { mode: 0o600 });
-writeFileSync(join(output, "latest.md"), scorecardMarkdown(report), { mode: 0o600 });
-const trend = join(output, "trend.tsv");
-// An older trend file has another column layout (no invalid or repeat column); keep it aside instead of mixing column layouts.
-if (existsSync(trend) && !readFileSync(trend, "utf8").startsWith(TREND_HEADER)) {
-  renameSync(trend, join(output, `trend.before-invalid-${Date.now()}.tsv`));
-}
-if (!existsSync(trend)) appendFileSync(trend, TREND_HEADER);
-appendFileSync(trend, trendLine(report));
-console.log(scorecardMarkdown(report));
 // A model run exits 0 only when every scenario is green; `--rehearse` exited above on its own rule.
-process.exitCode = runExitCode(report);
+process.exitCode = finishRun({ report, output, modelRun: Boolean(values.model) });

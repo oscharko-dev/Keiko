@@ -72,9 +72,15 @@ function verdictOf(red, greenParts) {
  * journey that could not verify everything cannot read as passed.
  */
 export function aggregateParts(parts, turns, { unverifiedIsNotGreen = false } = {}) {
-  const green = parts.filter((part) => part.status === "green");
+  // A part that is itself a strict aggregate (`unverifiedParts`) keeps crediting what its green parts
+  // verified, and counts as the unverified parts it holds.
+  const inner = (part) => part.unverifiedParts ?? 0;
+  const green = parts.filter((part) => part.status === "green" || inner(part) > 0);
   const red = parts.some((part) => part.status === "red");
-  const unverified = parts.filter((part) => part.status === "unverified").length;
+  const unverified = parts.reduce(
+    (sum, part) => sum + (inner(part) > 0 ? inner(part) : Number(part.status === "unverified")),
+    0,
+  );
   let status = verdictOf(red, green.length);
   if (unverifiedIsNotGreen && !red && unverified > 0) status = "unverified";
   const covers = (red ? parts : green).flatMap((part) => part.covers);

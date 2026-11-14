@@ -228,7 +228,7 @@ async function settledTurn(ctx, chat, prior) {
   const toolExchanges = user?.toolTranscript?.exchanges ?? [];
   return {
     answer: assistant?.content ?? assistant?.groundedAnswer?.content ?? "",
-    // The ids of every message the conversation held when the turn settled (the reload obligation).
+    // The ids of every message the conversation held when the turn settled (the stored-conversation obligation).
     messageIds: observed.messages.map((message) => message.id),
     toolCalls: toolExchanges.length,
     toolExchanges,
@@ -610,11 +610,11 @@ export function journeyContext(live, session, truth) {
         (await api(ctx, "stored-answer", messagesPath(ctx, chat), undefined, "GET")).messages,
         answer,
       ),
-    // A page reload re-reads the conversation from the product; the count of messages it holds.
-    reloadChat: async (chat) =>
-      (await api(ctx, "reload", messagesPath(ctx, chat), undefined, "GET")).messages.map(
-        (message) => message.id,
-      ),
+    // The product's stored conversation, read again: the ids of the messages it holds (no browser, no reload).
+    readStoredConversation: async (chat) =>
+      (
+        await api(ctx, "read-stored-conversation", messagesPath(ctx, chat), undefined, "GET")
+      ).messages.map((message) => message.id),
     search: (query, fields) => jql(session, query, fields),
     searchPages: (query, fields) => pagedJql(session, query, fields),
     count: (query) => jqlCount(session, query),

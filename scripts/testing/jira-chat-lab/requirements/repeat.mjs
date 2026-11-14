@@ -68,8 +68,9 @@ export function aggregateRuns(runs) {
     status,
     ...(status === "invalid" ? { reason: "insufficient-valid-runs" } : {}),
     covers: status === "green" ? intersection(valid.map((run) => run.covers ?? [])) : [],
-    // Runs that could not verify everything leave the scenario `unverified`, not partial.
-    ...(status === "unverified"
+    // Only runs that carry `unverifiedParts` (the Composer lane's strict aggregate) make the scenario
+    // `unverified`; the document lane's repeat verdict stays what it was (partial).
+    ...(status === "unverified" && valid.some((run) => (run.unverifiedParts ?? 0) > 0)
       ? { unverifiedParts: valid.filter((run) => run.status !== "green").length }
       : {}),
     detail,

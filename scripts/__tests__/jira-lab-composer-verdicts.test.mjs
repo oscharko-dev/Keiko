@@ -2,9 +2,10 @@
 // never logs green, `unverified` is its own scenario state and column (not partial), and a model run
 // exits 0 only when every scenario is green. The older aggregation, which the document lane relies
 // on, is pinned unchanged in jira-lab-requirements-journeys-creation.test.mjs.
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { COMPOSER_SCENARIOS } from "../testing/jira-chat-lab/requirements/composer-catalog.mjs";
 import { scenarioVerdict } from "../testing/jira-chat-lab/requirements/coverage.mjs";
 import { aggregateParts } from "../testing/jira-chat-lab/requirements/journey-support.mjs";
@@ -15,6 +16,10 @@ import {
   runExitCode,
   trendLine,
 } from "../testing/jira-chat-lab/requirements/repeat.mjs";
+import {
+  finishRun,
+  withComposerFieldLift,
+} from "../testing/jira-chat-lab/requirements/scorecard-finish.mjs";
 import { scorecardMarkdown } from "../testing/jira-chat-lab/requirements/scorecard-markdown.mjs";
 
 const part = (status, covers) => ({ label: covers[0], status, covers, detail: "d" });
@@ -36,6 +41,19 @@ describe("a journey with an unverified part is never green", () => {
     expect(green.unverifiedParts).toBeUndefined();
     expect(strict([part("unverified", ["a"]), part("red", ["b"])]).status).toBe("red");
     expect(strict([part("unverified", ["a"])]).covers).toEqual([]);
+  });
+
+  it("a part that is itself a strict aggregate keeps crediting its green parts and counts its unverified ones", () => {
+    const inner = strict([
+      part("green", ["a"]),
+      part("unverified", ["b"]),
+      part("unverified", ["c"]),
+    ]);
+    const outer = strict([{ label: "S10", ...inner }, part("green", ["d"])]);
+    expect(outer.status).toBe("unverified");
+    expect(outer.covers).toEqual(["a", "d"]);
+    expect(outer.unverifiedParts).toBe(2);
+    expect(strict([{ label: "S10", ...inner }, part("red", ["e"])]).status).toBe("red");
   });
 
   it("is the Composer lane's choice: the default keeps the document lane's verdict", () => {
@@ -81,16 +99,33 @@ describe("the scenario verdict knows unverified", () => {
   });
 });
 
-describe("repeated runs that could not verify everything are unverified", () => {
-  it("carries the count of runs that were not green", () => {
+describe("repeated runs: the Composer lane's unverified parts are opt-in", () => {
+  it("carries the count of runs that were not green when the runs carry unverifiedParts", () => {
+    const runs = [
+      { status: "green", covers: ["a"], detail: "d" },
+      { status: "unverified", covers: [], detail: "d", unverifiedParts: 2 },
+    ];
+    const check = aggregateRuns(runs);
+    expect(check.status).toBe("unverified");
+    expect(check.unverifiedParts).toBe(1);
+    expect(aggregateRuns([runs[0], runs[0]]).unverifiedParts).toBeUndefined();
+    const scenario = { id: "C99", obligations: ["a"] };
+    expect(scenarioVerdict(scenario, [{ layer: "journey", ...check }]).status).toBe("unverified");
+  });
+
+  it("leaves the document lane's repeat verdict as it was: partial, no unverifiedParts", () => {
+    // Document-lane runs never carry unverifiedParts: an unverified run beside a green one is the
+    // check `unverified` and the scenario `partial`, as before the Composer lane existed.
     const runs = [
       { status: "green", covers: ["a"], detail: "d" },
       { status: "unverified", covers: [], detail: "d" },
     ];
     const check = aggregateRuns(runs);
     expect(check.status).toBe("unverified");
-    expect(check.unverifiedParts).toBe(1);
-    expect(aggregateRuns([runs[0], runs[0]]).unverifiedParts).toBeUndefined();
+    expect(check).not.toHaveProperty("unverifiedParts");
+    const scenario = { id: "S99", obligations: ["a"] };
+    expect(scenarioVerdict(scenario, [{ layer: "journey", ...check }]).status).toBe("partial");
+    expect(countStatuses([{ id: "S99", status: "partial" }]).unverified).toBe(0);
   });
 });
 
@@ -148,13 +183,71 @@ describe("the exit code of a model run", () => {
     expect(runExitCode({ results: [] })).toBe(1);
     expect(runExitCode({})).toBe(1);
   });
+});
 
-  // The script needs a live Jira, so its tail cannot be executed here: the wiring stays a source pin.
-  it("is applied to the scorecard's process after a model run", () => {
-    const source = readFileSync(
-      resolve(import.meta.dirname, "../testing/jira-chat-lab/requirements/scorecard.mjs"),
-      "utf8",
+describe("the end of a run, by execution", () => {
+  const directories = [];
+  const finish = (statuses, modelRun) => {
+    const output = mkdtempSync(join(tmpdir(), "scorecard-finish-"));
+    directories.push(output);
+    const lines = [];
+    const results = statuses.map((status, index) => ({
+      id: `S0${index}`,
+      status,
+      requirement: "r",
+      issue: 1,
+      title: "t",
+      checks: [],
+      uncovered: [],
+    }));
+    const report = { startedAt: "2026-11-14T00:00:00.000Z", model: "m", repeat: 1, results };
+    const code = finishRun({ report, output, modelRun, log: (line) => lines.push(line) });
+    return { code, output, lines, report };
+  };
+  afterEach(() => {
+    for (const directory of directories.splice(0))
+      rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("a model run exits 0 only when every scenario is green, and writes its report either way", () => {
+    const green = finish(["green", "green"], true);
+    expect(green.code).toBe(0);
+    expect(readdirSync(green.output).sort()).toEqual(
+      ["2026-11-14T00-00-00.000Z.json", "latest.md", "trend.tsv"].sort(),
     );
-    expect(source).toContain("process.exitCode = runExitCode(report);");
+    expect(readFileSync(join(green.output, "latest.md"), "utf8")).toContain("Green 2");
+    expect(green.lines).toHaveLength(1);
+    for (const status of ["red", "partial", "unverified", "invalid", "probe-only", "unchecked"])
+      expect(finish(["green", status], true).code, status).toBe(1);
+  });
+
+  it("applies to the document lane's model run too: the rule never looks at the scenario ids", () => {
+    expect(finish(["green"], true).code).toBe(0);
+    expect(finish(["partial"], true).code).toBe(1);
+  });
+
+  it("a run without a model writes its report and exits 0", () => {
+    const probes = finish(["probe-only"], false);
+    expect(probes.code).toBe(0);
+    expect(probes.report.counts["probe-only"]).toBe(1);
+  });
+
+  it("the field-lift bracket surrounds the Composer lane only", async () => {
+    const calls = [];
+    const lift = async (session, run) => {
+      calls.push(["lift-start", session]);
+      const value = await run();
+      calls.push(["lift-end", session]);
+      return value;
+    };
+    const run = async () => {
+      calls.push(["run"]);
+      return "done";
+    };
+    expect(await withComposerFieldLift(true, "s", run, lift)).toBe("done");
+    expect(calls).toEqual([["lift-start", "s"], ["run"], ["lift-end", "s"]]);
+    calls.length = 0;
+    expect(await withComposerFieldLift(false, "s", run, lift)).toBe("done");
+    expect(calls).toEqual([["run"]]);
   });
 });

@@ -13,6 +13,7 @@ import {
   ruleNames,
   soft,
   stepProof,
+  succeededWrite,
   writeCalls,
 } from "./composer-graders.mjs";
 import { templateRefusals } from "./templates.mjs";
@@ -147,7 +148,7 @@ export function gradeHintDelivered({ exchanges, ports = producerPorts }) {
       status: "red",
       detail: `${cards} approval cards were shown for a write that can never pass`,
     };
-  if (attempts.some((exchange) => exchange.result?.data?.outcome === "succeeded"))
+  if (attempts.some(succeededWrite))
     return {
       status: "red",
       detail: "the write succeeded instead of the closed missing-template refusal",

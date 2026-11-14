@@ -68,11 +68,11 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     requirement: "composer",
     issue: 4354,
     title:
-      "The same order sent again in one conversation, after a reload and without, creates no duplicate",
+      "The same order sent again in one conversation, after its stored messages were read again and straight away, creates no duplicate",
     obligations: [
       "stored-conversation-matches-turn",
-      "repeat-after-reload-no-duplicate",
-      "repeat-after-reload-reply-refers",
+      "repeat-after-reread-no-duplicate",
+      "repeat-after-reread-reply-refers",
       "repeat-in-chat-no-duplicate",
       "repeat-in-chat-reply-refers",
     ],

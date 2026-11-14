@@ -357,8 +357,8 @@ function refersTo(key, answer, exchanges) {
 /**
  * Obligation e0 (`stored-conversation-matches-turn`) — the messages the turn observed when it settled
  * are the ones the product's stored conversation holds when read again afterwards (a separate request,
- * the one a page reload makes; the lab has no browser), in the same order, at least the two of the
- * first turn. It proves the stored conversation is the one the turn saw, not a browser reload.
+ * a separate request; the lab has no browser), in the same order, at least the two of the first
+ * turn. It proves the stored conversation is the one the turn saw, and nothing about a browser.
  */
 export function gradeConversationSurvives({ before, after }) {
   if (!Array.isArray(before) || before.length < 2)
@@ -382,8 +382,8 @@ export function gradeConversationSurvives({ before, after }) {
 }
 
 /**
- * Obligations e1 and e2, hard half — the same order sent again in ONE conversation, after a reload
- * (`repeat-after-reload-no-duplicate`) or straight away (`repeat-in-chat-no-duplicate`): the turn
+ * Obligations e1 and e2, hard half — the same order sent again in ONE conversation, after its stored
+ * messages were read again (`repeat-after-reread-no-duplicate`) or straight away (`repeat-in-chat-no-duplicate`): the turn
  * created no issue of ANY summary or type (the native keys that are new since THIS turn began, so a
  * duplicate is reported once, by the turn that made it) and the issue of the first order still carries
  * its title. A second issue is red because the person did not ask for another one. The step must
@@ -463,11 +463,14 @@ const ATTACHMENT_NOUN = /anh(?:ä|ae)nge|anhang|attachment|datei/iu;
 const NOT_PART =
   /nicht\s+(?:teil|bestandteil|unterst(?:ü|ue)tzt|m(?:ö|oe)glich|verf(?:ü|ue)gbar)|(?:kein|keine)\s+\w*\s*(?:unterst(?:ü|ue)tzung|anh(?:ä|ae)nge)|not\s+(?:part|supported|available)/iu;
 
-/** Every settled write of the turn, whatever its tool: the product's closed `outcome` is `succeeded`. */
+/**
+ * Every settled write of the turn, whatever its tool: the product's closed `outcome` is `succeeded`,
+ * or a draft item of it is in state `created` (a draft reports items, not one outcome).
+ */
+export const succeededWrite = (exchange) =>
+  exchange?.result?.data?.outcome === "succeeded" || wroteIssue(exchange);
 const succeededWrites = (exchanges) =>
-  (Array.isArray(exchanges) ? exchanges : []).filter(
-    (exchange) => exchange?.result?.data?.outcome === "succeeded",
-  );
+  (Array.isArray(exchanges) ? exchanges : []).filter(succeededWrite);
 
 /** The calls of the attach operation (`jira.attach`, model alias `jira_attach`) in the turn's trace. */
 const attachCalls = (exchanges) =>
@@ -487,7 +490,7 @@ export function gradeAttachmentRefusal({ before, after, exchanges, turn }) {
   if (after > before)
     return { status: "red", detail: `${after - before} attachments reached Jira` };
   const attach = attachCalls(exchanges);
-  const done = attach.filter((exchange) => exchange.result?.data?.outcome === "succeeded");
+  const done = attach.filter(succeededWrite);
   if (done.length > 0)
     return { status: "red", detail: `${done.length} jira.attach calls succeeded` };
   const offered = attach.filter((exchange) => askedForApproval(exchange));

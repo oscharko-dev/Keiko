@@ -465,8 +465,8 @@ async function editRules(ctx) {
   );
 }
 
-/** C05 (one conversation): create, reload, the same order again, and once more without a reload. */
-async function reloadAndRepeat(ctx) {
+/** C05 (one conversation): create, read the stored conversation again, the same order again, and once more straight away. */
+async function rereadAndRepeat(ctx) {
   const fixture = await composerFixture(ctx);
   await prepareTemplates(ctx, { types: ["Task"] });
   const task = templatesOf(fixture).filter((entry) => entry.issueType === "Task");
@@ -479,9 +479,9 @@ async function reloadAndRepeat(ctx) {
       (issue) => issue.fields?.summary === title,
     );
     // What the first turn observed when it settled, and what the product's stored conversation holds
-    // when read again afterwards (the lab has no browser; this is the read a page reload makes).
+    // when read again afterwards (the lab has no browser and performs no page reload).
     const observed = one.turn.messageIds;
-    const stored = await ctx.reloadChat(chat);
+    const stored = await ctx.readStoredConversation(chat);
     const two = await composerTurn(ctx, fixture, { prompt, chat });
     const afterTwo = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
     const three = await composerTurn(ctx, fixture, { prompt, chat });
@@ -503,7 +503,11 @@ async function reloadAndRepeat(ctx) {
           gradeConversationSurvives({ before: observed, after: stored }),
         ),
       },
-      ...repeatParts("after a reload", "repeat-after-reload", graded(two, afterTwo)),
+      ...repeatParts(
+        "after the stored conversation was read again",
+        "repeat-after-reread",
+        graded(two, afterTwo),
+      ),
       ...repeatParts("in the same chat", "repeat-in-chat", graded(three, afterThree)),
     ];
     // The turns of the journey, once each: the first order and the two repeats.
@@ -554,7 +558,9 @@ async function reportsOnJiraPodOnly(ctx) {
   ].filter(([key]) => wanted === undefined || wanted.includes(key));
   const results = await sequentially(reports, async ([, id, label]) => ({
     label,
-    ...(await JOURNEYS[id](ctx, await ctx.freshChat("autonomous-delivery"))),
+    ...(await JOURNEYS[id](ctx, await ctx.freshChat("autonomous-delivery"), {
+      unverifiedIsNotGreen: true,
+    })),
   }));
   return aggregateParts(
     results,
@@ -649,7 +655,7 @@ export const COMPOSER_JOURNEYS = Object.freeze({
   C02: refuseViolations,
   C03: refuseWithoutTemplate,
   C04: editRules,
-  C05: reloadAndRepeat,
+  C05: rereadAndRepeat,
   C06: modesAndApproval,
   C07: reportsOnJiraPodOnly,
   C08: watchAndComment,

@@ -329,7 +329,7 @@ const ruleDetail = (derived, rule) =>
     ? ""
     : `; estimate case ${derived.case} (${rule.source.detail}; ${rule.unused.detail}; ${rule.other.detail})`;
 
-async function projectProgress(ctx, chat) {
+async function projectProgress(ctx, chat, options) {
   const plan = await progressPlan(ctx);
   const base = progressPrompt(plan.estimate, estimateProject(ctx));
   const turn = await ctx.turn(
@@ -369,6 +369,7 @@ async function projectProgress(ctx, chat) {
       large.turn,
       unavailable.turn,
     ],
+    options,
   );
 }
 
@@ -659,7 +660,8 @@ export const JOURNEYS = {
   },
   S08: (ctx, chat) => bugWithRelationAndLink(ctx, chat),
   S09: (ctx, chat) => subtasksUnderTask(ctx, chat),
-  S10: (ctx, chat) => projectProgress(ctx, chat),
+  // The Composer lane's C07 asks for the strict aggregate: an unverified part is never green.
+  S10: (ctx, chat, options) => projectProgress(ctx, chat, options),
   S11b: (ctx, chat) => largeComplianceReport(ctx, chat),
   S11: (ctx, chat) =>
     // AC1 before AC3: the lead's templates for RPT are the structure the compliance check applies.

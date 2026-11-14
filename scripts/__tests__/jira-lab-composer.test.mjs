@@ -656,6 +656,22 @@ describe("obligation c) no template: hard from Jira and the stored refusal, soft
     expect(hint({ exchanges: [draft(guidanceOf(violations.slice(0, 1)))] }).status).toBe("red");
   });
 
+  it("hint delivered: a draft that created an issue is a write that succeeded, red, with or without producer rules", () => {
+    const draft = {
+      call: { id: "d", name: "jira_draft", arguments: {} },
+      result: {
+        toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
+        status: "completed",
+        data: { items: [{ state: "created", issueKey: "REQ-9" }] },
+      },
+    };
+    for (const ports of [PORTS, { ...PORTS, noTemplateRules: [] }]) {
+      const grade = hint({ ports, exchanges: [draft] });
+      expect(grade.status).toBe("red");
+      expect(grade.detail).toContain("succeeded instead of");
+    }
+  });
+
   it("hint delivered: a replayed refusal is unverified with its replay text checked, never red", () => {
     const replayed = (guidance) => storedRefusalOf("template-missing", { guidance, extra: {} });
     const withFlag = (guidance) => {
@@ -1170,6 +1186,23 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
     expect(attachment({ turn: { ...RAN_ATTACH, answer: "Erledigt." } }).status).toBe("green");
   });
 
+  it("attachment, hard: a draft that created an issue is a write that succeeded, red", () => {
+    const draft = {
+      call: { id: "d", name: "jira_draft", arguments: {} },
+      result: {
+        toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
+        status: "completed",
+        data: { items: [{ state: "created", issueKey: "REQ-9" }] },
+      },
+    };
+    const grade = attachment({ exchanges: [draft] });
+    expect(grade.status).toBe("red");
+    expect(grade.detail).toContain("1 writes succeeded");
+    // A draft whose items were not created is no write.
+    const idle = { ...draft, result: { ...draft.result, data: { items: [{ state: "failed" }] } } };
+    expect(attachment({ exchanges: [idle] }).status).toBe("green");
+  });
+
   it("attachment, hard: a turn that failed or answered nothing is unverified, never red", () => {
     const failed = { answer: "x", toolExchanges: [], failure: "timeout" };
     const silent = { answer: "", toolExchanges: [], failure: undefined };
@@ -1229,7 +1262,7 @@ function lane({ act, library = [], selection } = {}) {
   const issues = [];
   const store = { watchers: {}, comments: {}, attachments: {} };
   let counter = 0;
-  const calls = { turns: [], fresh: [], http: [], deleted: [], reloads: 0 };
+  const calls = { turns: [], fresh: [], http: [], deleted: [], reads: 0 };
   const ctx = {
     calls,
     issues,
@@ -1292,8 +1325,8 @@ function lane({ act, library = [], selection } = {}) {
       }
       return {};
     },
-    reloadChat: async () => {
-      calls.reloads += 1;
+    readStoredConversation: async () => {
+      calls.reads += 1;
       return ["m1", "m2"];
     },
     freshChat: async (mode) => {
@@ -1662,7 +1695,7 @@ describe("C03 without a template", () => {
       const ctx = lane({ selection: { types: ["epic"], modes: ["ask"] }, act });
       const check = await COMPOSER_JOURNEYS.C03(ctx, undefined);
       expect(check.covers).not.toContain("no-template-refused-epic-ask");
-      expect(check.status).not.toBe("green");
+      expect(check.status).toBe("unverified");
     }
   });
 
@@ -1812,7 +1845,7 @@ describe("C04 edit rules, through whichever tool", () => {
   });
 });
 
-describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () => {
+describe("C05 repeat after a re-read of the stored conversation and in the chat, and C06 modes (a Bug)", () => {
   const title = "Composer Wiederholung";
   /** The product's reply to the three turns of C05: create once, then refer to what exists. */
   const conversation = (replies) =>
@@ -1830,14 +1863,14 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
     again: ({ known }) => ({ answer: `Den Vorgang gibt es schon: ${known.key}.` }),
   };
 
-  it("is green when the same order again, after a reload and once more, creates no duplicate", async () => {
+  it("is green when the same order again, after the stored conversation was read again and once more, creates no duplicate", async () => {
     const ctx = conversation(refer);
     const check = await COMPOSER_JOURNEYS.C05(ctx, undefined);
     expect(check.status).toBe("green");
     expect(check.covers).toEqual([
       "stored-conversation-matches-turn",
-      "repeat-after-reload-no-duplicate",
-      "repeat-after-reload-reply-refers",
+      "repeat-after-reread-no-duplicate",
+      "repeat-after-reread-reply-refers",
       "repeat-in-chat-no-duplicate",
       "repeat-in-chat-reply-refers",
     ]);
@@ -1845,7 +1878,7 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
     expect(ctx.calls.fresh).toHaveLength(1);
     expect(new Set(ctx.calls.turns.map((turn) => turn.chat.id)).size).toBe(1);
     // The turn observed the conversation when it settled; the stored conversation is read once more.
-    expect(ctx.calls.reloads).toBe(1);
+    expect(ctx.calls.reads).toBe(1);
     expect(ctx.calls.turns[0].content).toContain("Aufgabe");
     expect(ctx.calls.turns.map((turn) => turn.content)).toEqual(
       Array(3).fill(ctx.calls.turns[0].content),
@@ -1876,7 +1909,9 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
     await idle.nativeCreate(taskFields);
     const check = await COMPOSER_JOURNEYS.C05(idle, undefined);
     expect(check.covers).toEqual(["stored-conversation-matches-turn"]);
-    expect(check.detail).toContain("same order again after a reload: unverified");
+    expect(check.detail).toContain(
+      "same order again after the stored conversation was read again: unverified",
+    );
     expect(check.detail).toContain("same order again in the same chat: unverified");
   });
 
@@ -1907,7 +1942,7 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
 
   it("is red when the stored conversation is not the one the turn observed", async () => {
     const lost = conversation(refer);
-    lost.reloadChat = async () => ["m1"];
+    lost.readStoredConversation = async () => ["m1"];
     const check = await COMPOSER_JOURNEYS.C05(lost, undefined);
     expect(check.status).toBe("red");
     expect(check.detail).toContain("stored conversation matches the turn: red");
@@ -1927,15 +1962,15 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
     );
     expect(check.status).toBe("unverified");
     expect(check.covers).toEqual(
-      expect.arrayContaining(["repeat-after-reload-no-duplicate", "repeat-in-chat-no-duplicate"]),
+      expect.arrayContaining(["repeat-after-reread-no-duplicate", "repeat-in-chat-no-duplicate"]),
     );
-    expect(check.covers).not.toContain("repeat-after-reload-reply-refers");
+    expect(check.covers).not.toContain("repeat-after-reread-reply-refers");
     expect(check.detail).toContain("does not refer to");
     expect(check.detail).toContain("model observation");
     expect(check.unverifiedParts).toBe(2);
   });
 
-  it("is unverified, never green, when the turn after the reload fails", async () => {
+  it("is unverified, never green, when the turn after the re-read fails", async () => {
     const ctx = conversation(refer);
     const turn = ctx.turn;
     let sent = 0;
@@ -1945,8 +1980,10 @@ describe("C05 repeat after a reload and in the chat, and C06 modes (a Bug)", () 
       return sent === 2 ? { ...result, failure: { kind: "gateway" } } : result;
     };
     const check = await COMPOSER_JOURNEYS.C05(ctx, undefined);
-    expect(check.detail).toContain("same order again after a reload: unverified");
-    expect(check.covers).not.toContain("repeat-after-reload-no-duplicate");
+    expect(check.detail).toContain(
+      "same order again after the stored conversation was read again: unverified",
+    );
+    expect(check.covers).not.toContain("repeat-after-reread-no-duplicate");
   });
 
   const asking = (mode) => mode !== "autonomous-delivery";
@@ -2046,13 +2083,19 @@ describe("C07 reports run the real S10 and S11 graders", () => {
   const S11_ANSWER =
     "RPT-1: Zusammenfassung ohne [LH-xxx]-Präfix; Abschnitt Abgrenzung fehlt\nRPT-3: kein Epic zugeordnet";
   /** A Jira-Pod-only Chat for the report project: S10 and S11 answer by their own prompt. */
-  const run = ({ s10 = GOOD_S10, s11 = S11_ANSWER, exchanges = [report], selection } = {}) => {
+  const run = ({
+    s10 = GOOD_S10,
+    s11 = S11_ANSWER,
+    exchanges = [report],
+    selection,
+    board = true,
+  } = {}) => {
     const ctx = lane({ selection });
     ctx.truth = { fieldIds: FIELDS, issues: DEVIATING };
     // Jira's own board: it estimates with the Story Points field, the one the world holds values in.
     ctx.nativeGet = async (path) => {
       if (path === "/rest/api/2/field") return [];
-      if (path.startsWith("/rest/agile/1.0/board?")) return { values: [{ id: 1 }] };
+      if (path.startsWith("/rest/agile/1.0/board?")) return { values: board ? [{ id: 1 }] : [] };
       return { estimation: { field: { fieldId: FIELDS.storyPoints } } };
     };
     ctx.refusals = () => 0;
@@ -2072,7 +2115,7 @@ describe("C07 reports run the real S10 and S11 graders", () => {
     return { ctx, check: COMPOSER_JOURNEYS.C07(ctx, undefined) };
   };
 
-  it("is green when the exact S10 figures and the described S11 deviations are given", async () => {
+  it("credits the exact S10 figures and the described S11 deviations; the parts the stub world cannot verify keep it unverified", async () => {
     const { ctx, check } = run();
     const result = await check;
     expect(result.covers).toEqual(
@@ -2084,9 +2127,23 @@ describe("C07 reports run the real S10 and S11 graders", () => {
         "deviation-detail",
       ]),
     );
-    expect(result.detail).toContain("S10 progress report: green");
+    // Without a large project, a stored report and an unavailable-estimate project, S10 holds three
+    // unverified parts: the scenario is unverified, never green and never partial.
+    expect(result.status).toBe("unverified");
+    expect(result.unverifiedParts).toBe(3);
+    expect(result.detail).toContain("S10 progress report: unverified");
     expect(result.detail).toContain("S11 compliance report: green");
     expect(ctx.calls.fresh).toHaveLength(2);
+  });
+
+  it("an unverified S10 part makes C07 unverified, not partial: the report graders use the strict aggregate too", async () => {
+    // Without a board the estimate facts are unavailable: those S10 parts are unverified.
+    const { check } = run({ board: false, selection: { parts: ["s10"] } });
+    const result = await check;
+    expect(result.status).toBe("unverified");
+    expect(result.unverifiedParts).toBeGreaterThan(3);
+    expect(result.covers).toEqual(expect.arrayContaining(["counts-by-type-status"]));
+    expect(result.covers).not.toContain("estimate-totals");
   });
 
   it("runs S10 alone when the run selects it, and leaves the S11 obligations uncovered", async () => {
