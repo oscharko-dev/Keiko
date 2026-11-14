@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { sanitizeJiraMutationFailureDetail } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   field,
@@ -120,6 +121,29 @@ const CREATE = (epic: string): CatalogJsonObject => ({
   projectId: "10000",
   issueTypeId: "3",
   fields: { summary: "A task under an epic", customfield_10000: "x", customfield_10014: epic },
+});
+
+describe("the Epic Link sentence stays whole for any key (#4357 AC3)", () => {
+  const RULE =
+    " is not an Epic, or this account cannot see it. The Epic Link must be the key of an existing Epic of this project that you can see; create the Epic first. This write was not made.";
+  it("names the key and the rule, within the 200-byte bound of a detail message", () => {
+    expect(jiraEpicLinkRefusalMessage("SYN-5")).toBe(`SYN-5${RULE}`);
+    expect(
+      new TextEncoder().encode(jiraEpicLinkRefusalMessage("SYN-5")).length,
+    ).toBeLessThanOrEqual(200);
+  });
+  it.each([
+    ["an over-long key", `${"PROJECTKEY".repeat(12)}-1234567890`],
+    ["CJK text", "任務".repeat(25)],
+    ["quotes and a backslash", 'SYN-5"\\"'],
+    ["a split surrogate", "SYN-1\ud83d"],
+    ["free text", "not a key at all"],
+  ])("names the target without repeating it when it is %s", (_name, target) => {
+    const message = jiraEpicLinkRefusalMessage(target);
+    expect(message).toBe(`The Epic Link target${RULE}`);
+    expect(new TextEncoder().encode(message).length).toBeLessThanOrEqual(200);
+    expect(sanitizeJiraMutationFailureDetail({ messages: [message] })?.messages).toEqual([message]);
+  });
 });
 
 describe("an Epic Link target that is not an Epic (#4354 AC2)", () => {

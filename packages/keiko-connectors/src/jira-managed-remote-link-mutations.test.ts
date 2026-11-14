@@ -540,3 +540,88 @@ it.each([
     }
   },
 );
+
+// #4357 AC3: one sentence per cause, pinned exactly: the model learns which rule its value, its
+// link ID or its global ID broke, and each text stays within the 200-byte bound of a message.
+const URL_RULE =
+  "must be an http or https URL of at most 2048 characters, with no credentials, control characters, backslash or surrounding spaces.";
+it.each([
+  ["a URL that is not http or https", { ...VALUE, url: "javascript:alert(1)" }, `url ${URL_RULE}`],
+  [
+    "an icon URL with credentials",
+    { ...VALUE, iconUrl: "https://user:secret@example.invalid/i.png" },
+    `iconUrl ${URL_RULE}`,
+  ],
+  ["a null url", { ...VALUE, url: null }, "url must be text, never null."],
+  ["a null title", { ...VALUE, title: null }, "title must be text, never null."],
+  [
+    "a resolved that is not a boolean",
+    { ...VALUE, resolved: "yes" },
+    "resolved must be true, false or null.",
+  ],
+  [
+    "a summary over the limit",
+    { ...VALUE, summary: "s".repeat(32769) },
+    "summary must be text of at most 32768 characters without control characters, or null.",
+  ],
+  [
+    "a blank application name",
+    { ...VALUE, applicationName: "  " },
+    "applicationName must be non-blank text of at most 255 characters without control characters, or null.",
+  ],
+] as const)("names the field rule a remote link value broke: %s", async (_name, value, message) => {
+  const request = fixture();
+  for (const [operation, args] of [
+    ["jira.upsert-remote-link", { ...CREATE, value }],
+    ["jira.update-remote-link", { ...UPDATE, value }],
+  ] as const) {
+    const result = await run(request, operation, args);
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { messages: [message] },
+    });
+    expect(new TextEncoder().encode(message).length).toBeLessThanOrEqual(200);
+  }
+  expect(request).not.toHaveBeenCalled();
+});
+it.each([
+  [
+    "an update with a global ID",
+    "jira.update-remote-link",
+    { ...UPDATE, globalId: "x" },
+    "An update takes linkId, not globalId: send linkId equal to expected.id.",
+  ],
+  [
+    "an update with another link ID",
+    "jira.update-remote-link",
+    { ...UPDATE, linkId: "999" },
+    "linkId must equal expected.id, the ID of the link to replace.",
+  ],
+  [
+    "a delete with a global ID",
+    "jira.delete-remote-link",
+    { ...DELETE, globalId: "x" },
+    "A delete by link ID takes linkId, not globalId; to delete by global ID use jira.delete-remote-link-by-global-id.",
+  ],
+  [
+    "a delete with another link ID",
+    "jira.delete-remote-link",
+    { ...DELETE, linkId: "999" },
+    "linkId must equal expected.id, the ID of the link to delete.",
+  ],
+  [
+    "a delete by global ID with another global ID",
+    "jira.delete-remote-link-by-global-id",
+    { ...BASE, expected: EXPECTED, globalId: "other" },
+    "globalId must equal expected.globalId, the global ID of the link to delete.",
+  ],
+] as const)("names the link rule for %s", async (_name, operation, args, message) => {
+  const request = fixture();
+  expect(await run(request, operation, args as CatalogJsonObject)).toMatchObject({
+    ok: false,
+    reason: "field-validation",
+    detail: { messages: [message] },
+  });
+  expect(request).not.toHaveBeenCalled();
+});

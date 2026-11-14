@@ -313,7 +313,7 @@ describe("jira.attach", () => {
     expect(result).toEqual({
       ok: false,
       reason: "permission-denied",
-      detail: { messages: ["No."] },
+      detail: { fromJira: true, messages: ["No."] },
     });
   });
 });

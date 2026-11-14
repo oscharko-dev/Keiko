@@ -137,7 +137,11 @@ function jiraRemoteErrors(bodyText: string): JiraMutationFailureDetail | undefin
     errors === undefined
       ? []
       : Object.entries(errors).map(([fieldId, message]) => ({ fieldId, message }));
-  return sanitizeJiraMutationFailureDetail({ fieldErrors, messages: body.errorMessages });
+  return sanitizeJiraMutationFailureDetail({
+    fromJira: true,
+    fieldErrors,
+    messages: body.errorMessages,
+  });
 }
 
 function defaultSleep(ms: number): Promise<void> {

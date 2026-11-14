@@ -824,6 +824,12 @@ describe("dry run before approval", () => {
         ok: false,
         reason: "malformed-payload",
         violations: [{ ruleId: "template-unreadable" }],
+        // #4357 AC3: a dispatch drops the violations of this reason, so the sentence stays.
+        detail: {
+          messages: [
+            "Jira's answer about the project or issue type could not be read completely, so the project's template cannot be applied. This write was not made.",
+          ],
+        },
       });
     }
     expect(f.writes()).toEqual([]);
@@ -875,6 +881,12 @@ describe("dry run before approval", () => {
         ok: false,
         reason: "conflict",
         violations: [{ ruleId: "template-unreadable" }],
+        // #4357 AC3: the sentence names what was unreadable (the field list), not the project.
+        detail: {
+          messages: [
+            "Jira's answer about the field list of the issue's type could not be read completely, so the project's template cannot be applied. This write was not made.",
+          ],
+        },
       });
       expect(await f.run(operation, args)).toMatchObject({ ok: false, reason: "conflict" });
       expect(f.writes()).toEqual([]);

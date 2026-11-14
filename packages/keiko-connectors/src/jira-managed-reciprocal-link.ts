@@ -45,7 +45,7 @@ async function admit(
 ): Promise<Admitted | ReciprocalFailure> {
   const configuration = await observeReciprocalConfiguration(ports, input);
   if (!configuration.ok) return configuration;
-  const prior = await observeReciprocalLinks(request, input);
+  const prior = await observeReciprocalLinks(request, input, true);
   if (!prior.ok) return prior;
   const absent = reciprocalAlreadyPresent(input, prior.value);
   if (absent !== undefined) return absent;
@@ -67,7 +67,7 @@ async function recheck(
   configuration: ReciprocalManifest,
   prior: Parameters<typeof sameRemoteLinks>[0],
 ): Promise<Admitted | ReciprocalFailure> {
-  const current = await observeReciprocalLinks(request, input);
+  const current = await observeReciprocalLinks(request, input, true);
   if (!current.ok) return current;
   if (!sameRemoteLinks(prior, current.value))
     return reciprocalRefusal(

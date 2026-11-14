@@ -286,8 +286,27 @@ export const JIRA_DRAFT_TOO_LARGE_GUIDANCE =
   "Tell the user in plain language that the backlog is too big to approve in one piece, that the items already written are still saved, " +
   "and offer to split the rest into several smaller drafts, for example one per epic or theme, each approved on its own. " +
   "Do not show this message, an error code or any numbers.";
+/**
+ * One fixed sentence for each refusal that says what to do next (#4357 AC3). A code alone left a model
+ * to guess whether to stage again, give up or ask. `invalid-fields` and `template-violation` carry
+ * their own results.
+ */
+const REFUSAL_GUIDANCE: Readonly<Partial<Record<JiraDraftRefusal, string>>> = {
+  "too-large": JIRA_DRAFT_TOO_LARGE_GUIDANCE,
+  "draft-not-found":
+    "No draft with this draftId is held for this Chat, so nothing was staged. Call jira.draft-stage again without a draftId: that starts a new draft; then use the draftId it returns, and do not invent one.",
+  "connection-changed":
+    "The Jira connection changed since this draft was staged, so it cannot be extended. Call jira.draft-stage again without a draftId: that starts a new draft on the current connection. Nothing was staged.",
+  "duplicate-ref":
+    "Two items of the draft use the same ref. Give every item its own ref and stage the page again; nothing was staged.",
+  "unsupported-deployment":
+    "Drafts work with Jira Data Center only, and this connection is not one. Tell the user a draft cannot be staged here. Nothing was staged.",
+  "invalid-input":
+    "An item of this page did not pass Keiko's check of its fields, links or requirement references. Send the page again with every item in the jira.draft item form; nothing was staged.",
+};
 function guidanceOf(refusal: JiraDraftRefusal): Record<string, string> {
-  return refusal === "too-large" ? { guidance: JIRA_DRAFT_TOO_LARGE_GUIDANCE } : {};
+  const guidance = REFUSAL_GUIDANCE[refusal];
+  return guidance === undefined ? {} : { guidance };
 }
 
 interface StageRun<Context extends ManagedMcpInvocationContext> {
