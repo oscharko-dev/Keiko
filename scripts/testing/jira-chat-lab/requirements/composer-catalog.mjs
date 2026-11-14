@@ -7,6 +7,14 @@ import { COMPOSER_MODES } from "./composer.mjs";
 import { COMPOSER_TYPES, typeSlug } from "./composer-templates.mjs";
 
 const slugs = COMPOSER_TYPES.map(typeSlug);
+/** One set per mode and wording: created, keys in the result, keys after a re-read (hard), keys in the answer (soft). */
+const MULTI_CREATE_OBLIGATIONS = COMPOSER_MODES.flatMap((mode) =>
+  ["lab", "plain"].flatMap((phrasing) =>
+    ["all-created", "keys-listed", "keys-after-reread", "answer-keys"].map(
+      (part) => `multi-create-${part}-${mode.key}-${phrasing}`,
+    ),
+  ),
+);
 const obligationsOf = (id) => SCENARIOS.find((scenario) => scenario.id === id).obligations;
 
 export const COMPOSER_SCENARIOS = Object.freeze([
@@ -17,10 +25,7 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     title: "Every issue type is created conformant by a plain instruction, also several at once",
     obligations: [
       ...slugs.map((slug) => `create-conformant-${slug}`),
-      "multi-create-all-created",
-      "multi-create-keys-listed",
-      "multi-create-keys-after-reread",
-      "multi-create-answer-keys",
+      ...MULTI_CREATE_OBLIGATIONS,
       "unrepairable-refused-natively",
       "unrepairable-refused-by-gate",
       "unrepairable-answer-plain",
