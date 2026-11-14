@@ -36,11 +36,17 @@ RUN apt-get update \
         xz-utils \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL "https://mirrors.edge.kernel.org/pub/software/scm/git/git-${GIT_VERSION}.tar.xz" -o /tmp/git.tar.xz \
+    && curl --proto "=https" --tlsv1.2 -fsSL \
+        "https://mirrors.edge.kernel.org/pub/software/scm/git/git-${GIT_VERSION}.tar.xz" \
+        -o /tmp/git.tar.xz \
     && echo "${GIT_SHA256}  /tmp/git.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/git.tar.xz -C /tmp \
-    && make -C "/tmp/git-${GIT_VERSION}" -j"$(nproc)" prefix=/usr/local NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_RUST=1 all \
-    && make -C "/tmp/git-${GIT_VERSION}" prefix=/usr/local NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_RUST=1 DESTDIR=/stage install
+    && make -C "/tmp/git-${GIT_VERSION}" -j"$(nproc)" \
+        prefix=/usr/local NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_RUST=1 \
+        all \
+    && make -C "/tmp/git-${GIT_VERSION}" \
+        prefix=/usr/local NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_RUST=1 \
+        DESTDIR=/stage install
 
 FROM node:24.18.0-bookworm
 
