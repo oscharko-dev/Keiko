@@ -168,12 +168,12 @@ equally when its size and SHA-256 equal the values recorded in "Image provenance
 | Size      | 5,042,194,432 bytes                                                                   |
 | SHA-256   | `3dcdba9c9c0aa0430d4332b60c9afcb3cd613d648a49cbba2d4ef7b5978f32e8`                    |
 
-Path convention: any directory you own (`<iso-dir>` below), the file name unchanged; the first build
-kept the file in the user's Downloads folder, and the machine bundle holds its own copy named
+Path convention: any directory you own, the file name unchanged; the default below is `$HOME/Downloads`
+(where a browser puts it), which is also where the first build kept the file, and the machine bundle holds its own copy named
 `windows.iso`, so removing the download afterwards does not break the machine. Check:
 
 ```sh
-ISO=<iso-dir>/26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_IOT_LTSC_EVAL_A64FRE_en-us.iso
+ISO="$HOME/Downloads/26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_IOT_LTSC_EVAL_A64FRE_en-us.iso"
 stat -f %z "$ISO"           # expect 5042194432
 shasum -a 256 "$ISO"        # expect 3dcdba9c9c0aa0430d4332b60c9afcb3cd613d648a49cbba2d4ef7b5978f32e8
 ```
@@ -564,42 +564,87 @@ expires on 2027-02-11. The proof is a second guest built from this page alone by
 touched the first one; until it has run, this sentence stays.
 
 Each step names its commands, the result to expect and where every input comes from. The host shell
-is zsh (the macOS default); the commands also run in bash. Appendices M to
-R hold the host helpers the commands call; copy them into `$W/bin` and make them executable
-(`chmod +x`). Placeholders in angle brackets are yours to fill. Nothing here records a password or a
-key. No step uses a pointer click, because clicks do not arrive (see "Operating limits and findings"):
-the guest console is driven by keyboard through the monitor.
+is zsh (the macOS default); the commands also run in bash. Placeholders in angle brackets are yours to
+fill. Nothing here records a password or a key. No step uses a pointer click, because clicks do not
+arrive (see "Operating limits and findings"): the guest console is driven by keyboard through the
+monitor. A step marked **not yet run** was corrected by reading, without a guest to test it; the
+first rebuild is its test, and it must be reported as such.
 
-| Input                                    | Where it comes from                                                                                    |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| UTM 5.0.8                                | `brew install --cask utm` (step 1)                                                                     |
-| Guest tools ISO 0.1.271                  | the URL and digest in step 2                                                                           |
-| Windows 11 IoT LTSC ARM64 evaluation ISO | an image on the host with the recorded size and SHA-256, otherwise Microsoft's form (step 2)           |
-| SSH key pair, guest credential           | created in step 3, kept outside every repository                                                       |
-| Answer file, first-logon script          | appendices A and B                                                                                     |
-| Host helpers                             | appendices M to Q                                                                                      |
-| Update, toolchain and release scripts    | appendices C, D, E and R                                                                               |
-| Node 26 zips, Keiko release              | `nodejs.org` and the public GitHub release, fetched by the scripts of step 12 and 14, digests verified |
+| Input                                    | Where it comes from                                                                                     |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| UTM 5.0.8                                | `brew install --cask utm`, checked against the version (step 1)                                         |
+| Guest tools ISO 0.1.271                  | the URL and digest in step 2                                                                            |
+| Windows 11 IoT LTSC ARM64 evaluation ISO | an image on the host with the recorded size and SHA-256, otherwise Microsoft's form (step 2)            |
+| SSH key pair, guest credential           | created in step 3, kept outside every repository                                                        |
+| Answer file, first-logon script          | appendices A and B                                                                                      |
+| Host helpers, guest scripts              | the appendices named in the table below                                                                 |
+| Node 26 zips, Keiko release              | `nodejs.org` and the public GitHub release, fetched by the scripts of steps 12 and 14, digests verified |
 
-Variables used below (set them once in the shell you work in):
+Where each appendix is saved (create the folders in step 1; every name is the file name used below):
+
+| Appendix                                  | Save as                                                                                                   |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| A `Autounattend.xml`                      | `$W/Autounattend.xml.tmpl`                                                                                |
+| B `keiko-firstlogon.ps1`                  | `$W/ans/keiko-firstlogon.ps1`                                                                             |
+| C `keiko-windows-update.ps1`              | `$W/guest/keiko-windows-update.ps1`                                                                       |
+| D `keiko-guest-toolchain.ps1`             | `$W/guest/keiko-guest-toolchain.ps1`                                                                      |
+| E `keiko-fetch-release.ps1`               | `$W/guest/keiko-fetch-release.ps1`                                                                        |
+| R `keiko-release-start.cmd`               | `$W/guest/keiko-release-start.cmd`                                                                        |
+| L `keiko-win-update-loop`                 | `$W/bin/keiko-win-update-loop` (executable; its key and host-key file come from the environment, step 11) |
+| M `mon.sh`, N `vmkeys.py`, O `vncshot.py` | `$W/bin/mon.sh`, `$W/bin/vmkeys.py`, `$W/bin/vncshot.py` (`mon.sh` executable)                            |
+| P `mkcfg.py`                              | `$W/bin/mkcfg.py`                                                                                         |
+| Q the six AppleScripts                    | `$W/bin/create.applescript`, `import`, `attach-tools`, `network`, `snapshot`, `restore` (same suffix)     |
+
+Variables and helpers used below (set them once in the shell you work in):
 
 ```sh
-W=<work-dir>                      # private directory, mode 700, outside every repository
+W="$HOME/keiko-windows-rebuild"   # private work directory; step 1 creates it, mode 700
 VM=keiko-win11-arm64-rebuild      # the rebuilt machine's own name (see "Ports and names")
-ISO=<iso-dir>/26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_IOT_LTSC_EVAL_A64FRE_en-us.iso
-KEY=<ssh-private-key>             # created in step 3
+ISO="$HOME/Downloads/26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_IOT_LTSC_EVAL_A64FRE_en-us.iso"
+KEY="$W/keiko-win-vm-rebuild"     # created in step 3
+KH="$W/known_hosts"               # host keys of THIS guest only, so the first guest's key on 127.0.0.1:2222 never clashes
 GUEST_USER=keiko
-guest() { ssh -i "$KEY" -p 2222 -o BatchMode=yes -o ConnectTimeout=10 "$GUEST_USER@127.0.0.1" "$@"; }   # runs a command in the guest over SSH
+SSHO=(-i "$KEY" -p 2222 -o BatchMode=yes -o ConnectTimeout=10 -o UserKnownHostsFile="$KH" -o StrictHostKeyChecking=accept-new)
+guest()     { ssh "${SSHO[@]}" "$GUEST_USER@127.0.0.1" "$@"; }                  # run a command in the guest over SSH
+guestcopy() { scp -q -i "$KEY" -P 2222 -o BatchMode=yes -o UserKnownHostsFile="$KH" -o StrictHostKeyChecking=accept-new "$@"; }
+typeline()  { python3 -I "$W/bin/vmkeys.py" "$1" --enter; }                     # type one line into the guest console
+waitstopped() { for i in $(seq 1 100); do [ "$(utmctl status "$VM")" = stopped ] && return 0; sleep 6; done; echo "machine still not stopped after 10 minutes"; return 1; }
 ```
 
+Typing into the guest: `typeline '<text>'` sends the text as key presses through the monitor and
+presses Enter. Put the text in shell **single quotes**; the Windows text then must not contain an
+apostrophe (use double quotes inside it). `typeline` works only while the guest console has the
+keyboard focus; take a screenshot (`vncshot.py`) after each line and read the result from the picture.
+`nc` (macOS's netcat) ends a pipe when its input ends: `mon.sh` and the key loop below return after
+about a second per call, and `nc -w 5` gives up on a monitor that does not answer. If a call hangs
+anyway, press Ctrl-C and check `lsof -nP -iTCP:55577 -sTCP:LISTEN` (the monitor must listen).
+
 0. **Preconditions.** Run the four checks of "Ports and names". Expect: the first machine `stopped`, no
-   listener on 2222, 5977 and 55577, `name free`, and the first machine's snapshot list noted.
+   listener on 2222, 5977 and 55577, `name free`, and the first machine's snapshot list noted. Then:
+   ```sh
+   df -g "$HOME" | awk 'NR==2 {print $4 " GB free"}'                          # expect 60 or more
+   osascript -e 'tell application "UTM" to get name of every virtual machine'   # expect the list of machines
+   ```
+   The first `osascript` call that addresses UTM makes macOS ask whether the terminal app may control
+   UTM; the person at the Mac must **allow** it. To see or change the decision: System Settings →
+   Privacy & Security → Automation → the terminal app → UTM. A refused call fails with `Not authorized
+to send Apple events to UTM. (-1743)`. UTM is sandboxed and writes the exported skeleton (step 4)
+   into `$W/vm`; a folder directly under the home directory is not one of the folders macOS protects.
+   If `$W/vm/skel.utm` does not exist after step 4, allow UTM under Privacy & Security → Files and
+   Folders (or choose another work folder). **Not yet run** on a Mac without earlier permissions.
 1. **Host tools.**
    ```sh
-   brew install --cask utm && utmctl version      # expect 5.0.8
-   mkdir -p "$W/bin" "$W/ans" && chmod 700 "$W"
+   brew install --cask utm
+   brew list --cask --versions utm                 # expect: utm 5.0.8
+   utmctl version                                  # expect: 5.0.8
+   mkdir -p "$W/bin" "$W/ans" "$W/guest" && chmod 700 "$W"
    python3 --version && which nc hdiutil xmllint osascript plutil shasum curl ssh scp   # all found
    ```
+   Homebrew installs the current cask version. The commands of this page were written for **5.0.8**
+   (checked: the release `v5.0.8` of the UTM project carries `UTM.dmg`). If the version shown is
+   another one, stop and install 5.0.8 from `https://github.com/utmapp/UTM/releases/tag/v5.0.8`
+   (`brew uninstall --cask utm`, then open `UTM.dmg` and drag UTM into Applications). **Not yet run.**
+   Save the appendices as the table above says.
 2. **Inputs and their digests.**
    ```sh
    curl -sL -o "$W/utm-guest-tools-0.1.271.iso" \
@@ -614,10 +659,9 @@ guest() { ssh -i "$KEY" -p 2222 -o BatchMode=yes -o ConnectTimeout=10 "$GUEST_US
    Microsoft lists one) and record its size and SHA-256 in the issue.
 3. **Credentials and the answer-file ISO.**
    ```sh
-   ssh-keygen -t ed25519 -N '' -f "$KEY"           # skip if you reuse the key of the first machine
+   ssh-keygen -t ed25519 -N '' -f "$KEY"           # a new key pair for this machine; $KEY.pub goes into the ISO
    PW=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)
    printf 'user=%s\npassword=%s\n' "$GUEST_USER" "$PW" > "$W/guest-credential" && chmod 600 "$W/guest-credential"
-   # appendix A -> $W/Autounattend.xml.tmpl, appendix B -> $W/ans/keiko-firstlogon.ps1
    sed -e "s/@@GUEST_USER@@/$GUEST_USER/g" -e "s/@@GUEST_PASSWORD@@/$PW/g" \
      "$W/Autounattend.xml.tmpl" > "$W/ans/Autounattend.xml"
    cp "$KEY.pub" "$W/ans/host-ssh-public-key.txt"
@@ -625,6 +669,7 @@ guest() { ssh -i "$KEY" -p 2222 -o BatchMode=yes -o ConnectTimeout=10 "$GUEST_US
    hdiutil makehybrid -quiet -iso -joliet -default-volume-name KEIKOANS -o "$W/autounattend.iso" "$W/ans"
    ls -l "$W/autounattend.iso"                                       # expect the file to exist
    ```
+   `$W/ans` now holds `Autounattend.xml`, `keiko-firstlogon.ps1` and `host-ssh-public-key.txt`.
 4. **Create the skeleton and export it.**
    ```sh
    SKEL=$(osascript "$W/bin/create.applescript" "$VM" "$ISO")       # prints a UUID
@@ -651,81 +696,143 @@ guest() { ssh -i "$KEY" -p 2222 -o BatchMode=yes -o ConnectTimeout=10 "$GUEST_US
    ```sh
    utmctl start "$VM"; sleep 6; utmctl status "$VM"        # expect: started
    "$W/bin/mon.sh" "info status"                            # expect: VM status: running
-   for i in $(seq 1 30); do (sleep 0.2; echo "sendkey spc"; sleep 0.3) | nc 127.0.0.1 55577 >/dev/null; sleep 0.5; done
+   for i in $(seq 1 30); do (sleep 0.2; echo "sendkey spc"; sleep 0.3) | nc -w 5 127.0.0.1 55577 >/dev/null; sleep 0.5; done
    python3 -I "$W/bin/vncshot.py" 127.0.0.1 5977 "$W/shot.png"   # expect: ok <width> <height>
    ```
-   The loop presses space for about 30 seconds so the Windows CD boot loader continues. If the screenshot
-   shows the UEFI shell, send `"$W/bin/mon.sh" system_reset` and repeat the loop. Take a screenshot every
-   five minutes: Windows Setup shows its copy and restart screens, and after **about 15 minutes** the
-   desktop of the signed-in `$GUEST_USER` appears. The guest has no network yet.
+   The loop presses space for about 30 seconds so the Windows CD boot loader ("Press any key to boot
+   from CD or DVD") continues once, at the start. **Do not press keys afterwards.** Setup restarts the
+   machine itself; the Windows ISO stays first in the boot order, so each later boot shows the same
+   prompt for a few seconds, and leaving it alone lets the machine fall through to the system disk and
+   continue Setup (pressing a key there would start Setup from the beginning, a loop). If the first
+   screenshot shows the UEFI shell instead, send `"$W/bin/mon.sh" system_reset` and repeat the loop.
+   Take a screenshot every five minutes and compare: Setup shows its progress screens ("Getting
+   ready", "Working on updates", the restart countdown) and, **after about 15 minutes**, a desktop
+   with a taskbar and the first-logon script's window. Two screenshots in a row of the language or
+   "Install now" page, or a Setup that has started over after 25 minutes, mean a loop: stop and
+   report. The guest has no network yet. The after-reboot behaviour is the first build's, **not yet
+   run** on a rebuild.
 8. **Network driver.** Stop the machine, attach the tools ISO and move the adapter.
    ```sh
-   utmctl stop "$VM" --request; until [ "$(utmctl status "$VM")" = stopped ]; do sleep 6; done
+   utmctl stop "$VM" --request; waitstopped                 # expect no message
    osascript -e 'tell application "UTM" to get configuration of virtual machine id "'$ID'"' \
-     | sed 's/, /\n/g' | grep -E '^id:' | head -3        # the three drive ids: Windows ISO, answer ISO, system disk
+     | sed 's/, /\n/g' | grep -oE 'id:[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}' | head -3 | cut -d: -f2
+   ```
+   The last command prints three UUIDs, in this order: Windows ISO, answer ISO, system disk. Sample from
+   the first machine (yours differ; the three lines, one UUID each, are the point):
+   ```
+   615B2C09-6348-489B-8148-143AA2D23E3C
+   4B6A7601-CFB8-44B4-9277-C28D5B08E833
+   B534A6AC-C99B-4986-B597-85B577BFC85F
+   ```
+   ```sh
    osascript "$W/bin/attach-tools.applescript" "$ID" "$W/utm-guest-tools-0.1.271.iso" <id-1> <id-2> <id-3>   # expect: drives-ok
    osascript "$W/bin/network.applescript" "$ID" 2222                                                         # expect: net-ok
    utmctl start "$VM"
    ```
-   When the desktop is back, open a command prompt through the keyboard (`vmkeys.py --keys meta_l-r`,
-   wait 2 s, `vmkeys.py 'cmd /k' --enter`; appendix N) and start an elevated PowerShell from it, which
-   installs the driver:
-   `python3 -I "$W/bin/vmkeys.py" 'cls & powershell -c "Start-Process powershell -Verb RunAs -ArgumentList ''-NoExit'',''-Command'',''pnputil /add-driver D:\Drivers\NetKVM\w11\ARM64\netkvm.inf /install''"' --enter`
-   (the line as used in the first build). If Windows asks to
-   confirm administrator rights, confirm by keyboard (`vmkeys.py --keys alt-y`; not verified). In the elevated
-   window type `ipconfig` and `ping www.microsoft.com` with `vmkeys.py '<line>' --enter`. Expect the
-   driver added, an address from 10.0.2.0/24 and replies; read each result from a screenshot. If `D:`
-   is not the tools drive, try the next letters.
-9. **Activation.** In the elevated window (PowerShell, so write `$env:windir` for `%windir%`): the
-   three `slmgr` commands of "4. Activation", for example
-   `cscript //nologo $env:windir\system32\slmgr.vbs /ato`. Expect
-   `Product activated successfully`, `Timebased activation will expire <date>` and
+   When the desktop is back (screenshot), open a command prompt through the keyboard and from it an
+   **elevated PowerShell**, then install the driver in that window (the Windows text of every line
+   has no apostrophe):
+   ```sh
+   python3 -I "$W/bin/vmkeys.py" --keys meta_l-r; sleep 2
+   typeline 'cmd'; sleep 3
+   typeline 'powershell -c "Start-Process powershell -Verb RunAs"'; sleep 5
+   ```
+   If Windows asks to confirm administrator rights, confirm by keyboard
+   (`python3 -I "$W/bin/vmkeys.py" --keys alt-y`) and take a screenshot: a second, administrator
+   PowerShell window must be in front. Then:
+   ```sh
+   typeline 'pnputil /add-driver D:\Drivers\NetKVM\w11\ARM64\netkvm.inf /install'
+   typeline 'ipconfig'
+   typeline 'ping www.microsoft.com'
+   ```
+   Expect the driver added, an address from 10.0.2.0/24 and replies; read each result from a
+   screenshot. If `D:` is not the tools drive, try the next letters. Every later line of steps 9 and 10
+   is typed into this elevated window. The elevation prompt and the drive letter are **not yet run** on a
+   rebuild (the first build used a different line that depended on shell quoting).
+9. **Activation.** In the elevated window (PowerShell, so write `$env:windir` for `%windir%`):
+   ```sh
+   typeline 'cscript //nologo $env:windir\system32\slmgr.vbs /ato'
+   typeline 'cscript //nologo $env:windir\system32\slmgr.vbs /xpr'
+   typeline 'cscript //nologo $env:windir\system32\slmgr.vbs /dli'
+   ```
+   Expect `Product activated successfully`, `Timebased activation will expire <date>` and
    `License Status: Licensed` in the `TIMEBASED_EVAL` channel. Write the expiry date down; if `/ato`
-   does not take, follow that section (`/rearm`, reboot, repeat) and otherwise stop and report.
-10. **OpenSSH, key-only.** In the elevated window, run the first-logon script again from the
-    answer-file drive:
-    `cmd /c for %i in (D E F G H I J) do @if exist %i:\keiko-firstlogon.ps1 powershell -NoProfile -ExecutionPolicy Bypass -File %i:\keiko-firstlogon.ps1`,
-    then the firewall command of "5. OpenSSH". From the host:
+   does not take, follow "4. Activation" (`/rearm`, reboot, repeat) and otherwise stop and report.
+10. **OpenSSH, key-only.** In the elevated PowerShell window, run the first-logon script again from the
+    answer-file drive (PowerShell syntax; the answer file's own `cmd` line does not work here), then
+    widen the firewall rule:
     ```sh
-    guest hostname                                   # expect: KEIKO-WIN11
+    typeline 'Get-PSDrive -PSProvider FileSystem | ForEach-Object { $f = Join-Path $_.Root "keiko-firstlogon.ps1"; if (Test-Path $f) { powershell -NoProfile -ExecutionPolicy Bypass -File $f } }'
+    typeline 'netsh advfirewall firewall set rule name="OpenSSH SSH Server (sshd)" new profile=any'
+    ```
+    The script prints its transcript and ends by writing `C:\ProgramData\keiko-setup\done.txt`; the
+    `netsh` line prints `Updated 1 rule(s).` **Not yet run** (the first build reached the same state
+    by other lines). From the host:
+    ```sh
+    guest hostname                                   # expect: KEIKO-WIN11 (the answer file's computer name)
     guest 'reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f'   # expect: The operation completed successfully.
     guest 'shutdown /r /t 5'
     ```
-    If the first SSH call reports `Connection timed out during banner exchange`, the firewall rule does
-    not cover all profiles yet. When the guest is back, `guest hostname` answers again and the
-    answer-file drive may be removed.
+    The first `guest` call stores this guest's host key in `$KH` (`accept-new`), so the host key of the
+    first guest, held in the default `known_hosts` for the same `127.0.0.1:2222`, is neither used nor
+    overwritten. If `guest hostname` reports `Connection timed out during banner exchange`, the firewall
+    rule does not cover all profiles yet. When the guest is back (a reboot takes a few minutes), `guest hostname`
+    answers again and the answer-file drive may be removed.
 11. **Windows Update until none is left.**
     ```sh
-    scp -i "$KEY" -P 2222 <the scripts of appendices C, D, E and R> "$GUEST_USER@127.0.0.1:C:/ProgramData/keiko-setup/"
+    guestcopy "$W/guest/keiko-windows-update.ps1" "$W/guest/keiko-guest-toolchain.ps1" \
+      "$W/guest/keiko-fetch-release.ps1" "$W/guest/keiko-release-start.cmd" \
+      "$GUEST_USER@127.0.0.1:C:/ProgramData/keiko-setup/"
     guest 'schtasks /create /tn KeikoUpdate /tr "powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\keiko-setup\keiko-windows-update.ps1" /sc once /st 23:59 /ru SYSTEM /rl HIGHEST /f'
-    "$W/bin/keiko-win-update-loop"      # appendix L; repeats passes and reboots; ends with: NO UPDATES LEFT
+    KEIKO_SSH_KEY="$KEY" KEIKO_KNOWN_HOSTS="$KH" "$W/bin/keiko-win-update-loop"   # appendix L
     ```
-    Expect several passes, each ending `pass <n>: installed;reboot=True`, then `pass <n>: none`.
+    The loop reboots the guest, repeats up to ten passes and ends with `NO UPDATES LEFT`; each pass
+    prints `pass <n>: installed;reboot=True` and the last one `pass <n>: none`. A pass that ends
+    `error` or after ten passes with updates pending stops the loop: read `update.log` and report.
 12. **Toolchain.**
     ```sh
     guest 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\keiko-setup\keiko-guest-toolchain.ps1'
     # expect: x64 ok sha256=<digest> and arm64 ok sha256=<digest>
     guest 'C:\tools\node-x64\node.exe -p process.arch; C:\tools\node-arm64\node.exe -p process.arch'   # expect: x64 and arm64
     ```
-13. **License check and snapshot.** Check the license as in step 9 (`/xpr`, `/dli`). Then, with the
-    machine stopped and **before any Keiko release or browser policy**:
+13. **License check and snapshot.** Check the license **over SSH** (an administrator's SSH session is
+    elevated), not at the console:
     ```sh
-    guest 'shutdown /s /t 5'; until [ "$(utmctl status "$VM")" = stopped ]; do sleep 10; done
+    guest 'cscript //nologo $env:windir\system32\slmgr.vbs /xpr'    # expect: Timebased activation will expire <date>
+    guest 'cscript //nologo $env:windir\system32\slmgr.vbs /dli'    # expect: License Status: Licensed, TIMEBASED_EVAL channel
+    ```
+    (**Not yet run** over SSH; if the output is empty or a dialog is needed, run the two lines in the
+    console window of step 9 instead.) Then, with the machine stopped and **before any Keiko release or
+    browser policy**:
+    ```sh
+    guest 'shutdown /s /t 5'; waitstopped
     osascript "$W/bin/snapshot.applescript" "$ID" clean-updated      # expect: clean-updated
     ```
     Write the expiry date and the reminder date (expiry minus one week) into the issue, record the
     observed duration of every phase, and run the snapshot list of "Ports and names" for the first
     machine again: it must equal the list noted in step 0.
-14. **Keiko release and start proof.** Start the machine, then:
+14. **Keiko release and start proof.** Start the machine (`utmctl start "$VM"`; `guest hostname` answers
+    after about three minutes, as in the 191 s restore measurement), then fetch, start and check the x64 leg:
     ```sh
     guest 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\keiko-setup\keiko-fetch-release.ps1 -Tag v1.4.0'
     # expect: sha256 ok ba6ae83c7655b69e1266beaeb9ce2eef6babffda1b4820a25a463ae5e5f22b76, then: extracted to C:\keiko\v1.4.0\extracted
     guest 'reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v HideFirstRunExperience /t REG_DWORD /d 1 /f; reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v BrowserSignin /t REG_DWORD /d 0 /f'
-    guest 'schtasks /create /tn KeikoReleaseStart /tr C:\ProgramData\keiko-setup\keiko-release-start.cmd /sc once /st 23:59 /it /ru keiko /f; schtasks /run /tn KeikoReleaseStart'
-    guest 'Get-Content C:\ProgramData\keiko-setup\release-start.log'     # wait for: exit=0 (up to four minutes)
-    guest 'curl.exe -s -m 30 http://127.0.0.1:1983/api/health'              # expect: "status":"ok" ... "readiness":"ready"
+    guest 'Remove-Item C:\ProgramData\keiko-setup\release-start.log -ErrorAction SilentlyContinue; schtasks /create /tn KeikoReleaseX64 /tr C:\ProgramData\keiko-setup\keiko-release-start.cmd /sc once /st 23:59 /it /ru keiko /f; schtasks /run /tn KeikoReleaseX64'
+    for i in $(seq 1 60); do
+      r=$(guest 'if (Test-Path C:\ProgramData\keiko-setup\release-start.log) { Get-Content C:\ProgramData\keiko-setup\release-start.log -Raw }')
+      case "$r" in *exit=*) break;; esac; sleep 5
+    done; echo "$r"                                                              # expect a last line: exit=0 (waits at most five minutes)
+    guest 'curl.exe -s -m 30 http://127.0.0.1:1983/api/health'                    # expect: "status":"ok" ... "readiness":"ready"
     ```
-    Then run the same start with `C:\tools\node-arm64\node.exe` as in "Start proofs (v1.4.0)".
+    Then the ARM64 leg. Port 1983 is held by the x64 instance, so stop it first, then start the same
+    script with the ARM64 Node as its argument in a second task:
+    ```sh
+    guest 'C:\keiko\v1.4.0\extracted\Keiko\runtime\node\node.exe C:\keiko\v1.4.0\extracted\Keiko\app\dist\cli\index.js stop'
+    guest 'Remove-Item C:\ProgramData\keiko-setup\release-start.log -ErrorAction SilentlyContinue; schtasks /create /tn KeikoReleaseArm64 /tr "C:\ProgramData\keiko-setup\keiko-release-start.cmd C:\tools\node-arm64\node.exe" /sc once /st 23:59 /it /ru keiko /f; schtasks /run /tn KeikoReleaseArm64'
+    ```
+    Poll `release-start.log` for `exit=0` and read `/api/health` exactly as above; stop the instance
+    with the same `stop` line afterwards. Both starts, the stop and the second task are **not yet run**;
+    the first build ran the start by hand in the interactive session (see "Start proofs (v1.4.0)").
 
 ## Appendix: scripts
 
@@ -1257,10 +1364,15 @@ echo "stop with   keiko-mac-dev stop"
 
 ### L. `keiko-win-update-loop` (host)
 
+Set `KEIKO_SSH_KEY` to the private key and, for a rebuilt machine, `KEIKO_KNOWN_HOSTS` to its own
+host-key file; the guest user is `keiko`.
+
 ```bash
 #!/bin/bash
 # Reboot the guest, then repeat update passes until none are left. Reboots whenever a pass asks.
-SSH="ssh -i <ssh-private-key> -p 2222 -o BatchMode=yes -o ConnectTimeout=10 keiko@127.0.0.1"
+KEY="${KEIKO_SSH_KEY:?set KEIKO_SSH_KEY to the guest's private key}"
+KH="${KEIKO_KNOWN_HOSTS:-$HOME/.ssh/known_hosts}"
+SSH="ssh -i $KEY -p 2222 -o BatchMode=yes -o ConnectTimeout=10 -o UserKnownHostsFile=$KH -o StrictHostKeyChecking=accept-new keiko@127.0.0.1"
 waitssh() { for i in $(seq 1 120); do $SSH hostname >/dev/null 2>&1 && return 0; sleep 10; done; return 1; }
 reboot_guest() { $SSH 'shutdown /r /t 5' >/dev/null 2>&1; sleep 90; waitssh || exit 1; sleep 120; }
 reboot_guest
@@ -1291,7 +1403,7 @@ machine got another monitor port.
 #!/bin/bash
 # usage: mon.sh "cmd" ["cmd"...]  — send commands to the QEMU monitor
 PORT="${KEIKO_MONITOR_PORT:-55577}"
-( sleep 0.3; for c in "$@"; do printf '%s\n' "$c"; sleep 0.4; done; sleep 0.5 ) | nc 127.0.0.1 "$PORT" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | tr -d '\r' | grep -v -E "^\(qemu\) *$"
+( sleep 0.3; for c in "$@"; do printf '%s\n' "$c"; sleep 0.4; done; sleep 0.5 ) | nc -w 5 127.0.0.1 "$PORT" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | tr -d '\r' | grep -v -E "^\(qemu\) *$"
 ```
 
 ### N. `vmkeys.py` (host)
@@ -1496,14 +1608,18 @@ end run
 ### R. `keiko-release-start.cmd` (guest)
 
 Starts the extracted release in the interactive session, like appendix I does for the developer loop.
-Run it through an interactive scheduled task as in step 14 of the checklist; it writes
+Run it through an interactive scheduled task as in step 14 of the checklist (the optional argument
+selects the ARM64 Node); it writes
 `C:\ProgramData\keiko-setup\release-start.log` and ends it with `exit=<code>`.
 
 ```bat
 @echo off
+rem usage: keiko-release-start.cmd [path-to-node.exe]   (default: the release's own x64 Node)
 rem Starts the extracted v1.4.0 release in the interactive session (a scheduled task starts in System32, which breaks `keiko start`).
 cd /d "%USERPROFILE%"
+set NODE=%~1
+if "%NODE%"=="" set NODE=C:\keiko\v1.4.0\extracted\Keiko\runtime\node\node.exe
 set OUT=C:\ProgramData\keiko-setup\release-start.log
-"C:\keiko\v1.4.0\extracted\Keiko\runtime\node\node.exe" "C:\keiko\v1.4.0\extracted\Keiko\app\dist\cli\index.js" start --start-timeout 240 > "%OUT%" 2>&1
+"%NODE%" "C:\keiko\v1.4.0\extracted\Keiko\app\dist\cli\index.js" start --start-timeout 240 > "%OUT%" 2>&1
 echo exit=%ERRORLEVEL% >> "%OUT%"
 ```
