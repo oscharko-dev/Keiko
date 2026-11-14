@@ -275,7 +275,7 @@ describe("runDetachedAlert", () => {
 });
 
 describe("runDetachedWindowsAlert", () => {
-  it("spawns the bounded detached PowerShell MessageBox contract and detaches from it", () => {
+  it("spawns the bounded attached PowerShell MessageBox contract and does not wait for it", () => {
     const calls: unknown[][] = [];
     const reported: string[] = [];
     const { sink, events } = recordingSecuritySink();
@@ -322,9 +322,12 @@ describe("runDetachedWindowsAlert", () => {
         "'Keiko could not start', 'OK', 'Error') | Out-Null",
     ]);
     // PowerShell/WPF need the core system variables to initialize; everything else stays
-    // withheld from the detached child (no TEMP/TMP here because the caller env carries none).
+    // withheld from the child (no TEMP/TMP here because the caller env carries none). The child
+    // is attached with a hidden console: a detached PowerShell owns no console and exits without
+    // showing its box on the Windows guest (#4358). The launcher still never waits for it: the
+    // child is unreferenced.
     expect(calls[0]?.[2]).toEqual({
-      detached: true,
+      detached: false,
       env: { SystemRoot: String.raw`D:\Windows`, WINDIR: String.raw`D:\Windows` },
       shell: false,
       stdio: "ignore",
@@ -524,5 +527,43 @@ describe("runDetachedWindowsBox as a setup notice", () => {
         "[System.Windows.MessageBox]::Show('can''t startbecause', " +
         "'Keiko could not start', 'OK', 'Error') | Out-Null",
     );
+  });
+});
+
+// #4358, Windows window on build cb59ec31f: the setup notice was requested and logged, and no box
+// appeared. Both boxes start through the one visible-helper start the browser opener uses.
+describe("the Windows boxes start like the browser opener", () => {
+  it.each([
+    ["setup notice", { kind: "setup-notice" }],
+    ["failure alert", { kind: "failure", message: "it failed" }],
+  ] as const)("starts the %s attached, hidden and unreferenced", (_name, box) => {
+    const started: { options: Record<string, unknown>; unreferenced: boolean }[] = [];
+    runDetachedWindowsBox(
+      box,
+      { SystemRoot: String.raw`D:\Windows` },
+      {
+        spawnFn: (_command, _args, options) => {
+          const record = { options: { ...options }, unreferenced: false };
+          started.push(record);
+          return {
+            on: (): void => undefined,
+            unref: (): void => {
+              record.unreferenced = true;
+            },
+          };
+        },
+        identityCheck: () => true,
+        existsAsFile: () => true,
+      },
+    );
+
+    expect(started).toHaveLength(1);
+    expect(started[0]?.options).toMatchObject({
+      detached: false,
+      windowsHide: true,
+      stdio: "ignore",
+      shell: false,
+    });
+    expect(started[0]?.unreferenced).toBe(true);
   });
 });
