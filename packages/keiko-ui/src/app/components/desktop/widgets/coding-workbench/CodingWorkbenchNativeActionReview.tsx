@@ -171,6 +171,36 @@ function jiraNamesOf(jira: CodingWorkbenchNativeJiraWriteReview): JiraNames {
   };
 }
 
+/** The facts a person decides on first: where the issue goes and what it is called. */
+const LEADING_ARGUMENTS = ["projectId", "issueTypeId", "issueKey"] as const;
+
+function leading(
+  value: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  return {
+    ...Object.fromEntries(keys.filter((key) => key in value).map((key) => [key, value[key]])),
+    ...value,
+  };
+}
+
+/**
+ * The call's arguments with the target and the summary first: the model sends them in any order,
+ * and a long description must not push what the issue is called out of sight.
+ */
+function readableInput(
+  input: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const ordered = leading(input, LEADING_ARGUMENTS);
+  const { fields } = ordered;
+  return typeof fields === "object" && fields !== null && !Array.isArray(fields)
+    ? {
+        ...ordered,
+        fields: leading(fields as Readonly<Record<string, unknown>>, ["summary"]),
+      }
+    : ordered;
+}
+
 /**
  * A Jira write the run's Pod would make, read as the same named facts Chat's approval shows for it
  * (`jiraActionFacts`): the operation in words, the project and issue type by the names Jira gave
@@ -187,7 +217,13 @@ function JiraWriteReview({
   const operation = Object.hasOwn(JIRA_MANAGED_ACTION_TYPES, jira.tool)
     ? (jira.tool as keyof typeof JIRA_MANAGED_ACTION_TYPES)
     : undefined;
-  const facts = jiraActionFacts(jira.input, true, widget, jiraNamesOf(jira), jira.tool);
+  const facts = jiraActionFacts(
+    readableInput(jira.input),
+    true,
+    widget,
+    jiraNamesOf(jira),
+    jira.tool,
+  );
   return (
     <fieldset
       className={styles.approvalResearch}

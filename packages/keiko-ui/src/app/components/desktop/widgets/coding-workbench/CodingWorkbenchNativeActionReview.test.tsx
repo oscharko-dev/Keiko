@@ -57,6 +57,29 @@ describe("CodingWorkbenchNativeActionReview", () => {
       expect(nativeActionTitle(action, en)).toBe("Jira change");
     });
 
+    it("puts the project, the issue type and the summary before a long description", async () => {
+      await loadOptionalWidgetMessages("en");
+      const { container } = render(
+        review({
+          ...action,
+          jira: {
+            ...action.jira!,
+            input: {
+              fields: { description: "A very long description", summary: "Probe" },
+              issueTypeId: "10003",
+              projectId: "10002",
+            },
+          },
+        }),
+      );
+      const text = container.textContent ?? "";
+      const order = ["Anforderungen (REQ)", "Task", "Probe", "A very long description"].map(
+        (fact) => text.indexOf(fact),
+      );
+      expect(order.every((position) => position >= 0)).toBe(true);
+      expect([...order].sort((a, b) => a - b)).toEqual(order);
+    });
+
     it("keeps the ordinary title for every other native action", () => {
       expect(nativeActionTitle({ permission: "shell", resources: ["npm test"] }, en)).toBe(
         nativePermissionLabel("shell", en),

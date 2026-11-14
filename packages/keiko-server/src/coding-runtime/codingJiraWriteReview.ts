@@ -17,6 +17,16 @@ const FAMILY_OF_READ: Readonly<Record<string, Family>> = {
   [jiraOperationNameKey("jira.create-fields")]: "fields",
 };
 
+const SINGLE_PROJECT_READ = jiraOperationNameKey("jira.project");
+
+/** One project read answers with the project's own id, key and name at the top. */
+function projectEntry(data: CatalogJsonObject): readonly (readonly [string, string])[] {
+  const { projectId, projectKey, projectName } = data;
+  if (typeof projectId !== "string" || typeof projectName !== "string") return [];
+  const shown = typeof projectKey === "string" ? `${projectName} (${projectKey})` : projectName;
+  return [[projectId, shown.slice(0, MAX_NAME_CHARS)]];
+}
+
 /**
  * What Jira called the ids this run has read so far, per family: the same facts Chat's approval
  * card takes from the conversation's completed reads. Bounded; a later read of an id wins.
@@ -56,9 +66,11 @@ export function createCodingJiraRunNames(): CodingJiraRunNames {
   };
   return {
     note: (tool, data): void => {
-      const family = FAMILY_OF_READ[jiraOperationNameKey(tool)];
+      const key = jiraOperationNameKey(tool);
+      const family = key === SINGLE_PROJECT_READ ? "projects" : FAMILY_OF_READ[key];
       if (family === undefined) return;
-      for (const [id, name] of entriesOf(family, data)) {
+      const entries = key === SINGLE_PROJECT_READ ? projectEntry(data) : entriesOf(family, data);
+      for (const [id, name] of entries) {
         known[family].delete(id);
         known[family].set(id, name);
       }

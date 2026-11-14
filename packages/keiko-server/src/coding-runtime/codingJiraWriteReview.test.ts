@@ -31,6 +31,20 @@ describe("the names a run's Jira reads gave its ids", () => {
     });
   });
 
+  it("names the project from a single project read, which answers with its own id, key and name", () => {
+    const names = createCodingJiraRunNames();
+    names.note("jira.project", {
+      projectId: "10002",
+      projectKey: "REQ",
+      projectName: "Anforderungen Schadenmeldung",
+      reviewSnapshot: { id: "ignored" },
+    });
+    names.note("jira.project", { projectKey: "NOID" });
+    expect(names.review({ tool: "jira.create", arguments: {} }).names.projects).toEqual([
+      ["10002", "Anforderungen Schadenmeldung (REQ)"],
+    ]);
+  });
+
   it("lets a later read of an id win and stays within its bound", () => {
     const names = createCodingJiraRunNames();
     names.note("jira.projects", { items: [{ id: "1", key: "A", name: "Old" }] });
