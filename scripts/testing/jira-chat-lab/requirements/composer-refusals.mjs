@@ -177,7 +177,7 @@ const CREATION = /\b(?:angelegt|erstellt|created)\b/iu;
 const NEGATED = /\b(?:nicht|nichts|nie\w*|kein\w*|not|never|no|n't|konnte nicht|unable)\b/iu;
 // "Sobald die Vorlage angelegt ist, kann ich ...": the template is what gets created, or it is a later offer.
 const NOT_A_CLAIM =
-  /(?:vorlage|template)\W+(?:\w+\W+){0,4}(?:angelegt|erstellt|created)|\b(?:wenn|sobald|danach|falls|nachdem|kann|k[öo]nnte|k[öo]nnen|w[üu]rde|once|after|if|can|could|would)\b/iu;
+  /(?:vorlage|template)\W+(?:\w+\W+){0,4}(?:angelegt|erstellt|created)|\b(?:wenn|sobald|danach|falls|nachdem|kann|k(?:ö|oe)nnte|k(?:ö|oe)nnen|w(?:ü|ue)rde|once|after|if|can|could|would)\b/iu;
 const claimsCreation = (clause) =>
   CREATION.test(clause) && !NEGATED.test(clause) && !NOT_A_CLAIM.test(clause);
 

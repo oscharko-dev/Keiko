@@ -830,6 +830,7 @@ describe("refusalTrace", () => {
     const [entry] = refusalTrace([ok, refused]);
     expect(entry).toEqual({
       call: "jira_upsert_remote_link",
+      argumentNames: ["url"],
       status: "failed",
       outcome: "rejected",
       reason: "invalid-arguments",
@@ -861,8 +862,42 @@ describe("refusalTrace", () => {
 
   it("reports a call with no result at all with closed placeholders", () => {
     expect(refusalTrace([{ call: { name: "jira.issue" } }])).toEqual([
-      { call: "jira_issue", status: "none", outcome: "none", reason: "none", invalidArguments: [] },
+      {
+        call: "jira_issue",
+        argumentNames: [],
+        status: "none",
+        outcome: "none",
+        reason: "none",
+        invalidArguments: [],
+      },
     ]);
+  });
+
+  it("names the arguments the model passed, never their values, and bounds them", () => {
+    const [entry] = refusalTrace([
+      {
+        call: {
+          name: "jira.assignable-users",
+          arguments: {
+            query: "keiko-api",
+            ["a".repeat(200)]: 1,
+            ...Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`k${i}`, i])),
+          },
+        },
+        result: {
+          status: "failed",
+          data: { outcome: "failed", reason: "provider-reported-error" },
+        },
+      },
+    ]);
+    expect(entry.argumentNames).toHaveLength(16);
+    expect(entry.argumentNames[0]).toBe("query");
+    expect(entry.argumentNames.every((name) => name.length <= 64)).toBe(true);
+    expect(JSON.stringify(entry)).not.toContain("keiko-api");
+    // A non-object argument list yields no names.
+    expect(
+      refusalTrace([{ call: { name: "jira.issue", arguments: "x" } }])[0].argumentNames,
+    ).toEqual([]);
   });
 
   it("bounds the closed status, outcome and reason like the other fields", () => {

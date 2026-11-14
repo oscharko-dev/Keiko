@@ -194,11 +194,22 @@ export function refusalTrace(exchanges) {
 const closedOf = (...values) =>
   String(values.find((value) => value !== undefined) ?? "none").slice(0, REFUSAL_NAME_CHARS);
 
+/** The names of the arguments the model passed (never a value), so a failed call can be diagnosed from the report. */
+function argumentNames(exchange) {
+  const args = exchange.call?.arguments;
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return [];
+  return Object.keys(args)
+    .map((name) => boundedText(name, REFUSAL_NAME_CHARS))
+    .filter((name) => name !== undefined)
+    .slice(0, REFUSAL_NAMES_MAX);
+}
+
 function refusalEntry(exchange) {
   const { result } = exchange;
   const message = refusalMessage(exchange);
   return {
     call: toolAlias(exchange.call?.name),
+    argumentNames: argumentNames(exchange),
     status: closedOf(result?.status),
     outcome: closedOf(result?.data?.outcome),
     reason: closedOf(result?.reason, result?.data?.reason),
