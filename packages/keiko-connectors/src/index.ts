@@ -366,12 +366,15 @@ export {
   requestFor as createJiraReadRequest,
 } from "./jira-managed-mutations.js";
 export {
+  boundJiraTemplateWithoutProposal,
   deriveJiraTemplateSections,
+  JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX,
   proposeJiraIssueTemplates,
   readJiraTemplateInstanceMetadata,
   renderProposedJiraIssueTemplate,
   type JiraTemplateInstanceRead,
   type JiraTemplateProposal,
+  type JiraTemplateProposalPartial,
   type JiraTemplateWithoutProposal,
   type JiraTemplateWithoutProposalReason,
   type JiraTemplateProposalInput,

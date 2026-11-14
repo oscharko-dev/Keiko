@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
-import { proposeJiraIssueTemplates } from "./jira-issue-template-instance.js";
+import {
+  JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX,
+  boundJiraTemplateWithoutProposal,
+  proposeJiraIssueTemplates,
+} from "./jira-issue-template-instance.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { REQUIRED_CUSTOM, field } from "../../../tests/support/jira-managed-remote.js";
 
@@ -67,7 +71,7 @@ function jira(types: readonly FakeType[]): JiraMutationRequest {
 }
 
 async function propose(types: readonly FakeType[]): Promise<{
-  readonly proposals: readonly { readonly issueType: string }[];
+  readonly proposals: readonly { readonly issueType: string; readonly partial?: string }[];
   readonly withoutProposal: readonly { readonly issueType: string; readonly reason: string }[];
   readonly typeCount: number;
 }> {
@@ -152,5 +156,43 @@ describe("proposeJiraIssueTemplates accounts for every issue type of the project
     const wide = await propose(many);
     expect(wide.typeCount).toBe(150);
     expect(wide.proposals.length + wide.withoutProposal.length).toBe(150);
+  });
+
+  it("marks a kept proposal as partial when exactly one of its two reads was not answered", async () => {
+    const result = await propose([
+      { id: "1", name: "Fields-down", metadata: "unavailable", samples: STRUCTURED },
+      { id: "2", name: "Samples-down", metadata: "required-field", samples: "unavailable" },
+      { id: "3", name: "Complete", metadata: "required-field", samples: STRUCTURED },
+      { id: "4", name: "Complete-empty", metadata: "required-field", samples: [] },
+    ]);
+    expect(result.proposals.map(({ issueType, partial }) => [issueType, partial])).toEqual([
+      ["Fields-down", "required-fields-unavailable"],
+      ["Samples-down", "samples-unavailable"],
+      ["Complete", undefined],
+      ["Complete-empty", undefined],
+    ]);
+    // A complete proposal carries no note at all, not an empty one.
+    expect(result.proposals[2]).not.toHaveProperty("partial");
+  });
+});
+
+describe("boundJiraTemplateWithoutProposal (#4354 F04)", () => {
+  const entries = (count: number): { issueType: string; reason: "beyond-limit" }[] =>
+    Array.from({ length: count }, (_, index) => ({
+      issueType: `T${String(index)}`,
+      reason: "beyond-limit",
+    }));
+  it("lists everything up to the bound and counts nothing more", () => {
+    const all = entries(JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX);
+    expect(boundJiraTemplateWithoutProposal(all)).toEqual({ listed: all, moreCount: 0 });
+  });
+  it("lists the first entries by name and counts the rest exactly", () => {
+    const bounded = boundJiraTemplateWithoutProposal(entries(150));
+    expect(bounded.listed).toHaveLength(JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX);
+    expect(bounded.listed[0]?.issueType).toBe("T0");
+    expect(bounded.moreCount).toBe(150 - JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX);
+  });
+  it("handles an empty list", () => {
+    expect(boundJiraTemplateWithoutProposal([])).toEqual({ listed: [], moreCount: 0 });
   });
 });

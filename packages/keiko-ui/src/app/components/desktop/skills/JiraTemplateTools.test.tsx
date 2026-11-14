@@ -467,11 +467,13 @@ describe("the automatic check follows the selected Pod", () => {
 function runOf(
   proposals: readonly templates.JiraTemplateProposal[],
   withoutProposal: readonly templates.JiraTemplateWithoutProposal[] = [],
+  withoutProposalMoreCount = 0,
 ): templates.JiraTemplateProposalRun {
   return {
     proposals,
     withoutProposal,
-    typeCount: proposals.length + withoutProposal.length,
+    withoutProposalMoreCount,
+    typeCount: proposals.length + withoutProposal.length + withoutProposalMoreCount,
   };
 }
 
@@ -609,6 +611,58 @@ describe("template proposals", () => {
       screen.getByText("Sub-task: Jira did not answer for this type. Try again."),
     ).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Open in editor" })).toHaveLength(3);
+  });
+
+  it("tells on the proposal itself which Jira read did not answer, and nothing on a complete one (#4354)", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf([
+        {
+          issueType: "Task",
+          markdown: "T",
+          sampledIssueCount: 3,
+          partial: "required-fields-unavailable",
+        },
+        { issueType: "Story", markdown: "S", sampledIssueCount: 0, partial: "samples-unavailable" },
+        { issueType: "Epic", markdown: "E", sampledIssueCount: 2 },
+      ]),
+    );
+    const user = userEvent.setup();
+    render(<Panel stored={library} />);
+    await screen.findByText("Story template");
+    await user.type(screen.getByLabelText("Project key"), "REQ");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    await screen.findByText("3 issue types: 3 with a proposal, 0 without.");
+    const notes = screen.getAllByRole("note").map((note) => note.textContent);
+    expect(notes).toEqual([
+      "Jira did not answer for the required fields of this type; check them before saving.",
+      "Jira did not answer for the sample issues of this type; check the sections before saving.",
+    ]);
+    const epic = screen.getByText("Proposed for Epic (2 issues sampled)").closest("li");
+    expect(epic).not.toBeNull();
+    expect(epic?.querySelector('[role="note"]')).toBeNull();
+  });
+
+  it("keeps the exact count when the list of types without a proposal is bounded, and says how many more", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockResolvedValue(
+      runOf(
+        [{ issueType: "Task", markdown: "T", sampledIssueCount: 3 }],
+        [
+          { issueType: "Bug", reason: "nothing-to-learn" },
+          { issueType: "Epic", reason: "beyond-limit" },
+        ],
+        137,
+      ),
+    );
+    const user = userEvent.setup();
+    render(<Panel stored={library} />);
+    await screen.findByText("Story template");
+    await user.type(screen.getByLabelText("Project key"), "REQ");
+    await user.click(screen.getByRole("button", { name: "Propose from project" }));
+    await screen.findByText("140 issue types: 1 with a proposal, 139 without.");
+    expect(screen.getByText("and 137 more without a proposal.")).toBeInTheDocument();
+    // Only the listed types are named; the others are counted, never one line each.
+    expect(screen.getByText("Bug: No issues of this type to learn from yet.")).toBeInTheDocument();
+    expect(screen.getAllByText(/^(Bug|Epic): /u)).toHaveLength(2);
   });
 
   it("names the reason of each type without a proposal, also when none has one", async () => {

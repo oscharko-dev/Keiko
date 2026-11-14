@@ -1,5 +1,6 @@
 import {
   createJiraReadRequest,
+  boundJiraTemplateWithoutProposal,
   proposeJiraIssueTemplates,
   readJiraTemplateInstanceMetadata,
   validateJiraIssueTemplateAgainstInstance,
@@ -148,7 +149,7 @@ export function handleValidateJiraTemplate(
 
 /** Counts per closed reason of a proposal run: what the closing log line carries, never a type name. */
 function proposalAccounting(result: {
-  readonly proposals: readonly unknown[];
+  readonly proposals: readonly { readonly partial?: string }[];
   readonly withoutProposal: readonly { readonly reason: string }[];
   readonly typeCount: number;
 }): MarkdownSkillProposalAccounting {
@@ -161,6 +162,8 @@ function proposalAccounting(result: {
     templateInvalidCount: count("template-invalid"),
     jiraUnavailableCount: count("jira-unavailable"),
     beyondLimitCount: count("beyond-limit"),
+    partialProposalCount: result.proposals.filter((proposal) => proposal.partial !== undefined)
+      .length,
   };
 }
 
@@ -187,11 +190,13 @@ export function handleProposeJiraTemplates(
         throw jiraReadFailure(result.reason);
       }
       accounted = proposalAccounting(result);
+      const { listed, moreCount } = boundJiraTemplateWithoutProposal(result.withoutProposal);
       return {
         status: 200,
         body: {
           proposals: result.proposals,
-          withoutProposal: result.withoutProposal,
+          withoutProposal: listed,
+          withoutProposalMoreCount: moreCount,
           typeCount: result.typeCount,
         },
       };

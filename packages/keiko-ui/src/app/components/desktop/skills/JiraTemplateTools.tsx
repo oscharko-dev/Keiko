@@ -8,6 +8,7 @@ import {
   type JiraTemplateEntry,
   type JiraTemplateFindingCode,
   type JiraTemplateProposal,
+  type JiraTemplateProposalPartial,
   type JiraTemplateWithoutProposal,
   type JiraTemplateWithoutProposalReason,
   type JiraTemplateValidation,
@@ -52,6 +53,7 @@ interface Proposals {
   readonly generation: number;
   readonly items: readonly JiraTemplateProposal[];
   readonly withoutProposal: readonly JiraTemplateWithoutProposal[];
+  readonly withoutProposalMoreCount: number;
   readonly typeCount: number;
 }
 interface Tools {
@@ -155,6 +157,7 @@ function useTemplateProposals(run: Run, scope: RequestScope): Pick<Tools, "propo
           generation: (current?.generation ?? 0) + 1,
           items: run.proposals,
           withoutProposal: run.withoutProposal,
+          withoutProposalMoreCount: run.withoutProposalMoreCount,
           typeCount: run.typeCount,
         }));
       }),
@@ -459,6 +462,11 @@ const WITHOUT_PROPOSAL_TEXT = {
   "beyond-limit": "chat.skills.jira.withoutProposal.beyond-limit",
 } as const satisfies Record<JiraTemplateWithoutProposalReason, string>;
 
+const PARTIAL_TEXT = {
+  "required-fields-unavailable": "chat.skills.jira.partial.required-fields-unavailable",
+  "samples-unavailable": "chat.skills.jira.partial.samples-unavailable",
+} as const satisfies Record<JiraTemplateProposalPartial, string>;
+
 function ProposalLine({
   proposal,
   onDraft,
@@ -486,6 +494,11 @@ function ProposalLine({
       >
         {t("chat.skills.jira.openProposal")}
       </button>
+      {proposal.partial === undefined ? null : (
+        <span role="note" className={styles.cmpProposalNote}>
+          {t(PARTIAL_TEXT[proposal.partial])}
+        </span>
+      )}
     </li>
   );
 }
@@ -526,7 +539,7 @@ function ProposalList({
         {t("chat.skills.jira.proposalCount", {
           types: proposals.typeCount,
           proposals: proposals.items.length,
-          without: proposals.withoutProposal.length,
+          without: proposals.typeCount - proposals.items.length,
         })}
       </p>
       <ul className={styles.cmpProposals}>
@@ -540,6 +553,13 @@ function ProposalList({
         {proposals.withoutProposal.map((entry) => (
           <WithoutProposalLine key={`${run}:without:${entry.issueType}`} entry={entry} />
         ))}
+        {proposals.withoutProposalMoreCount === 0 ? null : (
+          <li>
+            {t("chat.skills.jira.withoutProposalMore", {
+              count: proposals.withoutProposalMoreCount,
+            })}
+          </li>
+        )}
       </ul>
     </div>
   );

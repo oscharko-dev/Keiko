@@ -47,6 +47,8 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
     templateInvalidCount: { type: "integer", dataClass: "count", required: false },
     jiraUnavailableCount: { type: "integer", dataClass: "count", required: false },
     beyondLimitCount: { type: "integer", dataClass: "count", required: false },
+    // Proposals kept although one of their two Jira reads was not answered (#4354).
+    partialProposalCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -80,6 +82,7 @@ export interface MarkdownSkillProposalAccounting {
   readonly templateInvalidCount: number;
   readonly jiraUnavailableCount: number;
   readonly beyondLimitCount: number;
+  readonly partialProposalCount: number;
 }
 
 export function logMarkdownSkillOperation(

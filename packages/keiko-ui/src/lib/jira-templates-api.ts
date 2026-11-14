@@ -44,10 +44,13 @@ export type JiraTemplateValidation =
       };
     };
 
+/** The Jira read that did not answer for a proposal that was kept anyway (#4354). */
+export type JiraTemplateProposalPartial = "required-fields-unavailable" | "samples-unavailable";
 export interface JiraTemplateProposal {
   readonly issueType: string;
   readonly markdown: string;
   readonly sampledIssueCount: number;
+  readonly partial?: JiraTemplateProposalPartial;
 }
 
 /** Why an issue type of the project has no proposal; each is a closed word with its own plain text. */
@@ -60,7 +63,9 @@ export interface JiraTemplateWithoutProposal {
 /** A proposal run accounts for every issue type of the project (#4354). */
 export interface JiraTemplateProposalRun {
   readonly proposals: readonly JiraTemplateProposal[];
+  /** The first entries by name; the others are only counted in `withoutProposalMoreCount`. */
   readonly withoutProposal: readonly JiraTemplateWithoutProposal[];
+  readonly withoutProposalMoreCount: number;
   readonly typeCount: number;
 }
 
