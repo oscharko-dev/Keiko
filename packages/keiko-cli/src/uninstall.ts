@@ -795,9 +795,16 @@ const UNINSTALL_HANDOFF_OUTCOMES = [
   "resumed",
   "helper-ready",
   "helper-refused",
+  "helper-lost",
   "residue-committed",
   "residue-reported",
 ] as const;
+
+// What an interrupted earlier run left, as the journal and the registration tell it: the installation
+// still had files, or only the registration remained. `none` for a first run. A journal that is
+// still present when this run starts means the earlier helper did not finish; a removal that
+// finished leaves neither journal nor registration.
+const UNINSTALL_RESUME_STATES = ["none", "files-remaining", "installation-gone"] as const;
 
 const UNINSTALL_HELPER_REFUSALS = [
   "none",
@@ -831,6 +838,12 @@ const CLI_UNINSTALL_HANDOFF_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: UNINSTALL_HELPER_REFUSALS,
+    },
+    resumeState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: UNINSTALL_RESUME_STATES,
     },
     failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
     removedCount: { type: "integer", dataClass: "count", required: true },
@@ -1089,29 +1102,49 @@ function managedRemovalContext(
   };
 }
 
+interface UninstallHandoffFields {
+  readonly refusal?: (typeof UNINSTALL_HELPER_REFUSALS)[number];
+  readonly failureKind?: string | undefined;
+  readonly resumeState?: (typeof UNINSTALL_RESUME_STATES)[number];
+  readonly removedCount?: number;
+  readonly residueFileCount?: number;
+  readonly residueDirectoryCount?: number;
+}
+
+const WARNING_HANDOFF_OUTCOMES: ReadonlySet<UninstallHandoffOutcome> = new Set([
+  "helper-refused",
+  "helper-lost",
+  "residue-reported",
+]);
+
+function handoffCounts(fields: UninstallHandoffFields): {
+  readonly removedCount: number;
+  readonly residueFileCount: number;
+  readonly residueDirectoryCount: number;
+} {
+  return {
+    removedCount: fields.removedCount ?? 0,
+    residueFileCount: fields.residueFileCount ?? 0,
+    residueDirectoryCount: fields.residueDirectoryCount ?? 0,
+  };
+}
+
 function emitUninstallHandoff(
   activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
   outcome: UninstallHandoffOutcome,
-  fields: {
-    readonly refusal?: (typeof UNINSTALL_HELPER_REFUSALS)[number];
-    readonly failureKind?: string | undefined;
-    readonly removedCount?: number;
-    readonly residueFileCount?: number;
-    readonly residueDirectoryCount?: number;
-  } = {},
+  fields: UninstallHandoffFields = {},
 ): void {
   emitSecurityLogEvent(
     activity.sink,
     activityLogEvent(
       CLI_UNINSTALL_HANDOFF_OPERATION,
-      { level: outcome === "helper-refused" || outcome === "residue-reported" ? "warn" : "info" },
+      { level: WARNING_HANDOFF_OUTCOMES.has(outcome) ? "warn" : "info" },
       {
         outcome,
         refusal: fields.refusal ?? "none",
+        resumeState: fields.resumeState ?? "none",
         ...(fields.failureKind === undefined ? {} : { failureKind: fields.failureKind }),
-        removedCount: fields.removedCount ?? 0,
-        residueFileCount: fields.residueFileCount ?? 0,
-        residueDirectoryCount: fields.residueDirectoryCount ?? 0,
+        ...handoffCounts(fields),
         targetSha256: activity.targetSha256,
         packageTargetSha256: activity.packageTargetSha256,
       },
@@ -1154,10 +1187,14 @@ function reportManagedResult(
     return { held: new Set(result.deferredStatePaths), incomplete: false };
   }
   if (result.kind === "incomplete") {
-    emitUninstallHandoff(activity, "residue-reported", result);
+    emitUninstallHandoff(activity, result.helperLost ? "helper-lost" : "residue-reported", result);
+    const count = String(result.residueFileCount + result.residueDirectoryCount);
     io.err(
-      `keiko uninstall: ${String(result.residueFileCount + result.residueDirectoryCount)} entries of the installation could not be removed ` +
-        "(another program holds them). Nothing else was changed. Close that program and run keiko uninstall again; it continues where this run stopped.\n",
+      result.helperLost
+        ? `keiko uninstall: ${count} entries of the installation remain and the helper that was to remove them has stopped. ` +
+            "Nothing else was changed, and the installation is still registered. Run keiko uninstall again, from the downloaded Keiko release package, to finish it.\n"
+        : `keiko uninstall: ${count} entries of the installation could not be removed ` +
+            "(another program holds them). Nothing else was changed. Close that program and run keiko uninstall again; it continues where this run stopped.\n",
     );
     return { held: new Set(), incomplete: true };
   }
@@ -1170,7 +1207,9 @@ function applyManagedStep(
   activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
 ): ManagedStepOutcome {
   if (planned.kind !== "ready") return { held: new Set(), incomplete: false };
-  if (planned.plan.resumed) emitUninstallHandoff(activity, "resumed");
+  if (planned.plan.resume !== "none") {
+    emitUninstallHandoff(activity, "resumed", { resumeState: planned.plan.resume });
+  }
   if (planned.plan.helper !== undefined) emitUninstallHandoff(activity, "helper-ready");
   return reportManagedResult(applyManagedRemoval(planned.plan, context), context.io, activity);
 }
@@ -1216,8 +1255,9 @@ function printKeptSummary(
   if (state.retainedNames.length > 0) {
     const shown = state.retainedNames.slice(0, MAX_KEPT_NAMES).join(", ");
     const more = state.retainedNames.length - MAX_KEPT_NAMES;
+    const moreText = more > 0 ? `, and ${String(more)} more` : "";
     kept.push(
-      `${String(state.retainedNames.length)} entries in ${stateDir} that are not Keiko's artifacts (${shown}${more > 0 ? `, and ${String(more)} more` : ""})`,
+      `${String(state.retainedNames.length)} entries in ${stateDir} that are not Keiko's artifacts (${shown}${moreText})`,
     );
   }
   if (activity.sink !== undefined) {

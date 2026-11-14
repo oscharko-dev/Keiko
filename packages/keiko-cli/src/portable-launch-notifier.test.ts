@@ -332,6 +332,7 @@ describe("runDetachedWindowsAlert", () => {
       shell: false,
       stdio: "ignore",
       windowsHide: true,
+      cwd: String.raw`D:\Windows`,
     });
     expect(unreferenced).toBe(true);
     expect(errorHandler).toBeDefined();
@@ -563,6 +564,7 @@ describe("the Windows boxes start like the browser opener", () => {
       windowsHide: true,
       stdio: "ignore",
       shell: false,
+      cwd: String.raw`D:\Windows`,
     });
     expect(started[0]?.unreferenced).toBe(true);
   });

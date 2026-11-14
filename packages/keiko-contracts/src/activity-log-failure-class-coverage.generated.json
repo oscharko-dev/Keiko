@@ -6473,6 +6473,12 @@
               "required": true
             },
             {
+              "name": "resumeState",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
               "name": "targetSha256",
               "type": "string",
               "dataClass": "digest",

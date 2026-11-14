@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { win32 } from "node:path";
 import {
   resolveWindowsPowerShellExecutable,
   resolveWindowsSystemDirectory,
@@ -19,11 +21,19 @@ export interface VisibleWindowsHelperSpawnOptions {
   readonly stdio: "ignore";
   readonly shell: false;
   readonly env: NodeJS.ProcessEnv;
+  /**
+   * Never the caller's working directory: a helper that inherits it holds that folder for its whole
+   * life, and the caller may be running from inside an installation it is about to remove.
+   */
+  readonly cwd: string;
 }
 
 export interface WindowsHelperChild {
   on(event: "error", listener: (error: Error) => void): unknown;
   unref(): void;
+  /** Set by the platform once the program has ended; absent while it runs. */
+  readonly exitCode?: number | null;
+  readonly signalCode?: NodeJS.Signals | null;
 }
 
 export type WindowsHelperSpawn = (
@@ -32,10 +42,24 @@ export type WindowsHelperSpawn = (
   options: VisibleWindowsHelperSpawnOptions,
 ) => WindowsHelperChild;
 
+// The system directory when the environment names one, else the temporary folder: places no
+// installation of Keiko lies in.
+function helperWorkingDirectory(env: NodeJS.ProcessEnv): string {
+  const systemRoot = env.SystemRoot;
+  return systemRoot !== undefined && win32.isAbsolute(systemRoot) ? systemRoot : tmpdir();
+}
+
 export function visibleWindowsHelperSpawnOptions(
   env: NodeJS.ProcessEnv,
 ): VisibleWindowsHelperSpawnOptions {
-  return { detached: false, windowsHide: true, stdio: "ignore", shell: false, env };
+  return {
+    detached: false,
+    windowsHide: true,
+    stdio: "ignore",
+    shell: false,
+    env,
+    cwd: helperWorkingDirectory(env),
+  };
 }
 
 export function startVisibleWindowsHelper(

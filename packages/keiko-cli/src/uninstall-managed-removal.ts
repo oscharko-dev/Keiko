@@ -5,6 +5,7 @@ import { attestedPortableInstallRecord, resumedPortableInstallRecord } from "./p
 import {
   portableRegistrationArtifactPaths,
   removePortableManagedInstall,
+  removeEmptyInstallTree,
   removePortableManagedInstallTolerant,
   removePortableRegistrationArtifacts,
   type ManagedRemovalOutcome,
@@ -57,6 +58,8 @@ export interface ManagedRemovalContext {
   readonly deps: ManagedRemovalDeps;
 }
 
+export type ResumeState = "none" | "files-remaining" | "installation-gone";
+
 interface ManagedRecord {
   readonly target: PortableTarget;
   readonly managedRoot: string;
@@ -65,9 +68,12 @@ interface ManagedRecord {
 
 export interface ManagedRemovalPlan {
   readonly record: ManagedRecord;
-  readonly resumed: boolean;
+  /** What an earlier, interrupted run left: nothing, files, or only the registration. */
+  readonly resume: ResumeState;
   readonly selfInside: boolean;
   readonly helper: UninstallHelperHandle | undefined;
+  /** The registration artifacts a removal deletes, each verified as Keiko's own. */
+  readonly artifacts: readonly string[];
 }
 
 export type ManagedRemovalPlanResult =
@@ -94,6 +100,8 @@ export type ManagedRemovalResult =
       readonly removedCount: number;
       readonly residueFileCount: number;
       readonly residueDirectoryCount: number;
+      /** The helper had ended before the list was committed: nothing was handed over. */
+      readonly helperLost: boolean;
     };
 
 const NOOP_IO: CliIo = {
@@ -101,10 +109,6 @@ const NOOP_IO: CliIo = {
   err: (_text: string): void => undefined,
 };
 const MAX_REPORTED_RESIDUE = 20;
-
-function inspectForRemoval(layout: PortableLayout): void {
-  removePortableManagedInstall(layout, NOOP_IO, true);
-}
 
 function registrationInput(
   record: ManagedRecord,
@@ -120,18 +124,9 @@ function registrationInput(
   };
 }
 
-// The Start-menu entry and the like must be Keiko's own before anything is removed.
-function assertRegistrationRemovable(record: ManagedRecord, context: ManagedRemovalContext): void {
-  removePortableRegistrationArtifacts({
-    ...registrationInput(record, context),
-    dryRun: true,
-    io: NOOP_IO,
-  });
-}
-
 function locateManagedRecord(
   context: ManagedRemovalContext,
-): { readonly record: ManagedRecord; readonly resumed: boolean } | undefined {
+): { readonly record: ManagedRecord; readonly resume: ResumeState } | undefined {
   const { stateDir, env, homedir, securityLogSink } = context;
   const attested = attestedPortableInstallRecord(stateDir, env, homedir, { securityLogSink });
   if (attested === undefined || attested.registration.status === "setup-failed") return undefined;
@@ -142,7 +137,7 @@ function locateManagedRecord(
         managedRoot: attested.managedRoot,
         layout: attested.layout,
       },
-      resumed: false,
+      resume: "none",
     };
   }
   const journal = readUninstallJournal(stateDir);
@@ -153,7 +148,7 @@ function locateManagedRecord(
   if (resumed !== undefined) {
     return {
       record: { target: resumed.target, managedRoot: resumed.managedRoot, layout: resumed.layout },
-      resumed: true,
+      resume: resumed.state,
     };
   }
   throw new Error(
@@ -161,43 +156,59 @@ function locateManagedRecord(
   );
 }
 
+// Every path the helper may delete besides the installation's own entries, named exactly.
+function helperExternals(artifacts: readonly string[], stateDir: string): readonly string[] {
+  return [
+    ...artifacts,
+    join(stateDir, REGISTRATION_FILE),
+    uninstallJournalPath(stateDir),
+    stateDir,
+  ];
+}
+
 export async function planManagedRemoval(
   context: ManagedRemovalContext,
 ): Promise<ManagedRemovalPlanResult> {
   const located = locateManagedRecord(context);
   if (located === undefined) return { kind: "none" };
-  const { record, resumed } = located;
+  const { record, resume } = located;
   const { deps } = context;
-  const selfInside = runsInsideInstallation({
-    installRoot: record.layout.installRoot,
-    platform: deps.platform,
-    execPath: deps.execPath,
-    argv1: deps.argv1,
-    cwd: deps.cwd,
-  });
-  if (context.dryRun)
-    return { kind: "ready", plan: { record, resumed, selfInside, helper: undefined } };
-  inspectForRemoval(record.layout);
-  assertRegistrationRemovable(record, context);
-  if (!selfInside)
-    return { kind: "ready", plan: { record, resumed, selfInside, helper: undefined } };
-  const started = await startUninstallHelper(record.layout.installRoot, context.env, {
-    ...deps.helper,
-    pid: deps.pid,
-  });
+  const selfInside =
+    resume !== "installation-gone" &&
+    runsInsideInstallation({
+      installRoot: record.layout.installRoot,
+      platform: deps.platform,
+      execPath: deps.execPath,
+      argv1: deps.argv1,
+      cwd: deps.cwd,
+    });
+  const plain = { record, resume, selfInside, helper: undefined, artifacts: [] };
+  if (context.dryRun) return { kind: "ready", plan: plain };
+  if (resume !== "installation-gone") removePortableManagedInstall(record.layout, NOOP_IO, true);
+  // The Start-menu entry and the like must be Keiko's own before anything is removed.
+  const artifacts = portableRegistrationArtifactPaths(registrationInput(record, context));
+  if (!selfInside) return { kind: "ready", plan: { ...plain, artifacts } };
+  const started = await startUninstallHelper(
+    record.layout.installRoot,
+    context.env,
+    { ...deps.helper, pid: deps.pid },
+    helperExternals(artifacts, context.stateDir),
+  );
   if (started.kind === "refused") {
     return started.failureKind === undefined
       ? { kind: "refused", reason: started.reason }
       : { kind: "refused", reason: started.reason, failureKind: started.failureKind };
   }
-  return { kind: "ready", plan: { record, resumed, selfInside, helper: started.handle } };
+  return { kind: "ready", plan: { ...plain, helper: started.handle, artifacts } };
 }
 
 function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+// Only the first run writes it: a resumed run may no longer have the manifest to digest.
 function writeJournal(plan: ManagedRemovalPlan, stateDir: string): void {
+  if (plan.resume !== "none") return;
   const { record } = plan;
   writeUninstallJournal(stateDir, {
     schemaVersion: 1,
@@ -212,6 +223,9 @@ function reportResidue(outcome: ManagedRemovalOutcome, io: CliIo): void {
   for (const path of files.slice(0, MAX_REPORTED_RESIDUE)) io.out(`remaining: ${path}\n`);
   if (files.length > MAX_REPORTED_RESIDUE) {
     io.out(`remaining: and ${String(files.length - MAX_REPORTED_RESIDUE)} more files\n`);
+  }
+  for (const path of outcome.residueDirectories.slice(0, MAX_REPORTED_RESIDUE)) {
+    io.out(`remaining: ${path}\n`);
   }
 }
 
@@ -228,8 +242,14 @@ function handedOffEntries(
   artifacts: readonly string[],
   stateDir: string,
 ): readonly HelperEntry[] {
+  const identity = new Set(outcome.identityResidue);
   return [
-    ...outcome.residueFiles.map((path): HelperEntry => ({ kind: "file", path })),
+    ...outcome.residueFiles
+      .filter((path) => !identity.has(path))
+      .map((path): HelperEntry => ({ kind: "file", path })),
+    // Left to the end, and only if every file before them went: a later run needs them to find the
+    // installation.
+    ...outcome.identityResidue.map((path): HelperEntry => ({ kind: "identity-file", path })),
     ...outcome.residueDirectories.map((path): HelperEntry => ({ kind: "directory", path })),
     // Last, so the installation stays registered, and resumable, until its last file is gone.
     ...artifacts.map((path): HelperEntry => ({ kind: "external-file", path })),
@@ -245,11 +265,53 @@ function applyDryRun(
 ): ManagedRemovalResult {
   const { io } = context;
   const { record } = plan;
-  removePortableManagedInstall(record.layout, io, true);
-  assertRegistrationRemovable(record, context);
+  if (plan.resume !== "installation-gone") removePortableManagedInstall(record.layout, io, true);
   dryRunNotes(plan, io);
   removePortableRegistrationArtifacts({ ...registrationInput(record, context), dryRun: true, io });
   return { kind: "complete", removedCount: 0 };
+}
+
+function finishRegistration(
+  plan: ManagedRemovalPlan,
+  context: ManagedRemovalContext,
+  removedCount: number,
+): ManagedRemovalResult {
+  plan.helper?.commit([]);
+  removePortableRegistrationArtifacts({
+    ...registrationInput(plan.record, context),
+    dryRun: false,
+    io: context.io,
+  });
+  return { kind: "complete", removedCount };
+}
+
+function handOff(
+  plan: ManagedRemovalPlan,
+  context: ManagedRemovalContext,
+  outcome: ManagedRemovalOutcome,
+  helper: UninstallHelperHandle,
+): ManagedRemovalResult {
+  const residueFileCount = outcome.residueFiles.length;
+  const residueDirectoryCount = outcome.residueDirectories.length;
+  const { stateDir } = context;
+  const committed = helper.commit(handedOffEntries(outcome, plan.artifacts, stateDir));
+  if (committed === "helper-gone") {
+    reportResidue(outcome, context.io);
+    return {
+      kind: "incomplete",
+      removedCount: outcome.removedCount,
+      residueFileCount,
+      residueDirectoryCount,
+      helperLost: true,
+    };
+  }
+  return {
+    kind: "handed-off",
+    removedCount: outcome.removedCount,
+    residueFileCount,
+    residueDirectoryCount,
+    deferredStatePaths: [join(stateDir, REGISTRATION_FILE), uninstallJournalPath(stateDir)],
+  };
 }
 
 export function applyManagedRemoval(
@@ -260,38 +322,23 @@ export function applyManagedRemoval(
   const { io, stateDir } = context;
   const { record } = plan;
   writeJournal(plan, stateDir);
-  const outcome = removePortableManagedInstallTolerant(record.layout, io, {
-    deferIdentity: plan.helper !== undefined,
-    unlink: context.deps.unlink,
-    rmdir: context.deps.rmdir,
-  });
-  const residueFileCount = outcome.residueFiles.length;
-  const residueDirectoryCount = outcome.residueDirectories.length;
-  if (residueFileCount + residueDirectoryCount === 0) {
-    plan.helper?.commit([]);
-    removePortableRegistrationArtifacts({
-      ...registrationInput(record, context),
-      dryRun: false,
-      io,
-    });
-    return { kind: "complete", removedCount: outcome.removedCount };
-  }
-  if (plan.helper === undefined) {
-    reportResidue(outcome, io);
-    return {
-      kind: "incomplete",
-      removedCount: outcome.removedCount,
-      residueFileCount,
-      residueDirectoryCount,
-    };
-  }
-  const artifacts = portableRegistrationArtifactPaths(registrationInput(record, context));
-  plan.helper.commit(handedOffEntries(outcome, artifacts, stateDir));
+  const outcome =
+    plan.resume === "installation-gone"
+      ? removeEmptyInstallTree(record.layout.installRoot, io, context.deps.rmdir)
+      : removePortableManagedInstallTolerant(record.layout, io, {
+          deferIdentity: plan.helper !== undefined,
+          unlink: context.deps.unlink,
+          rmdir: context.deps.rmdir,
+        });
+  const residue = outcome.residueFiles.length + outcome.residueDirectories.length;
+  if (residue === 0) return finishRegistration(plan, context, outcome.removedCount);
+  if (plan.helper !== undefined) return handOff(plan, context, outcome, plan.helper);
+  reportResidue(outcome, io);
   return {
-    kind: "handed-off",
+    kind: "incomplete",
     removedCount: outcome.removedCount,
-    residueFileCount,
-    residueDirectoryCount,
-    deferredStatePaths: [join(stateDir, REGISTRATION_FILE), uninstallJournalPath(stateDir)],
+    residueFileCount: outcome.residueFiles.length,
+    residueDirectoryCount: outcome.residueDirectories.length,
+    helperLost: false,
   };
 }

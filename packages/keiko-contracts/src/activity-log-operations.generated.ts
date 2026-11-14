@@ -5283,6 +5283,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "resumed",
           "helper-ready",
           "helper-refused",
+          "helper-lost",
           "residue-committed",
           "residue-reported",
         ],
@@ -5298,6 +5299,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "spawn-failed",
           "not-ready",
         ],
+      },
+      resumeState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["none", "files-remaining", "installation-gone"],
       },
       failureKind: {
         type: "string",

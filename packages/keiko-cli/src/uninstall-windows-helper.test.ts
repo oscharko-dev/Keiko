@@ -19,6 +19,7 @@ import {
 import type { VisibleWindowsHelperSpawnOptions } from "./windows-helper-start.js";
 
 const ROOT = String.raw`C:\Users\Anna\AppData\Local\Programs\Keiko`;
+const EXTERNALS = [String.raw`C:\Users\Anna\state.json`, String.raw`C:\Users\Anna\.keiko`];
 const roots: string[] = [];
 
 afterEach(() => {
@@ -92,20 +93,72 @@ describe("the helper's command", () => {
     expect(UNINSTALL_HELPER_SCRIPT.length).toBeLessThan(6000);
   });
 
-  it("reports ready first, waits for this process to end and acts only on a committed list", () => {
-    const ready = UNINSTALL_HELPER_SCRIPT.indexOf("'ready'");
-    const wait = UNINSTALL_HELPER_SCRIPT.indexOf("WaitForExit(");
-    const list = UNINSTALL_HELPER_SCRIPT.indexOf("[System.IO.File]::Exists($list)");
-    expect(ready).toBeGreaterThan(-1);
-    expect(wait).toBeGreaterThan(ready);
-    expect(list).toBeGreaterThan(wait);
+  it("acts in this order: ready, the committed list, the end of this process, then deleting", () => {
+    const at = (text: string): number => UNINSTALL_HELPER_SCRIPT.indexOf(text);
+    const ready = at("[System.IO.File]::WriteAllText($ready, 'ready')");
+    const list = at("while (-not [System.IO.File]::Exists($list))");
+    const owner = at("$owner.WaitForExit(");
+    const deleting = at("foreach ($line in [System.IO.File]::ReadAllLines($list))");
+    for (const index of [ready, list, owner, deleting]) expect(index).toBeGreaterThan(-1);
+    expect(ready).toBeLessThan(list);
+    expect(list).toBeLessThan(owner);
+    expect(owner).toBeLessThan(deleting);
   });
 
-  it("keeps file and folder entries of the installation under its root", () => {
+  it("bounds the two waits differently: generous for the list, short for this process", () => {
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("AddSeconds(1800)");
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("WaitForExit(60000)");
+  });
+
+  it("ends without deleting, and removes its own folder, when no list ever comes or the wait ends", () => {
+    const withoutList =
+      "if ($owner -eq $null -or $owner.HasExited) { if ([System.IO.File]::Exists($list)) { break }; Remove-KeikoOwn; exit 0 }";
+    expect(UNINSTALL_HELPER_SCRIPT).toContain(withoutList);
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("Remove-KeikoOwn; exit 3");
+    // every exit before the deleting phase cleans up first
+    const beforeDeleting = UNINSTALL_HELPER_SCRIPT.slice(
+      0,
+      UNINSTALL_HELPER_SCRIPT.indexOf("foreach ($line"),
+    );
+    for (const exit of beforeDeleting.match(/exit \d/gu) ?? []) {
+      expect(beforeDeleting).toContain(`Remove-KeikoOwn; ${exit}`);
+    }
+  });
+
+  it("keeps file, identity and folder entries of the installation under its root", () => {
     expect(UNINSTALL_HELPER_SCRIPT).toContain(
-      "if (($kind -eq 'F' -or $kind -eq 'D') -and -not $inside) { continue }",
+      "if (-not (($path + $sep).Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or $path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase))) { $failed = $true; continue }",
     );
     expect(UNINSTALL_HELPER_SCRIPT).toContain("[System.IO.Path]::GetFullPath($path) -ne $path");
+    // the root is never trimmed: a drive root keeps its separator
+    expect(UNINSTALL_HELPER_SCRIPT).not.toContain("TrimEnd");
+    expect(UNINSTALL_HELPER_SCRIPT).toContain(
+      "$prefix = if ($root.EndsWith($sep)) { $root } else { $root + $sep }",
+    );
+  });
+
+  it("deletes a registration entry only when it is one of the paths named at start", () => {
+    expect(UNINSTALL_HELPER_SCRIPT).toContain(
+      "$externals = @(ConvertFrom-Json $env:KEIKO_UNINSTALL_EXTERNALS)",
+    );
+    expect(UNINSTALL_HELPER_SCRIPT).toContain(
+      "if ($path.Equals($e, [System.StringComparison]::OrdinalIgnoreCase)) { $known = $true }",
+    );
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("if (-not $known) { $failed = $true; continue }");
+  });
+
+  it("never deletes through a link, and a failed entry keeps the identity files and the registration", () => {
+    expect(UNINSTALL_HELPER_SCRIPT).toContain(
+      "if (([System.IO.File]::GetAttributes($path) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { $failed = $true; continue }",
+    );
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("if ($kind -eq 'I' -and $failed) { continue }");
+    expect(UNINSTALL_HELPER_SCRIPT).toContain("if ($failed) { continue }");
+    expect(UNINSTALL_HELPER_SCRIPT).toContain(
+      "if (-not $ok -and $kind -ne 'S') { $failed = $true }",
+    );
+    expect(
+      UNINSTALL_HELPER_SCRIPT.endsWith("Remove-KeikoOwn; if ($failed) { exit 1 } else { exit 0 }"),
+    ).toBe(true);
   });
 });
 
@@ -140,7 +193,7 @@ describe("startUninstallHelper", () => {
     const { deps: d, started } = deps(parent, (_o, dir) => {
       writeFileSync(join(dir, "ready"), "ready");
     });
-    const result = await startUninstallHelper(ROOT, env, d);
+    const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
     expect(result.kind).toBe("ready");
     expect(started[0]).toMatchObject({
       detached: false,
@@ -150,6 +203,7 @@ describe("startUninstallHelper", () => {
     });
     expect(Object.keys(started[0]?.env ?? {}).sort()).toEqual([
       "KEIKO_UNINSTALL_DIR",
+      "KEIKO_UNINSTALL_EXTERNALS",
       "KEIKO_UNINSTALL_PID",
       "KEIKO_UNINSTALL_ROOT",
       "SystemRoot",
@@ -165,7 +219,7 @@ describe("startUninstallHelper", () => {
     const { deps: d } = deps(parent, (_o, dir) => {
       writeFileSync(join(dir, "ready"), "ready");
     });
-    const result = await startUninstallHelper(ROOT, env, d);
+    const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
     if (result.kind !== "ready") throw new Error("expected a ready helper");
     const directory = join(parent, readdirSync(parent)[0] ?? "");
     expect(existsSync(join(directory, "residue.txt"))).toBe(false);
@@ -192,7 +246,7 @@ describe("startUninstallHelper", () => {
     const { deps: d } = deps(parent, (_o, dir) => {
       writeFileSync(join(dir, "ready"), "ready");
     });
-    const result = await startUninstallHelper(ROOT, env, d);
+    const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
     if (result.kind !== "ready") throw new Error("expected a ready helper");
     expect(() => {
       result.handle.commit([{ kind: "file", path: `${ROOT}\\a\nD\t${ROOT}` }]);
@@ -202,7 +256,7 @@ describe("startUninstallHelper", () => {
   it("refuses, and leaves nothing behind, when the helper never reports ready", async () => {
     const parent = tempParent();
     const { deps: d } = deps(parent, () => undefined);
-    await expect(startUninstallHelper(ROOT, env, d)).resolves.toEqual({
+    await expect(startUninstallHelper(ROOT, env, d, EXTERNALS)).resolves.toEqual({
       kind: "refused",
       reason: "not-ready",
     });
@@ -214,22 +268,27 @@ describe("startUninstallHelper", () => {
     const thrown = deps(parent, () => {
       throw new Error("spawn EACCES");
     });
-    await expect(startUninstallHelper(ROOT, env, thrown.deps)).resolves.toEqual({
+    await expect(startUninstallHelper(ROOT, env, thrown.deps, EXTERNALS)).resolves.toEqual({
       kind: "refused",
       reason: "spawn-failed",
       failureKind: "Error",
     });
     const errored = deps(parent, () => undefined);
     await expect(
-      startUninstallHelper(ROOT, env, {
-        ...errored.deps,
-        spawnFn: (_c, _a, _o) => ({
-          on: (_event, listener): void => {
-            listener(new Error("spawn ENOENT"));
-          },
-          unref: (): void => undefined,
-        }),
-      }),
+      startUninstallHelper(
+        ROOT,
+        env,
+        {
+          ...errored.deps,
+          spawnFn: (_c, _a, _o) => ({
+            on: (_event, listener): void => {
+              listener(new Error("spawn ENOENT"));
+            },
+            unref: (): void => undefined,
+          }),
+        },
+        EXTERNALS,
+      ),
     ).resolves.toEqual({ kind: "refused", reason: "spawn-failed" });
     expect(readdirSync(parent)).toEqual([]);
   });
@@ -238,7 +297,7 @@ describe("startUninstallHelper", () => {
     const parent = tempParent();
     const { deps: d, started } = deps(parent, () => undefined);
     await expect(
-      startUninstallHelper(ROOT, env, { ...d, existsAsFile: () => false }),
+      startUninstallHelper(ROOT, env, { ...d, existsAsFile: () => false }, EXTERNALS),
     ).resolves.toMatchObject({ kind: "refused", reason: "powershell-unavailable" });
     expect(started).toEqual([]);
     expect(readdirSync(parent)).toEqual([]);
@@ -249,11 +308,65 @@ describe("startUninstallHelper", () => {
     const inside = join(parent, "Keiko");
     mkdirSync(inside);
     const { deps: d, started } = deps(inside, () => undefined);
-    await expect(startUninstallHelper(inside, env, d)).resolves.toEqual({
+    await expect(startUninstallHelper(inside, env, d, EXTERNALS)).resolves.toEqual({
       kind: "refused",
       reason: "temp-inside-installation",
     });
     expect(started).toEqual([]);
     expect(readdirSync(inside)).toEqual([]);
+  });
+
+  it("names the exact external paths to the helper, starts it in the system directory and tracks its end", async () => {
+    const parent = tempParent();
+    const ending: { exitCode: number | null } = { exitCode: null };
+    const { deps: base, started } = deps(parent, (_o, dir) => {
+      writeFileSync(join(dir, "ready"), "ready");
+    });
+    const result = await startUninstallHelper(
+      ROOT,
+      env,
+      {
+        ...base,
+        spawnFn: (command, args, options) => {
+          base.spawnFn?.(command, args, options);
+          return {
+            on: (): void => undefined,
+            unref: (): void => undefined,
+            get exitCode(): number | null {
+              return ending.exitCode;
+            },
+          };
+        },
+      },
+      EXTERNALS,
+    );
+    if (result.kind !== "ready") throw new Error("expected a ready helper");
+    expect(JSON.parse(started[0]?.env.KEIKO_UNINSTALL_EXTERNALS ?? "null")).toEqual(EXTERNALS);
+    // the working directory is the system directory: never an installation, never the caller's
+    expect(started[0]?.cwd).toBe(String.raw`D:\Windows`);
+    const entries = [{ kind: "external-file", path: EXTERNALS[0] ?? "" }] as const;
+    const listFile = join(parent, readdirSync(parent)[0] ?? "", "residue.txt");
+    expect(result.handle.commit(entries)).toBe("committed");
+    expect(existsSync(listFile)).toBe(true);
+    // a helper that ended is not handed a list: the caller keeps the installation registered
+    rmSync(listFile);
+    ending.exitCode = 1;
+    expect(result.handle.commit(entries)).toBe("helper-gone");
+    expect(existsSync(listFile)).toBe(false);
+  });
+
+  it("refuses to commit a registration entry that was not named at start", async () => {
+    const parent = tempParent();
+    const { deps: d } = deps(parent, (_o, dir) => {
+      writeFileSync(join(dir, "ready"), "ready");
+    });
+    const result = await startUninstallHelper(ROOT, env, d, EXTERNALS);
+    if (result.kind !== "ready") throw new Error("expected a ready helper");
+    expect(() => {
+      result.handle.commit([{ kind: "external-file", path: String.raw`C:\Users\Anna\other.json` }]);
+    }).toThrow("was not named at start");
+    expect(() => {
+      result.handle.commit([{ kind: "external-directory", path: String.raw`C:\Windows` }]);
+    }).toThrow("was not named at start");
   });
 });

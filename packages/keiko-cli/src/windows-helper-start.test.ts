@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import {
   resolveWindowsPowerShellHelper,
@@ -19,7 +20,18 @@ describe("the visible Windows helper start", () => {
       stdio: "ignore",
       shell: false,
       env: { A: "1" },
+      cwd: tmpdir(),
     });
+  });
+
+  // A helper that inherits the caller's working directory holds it for its whole life; the caller
+  // may be running from inside an installation it is about to remove (#4358).
+  it("starts in the system directory, or the temp folder, never in the caller's directory", () => {
+    const system = String.raw`D:\Windows`;
+    expect(visibleWindowsHelperSpawnOptions({ SystemRoot: system }).cwd).toBe(system);
+    expect(visibleWindowsHelperSpawnOptions({ SystemRoot: "relative" }).cwd).toBe(tmpdir());
+    expect(visibleWindowsHelperSpawnOptions({}).cwd).toBe(tmpdir());
+    expect(visibleWindowsHelperSpawnOptions({}).cwd).not.toBe(process.cwd());
   });
 
   it("hands the command, the arguments and exactly those options to the spawn", () => {

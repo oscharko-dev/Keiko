@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   rmdirSync,
   rmSync,
   unlinkSync,
@@ -15,6 +16,7 @@ import {
   inspectPortableManagedInstall,
   portableManagedInstallHealth,
   removePortableManagedInstall,
+  removeEmptyInstallTree,
   removePortableManagedInstallTolerant,
 } from "./portable-maintenance.js";
 import { layoutFor, type PortableLayout, type PortableTarget } from "./portable-shared.js";
@@ -101,6 +103,10 @@ function generationInstall(): Install {
   writePortableAppPayload(resourceRoot);
   writePortableRuntimePayload(resourceRoot, "windows-x64");
   return { layout, runtimeTarget: "windows-x64" };
+}
+
+function removedFiles(root: string): readonly string[] {
+  return readdirSync(root, { recursive: true }).map(String).sort();
 }
 
 const INSTALLS: readonly (readonly [string, () => Install])[] = [
@@ -353,6 +359,12 @@ describe("removal that meets a held-open entry", () => {
         layout.primaryLauncherPath,
         layout.setupManifestPath,
       ]);
+      expect(outcome.identityResidue).toEqual([
+        recordPath(layout),
+        layout.packageJsonPath,
+        layout.primaryLauncherPath,
+        layout.setupManifestPath,
+      ]);
       expect(outcome.removedCount).toBe(total - 5);
       expect(outcome.residueDirectories.at(-1)).toBe(layout.installRoot);
       // the partly removed installation is still one the inspection accepts ...
@@ -386,6 +398,7 @@ describe("removal that meets a held-open entry", () => {
         layout.primaryLauncherPath,
         layout.setupManifestPath,
       ]);
+      expect(outcome.identityResidue).toEqual(outcome.residueFiles);
       expect(touched).not.toContain(layout.setupManifestPath);
       expect(outcome.residueDirectories.at(-1)).toBe(layout.installRoot);
       expect(inspectPortableManagedInstall(layout).issues).toEqual([]);
@@ -423,6 +436,58 @@ describe("removal that meets a held-open entry", () => {
     expect(removePortableManagedInstallTolerant(layout, noopIo, { deferIdentity: false })).toEqual({
       removedCount: 0,
       residueFiles: [],
+      identityResidue: [],
+      residueDirectories: [],
+    });
+  });
+
+  // What an interrupted removal can leave after its identity files: folders only.
+  it("removes the empty folders of an installation that has lost its files, deepest first", () => {
+    const { layout } = generationInstall();
+    removePortableManagedInstallTolerant(layout, noopIo, { deferIdentity: false });
+    const hold = join(layout.installRoot, ".portable", "generations", "x", "app", "dist");
+    mkdirSync(hold, { recursive: true });
+    const removed: string[] = [];
+    const outcome = removeEmptyInstallTree(layout.installRoot, noopIo, (path) => {
+      removed.push(path);
+      rmdirSync(path);
+    });
+    expect(outcome.residueDirectories).toEqual([]);
+    expect(removed.at(-1)).toBe(layout.installRoot);
+    expect(removed.indexOf(hold)).toBeLessThan(removed.indexOf(join(hold, "..")));
+    expect(existsSync(layout.installRoot)).toBe(false);
+  });
+
+  it("refuses a file in such a tree and removes nothing", () => {
+    const root = newRoot();
+    const foreign = join(root, "runtime", "native", "FOREIGN.txt");
+    touch(foreign);
+    mkdirSync(join(root, "empty"));
+    const before = removedFiles(root);
+    expect(() => removeEmptyInstallTree(root, noopIo)).toThrow(
+      "portable managed install contains unknown entry: runtime/native/FOREIGN.txt",
+    );
+    expect(existsSync(foreign)).toBe(true);
+    expect(removedFiles(root)).toEqual(before);
+  });
+
+  it("reports a folder that is held open and keeps the folders above it", () => {
+    const { layout } = flatInstall("linux-x64");
+    removePortableManagedInstallTolerant(layout, noopIo, { deferIdentity: false });
+    const held = join(layout.installRoot, "held");
+    mkdirSync(held, { recursive: true });
+    const outcome = removeEmptyInstallTree(layout.installRoot, noopIo, (path) => {
+      if (path === held) throw lock("EBUSY");
+      rmdirSync(path);
+    });
+    expect(outcome.residueDirectories).toEqual([held, layout.installRoot]);
+  });
+
+  it("does nothing for a root that is gone", () => {
+    expect(removeEmptyInstallTree(join(tmpdir(), "keiko-no-such-root-4358"), noopIo)).toEqual({
+      removedCount: 0,
+      residueFiles: [],
+      identityResidue: [],
       residueDirectories: [],
     });
   });

@@ -166,6 +166,8 @@ function alertScript(message: string): string {
 interface DetachedAlertChild {
   on(event: "error", listener: (error: Error) => void): unknown;
   unref(): void;
+  readonly exitCode?: number | null;
+  readonly signalCode?: NodeJS.Signals | null;
 }
 
 type DetachedAlertSpawn = (
@@ -177,6 +179,7 @@ type DetachedAlertSpawn = (
     readonly shell: false;
     readonly stdio: "ignore";
     readonly windowsHide?: boolean;
+    readonly cwd?: string;
   },
 ) => DetachedAlertChild;
 

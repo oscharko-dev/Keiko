@@ -854,18 +854,37 @@ On Windows, when the command's own executable, script or working directory lies 
 installation, it first starts a helper outside it, before the first deletion: the trusted System32
 PowerShell, started attached with a hidden window through the one visible-helper start the browser
 opener and the launcher's message boxes use (a detached PowerShell showed no browser and no box on
-the Windows guest, #4358). The helper reports ready by writing a file and then waits for this process
-to end. If it does not report ready, nothing is removed and the person is told to run the uninstall
-from the downloaded release package, whose runtime lies outside the installation. The command then
-removes what it can and commits the remainder, as a list written atomically, and the helper removes
-exactly that list once the process has ended: files and folders by path, a folder only if it is
-empty, entries of the installation only under its root, the payload residue first, then the
-identity files, then the Start-menu entry, the registration, the journal and the state directory.
-A command that ends or a helper that dies before it has finished leaves the installation registered
-and resumable. macOS and Linux remove a running program's files, so they start no helper; the other
-two rules apply to them unchanged. Which of this a unit test cannot show, and only a Windows run
-can, is recorded in the delivery of the change: that the helper runs and survives the end of the
-command, that it removes the loaded native files, and the real refusal semantics of a held file.
+the Windows guest, #4358). That start gives every helper an explicit working directory, the system
+directory, so a helper never holds a folder of the installation. The helper reports ready by writing
+a file. If it does not, nothing is removed and the person is told to run the uninstall from the
+downloaded release package, whose runtime lies outside the installation. The command then removes
+what it can and commits the remainder, as a list written atomically; a helper that has already ended
+is not handed a list, and the run reports the residue and keeps the installation registered.
+
+The helper acts in three phases, in this order: it waits for the committed list (generously: this
+process removes thousands of files first; it ends, deleting nothing, if this process ends without
+committing one), then for this process to end (a short bound, after which it deletes nothing), and
+only then deletes. It removes files and folders by path, a folder only if it is empty, entries of the
+installation only under its root, never through a link, and never a file kind it did not expect. The
+registration entries (the Start-menu entry, the registration, the journal and the state directory) are
+exactly the paths the command named when it started the helper; no other path is accepted for them.
+The order of the list is: payload residue, the identity files (the runtime record, `app/package.json`,
+the launcher, the setup manifest), the folders, then the registration entries. Any entry that cannot
+be removed marks the run as failed, and a failed run leaves every identity file and every
+registration entry: the installation stays registered and resumable. A state directory that still holds
+an entry that is not Keiko's is kept on purpose and is not a failure.
+
+A second `keiko uninstall` finds an installation that an interrupted run left: through the journal
+and the registration it recognises one that still has files (attested by its setup manifest), and one
+whose setup manifest or whole root is gone, which it finishes by removing the empty folders, then the
+Start-menu entry, the registration, the journal and the state. A file in such a tree is a foreign
+entry and refuses the removal. The closed `resumeState` of `cli.uninstall.handoff` (`none`,
+`files-remaining`, `installation-gone`) says which; a journal that is still present when a run starts
+means the earlier helper did not finish, and a finished removal leaves neither journal nor
+registration. macOS and Linux remove a running program's files, so they start no helper; the other
+rules apply to them unchanged. Which of this a unit test cannot show, and only a Windows run can, is
+recorded in the delivery of the change: that the helper survives the end of the command, that it
+removes the loaded native files, the real refusal semantics of a held file, and the Start-menu entry.
 
 One coordinator owns receipt policy, phase classification, deadlines, forward/restore/cleanup and
 semantic acknowledgment. Compile-selected platform adapters supply secure filesystem operations,

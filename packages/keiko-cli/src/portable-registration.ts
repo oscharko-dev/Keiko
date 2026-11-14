@@ -11,7 +11,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   atomicPublishRename,
   WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
@@ -117,6 +117,24 @@ function sha256File(path: string): string {
 
 export function portableInstallRootIdentitySha256(path: string): string {
   return sha256Text(realpathSync(path));
+}
+
+/**
+ * The same identity for a root that may no longer exist: the real path of its nearest existing
+ * ancestor with the missing tail appended. A root the managed-root policy admitted has no symbolic
+ * link in its path, so this equals the identity recorded while it existed.
+ */
+export function portableInstallRootIdentityForRemoval(path: string): string {
+  let cursor = resolve(path);
+  const missing: string[] = [];
+  while (!existsSync(cursor)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    missing.unshift(basename(cursor));
+    cursor = parent;
+  }
+  const existing = existsSync(cursor) ? realpathSync(cursor) : cursor;
+  return sha256Text(join(existing, ...missing));
 }
 
 // #KEIKO-0333: fail closed to `undefined` on a truncated / non-JSON registration file

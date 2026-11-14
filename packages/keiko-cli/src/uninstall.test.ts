@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   realpathSync,
   readFileSync,
+  rmdirSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -1835,10 +1836,13 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
     const directory = join(helper.tempParent, readdirSync(helper.tempParent)[0] ?? "");
     const lines = readFileSync(join(directory, "residue.txt"), "utf8").trim().split("\n");
     const kinds = lines.map((line) => line.slice(0, 1)).join("");
-    expect(kinds).toMatch(/^F+D+X+S$/u);
+    expect(kinds).toMatch(/^F+I{4}D+X+S$/u);
     const files = lines.filter((line) => line.startsWith("F\t")).map((line) => line.slice(2));
     expect(files[0]).toBe(join(managedRoot, "runtime", "node", "node.exe"));
-    expect(files.slice(-2)).toEqual([
+    // the identity files, in the order a second run needs them
+    expect(lines.filter((line) => line.startsWith("I\t")).map((line) => line.slice(2))).toEqual([
+      join(managedRoot, ".portable", "runtime-activation.json"),
+      join(managedRoot, "app", "package.json"),
       join(managedRoot, "Keiko.exe"),
       join(managedRoot, ".portable", "setup-manifest.json"),
     ]);
@@ -1947,6 +1951,183 @@ describe("runUninstallCli — held-open entries and a run from inside the instal
     expect(helper.calls).toEqual([]);
     expect(c.err()).toContain("nothing was removed");
     expect(existsSync(join(managedRoot, "Keiko.exe"))).toBe(true);
+  });
+
+  // What a helper (or the parent) leaves when it dies at each point, and that the next run finishes
+  // from the journal and the registration. The stand-in carries out the committed list the way the
+  // helper does, in order, up to a point.
+  function carryOut(directory: string, keep: (line: string) => boolean): void {
+    const lines = readFileSync(join(directory, "residue.txt"), "utf8").trim().split("\n");
+    for (const line of lines.filter(keep)) {
+      const path = line.slice(2);
+      if (line.startsWith("D\t") || line.startsWith("S\t")) {
+        if (existsSync(path)) rmdirSync(path);
+      } else if (existsSync(path)) unlinkSync(path);
+    }
+  }
+
+  async function handedOff(): Promise<{
+    readonly root: string;
+    readonly home: string;
+    readonly managedRoot: string;
+    readonly shortcut: string;
+    readonly env: { readonly APPDATA: string; readonly LOCALAPPDATA: string };
+    readonly directory: string;
+  }> {
+    const installed = await installReal();
+    const helper = helperSeam(installed.root, true);
+    const code = await runUninstallCli(
+      ["--state"],
+      makeIo().io,
+      { ...installed.env, ...WIN },
+      {
+        cwd: installed.root,
+        homedir: () => installed.home,
+        ...insideCopy(installed.managedRoot),
+        managedRemoval: {
+          helper: helper.seam,
+          unlink: heldOpen(join("runtime", "node", "node.exe")),
+        },
+      },
+    );
+    expect(code).toBe(0);
+    const directory = join(helper.tempParent, readdirSync(helper.tempParent)[0] ?? "");
+    return { ...installed, directory };
+  }
+
+  async function secondRun(
+    where: Awaited<ReturnType<typeof handedOff>>,
+  ): Promise<{ readonly code: number; readonly states: unknown[] }> {
+    const events: SecurityLogEvent[] = [];
+    const code = await runUninstallCli(["--state"], makeIo().io, where.env, {
+      cwd: where.root,
+      homedir: () => where.home,
+      ...activityDeps(where.root, events),
+    });
+    return {
+      code,
+      states: events
+        .filter(({ op }) => op === "cli.uninstall.handoff")
+        .map((event) => extraOf(event).resumeState),
+    };
+  }
+
+  it.each([
+    ["helper dies before it deletes anything", (): boolean => false, []],
+    [
+      "helper dies in the middle of the payload",
+      (l: string): boolean => l.startsWith("F\t"),
+      ["files-remaining"],
+    ],
+    [
+      "helper dies right after the setup manifest",
+      (l: string): boolean => l.startsWith("F\t") || l.startsWith("I\t"),
+      ["installation-gone"],
+    ],
+    [
+      "helper dies right after the install root",
+      (l: string): boolean => /^[FID]\t/u.test(l),
+      ["installation-gone"],
+    ],
+  ] as const)(
+    "%s: the next run finishes from the journal and the registration",
+    async (_name, keep, state) => {
+      const where = await handedOff();
+      carryOut(where.directory, keep);
+      const registration = join(where.root, ".keiko", "portable-install-state.json");
+      // registered and resumable, whatever the helper got to
+      expect(existsSync(registration)).toBe(true);
+      expect(existsSync(where.shortcut)).toBe(true);
+
+      const next = await secondRun(where);
+
+      expect(next.code).toBe(0);
+      expect(next.states).toEqual(state);
+      expect(existsSync(where.managedRoot)).toBe(false);
+      expect(existsSync(where.shortcut)).toBe(false);
+      expect(existsSync(join(where.root, ".keiko"))).toBe(false);
+    },
+  );
+
+  it("the parent dies before it commits: the next run finishes", async () => {
+    const installed = await installReal();
+    const helper = helperSeam(installed.root, true);
+    const failing = (path: string): void => {
+      if (path.endsWith("usearch.node")) {
+        throw Object.assign(new Error("input/output error"), { code: "EIO" });
+      }
+      unlinkSync(path);
+    };
+
+    const c = makeIo();
+    const code = await runUninstallCli(
+      ["--state"],
+      c.io,
+      { ...installed.env, ...WIN },
+      {
+        cwd: installed.root,
+        homedir: () => installed.home,
+        ...insideCopy(installed.managedRoot),
+        managedRemoval: { helper: helper.seam, unlink: failing },
+      },
+    );
+
+    expect(code).toBe(1);
+    const directory = join(helper.tempParent, readdirSync(helper.tempParent)[0] ?? "");
+    expect(existsSync(join(directory, "residue.txt"))).toBe(false);
+    expect(existsSync(join(installed.root, ".keiko", "portable-install-state.json"))).toBe(true);
+    expect(existsSync(installed.shortcut)).toBe(true);
+    await expect(
+      runUninstallCli(["--state"], makeIo().io, installed.env, {
+        cwd: installed.root,
+        homedir: () => installed.home,
+      }),
+    ).resolves.toBe(0);
+    expect(existsSync(installed.managedRoot)).toBe(false);
+    expect(existsSync(join(installed.root, ".keiko"))).toBe(false);
+  });
+
+  it("a helper that has ended is not handed a list: the run says so and stays registered", async () => {
+    const { root, home, managedRoot, shortcut, env } = await installReal();
+    const helper = helperSeam(root, true);
+    const events: SecurityLogEvent[] = [];
+    const c = makeIo();
+
+    const code = await runUninstallCli(
+      ["--state"],
+      c.io,
+      { ...env, ...WIN },
+      {
+        cwd: root,
+        homedir: () => home,
+        ...activityDeps(root, events),
+        ...insideCopy(managedRoot),
+        managedRemoval: {
+          helper: {
+            ...helper.seam,
+            // the stand-in reports ready, and has ended before the list is committed
+            spawnFn: (command, args, options) => {
+              const child = helper.seam?.spawnFn?.(command, args, options);
+              return { on: (): void => undefined, unref: (): void => child?.unref(), exitCode: 1 };
+            },
+          },
+          unlink: heldOpen(join("runtime", "node", "node.exe")),
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("the helper that was to remove them has stopped");
+    expect(existsSync(shortcut)).toBe(true);
+    expect(existsSync(join(root, ".keiko", "portable-install-state.json"))).toBe(true);
+    const handoff = events.filter(({ op }) => op === "cli.uninstall.handoff");
+    expect(handoff.map((event) => extraOf(event).outcome)).toEqual(["helper-ready", "helper-lost"]);
+    const directory = join(helper.tempParent, readdirSync(helper.tempParent)[0] ?? "");
+    expect(existsSync(join(directory, "residue.txt"))).toBe(false);
+    await expect(
+      runUninstallCli(["--state"], makeIo().io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(0);
+    expect(existsSync(managedRoot)).toBe(false);
   });
 
   it("starts no helper on another platform or on a dry run, and a dry run names the handoff", async () => {
