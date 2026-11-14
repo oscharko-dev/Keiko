@@ -234,6 +234,22 @@ function qualificationInputPorts(context, options, call, publishHumanInput) {
     },
   };
 }
+/**
+ * The ports the discovery tools need from the turn that hosts them (the real Chat turn supplies the
+ * same three): the selection a describe leaves for the next round, what is selected, and whether a
+ * result fits. They exist only while the discovery proof is requested.
+ */
+function discoveryPorts(context) {
+  if (context.qualifyDiscovery !== true) return {};
+  const selected = (context.qualificationDiscoverySelection ??= []);
+  return {
+    selectJiraOperations: async (identities) => {
+      selected.splice(0, selected.length, ...identities);
+    },
+    selectedJiraOperations: () => [...selected],
+    jiraDiscoveryResultFits: () => true,
+  };
+}
 function qualificationReview(context, preparedTurn, options, call, actionId, publishHumanInput) {
   const { context: current, sourcePreparation, consumerPort, humanInput } = preparedTurn;
   const writeExchange = (id) =>
@@ -256,6 +272,7 @@ function qualificationReview(context, preparedTurn, options, call, actionId, pub
     consumerPort,
     humanInput,
     admission: {
+      ...discoveryPorts(context),
       reviewableWrite,
       sourcePreparation,
       ...createJiraChatTurnReviewPorts(options, {
