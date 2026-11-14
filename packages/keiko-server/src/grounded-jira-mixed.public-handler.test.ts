@@ -19,6 +19,7 @@ import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js"
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import { createJiraChatCatalogRuntime } from "./atlassian/jiraChatCatalogRuntime.js";
 import { jiraOperationDefinitions } from "./atlassian/jiraOperationRegistry.js";
+import { jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
 import { projectChatReadGrant } from "./atlassian/chatReadGrantState.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -899,10 +900,17 @@ function isToolStep(body: string, step: ProviderStep): boolean {
   return (
     step === "repair-write" ||
     (body.includes('"tools":') &&
-      (step === "describe" || step === "tool" || step === "write" || step === "malformed"))
+      (step === "describe" ||
+        step === "describe-many" ||
+        step === "tool" ||
+        step === "write" ||
+        step === "malformed"))
   );
 }
+/** The identities the "describe-many" step selects: set by the test that walks the selection. */
+let describeManyIdentities: readonly string[] = [];
 function toolArguments(step: ProviderStep, commentBody: string): string {
+  if (step === "describe-many") return JSON.stringify({ identities: describeManyIdentities });
   if (step === "describe")
     return JSON.stringify({ identities: ["GET /rest/agile/1.0/board/{boardId}/configuration"] });
   if (step === "repair-write")
@@ -928,6 +936,7 @@ function finalContent(step: ProviderStep, steps: readonly ProviderStep[]): strin
 }
 type ProviderStep =
   | "describe"
+  | "describe-many"
   | "tool"
   | "write"
   | "repair-write"
@@ -1054,9 +1063,64 @@ function provider(
 }
 
 function providerToolName(step: ProviderStep): string {
-  if (step === "describe") return "jira_describe";
+  if (step === "describe" || step === "describe-many") return "jira_describe";
   return step === "write" || step === "repair-write" ? "jira_comment" : "jira_projects";
 }
+
+// #4355: the base round holds the draft run beside staging. The bridge captures the whole advertisement
+// of a round (catalog, projection and offer, of every provider the turn merges) under one byte ceiling,
+// and a mixed turn (a connected folder beside Jira) carries more tools than a Jira-only Chat. A real
+// describe that selects more natives than the merged round can carry must be refused at the selecting
+// tool with the closed reason and keep the earlier selection, and the turn goes on: never
+// GATEWAY_MALFORMED_TOOL_CALL or a 502 reaching the person. Walked here with real identities, one
+// size after the other, through the real describe round.
+it("walks a real describe in a mixed turn to the ceiling: every size ends the turn, a size that does not fit is refused, no 502", async () => {
+  const probe = runtime(false, {}, true);
+  const curated = new Set(
+    (probe.deps.jiraChatCatalog?.toolDefinitions({ knowledgeScoped: false }) ?? []).map(
+      (tool) => tool.name,
+    ),
+  );
+  const natives = jiraOperationDefinitions()
+    .filter(
+      (definition) =>
+        definition.kind === "native" &&
+        definition.method === "GET" &&
+        definition.apiRoot === "/rest/api/2" &&
+        !curated.has(definition.tool.replace(/[.-]/gu, "_")),
+    )
+    // The heaviest first: the walk reaches the ceiling with the fewest natives, the worst case.
+    .sort(
+      (left, right) =>
+        JSON.stringify(jiraOperationForTool(right.tool)?.declaration.descriptor).length -
+        JSON.stringify(jiraOperationForTool(left.tool)?.declaration.descriptor).length,
+    )
+    .slice(0, 60)
+    .map((definition) => definition.identity);
+  const outcomes: string[] = [];
+  for (const count of [0, 4, 8, 12, 16, 20, 24, 28, 32, 40, 48]) {
+    const f = runtime(false, {}, true);
+    describeManyIdentities = natives.slice(0, count);
+    provider(["describe-many", "tool", "answer"]);
+    const result = await askFeatureAndProjects(f);
+    const exchange = f.deps.store
+      .listMessages(f.chatId)[0]
+      ?.toolTranscript?.exchanges.find((entry) => entry.call.name === "jira_describe");
+    const refused = JSON.stringify(exchange?.result?.data ?? {}).includes("selection-too-large");
+    outcomes.push(
+      `${String(count)}:${String(result.status)}:${String(exchange?.result?.status)}:${refused ? "too-large" : "-"}`,
+    );
+  }
+  // Measured on 2026-11-14 with the heaviest descriptors first: 20 natives fit, 24 do not. Every size
+  // ends the turn with a 200; the size that does not fit is refused with the closed reason.
+  const sizes = [0, 4, 8, 12, 16, 20, 24, 28, 32, 40, 48];
+  outcomes.forEach((outcome, index) => {
+    const count = sizes[index] ?? 0;
+    expect(outcome, `${String(count)} natives`).toBe(
+      count <= 20 ? `${String(count)}:200:completed:-` : `${String(count)}:200:failed:too-large`,
+    );
+  });
+});
 
 it("offers curated Jira projects and discovers an additional schema while retaining mixed grounding and its read grant", async () => {
   const f = runtime(false, {}, true);

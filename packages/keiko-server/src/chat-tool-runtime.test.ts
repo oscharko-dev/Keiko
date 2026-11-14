@@ -1065,7 +1065,8 @@ it("keeps external MCP tools available while Jira typed schemas are selected bet
   const [first, second] = f.calls.map((call) => call.toolCatalog);
   if (first?.kind !== "bound" || second?.kind !== "bound")
     throw new TypeError("Expected round catalogs");
-  // This Chat has no Knowledge scope: only the batch and its draft companion are absent. The base
+  // This Chat has no Knowledge scope: only the batch is absent; the draft run that commits a staged
+  // draft is offered with staging (#4355). The base
   // set also carries jira_myself, jira_watch and jira_unwatch: a model asked who it is, or to follow
   // or stop following an issue, found no tool for it among the 19 and either said it could not or
   // answered with another tool's result (#4357), so these three are offered from the first round.
@@ -1092,6 +1093,7 @@ it("keeps external MCP tools available while Jira typed schemas are selected bet
       "jira_assign",
       "jira_comment",
       "jira_transition",
+      "jira_draft",
       "jira_discover",
       "jira_describe",
       "jira_myself",
