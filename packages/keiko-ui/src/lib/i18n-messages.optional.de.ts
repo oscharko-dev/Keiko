@@ -2630,10 +2630,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.tool": "Jira-Aktion",
   "chat.jira.catalog.discover": "Jira-Aktionen finden",
   "chat.jira.catalog.describe": "Jira-Aktionen auswählen",
-  "chat.jira.catalog.actions": "Jira-Aktionen",
-  "chat.jira.catalog.read": "Liest Jira",
-  "chat.jira.catalog.write": "Ändert Jira",
-  "chat.jira.catalog.local": "Lokale Vorbereitung",
+  "chat.jira.catalog.found": "Keiko hat nachgesehen, welche Jira-Aktionen passen.",
   "chat.jira.catalog.selected": "Aktionsauswahl aktualisiert",
   "chat.jira.catalog.invalidArguments":
     "Die Jira-Aktionsauswahl war ungültig. Suche verfügbare Aktionen und wähle sie erneut aus.",

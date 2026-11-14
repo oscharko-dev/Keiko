@@ -59,8 +59,12 @@ function embeddedHeader(state: LivePodState): ReactNode {
 
 it("shows the verified outcome of a check run in this view, in the connection page's words", () => {
   const { rerender } = render(embeddedHeader({ kind: "verifying" }));
+  // The live region exists before the outcome and is the same element afterwards, so a screen
+  // reader announces what fills it.
+  const before = screen.getByTestId("acx-verify-status");
   rerender(embeddedHeader({ kind: "ready" }));
   const status = screen.getByTestId("acx-verify-status");
+  expect(status).toBe(before);
   expect(status).toBeVisible();
   expect(status).not.toHaveClass("sr-only");
   expect(status).toHaveAttribute("data-status", "ok");

@@ -1131,18 +1131,20 @@ describe.each(["en", "de"] as const)("local Jira catalog results in %s", (locale
       const { container } = show();
       const card = screen.getByRole("group", { name: title });
       expect(card).toHaveTextContent(title);
-      const rows = within(card).getByRole("list", {
-        name: locale === "en" ? "Jira actions" : "Jira-Aktionen",
-      });
-      expect(rows).toHaveTextContent(
-        locale === "en" ? "Read Jira projects" : "Jira-Projekte lesen",
+      // #4371: a lookup of Jira actions is one calm line, never the catalog's tools or a count.
+      expect(within(card).queryByRole("list")).toBeNull();
+      expect(card).toHaveTextContent(
+        discover
+          ? locale === "en"
+            ? "Keiko looked up which Jira actions fit."
+            : "Keiko hat nachgesehen, welche Jira-Aktionen passen."
+          : locale === "en"
+            ? "Action selection updated"
+            : "Aktionsauswahl aktualisiert",
       );
-      if (discover)
-        expect(rows).toHaveTextContent("List projects available to this Jira connection.");
-      else
-        expect(card).toHaveTextContent(
-          locale === "en" ? "Action selection updated" : "Aktionsauswahl aktualisiert",
-        );
+      expect(card).not.toHaveTextContent(
+        /Read Jira projects|Jira-Projekte lesen|Reads Jira|Liest Jira|List projects available|Partial|Teilweise|results returned|Ergebnisse/u,
+      );
       expect(container.textContent).toBe(previous);
       expect(container.textContent).not.toMatch(
         /schema-marker|unowned-marker|metadata\.example|A readable view|keine lesbare Ansicht/u,
@@ -1151,6 +1153,52 @@ describe.each(["en", "de"] as const)("local Jira catalog results in %s", (locale
       expect(await axe(container)).toHaveNoViolations();
     },
   );
+
+  it("does not call a page of the action catalog a partial Jira result (#4371)", () => {
+    const base = exchange("succeeded", {
+      call: { id: "find", name: "jira_discover", arguments: {} },
+      data: {
+        outcome: "succeeded",
+        items: Array.from({ length: 10 }, (_, index) => ({
+          identity: `GET /rest/api/2/thing/${String(index)}`,
+          tool: "jira_projects",
+          description: "Catalog entry.",
+          kind: "native",
+          effects: ["remote-read"],
+        })),
+        startAt: 0,
+        total: 188,
+      },
+    });
+    const withPage: ChatToolExchange =
+      base.result === undefined
+        ? base
+        : {
+            ...base,
+            result: {
+              ...base.result,
+              page: { truncated: true, reason: "result-cap", cursor: null },
+            },
+          };
+    const { container } = render(
+      <I18nProvider>
+        <JiraChatTools
+          transcript={{ schemaVersion: 1, exchanges: [withPage] }}
+          turnState="completed"
+        />
+      </I18nProvider>,
+    );
+    expect(container).toHaveTextContent(
+      locale === "en"
+        ? "Keiko looked up which Jira actions fit."
+        : "Keiko hat nachgesehen, welche Jira-Aktionen passen.",
+    );
+    expect(container).not.toHaveTextContent(
+      /Partial|Teilweise|of 188|von 188|Reads Jira|Liest Jira|Catalog entry/u,
+    );
+    // The progress steps are list items; the catalog's own tool rows are not.
+    expect(screen.queryByRole("list", { name: /Jira actions|Jira-Aktionen/u })).toBeNull();
+  });
 
   it("shows an empty successful selection without inventing an action or a Jira effect", () => {
     render(

@@ -16,7 +16,7 @@ import type {
 } from "@/lib/atlassian-connectors-api";
 import { JiraPodWorkspaceAction } from "../cards/JiraPodWorkspaceAction";
 import { verifyStatusCopyKey, verifyStatusLabelKey, verifyStatusTone } from "./connector-labels";
-import { VerifyConnectionStatus } from "./VerifyConnectionStatus";
+import { VerifyStatusText } from "./VerifyConnectionStatus";
 import { PodActionsMenu, type PodMenuItem } from "./PodActionsMenu";
 import type { CardController } from "./useConnectorCard";
 import styles from "./connectors.module.css";
@@ -100,19 +100,27 @@ function useCheckedStatus(state: LivePodState): AtlassianConnectorVerifyStatus |
   return checked;
 }
 
-// The one live region of the card. A check run in this view that succeeded is shown, not only
+// The one live region of the card. It exists before a check and is filled with the outcome, so
+// the announcement is reliable. A check run in this view that succeeded is also shown, not only
 // announced: the person who just connected a Pod must see that it is connected and ready, in the
 // words of the connection page (#4371). A failed check keeps the chip and its one remediation line
 // and is announced here; a card loaded at rest stays silent.
 function VerifyAnnouncement({ state }: { readonly state: LivePodState }): ReactNode {
   const t = useTranslate();
   const status = useCheckedStatus(state);
-  if (status === "ok") return <VerifyConnectionStatus status={status} />;
+  const shown = status === "ok";
   return (
-    <output className="sr-only" data-status={status} data-testid="acx-verify-status">
-      {status === undefined
-        ? null
-        : `${t(verifyStatusLabelKey(status))}. ${t(verifyStatusCopyKey(status))}`}
+    <output
+      className={shown ? "acx-notice" : "sr-only"}
+      data-tone={shown ? verifyStatusTone(status) : undefined}
+      data-status={status}
+      data-testid="acx-verify-status"
+    >
+      {status === undefined ? null : shown ? (
+        <VerifyStatusText status={status} />
+      ) : (
+        `${t(verifyStatusLabelKey(status))}. ${t(verifyStatusCopyKey(status))}`
+      )}
     </output>
   );
 }

@@ -2486,10 +2486,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.tool": "Jira action",
   "chat.jira.catalog.discover": "Find Jira actions",
   "chat.jira.catalog.describe": "Select Jira actions",
-  "chat.jira.catalog.actions": "Jira actions",
-  "chat.jira.catalog.read": "Reads Jira",
-  "chat.jira.catalog.write": "Changes Jira",
-  "chat.jira.catalog.local": "Local preparation",
+  "chat.jira.catalog.found": "Keiko looked up which Jira actions fit.",
   "chat.jira.catalog.selected": "Action selection updated",
   "chat.jira.catalog.invalidArguments":
     "The Jira action selection was invalid. Find available actions and select them again.",
