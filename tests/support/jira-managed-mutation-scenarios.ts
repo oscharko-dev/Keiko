@@ -400,16 +400,24 @@ function nativeSprintFieldRead(
         name: "Sprint",
         schema: { type: "array", items: "string", custom: "com.pyxis.greenhopper.jira:gh-sprint" },
       },
+      {
+        id: "customfield_10014",
+        name: "Epic Link",
+        schema: { type: "any", custom: "com.pyxis.greenhopper.jira:gh-epic-link" },
+      },
     ]);
-  if (path !== "/context/rest/api/2/issue/SYN-1") return undefined;
+  // The second synthetic issue is the other end of a link and the epic of a move (#4354): an edit
+  // of either is judged against the templates of its own project and type, so it must be readable.
+  const issueNumber = /^\/context\/rest\/api\/2\/issue\/SYN-(\d{1,3})$/u.exec(path)?.[1];
+  if (issueNumber === undefined) return undefined;
   const member = state.agileFields.sprint as { readonly id: number } | null;
   const sprint =
     member === null
       ? null
       : [{ id: member.id, state: member.id === state.sprint.id ? state.sprint.state : "active" }];
   return response({
-    id: "10001",
-    key: "SYN-1",
+    id: String(10000 + Number(issueNumber)),
+    key: `SYN-${issueNumber}`,
     fields: { ...state.fields, [NATIVE_SPRINT_FIELD]: sprint },
   });
 }
@@ -455,7 +463,11 @@ export function nativeRead(
     "/context/rest/agile/1.0/board/7/configuration": state.board,
     "/context/rest/agile/1.0/sprint/9": state.sprint,
     "/context/rest/agile/1.0/epic/SYN-11": state.epic,
-    "/context/rest/agile/1.0/issue/SYN-1": { id: "10001", key: "SYN-1", fields: state.agileFields },
+    "/context/rest/agile/1.0/issue/SYN-1": {
+      id: "10001",
+      key: "SYN-1",
+      fields: { ...state.agileFields, closedSprints: null },
+    },
   };
   return Object.hasOwn(resources, path) ? response(resources[path]) : undefined;
 }

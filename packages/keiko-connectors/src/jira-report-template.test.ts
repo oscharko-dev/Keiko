@@ -113,7 +113,11 @@ async function reportOf(
   return (await runOf(source, options, extraArgs)).report;
 }
 
-/** The write gate for an edit of the same issue, with the same template source. */
+/**
+ * The write gate for an edit that sets the issue's own checked fields again, with the same template
+ * source: every rule the report names is then about a field the edit touches (#4354), so the two
+ * judge the same state.
+ */
 function gateOf(
   source: JiraIssueTemplateSource,
   issue: FixtureIssue,
@@ -142,7 +146,10 @@ function gateOf(
     source,
     operation: "edit",
     metadata: [],
-    validated: { fields: {}, update: {} },
+    validated: {
+      fields: { summary: issue.summary, description: issue.description ?? null },
+      update: { labels: [] },
+    },
     target: { issueKey: issue.key },
   });
 }
@@ -203,9 +210,12 @@ describe("the report and the write gate share one template source", () => {
     expect(report.compliance).toMatchObject({ checker: "applied" });
     expect(deviationKeys(report, "section-missing")).toContain(violating.key);
     expect(deviationKeys(report, "section-missing")).not.toContain(conforming.key);
-    // A create-only template does not govern an edit, so the gate stays open: the report names
-    // the existing violation without ever blocking the write the template was not written for.
-    expect(await gateOf(source, violating)).toEqual({ ok: true });
+    // Whatever plain activation a template names, it governs edits too (#4354): the report names
+    // the existing violation, and an edit that sets the description again is judged by it.
+    expect(await gateOf(source, violating)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "section-missing" }],
+    });
   });
 
   it("names what is missing, not only the rule", async () => {

@@ -664,6 +664,7 @@ function nativeRunInputs(
   | "remoteSkills"
   | "nativeWorktrees"
   | "nativeWebSearch"
+  | "jiraWritePreflight"
   | "externalReadRoots"
   | "configDocuments"
   | "agentModelCatalog"
@@ -686,8 +687,20 @@ function nativeRunInputs(
     ...(input.remoteSkills === undefined ? {} : { remoteSkills: input.remoteSkills }),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
     ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
+    ...jiraWritePreflightFor(jira),
     externalReadRoots: nativeExternalReadRoots(input, run),
   };
+}
+
+// A run with a bound Jira Pod: the dry run of its writes before the human is asked (#4354 L4).
+function jiraWritePreflightFor(
+  jira: BoundJira | undefined,
+): Pick<OpenCodeRuntimeCompositionInput, "jiraWritePreflight"> {
+  return jira === undefined
+    ? {}
+    : {
+        jiraWritePreflight: (call) => jira.pods.preflightWrite(jira.binding, jira.authority, call),
+      };
 }
 
 // One resolution per run, shared by the kernel allowlist and the composition's policy, so the two

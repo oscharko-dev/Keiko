@@ -2579,6 +2579,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Ein Pflichtfeld in Jira kann Keiko nicht befüllen.",
   "chat.jira.outcome.validation.invalid-field":
     "Ein Jira-Feld hatte einen Wert, den Jira nicht annimmt.",
+  "chat.jira.outcome.validation.invalid-epic-link":
+    "Der Epic Link zeigt auf einen Vorgang, der kein Epic ist oder den dieses Konto nicht sehen kann.",
   "chat.jira.outcome.validation.invalid-operation":
     "Die gewünschte Feldänderung ist in Jira nicht möglich.",
   "chat.jira.outcome.validation.bounds-exceeded": "Die Änderung war zu groß für einen Schritt.",
@@ -2601,6 +2603,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Der Vorgang braucht einen übergeordneten Vorgang ({subject}).",
   "chat.jira.outcome.rule.template-unreadable":
     "Die Vorlage „{subject}“ konnte nicht gelesen werden.",
+  "chat.jira.outcome.rule.template-missing":
+    "Für den Vorgangstyp „{subject}“ gibt es keine Vorlage, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere die Vorlage und frage dann erneut.",
+  "chat.jira.outcome.rule.template-not-activated":
+    "Für „{subject}“ gibt es nur Regeln für den Wechsel in einen Status, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere eine Vorlage zum Anlegen und frage dann erneut.",
   "chat.jira.tool": "Jira-Aktion",
   "chat.jira.catalog.discover": "Jira-Aktionen finden",
   "chat.jira.catalog.describe": "Jira-Aktionen auswählen",
@@ -2796,6 +2802,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.finding.unknown-link-type": "Der Verknüpfungstyp {subject} existiert nicht.",
   "chat.skills.jira.finding.unknown-transition-target":
     "{subject} ist kein Status des Projekts. Ein Übergangsname oder eine ID lässt sich hier nicht prüfen.",
+  "chat.skills.jira.finding.wrong-parent-field":
+    "Das Eltern-Feld verknüpft diesen Vorgangstyp hier nicht mit seinem Elternvorgang: {subject}. Davon betroffene Schreibvorgänge lassen sich nicht erfüllen.",
   "chat.skills.jira.projectKey": "Projektschlüssel",
   "chat.skills.jira.propose": "Aus Projekt vorschlagen",
   "chat.skills.jira.proposeTitle": "Vorlage aus einem Jira-Projekt erstellen",

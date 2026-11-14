@@ -50,7 +50,9 @@ export async function bindLifecycleSelection(
   requests: JiraAgileRequestPhase,
   input: SprintLifecycleInput,
 ): Promise<JiraTemplateGateResult> {
-  const actor = await readSavedActor(requests.issue, input.expectedActorKey);
+  const actor = await readSavedActor(requests.issue, input.expectedActorKey, {
+    beforeEffect: true,
+  });
   if (!actor.ok) return actor;
   const boards = new Set<string>();
   const selected = [

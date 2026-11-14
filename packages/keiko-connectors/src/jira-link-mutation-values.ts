@@ -55,8 +55,13 @@ export async function bindLinkIssue(
 export async function bindLinkActor(
   request: JiraMutationRequest,
   expectedActorKey: string,
+  beforeEffect = false,
 ): Promise<LinkObservation<true>> {
-  const actor = await readSavedActor(request, expectedActorKey);
+  const actor = await readSavedActor(
+    request,
+    expectedActorKey,
+    beforeEffect ? { beforeEffect } : {},
+  );
   return actor.ok ? { ok: true, value: true } : actor;
 }
 export function sameLinkParent(left: LinkIssue, right: LinkIssue): boolean {

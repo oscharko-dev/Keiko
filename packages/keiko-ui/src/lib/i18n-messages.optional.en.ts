@@ -2438,6 +2438,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.validation.unsupported-field":
     "A required Jira field cannot be filled from Keiko.",
   "chat.jira.outcome.validation.invalid-field": "A Jira field had a value Jira does not accept.",
+  "chat.jira.outcome.validation.invalid-epic-link":
+    "The Epic Link points to an issue that is not an Epic, or that this account cannot see.",
   "chat.jira.outcome.validation.invalid-operation":
     "The requested field change is not possible in Jira.",
   "chat.jira.outcome.validation.bounds-exceeded": "The change was too large to send in one step.",
@@ -2457,6 +2459,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.rule.label-count": "The issue has too few labels.",
   "chat.jira.outcome.rule.parent-missing": "The issue needs a parent ({subject}).",
   "chat.jira.outcome.rule.template-unreadable": "The template “{subject}” could not be read.",
+  "chat.jira.outcome.rule.template-missing":
+    "No template exists for the issue type “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save the template, then ask again.",
+  "chat.jira.outcome.rule.template-not-activated":
+    "Only rules for entering a status exist for “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save a template for creating, then ask again.",
   "chat.jira.tool": "Jira action",
   "chat.jira.catalog.discover": "Find Jira actions",
   "chat.jira.catalog.describe": "Select Jira actions",
@@ -2640,6 +2646,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.finding.unknown-link-type": "Link type {subject} does not exist.",
   "chat.skills.jira.finding.unknown-transition-target":
     "{subject} is not a status of the project. A transition name or id cannot be checked here.",
+  "chat.skills.jira.finding.wrong-parent-field":
+    "The parent field does not link this issue type to its parent here: {subject}. Writes it governs cannot satisfy it.",
   "chat.skills.jira.projectKey": "Project key",
   "chat.skills.jira.propose": "Propose from project",
   "chat.skills.jira.proposeTitle": "Create a template from a Jira project",

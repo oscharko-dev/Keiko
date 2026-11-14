@@ -212,6 +212,8 @@ const RULE_MESSAGES = {
   "parent-missing": "chat.jira.outcome.rule.parent-missing",
   "parent-type-mismatch": "chat.jira.outcome.rule.parent-type-mismatch",
   "template-unreadable": "chat.jira.outcome.rule.template-unreadable",
+  "template-missing": "chat.jira.outcome.rule.template-missing",
+  "template-not-activated": "chat.jira.outcome.rule.template-not-activated",
 } as const satisfies Readonly<Record<JiraOutcomeRule["ruleId"], string>>;
 /** One sentence per closed draft problem; it says what to change, and "{position}" is the item. */
 const DRAFT_PROBLEM_MESSAGES = {
@@ -235,6 +237,7 @@ const VALIDATION_MESSAGES = {
   "invalid-field": "chat.jira.outcome.validation.invalid-field",
   "invalid-operation": "chat.jira.outcome.validation.invalid-operation",
   "bounds-exceeded": "chat.jira.outcome.validation.bounds-exceeded",
+  "invalid-epic-link": "chat.jira.outcome.validation.invalid-epic-link",
 } as const;
 
 function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {

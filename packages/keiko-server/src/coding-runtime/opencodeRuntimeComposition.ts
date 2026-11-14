@@ -1,3 +1,5 @@
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { CODING_JIRA_SERVER_NAME } from "./codingJiraPodBinding.js";
 import {
   bindNativeMcpHumanTurn,
   type NativeMcpMutationJournal,
@@ -606,6 +608,17 @@ export interface OpenCodeRuntimeCompositionInput {
    */
   readonly nativeWebSearch?: NativeWebSearch | undefined;
   /**
+   * Native profile only, a run with a bound Jira Pod (#4354 L4): the dry run of a managed Jira
+   * write the human is about to be asked about. A returned string is the model-facing refusal and
+   * no approval card is raised; `undefined` admits the card. The executor gate stays authoritative.
+   */
+  readonly jiraWritePreflight?:
+    | ((call: {
+        readonly tool: string;
+        readonly arguments: CatalogJsonObject;
+      }) => Promise<string | undefined>)
+    | undefined;
+  /**
    * Native profile only: the user's global and the project's OpenCode configuration documents for
    * one run, in merge order (#3900 AC4, `opencodeConfigDocuments.ts`), read before its launch
    * profile is built. Absent reads none.
@@ -1052,6 +1065,9 @@ function compositionToolBridgeDeps(
       ? {}
       : { externalReadRoots: input.externalReadRoots }),
     ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
+    ...(input.jiraWritePreflight === undefined
+      ? {}
+      : { jiraWritePreflight: input.jiraWritePreflight }),
   };
 }
 
@@ -3853,6 +3869,7 @@ interface ToolBridgeExecutionDeps {
   readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
   readonly externalReadRoots?: readonly string[] | undefined;
   readonly nativeWebSearch?: NativeWebSearch | undefined;
+  readonly jiraWritePreflight?: OpenCodeRuntimeCompositionInput["jiraWritePreflight"];
 }
 
 /** Where a delivered tool result's model-facing rendering is recorded (#3873). */
@@ -4560,6 +4577,41 @@ async function settleNativePolicyOutcome(
 }
 
 /**
+ * A managed Jira write the human would be asked about is dry-run first (#4354 L4), so a write that
+ * breaks the customer's issue templates ends as the model's refusal and no card is raised for it.
+ * Only a write of the Jira Pod bound to this run is checked; every other action, a Pod read and a
+ * run without a preflight take the ordinary path, and the executor gate refuses after approval.
+ */
+async function jiraTemplateRefusal(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  deps: ToolBridgeExecutionDeps,
+): Promise<string | undefined> {
+  const mutation = run.mcp?.actions.get(request.permission)?.mutation;
+  if (
+    deps.jiraWritePreflight === undefined ||
+    mutation?.serverName !== CODING_JIRA_SERVER_NAME ||
+    request.mcpInput === undefined
+  )
+    return undefined;
+  const args = jsonArguments(request.mcpInput);
+  return args === undefined
+    ? undefined
+    : deps.jiraWritePreflight({ tool: mutation.toolName, arguments: args });
+}
+
+/**
+ * The runtime's decoded MCP arguments as plain JSON. They were parsed from the request body, so
+ * the copy cannot fail; a value that is not an object is left unchecked.
+ */
+function jsonArguments(value: Readonly<Record<string, unknown>>): CatalogJsonObject | undefined {
+  const copy: unknown = structuredClone(value);
+  return typeof copy === "object" && copy !== null && !Array.isArray(copy)
+    ? (copy as CatalogJsonObject)
+    : undefined;
+}
+
+/**
  * An allowed action as it is, an asked one after the human's decision and the re-check of its
  * paths: a refusal found by the re-check, or the decision itself.
  */
@@ -4574,6 +4626,10 @@ async function humanDecidedOutcome(
     readonly recheck: () => OpenCodeNativePolicyDecision;
   },
 ): Promise<NativePolicySettlement> {
+  const templateRefusal =
+    decision.effect === "ask" ? await jiraTemplateRefusal(run, request, deps) : undefined;
+  if (templateRefusal !== undefined)
+    return { outcome: "template-refused", refusal: templateRefusal };
   const outcome: OpenCodeNativePolicyOutcome =
     decision.effect === "ask"
       ? await nativePolicyHumanDecision(run, decision, signal, deps, context.approvals)
