@@ -552,7 +552,10 @@ describe("the report under a localized issue type name", () => {
   const SEEN = { Story: "Geschichte" } as const;
   const bound = (): JiraIssueTemplate => ({
     ...template(),
-    binding: { digest: jiraTemplateBindingDigest(INSTANCE, template()), issueTypeId: "11" },
+    binding: {
+      digest: jiraTemplateBindingDigest(INSTANCE, template(), { issueTypeId: "11" }),
+      issueTypeId: "11",
+    },
   });
   const stories = (): readonly FixtureIssue[] =>
     project().issues.filter((issue) => issue.type === "Story");
@@ -586,5 +589,37 @@ describe("the report under a localized issue type name", () => {
     expect(report.compliance.withoutTemplateByType.map((item) => item.typeName)).toContain(
       "Geschichte",
     );
+  });
+});
+
+// Part 2 (#4354): a required field the template typed in another language is judged by its bound id in
+// the report as in the gate; without the binding the name finds no field and the check says so.
+describe("the report for a required field typed in another language", () => {
+  const INSTANCE = "0123456789abcdef0123456789abcdef";
+  const typed = (): JiraIssueTemplate => template("requiredFields: [Geschichtspunkte]");
+  const bound = (): JiraIssueTemplate => ({
+    ...typed(),
+    binding: {
+      digest: jiraTemplateBindingDigest(INSTANCE, typed(), {
+        issueTypeId: "11",
+        requiredFieldIds: [POINTS],
+      }),
+      issueTypeId: "11",
+      requiredFieldIds: [POINTS],
+    },
+  });
+  const ruleIds = (report: JiraReport): readonly string[] => [
+    ...new Set(report.compliance.deviations.flatMap((item) => item.ruleIds)),
+  ];
+
+  it("judges the field by its bound id", async () => {
+    const report = await reportOf(() => SET(bound()), {});
+    expect(ruleIds(report)).toContain("field-missing");
+    expect(ruleIds(report)).not.toContain("field-unavailable");
+  });
+
+  it("finds no field by the typed name when the template is not bound", async () => {
+    const report = await reportOf(() => SET(typed()), {});
+    expect(ruleIds(report)).not.toContain("field-missing");
   });
 });

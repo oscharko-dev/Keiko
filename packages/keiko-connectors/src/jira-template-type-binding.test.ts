@@ -42,7 +42,10 @@ function bound(
   return {
     ...base,
     binding: {
-      digest: jiraTemplateBindingDigest(INSTANCE, base),
+      digest: jiraTemplateBindingDigest(INSTANCE, base, {
+        issueTypeId,
+        ...(parentIssueTypeIds === undefined ? {} : { parentIssueTypeIds }),
+      }),
       issueTypeId,
       ...(parentIssueTypeIds === undefined ? {} : { parentIssueTypeIds }),
     },
@@ -119,7 +122,10 @@ describe("resolving a template's binding in the acting person's view", () => {
     );
     expect(resolution).toMatchObject({
       state: "bindable",
-      binding: { digest: jiraTemplateBindingDigest(INSTANCE, plain), issueTypeId: "10002" },
+      binding: {
+        digest: jiraTemplateBindingDigest(INSTANCE, plain, { issueTypeId: "10002" }),
+        issueTypeId: "10002",
+      },
     });
   });
 
@@ -142,5 +148,97 @@ describe("resolving a template's binding in the acting person's view", () => {
     expect(
       resolveJiraTemplateBinding(current, PROJECT([{ id: "10002", name: "Task" }]), INSTANCE),
     ).toEqual({ state: "bound", issueType: "Task" });
+  });
+});
+
+// Part 2 (#4354): fields and transition targets are resolved to ids in the same step, aligned to the
+// typed lists, and an entry nothing resolves is written `none` and matched by name.
+describe("resolving the field and status ids of a template", () => {
+  const view = (
+    fields: readonly { id: string; name: string }[],
+    statusRefs: readonly { id: string; name: string }[],
+  ): Parameters<typeof resolveJiraTemplateBinding>[1] => ({
+    project: { key: "SYN", issueTypes: [{ id: "10002", name: "Aufgabe" }] },
+    fields,
+    statusRefs,
+  });
+  const parsedTyped = parseJiraIssueTemplate(
+    [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Aufgabe",
+      "activateOn: [transition:Fertig, transition:31]",
+      "requiredFields: [Story Punkte, Gibt es nicht]",
+      "---",
+      "# Aufgabe",
+    ].join("\n"),
+  );
+  if (!parsedTyped.ok) throw new TypeError("Expected a parseable template");
+  const typed = parsedTyped.template;
+
+  it("binds each typed field and status to its id and the rest to none, aligned to the typed lists", () => {
+    const resolution = resolveJiraTemplateBinding(
+      typed,
+      view([{ id: "customfield_10016", name: "Story Punkte" }], [{ id: "5", name: "Fertig" }]),
+      INSTANCE,
+    );
+    expect(resolution).toMatchObject({
+      state: "bindable",
+      binding: {
+        issueTypeId: "10002",
+        requiredFieldIds: ["customfield_10016", "none"],
+        transitionStatusIds: ["5", "none"],
+      },
+    });
+    if (resolution.state !== "bindable") throw new TypeError("Expected a bindable template");
+    const { digest, ...ids } = resolution.binding;
+    expect(digest).toBe(jiraTemplateBindingDigest(INSTANCE, typed, ids));
+  });
+
+  it("does not bind a field name that two fields carry", () => {
+    const resolution = resolveJiraTemplateBinding(
+      template("Aufgabe", "requiredFields: [Punkte]"),
+      view(
+        [
+          { id: "customfield_1", name: "Punkte" },
+          { id: "customfield_2", name: "Punkte" },
+        ],
+        [],
+      ),
+      INSTANCE,
+    );
+    expect(resolution).toMatchObject({
+      state: "bindable",
+      binding: { requiredFieldIds: ["none"] },
+    });
+  });
+
+  it("binds again when a bound field id is gone from the author's view (stale ids)", () => {
+    const stale = template("Aufgabe", "requiredFields: [Story Punkte]");
+    const resolvedBefore = resolveJiraTemplateBinding(
+      stale,
+      view([{ id: "customfield_10016", name: "Story Punkte" }], []),
+      INSTANCE,
+    );
+    if (resolvedBefore.state !== "bindable") throw new TypeError("Expected a bindable template");
+    const boundBefore: JiraIssueTemplate = { ...stale, binding: resolvedBefore.binding };
+    const again = resolveJiraTemplateBinding(
+      boundBefore,
+      view([{ id: "customfield_20000", name: "Story Punkte" }], []),
+      INSTANCE,
+    );
+    expect(again).toMatchObject({
+      state: "bindable",
+      binding: { requiredFieldIds: ["customfield_20000"] },
+    });
+    expect(
+      resolveJiraTemplateBinding(
+        boundBefore,
+        view([{ id: "customfield_10016", name: "Story Punkte" }], []),
+        INSTANCE,
+      ),
+    ).toMatchObject({ state: "bound" });
   });
 });

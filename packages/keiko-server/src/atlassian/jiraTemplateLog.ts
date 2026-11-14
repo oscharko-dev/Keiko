@@ -247,7 +247,7 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       // Literal on purpose (the registry reads a closed literal); a test pins it to the contract.
-      values: ["type-list-unavailable"],
+      values: ["type-list-unavailable", "status-list-unavailable"],
       maxItems: 4,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },

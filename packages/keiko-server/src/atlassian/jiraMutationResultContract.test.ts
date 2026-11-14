@@ -481,7 +481,8 @@ describe("the worst-case mix of one refusal", () => {
     (_, index) => ({
       ruleId: ordinary[index % ordinary.length] ?? "summary-too-short",
       subject: WIDE.repeat(120),
-      template: WIDE.repeat(256),
+      // Ends in a place (` #2`), as when several templates govern the type: the longest guidance.
+      template: `${WIDE.repeat(253)} #2`,
     }),
   );
   const longest = Math.max(...jiraTemplateGuidanceVariants().map((variant) => variant.length));

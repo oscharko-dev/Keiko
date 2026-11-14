@@ -14,6 +14,7 @@ import {
   bindJiraIssueTemplateText,
   jiraIssueTemplateLabel,
   jiraTemplateForInstance,
+  jiraTemplateGovernsWrites,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
   type JiraTemplateActivation,
@@ -23,6 +24,7 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { findOwnedJiraPod, isReadyJiraPod } from "./atlassian/jiraPodAccess.js";
 import { readMutation, withSkillAccess } from "./markdown-skill-routes.js";
+import type { MarkdownSkillProposalAccounting } from "./markdown-skill-log.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { invalidRequest, notFound, UiStoreError } from "./store/errors.js";
 
@@ -58,22 +60,49 @@ function templateSummary(template: JiraIssueTemplate): {
   };
 }
 
+/**
+ * How many other saved templates govern the same project and issue type as this one (#4354, F07a):
+ * the gate checks every governing template, so a write must meet all of them. The same type means the
+ * same bound issue type id, or else the same typed name; a template that only governs a status change
+ * does not share a type with one that governs writes.
+ */
+function sharedTypeCount(template: JiraIssueTemplate, all: readonly JiraIssueTemplate[]): number {
+  const same = (left: string, right: string): boolean =>
+    left.trim().toLowerCase() === right.trim().toLowerCase();
+  return all.filter(
+    (other) =>
+      other !== template &&
+      jiraTemplateGovernsWrites(other) &&
+      jiraTemplateGovernsWrites(template) &&
+      same(other.project, template.project) &&
+      (other.binding !== undefined && template.binding !== undefined
+        ? other.binding.issueTypeId === template.binding.issueTypeId
+        : same(other.issueType, template.issueType)),
+  ).length;
+}
+
 export function handleListJiraTemplates(
   ctx: RouteContext,
   deps: TemplateRouteDeps,
 ): Promise<RouteResult> {
-  return withSkillAccess(ctx, deps, "jira-template-list", () => ({
-    status: 200,
-    body: {
-      templates: deps.store.markdownSkills.jiraTemplates().map(({ skill, template }) => ({
-        id: skill.id,
-        revision: skill.revision,
-        name: skill.name,
-        valid: template !== undefined,
-        ...(template === undefined ? {} : templateSummary(template)),
-      })),
-    },
-  }));
+  return withSkillAccess(ctx, deps, "jira-template-list", () => {
+    const entries = deps.store.markdownSkills.jiraTemplates();
+    const parsed = entries.flatMap(({ template }) => (template === undefined ? [] : [template]));
+    return {
+      status: 200,
+      body: {
+        templates: entries.map(({ skill, template }) => ({
+          id: skill.id,
+          revision: skill.revision,
+          name: skill.name,
+          valid: template !== undefined,
+          ...(template === undefined
+            ? {}
+            : { ...templateSummary(template), sharedWith: sharedTypeCount(template, parsed) }),
+        })),
+      },
+    };
+  });
 }
 
 function readyPod(
@@ -155,29 +184,58 @@ export function handleValidateJiraTemplate(
   });
 }
 
+/** Counts per closed reason of a proposal run: what the closing log line carries, never a type name. */
+function proposalAccounting(result: {
+  readonly proposals: readonly unknown[];
+  readonly withoutProposal: readonly { readonly reason: string }[];
+  readonly typeCount: number;
+}): MarkdownSkillProposalAccounting {
+  const count = (reason: string): number =>
+    result.withoutProposal.filter((entry) => entry.reason === reason).length;
+  return {
+    typeCount: result.typeCount,
+    proposalCount: result.proposals.length,
+    nothingToLearnCount: count("nothing-to-learn"),
+    templateInvalidCount: count("template-invalid"),
+    jiraUnavailableCount: count("jira-unavailable"),
+    beyondLimitCount: count("beyond-limit"),
+  };
+}
+
 export function handleProposeJiraTemplates(
   ctx: RouteContext,
   deps: TemplateRouteDeps,
 ): Promise<RouteResult> {
-  return withSkillAccess(ctx, deps, "jira-template-propose", async () => {
-    const body = await readMutation(ctx, deps, 4096);
-    if (body.kind === "rejected") return body.response;
-    const { projectKey, podId } = body.value;
-    if (typeof projectKey !== "string" || !/^[A-Za-z]\w{0,127}$/u.test(projectKey)) {
-      throw invalidRequest("Provide a Jira project key.");
-    }
-    const pod = readyPod(deps, podId);
-    const result = await proposeJiraIssueTemplates(
-      podRequest(deps, ctx, pod),
-      projectKey,
-      jiraInstanceIdentity(pod.baseUrl),
-    );
-    if (!result.ok) {
-      if (result.reason === "not-found") throw notFound("Jira project");
-      throw jiraReadFailure(result.reason);
-    }
-    return { status: 200, body: { proposals: result.proposals } };
-  });
+  let accounted: MarkdownSkillProposalAccounting | undefined;
+  return withSkillAccess(
+    ctx,
+    deps,
+    "jira-template-propose",
+    async () => {
+      const body = await readMutation(ctx, deps, 4096);
+      if (body.kind === "rejected") return body.response;
+      const { projectKey, podId } = body.value;
+      if (typeof projectKey !== "string" || !/^[A-Za-z]\w{0,127}$/u.test(projectKey)) {
+        throw invalidRequest("Provide a Jira project key.");
+      }
+      const pod = readyPod(deps, podId);
+      const result = await proposeJiraIssueTemplates(podRequest(deps, ctx, pod), projectKey);
+      if (!result.ok) {
+        if (result.reason === "not-found") throw notFound("Jira project");
+        throw jiraReadFailure(result.reason);
+      }
+      accounted = proposalAccounting(result);
+      return {
+        status: 200,
+        body: {
+          proposals: result.proposals,
+          withoutProposal: result.withoutProposal,
+          typeCount: result.typeCount,
+        },
+      };
+    },
+    () => accounted,
+  );
 }
 
 const BIND_BODY_BYTES = 4096;

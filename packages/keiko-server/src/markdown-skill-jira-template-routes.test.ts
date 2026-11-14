@@ -24,7 +24,14 @@ import {
 import { API_ROUTES, matchRoute, type RouteContext } from "./routes.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { UiStore } from "./store/types.js";
-import { field, response } from "../../../tests/support/jira-managed-remote.js";
+import { REQUIRED_CUSTOM, field, response } from "../../../tests/support/jira-managed-remote.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const PRINCIPAL = "operator-principal";
@@ -194,6 +201,7 @@ function context(cookie: string, body: unknown = {}, id = ""): RouteContext {
 
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
+  resetServerLogger();
 });
 
 describe("template documents in the skill library", () => {
@@ -249,6 +257,7 @@ describe("template documents in the skill library", () => {
           project: "SYN",
           issueType: "Story",
           activations: ["create", "transition:Ready"],
+          sharedWith: 0,
         },
       ],
     });
@@ -507,17 +516,22 @@ describe("binding a template to this Jira", () => {
     // The digest says what the ids were resolved from: this Jira and the typed names.
     const plain = parseJiraIssueTemplate(typed("Story"));
     if (!plain.ok) throw new TypeError("Expected a parseable template");
-    const digest = jiraTemplateBindingDigest(INSTANCE, plain.template);
+    const digest = jiraTemplateBindingDigest(INSTANCE, plain.template, {
+      issueTypeId: "10001",
+      parentIssueTypeIds: ["7"],
+      parentFieldId: "parent",
+    });
     expect(body).toContain(`jiraBinding: "${digest}"`);
     // Nothing else of the person's file moved, and the name stays the label.
-    expect(body.replace(/^(?:issueTypeId|parentIssueTypeIds|jiraBinding):.*\n/gmu, "")).toBe(
-      typed("Story"),
-    );
+    expect(
+      body.replace(/^(?:issueTypeId|parentIssueTypeIds|parentFieldId|jiraBinding):.*\n/gmu, ""),
+    ).toBe(typed("Story"));
     const template = parseJiraIssueTemplate(body);
     expect(template.ok && template.template.binding).toEqual({
       digest,
       issueTypeId: "10001",
       parentIssueTypeIds: ["7"],
+      parentFieldId: "parent",
     });
     expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
 
@@ -604,10 +618,20 @@ describe("binding a template to this Jira", () => {
     const f = fixture();
     const plain = parseJiraIssueTemplate(typed("Aufgabe"));
     if (!plain.ok) throw new TypeError("Expected a parseable template");
-    const digest = jiraTemplateBindingDigest(INSTANCE, plain.template);
+    const digest = jiraTemplateBindingDigest(INSTANCE, plain.template, {
+      issueTypeId: "99999",
+      parentIssueTypeIds: ["7"],
+      parentFieldId: "parent",
+    });
     const skill = await stored(
       f,
-      typed("Aufgabe", 'issueTypeId: "99999"', `jiraBinding: "${digest}"`),
+      typed(
+        "Aufgabe",
+        'issueTypeId: "99999"',
+        'parentIssueTypeIds: ["7"]',
+        'parentFieldId: "parent"',
+        `jiraBinding: "${digest}"`,
+      ),
     );
     const checked = await handleValidateJiraTemplate(
       context(f.cookie, { podId: POD, markdown: f.deps.store.markdownSkills.get(skill.id)?.body }),
@@ -632,5 +656,98 @@ describe("binding a template to this Jira", () => {
     expect(API_ROUTES.some((route) => route.pattern === "/api/skills/jira-templates/bind")).toBe(
       true,
     );
+  });
+});
+
+// #4354 F04: "Propose from project" dropped every type it could derive nothing for, without a word.
+// The route answers for EVERY issue type: a proposal, or one closed reason, and the count.
+function accountingGet(request: { readonly url: string }): ReturnType<AtlassianHttpBodyPort> {
+  const url = new URL(request.url);
+  const { pathname } = url;
+  if (pathname.endsWith("/project/ACC"))
+    return Promise.resolve(
+      response({
+        id: "20000",
+        key: "ACC",
+        issueTypes: [
+          { id: "1", name: "Task" },
+          { id: "2", name: "Epic" },
+          { id: "3", name: "Bug" },
+          { id: "4", name: "Sub-task", subtask: true },
+        ],
+      }),
+    );
+  const meta = /createmeta\/20000\/issuetypes\/(\d+)$/u.exec(pathname);
+  if (meta !== null) {
+    if (meta[1] === "3") return Promise.resolve(response({}, 403));
+    const values = [
+      field("summary", "string", true),
+      ...(meta[1] === "1" ? [REQUIRED_CUSTOM] : []),
+    ];
+    return Promise.resolve(
+      response({ values, startAt: 0, maxResults: 100, isLast: true, total: values.length }),
+    );
+  }
+  if (pathname.endsWith("/search")) {
+    const jql = url.searchParams.get("jql") ?? "";
+    if (jql.includes("issuetype = 3 ")) return Promise.resolve(response({}, 403));
+    const sample = jql.includes("issuetype = 1 ")
+      ? [
+          { fields: { description: "h2. Context\nA\nh2. Acceptance criteria\nB" } },
+          { fields: { description: "h2. Context\nC\nh2. Acceptance criteria\nD" } },
+        ]
+      : [];
+    return Promise.resolve(response({ issues: sample }));
+  }
+  return Promise.resolve(response({}, 404));
+}
+
+describe("a proposal accounts for every issue type of the project (#4354 F04)", () => {
+  it("answers with a proposal or a closed reason per type, and the count", async () => {
+    const { deps, cookie, http } = fixture();
+    http.mockImplementation(accountingGet);
+    const result = await handleProposeJiraTemplates(
+      context(cookie, { podId: POD, projectKey: "ACC" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      proposals: { issueType: string }[];
+      withoutProposal: { issueType: string; reason: string }[];
+      typeCount: number;
+    };
+    expect(body.typeCount).toBe(4);
+    expect(body.proposals.map((proposal) => proposal.issueType)).toEqual(["Task"]);
+    expect(body.withoutProposal).toEqual([
+      { issueType: "Epic", reason: "nothing-to-learn" },
+      { issueType: "Bug", reason: "jira-unavailable" },
+      { issueType: "Sub-task", reason: "nothing-to-learn" },
+    ]);
+    expect(body.proposals.length + body.withoutProposal.length).toBe(body.typeCount);
+  });
+
+  it("records the accounting as counts per closed reason on the existing operation, without a name", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const { deps, cookie, http } = fixture();
+    http.mockImplementation(accountingGet);
+    await handleProposeJiraTemplates(context(cookie, { podId: POD, projectKey: "ACC" }), deps);
+    const completed = sink.events.find(
+      (event) =>
+        event.op === "skills.library.operation" &&
+        event.extra?.action === "jira-template-propose" &&
+        event.extra.phase === "completed",
+    );
+    expect(completed?.extra).toMatchObject({
+      typeCount: 4,
+      proposalCount: 1,
+      nothingToLearnCount: 2,
+      templateInvalidCount: 0,
+      jiraUnavailableCount: 1,
+      beyondLimitCount: 0,
+    });
+    const line = formatActivityLogProofLine(completed ?? {});
+    expectActivityLogProof("skills.library.operation.lifecycle", line);
+    expect(line).not.toMatch(/Task|Epic|Bug|Sub-task|ACC/u);
   });
 });

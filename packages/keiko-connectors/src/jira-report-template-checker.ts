@@ -56,11 +56,15 @@ function catalogOf(
   return [...known.values()];
 }
 
-function references(templates: readonly JiraIssueTemplate[]): readonly string[] {
-  return templates.flatMap((template) => [
-    ...template.requiredFields,
-    ...(template.parent.field === undefined ? [] : [template.parent.field]),
-  ]);
+function references(
+  templates: readonly JiraIssueTemplate[],
+): readonly { readonly template: JiraIssueTemplate; readonly reference: string }[] {
+  return templates.flatMap((template) =>
+    [
+      ...template.requiredFields,
+      ...(template.parent.field === undefined ? [] : [template.parent.field]),
+    ].map((reference) => ({ template, reference })),
+  );
 }
 
 function unresolved(
@@ -68,7 +72,8 @@ function unresolved(
   catalog: readonly JiraFieldCatalogEntry[],
 ): boolean {
   return references(templates).some(
-    (reference) => resolveJiraTemplateFieldIds(reference, catalog).length === 0,
+    ({ reference, template }) =>
+      resolveJiraTemplateFieldIds(reference, catalog, template).length === 0,
   );
 }
 
@@ -77,8 +82,8 @@ function fieldIdsOf(
   catalog: readonly JiraFieldCatalogEntry[],
 ): readonly string[] {
   const ids = new Set<string>(CHECKED_FIELDS);
-  for (const reference of references(templates))
-    for (const id of resolveJiraTemplateFieldIds(reference, catalog)) ids.add(id);
+  for (const { reference, template } of references(templates))
+    for (const id of resolveJiraTemplateFieldIds(reference, catalog, template)) ids.add(id);
   return [...ids];
 }
 
@@ -213,9 +218,10 @@ function parentFieldsObserved(
   subject: JiraTemplateSubject,
   catalog: readonly JiraFieldCatalogEntry[],
 ): boolean {
-  return templates.every(({ parent }) => {
+  return templates.every((template) => {
+    const { parent } = template;
     if (parent.field === undefined) return true;
-    const ids = resolveJiraTemplateFieldIds(parent.field, catalog);
+    const ids = resolveJiraTemplateFieldIds(parent.field, catalog, template);
     return ids.length === 1 && ids.every((id) => Object.hasOwn(subject.fields, id));
   });
 }

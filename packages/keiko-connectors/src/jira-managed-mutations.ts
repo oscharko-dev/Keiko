@@ -918,6 +918,7 @@ interface FieldTarget {
     readonly id: string;
     readonly name?: string;
     readonly targetStatusName?: string;
+    readonly targetStatusId?: string;
   };
 }
 /** The template gate in front of an edit or transition: the attempt that stops it, or the links to send. */
@@ -1185,6 +1186,7 @@ async function transitionIssue(
         ...(metadata.targetStatusName === undefined
           ? {}
           : { targetStatusName: metadata.targetStatusName }),
+        targetStatusId: metadata.targetStatusId,
       },
     },
     policy,

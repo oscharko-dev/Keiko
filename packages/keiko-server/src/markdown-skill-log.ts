@@ -40,6 +40,14 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
       values: ["started", "completed", "rejected", "failed"],
     },
     httpStatus: { type: "integer", dataClass: "count", required: true },
+    // A Jira template proposal accounts for every issue type of the project (#4354): the number of
+    // types and of proposals, and the number without one per closed reason. Counts only.
+    typeCount: { type: "integer", dataClass: "count", required: false },
+    proposalCount: { type: "integer", dataClass: "count", required: false },
+    nothingToLearnCount: { type: "integer", dataClass: "count", required: false },
+    templateInvalidCount: { type: "integer", dataClass: "count", required: false },
+    jiraUnavailableCount: { type: "integer", dataClass: "count", required: false },
+    beyondLimitCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -66,17 +74,35 @@ export type MarkdownSkillAction =
   | "jira-template-propose"
   | "jira-template-bind";
 
+/** What a template proposal accounted for, as counts per closed reason (#4354). */
+export interface MarkdownSkillProposalAccounting {
+  readonly typeCount: number;
+  readonly proposalCount: number;
+  readonly nothingToLearnCount: number;
+  readonly templateInvalidCount: number;
+  readonly jiraUnavailableCount: number;
+  readonly beyondLimitCount: number;
+}
+
 export function logMarkdownSkillOperation(
   correlationId: string | undefined,
   action: MarkdownSkillAction,
   phase: "started" | "completed" | "rejected" | "failed",
   status: number,
+  accounting?: MarkdownSkillProposalAccounting,
 ): void {
   processServerLogSink().write(
     activityLogEvent(
       MARKDOWN_SKILL_OPERATION,
       { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID },
-      { action, phase, httpStatus: status, completeness: "complete", loss: "none" },
+      {
+        action,
+        phase,
+        httpStatus: status,
+        ...accounting,
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
 }

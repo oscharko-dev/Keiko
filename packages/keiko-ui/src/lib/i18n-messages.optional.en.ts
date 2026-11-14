@@ -2480,7 +2480,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.rule.template-not-activated":
     "Only rules for entering a status exist for “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save a template for creating, then ask again.",
   "chat.jira.outcome.rule.template-binding-unresolved":
-    "The template “{subject}” names an issue type that this Jira does not show you, so nothing was changed. Either open the template in Skills, write the issue type as this Jira shows it to you and save it, or ask its author to check it against Jira. Then ask again.",
+    "The template “{subject}” names an issue type or a status that this Jira does not show you, so nothing was changed. Either open the template in Skills, write it as this Jira shows it to you and save it, or ask its author to check it against Jira. Then ask again.",
   "chat.jira.outcome.templateNotices":
     "The change was made. The issue already breaks these template rules in fields this change did not touch. Ask Keiko to repair them, or fix them in Jira.",
   "chat.jira.outcome.failure.releaseScope":
@@ -2667,13 +2667,23 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Several fields are named {subject}. Use the field id to be exact.",
   "chat.skills.jira.finding.unknown-link-type": "Link type {subject} does not exist.",
   "chat.skills.jira.finding.unknown-transition-target":
-    "{subject} is not a status of the project. A transition name or id cannot be checked here.",
+    "{subject} is not a status of the project. A transition name cannot be bound across languages: name the target status as this Jira shows it, and the rule then holds for everyone.",
   "chat.skills.jira.finding.wrong-parent-field":
     "The parent field does not link this issue type to its parent here: {subject}. Writes it governs cannot satisfy it.",
   "chat.skills.jira.projectKey": "Project key",
   "chat.skills.jira.propose": "Propose from project",
   "chat.skills.jira.proposeTitle": "Create a template from a Jira project",
   "chat.skills.jira.proposing": "Reading project…",
+  "chat.skills.jira.proposalCount":
+    "{types} issue types: {proposals} with a proposal, {without} without.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn": "No issues of this type to learn from yet.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "The derived template was not valid, so none is proposed.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira did not answer for this type. Try again.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Not examined: the project has more issue types than one proposal run covers.",
   "chat.skills.jira.proposalNone": "No template could be derived from this project.",
   "chat.skills.jira.proposalTitle": "Proposed for {issueType} ({count} issues sampled)",
   "chat.skills.jira.error":
@@ -2731,6 +2741,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.bindAmbiguous":
     "More than one issue type is called “{subject}” in this Jira, so the template cannot be bound.",
   "chat.skills.jira.bindFailed": "The template could not be bound right now. Try again.",
+  "chat.skills.jira.sharedType":
+    "Another template governs this issue type too: every write must meet both.",
   "chat.skills.jira.bindDead":
     "This template is bound to an issue type that no longer exists in this project (“{subject}”), so it governs nothing and blocks nothing. Change the issue type or delete the template.",
   "chat.skills.jira.openProposal": "Open in editor",

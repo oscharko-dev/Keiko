@@ -58,21 +58,24 @@ export function useJiraTemplateBinding(
 }
 
 /**
- * Binds every template whose check offers it, once per saved revision (#4354): a lead who saves a
+ * Binds every template whose check offers it, once per saved revision and Pod (#4354): a lead who saves a
  * template does not also have to find a button. A refusal shows the server's sentence on the row; the
  * button stays as a re-check.
  */
 export function useAutomaticTemplateBinding(
   bind: (entry: JiraTemplateEntry) => Promise<void>,
   pending: readonly JiraTemplateEntry[],
+  podId: string | undefined,
 ): void {
   const attempted = useRef(new Set<string>());
   useEffect(() => {
+    // Without a ready Pod nothing is attempted and nothing is marked: the revision is bound when one appears.
+    if (podId === undefined) return;
     for (const entry of pending) {
-      const key = `${entry.id}:${String(entry.revision)}`;
+      const key = `${podId}:${entry.id}:${String(entry.revision)}`;
       if (attempted.current.has(key)) continue;
       attempted.current.add(key);
       void bind(entry);
     }
-  }, [bind, pending]);
+  }, [bind, pending, podId]);
 }

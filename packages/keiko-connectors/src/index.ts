@@ -375,6 +375,8 @@ export {
   type JiraTemplateBindingResolution,
   type JiraTemplateInstanceRead,
   type JiraTemplateProposal,
+  type JiraTemplateWithoutProposal,
+  type JiraTemplateWithoutProposalReason,
   type JiraTemplateProposalInput,
 } from "./jira-issue-template-instance.js";
 export { createJiraReportTemplateChecker } from "./jira-report-template-checker.js";

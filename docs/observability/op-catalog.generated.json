@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5178e16e051f56e9eb347c4f0390db153c141a3bb096efa6342300813f32e63b",
+    "catalogDigest": "ef2da95258a4ad95b897eb0a2b944c73d9ed060f1bbf7267a03861a72df5a73b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -36418,7 +36418,7 @@
             "type": "string-array",
             "dataClass": "closed-enum",
             "required": false,
-            "values": ["type-list-unavailable"],
+            "values": ["type-list-unavailable", "status-list-unavailable"],
             "maxItems": 4
           }
         },
@@ -45794,6 +45794,36 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "typeCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "proposalCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "nothingToLearnCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "templateInvalidCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "jiraUnavailableCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "beyondLimitCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -45803,7 +45833,7 @@
         "proofIds": ["skills.library.operation.lifecycle"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:8",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:76"]
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:95"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45870,8 +45900,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["skills.workflow.attached.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:84",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:139"]
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:110",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:165"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -102879,16 +102909,52 @@
                   "required": true
                 },
                 {
+                  "name": "beyondLimitCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "httpStatus",
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
                 },
                 {
+                  "name": "jiraUnavailableCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "nothingToLearnCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "phase",
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "proposalCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "templateInvalidCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "typeCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -123472,7 +123538,7 @@
     {
       "op": "skills.workflow.attached",
       "category": "gateway",
-      "site": "packages/keiko-server/src/markdown-skill-log.ts:87",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:113",
       "package": "keiko-server"
     },
     {

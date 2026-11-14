@@ -13,6 +13,8 @@ export interface JiraTemplateEntry {
   readonly project?: string;
   readonly issueType?: string;
   readonly activations?: readonly string[];
+  /** How many other saved templates govern the same project and issue type (every one must be met). */
+  readonly sharedWith?: number;
 }
 
 export const JIRA_TEMPLATE_FINDING_CODES = [
@@ -60,6 +62,20 @@ export interface JiraTemplateProposal {
   readonly sampledIssueCount: number;
 }
 
+/** Why an issue type of the project has no proposal; each is a closed word with its own plain text. */
+export type JiraTemplateWithoutProposalReason =
+  "nothing-to-learn" | "template-invalid" | "jira-unavailable" | "beyond-limit";
+export interface JiraTemplateWithoutProposal {
+  readonly issueType: string;
+  readonly reason: JiraTemplateWithoutProposalReason;
+}
+/** A proposal run accounts for every issue type of the project (#4354). */
+export interface JiraTemplateProposalRun {
+  readonly proposals: readonly JiraTemplateProposal[];
+  readonly withoutProposal: readonly JiraTemplateWithoutProposal[];
+  readonly typeCount: number;
+}
+
 export type { JiraTemplateParseErrorCode } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 function request<T>(path: string, body?: unknown, correlationId?: string): Promise<T> {
@@ -99,14 +115,12 @@ export async function proposeJiraTemplates(
   podId: string,
   projectKey: string,
   correlationId?: string,
-): Promise<readonly JiraTemplateProposal[]> {
-  return (
-    await request<{ proposals: readonly JiraTemplateProposal[] }>(
-      "/api/skills/jira-templates/propose",
-      { podId, projectKey },
-      correlationId,
-    )
-  ).proposals;
+): Promise<JiraTemplateProposalRun> {
+  return request<JiraTemplateProposalRun>(
+    "/api/skills/jira-templates/propose",
+    { podId, projectKey },
+    correlationId,
+  );
 }
 
 /** What binding a template to this Jira did: the issue type it now names by id. */

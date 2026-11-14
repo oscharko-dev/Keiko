@@ -1794,26 +1794,41 @@ the approval.
   Jira Data Center localizes per user: in a German profile the system fields (41 of 55 measured on 10.3),
   the statuses, the transition names, the resolutions and the issue types are German, while link types,
   priority names and custom fields were not in the lab. A template types its names once, in its
-  author's language. The product therefore resolves the typed issue type and the allowed parent types to
-  ids in the author's own view of the project (`POST /api/skills/jira-templates/bind`, called by the Skills
-  editor after every save of a Jira template; the button stays as a re-check) and writes them into the
-  template's front matter (`issueTypeId`, `parentIssueTypeIds`, `jiraBinding`); the file stays a plain
-  Markdown document and the binding travels with an exported copy. **The binding is in force only for what it
-  was resolved from:** `jiraBinding` is one digest over the Jira's identity (a digest of its normalised base
-  URL) and the typed names, and the single source of templates (`jiraTemplateForInstance`) drops a binding
-  whose digest no longer matches (another Jira, an edited typed name, a hand-written id), so that template is
-  matched by name again; ids without a digest are no binding. One matcher (`jiraTemplateIssueTypeMatches`,
-  `jiraTemplateParentEntryMatches`) decides for the gate, the report, the settings validator and the
+  author's language. The product therefore resolves what Jira localizes to its stable ids in
+  the author's own view of the project (`POST /api/skills/jira-templates/bind`, called by the Skills editor
+  after every save of a Jira template, and again once a Pod is available when the first save found none; the
+  button stays as a re-check) and writes them into the template's front matter. **By id:** the issue type
+  (`issueTypeId`), the allowed parent types (`parentIssueTypeIds`), every required field, system or custom
+  (`requiredFieldIds`, aligned to the typed list), the parent-link field (`parentFieldId`), and the target of
+  each status-bound transition rule (`transitionStatusIds`, the id of the status; Jira keeps that id under
+  every profile language). An entry that did not resolve is written as `none` and that one entry is matched by
+  name. **By name, because nothing stable answers it:** link types, priorities, labels, section and summary
+  text, the project key (language independent already), and a transition typed as a transition id (an id
+  already). The file stays a plain Markdown document and the binding travels with an exported copy.
+  **The binding is in force only for what it was resolved from:** `jiraBinding` is one digest (version 2) over
+  the Jira's identity (a digest of its normalised base URL), the typed names and every written id, and the
+  single source of templates (`jiraTemplateForInstance`) drops a binding whose digest no longer matches
+  (another Jira, an edited typed name or id), so that template is matched by name again; ids without a digest
+  or with counts that do not align with the typed lists are no binding at all, not a parse error. One matcher
+  (`jiraTemplateIssueTypeMatches`, `jiraTemplateParentEntryMatches`, `jiraTemplateBoundFieldId`,
+  `jiraTemplateBoundStatusId`) decides for the gate, the report, the settings validator and the
   offered-template metadata. A gated write is refused with the closed rule `template-binding-unresolved` when
   a template of its project that is matched by name names an issue type nobody sees in this Jira (a name in
-  another profile language): the refusal names that template and the two ways out (write the type as this Jira
-  shows it and save the template, or have the author check it against Jira), and the bind route's 422 says the
-  same. A template that is bound for this Jira whose bound id is no type of the project is **dead**: it governs
-  nothing and blocks nothing, and the template list says so. When Jira's project read lists no issue types (or
-  more than the gate reads) the unresolved rule cannot be judged and the write goes on, as before, but the
-  decision is now recorded on `jira.template.admission` (`gateFacts: ["type-list-unavailable"]`). A report
-  issue record without a type id is neither covered nor uncovered by a bound template: the report says the
-  check is unavailable instead of counting it "without template".
+  another profile language), and likewise a transition beside an unbound status-named rule whose target is no
+  status of the project and no transition id: nothing could show that the rule belongs to another language
+  rather than to a status that does not exist, and a transition must not pass unchecked on that doubt. The
+  refusal names that template and the two ways out (write the name as this Jira shows it and save the
+  template, or have the author check it against Jira), and the bind route's 422 says the same. A template that
+  is bound for this Jira whose bound id is no type of the project is **dead**: it governs nothing and blocks
+  nothing, and the template list says so; a bound field id the instance no longer has is `field-unavailable`,
+  never satisfied, and a bound status the project no longer has makes the transition rule dead. When Jira's
+  project read lists no issue types (or more than the gate reads), or its statuses read gives no list, the
+  unresolved rule cannot be judged and the write goes on, as before, but the decision is now recorded on
+  `jira.template.admission` (`gateFacts: ["type-list-unavailable"]`, `["status-list-unavailable"]`). When
+  several templates of one project share an issue type name, the picker and the list label each with a `#N`
+  suffix and say which share, so a person can tell them apart. A report issue record without a type id is
+  neither covered nor uncovered by a bound template: the report says the check is unavailable instead of
+  counting it "without template".
 - **Write-path inventory (#4354).** 224 mutation operations. Every operation that creates or changes
   the fields or relations of an issue reaches `gateJiraMutationByTemplates` through the managed
   executor `executeJiraManagedMutation`, the only production caller of which is `mutationTool`

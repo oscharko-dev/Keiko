@@ -60,7 +60,9 @@ function sourceWith(markdown: string): ReturnType<typeof jiraIssueTemplateSource
 function bound(): string {
   const parsed = parseJiraIssueTemplate(PLAIN);
   if (!parsed.ok) throw new TypeError("Expected a parseable template");
-  const digest = jiraTemplateBindingDigest(jiraInstanceIdentity(BASE_URL), parsed.template);
+  const digest = jiraTemplateBindingDigest(jiraInstanceIdentity(BASE_URL), parsed.template, {
+    issueTypeId: "10002",
+  });
   const text = bindJiraIssueTemplateText(PLAIN, { digest, issueTypeId: "10002" });
   if (text === undefined) throw new TypeError("Expected a bound template");
   return text;

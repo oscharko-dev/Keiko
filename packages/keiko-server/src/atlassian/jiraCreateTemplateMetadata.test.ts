@@ -210,10 +210,14 @@ describe("applicable create template metadata through the managed read", () => {
       const parsed = parseJiraIssueTemplate(plain);
       if (!parsed.ok) throw new TypeError("Expected a parseable template");
       // The digest comes from its producer: the Jira's identity and the typed names it was resolved from.
-      const digest = jiraTemplateBindingDigest(instance, parsed.template);
+      const digest = jiraTemplateBindingDigest(instance, parsed.template, {
+        issueTypeId: "10003",
+        requiredFieldIds: ["description", "customfield_10014"],
+        parentFieldId: "customfield_10014",
+      });
       return plain.replace(
         "issueType: Aufgabe",
-        `issueType: Aufgabe\nissueTypeId: "10003"\njiraBinding: "${digest}"`,
+        `issueType: Aufgabe\nissueTypeId: "10003"\nrequiredFieldIds: ["description", "customfield_10014"]\nparentFieldId: "customfield_10014"\njiraBinding: "${digest}"`,
       );
     };
     f.add(bound("fedcba9876543210fedcba9876543210"));

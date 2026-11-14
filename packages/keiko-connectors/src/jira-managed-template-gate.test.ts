@@ -3,6 +3,7 @@ import {
   jiraTemplateBindingDigest,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
+  type JiraTemplateBindingIds,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -275,6 +276,9 @@ interface ReadRoute {
 }
 function readRoutes(remote: Remote): readonly ReadRoute[] {
   return [
+    ...(remote.statusList === "absent"
+      ? [{ suffix: "/project/SYN/statuses", body: {}, status: 404 }]
+      : []),
     { suffix: "/project/10000", body: projectBody(remote) },
     { suffix: "/project/SYN", body: projectBody(remote) },
     { suffix: "/issuetype/10001", body: { id: "10001", name: remote.issueTypeName ?? "Story" } },
@@ -287,6 +291,20 @@ function readRoutes(remote: Remote): readonly ReadRoute[] {
         last: true,
         total: (remote.createFields ?? CREATE_FIELDS).length,
       },
+    },
+    {
+      suffix: "/project/SYN/statuses",
+      body: [
+        {
+          id: "10001",
+          name: "Story",
+          statuses: [
+            { id: "1", name: "To Do" },
+            { id: "3", name: "Ready" },
+            { id: "4", name: "Parked" },
+          ],
+        },
+      ],
     },
     { suffix: "editmeta", body: { fields: EDIT_FIELDS } },
     { suffix: "assignable/search", body: [{ name: "alice", active: true }] },
@@ -342,6 +360,8 @@ function projectBody(remote: Remote): Record<string, unknown> {
   };
 }
 interface Remote {
+  /** Jira answers the project's statuses without a list, so no transition rule can be shown unresolved. */
+  statusList?: "absent";
   /** How Jira lists the project's issue types: not at all, or more than the gate reads. */
   typeList?: "absent" | "oversized";
   /** The project's issue types as the acting user sees them. */
@@ -454,7 +474,10 @@ describe("localized issue type names", () => {
     return {
       ...base,
       binding: {
-        digest: jiraTemplateBindingDigest(INSTANCE, base),
+        digest: jiraTemplateBindingDigest(INSTANCE, base, {
+          issueTypeId: id,
+          ...(parentIssueTypeIds === undefined ? {} : { parentIssueTypeIds }),
+        }),
         issueTypeId: id,
         ...(parentIssueTypeIds === undefined ? {} : { parentIssueTypeIds }),
       },
@@ -1408,5 +1431,110 @@ describe("a Data Center Epic create against a stored formal rule", () => {
       },
     });
     expect(f.writes()).toEqual([]);
+  });
+});
+
+// #4354 Part 2: the names Jira localizes besides issue types. A field named in the author's language
+// and a transition target named by a status are bound to ids when the template is bound, and the gate
+// matches by id from then on; a target that is neither bound nor a status name the acting user sees may
+// belong to a rule of another language, so the transition is refused instead of passing unchecked.
+describe("localized field names and transition targets", () => {
+  const INSTANCE_ID = "0123456789abcdef0123456789abcdef";
+  const withBinding = (
+    front: readonly string[],
+    ids: Omit<JiraTemplateBindingIds, "issueTypeId">,
+  ): JiraIssueTemplate => {
+    const base = template(front, "# T");
+    const all: JiraTemplateBindingIds = { issueTypeId: "10001", ...ids };
+    return {
+      ...base,
+      binding: { digest: jiraTemplateBindingDigest(INSTANCE_ID, base, all), ...all },
+    };
+  };
+  const conforming: Remote = {
+    fieldCatalog: true,
+    issue: {
+      project: { key: "SYN" },
+      issuetype: { id: "10001", name: "Story" },
+      status: { id: "1", name: "To Do" },
+      customfield_10016: 8,
+    },
+  };
+  const missing: Remote = {
+    fieldCatalog: true,
+    issue: {
+      project: { key: "SYN" },
+      issuetype: { id: "10001", name: "Story" },
+      status: { id: "1", name: "To Do" },
+    },
+  };
+  const FIELD = ["activateOn: [create, edit]", "requiredFields: [Story Punkte]"];
+  const GERMAN_FIELD = { requiredFieldIds: ["customfield_10016"] };
+
+  it("judges a required field by its bound id although the acting user sees another name", async () => {
+    const f = fixture(SET(withBinding(FIELD, GERMAN_FIELD)));
+    expect(await f.run("jira.create", CREATE)).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      violations: [{ ruleId: "field-missing" }],
+    });
+    expect(f.writes()).toEqual([]);
+    const ok = fixture(SET(withBinding(FIELD, GERMAN_FIELD)));
+    await ok.run("jira.create", { ...CREATE, fields: { ...CREATE.fields, customfield_10016: 5 } });
+    expect(ok.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+  });
+
+  const TRANSITION = ["activateOn: [transition:Fertig]", "requiredFields: [Story Points]"];
+  const move = { issueKey: "SYN-1", transitionId: "31" };
+
+  it("governs a transition by the bound id of its target status, under any status name", async () => {
+    const f = fixture(SET(withBinding(TRANSITION, { transitionStatusIds: ["3"] })), missing);
+    expect(await f.run("jira.transition", move)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "field-missing", subject: "Story Points" }],
+    });
+    expect(f.writes()).toEqual([]);
+    // Park leads to another status: the rule does not govern it.
+    const other = fixture(SET(withBinding(TRANSITION, { transitionStatusIds: ["3"] })), missing);
+    await other.run("jira.transition", { issueKey: "SYN-1", transitionId: "41" });
+    expect(other.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  it("refuses a transition beside an unbound rule whose target no status of this Jira has, naming the template", async () => {
+    const f = fixture(SET(template(TRANSITION, "# T")), conforming);
+    expect(await f.run("jira.transition", move)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      violations: [
+        { ruleId: "template-binding-unresolved", subject: "SYN/Story", template: "SYN/Story" },
+      ],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("lets a transition through beside a rule bound to a status that is gone: it is dead", async () => {
+    const f = fixture(SET(withBinding(TRANSITION, { transitionStatusIds: ["99"] })), conforming);
+    await f.run("jira.transition", move);
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  it("does not refuse for a target that is a status name this Jira shows, or a typed transition id", async () => {
+    for (const target of ["Ready", "31"]) {
+      const f = fixture(
+        SET(
+          template([`activateOn: [transition:${target}]`, "requiredFields: [Story Points]"], "# T"),
+        ),
+        conforming,
+      );
+      await f.run("jira.transition", move);
+      expect(f.writes(), target).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+    }
+  });
+
+  it("records that the status list was missing when it lets such a transition through", async () => {
+    const f = fixture(SET(template(TRANSITION, "# T")), { ...conforming, statusList: "absent" });
+    expect(await f.run("jira.transition", move)).toMatchObject({
+      templateGateFacts: ["status-list-unavailable"],
+    });
   });
 });
