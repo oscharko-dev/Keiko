@@ -52,6 +52,7 @@ RUN apt-get update \
         bubblewrap \
         ca-certificates \
         git \
+        iproute2 \
         libasound2 \
         libatk-bridge2.0-0 \
         libatk1.0-0 \
@@ -77,7 +78,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # The newer git, ahead of the distribution's in PATH (/usr/local/bin precedes /usr/bin). The
-# distribution package stays installed for its own dependants.
+# distribution package stays installed for its own dependants. `iproute2` is the `ip` tool the
+# keiko-sandbox unshare fallback needs to bring loopback up inside its namespace; without it that
+# fallback fails closed (loopback-tool-unavailable), exactly as on any host that lacks it.
 COPY --from=git-build /stage/usr/local/ /usr/local/
 
 # Browsers live outside the bind-mounted workspace so a host checkout is never polluted and the
