@@ -308,6 +308,30 @@ describe("ordinary Chat structured tool transcript", () => {
     expect(line).toContain("claim-notice");
   });
 
+  it("clears the marker when the final answer no longer claims, and never hands it to another message (#4355)", () => {
+    const { store, id, chatId, logs } = fixture();
+    store.updateChatToolTranscript(id, { kind: "claim-notice", notice: "no-jira-create" }, "n");
+    store.updateChatToolTranscript(id, { kind: "claim-notice", notice: undefined }, "n");
+    expect(store.findMessageById(id)?.toolTranscript?.claimNotice).toBeUndefined();
+    // The cleared state is a line without the closed value: absent means cleared.
+    const cleared = logs.events.filter((entry) => entry.op === "chat.tool-transcript.updated").at(-1);
+    expect(formatActivityLogProofLine(cleared ?? {})).not.toContain("no-jira-create");
+    store.updateChatToolTranscript(id, { kind: "claim-notice", notice: "tool-call-not-executed" }, "n");
+    const other = store.createMessage({
+      chatId,
+      role: "user",
+      content: "Another turn",
+      timestamp: 2000,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(store.findMessageById(other.id)?.toolTranscript?.claimNotice).toBeUndefined();
+    expect(store.findMessageById(id)?.toolTranscript?.claimNotice).toBe("tool-call-not-executed");
+  });
+
   it("records only identity digests and counts through the registered activity projection", () => {
     const { store, id, logs } = fixture();
     store.updateChatToolTranscript(id, { kind: "started", call }, "transcript-proof");

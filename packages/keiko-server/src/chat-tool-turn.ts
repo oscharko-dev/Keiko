@@ -507,8 +507,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private correction: GatewayMessage | undefined;
   /** A correction about a claimed action is answered without any tool: it can never write. */
   private correctionWithoutTools = false;
-  /** The claimed actions a correction round was asked about, and who to tell in which language. */
+  /** The claimed actions a correction round was asked about (#4355). */
   private claimedKinds: readonly ("announced-create" | "tool-call-as-text")[] = [];
+  /** The text the claim detection saw: the person's words and what the turn already held. */
+  private claimContext: readonly string[] = [];
   /** The turn corrected a rejected call and no round has dispatched a tool call since. */
   private correctedSinceProgress = false;
   /** The first admission of a correction round follows an attempt the turn could not use. */
@@ -1295,36 +1297,38 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
     // The correction round failed: the original answer is published unchanged, and a false claim
     // in it is marked in the stored turn.
-    this.recordClaimNotice(answer, true);
+    this.settleClaimNotice(answer);
     this.endedAnswer = this.knowledgeAnswer(answer);
     return this.endedAnswer;
   }
 
   private stillClaims(kind: "announced-create" | "tool-call-as-text", content: string): boolean {
     return kind === "announced-create"
-      ? announcedCreateCount(this.settledExchanges, content) > 0
+      ? announcedCreateCount(this.settledExchanges, content, this.claimContext) > 0
       : toolCallsWrittenAsText(content) > 0;
   }
 
   /**
-   * After a claimed-action correction, a published answer that still claims it (or is the original
-   * one because the correction round failed) is stored with a closed marker the Chat words; the
+   * The marker describes the turn's FINAL answer (#4355): every final answer states it afresh. It
+   * is set while the answer still claims what a correction asked about, and cleared otherwise, so
+   * a marker an earlier leg of the same turn stored never outlives the answer it described. The
    * answer text itself stays as the model wrote it. An announced create outranks a tool call
-   * written as text, since the person acts on whether an issue exists.
+   * written as text, since the person acts on whether an issue exists; a created receipt in the
+   * turn never leaves a create claim standing.
    */
-  private recordClaimNotice(answer: NormalizedResponse, original: boolean): void {
-    const still = original
-      ? this.claimedKinds
-      : this.claimedKinds.filter((kind) => this.stillClaims(kind, answer.content));
-    if (still.length === 0) return;
-    this.storeClaimNotice(
-      still.includes("announced-create") ? "no-jira-create" : "tool-call-not-executed",
-    );
+  private settleClaimNotice(answer: NormalizedResponse): void {
+    const still = this.claimedKinds.filter((kind) => this.stillClaims(kind, answer.content));
+    let notice: ChatClaimNotice | undefined;
+    if (still.includes("announced-create")) notice = "no-jira-create";
+    else if (still.length > 0) notice = "tool-call-not-executed";
+    this.storeClaimNotice(notice);
   }
 
-  private storeClaimNotice(notice: ChatClaimNotice): void {
+  private storeClaimNotice(notice: ChatClaimNotice | undefined): void {
     const { deps, message, correlationId } = this.options;
     try {
+      // Only a change is written: a plain turn never gains a transcript for this.
+      if (deps.store.findMessageById(message.id)?.toolTranscript?.claimNotice === notice) return;
       deps.store.updateChatToolTranscript(
         message.id,
         { kind: "claim-notice", notice },
@@ -1380,6 +1384,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         costClass: "low",
       },
     };
+    this.settleClaimNotice(this.endedAnswer);
     return this.endedAnswer;
   }
 
@@ -1722,7 +1727,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         },
       };
       if (this.correctAnswer(answer, request)) return undefined;
-      this.recordClaimNotice(answer, false);
+      this.settleClaimNotice(answer);
       return this.knowledgeAnswer(answer);
     }
     requireDispatch(
@@ -1860,6 +1865,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     if (this.counters.iterations >= this.limits.maxIterations) return false;
     const correction = this.answerCorrection(answer, request);
     if (correction === undefined) return false;
+    // The claim check of every later answer reads the text the first detection saw.
+    this.claimContext = this.detectionContext(request);
     this.uncorrectedAnswer = answer;
     this.uncorrectedExchangeCount = this.transcriptExchangeCount();
     this.continuation.push({ role: "assistant", content: answer.content });
@@ -1881,6 +1888,11 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     return true;
   }
 
+  /** What the person and the turn already said: a key named there is not a claimed creation. */
+  private detectionContext(request: GatewayCallRequest): readonly string[] {
+    return [...request.messages, ...this.continuation].map((message) => message.content);
+  }
+
   private answerCorrection(
     answer: NormalizedResponse,
     request: GatewayCallRequest,
@@ -1898,7 +1910,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         content: reportCoverageCorrection(mismatched),
         log: { correctionKind: "report-coverage", mismatchedRequirementCount: mismatched.length },
       });
-    const context = [...request.messages, ...this.continuation].map((message) => message.content);
+    const context = this.detectionContext(request);
     const unsupported = unsupportedIssueKeys(this.settledExchanges, context, answer.content);
     if (unsupported.length > 0)
       corrections.push({

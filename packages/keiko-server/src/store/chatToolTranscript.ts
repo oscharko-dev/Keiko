@@ -88,7 +88,11 @@ export type ChatToolTranscriptUpdate =
       readonly batchProgress: ChatToolBatchProgress;
     }
   | { readonly kind: "read-consent"; readonly grant: ChatToolReadGrantView }
-  | { readonly kind: "claim-notice"; readonly notice: ChatClaimNotice }
+  | {
+      /** The marker follows the turn's final answer: a value sets it, undefined clears it. */
+      readonly kind: "claim-notice";
+      readonly notice: ChatClaimNotice | undefined;
+    }
   | {
       readonly kind: "write-approval";
       readonly callId: string;
@@ -992,7 +996,8 @@ function redactStarted(
 function redactClaimNotice(
   update: Extract<ChatToolTranscriptUpdate, { kind: "claim-notice" }>,
 ): ChatToolTranscriptUpdate {
-  if (!isChatClaimNotice(update.notice)) throw invalidRequest("Invalid claim notice.");
+  if (update.notice !== undefined && !isChatClaimNotice(update.notice))
+    throw invalidRequest("Invalid claim notice.");
   // Copy only the closed marker; nothing else of the update survives.
   return { kind: "claim-notice", notice: update.notice };
 }
@@ -1158,7 +1163,9 @@ export function updateChatToolTranscript(
         messageDigest: sha256Hex(id),
         phase: update.kind,
         exchangeCount: count,
-        ...(update.kind === "claim-notice" ? { claimNotice: update.notice } : {}),
+        ...(update.kind === "claim-notice" && update.notice !== undefined
+          ? { claimNotice: update.notice }
+          : {}),
         ...draftReceiptLogFields(update),
         ...progressLogFields(update),
         completeness: "complete",

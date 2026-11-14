@@ -380,8 +380,13 @@ const scriptedFinalAnswer = vi.hoisted(() => ({
   after: undefined as string | undefined,
   /** A model that answers the tool-less correction round with a tool call. */
   callInToollessRound: false,
+  /** Runs once, just before the turn's final answer, e.g. to leave a marker an earlier leg stored. */
+  beforeAnswer: undefined as (() => void) | undefined,
 }));
 function finalAnswer(response: NormalizedResponse): NormalizedResponse {
+  const before = scriptedFinalAnswer.beforeAnswer;
+  scriptedFinalAnswer.beforeAnswer = undefined;
+  before?.();
   const content = scriptedFinalAnswer.next;
   scriptedFinalAnswer.next = scriptedFinalAnswer.after;
   scriptedFinalAnswer.after = undefined;
@@ -1825,6 +1830,105 @@ describe.each([false, true])(
     );
   },
 );
+
+// #4355 AC4: the marker describes the turn's FINAL answer. A marker an earlier leg of the same turn
+// stored never outlives a final answer that no longer claims the effect, the claim check reads the
+// text the first detection saw, and a marker that cannot be stored never changes the answer.
+describe.each([false, true])("the claim marker follows the final answer (stream=%s)", (stream) => {
+  async function run(
+    f: ReturnType<typeof fixture>,
+    id: string,
+    body: Record<string, unknown> = sendBody(f, id),
+    deps: UiHandlerDeps = f.deps,
+  ): Promise<void> {
+    const ctx = context(body);
+    const pending = stream ? handleSendDesktopChatStream(ctx, deps) : handleSendDesktopChat(ctx, deps);
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    await pending;
+  }
+  function reset(): void {
+    scriptedFinalAnswer.next = undefined;
+    scriptedFinalAnswer.after = undefined;
+    scriptedFinalAnswer.callInToollessRound = false;
+    scriptedFinalAnswer.beforeAnswer = undefined;
+  }
+  const storeStale = (f: ReturnType<typeof fixture>) => (): void => {
+    const user = f.deps.store.listMessages(f.chatId).find((message) => message.role === "user");
+    if (user === undefined) throw new Error("Missing user message");
+    f.deps.store.updateChatToolTranscript(
+      user.id,
+      { kind: "claim-notice", notice: "no-jira-create" },
+      "stale-marker",
+    );
+  };
+
+  it.each([
+    ["a clean final answer", undefined],
+    ["a corrected final answer", "I created the Epic REQ-1 for you."],
+  ] as const)("clears a marker an earlier leg stored after %s", async (_name, claim) => {
+    scriptedFinalAnswer.next = claim;
+    try {
+      const f = fixture();
+      scriptedFinalAnswer.beforeAnswer = storeStale(f);
+      await run(f, `stale-${String(stream)}-${String(_name.length)}`);
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      expect(user?.toolTranscript?.claimNotice).toBeUndefined();
+    } finally {
+      reset();
+    }
+  });
+
+  it("reads the claim check against the text the first detection saw", async () => {
+    scriptedFinalAnswer.next = "I created the Epic REQ-1 for you.";
+    scriptedFinalAnswer.after = "The epic REQ-7 was created.";
+    try {
+      const f = fixture();
+      await run(f, `context-${String(stream)}`, {
+        ...sendBody(f, `context-${String(stream)}`),
+        content: "List Jira projects, I already know REQ-7",
+      });
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(assistant?.content).toBe("The epic REQ-7 was created.");
+      // REQ-7 is a key the person gave: naming it is no claimed creation.
+      expect(user?.toolTranscript?.claimNotice).toBeUndefined();
+    } finally {
+      reset();
+    }
+  });
+
+  it("publishes the answer unchanged and reports a diagnostic when the marker cannot be stored", async () => {
+    scriptedFinalAnswer.next = "I created the Epic REQ-1 for you.";
+    scriptedFinalAnswer.after = "I created the Epic REQ-1 again.";
+    try {
+      const f = fixture();
+      const update = f.deps.store.updateChatToolTranscript.bind(f.deps.store);
+      vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementation(
+        (id, change, correlationId) => {
+          if (change.kind === "claim-notice") throw new Error("disk full Bearer fixture-secret");
+          update(id, change, correlationId);
+        },
+      );
+      const record = vi.fn();
+      await run(f, `store-fails-${String(stream)}`, sendBody(f, `store-fails-${String(stream)}`), {
+        ...f.deps,
+        diagnostics: { record },
+      });
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("I created the Epic REQ-1 again.");
+      expect(user?.toolTranscript?.claimNotice).toBeUndefined();
+      expect(f.writes()).toBe(0);
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ operation: "chat.tool-turn.claim-notice" }),
+      );
+      expect(JSON.stringify(record.mock.calls)).not.toContain("fixture-secret");
+    } finally {
+      reset();
+    }
+  });
+});
 
 // S01 of epic #4173: after three refused creates Qwen answered "successfully created … REQ-42". An
 // answer naming issue keys no tool result shows gets ONE further round naming them; the model
