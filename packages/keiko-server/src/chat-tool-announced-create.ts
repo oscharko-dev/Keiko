@@ -317,30 +317,3 @@ const CLAIMED_ACTION_KINDS: ReadonlySet<string> = new Set([
 export function correctionRoundOffersTools(kinds: readonly string[]): boolean {
   return !kinds.some((kind) => CLAIMED_ACTION_KINDS.has(kind));
 }
-
-const GERMAN_MARKERS =
-  /[äöüß]|\b(?:und|der|die|das|nicht|bitte|ich|ein|eine|erstelle|lege|mir|für)\b/iu;
-const NOTICES = {
-  en: {
-    "announced-create": "Note from Keiko: no Jira issue was created in this turn.",
-    "tool-call-as-text":
-      "Note from Keiko: a tool call written as text in this answer was not executed.",
-  },
-  de: {
-    "announced-create": "Hinweis von Keiko: In diesem Durchgang wurde kein Jira-Vorgang angelegt.",
-    "tool-call-as-text":
-      "Hinweis von Keiko: Ein als Text geschriebener Tool-Aufruf in dieser Antwort wurde nicht ausgeführt.",
-  },
-} as const;
-
-/**
- * The one fixed sentence the published answer carries when its claim could not be corrected (the
- * correction round failed or repeated the claim), in the language of the person's last message.
- */
-export function claimNotice(
-  kinds: readonly ("announced-create" | "tool-call-as-text")[],
-  personText: string,
-): string {
-  const language = GERMAN_MARKERS.test(personText) ? "de" : "en";
-  return kinds.map((kind) => NOTICES[language][kind]).join(" ");
-}

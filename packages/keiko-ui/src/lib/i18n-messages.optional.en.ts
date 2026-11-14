@@ -2994,6 +2994,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Pull completed, but editor buffers need recovery. Review open files before continuing.",
   "chat.turn.failed": "Turn failed",
   "chat.turn.cancelled": "Turn cancelled",
+  "chat.claimNotice.label": "Note from Keiko",
+  "chat.claimNotice.noJiraCreate": "No Jira issue was created in this turn.",
+  "chat.claimNotice.toolCallNotExecuted":
+    "A tool call written as text in this answer was not executed.",
   "chat.contextWindow.label": "Context window notice",
   "chat.contextWindow.notice":
     "This transcript shows {count} turns. Context beyond the 48-turn boundary may be compacted.",

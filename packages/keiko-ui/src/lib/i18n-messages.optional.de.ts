@@ -3158,6 +3158,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Der Pull wurde abgeschlossen, aber Editor-Puffer müssen wiederhergestellt werden. Prüfen Sie offene Dateien, bevor Sie fortfahren.",
   "chat.turn.failed": "Beitrag fehlgeschlagen",
   "chat.turn.cancelled": "Beitrag abgebrochen",
+  "chat.claimNotice.label": "Hinweis von Keiko",
+  "chat.claimNotice.noJiraCreate": "In diesem Durchgang wurde kein Jira-Vorgang angelegt.",
+  "chat.claimNotice.toolCallNotExecuted":
+    "Ein als Text geschriebener Tool-Aufruf in dieser Antwort wurde nicht ausgeführt.",
   "chat.contextWindow.label": "Hinweis zum Kontextfenster",
   "chat.contextWindow.notice":
     "Der sichtbare Verlauf enthält {count} Beiträge. Kontext jenseits der Grenze von 48 Beiträgen kann komprimiert werden.",

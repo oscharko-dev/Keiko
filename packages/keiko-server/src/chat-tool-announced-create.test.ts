@@ -3,7 +3,6 @@ import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   announcedCreateCorrection,
   announcedCreateCount,
-  claimNotice,
   correctionRoundOffersTools,
   toolCallAsTextCorrection,
   toolCallsWrittenAsText,
@@ -174,18 +173,6 @@ describe("announcedCreateCount", () => {
     expect(correctionRoundOffersTools(["unsupported-issue-key", "report-omission"])).toBe(true);
     expect(correctionRoundOffersTools(["announced-create"])).toBe(false);
     expect(correctionRoundOffersTools(["knowledge-coverage", "tool-call-as-text"])).toBe(false);
-  });
-
-  it("gives the fixed notice in the language of the person's last message", () => {
-    expect(claimNotice(["announced-create"], "Please create an epic")).toBe(
-      "Note from Keiko: no Jira issue was created in this turn.",
-    );
-    expect(claimNotice(["announced-create"], "Bitte lege einen Epic an")).toBe(
-      "Hinweis von Keiko: In diesem Durchgang wurde kein Jira-Vorgang angelegt.",
-    );
-    expect(claimNotice(["announced-create", "tool-call-as-text"], "create")).toContain(
-      "was not executed",
-    );
   });
 
   it("asks for an honest answer and never for a write", () => {

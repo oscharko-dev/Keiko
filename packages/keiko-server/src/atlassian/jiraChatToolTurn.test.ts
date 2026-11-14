@@ -1751,6 +1751,8 @@ describe.each([false, true])(
           const [user, assistant] = f.deps.store.listMessages(f.chatId);
           expect(user?.turnState).toBe("completed");
           expect(assistant?.content).toBe("No Jira projects are visible.");
+          // A correction that worked leaves no marker.
+          expect(user?.toolTranscript?.claimNotice).toBeUndefined();
           expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
           expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
             correctionKind: kind,
@@ -1770,18 +1772,34 @@ describe.each([false, true])(
 );
 
 // #4355 AC4: when the correction round cannot correct the claim (the model calls a tool in the
-// tool-less round, or repeats the claim), the published answer carries ONE fixed Keiko sentence,
-// and nothing is executed.
+// tool-less round, or repeats the claim), the answer is published as the model wrote it and the
+// stored turn carries a closed marker the Chat words; nothing is executed.
 describe.each([false, true])(
-  "a claimed create the correction round could not correct (stream=%s)",
+  "a claimed action the correction round could not correct (stream=%s)",
   (stream) => {
     it.each([
-      ["calls a tool in the tool-less round", { callInToollessRound: true }],
-      ["repeats the claim", { after: "I created the Epic REQ-1 again." }],
+      [
+        "calls a tool in the tool-less round",
+        "I created the Epic REQ-1 for you.",
+        { callInToollessRound: true },
+        "no-jira-create",
+      ],
+      [
+        "repeats the claim",
+        "I created the Epic REQ-1 for you.",
+        { after: "I created the Epic REQ-1 again." },
+        "no-jira-create",
+      ],
+      [
+        "repeats a tool call written as text",
+        'jira_create({"projectId":"10000"})',
+        { after: 'jira_create({"projectId":"10000"}) again' },
+        "tool-call-not-executed",
+      ],
     ] as const)(
-      "publishes the claim with the fixed notice when the model %s",
-      async (_name, script) => {
-        scriptedFinalAnswer.next = "I created the Epic REQ-1 for you.";
+      "stores the closed marker and leaves the answer unchanged when the model %s",
+      async (_name, claim, script, marker) => {
+        scriptedFinalAnswer.next = claim;
         scriptedFinalAnswer.after = "after" in script ? script.after : undefined;
         scriptedFinalAnswer.callInToollessRound = "callInToollessRound" in script;
         try {
@@ -1793,13 +1811,10 @@ describe.each([false, true])(
           void pending.catch(() => undefined);
           await awaitReadGrantedForWrite(f);
           await pending;
-          const [, assistant] = f.deps.store.listMessages(f.chatId);
-          expect(assistant?.content).toContain("REQ-1");
-          expect(assistant?.content).toContain(
-            "Note from Keiko: no Jira issue was created in this turn.",
-          );
-          // The notice is one sentence, once, and nothing was written.
-          expect(assistant?.content.match(/Note from Keiko/gu)).toHaveLength(1);
+          const [user, assistant] = f.deps.store.listMessages(f.chatId);
+          // The words are the model's own: no sentence of Keiko's is appended, in any language.
+          expect(assistant?.content).toBe("after" in script ? script.after : claim);
+          expect(user?.toolTranscript?.claimNotice).toBe(marker);
           expect(f.writes()).toBe(0);
         } finally {
           scriptedFinalAnswer.next = undefined;

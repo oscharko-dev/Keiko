@@ -279,6 +279,35 @@ describe("ordinary Chat structured tool transcript", () => {
     }).toThrow("Invalid tool consent");
   });
 
+  it("stores the closed claim marker once, reads it back and refuses anything else (#4355)", () => {
+    const { store, id, logs } = fixture();
+    expect(store.findMessageById(id)?.toolTranscript?.claimNotice).toBeUndefined();
+    store.updateChatToolTranscript(
+      id,
+      { kind: "claim-notice", notice: "no-jira-create" },
+      "notice",
+    );
+    store.updateChatToolTranscript(
+      id,
+      { kind: "claim-notice", notice: "no-jira-create" },
+      "notice",
+    );
+    expect(store.findMessageById(id)?.toolTranscript?.claimNotice).toBe("no-jira-create");
+    expect(() => {
+      store.updateChatToolTranscript(
+        id,
+        { kind: "claim-notice", notice: "Note from Keiko" as "no-jira-create" },
+        "notice",
+      );
+    }).toThrow("Invalid claim notice");
+    // The closed value, and nothing else, reaches the registered line.
+    const event = logs.events.filter((entry) => entry.op === "chat.tool-transcript.updated").at(-1);
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-transcript.updated.line", line);
+    expect(line).toContain("no-jira-create");
+    expect(line).toContain("claim-notice");
+  });
+
   it("records only identity digests and counts through the registered activity projection", () => {
     const { store, id, logs } = fixture();
     store.updateChatToolTranscript(id, { kind: "started", call }, "transcript-proof");

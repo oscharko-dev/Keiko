@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4cd6c11f55cb85d43be06ec50fbaace8b4db96a15622e16211816c491aab128c",
+    "catalogDigest": "297250e3515dc334e2250bf2a2be0fd1da244811f53cb6b9d895b080cac23f74",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4142,7 +4142,8 @@
               "progress",
               "read-consent",
               "write-approval",
-              "human-input"
+              "human-input",
+              "claim-notice"
             ]
           },
           "batchPhase": {
@@ -4166,6 +4167,12 @@
             "dataClass": "count",
             "required": false
           },
+          "claimNotice": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["no-jira-create", "tool-call-not-executed"]
+          },
           "exchangeCount": {
             "type": "integer",
             "dataClass": "count",
@@ -4183,8 +4190,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-transcript.updated.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:155",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:1131"]
+        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:158",
+        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:1154"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4241,8 +4248,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.batch-draft-offer.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:552",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:599"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:559",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:606"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4328,7 +4335,9 @@
               "report-coverage",
               "unsupported-issue-key",
               "knowledge-coverage",
-              "raw-report-key"
+              "raw-report-key",
+              "announced-create",
+              "tool-call-as-text"
             ]
           },
           "omittedFindingCount": {
@@ -4351,6 +4360,11 @@
             "dataClass": "count",
             "required": false
           },
+          "announcementCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "pendingKnowledgePageCount": {
             "type": "integer",
             "dataClass": "count",
@@ -4364,7 +4378,7 @@
         "proofIds": ["chat.tool-turn.corrected.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:391",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:534"]
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:541"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -67607,6 +67621,12 @@
                   "required": false
                 },
                 {
+                  "name": "claimNotice",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "draftReceiptCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -67726,6 +67746,12 @@
               "causal": "correlation",
               "analyzerProjection": "timeline",
               "safeContextFields": [
+                {
+                  "name": "announcementCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
                 {
                   "name": "correctionKind",
                   "type": "string",
@@ -118854,7 +118880,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:411",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:424",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -119704,13 +119730,13 @@
     {
       "op": "chat.tool-transcript.updated",
       "category": "process",
-      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:158",
+      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:161",
       "package": "keiko-server"
     },
     {
       "op": "chat.tool-turn.batch-draft-offer",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:555",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:562",
       "package": "keiko-server"
     },
     {

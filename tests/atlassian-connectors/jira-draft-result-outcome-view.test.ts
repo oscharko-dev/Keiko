@@ -167,7 +167,9 @@ describe("jira.draft result as the Chat outcome card reads it", () => {
   it.each([1, 59, 60, 61, 400])("lists all %s created keys with their links", (count) => {
     const view = viewOf(created(count));
     expect(keysOf(view)).toEqual(expectedKeys(count));
-    expect(view.items.every((item) => item.href === `${BASE_URL}/browse/${item.key}`)).toBe(true);
+    expect(view.items.every((item) => item.href === `${BASE_URL}/browse/${item.key ?? ""}`)).toBe(
+      true,
+    );
     expect(view.visibleItems).toBe(60);
     expect(view.unlistedItemCount).toBe(0);
   });

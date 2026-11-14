@@ -5086,6 +5086,12 @@
               "required": false
             },
             {
+              "name": "claimNotice",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "draftReceiptCount",
               "type": "integer",
               "dataClass": "count",

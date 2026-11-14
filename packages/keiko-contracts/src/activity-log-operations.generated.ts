@@ -4011,6 +4011,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "read-consent",
           "write-approval",
           "human-input",
+          "claim-notice",
         ],
       },
       batchPhase: {
@@ -4033,6 +4034,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      claimNotice: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["no-jira-create", "tool-call-not-executed"],
       },
       exchangeCount: {
         type: "integer",

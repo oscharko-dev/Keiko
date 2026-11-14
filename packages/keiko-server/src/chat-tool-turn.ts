@@ -77,7 +77,6 @@ import { fitToolContinuation, fitToolRoundOutput } from "./chat-tool-continuatio
 import {
   announcedCreateCorrection,
   announcedCreateCount,
-  claimNotice,
   correctionRoundOffersTools,
   toolCallAsTextCorrection,
   toolCallsWrittenAsText,
@@ -111,6 +110,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   isChatToolBatchProgress,
+  type ChatClaimNotice,
   type ChatToolBatchProgress,
   type ChatToolExchange,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -415,6 +415,7 @@ function reportTurnFailure(
   operation:
     | "chat.tool-turn.batch-progress"
     | "chat.tool-turn.selection-release"
+    | "chat.tool-turn.claim-notice"
     | "chat.tool-turn.finalize" = "chat.tool-turn.batch-progress",
 ): void {
   const { deps, correlationId } = options;
@@ -508,7 +509,6 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private correctionWithoutTools = false;
   /** The claimed actions a correction round was asked about, and who to tell in which language. */
   private claimedKinds: readonly ("announced-create" | "tool-call-as-text")[] = [];
-  private claimedPersonText = "";
   /** The turn corrected a rejected call and no round has dispatched a tool call since. */
   private correctedSinceProgress = false;
   /** The first admission of a correction round follows an attempt the turn could not use. */
@@ -1307,17 +1307,33 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
 
   /**
    * After a claimed-action correction, a published answer that still claims it (or is the original
-   * one because the correction round failed) carries one fixed Keiko sentence; nowhere else.
+   * one because the correction round failed) is stored with a closed marker the Chat words; the
+   * answer text itself stays as the model wrote it. An announced create outranks a tool call
+   * written as text, since the person acts on whether an issue exists.
    */
   private withClaimNotice(answer: NormalizedResponse, original: boolean): NormalizedResponse {
     const still = original
       ? this.claimedKinds
       : this.claimedKinds.filter((kind) => this.stillClaims(kind, answer.content));
     if (still.length === 0) return answer;
-    return {
-      ...answer,
-      content: `${answer.content}\n\n${claimNotice(still, this.claimedPersonText)}`,
-    };
+    this.storeClaimNotice(
+      still.includes("announced-create") ? "no-jira-create" : "tool-call-not-executed",
+    );
+    return answer;
+  }
+
+  private storeClaimNotice(notice: ChatClaimNotice): void {
+    const { deps, message, correlationId } = this.options;
+    try {
+      deps.store.updateChatToolTranscript(
+        message.id,
+        { kind: "claim-notice", notice },
+        correlationId,
+      );
+    } catch (error: unknown) {
+      // The answer is still published unchanged; the missing note is a diagnostic, not a failure.
+      reportTurnFailure(this.options, error, "chat.tool-turn.claim-notice");
+    }
   }
 
   /**
@@ -1855,7 +1871,6 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         ? [log.correctionKind]
         : [],
     );
-    this.claimedPersonText = lastPersonText(request.messages);
     for (const log of correction.logs)
       recordChatToolTurnCorrected(processServerLogSink(), {
         correlationId: this.options.correlationId,
@@ -1955,12 +1970,6 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.correctionWithoutTools = false;
     this.correctionAdmissionPending = false;
   }
-}
-
-/** The text of the person's last message, for the language of a fixed notice. */
-function lastPersonText(messages: readonly GatewayMessage[]): string {
-  const last = [...messages].reverse().find((message) => message.role === "user");
-  return typeof last?.content === "string" ? last.content : "";
 }
 
 /**

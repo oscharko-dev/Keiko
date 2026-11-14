@@ -6,12 +6,14 @@ import {
 import { jiraMutationToolId } from "../atlassian/jiraMutationToolId.js";
 import type { DatabaseSync } from "node:sqlite";
 import type {
+  ChatClaimNotice,
   ChatToolBatchProgress,
   ChatToolExchange,
   ChatToolTranscript,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   CHAT_TOOL_BATCH_TOOL_NAME,
+  isChatClaimNotice,
   isChatToolBatchProgress,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -86,6 +88,7 @@ export type ChatToolTranscriptUpdate =
       readonly batchProgress: ChatToolBatchProgress;
     }
   | { readonly kind: "read-consent"; readonly grant: ChatToolReadGrantView }
+  | { readonly kind: "claim-notice"; readonly notice: ChatClaimNotice }
   | {
       readonly kind: "write-approval";
       readonly callId: string;
@@ -174,6 +177,7 @@ const UPDATE = defineActivityLogOperation({
         "read-consent",
         "write-approval",
         "human-input",
+        "claim-notice",
       ],
     },
     batchPhase: {
@@ -185,6 +189,12 @@ const UPDATE = defineActivityLogOperation({
     batchDraftedCount: { type: "integer", dataClass: "count", required: false },
     batchPlannedCount: { type: "integer", dataClass: "count", required: false },
     batchFailedCount: { type: "integer", dataClass: "count", required: false },
+    claimNotice: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["no-jira-create", "tool-call-not-executed"],
+    },
     exchangeCount: { type: "integer", dataClass: "count", required: true },
     draftReceiptCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -456,8 +466,12 @@ function validTranscript(
   value: unknown,
   identity: TranscriptIdentity | undefined,
 ): value is StoredTranscript {
-  if (!object(value) || !exact(value, ["schemaVersion", "exchanges", "readGrant", "readGrants"]))
+  if (
+    !object(value) ||
+    !exact(value, ["schemaVersion", "exchanges", "readGrant", "readGrants", "claimNotice"])
+  )
     return false;
+  if (value.claimNotice !== undefined && !isChatClaimNotice(value.claimNotice)) return false;
   if (
     value.schemaVersion !== 1 ||
     !Array.isArray(value.exchanges) ||
@@ -716,6 +730,7 @@ function applyUpdate(
   if (update.kind === "write-prepared") return applyPrepared(current, update);
   if (update.kind === "progress") return applyProgress(current, update);
   if (update.kind === "write-approval") return applyApproval(current, update, chatId, messageId);
+  if (update.kind === "claim-notice") return { ...current, claimNotice: update.notice };
   if (update.kind !== "read-consent") return applyExchange(current, update);
   return applyReadConsent(current, update, chatId);
 }
@@ -974,6 +989,13 @@ function redactStarted(
     throw invalidRequest("Invalid pending native tool identity.");
   return { ...update, call: redactCall(update, redact) };
 }
+function redactClaimNotice(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "claim-notice" }>,
+): ChatToolTranscriptUpdate {
+  if (!isChatClaimNotice(update.notice)) throw invalidRequest("Invalid claim notice.");
+  // Copy only the closed marker; nothing else of the update survives.
+  return { kind: "claim-notice", notice: update.notice };
+}
 function redactHumanInput(
   update: Extract<ChatToolTranscriptUpdate, { kind: "human-input" }>,
 ): ChatToolTranscriptUpdate {
@@ -992,7 +1014,7 @@ function redactHumanInput(
 function redactStateUpdate(
   update: Exclude<
     ChatToolTranscriptUpdate,
-    { kind: "started" | "captured" | "settled" | "human-input" }
+    { kind: "started" | "captured" | "settled" | "human-input" | "claim-notice" }
   >,
 ): ChatToolTranscriptUpdate {
   if (update.kind === "write-prepared") {
@@ -1025,6 +1047,7 @@ function redactUpdate(
   if (update.kind === "captured") return redactCaptured(update, redact);
   if (update.kind === "settled") return redactSettlement(update, redact);
   if (update.kind === "human-input") return redactHumanInput(update);
+  if (update.kind === "claim-notice") return redactClaimNotice(update);
   return redactStateUpdate(update);
 }
 
@@ -1135,6 +1158,7 @@ export function updateChatToolTranscript(
         messageDigest: sha256Hex(id),
         phase: update.kind,
         exchangeCount: count,
+        ...(update.kind === "claim-notice" ? { claimNotice: update.notice } : {}),
         ...draftReceiptLogFields(update),
         ...progressLogFields(update),
         completeness: "complete",
