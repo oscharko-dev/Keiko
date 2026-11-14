@@ -27,6 +27,38 @@ function fixture() {
   };
 }
 
+describe("a gateway configuration that discovered its models", () => {
+  it("is used for the selected models only: no provider keeps its discovered origin", async () => {
+    const f = fixture();
+    const configPath = join(f.session.directory, "gateway.config.json");
+    const provider = (modelId) => ({
+      modelId,
+      baseUrl: "http://127.0.0.1:4000",
+      apiKey: "lab-test-key",
+      catalogOrigin: "discovered",
+      timeoutMs: 45000,
+    });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        providers: [provider("chat-model"), provider("embedding-model"), provider("other-chat")],
+      }),
+      { mode: 0o600 },
+    );
+    vi.stubEnv("KEIKO_JIRA_LAB_GATEWAY_CONFIG", configPath);
+    await configureModel(f.deps, "chat-model", f.session, f.path, {
+      embeddingModelId: "embedding-model",
+    });
+    const saved = JSON.parse(readFileSync(f.path, "utf8"));
+    // Only the two named models are configured; none of them lets the product discover the rest.
+    expect(saved.providers.map((entry) => entry.modelId)).toEqual([
+      "chat-model",
+      "embedding-model",
+    ]);
+    for (const entry of saved.providers) expect(entry.catalogOrigin).toBeUndefined();
+  });
+});
+
 describe("explicit live model qualification configuration", () => {
   it.each([undefined, { modelRetries: 1 }])(
     "preserves the default and bounded opt-in: %j",
