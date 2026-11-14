@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import {
@@ -577,7 +578,7 @@ describe("a seal prunes only what its own config owned and gave up (shared vault
       ["cred:kept", "cred:given-up"],
     );
     expect(outcome).toEqual({ removedCount: 1, foreignRetainedCount: 1 });
-    expect([...vault.list()].sort()).toEqual(["cred:beside", "cred:kept"]);
+    expect([...vault.list()].sort(compareStrings)).toEqual(["cred:beside", "cred:kept"]);
   });
 
   it("prunes nothing for a config with no previous version, even when the vault holds others", () => {

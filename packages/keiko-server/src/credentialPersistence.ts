@@ -15,6 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { LocalVaultKeychainAccess } from "@oscharko-dev/keiko-security/secret-vault";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
@@ -90,7 +91,7 @@ function neighbourSecretRefs(storagePath: string): ReadonlySet<string> {
   const names = readdirSync(dir).filter((name) => name.endsWith(".json") && name !== self);
   if (names.length > NEIGHBOUR_CONFIGS_MAX) throw new RangeError("too many neighbouring configs");
   return new Set(
-    names.sort().flatMap((name) => {
+    [...names].sort(compareStrings).flatMap((name) => {
       const path = join(dir, name);
       const info = statSync(path);
       if (!info.isFile()) return [];

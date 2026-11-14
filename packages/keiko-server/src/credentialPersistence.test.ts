@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import {
   migrateLocalConfigCredentials,
@@ -141,7 +142,7 @@ describe("sealing a config never deletes another config's credentials", () => {
     );
   }
   const stored = (path: string): readonly string[] =>
-    [...openProviderCredentialVault({ configPath: path, env }).list()].sort();
+    [...openProviderCredentialVault({ configPath: path, env }).list()].sort(compareStrings);
 
   it("keeps the other config's credentials when one config is sealed (the defect)", () => {
     const dir = folder();
