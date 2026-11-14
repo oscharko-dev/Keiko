@@ -1293,9 +1293,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       return undefined;
     const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
     if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
-    // The correction round failed: the original answer is published, and a false claim in it is
-    // followed by one fixed sentence that says so.
-    this.endedAnswer = this.knowledgeAnswer(this.withClaimNotice(answer, true));
+    // The correction round failed: the original answer is published unchanged, and a false claim
+    // in it is marked in the stored turn.
+    this.recordClaimNotice(answer, true);
+    this.endedAnswer = this.knowledgeAnswer(answer);
     return this.endedAnswer;
   }
 
@@ -1311,15 +1312,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
    * answer text itself stays as the model wrote it. An announced create outranks a tool call
    * written as text, since the person acts on whether an issue exists.
    */
-  private withClaimNotice(answer: NormalizedResponse, original: boolean): NormalizedResponse {
+  private recordClaimNotice(answer: NormalizedResponse, original: boolean): void {
     const still = original
       ? this.claimedKinds
       : this.claimedKinds.filter((kind) => this.stillClaims(kind, answer.content));
-    if (still.length === 0) return answer;
+    if (still.length === 0) return;
     this.storeClaimNotice(
       still.includes("announced-create") ? "no-jira-create" : "tool-call-not-executed",
     );
-    return answer;
   }
 
   private storeClaimNotice(notice: ChatClaimNotice): void {
@@ -1721,9 +1721,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
           completionTokens: this.completionTokens,
         },
       };
-      return this.correctAnswer(answer, request)
-        ? undefined
-        : this.knowledgeAnswer(this.withClaimNotice(answer, false));
+      if (this.correctAnswer(answer, request)) return undefined;
+      this.recordClaimNotice(answer, false);
+      return this.knowledgeAnswer(answer);
     }
     requireDispatch(
       response.toolCalls.length <= this.limits.maxToolCalls - this.counters.toolCalls,
