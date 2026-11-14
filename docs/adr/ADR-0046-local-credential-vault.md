@@ -61,17 +61,29 @@ Gateway setup seals each persistable provider apiKey into the credential vault (
 
 *A seal prunes only what its own config owned (2026-11-14).* The vault lives next to the config
 file's directory, so every config file in one directory shares one vault. After the config rewrite
-succeeds, a seal removes only the references the previous version of THIS config file named and the
-new version no longer names; a reference this config never named (a second config beside it, a
-credential stored by hand) is not its to delete and stays. The first seal of a config with no
-readable previous version prunes nothing. Both writers, the startup migration of a plaintext config
-and the Gateway Setup save, go through `persistSealedGatewayConfig`, the one owner of the rule. The
-vault's own `security.vault.entries-deleted` line reports counts only: `count` of entries removed
-and `foreignRetainedCount` of entries left as not this config's. A vault entry that no config names
-any longer (a seal that crashed between the vault write and the config rewrite) therefore stays
-until its owner config names it again; it is never removed on behalf of another config. Earlier
-text, which removed every entry the sealed config did not name, deleted another config's stored
-provider credentials without asking.
+succeeds, a seal removes only the references the previous version of THIS config file named, the
+new version no longer names, and no other config file in the same directory names. A reference this
+config never named (a second config beside it, a credential stored by hand) is not its to delete
+and stays. References are `cred:<modelId>`, so two configs in one folder that name the same model
+share ONE entry, and the last save of either overwrites its key; the entry is kept for as long as
+either names it. The first seal of a config with no readable previous version prunes nothing. A
+seal that cannot read the previous file or a neighbouring `.json` file in the folder (unreadable,
+malformed, over 1 MiB, more than 64 of them) cannot prove what is its own and prunes nothing; it
+records the existing body-free diagnostic `credential.previous-config-unreadable` once (closed error
+class, no path). Both writers, the startup migration of a plaintext config and the Gateway Setup
+save, go through `persistSealedGatewayConfig`, the one owner of the rule. The vault's own
+`security.vault.entries-deleted` line reports counts only: `count` of entries removed and
+`foreignRetainedCount` of entries left as not this config's alone. Earlier text, which removed every
+entry the sealed config did not name, deleted another config's stored provider credentials without
+asking.
+
+*Limit: an entry can outlive its config.* An entry that no readable config names any more (a seal
+that crashed between the vault write and the config rewrite, a config deleted by hand, a previous or
+neighbouring config that could not be read) is not removed on anyone's behalf: it stays until its
+owner names it again. It remains encrypted at rest with the vault key, but it is not removed. A
+person who wants a revoked or retired key gone must remove the provider through Gateway Setup while
+its config is readable (the seal then removes the reference that config gave up), and revoke the key
+at the provider as well.
 
 ### D4 — Crash-aware, idempotent one-time migration
 

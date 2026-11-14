@@ -845,7 +845,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "coding-sidecar-gateway-tool-contract-rejected",
   "coding-sidecar-gateway-tool-adoption-gap",
   "Local credential migration failed; plaintext config remains in place.",
-  "The previous gateway config could not be read; no stored credential is pruned.",
+  "The gateway configs in this folder could not all be read; no stored credential is pruned.",
   "Editor local-history capture failed.",
   "Verification execution failed unexpectedly.",
   "A verification event subscriber failed.",

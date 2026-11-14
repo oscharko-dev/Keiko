@@ -109,7 +109,12 @@ describe("sealing a config never deletes another config's credentials", () => {
     dirs.push(dir);
     return dir;
   }
-  function seal(path: string, models: readonly string[], sink?: SecurityLogEvent[]): void {
+  function seal(
+    path: string,
+    models: readonly string[],
+    sink?: SecurityLogEvent[],
+    diagnostics?: ServerDiagnosticSink,
+  ): void {
     persistSealedGatewayConfig(
       {
         providers: models.map((modelId) => ({
@@ -131,6 +136,7 @@ describe("sealing a config never deletes another config's credentials", () => {
                 },
               },
             }),
+        ...(diagnostics === undefined ? {} : { diagnostics }),
       },
     );
   }
@@ -180,15 +186,61 @@ describe("sealing a config never deletes another config's credentials", () => {
     expect(deleted[0]).toMatchObject({ extra: { count: 0, foreignRetainedCount: 1 } });
   });
 
-  it("prunes nothing when the previous config cannot be read", () => {
+  it("prunes nothing when the previous config cannot be read, and says so once without a path", () => {
     const dir = folder();
     const first = join(dir, "keiko.config.json");
     const second = join(dir, "keiko.local.config.json");
     seal(first, ["gemma"]);
     writeFileSync(second, "{ not valid json", "utf8");
-    seal(second, ["gpt"]);
+    const { sink, records } = recordingDiagnosticSink();
+    seal(second, ["gpt"], undefined, sink);
     expect(stored(first)).toEqual(["cred:gemma", "cred:gpt"]);
     expect(readFileSync(second, "utf8")).toContain("cred:gpt");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      operation: "credential.previous-config-unreadable",
+      source: "credentialPersistence.prunableSecretRefs",
+      errorClass: "SyntaxError",
+      message:
+        "The gateway configs in this folder could not all be read; no stored credential is pruned.",
+    });
+    expect(JSON.stringify(records)).not.toContain(dir);
+    expect(JSON.stringify(records)).not.toContain("keiko.local.config");
+  });
+
+  // Two configs in one folder that name the same model share ONE vault entry (`cred:<modelId>`).
+  it("keeps an entry another config in the folder still names, and prunes it once none does", () => {
+    const dir = folder();
+    const first = join(dir, "keiko.config.json");
+    const second = join(dir, "keiko.local.config.json");
+    seal(first, ["shared", "only-first"]);
+    seal(second, ["shared"]);
+    const events: SecurityLogEvent[] = [];
+    // The second config drops the shared model: the first still names it, so it stays.
+    seal(second, ["other"], events);
+    expect(stored(first)).toEqual(["cred:only-first", "cred:other", "cred:shared"]);
+    const deleted = events.filter((event) => event.op === "security.vault.entries-deleted");
+    expect(deleted[0]).toMatchObject({ extra: { count: 0 } });
+    // Once the first config gives it up too, nothing names it and it is pruned.
+    seal(first, ["only-first"]);
+    expect(stored(first)).toEqual(["cred:only-first", "cred:other"]);
+  });
+
+  it("prunes nothing when a neighbouring config cannot be read, and says so once without a path", () => {
+    const dir = folder();
+    const first = join(dir, "keiko.config.json");
+    seal(first, ["gemma", "qwen"]);
+    writeFileSync(join(dir, "notes.json"), "{ not valid json", "utf8");
+    const { sink, records } = recordingDiagnosticSink();
+    seal(first, ["gemma"], undefined, sink);
+    expect(stored(first)).toEqual(["cred:gemma", "cred:qwen"]);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      operation: "credential.previous-config-unreadable",
+      errorClass: "SyntaxError",
+    });
+    expect(JSON.stringify(records)).not.toContain("notes.json");
+    expect(JSON.stringify(records)).not.toContain(dir);
   });
 
   it("the startup migration leaves the credentials of the config beside it", () => {
