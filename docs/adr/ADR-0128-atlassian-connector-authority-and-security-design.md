@@ -1594,7 +1594,8 @@ German), under the answer and visibly apart from it, and a copy of the answer ca
 marker describes the turn's final answer: every final answer of the turn states it afresh, setting
 it while the answer still claims, judged against the text the first detection saw, and clearing it
 otherwise, so a marker an earlier leg stored never outlives the answer it described. A regenerated
-answer shows none, because regeneration runs no tool turn. Read-aloud does not carry the note yet.
+answer shows none, because regeneration runs no tool turn. The voice dialogue reads the same note after
+the answer; its speech preparation counts are unchanged.
 
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically
