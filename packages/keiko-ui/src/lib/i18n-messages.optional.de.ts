@@ -984,7 +984,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.live.saveToken": "Token speichern",
   "atlassianConnectors.live.saving": "Änderungen werden gespeichert…",
   "atlassianConnectors.live.rotateHint":
-    "Der Pod und seine Chat-Verbindungen bleiben erhalten. Der Tokenwechsel stoppt den aktuellen Zugriff und ausstehende Aktionen; prüfe die Verbindung danach erneut.",
+    "Der Pod und seine Chat-Verbindungen bleiben erhalten. Der Tokenwechsel stoppt den aktuellen Zugriff und ausstehende Aktionen; Keiko prüft das neue Token sofort.",
   "atlassianConnectors.live.operationFailed":
     "Die Aktion konnte nicht bestätigt werden. Aktualisiere den Pod-Status, bevor du weitere Änderungen vornimmst.",
   "atlassianConnectors.live.refresh": "Status aktualisieren",
@@ -995,6 +995,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Aktualisiere den Status, bevor du diesen Pod verwendest.",
   "atlassianConnectors.live.verifyRequired":
     "Prüfe die Verbindung, bevor du diesen Pod verwendest.",
+  "atlassianConnectors.live.tlsFailed.wayOut":
+    "Bis zur erfolgreichen Prüfung bleibt der Pod gespeichert, ist aber nicht nutzbar; du kannst ihn auch entfernen.",
   "atlassianConnectors.live.remove": "Pod entfernen",
   "atlassianConnectors.live.keep": "Pod behalten",
   "atlassianConnectors.live.removeConfirm":

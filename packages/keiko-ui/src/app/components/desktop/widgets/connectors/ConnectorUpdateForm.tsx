@@ -79,10 +79,14 @@ function UpdateButtons({
   const t = useTranslate();
   const saveLabel =
     mode === "rename" ? "atlassianConnectors.live.saveName" : "atlassianConnectors.live.saveToken";
+  // One state text at a time: a replaced token is stored and verified by the same request, and the
+  // card's chip already says so, so the button names that state instead of a second one.
+  const busyLabel =
+    mode === "rename" ? "atlassianConnectors.live.saving" : "atlassianConnectors.verify.verifying";
   return (
     <div className="acx-actions">
       <button type="submit" className="lk-btn lk-btn-primary" disabled={busy || unconfirmed}>
-        {t(busy ? "atlassianConnectors.live.saving" : saveLabel)}
+        {t(busy ? busyLabel : saveLabel)}
       </button>
       {unconfirmed ? (
         <button type="button" className="lk-btn" disabled={busy} onClick={refresh}>

@@ -949,7 +949,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["verify", "sync", "request"],
+        values: ["verify", "verify-after-replace", "sync", "request"],
       },
       outcome: {
         type: "string",
