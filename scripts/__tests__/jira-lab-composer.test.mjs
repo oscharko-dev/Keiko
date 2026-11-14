@@ -30,6 +30,7 @@ import {
   gradeRepeatReference,
   keysMissingInAnswer,
   keysMissingInCards,
+  gradeKeysAfterReread,
   stepProof,
 } from "../testing/jira-chat-lab/requirements/composer-graders.mjs";
 import { COMPOSER_SCENARIOS } from "../testing/jira-chat-lab/requirements/composer-catalog.mjs";
@@ -374,6 +375,41 @@ describe("obligation a) creation, one and several", () => {
     expect(partial.listed.detail).toContain("1 created keys are in no stored write result");
     expect(several(three, "REQ-5 REQ-6 REQ-7", []).listed.status).toBe("unverified");
     expect(several([], "", []).listed.status).toBe("unverified");
+  });
+
+  it("hard (#4355 AC1 a): the stored conversation read again names exactly the created keys", () => {
+    const stored = (exchanges) => [
+      { id: "u", role: "user", toolTranscript: { exchanges } },
+      { id: "a", role: "assistant" },
+    ];
+    const created = (keys) => ({
+      ...cardOf(keys),
+      result: {
+        ...cardOf(keys).result,
+        data: { items: keys.map((issueKey) => ({ issueKey, state: "created" })) },
+      },
+    });
+    const made = turnOf(three).created;
+    expect(
+      gradeKeysAfterReread(made, stored([created(["REQ-5", "REQ-6", "REQ-7"])])),
+    ).toMatchObject({
+      status: "green",
+    });
+    // A key Jira holds but the stored card lost, and a key the stored card names that Jira does not hold.
+    const lost = gradeKeysAfterReread(made, stored([created(["REQ-5", "REQ-6"])]));
+    expect(lost).toMatchObject({ status: "red" });
+    expect(lost.detail).toContain("lacks 1 created keys");
+    const invented = gradeKeysAfterReread(
+      made,
+      stored([created(["REQ-5", "REQ-6", "REQ-7", "REQ-99"])]),
+    );
+    expect(invented).toMatchObject({ status: "red" });
+    expect(invented.detail).toContain("names 1 created keys Jira does not hold");
+    // Nothing stored to derive from, or nothing created natively, proves nothing.
+    expect(gradeKeysAfterReread(made, stored([])).status).toBe("unverified");
+    expect(gradeKeysAfterReread(made, []).status).toBe("unverified");
+    expect(gradeKeysAfterReread(made, undefined).status).toBe("unverified");
+    expect(gradeKeysAfterReread([], stored([created(["REQ-5"])])).status).toBe("unverified");
   });
 
   it("soft: an answer that misses a key is a model observation, never red, and never decides the hard half", () => {
@@ -803,6 +839,8 @@ describe("obligation c) no template: hard from Jira and the stored refusal, soft
       "Sobald die Vorlage angelegt ist, kann ich denselben Sub-task erstellen.",
       "Laut Jira-Hinweis muss diese Vorlage hier angelegt werden: REQ / Sub-task.",
       "Danach kann derselbe Vorgang angelegt werden; die Vorlage fehlt.",
+      // gpt-5.4, en_US run of 2026-11-14 (C03 Sub-task, Full access): the instruction names the template.
+      "Laut Rückmeldung soll diese hier angelegt werden: Skills → Jira template → Vorlage vorschlagen.",
       "Keine Vorlage für REQ / Bug. Die Eltern REQ-491 und REQ-492 habe ich gelesen, nichts wurde geändert.",
     ])
       expect(gradeMentionsTemplate(answer).status, answer).toBe("green");
@@ -1477,6 +1515,11 @@ function lane({ act, library = [], selection } = {}) {
       calls.reads += 1;
       return ["m1", "m2"];
     },
+    // The stored messages themselves: the last turn's tool transcript, as the product stores it.
+    readStoredMessages: async () => [
+      { id: "m1", role: "user", toolTranscript: { exchanges: calls.lastExchanges ?? [] } },
+      { id: "m2", role: "assistant" },
+    ],
     freshChat: async (mode) => {
       calls.fresh.push(mode);
       return { id: `chat-${calls.fresh.length}`, mode };
@@ -1487,13 +1530,15 @@ function lane({ act, library = [], selection } = {}) {
       const observed = await options?.observeBeforeApproval?.();
       const played = (await act({ chat, content, options, ctx, add, store })) ?? {};
       const writes = played.writes ?? 0;
+      const toolExchanges = played.toolExchanges ?? [];
+      calls.lastExchanges = toolExchanges;
       return {
         answer: played.answer ?? "",
-        toolExchanges: played.toolExchanges ?? [],
+        toolExchanges,
         failure: played.failure,
         messageIds: played.messageIds ?? ["m1", "m2"],
         durationMs: 1000,
-        toolCalls: (played.toolExchanges ?? []).length,
+        toolCalls: toolExchanges.length,
         approvals: {
           writes,
           records:
@@ -1652,6 +1697,7 @@ describe("C01 creates every type, also several at once", () => {
         "create-conformant-bug",
         "multi-create-all-created",
         "multi-create-keys-listed",
+        "multi-create-keys-after-reread",
         "multi-create-answer-keys",
         "unrepairable-refused-natively",
         "unrepairable-refused-by-gate",
@@ -1718,6 +1764,29 @@ describe("C02 refuses violations in every mode", () => {
     expect(check.status).toBe("green");
     expect(ctx.calls.fresh).toHaveLength(COMPOSER_TYPES.length * COMPOSER_MODES.length);
     expect(check.covers).toHaveLength(15);
+  });
+
+  it("reads a refusal by the type name the German token sees (Aufgabe), not the English one", async () => {
+    // #4369: the template is authored as REQ/Aufgabe in a German profile and the product's violation
+    // reports exactly that label; comparing it with REQ/Task read a correct refusal as "not exercised".
+    const ctx = lane({
+      selection: { types: ["task"], modes: ["ask"] },
+      act: ({ add }) => ({ toolExchanges: [refusal("Aufgabe"), success(add("Task").key)] }),
+    });
+    ctx.language = {
+      locale: "de_DE",
+      issueTypes: [
+        { id: "10000", english: "Epic", localized: "Epic" },
+        { id: "10001", english: "Story", localized: "Story" },
+        { id: "10002", english: "Task", localized: "Aufgabe" },
+        { id: "10003", english: "Sub-task", localized: "Sub-Task" },
+        { id: "10004", english: "Bug", localized: "Bug" },
+      ],
+      statuses: [],
+    };
+    const check = await COMPOSER_JOURNEYS.C02(ctx, undefined);
+    expect(check.status).toBe("green");
+    expect(check.detail).toContain("1 refusals (section-missing)");
   });
 
   it("takes one type or one mode when selected", async () => {
@@ -2011,7 +2080,7 @@ describe("C05 repeat after a re-read of the stored conversation and in the chat,
     again: ({ known }) => ({ answer: `Den Vorgang gibt es schon: ${known.key}.` }),
   };
 
-  it("is green when the same order again, after the stored conversation was read again and once more, creates no duplicate", async () => {
+  it("is green when the repetition, after the stored conversation was read again and once more, creates no duplicate", async () => {
     const ctx = conversation(refer);
     const check = await COMPOSER_JOURNEYS.C05(ctx, undefined);
     expect(check.status).toBe("green");
@@ -2028,11 +2097,15 @@ describe("C05 repeat after a re-read of the stored conversation and in the chat,
     // The turn observed the conversation when it settled; the stored conversation is read once more.
     expect(ctx.calls.reads).toBe(1);
     expect(ctx.calls.turns[0].content).toContain("Aufgabe");
-    // Turns 1 and 2 are the same order; turn 3 is a follow-up that orders nothing new.
+    // Only turn 1 is an order; turns 2 and 3 ask whether it arrived and order nothing new.
     const [first, again, followUp] = ctx.calls.turns.map((turn) => turn.content);
-    expect(again).toBe(first);
-    expect(followUp).toContain("Kam das an?");
-    expect(followUp).not.toContain("Lege im Jira-Projekt");
+    expect(first).toContain("Lege im Jira-Projekt");
+    for (const asked of [again, followUp]) {
+      expect(asked).not.toContain("Lege im Jira-Projekt");
+      expect(asked).toContain("Composer Wiederholung");
+    }
+    expect(again).toContain("Kam das an?");
+    expect(followUp).not.toBe(again);
   });
 
   it("a leftover issue with the same title never changes the verdict of C05", async () => {
@@ -2060,9 +2133,9 @@ describe("C05 repeat after a re-read of the stored conversation and in the chat,
     const check = await COMPOSER_JOURNEYS.C05(idle, undefined);
     expect(check.covers).toEqual(["stored-conversation-matches-turn"]);
     expect(check.detail).toContain(
-      "same order again after the stored conversation was read again: unverified",
+      "repetition after the stored conversation was read again: unverified",
     );
-    expect(check.detail).toContain("same order again in the same chat: unverified");
+    expect(check.detail).toContain("repetition in the same chat: unverified");
   });
 
   it("a leftover Epic with the title never makes C01 green for a product that created nothing", async () => {
@@ -2131,7 +2204,7 @@ describe("C05 repeat after a re-read of the stored conversation and in the chat,
     };
     const check = await COMPOSER_JOURNEYS.C05(ctx, undefined);
     expect(check.detail).toContain(
-      "same order again after the stored conversation was read again: unverified",
+      "repetition after the stored conversation was read again: unverified",
     );
     expect(check.covers).not.toContain("repeat-after-reread-no-duplicate");
   });

@@ -34,6 +34,7 @@ import {
   gradeWatcher,
   composerRelation,
   ofType,
+  gradeKeysAfterReread,
 } from "./composer-graders.mjs";
 import {
   SUBTASK_PARENT_TYPES,
@@ -185,7 +186,7 @@ async function composerTurn(
     issues: await ctx.search(`project = ${PROJECT}`, composerFields(fixture.epicLink)),
     exchanges: turn.toolExchanges,
   });
-  return { turn, issues };
+  return { turn, issues, chat };
 }
 
 const part = (label, covers, grade) => ({ label, covers, ...grade });
@@ -257,7 +258,7 @@ const SEVERAL_TITLES = ["Composer Teil A", "Composer Teil B", "Composer Teil C"]
 
 /** One request, three Tasks under the named Epic: all created natively, every key listed. */
 async function createSeveralTasks(ctx, fixture) {
-  const { turn, issues } = await composerTurn(ctx, fixture, {
+  const { turn, issues, chat } = await composerTurn(ctx, fixture, {
     prompt: `Lege im Jira-Projekt REQ drei Aufgaben (Vorgangstyp Task) mit den Titeln ${SEVERAL_TITLES.map((title) => `„${title}“`).join(", ")} im Epic ${fixture.epic} an. ${contentRequest("Task", "jede")} Melde alle Vorgangsschlüssel.`,
   });
   const grade = gradeMultiCreate({
@@ -278,6 +279,14 @@ async function createSeveralTasks(ctx, fixture) {
     {
       turn: NO_TURN,
       part: part("several Tasks: keys in the result", ["multi-create-keys-listed"], grade.listed),
+    },
+    {
+      turn: NO_TURN,
+      part: part(
+        "several Tasks: keys after the stored conversation was read again",
+        ["multi-create-keys-after-reread"],
+        gradeKeysAfterReread(ofType(issues, "Task").created, await ctx.readStoredMessages(chat)),
+      ),
     },
     {
       turn: NO_TURN,
@@ -303,7 +312,9 @@ async function refuseViolations(ctx) {
           type,
           exchanges: turn.toolExchanges,
           created: issues.created,
-          template: `${PROJECT}/${type}`,
+          // The template is authored with the type as the caller's token names it ("Aufgabe" in a German profile),
+          // and the product's violation reports exactly that label.
+          template: `${PROJECT}/${fixture.label(type)}`,
           conforms: composerConformity(type, fixture),
         });
         return {
@@ -486,7 +497,18 @@ async function editRules(ctx) {
   );
 }
 
-/** C05 (one conversation): create, read the stored conversation again, the same order again, and a follow-up "did that arrive?" straight away. */
+/**
+ * The two repetitions of C05 are WITHOUT a new order: the person asks whether the issue arrived. The
+ * same wording again would be a second order as far as the text shows (gpt-5.4 answered the identical
+ * text once with the existing key and once with a new issue, in English and in German), so a
+ * duplicate after a question is unambiguous.
+ */
+const repetitionQuestions = (title) => [
+  `Kam das an? Ist der Vorgang „${title}“ angelegt? Nenne mir den Vorgangsschlüssel.`,
+  `Ich bin mir nicht sicher: Gibt es den Vorgang „${title}“ jetzt wirklich in Jira? Nenne mir bitte seinen Schlüssel.`,
+];
+
+/** C05 (one conversation): create, read the stored conversation again, and two questions whether it arrived (the second straight away). */
 async function rereadAndRepeat(ctx) {
   const fixture = await composerFixture(ctx);
   await prepareTemplates(ctx, { types: ["Task"] });
@@ -503,13 +525,10 @@ async function rereadAndRepeat(ctx) {
     // when read again afterwards (the lab has no browser and performs no page reload).
     const observed = one.turn.messageIds;
     const stored = await ctx.readStoredConversation(chat);
-    const two = await composerTurn(ctx, fixture, { prompt, chat });
+    const [ask, askAgain] = repetitionQuestions(title);
+    const two = await composerTurn(ctx, fixture, { prompt: ask, chat });
     const afterTwo = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
-    // The third turn is a repetition WITHOUT a new order: the person asks whether it arrived. The same
-    // wording again would be a second order as far as the text shows (gpt-5.4 answered the identical
-    // text once with the existing key and once with a new issue), so a duplicate here is unambiguous.
-    const followUp = `Kam das an? Ist der Vorgang „${title}“ angelegt? Nenne mir den Vorgangsschlüssel.`;
-    const three = await composerTurn(ctx, fixture, { prompt: followUp, chat });
+    const three = await composerTurn(ctx, fixture, { prompt: askAgain, chat });
     const afterThree = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
     const graded = (run, listed) => ({
       title,
@@ -544,15 +563,15 @@ async function rereadAndRepeat(ctx) {
   });
 }
 
-/** The repeated order's two parts: hard (nothing created, the first issue stands), soft (reply names it). */
+/** The repetition's two parts: hard (nothing created, the first issue stands), soft (reply names it). */
 function repeatParts(label, id, grading) {
   return [
     {
-      part: part(`same order again ${label}`, [`${id}-no-duplicate`], gradeRepeat(grading)),
+      part: part(`repetition ${label}`, [`${id}-no-duplicate`], gradeRepeat(grading)),
     },
     {
       part: part(
-        `same order again ${label}: the reply refers to the first issue`,
+        `repetition ${label}: the reply refers to the first issue`,
         [`${id}-reply-refers`],
         gradeRepeatReference(grading),
       ),

@@ -19,6 +19,7 @@ export const COMPOSER_SCENARIOS = Object.freeze([
       ...slugs.map((slug) => `create-conformant-${slug}`),
       "multi-create-all-created",
       "multi-create-keys-listed",
+      "multi-create-keys-after-reread",
       "multi-create-answer-keys",
       "unrepairable-refused-natively",
       "unrepairable-refused-by-gate",
@@ -68,7 +69,7 @@ export const COMPOSER_SCENARIOS = Object.freeze([
     requirement: "composer",
     issue: 4354,
     title:
-      "The same order sent again in one conversation, after its stored messages were read again and straight away, creates no duplicate",
+      "A question whether the issue arrived, asked in the same conversation after its stored messages were read again and straight away, creates no duplicate",
     obligations: [
       "stored-conversation-matches-turn",
       "repeat-after-reread-no-duplicate",

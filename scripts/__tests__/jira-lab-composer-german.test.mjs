@@ -141,9 +141,11 @@ describe("what seed-language records", () => {
     puts.length = 0;
     await withActorLocale({}, "api", "de_DE", async () => undefined, jira);
     expect(puts).toEqual([]);
-    expect(() => withActorLocale({}, "api", "fr_FR", async () => undefined, jira)).rejects.toThrow(
+    await expect(withActorLocale({}, "api", "fr_FR", async () => undefined, jira)).rejects.toThrow(
       "Unsupported",
     );
+    // The refusal happens before anything is read or written.
+    expect(puts).toEqual([]);
   });
 
   it("refuses a locale Jira does not take", async () => {

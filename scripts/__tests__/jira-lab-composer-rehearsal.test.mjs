@@ -29,6 +29,7 @@ describe("the rehearsal's context replaces only the model", () => {
     // Chats that exist nowhere cannot be read back: no stored message, no read failure.
     expect(await ctx.storedAnswer({ id: "rehearsal-1" })).toBeUndefined();
     expect(await ctx.readStoredConversation({ id: "rehearsal-1" })).toHaveLength(2);
+    expect(await ctx.readStoredMessages({ id: "rehearsal-1" })).toEqual([]);
     expect(ctx.http).toBe("kept");
   });
 });

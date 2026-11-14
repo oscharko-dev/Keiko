@@ -634,6 +634,9 @@ export function journeyContext(live, session, truth) {
       (
         await api(ctx, "read-stored-conversation", messagesPath(ctx, chat), undefined, "GET")
       ).messages.map((message) => message.id),
+    // The stored messages themselves, read again: their tool transcripts are what a result card is rebuilt from.
+    readStoredMessages: async (chat) =>
+      (await api(ctx, "read-stored-messages", messagesPath(ctx, chat), undefined, "GET")).messages,
     ...nativeReads(session, () => ctx.readAs),
     http: (name, path, body, method = "POST") => api(ctx, name, path, body, method),
     deselectSkill: (chat) => deselectSkill(ctx, chat),
