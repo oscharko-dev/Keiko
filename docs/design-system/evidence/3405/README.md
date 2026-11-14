@@ -653,3 +653,12 @@ the Linux arm64 gates container (Node 24.18.0): all nine passed. Only the source
 `generatedAt` in the changed records were taken from this run; its fallback-font captures were
 discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or
 numerical ceiling changed. This remains updater fixture evidence.
+
+## Jira write path template rule — 2026-11-14 (#4354, #4351)
+
+The Jira Chat tools and the optional message catalogs gained the wording of the template rule on
+every Jira write, so the freshness gate rejected the changed digests. The complete original nine-case
+producer ran in the Linux arm64 gates container (Node 24.18.0): all nine passed. Only the source
+digests and `generatedAt` in the three records were taken from this run; its fallback-font captures
+were discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion
+or numerical ceiling changed. This remains updater fixture evidence.
