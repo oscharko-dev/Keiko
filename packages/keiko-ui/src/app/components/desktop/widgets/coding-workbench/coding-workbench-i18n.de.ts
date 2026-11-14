@@ -609,6 +609,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko konnte den Zustand des Windows-Runtime-Gateways nicht lesen. Führe im Terminal aus: keiko gateway-service status",
   "codingWorkbench.gatewayService.unqualified":
     "Dieser Keiko-Build kann unter Windows keine Coding-Läufe starten. Sie brauchen das Windows-Runtime-Gateway, das nur ein freigegebenes Keiko-Paket nutzen kann. Ein anderes Repository zu wählen, ändert daran nichts.",
+  "codingWorkbench.installVolume.notLocal":
+    "Coding-Läufe können nicht starten, weil Keiko in einem Netzwerkordner oder einem umgeleiteten Ordner installiert ist. Installiere Keiko auf einem lokalen Laufwerk dieses Computers.",
+  "codingWorkbench.installVolume.unverified":
+    "Keiko konnte seinen Installationsordner gerade nicht prüfen, weil Windows zu langsam geantwortet hat. Versuch es gleich noch einmal; wenn es so bleibt, starte Keiko neu.",
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":
@@ -1444,6 +1448,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Kontextfenster des gewählten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens; {code}). Keiko konnte 32.000 Tokens dafür nicht bestätigen. Wähle ein größeres Modell oder lass das Gateway max_input_tokens für dieses Modell angeben und starte dann erneut.",
   "codingWorkbench.alert.startRefusedModelVerificationPending":
     "Keiko prüft das Kontextfenster des gewählten Modells gerade beim Gateway ({code}). Bei einem ausgelasteten Gateway kann das einige Minuten dauern; starte erneut, sobald die Prüfung abgeschlossen ist.",
+  "codingWorkbench.alert.startEndedModelChanged":
+    "Das Modell hat gewechselt, während es geprüft wurde, deshalb wurde kein Lauf gestartet ({code}). Wähle das gewünschte Modell und starte erneut.",
   "codingWorkbench.alert.startRefusedWorkspaceLocation":
     "Unter Windows führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree aus, nicht in deinem eigenen Checkout oder Ordner ({code}). Wähle „Neuer lokaler Worktree“ als Arbeitsort eines Git-Repositorys und starte erneut.",
   "codingWorkbench.alert.startRefusedWorkspaceVolume":

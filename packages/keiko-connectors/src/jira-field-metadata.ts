@@ -520,17 +520,22 @@ function scalar(
   }
 }
 const ISSUE_KEY = /^[A-Za-z]\w{0,254}-[1-9]\d{0,17}$/u;
+/** What a model that sent something else is told: the accepted forms, nothing is widened. */
+const ISSUE_REFERENCE_FORMS =
+  'An issue reference is the issue KEY as a string (for example "PROJ-12") or an object with only "key" or only "id" (the numeric id as a string); a bare number or any other text is not accepted.';
 /** `{ key }`, `{ id }` or a bare issue key; the result is always one canonical reference. */
 function issueValue(value: unknown): ValueResult {
   if (typeof value === "string")
-    return ISSUE_KEY.test(value) ? { ok: true, value: { key: value } } : INVALID;
+    return ISSUE_KEY.test(value)
+      ? { ok: true, value: { key: value } }
+      : invalidWith(ISSUE_REFERENCE_FORMS);
   const raw = asRecord(value);
-  if (raw === undefined || Object.keys(raw).length !== 1) return INVALID;
+  if (raw === undefined || Object.keys(raw).length !== 1) return invalidWith(ISSUE_REFERENCE_FORMS);
   if (typeof raw.key === "string" && ISSUE_KEY.test(raw.key))
     return { ok: true, value: { key: raw.key } };
   return typeof raw.id === "string" && /^\d{1,32}$/u.test(raw.id)
     ? { ok: true, value: { id: raw.id } }
-    : INVALID;
+    : invalidWith(ISSUE_REFERENCE_FORMS);
 }
 function opaqueScalar(value: unknown): boolean | undefined {
   if (value === null || typeof value === "boolean") return true;
@@ -656,7 +661,7 @@ function unknownFieldMessage(named: readonly JiraFieldMetadata[], key: string): 
     return `Fields are keyed by field id, not display name: send "${key}" as ${only.id}.`;
   }
   if (isJiraFieldId(key)) return undefined;
-  return "A key in fields is not a field id. Use the field ids jira.create.fields returns.";
+  return "A key in fields is not a field id. Use the field ids jira.create-fields returns for a create, or jira.edit-fields for an edit.";
 }
 function unknownFieldFailure(
   byId: ReadonlyMap<string, JiraFieldMetadata>,

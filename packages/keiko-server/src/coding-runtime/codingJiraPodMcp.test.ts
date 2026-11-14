@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import type {
-  AtlassianCredentialMetadata,
-  AtlassianHttpBodyPort,
-  AtlassianHttpBodyRequest,
-  AtlassianHttpBodyResult,
+import {
+  jiraTemplateViolationGuidance,
+  type AtlassianCredentialMetadata,
+  type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyRequest,
+  type AtlassianHttpBodyResult,
 } from "@oscharko-dev/keiko-connectors";
 import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
@@ -988,8 +992,9 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
       { ruleId: "summary-too-short", subject: "at least 40 characters", template: "SYN/Story" },
     ]);
     expect(result.structuredContent?.guidance).toBe(
-      "Nothing was changed: this breaks the issue template of the project. " +
-        "Correct what violations name (ruleId, subject), then send it again.",
+      jiraTemplateViolationGuidance([
+        { ruleId: "summary-too-short", subject: "at least 40 characters", template: "SYN/Story" },
+      ]),
     );
     expect(writes(h)).toBe(0);
     expect(h.dispatched).not.toHaveBeenCalled();
@@ -1090,6 +1095,131 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
     const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     await client.call("jira.edit", { issueKey: "SYN-1", fields: { summary: "Too short" } });
     expect(writes(h)).toBe(1);
+  });
+
+  describe("the dry run before the human is asked (#4354 L4)", () => {
+    const LONG_SUMMARY =
+      "A summary that is long enough for the forty character minimum of the rule";
+
+    it("hands the model the refusal of a write that breaks a template and sends nothing", async () => {
+      const h = harness({ template: EDIT_TEMPLATE });
+      const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+        tool: "jira.edit",
+        arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+      });
+      expect(refusal).toContain("Nothing was changed");
+      expect(refusal).toContain("summary");
+      expect(writes(h)).toBe(0);
+    });
+
+    it("logs the refusal on the template admission line, pre-approval, under the run's correlation", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const h = harness({ template: EDIT_TEMPLATE });
+        await h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+        });
+        const events = sink.events.filter(({ op }) => op === "jira.template.admission");
+        expect(events).toHaveLength(1);
+        expect(events[0]?.correlationId).toBe(runAuthority(h).runId);
+        expect(events[0]?.extra).toMatchObject({
+          operation: "jira.edit",
+          stage: "pre-approval",
+          ruleIds: ["summary-too-short"],
+        });
+      } finally {
+        resetServerLogger();
+      }
+    });
+
+    it("logs a refusal by Keiko's own field validation, which has no violations, on the field admission line", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const h = harness();
+        const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { notAField: "x" } },
+        });
+        expect(refusal).toContain('"reason":"field-validation"');
+        const events = sink.events.filter(({ op }) => op === "jira.field.admission");
+        expect(events).toHaveLength(1);
+        expect(events[0]?.extra).toMatchObject({ stage: "pre-approval", refusedCount: 1 });
+        expect(sink.lines().join("\n")).not.toContain("notAField");
+      } finally {
+        resetServerLogger();
+      }
+    });
+
+    it("logs an attachment call the release switch refuses before any card, as one closed line", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const h = harness();
+        const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.attach",
+          arguments: { issueKey: "SYN-1", fileName: "private-report.txt" },
+        });
+        expect(refusal).toContain('"reason":"unavailable"');
+        const events = sink.events.filter(({ op }) => op.startsWith("jira.operation."));
+        expect(events).toHaveLength(1);
+        expect(events[0]?.extra).toMatchObject({
+          operation: "jira.attach",
+          stage: "release-scope",
+          outcome: "refused",
+          reason: "unavailable",
+        });
+        expect(sink.lines().join("\n")).not.toContain("private-report");
+        expect(writes(h)).toBe(0);
+      } finally {
+        resetServerLogger();
+      }
+    });
+
+    it("leaves a conforming write, and a write no template governs, to the human's card", async () => {
+      const governed = harness({ template: EDIT_TEMPLATE });
+      await expect(
+        governed.pods.preflightWrite(bound(governed), runAuthority(governed), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: LONG_SUMMARY } },
+        }),
+      ).resolves.toBeUndefined();
+      const free = harness();
+      await expect(
+        free.pods.preflightWrite(bound(free), runAuthority(free), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+        }),
+      ).resolves.toBeUndefined();
+      expect(writes(governed) + writes(free)).toBe(0);
+    });
+
+    it("refuses a creation no template governs, naming the way out, before any card", async () => {
+      const h = harness();
+      const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+        tool: "jira.create",
+        arguments: {
+          projectId: "10000",
+          issueTypeId: "3",
+          fields: { summary: LONG_SUMMARY, customfield_10000: "x" },
+        },
+      });
+      expect(refusal).toContain("template-missing");
+      expect(writes(h)).toBe(0);
+    });
+
+    it("does nothing for a name that is not a registered Jira write", async () => {
+      const h = harness({ template: EDIT_TEMPLATE });
+      await expect(
+        h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.search",
+          arguments: { jql: "project = SYN" },
+        }),
+      ).resolves.toBeUndefined();
+      expect(h.http).not.toHaveBeenCalled();
+    });
   });
 
   it("refuses requirement references a Coding run cannot trace, and still writes without them", async () => {

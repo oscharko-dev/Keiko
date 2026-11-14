@@ -29,6 +29,7 @@ import {
   remoteLinkBody,
   remoteLinkExpected,
   remoteLinkSelfMatches,
+  remoteLinkValueProblem,
   remoteLinkValue,
   sameRemoteLinks,
   sameRemoteLinkValue,
@@ -118,8 +119,9 @@ function input(operation: Operation, args: CatalogJsonObject): Input | undefined
 async function inspect(
   request: JiraMutationRequest,
   selected: Input,
+  preDispatch = false,
 ): Promise<LinkObservation<State>> {
-  const actor = await bindLinkActor(request, selected.actorKey);
+  const actor = await bindLinkActor(request, selected.actorKey, preDispatch);
   if (!actor.ok) return actor;
   const issue = await bindLinkIssue(request, selected.issue);
   if (!issue.ok) return issue;
@@ -265,7 +267,7 @@ async function admitRemoteLink(
   selected: Input,
   templates: JiraIssueTemplateSource | undefined,
 ): Promise<LinkObservation<State>> {
-  const prior = await inspect(request, selected);
+  const prior = await inspect(request, selected, true);
   if (!prior.ok) return prior;
   const refusal = beforeEffect(selected, prior.value);
   if (refusal !== undefined) return refusal;
@@ -282,7 +284,7 @@ async function admitRemoteLink(
     validated: { fields: {}, update: {} },
   });
   if (!gate.ok) return gate;
-  const rechecked = await inspect(request, { ...selected, issue: prior.value.issue.id });
+  const rechecked = await inspect(request, { ...selected, issue: prior.value.issue.id }, true);
   if (!rechecked.ok) return rechecked;
   if (
     !sameLinkParent(prior.value.issue, rechecked.value.issue) ||
@@ -347,6 +349,65 @@ function remoteAcknowledgement(
       acknowledgedTargetMismatch(acknowledgedId, body, selected, prior));
   return { receipt: known, mismatched };
 }
+/**
+ * What to change, named by the first rule the arguments break (#4354): one sentence for every cause
+ * left a model repeating the same call. The order follows the order `input` checks them in.
+ */
+function remoteLinkInvalidMessage(operation: Operation, args: CatalogJsonObject): string {
+  const keys = Object.keys(args).filter((key) => !FIELDS.has(key));
+  if (keys.length > 0) return `This call takes only ${[...FIELDS].join(", ")}.`;
+  if (!isSafeAtlassianIdentifier(args.issueIdOrKey))
+    return "issueIdOrKey must be the issue key or id the link belongs to.";
+  if (!savedText(args.expectedActorKey, 255))
+    return "expectedActorKey must be the key of the connected Jira user; jira.myself returns it.";
+  return operation === "jira.upsert-remote-link"
+    ? upsertInvalidMessage(args)
+    : snapshotInvalidMessage(operation, args);
+}
+function upsertInvalidMessage(args: CatalogJsonObject): string {
+  const value = remoteLinkValue(args.value);
+  if (value === undefined) return remoteLinkValueProblem(args.value);
+  if (value.globalId === null)
+    return "value.globalId is required: it identifies the link, so send it inside value.";
+  if (args.linkId !== undefined || args.globalId !== undefined)
+    return "Send the global ID inside value; linkId and globalId are not arguments of an upsert.";
+  if (args.expectAbsent !== undefined && args.expected !== undefined)
+    return "Send exactly one of expectAbsent:true or expected, not both.";
+  if (args.expectAbsent !== undefined)
+    return "expectAbsent must be true, and only for a link that does not exist yet.";
+  const expected = remoteLinkExpected(args.expected);
+  if (expected === undefined)
+    return "Send expectAbsent:true for a new link, or expected: the current link exactly as jira.remote-links lists it, every field present.";
+  return "expected.globalId must equal value.globalId; to replace another link, use jira.update-remote-link.";
+}
+function snapshotInvalidMessage(operation: Operation, args: CatalogJsonObject): string {
+  const expected = remoteLinkExpected(args.expected);
+  if (args.expectAbsent !== undefined || expected === undefined)
+    return "expected must be the current link exactly as jira.remote-links lists it, every field present; expectAbsent is only for an upsert.";
+  if (operation === "jira.delete-remote-link-by-global-id") return globalDeleteMessage(args);
+  return selectedLinkMessage(operation, args, expected.id);
+}
+function globalDeleteMessage(args: CatalogJsonObject): string {
+  if (args.value !== undefined || args.linkId !== undefined)
+    return "Send only globalId, equal to expected.globalId, and no value or linkId.";
+  return "globalId must equal expected.globalId, the global ID of the link to delete.";
+}
+function selectedLinkMessage(
+  operation: Operation,
+  args: CatalogJsonObject,
+  expectedId: string,
+): string {
+  const update = operation === "jira.update-remote-link";
+  if (args.globalId !== undefined)
+    return update
+      ? "An update takes linkId, not globalId: send linkId equal to expected.id."
+      : "A delete by link ID takes linkId, not globalId; to delete by global ID use jira.delete-remote-link-by-global-id.";
+  if (args.linkId !== expectedId)
+    return `linkId must equal expected.id, the ID of the link to ${update ? "replace" : "delete"}.`;
+  return update
+    ? remoteLinkValueProblem(args.value)
+    : "Send linkId equal to expected.id, and no value.";
+}
 /** Native POST is an explicitly reviewed upsert. No reciprocal endpoint or external HTTP request. */
 export async function executeJiraRemoteLinkMutation(
   operation: Operation,
@@ -358,8 +419,7 @@ export async function executeJiraRemoteLinkMutation(
   return runLinkMutation(
     {
       selected: input(operation, args),
-      invalid:
-        "Review the exact native issue, connected actor and complete remote link value. POST requires globalId and either expectAbsent:true or the complete expected snapshot; update/delete require the exact existing snapshot. Every nullable replacement field must be explicit.",
+      invalid: remoteLinkInvalidMessage(operation, args),
       admit: (selected) => admitRemoteLink(request, selected, templates),
       receiptFor,
       dispatch: (selected, state) => dispatchRemoteLink(request, operation, selected, state),

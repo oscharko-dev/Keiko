@@ -1,7 +1,7 @@
 import type { GatewayConfig, ModelProviderConfig } from "@oscharko-dev/keiko-model-gateway";
 import { codingSidecarDisabledByPolicy } from "./coding-sidecar-gateway.js";
 import { newCorrelationId } from "./correlation.js";
-import type { UiHandlerDeps } from "./deps.js";
+import { currentConversationReadinessObservation, type UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import {
   catalogConnectionMatches,
@@ -12,7 +12,9 @@ import {
   cancellableConversationProbeDeps,
   initializeConfiguredConversationReadiness,
   initializeConfiguredEmbeddingReadiness,
+  conversationModelForStartupProof,
   initializeLiteLlmCodingReadiness,
+  settleStartupConversationReadiness,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   withReadinessParentCorrelation,
 } from "./gateway-readiness.js";
@@ -197,11 +199,7 @@ class GatewayStartupChecks {
     if (!this.currentGeneration(generation)) return;
     this.initializeConversationReadiness(deps, correlationId, parentCorrelationId);
     const coding = codingStartupEnabled(deps);
-    if (coding)
-      await initializeLiteLlmCodingReadiness(
-        cancellableConversationProbeDeps(deps, this.controller.signal),
-        correlationId,
-      );
+    if (coding) await this.initializeCodingReadiness(deps, correlationId, generation);
     if (!this.currentGeneration(generation)) return;
     // Only catalog discovery is retried on a timer. Basic-chat readiness retains its startup
     // result until explicit Settings verification or connection replacement.
@@ -212,6 +210,25 @@ class GatewayStartupChecks {
       clearTimeout(this.retry);
       this.retry = undefined;
     }
+  }
+
+  // The tool-calling proof follows the chat model in use (#4351). It starts for the model elected
+  // now. When the startup walk then moved to another model because the default was refused
+  // definitively, that model gets its proof too, but only because it answered the walk's own check:
+  // a model nobody picked, and that no check proved ready, never receives a tool-calling request.
+  private async initializeCodingReadiness(
+    deps: UiHandlerDeps,
+    correlationId: string,
+    generation: number,
+  ): Promise<void> {
+    const probeDeps = cancellableConversationProbeDeps(deps, this.controller.signal);
+    const first = conversationModelForStartupProof(deps);
+    await initializeLiteLlmCodingReadiness(probeDeps, correlationId);
+    await settleStartupConversationReadiness(deps);
+    const next = conversationModelForStartupProof(deps);
+    if (!this.currentGeneration(generation) || next === first || next === undefined) return;
+    if (currentConversationReadinessObservation(deps, next) !== true) return;
+    await initializeLiteLlmCodingReadiness(probeDeps, correlationId);
   }
 
   private scheduleRetry(

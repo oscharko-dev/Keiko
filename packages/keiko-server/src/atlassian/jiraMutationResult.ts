@@ -6,6 +6,7 @@ import {
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   JIRA_TEMPLATE_RULE_IDS,
+  JIRA_RESULT_GUIDANCE_MAX_CHARS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
   isSafeAtlassianIdentifier,
   sanitizeJiraMutationFailureDetail,
@@ -693,10 +694,15 @@ export function validJiraMutationAttempt(
       ? failedAttempt({ ok: false, reason: "malformed-payload", receipt: value.receipt }, operation)
       : { ok: false, reason: "malformed-payload" };
   const links = sanitizeJiraMutationLinkAccount(value.links);
+  const notices = boundedViolations(value.templateNotices);
   return {
     ok: true,
     receipt: snapshotReceipt(receipt),
     ...(links === undefined ? {} : { links }),
+    // The rules an untouched field already broke (#4354): the executor's collector attached them to
+    // the attempt, and this validated copy is what the model's result and the log are built from,
+    // so they are bounded and checked against the closed rule ids here, like a refusal's violations.
+    ...(notices === undefined ? {} : { templateNotices: notices }),
     ...descriptionFormattingFacts(value),
   };
 }
@@ -745,6 +751,17 @@ function linkData(links: JiraMutationLinkAccount | undefined): Record<string, un
  */
 export const JIRA_REJECTED_GUIDANCE =
   "Jira refused this change and nothing was changed. Correct the fields named in fieldErrors (fieldId, fieldName, message) or messages, then send the corrected change once. If Jira refuses it again, tell the user in plain language which field is the problem and what Jira said.";
+/**
+ * A refusal made before the change was sent: by Keiko's own checks, or by what Keiko read first
+ * (#4357 AC3). Its `messages` and `fieldId` say what to do; saying "Jira refused" there would be untrue.
+ * Which of the two instructions a result gets is decided by a closed fact set where Jira's error
+ * document is parsed (`detail.fromJira`), never by the shape of the detail.
+ */
+export const JIRA_LOCAL_REFUSAL_GUIDANCE =
+  "Keiko refused this change before sending it to Jira, and nothing was changed. Do what the messages say: correct the argument named in fieldId, or read the current state again, then send the corrected change once. If it is refused again, tell the user in plain language what is wrong.";
+/** A permission refusal is not a field to correct: retrying cannot succeed. */
+export const JIRA_PERMISSION_GUIDANCE =
+  "Jira's permissions do not allow this connection to make this change or to read what it needs, and nothing was changed. Do not retry it. Tell the user in plain language that the Jira account lacks the permission, and what the messages say.";
 export const JIRA_EXISTING_GUIDANCE =
   "Nothing was written: the Jira resource identified by this result already exists or already holds these values, as messages say. Report that as the result. Do not send it again, and do not change its fields to create another one.";
 /** The journal holds no arguments or results, so a replay cannot repeat the earlier reasons. */
@@ -777,7 +794,35 @@ export function jiraResultGuidance(
   // An adapter independently observed the requested state before attempting any effect.
   if (outcome === "rejected" && reason === "conflict" && detail?.unchanged === true)
     return JIRA_EXISTING_GUIDANCE;
-  return outcome === "rejected" && jiraExplained(detail) ? JIRA_REJECTED_GUIDANCE : undefined;
+  return outcome === "rejected" && jiraExplained(detail)
+    ? explainedRefusalGuidance(reason, detail)
+    : undefined;
+}
+export type JiraRefusalSource = "jira" | "keiko";
+/**
+ * Who refused a change that was refused, from the closed fact the detail carries and nothing else
+ * (#4357 AC3): Jira, when its own error document was parsed (`detail.fromJira`), otherwise Keiko. The
+ * guidance of a result and the draft's per-item source both come from this one function. A result
+ * that is not a refusal has no source.
+ */
+export function jiraRefusalSource(
+  outcome: JiraMutationResultState,
+  detail: JiraMutationFailureDetail | undefined,
+): JiraRefusalSource | undefined {
+  if (outcome !== "rejected" && outcome !== "not-dispatched") return undefined;
+  return detail?.fromJira === true ? "jira" : "keiko";
+}
+/**
+ * What the model is told to do after an explained refusal. Only Jira's own refusal can be a
+ * permission one: a Keiko-made `permission-denied` (a read Jira denied before the write) is Keiko's
+ * refusal and gets Keiko's words.
+ */
+function explainedRefusalGuidance(
+  reason: AtlassianConnectorWriteFailureReason | undefined,
+  detail: JiraMutationFailureDetail | undefined,
+): string {
+  if (jiraRefusalSource("rejected", detail) !== "jira") return JIRA_LOCAL_REFUSAL_GUIDANCE;
+  return reason === "permission-denied" ? JIRA_PERMISSION_GUIDANCE : JIRA_REJECTED_GUIDANCE;
 }
 function uncertainOutcome(
   outcome: JiraMutationResultState,
@@ -816,6 +861,16 @@ function toolResultGuidance(
   if (!replayed) return guidance ?? jiraTemplateViolationGuidance(violations ?? []);
   return outcome === "rejected" ? JIRA_ALREADY_REFUSED_GUIDANCE : guidance;
 }
+/**
+ * The guidance the result schema allows. The sentences the producer writes fit (a test pins every
+ * refusal of every governed operation); this is the net under them, so that whatever is written
+ * later still settles as a valid, explained result and never as `result-contract-failed`.
+ */
+export function boundedGuidance(guidance: string | undefined): string | undefined {
+  return guidance === undefined || guidance.length <= JIRA_RESULT_GUIDANCE_MAX_CHARS
+    ? guidance
+    : `${guidance.slice(0, JIRA_RESULT_GUIDANCE_MAX_CHARS - 1)}…`;
+}
 export function jiraMutationToolResult(
   outcome: JiraMutationResultState,
   reason?: AtlassianConnectorWriteFailureReason,
@@ -825,7 +880,9 @@ export function jiraMutationToolResult(
   links?: JiraMutationLinkAccount,
   violations?: readonly JiraTemplateViolation[],
 ): ManagedMcpToolResult {
-  const guidance = toolResultGuidance(outcome, reason, replayed, detail, violations);
+  const guidance = boundedGuidance(
+    toolResultGuidance(outcome, reason, replayed, detail, violations),
+  );
   return {
     data: {
       ...receipt,
@@ -853,11 +910,18 @@ function attemptReceipt(
   if (attempt.ok) return outcome === "succeeded" ? attempt.receipt : {};
   return attempt.receipt ?? {};
 }
+/**
+ * Fixed words for a change that succeeded although the issue already broke template rules in fields
+ * the change did not touch: the change is not undone and not blocked, and the person is told.
+ */
+export const TEMPLATE_NOTICE_GUIDANCE =
+  "The change was made. The issue already broke these template rules in fields this change did not touch (templateNotices: ruleId, subject). " +
+  "Tell the person plainly what is still missing and offer to repair it; do not repeat the change.";
 export function jiraAttemptToolResult(
   outcome: JiraMutationOutcome,
   attempt: JiraMutationAttempt,
 ): ManagedMcpToolResult {
-  return jiraMutationToolResult(
+  const result = jiraMutationToolResult(
     outcome,
     attempt.ok ? undefined : attempt.reason,
     attemptReceipt(outcome, attempt),
@@ -866,4 +930,14 @@ export function jiraAttemptToolResult(
     attempt.links,
     attempt.ok ? undefined : attempt.violations,
   );
+  const notices = attempt.ok ? boundedViolations(attempt.templateNotices) : undefined;
+  if (notices === undefined || outcome !== "succeeded") return result;
+  return {
+    ...result,
+    data: {
+      ...result.data,
+      guidance: TEMPLATE_NOTICE_GUIDANCE,
+      templateNotices: notices.map((item) => ({ ...item })),
+    },
+  };
 }

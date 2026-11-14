@@ -45,6 +45,8 @@ export function evidenceLines(result) {
  *                failure) and no check is red; never graded as a product failure
  *  - green:      every obligation is covered by a passing check AND the end-to-end journey is
  *                green; probes covering everything beside an `unverified` journey stay partial
+ *  - unverified: a journey ran and nothing is red, but some of its parts could not be verified
+ *                (`unverifiedParts`); distinct from partial, which only misses obligations
  *  - partial:    a journey ran but obligations remain uncovered or it could not verify its
  *                evidence (`unverified` covers nothing)
  *  - probe-only: only model-free probes ran
@@ -62,15 +64,17 @@ export function scenarioVerdict(scenario, checks) {
   if (unknown.length > 0) {
     throw new TypeError(`${scenario.id}: checks cover unknown obligations ${unknown.join(", ")}`);
   }
-  const covered = new Set(
-    checks.filter((check) => check.status === "green").flatMap((check) => check.covers ?? []),
-  );
+  // A check with unverified parts credits what its green parts verified and nothing else.
+  const credits = (check) => check.status === "green" || (check.unverifiedParts ?? 0) > 0;
+  const covered = new Set(checks.filter(credits).flatMap((check) => check.covers ?? []));
   const uncovered = scenario.obligations.filter((name) => !covered.has(name));
   const base = { covered: [...covered].sort(), uncovered, deferred };
   if (checks.some((check) => check.status === "red")) return { status: "red", ...base };
   if (checks.some((check) => check.status === "invalid")) return { status: "invalid", ...base };
   const journey = checks.find((check) => check.layer === "journey");
   if (journey === undefined) return { status: "probe-only", ...base };
+  // A journey that could not verify some part is `unverified` itself, never partial or green.
+  if ((journey.unverifiedParts ?? 0) > 0) return { status: "unverified", ...base };
   const green = uncovered.length === 0 && journey.status === "green";
   return { status: green ? "green" : "partial", ...base };
 }

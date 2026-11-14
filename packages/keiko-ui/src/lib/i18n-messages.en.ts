@@ -89,6 +89,10 @@ export const EN_MESSAGES = {
     "Memory is unavailable until its local vault is repaired. Chat remains available. Resolve the cause and restart Keiko.",
   "memory.readiness.unreadable":
     "The saved Memory vault could not be opened. Check the available key and restart Keiko. Chat remains available.",
+  "credentialCustody.exposed":
+    "The key that protects your stored credentials was readable by another account on this computer. Keiko has now made it private, but the credentials may have been read. Replace them: create a new Jira token and reconnect the Jira Pod, and replace the gateway key in Settings > Models.",
+  "credentialCustody.unattested":
+    "Keiko could not check whether your stored credentials are protected from other accounts on this computer. They keep working. Ask your administrator to allow Windows PowerShell for your account, then restart Keiko.",
   "supportReport.create": "Create error report",
   "supportReport.creating": "Creating report…",
   "supportReport.download": "Download report",
@@ -241,7 +245,8 @@ export const EN_MESSAGES = {
   "gatewaySetup.unusable.unsupported": " Not used (mode declared by the gateway): {models}.",
   "gatewaySetup.unusable.dropped": " Embedding verification failed, not stored: {models}.",
   "gatewaySetup.unusable.unverified": " Kept but unverified as embedding models: {models}.",
-  "gatewaySetup.unusable.unverifiedChat": " Kept but unverified as chat models: {models}.",
+  "gatewaySetup.unusable.unverifiedChat":
+    " Kept, but not verified as chat models: {models}. Choose one in Chat or the Coding Workbench to check it, or verify it in Settings > Models.",
   // The shell undo stack records panel toggles only — no window move/resize/maximize/close reaches
   // it — so the empty-stack labels name that scope instead of promising window changes.
   "shell.command.undo.target": "Undo: {target}",
@@ -528,9 +533,34 @@ export const EN_MESSAGES = {
   "chat.error.scopeChanged.remediation":
     "Check the Chat's current sources, then send your request again.",
   "chat.error.jiraAuthentication.title": "Jira authentication failed",
-  "chat.error.jiraAuthentication.message": "The Jira connection could not be authenticated.",
+  "chat.error.jiraAuthentication.message":
+    "Jira rejected the token of this connection. It may have expired or been revoked.",
   "chat.error.jiraAuthentication.remediation":
-    "Verify the Jira connection in the Knowledge Pods Hub. Before requesting another change, check its outcome in Jira.",
+    "Open the Local Knowledge window, replace the token on the Jira Pod and verify the connection. This Chat and its draft stay as they are. Before requesting another change, check its outcome in Jira.",
+  "chat.error.knowledgePodUnavailable.title": "Knowledge Pod unavailable",
+  "chat.error.knowledgePodUnavailable.message":
+    "The selected Knowledge Pod no longer exists or is being deleted. Choose another Knowledge Pod.",
+  "chat.error.knowledgePodUnavailable.remediation":
+    "The list has been refreshed. Pick a Knowledge Pod from it.",
+  "chat.error.knowledgeStoreUnavailable.title": "Knowledge Pods cannot be checked",
+  "chat.error.knowledgeStoreUnavailable.message":
+    "The Knowledge Pod store is unavailable, so the selection could not be checked. Try again in a moment.",
+  "chat.error.knowledgeStoreUnavailable.remediation": "If this keeps happening, restart Keiko.",
+  "chat.error.jiraPodUnavailable.title": "Jira Pod no longer available",
+  "chat.error.jiraPodUnavailable.message":
+    "The Jira Pod bound to this chat is no longer available. Choose a Jira Pod again.",
+  "chat.error.jiraPodUnavailable.remediation":
+    "Open the Connectors menu above the conversation and switch on a Jira Pod, then send your message again.",
+  "chat.error.jiraPodVerification.title": "Jira Pod needs verification",
+  "chat.error.jiraPodVerification.message":
+    "The Jira Pod must be verified again before this chat can use it. Verify it in the Local Knowledge window.",
+  "chat.error.jiraPodVerification.remediation":
+    "Open the Local Knowledge window, verify the Jira connection, then send your message again.",
+  "chat.error.jiraPodConnectionChanged.title": "Jira connection changed",
+  "chat.error.jiraPodConnectionChanged.message":
+    "The Jira connection changed after this chat chose its Jira Pod. Choose the Jira Pod again.",
+  "chat.error.jiraPodConnectionChanged.remediation":
+    "Open the Connectors menu above the conversation and switch the Jira Pod on again, then send your message again.",
   "chat.error.gatewayTimeout.title": "Model gateway did not answer in time",
   "chat.error.gatewayTimeout.message":
     "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large.",

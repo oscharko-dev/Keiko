@@ -27,6 +27,7 @@ const REASON_KEYS: Readonly<Record<JiraReportIncompleteReason, WidgetMessageKey>
 const LOCAL_FAILURE_KEYS: Partial<Readonly<Record<JiraReportFailureReason, WidgetMessageKey>>> = {
   "effect-denied": "chat.jira.outcome.failure.localAuthority",
   cancelled: "chat.jira.outcome.failure.cancelled",
+  "auth-unverified": "chat.jira.outcome.failure.authUnverified",
 };
 const ESTIMATE_REASON_KEYS: Readonly<
   Record<JiraReportEstimateUnavailableReason, WidgetMessageKey>

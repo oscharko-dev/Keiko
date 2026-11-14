@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+} from "../../../tests/support/jira-test-templates.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import {
   JIRA_DRAFT_IDENTITY_PREFIX,
@@ -278,6 +282,27 @@ interface StoredIssue {
   readonly id: string;
   fields: Record<string, unknown>;
 }
+/**
+ * The answers that do not depend on the test: the identity a creation is judged by (a template
+ * governs a project and an issue type, #4354) and the create metadata.
+ */
+function fixedAnswer(
+  url: URL,
+  createFields: readonly Record<string, unknown>[],
+): ReturnType<typeof response> | undefined {
+  if (url.pathname.endsWith("/project/10000")) return response({ id: "10000", key: "SYN" });
+  const type = /\/issuetype\/(\d{1,10})$/u.exec(url.pathname);
+  if (type !== null) return response({ id: type[1], name: "Task" });
+  return url.pathname.includes("createmeta")
+    ? response({
+        values: createFields,
+        start: 0,
+        size: 100,
+        last: true,
+        total: createFields.length,
+      })
+    : undefined;
+}
 function syntheticJira(options: {
   readonly labels: boolean;
   readonly description?: boolean;
@@ -293,16 +318,8 @@ function syntheticJira(options: {
     options.description === true ? [...BASE_FIELDS, field("description", "string")] : BASE_FIELDS;
   const createFields = options.labels ? [...base, LABELS] : base;
   const read = (url: URL): ReturnType<AtlassianHttpBodyPort> => {
-    if (url.pathname.includes("createmeta"))
-      return Promise.resolve(
-        response({
-          values: createFields,
-          start: 0,
-          size: 100,
-          last: true,
-          total: createFields.length,
-        }),
-      );
+    const fixed = fixedAnswer(url, createFields);
+    if (fixed !== undefined) return Promise.resolve(fixed);
     if (url.pathname.endsWith("/search")) {
       const jql = url.searchParams.get("jql") ?? "";
       queries.push(jql);
@@ -367,7 +384,12 @@ function runItem(
       signal: new AbortController().signal,
       beforeEffect: () => true,
     },
-    { deployment: "data-center", baseUrl: "https://jira.example.invalid", http: jira.http },
+    {
+      deployment: "data-center",
+      baseUrl: "https://jira.example.invalid",
+      http: jira.http,
+      issueTemplates: () => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
+    },
     trace,
   );
 }

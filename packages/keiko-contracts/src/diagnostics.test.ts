@@ -41,7 +41,9 @@ import {
   CLIENT_VOICE_CAPTURE_REASONS,
   CLIENT_VOICE_CAPTURE_ERRORS,
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
+  CREDENTIAL_CUSTODY_STATES,
   isActivityLogReadinessSnapshot,
+  isCredentialCustodyState,
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
   isClientGitRetryAttemptIngestRequest,
@@ -50,6 +52,7 @@ import {
   isClientDiagnosticLossCount,
   isClientStageIngestRequest,
   isLinuxGatewayDiagnosticKind,
+  isServerInstanceId,
   CLIENT_ERROR_CLASSES,
   clientErrorClass,
   type ClientGitRetryOperation,
@@ -529,6 +532,42 @@ describe("isClientDiagnosticIngestRequest", () => {
   });
 });
 
+// #4371: a catalog refresh the picker did not wait for is a closed outcome and a closed duration
+// bucket, under a correlation id; nothing else rides along.
+describe("knowledgeCatalogRefresh report", () => {
+  const withCorrelation = { ...validRequest(), correlationId: "ui_catalog-refresh-0001" };
+  it("accepts exactly the closed outcome and duration bucket", () => {
+    for (const outcome of ["ok", "failed", "superseded"]) {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...withCorrelation,
+          knowledgeCatalogRefresh: { outcome, duration: "1s-5s" },
+        }),
+      ).toBe(true);
+    }
+    for (const invalid of [
+      { outcome: "slow", duration: "1s-5s" },
+      { outcome: "ok", duration: "3s" },
+      { outcome: "ok" },
+      { outcome: "ok", duration: "1s-5s", podName: "Customer contracts" },
+      "ok",
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...withCorrelation, knowledgeCatalogRefresh: invalid }),
+      ).toBe(false);
+    }
+  });
+
+  it("requires a correlation id", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        knowledgeCatalogRefresh: { outcome: "ok", duration: "1s-5s" },
+      }),
+    ).toBe(false);
+  });
+});
+
 // #3876 review: a restored coding run reports where its messages went as counts — never a message,
 // a path or a run name — and the counts must describe one restoration.
 describe("client coding run restore evidence", () => {
@@ -844,6 +883,21 @@ describe("client diagnostic loss counts", () => {
 });
 
 // #3532: the readiness `/api/health` reports and `keiko status` prints.
+describe("isCredentialCustodyState", () => {
+  it("admits exactly the four closed states", () => {
+    expect(CREDENTIAL_CUSTODY_STATES).toEqual(["attested", "protected", "exposed", "unattested"]);
+    for (const state of CREDENTIAL_CUSTODY_STATES)
+      expect(isCredentialCustodyState(state)).toBe(true);
+  });
+
+  it.each([undefined, null, "", "ATTESTED", "attested ", "refused", "ok", true, 0, ["attested"]])(
+    "refuses %j",
+    (value) => {
+      expect(isCredentialCustodyState(value)).toBe(false);
+    },
+  );
+});
+
 describe("isActivityLogReadinessSnapshot", () => {
   const ready = { readiness: "ready", reasons: [], writer: "production-file", lostEvents: 0 };
   it("preserves truthful retained stock above a newly governing admission capacity", () => {
@@ -2648,5 +2702,26 @@ describe("coding request timeout evidence (#4109)", () => {
     ).toBe(false);
     expect(isClientDiagnosticIngestRequest(report(timeout, { kind: "other" }))).toBe(false);
     expect(isClientDiagnosticIngestRequest(report(timeout, { errorKind: "timeout" }))).toBe(false);
+  });
+});
+
+describe("server instance identity (#4370)", () => {
+  it.each(["a".repeat(32), "0123456789abcdef".repeat(2)])("accepts %s", (value) => {
+    expect(isServerInstanceId(value)).toBe(true);
+  });
+
+  it.each([
+    undefined,
+    null,
+    42,
+    "",
+    "A".repeat(32),
+    "a".repeat(31),
+    "a".repeat(33),
+    `${"a".repeat(32)}\n`,
+    `${"a".repeat(31)}g`,
+    ["a".repeat(32)],
+  ])("refuses a value outside the closed shape: %s", (value) => {
+    expect(isServerInstanceId(value)).toBe(false);
   });
 });

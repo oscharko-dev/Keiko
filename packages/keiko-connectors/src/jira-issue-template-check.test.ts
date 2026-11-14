@@ -6,7 +6,9 @@ import {
 import {
   checkJiraIssueTemplate,
   checkJiraIssueTemplates,
+  evaluateJiraTemplateChange,
   jiraTemplateValuePresent,
+  jiraNoGoverningTemplateGuidance,
   jiraTemplateValueText,
   jiraTemplateViolationGuidance,
   matchingJiraIssueTemplates,
@@ -16,6 +18,74 @@ import {
   type JiraTemplateSubject,
 } from "./jira-issue-template-check.js";
 import { deriveJiraTemplateSections } from "./jira-issue-template-instance.js";
+
+// #4354: a model that passes the refusal text through must pass words a bank clerk can read, not
+// `parent-type-mismatch` and `parent: Task`. The structured rule id stays for the card and the log;
+// the guidance and the subject carry the allowed and the actual parent type in plain words.
+describe("the plain words of a parent refusal (#4354)", () => {
+  const withParent = parsed(["parentField: Epic Link", "parentIssueTypes: [Epic]"], "# Story");
+  const catalog: readonly JiraFieldCatalogEntry[] = [
+    { id: "customfield_10014", name: "Epic Link" },
+  ];
+  const subject: JiraTemplateSubject = {
+    operation: "create",
+    projectKey: "ABC",
+    issueType: { name: "Story" },
+    fields: { customfield_10014: "ABC-5" },
+    parentIssueTypes: { customfield_10014: { id: "1", name: "Task" } },
+  };
+
+  it("names the allowed and the actual parent type in the violation subject", () => {
+    const violations = checkJiraIssueTemplate(withParent, subject, catalog);
+    expect(violations).toEqual([
+      expect.objectContaining({
+        ruleId: "parent-type-mismatch",
+        subject: "Epic Link: Epic (found: Task)",
+      }),
+    ]);
+  });
+
+  it("tells the model to explain in plain words, never to quote the rule id or a field id", () => {
+    const guidance = jiraTemplateViolationGuidance([
+      {
+        ruleId: "parent-type-mismatch",
+        subject: "Epic Link: Epic (found: Task)",
+        template: "ABC/Story",
+      },
+    ]);
+    expect(guidance).toContain("parent");
+    expect(guidance).toContain("allowed");
+    expect(guidance).toContain("actually");
+    expect(guidance).toMatch(/never quote the rule id/iu);
+    // The bare rule id is not the explanation the guidance offers.
+    expect(guidance?.replaceAll("parent-type-mismatch", "")).toContain("plain words");
+  });
+
+  it("says the same for a missing parent: which parent the issue needs, in words", () => {
+    const guidance = jiraTemplateViolationGuidance([
+      { ruleId: "parent-missing", subject: "Epic Link", template: "ABC/Story" },
+    ]);
+    expect(guidance).toMatch(/needs a parent/iu);
+    expect(guidance).toMatch(/never quote the rule id/iu);
+  });
+});
+
+describe("the hint when no template governs a write (#4354)", () => {
+  it("is fixed words that never carry remote text, and takes one observed sentence", () => {
+    const plain = jiraNoGoverningTemplateGuidance({ ruleId: "template-missing" });
+    expect(plain).toContain("Nothing was changed");
+    expect(plain).toContain("propose templates from an existing project");
+    const further = jiraNoGoverningTemplateGuidance(
+      { ruleId: "template-missing" },
+      "Stored templates exist, but they name another project.",
+    );
+    expect(further).toContain("Stored templates exist, but they name another project.");
+    expect(further.startsWith(plain.slice(0, 60))).toBe(true);
+    expect(jiraNoGoverningTemplateGuidance({ ruleId: "template-not-activated" })).toContain(
+      "only for entering a status",
+    );
+  });
+});
 
 describe("formal admission guidance", () => {
   it("asks for complete evidence rather than alleging a rule violation when native data is unreadable", () => {
@@ -163,6 +233,16 @@ describe("description sections", () => {
     expect(
       ids(template, subject({ description: "h2. Context\nTBD\nh2. Acceptance criteria\n\n  \n" })),
     ).toEqual(["section-empty:Context", "section-empty:Acceptance criteria"]);
+  });
+
+  it("counts every placeholder the empty-section hint names as no content (#4357 AC3)", () => {
+    for (const placeholder of ["TBD", "TODO", "...", "-", "<text>"])
+      expect(
+        ids(
+          template,
+          subject({ description: `h2. Context\n${placeholder}\nh2. Acceptance criteria\nOK` }),
+        ),
+      ).toEqual(["section-empty:Context"]);
   });
 
   it("does not take a heading from inside another section's text", () => {
@@ -360,6 +440,112 @@ describe("activation and matching", () => {
   });
 });
 
+describe("a plain activation governs creating and editing, never a transition (#4354)", () => {
+  const withActivation = (activateOn: string): JiraIssueTemplate => {
+    const result = parseJiraIssueTemplate(
+      [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: ABC",
+        "issueType: Story",
+        `activateOn: [${activateOn}]`,
+        "summaryMinLength: 3",
+        "---",
+        "# T",
+      ].join("\n"),
+    );
+    if (!result.ok) throw new Error("fixture template must parse");
+    return result.template;
+  };
+  const governed = (activateOn: string, operation: JiraTemplateSubject["operation"]): number =>
+    matchingJiraIssueTemplates(
+      [withActivation(activateOn)],
+      subject(
+        {},
+        { operation, transition: { id: "31", name: "Start", targetStatusName: "Ready" } },
+      ),
+    ).length;
+
+  it.each(["create", "edit"])("lets %s govern creating and editing, not a transition", (word) => {
+    expect(governed(word, "create")).toBe(1);
+    expect(governed(word, "edit")).toBe(1);
+    expect(governed(word, "transition")).toBe(0);
+  });
+  it("lets a transition activation govern only the transition it names", () => {
+    expect(governed("transition:Ready", "transition")).toBe(1);
+    expect(governed("transition:Done", "transition")).toBe(0);
+    expect(governed("transition:Ready", "create")).toBe(0);
+    expect(governed("transition:Ready", "edit")).toBe(0);
+  });
+});
+
+describe("evaluating a change against its before-state and after-state (#4354)", () => {
+  const template = parsed(["summaryMinLength: 10", "requiredLabels: [reviewed]"], "# T");
+  const evaluate = (
+    before: Record<string, unknown> | undefined,
+    after: Record<string, unknown>,
+    touched: readonly string[],
+  ): ReturnType<typeof evaluateJiraTemplateChange> =>
+    evaluateJiraTemplateChange({
+      templates: [template],
+      before: before === undefined ? undefined : subject(before, { operation: "edit" }),
+      after: subject(after, { operation: before === undefined ? "create" : "edit" }),
+      touched: new Set(touched),
+      catalog: CATALOG,
+    });
+  const ids = (list: readonly { ruleId: string }[]): string[] =>
+    list.map((violation) => violation.ruleId);
+
+  it("judges a creation on its after-state alone: everything blocks", () => {
+    const verdict = evaluate(undefined, { summary: "short", labels: [] }, ["summary"]);
+    expect(ids(verdict.blocking)).toEqual(["summary-too-short", "label-missing"]);
+    expect(verdict.notices).toEqual([]);
+  });
+  it("blocks an edit that breaks a field it touches and notices what was already broken elsewhere", () => {
+    const before = { summary: "A long enough summary", labels: [] };
+    const verdict = evaluate(before, { ...before, summary: "short" }, ["summary"]);
+    expect(ids(verdict.blocking)).toEqual(["summary-too-short"]);
+    expect(ids(verdict.notices)).toEqual(["label-missing"]);
+  });
+  it("lets an edit through when every rule it fails already failed in an untouched field", () => {
+    const before = { summary: "short", labels: [] };
+    const verdict = evaluate(before, { ...before, description: "x" }, ["description"]);
+    expect(verdict.blocking).toEqual([]);
+    expect(ids(verdict.notices)).toEqual(["summary-too-short", "label-missing"]);
+  });
+  it("blocks an edit that touches a field that was already broken and stays broken", () => {
+    const before = { summary: "short", labels: ["reviewed"] };
+    const verdict = evaluate(before, { ...before, summary: "tiny" }, ["summary"]);
+    expect(ids(verdict.blocking)).toEqual(["summary-too-short"]);
+  });
+  it("blocks a violation the edit introduces even in a field it did not list as touched", () => {
+    const verdict = evaluate(
+      { summary: "A long enough summary", labels: ["reviewed"] },
+      { summary: "A long enough summary", labels: [] },
+      [],
+    );
+    expect(ids(verdict.blocking)).toEqual(["label-missing"]);
+  });
+  it("counts labels and links as touched fields", () => {
+    const before = { summary: "A long enough summary", labels: [] };
+    const verdict = evaluate(before, before, ["labels"]);
+    expect(ids(verdict.blocking)).toEqual(["label-missing"]);
+  });
+  it("keeps a rule about a field the instance lacks a notice when the edit does not set it", () => {
+    const unreadable = parsed(["requiredFields: [Story Points]"], "# T");
+    const verdict = evaluateJiraTemplateChange({
+      templates: [unreadable],
+      before: subject({}, { operation: "edit" }),
+      after: subject({}, { operation: "edit" }),
+      touched: new Set(),
+      catalog: [],
+    });
+    expect(verdict.blocking.map((violation) => violation.ruleId)).toEqual([]);
+    expect(verdict.notices.map((violation) => violation.ruleId)).toEqual(["field-unavailable"]);
+  });
+});
+
 describe("checkJiraIssueTemplates", () => {
   it("merges the violations of every governing template once and in a stable order", () => {
     const first = parsed(["summaryMinLength: 5"], "# T");
@@ -496,6 +682,79 @@ describe("validateJiraIssueTemplateAgainstInstance", () => {
   });
 });
 
+// #4354 AC2: a Task or Sub-task template names the field that links it to its parent; the instance
+// decides which field that is. A Parent Link on a Task (customfield_10101 in the customer's Jira)
+// matched "Jira" although the Task-to-Epic relation is the Epic Link (customfield_10109).
+describe("the parent relation of a template's issue type (#4354)", () => {
+  const RELATIONS: readonly JiraFieldCatalogEntry[] = [
+    { id: "summary", name: "Summary" },
+    { id: "parent", name: "Parent" },
+    {
+      id: "customfield_10109",
+      name: "Epic Link",
+      schemaCustom: "com.pyxis.greenhopper.jira:gh-epic-link",
+    },
+    {
+      id: "customfield_10101",
+      name: "Parent Link",
+      schemaCustom: "com.atlassian.jpo:jpo-custom-field-parent",
+    },
+  ];
+  const instance = {
+    fields: RELATIONS,
+    project: {
+      key: "ABC",
+      issueTypes: [
+        { id: "1", name: "Task", subtask: false },
+        { id: "2", name: "Sub-task", subtask: true },
+        { id: "3", name: "Epic", subtask: false },
+      ],
+    },
+  };
+  const findings = (issueType: string, field: string): readonly string[] =>
+    validateJiraIssueTemplateAgainstInstance(
+      { ...parsed([`parentField: ${field}`], "# T"), issueType },
+      instance,
+    ).map((finding) => `${finding.code}:${finding.subject}`);
+
+  it("flags a Task template whose parent field is the Parent Link, naming the Epic Link", () => {
+    expect(findings("Task", "customfield_10101")).toEqual([
+      "wrong-parent-field:customfield_10101 instead of Epic Link (customfield_10109)",
+    ]);
+  });
+  it("accepts the Epic Link on a Task and the system parent on a Sub-task", () => {
+    expect(findings("Task", "customfield_10109")).toEqual([]);
+    expect(findings("Task", "Epic Link")).toEqual([]);
+    expect(findings("Sub-task", "parent")).toEqual([]);
+  });
+  it("flags an Epic Link or a Parent Link on a Sub-task, naming the system parent", () => {
+    expect(findings("Sub-task", "customfield_10109")).toEqual([
+      "wrong-parent-field:customfield_10109 instead of Parent (parent)",
+    ]);
+    expect(findings("Sub-task", "customfield_10101")).toEqual([
+      "wrong-parent-field:customfield_10101 instead of Parent (parent)",
+    ]);
+  });
+  it("leaves an Epic alone: it is linked to an initiative by the Parent Link", () => {
+    expect(findings("Epic", "customfield_10101")).toEqual([]);
+  });
+  it("says nothing about the relation when the project or the field kinds are not known", () => {
+    const codes = (
+      template: JiraIssueTemplate,
+      facts: Parameters<typeof validateJiraIssueTemplateAgainstInstance>[1],
+    ): readonly string[] =>
+      validateJiraIssueTemplateAgainstInstance(template, facts).map((finding) => finding.code);
+    const bare = { ...parsed(["parentField: customfield_10101"], "# T"), issueType: "Task" };
+    expect(codes(bare, { fields: RELATIONS })).not.toContain("wrong-parent-field");
+    expect(
+      codes(bare, {
+        fields: [{ id: "customfield_10101", name: "Parent Link" }],
+        project: instance.project,
+      }),
+    ).not.toContain("wrong-parent-field");
+  });
+});
+
 describe("native description rendering contract", () => {
   const required = parsed([], "## Criteria\n## Source\n");
 
@@ -518,5 +777,49 @@ describe("native description rendering contract", () => {
         }),
       ),
     ).toEqual([]);
+  });
+});
+
+// #4357 AC3: three rules whose subject alone does not say what to change get one short sentence each.
+describe("the hints of rules a subject does not explain (#4357 AC3)", () => {
+  const HINTS = {
+    "section-empty":
+      " A section that holds only a placeholder (TBD, TODO, ..., -, or <text>) counts as empty: write real content.",
+    "label-pattern":
+      " A label rule has a pattern: the subject is the label that does not match it; use a label the template's labels rule allows.",
+    "field-unavailable":
+      " A field-unavailable subject is a field this project's screen does not offer, so it cannot be set: do not retry with it, tell the person.",
+  } as const;
+  const guidanceFor = (ruleId: keyof typeof HINTS): string =>
+    jiraTemplateViolationGuidance([{ ruleId, subject: "x", template: "SYN/Story" }]) ?? "";
+  it.each(Object.keys(HINTS) as (keyof typeof HINTS)[])(
+    "adds the sentence for %s, and only for it",
+    (ruleId) => {
+      expect(guidanceFor(ruleId)).toContain(HINTS[ruleId]);
+      for (const other of Object.keys(HINTS) as (keyof typeof HINTS)[])
+        if (other !== ruleId) expect(guidanceFor(ruleId)).not.toContain(HINTS[other]);
+    },
+  );
+});
+
+describe("a bulk or schema change a formal rule refers to (#4357 AC3)", () => {
+  const IMPACT =
+    "Nothing was changed: a formal template rule of this project refers to a field this change would alter on issues that Keiko cannot check one by one. Do not retry it. Change the affected issues one at a time with the edit tool, or tell the person it has to be done in Jira.";
+  it.each([
+    "Bulk issue-field impact: Fix versions",
+    "Schema changes require complete governed issue migration",
+  ])("says the rule exists and what to do, not that evidence is missing: %s", (subject) => {
+    const guidance = jiraTemplateViolationGuidance([
+      { ruleId: "template-unreadable", subject, template: "SYN/Story" },
+    ]);
+    expect(guidance).toBe(IMPACT);
+    expect(guidance).not.toMatch(/could not be read|Missing evidence/u);
+  });
+  it("keeps the evidence wording for an unreadable library", () => {
+    expect(
+      jiraTemplateViolationGuidance([
+        { ruleId: "template-unreadable", subject: "template library", template: "*" },
+      ]),
+    ).toMatch(/could not be read completely/u);
   });
 });

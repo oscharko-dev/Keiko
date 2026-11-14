@@ -1218,7 +1218,49 @@ and invalid timestamps without recording model names, requests or answers. An un
 consumes no physical synthesis attempt or uncertain output reservation; actual interrupted provider
 calls retain conservative accounting.
 
-Each chat model is checked once per connection at startup. Nothing renews or recovers a model on a
+Keiko lists every model a gateway offers through metadata requests, which cost nothing, and sends
+an inference request only to a model a person uses (#4351, owner decision 2026-11-13): a check loads
+the model, which on a shared gateway evicts a model somebody else is using. Startup checks the chat
+model in use once per connection, the elected default; only a definitive refusal of that model moves
+the walk one model at a time along the election order to the first ready model, and a check that
+ended without a verdict (a timeout, a busy gateway) moves nothing on. A person's first explicit
+pick of a chat model that has no current observation (the Chat or Coding Workbench picker) starts
+exactly one check of that model, and in the Workbench its tool-calling proof; the picker shows that
+it is being checked. Startup also probes only the embedding model in use, and Gateway Setup verifies
+only the model that becomes the default and the embedding model in use: the other listed models are
+configured as listed and unverified, and a rejection surfaces at their first selection.
+The walk uses the election Chat makes for its default (`electConversationDefault`), stops at a
+refused credential (HTTP 401/403) instead of sweeping the catalog, and an explicit Settings
+verification that answers definitively ends its pause on a model. The tool-calling proof at startup
+follows the model in use; a model nobody picked receives none unless the walk itself found it ready.
+A restored selection is never checked on page load, restore or opening a Chat: the first Send (Chat)
+or Start (Workbench) on a model without a current observation is the first use that checks it, shows
+that it is being checked and goes ahead when it answers; a refusal shows its reason and keeps the
+draft. A window opening reads the Workbench profile with `check=use`, which dispatches nothing; a
+pick or Start reads with `check=1`. A check that ended without a verdict may be checked
+again by a pick or the next Send, only after the existing not-ready cooldown has passed; a definitive refusal
+stays refused. Gateway Setup keeps the full verification round for explicitly named deployments;
+for a discovered listing, a candidate the walk reaches and the gateway rejects is dropped, a wildcard
+route pattern is dropped by its shape without a request (a listing of nothing else fails with its own
+reason), a default that got no verdict from a gateway that answers (a timeout of its completion, a rate
+limit, an overloaded status) is kept unverified and the walk stops, a failure to reach the gateway at
+all (refused connection, unknown host, TLS or proxy fault) is no verdict and takes the existing
+base-URL fallback and deferred admission without saving anything, and the listed models no request
+reached are configured and reported as unverified. A model kept without a verdict is saved only
+because the answer names it as not verified (the dialog tells the person to choose it in Chat or the
+Coding Workbench, or to verify it in Settings > Models), its tool-calling record is `unverified`, and
+no successful observation is recorded for it. A request for a model with no current positive
+observation that did not come through the UI's first-use check (a Voice canonical target, a direct
+API call) is refused and starts no check: Chat create, send and regeneration answer 400
+`CONVERSATION_MODEL_NOT_READY`, a coding run start is refused as model-unavailable, and the Voice
+queue retries a bounded number of times and then suspends with the transcript kept. A window opening
+or restored selection reads the Workbench profile with `check=use`, which may join a check that
+already runs and report the state but never dispatches one; only a person's pick or Start sends
+`check=1`, and a Start belongs to the model it was pressed for (a model adopted or picked meanwhile
+ends its wait with a plain message and starts no run). `gateway.readiness.scope` records how many models were listed and checked and why,
+only for a check that actually sent a request; `gateway.readiness.selection` records the outcome of
+every pick under its own correlation id; and `gateway.readiness.automatic.started` carries the
+closed `checkReason` (`startup`, `fallback`, `selection`). Nothing renews or recovers a model on a
 timer or passive read. Explicit Settings verification may retry an unsuccessful check. Startup-owned
 work can be observed with a bounded, cancellable metadata wait; disconnecting a browser does not
 cancel shared discovery or start another provider call. The Workbench profile describes the model
@@ -1226,6 +1268,36 @@ chosen in its picker (`modelId`) and its own observed verification, rather than 
 state. `model-verification-pending` means that a configuration-owned check of that model is already
 running; `tool-calling-unverified` records an unknown tool capability without dispatching a probe.
 See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+
+The tool-calling check runs in two steps (#4351, owner decision 2026-11-13): first as production works, the
+tool offered and no forced `tool_choice`; only a model that called no tool is asked once more with the
+forced named call. It ends in one of six closed outcomes (`called-unforced`, `called-only-forced`,
+`forced-refused`, `no-call`, `tools-refused`, `inconclusive`), recorded as `toolCallingOutcome` on the
+existing readiness completion lines and told in plain words in the tool-calling evidence of
+Settings > Models. A forced call the provider refuses (a thinking mode answers HTTP 400 to
+`tool_choice`) is never a verdict that the model cannot call tools, and writes no "unsupported"
+record, but it confirms nothing either: the conversation stays admitted and tool turns stay
+`unverified` until a check passes. `called-only-forced` is admitted. Settings > Models words every closed outcome in one plain
+sentence per language (`settings.models.toolOutcome.<outcome>`, informal German), saying what it was
+and what to do next, in place of the server's English evidence; a new outcome without a sentence
+fails a test. A check a
+person starts in Settings waits at least the interactive silence floor for a slow model when the stored
+configuration does not name a provider timeout (a timeout a person named, whatever its value, stays as
+configured; a person's value is stored with `timeoutNamed: true`, and Setup's own 30 s default is
+stored bare, as are the 30 s and 120 s defaults of installations written before the marker, so those
+read as defaults); it is bounded, cancelled when
+the request closes, shown on the start line as `chatProbeTimeoutMs` and announced as still running; no
+conversation turn is affected. Every tool definition leaves the gateway as a plain object schema (no
+`oneOf`, `anyOf`, `allOf`, `enum`, `const` or `not` at the top level; the alternatives are named in the
+description), and Keiko's own validation keeps using the original schema; a hermetic walk over every
+registered tool definition fails on any other construct at the root; alternatives nested below the root
+pass unchanged (the captured provider 400 and rule name the top level; a live pass is the evidence for
+nested ones). A meter read that withholds the window probe for an unused model records
+`gateway.context-window.probe` state `skipped-unused` once per deployment and generation. The meter read of a Chat's context window
+sends its probe only for a model a person has used: an actual model call completed through the
+current configuration generation, or an explicit Settings check passed (a startup observation is not
+use). Operator procedure:
+[`docs/troubleshooting/model-does-not-call-tools.md`](docs/troubleshooting/model-does-not-call-tools.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
@@ -1379,6 +1451,19 @@ protocol state. `gateway.reasoning-history` records only closed state and counts
 enters evidence, logs, history exports or repository files. Identifying echoed reasoning requires
 the runtime to preserve part types: reasoning already relabelled as ordinary text cannot be identified from
 the wire body. ADR-0137 D8 records the pinned runtime's interrupted-reasoning qualification limit.
+A deployment with no such setting is detected, not configured (#4351): an unattributed HTTP 400 on a
+tool-turn continuation is answered once with the current turn's retained reasoning restored (the closed
+retry reason `reasoning-restore-repair`; the model request only, never a re-run tool, never a replayed
+write; a stream only before its first chunk); only a successful retry marks the deployment as wanting
+its reasoning back, held in memory for the gateway instance (gone with a generation change, never
+persisted or logged beyond the closed states `learned` and `unlearned`) and shown in Settings > Models;
+a second rejection surfaces the original error; an explicit setting always wins; the current turn's
+reasoning is kept in memory for this purpose only and dropped when the turn ends (a final answer, a
+failure or a cancellation of a gateway call; a turn that ends outside the gateway waits for the next
+turn of the session or the 30-minute idle TTL). A learned deployment that rejects a continuation which carried its
+reasoning is answered once without it (the closed retry reason `reasoning-withhold-repair`, still one
+retry per call); when that succeeds the deployment is unlearned, and a second rejection surfaces the
+original error and changes nothing.
 
 For the authenticated native Coding path, the separate explicit provider policy
 `reasoningContinuation: "required-with-tools"` uses the existing native session as the sole

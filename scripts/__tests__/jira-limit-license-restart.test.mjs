@@ -19,6 +19,9 @@ vi.mock("../testing/jira-chat-lab/lab-client.mjs", () => ({
     value: { valid: true, expired: false, expiryDate: Date.now() + remaining * 1000 },
   })),
 }));
+// The restart's new edges (evidence capture, the front wait) have their own tests in
+// jira-lab-health.test.mjs; here they are inert so the restart sequence itself stays under test.
+const INERT = { capture: async () => undefined, waitFront: async () => undefined };
 const { renewLicenseWindow } =
   await import("../testing/jira-chat-lab/requirements/license-window.mjs");
 
@@ -39,7 +42,7 @@ afterEach(() => {
 describe("the owned laboratory renewal", () => {
   it("restarts only this session's directory once and reports the window before and after", async () => {
     remaining = 600;
-    const result = await renewLicenseWindow({}, directory, 5400);
+    const result = await renewLicenseWindow({}, directory, 5400, INERT);
     expect(spawned).toEqual([
       { script: "session.mjs", action: "stop", directory },
       { script: "session.mjs", action: "start", directory },
@@ -50,7 +53,7 @@ describe("the owned laboratory renewal", () => {
 
   it("does not restart when the window already suffices", async () => {
     remaining = 6000;
-    const result = await renewLicenseWindow({}, directory, 5400);
+    const result = await renewLicenseWindow({}, directory, 5400, INERT);
     expect(spawned).toEqual([]);
     expect(result.restarted).toBe(false);
   });

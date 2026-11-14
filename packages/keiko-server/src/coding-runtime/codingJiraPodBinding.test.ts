@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
+  jiraOperationInReleaseScope,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   mcpToolAction,
@@ -32,7 +33,11 @@ import {
 
 /** A draft is approved as one reviewed tree in Chat (#4178) and an attachment reads Chat-connected files (#4176); Coding runs offer neither. */
 const CODING_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
-  (operation) => operation !== "jira.draft" && operation !== "jira.attach",
+  (operation) =>
+    operation !== "jira.draft" &&
+    operation !== "jira.attach" &&
+    // Attachments are outside Release 1 (#4354): neither attachment operation is offered.
+    jiraOperationInReleaseScope(operation),
 );
 
 const BINDING = {
@@ -59,6 +64,7 @@ describe("the run's Jira server definition", () => {
     expect(CODING_READS).not.toContain("jira.draft-batch");
     expect(CODING_READS).toHaveLength(JIRA_MANAGED_READ_TOOLS.length - 1);
     expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.attach"]);
+    expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.delete-attachment"]);
   });
 
   it("reaches the policy as jira_<tool> without any two tools sharing an action", () => {

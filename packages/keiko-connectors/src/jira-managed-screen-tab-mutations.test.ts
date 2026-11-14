@@ -446,3 +446,30 @@ it("recognizes only the three fixed native tab mutations", () => {
   expect(isJiraScreenTabMutation("constructor")).toBe(false);
   expect(isJiraScreenTabMutation("jira.delete-screen")).toBe(false);
 });
+
+// #4357 AC3: a screen lookup Jira itself refused keeps the closed fact that Jira refused it, so a
+// model is never told that Keiko refused before sending.
+it("keeps the fact that Jira refused the screen lookup, with its own explanation", async () => {
+  const request = port([
+    {
+      ok: false,
+      reason: "not-found",
+      httpStatus: 404,
+      remote: { fromJira: true, messages: ["No such screen search."] },
+    },
+  ]);
+  expect(
+    await mutate("jira.create-screen-tab", { ...SELECTED, name: "Implementation" }, request),
+  ).toEqual({
+    ok: false,
+    reason: "not-found",
+    detail: { fromJira: true, messages: ["No such screen search."] },
+  });
+  expect(writes(request)).toEqual([]);
+});
+it("leaves a screen lookup Keiko refused without that fact", async () => {
+  const request = port([body({ screens: "not a list" })]);
+  const refused = await mutate("jira.create-screen-tab", { ...SELECTED, name: "x" }, request);
+  expect(refused).toMatchObject({ ok: false });
+  expect(JSON.stringify(refused)).not.toContain("fromJira");
+});

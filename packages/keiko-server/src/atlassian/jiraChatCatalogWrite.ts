@@ -4,6 +4,7 @@ import {
   isJiraAvatarUploadOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ToolAuthorityAvailability } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type {
   JiraChatAdmissionOptions,
   JiraChatCatalogAction,
@@ -164,15 +165,39 @@ async function reviewedIdentity(
   return attachment === undefined ? undefined : { ...identity, attachment };
 }
 
+/**
+ * What happened to the write approval a person was asked for: it ran out before anyone decided
+ * (`expired`, so the model and the card say so instead of "declined"), or nothing special. An
+ * approval that is merely gone, after a reset or a shutdown, is never reported as expired.
+ */
+export type CatalogWriteApprovalWait = "expired" | undefined;
+
 export async function requestCatalogWriteApproval(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
-): Promise<void> {
+): Promise<CatalogWriteApprovalWait> {
   const context = options.context();
+  const requested = await requestedApproval(options, action, context);
+  if (requested === undefined) return undefined;
+  await options.requestWriteConsent?.(requested, context.signal);
+  return options.deps.atlassianActionApprovalRegistry?.chatWriteApprovalExpired(
+    requested.approvalId,
+    context.correlationId,
+  ) === true
+    ? "expired"
+    : undefined;
+}
+
+/** The approval a person must decide, if this write needs one. */
+async function requestedApproval(
+  options: JiraChatAdmissionOptions,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+): Promise<ChatToolWriteApprovalView | undefined> {
   const identity = jiraChatWriteAction(action);
-  if (identity === undefined || options.reviewableWrite?.(action) !== true) return;
+  if (identity === undefined || options.reviewableWrite?.(action) !== true) return undefined;
   const reviewed = await reviewedIdentity(options, action, identity);
-  if (reviewed === undefined) return;
+  if (reviewed === undefined) return undefined;
   const result = requestJiraChatWriteApproval(
     options.deps,
     context.chatId,
@@ -182,8 +207,7 @@ export async function requestCatalogWriteApproval(
     context.correlationId,
     identity.operation === "jira.draft" ? options.draftItemRefs?.(action) : undefined,
   );
-  if (result.kind === "review-required")
-    await options.requestWriteConsent?.(result.approval, context.signal);
+  return result.kind === "review-required" ? result.approval : undefined;
 }
 
 export function claimJiraChatWrite(

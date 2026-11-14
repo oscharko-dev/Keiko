@@ -10,6 +10,7 @@ import { logChatContextManagement } from "./chat-context-log.js";
 import {
   contextWindowProbeInFlight,
   discoverAssumedContextWindow,
+  noteWithheldContextWindowProbe,
 } from "./gateway-context-window.js";
 // ADR-0013 D7 — Route handlers for UI-local store routes. All inputs are validated;
 // every error path uses the redacted `{ error: { code, message } }` envelope; SECURITY_HEADERS are
@@ -36,10 +37,16 @@ import {
   parseExpectedGroundingScopeIdentity,
 } from "./store/chat-grounding-scope-identity.js";
 import { logChatScopeUpdate } from "./chat-scope-update-log.js";
+import { refuseUnavailableKnowledgeScopes } from "./chat-knowledge-scope-availability.js";
 import { jiraChatPatchFields, jiraChatUpdateOptions } from "./atlassian/jiraChatBindingPatch.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentGroundingLimits } from "./deps.js";
+import {
+  currentConversationReadinessObservation,
+  currentGatewayConfig,
+  currentGroundingLimits,
+  modelUsedByPerson,
+} from "./deps.js";
 import { findCapability, findConfiguredCapability } from "@oscharko-dev/keiko-model-gateway";
 import {
   UiStoreError,
@@ -1321,6 +1328,8 @@ function interruptChangedScopeTurn(
   if (existing === undefined) return notFoundResult("Chat not found.");
   const conflict = groundingPatchConflict(deps, existing, patch, correlationId);
   if (conflict !== undefined) return conflict;
+  const refused = knowledgeScopeRefusal(deps, existing, patch, correlationId);
+  if (refused !== undefined) return refused;
   const safePatch = canonicalizeGitChangeScopePatch(
     deps,
     existing,
@@ -1333,6 +1342,20 @@ function interruptChangedScopeTurn(
   });
   interruptChangedChatGenerations(deps, existing, preview, correlationId, patch);
   return undefined;
+}
+
+// A newly added Knowledge Pod that does not exist or is being deleted refuses the whole update before
+// any state changes or running turn is interrupted (#4371).
+function knowledgeScopeRefusal(
+  deps: UiHandlerDeps,
+  existing: Chat,
+  patch: UpdateChatPatch,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const refusal = refuseUnavailableKnowledgeScopes(deps, existing, patch);
+  if (refusal === undefined) return undefined;
+  logChatScopeUpdate("denied", existing, existing, patch, correlationId, undefined, refusal.reason);
+  return { status: refusal.status, body: errorBody(refusal.code, refusal.message, correlationId) };
 }
 
 function groundingPatchConflict(
@@ -1371,6 +1394,8 @@ function applyChatUpdate(
   if (existing === undefined) return notFoundResult("Chat not found.");
   const conflict = groundingPatchConflict(deps, existing, patch, correlationId);
   if (conflict !== undefined) return conflict;
+  const refused = knowledgeScopeRefusal(deps, existing, patch, correlationId);
+  if (refused !== undefined) return refused;
   const scopesToCheck = scopesRequiringAccessValidation(patch);
   const needsGitChangeCheck = gitChangeScopePatchNeedsAccessValidation(patch);
   let safePatch = patch;
@@ -1661,6 +1686,26 @@ export function handleChatContextStatus(
 // without generating; a slow gateway only delays the reading, never fails it.
 const CONTEXT_WINDOW_PROBE_WAIT_MS = 3_000;
 
+// A read never loads a model (#4351): the probe is a streamed completion, so it runs only for a model
+// a person has used (an actual call completed in this configuration generation, or an explicit
+// Settings verification passed) and that was not since observed failing. A startup observation is not
+// use. Any other model reports the window it is planned with and dispatches nothing, which the
+// activity log records once per deployment and generation; the first overflow still teaches the
+// real window.
+function measuredWindowProbe(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+): Promise<void> {
+  if (
+    modelUsedByPerson(deps, modelId) &&
+    currentConversationReadinessObservation(deps, modelId) !== false
+  )
+    return discoverAssumedContextWindow(deps, modelId, correlationId);
+  noteWithheldContextWindowProbe(deps, modelId, correlationId);
+  return Promise.resolve();
+}
+
 async function contextStatusWithMeasuredWindow(
   deps: UiHandlerDeps,
   chatId: string,
@@ -1668,11 +1713,7 @@ async function contextStatusWithMeasuredWindow(
   correlationId: string | undefined,
 ): Promise<ChatContextStatusWire> {
   const status = readChatContextStatus(deps, chatId, modelId, correlationId);
-  const probe = discoverAssumedContextWindow(
-    deps,
-    modelId,
-    correlationId ?? UNKNOWN_CORRELATION_ID,
-  );
+  const probe = measuredWindowProbe(deps, modelId, correlationId ?? UNKNOWN_CORRELATION_ID);
   // A provider-reported window is re-checked in the background; only an assumed one delays.
   if (status.contextWindowAssumed === true) {
     let timer: NodeJS.Timeout | undefined;

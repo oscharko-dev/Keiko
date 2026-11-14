@@ -42,11 +42,13 @@ import type {
 } from "../store/chatToolMutationTypes.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
-import { jiraDraftProblemGuidance } from "./jiraChatDraftArguments.js";
+import { draftProblemData } from "./jiraChatDraftArguments.js";
 import { JIRA_DRAFT_UNLISTED_GUIDANCE, listIssueKeys } from "./jiraDraftKeyRanges.js";
 import {
   JIRA_ALREADY_REFUSED_GUIDANCE,
+  JIRA_LOCAL_REFUSAL_GUIDANCE,
   JIRA_REJECTED_GUIDANCE,
+  jiraRefusalSource,
   JIRA_UNCERTAIN_GUIDANCE,
 } from "./jiraMutationResult.js";
 import {
@@ -133,6 +135,12 @@ export interface DraftItemResult {
   readonly state: JiraDraftItemState;
   readonly issueKey?: string;
   readonly detail?: CatalogJsonObject;
+  /**
+   * Who refused a failed item, a closed fact taken from the instruction its own result carries (#4357
+   * AC3): Jira's error document or permission, or Keiko's own check before the item was sent. Never
+   * projected into a row.
+   */
+  readonly refusedBy?: "jira" | "keiko";
   /** What of the requested trace reached the created issue. */
   readonly trace?: CatalogJsonObject;
 }
@@ -183,13 +191,22 @@ function keyOf(value: unknown): string | undefined {
  * A refusal that names an issue (an existing item still missing links) keeps its key: the issue
  * exists, so its dependents proceed and the model repairs it instead of creating it again.
  */
-function failedItem(ref: string, result: ManagedMcpToolResult): DraftItemResult {
+function failedItem(
+  ref: string,
+  result: ManagedMcpToolResult,
+  attempt: JiraMutationAttempt | undefined,
+): DraftItemResult {
   const issueKey = keyOf(result.data.issueKey);
+  // The source comes from the attempt's own detail through the one closed function; an item with no
+  // attempt (a replayed settlement) has no known source and is never assumed to be Keiko's.
+  const refusedBy =
+    attempt?.ok === false ? jiraRefusalSource("rejected", attempt.detail) : undefined;
   return {
     ref,
     state: "failed",
     ...(issueKey === undefined ? {} : { issueKey }),
     detail: failureDetail(result.data),
+    ...(refusedBy === undefined ? {} : { refusedBy }),
   };
 }
 /** Journal outcome first; the attempt only names the key a reconciliation found. */
@@ -207,7 +224,8 @@ function settledItem(
     const issueKey = keyOf(attempt.receipt.issueKey);
     return { ref, state: "existing", ...(issueKey === undefined ? {} : { issueKey }) };
   }
-  if (outcome === "rejected" || outcome === "not-dispatched") return failedItem(ref, result);
+  if (outcome === "rejected" || outcome === "not-dispatched")
+    return failedItem(ref, result, attempt);
   // A partial effect names the issue it did create, so it is never created again.
   const partialKey = keyOf(result.data.issueKey);
   return {
@@ -648,14 +666,50 @@ function refusedAgainGuidance(failed: readonly DraftItemResult[]): string | unde
     ),
   );
 }
+/**
+ * Keiko refused some items marked failed before sending them, and Jira refused others: neither
+ * "Jira refused" nor "Keiko refused" alone would be true of the draft (#4357 AC3).
+ */
+export const JIRA_DRAFT_MIXED_REFUSAL_GUIDANCE =
+  "Some items marked failed were refused by Keiko before sending them and some by Jira; the items with an issueKey, if any, are in Jira. " +
+  "Do what each failed item's fieldErrors or messages say, then send the corrected draft once: " +
+  "issues already in Jira are recognised, so nothing is created twice. " +
+  "Tell the user in plain language what was created, if anything, and which item was refused and why.";
+/** Keiko's own checks refused the failed items while others were created. */
+export const JIRA_DRAFT_PARTLY_LOCAL_REFUSAL_GUIDANCE =
+  "Keiko refused the items marked failed before sending them; the items with an issueKey are in Jira. " +
+  "Do what each failed item's messages say, then send the corrected draft once: " +
+  "issues already in Jira are recognised, so nothing is created twice. " +
+  "Tell the user in plain language which issues were created and which item was refused and why.";
+/**
+ * Failed items whose refusal source is not known (a replayed settlement keeps no attempt): neither
+ * "Jira refused" nor "Keiko refused" would be true of them, so the words name neither.
+ */
+export const JIRA_DRAFT_UNKNOWN_SOURCE_REFUSAL_GUIDANCE =
+  "The items marked failed were refused and not created; the items with an issueKey, if any, are in Jira. " +
+  "Do what each failed item's fieldErrors or messages say, then send the corrected draft once: " +
+  "issues already in Jira are recognised, so nothing is created twice. " +
+  "Tell the user in plain language what was created, if anything, and which item was refused and why.";
+/** The words for failed items that carry an explanation, by who refused them. */
+function explainedDraftGuidance(
+  items: readonly DraftItemResult[],
+  explained: readonly DraftItemResult[],
+): string {
+  const created = items.some((item) => item.issueKey !== undefined);
+  const jira = explained.some((item) => item.refusedBy === "jira");
+  const keiko = explained.some((item) => item.refusedBy === "keiko");
+  if (explained.some((item) => item.refusedBy === undefined))
+    return JIRA_DRAFT_UNKNOWN_SOURCE_REFUSAL_GUIDANCE;
+  if (jira && keiko) return JIRA_DRAFT_MIXED_REFUSAL_GUIDANCE;
+  if (jira) return created ? JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE : JIRA_REJECTED_GUIDANCE;
+  return created ? JIRA_DRAFT_PARTLY_LOCAL_REFUSAL_GUIDANCE : JIRA_LOCAL_REFUSAL_GUIDANCE;
+}
 /** An uncertain item outranks a refused one: the model must stop and tell the user first. */
-function draftGuidance(items: readonly DraftItemResult[]): string | undefined {
+export function jiraDraftGuidance(items: readonly DraftItemResult[]): string | undefined {
   if (items.some((item) => item.state === "uncertain")) return JIRA_UNCERTAIN_GUIDANCE;
   const failed = items.filter((item) => item.state === "failed");
-  if (failed.some((item) => item.detail?.fieldErrors ?? item.detail?.messages))
-    return items.some((item) => item.issueKey !== undefined)
-      ? JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE
-      : JIRA_REJECTED_GUIDANCE;
+  const explained = failed.filter((item) => item.detail?.fieldErrors ?? item.detail?.messages);
+  if (explained.length > 0) return explainedDraftGuidance(items, explained);
   const refused = refusedAgainGuidance(failed);
   if (refused !== undefined) return refused;
   if (items.some((item) => item.state === "pending")) return JIRA_DRAFT_PENDING_GUIDANCE;
@@ -755,7 +809,7 @@ export function draftResult(
   const projected = projectRows(baseUrl, items);
   const compact = projected.compact ? compactData(baseUrl, items, projected) : {};
   const guidance =
-    draftGuidance(items) ??
+    jiraDraftGuidance(items) ??
     (compact.rangesTruncated === true ? JIRA_DRAFT_UNLISTED_GUIDANCE : undefined);
   return {
     data: {
@@ -938,7 +992,7 @@ export async function executeJiraChatDraft(
       data: {
         outcome: "rejected",
         reason: "field-validation",
-        guidance: jiraDraftProblemGuidance(checked.problem, checked.item),
+        ...draftProblemData(checked.problem, checked.item),
         items: [],
       },
       isError: true,

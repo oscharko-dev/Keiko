@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   JIRA_DESCRIPTION_INPUT_SCHEMA,
   JIRA_MANAGED_READ_TOOLS,
+  JIRA_MUTATION_DETAIL_LIMITS,
   type JiraManagedReadToolName,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
@@ -15,7 +16,12 @@ import type {
   ManagedMcpToolDeclaration,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { createJiraManagedProvider, type JiraManagedConnection } from "./jira-managed-tools.js";
+import {
+  JIRA_READ_GENERIC_INPUT_RULE,
+  JIRA_READ_INPUT_RULES,
+  createJiraManagedProvider,
+  type JiraManagedConnection,
+} from "./jira-managed-tools.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { field, response } from "../../../tests/support/jira-managed-remote.js";
 import { asRecord } from "./atlassian-sync-classify.js";
@@ -295,14 +301,45 @@ it.each([
   "refuses invalid %s input %j before connection resolution",
   async (name, args) => {
     const f = fixture({});
+    // The refusal still happens before any connection or request; it now also says the rule (#4357).
     expect(await f.run(name, args)).toEqual({
-      data: { outcome: "failed", reason: "invalid-input" },
+      data: {
+        outcome: "failed",
+        reason: "invalid-input",
+        messages: [expect.stringMatching(/^Pass /u)],
+      },
       isError: true,
     });
     expect(f.connection).not.toHaveBeenCalled();
     expect(f.http).not.toHaveBeenCalled();
   },
 );
+
+// The exact rule text one case says (#4357): a pin that still fails when the sentence changes by accident.
+it("says the exact rule when jira.assignable-users is called without a scope", async () => {
+  const f = fixture({});
+  expect(await f.run("jira.assignable-users", { query: "ann" })).toEqual({
+    data: {
+      outcome: "failed",
+      reason: "invalid-input",
+      messages: [
+        "Pass exactly one of projectKey or issueKey, optionally with query. Do not pass both.",
+      ],
+    },
+    isError: true,
+  });
+});
+
+it("keeps every pre-dispatch rule inside the 200-byte message bound", () => {
+  for (const [tool, rule] of [
+    ...Object.entries(JIRA_READ_INPUT_RULES),
+    ["generic", JIRA_READ_GENERIC_INPUT_RULE],
+  ]) {
+    expect(Buffer.byteLength(JSON.stringify(rule)), tool).toBeLessThanOrEqual(
+      JIRA_MUTATION_DETAIL_LIMITS.messageBytes,
+    );
+  }
+});
 
 it.each([
   [401, "auth-failed"],
@@ -694,6 +731,92 @@ describe("jira.search with requested fields (#4176)", () => {
         ],
       },
     ]);
+  });
+  it("does not repeat a requested field the result row already carries, and keeps one it does not", async () => {
+    const f = fixture(
+      search([hit("SYN-1", { customfield_1: "Selected", priority: { id: "3", name: "High" } })]),
+    );
+    const result = await f.run("jira.search", {
+      jql: "project=SYN",
+      fields: ["status", "labels", "assignee", "created", "customfield_1", "reporter"],
+    });
+    const [row] = result.data.items as readonly Record<string, unknown>[];
+    expect(row).toMatchObject({
+      status: { name: "Open" },
+      labels: ["synthetic"],
+      assigneeEmpty: true,
+      created: "2026-10-28",
+    });
+    expect(row?.fieldValues).toMatchObject([
+      { id: "customfield_1", state: "value", text: "Selected" },
+      { id: "reporter" },
+    ]);
+    expect(row?.fieldValues as readonly unknown[]).toHaveLength(2);
+  });
+  it("omits fieldValues when every requested field is already on the row, but keeps an absent one visible", async () => {
+    const f = fixture(search([hit("SYN-1", {})]));
+    const carried = await f.run("jira.search", {
+      jql: "project=SYN",
+      fields: ["status", "labels"],
+    });
+    expect(JSON.stringify(carried.data.items)).not.toContain("fieldValues");
+    const absent = await f.run("jira.search", { jql: "project=SYN", fields: ["priority"] });
+    expect(absent.data.items).toMatchObject([
+      { fieldValues: [{ id: "priority", state: "unavailable" }] },
+    ]);
+  });
+  describe("steering a search that asks for bodies across more issues than one page", () => {
+    const many = (total: number, issues: readonly unknown[]): unknown => ({
+      ...(search(issues) as Record<string, unknown>),
+      total,
+    });
+    it("carries one closed guidance sentence built from counts only", async () => {
+      const f = fixture(
+        many(240, [hit("SYN-1", { customfield_1: "Private body text", description: "Secret" })]),
+      );
+      const result = await f.run("jira.search", {
+        jql: 'project = "Private Project Name"',
+        fields: ["description", "customfield_1"],
+      });
+      const guidance = result.data.guidance;
+      expect(typeof guidance).toBe("string");
+      expect(guidance).toContain("240");
+      expect(guidance).toContain("jira.report");
+      expect(guidance).toContain("jira.issue");
+      expect(guidance).not.toMatch(/Private|Secret|SYN-1/u);
+    });
+    it("never claims more than the row returned: a value cut for size is marked unavailable and the sentence says so", async () => {
+      const f = fixture(many(240, [hit("SYN-1", { customfield_1: "x".repeat(20000) })]));
+      const result = await f.run("jira.search", {
+        jql: "project=SYN",
+        fields: ["customfield_1", "customfield_2"],
+      });
+      const [row] = result.data.items as readonly Record<string, unknown>[];
+      expect(row?.fieldValues).toMatchObject([
+        { id: "customfield_1", state: "unavailable" },
+        { id: "customfield_2", state: "unavailable" },
+      ]);
+      const guidance = result.data.guidance as string;
+      expect(guidance).toMatch(/marked unavailable/u);
+      expect(guidance).toMatch(/cut/u);
+      expect(guidance).not.toMatch(/returned the requested field values/u);
+    });
+    it.each([
+      [
+        "every issue fits one page",
+        many(1, [hit("SYN-1", { customfield_1: "x" })]),
+        ["customfield_1"],
+      ],
+      ["no field is requested", many(240, [hit("SYN-1", {})]), undefined],
+      ["only row fields are requested", many(240, [hit("SYN-1", {})]), ["status", "labels"]],
+    ])("adds no guidance when %s", async (_name, body, fields) => {
+      const f = fixture(body);
+      const result = await f.run("jira.search", {
+        jql: "project=SYN",
+        ...(fields === undefined ? {} : { fields }),
+      });
+      expect(result.data).not.toHaveProperty("guidance");
+    });
   });
   it("keeps the summary-only shape when no fields are requested", async () => {
     const f = fixture(search([hit("SYN-1", {})]));

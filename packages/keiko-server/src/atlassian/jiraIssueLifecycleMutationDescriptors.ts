@@ -29,26 +29,37 @@ const COMMON_INPUT = {
 const COMMON_REQUIRED = ["expectedActorKey", "confirmUnverifiedEffect"];
 const COMMON =
   "High-risk issue-tracker.write action, independently subject to native Jira permissions. Bind the exact current actor, numeric issue identity, key, summary, project and type before exactly one fixed native effect. Reviewed state is not atomic compare-and-swap. confirmUnverifiedEffect:true explicitly accepts that complete archive/deletion/notification/sequence consequences cannot be independently proved. Every acknowledged effect remains succeeded-unconfirmed; never retry a lost or uncertain response. Missing/denied issue reads or404 do not prove deletion or archiving. Receipt flags/positions describe requested targets, not observed completion. Known receipts are bounded to16KiB before requests; existing authority, one-effect journal, preflight and body-free logging apply.";
+/**
+ * An issue deletion is the one lifecycle effect that can be confirmed (#4354, ADR-0128): Jira's 2xx
+ * answer to this very DELETE was observed and the issue then reads as gone.
+ */
+const COMMON_CONFIRMABLE = COMMON.replace(
+  "Every acknowledged effect remains succeeded-unconfirmed; never retry a lost or uncertain response. Missing/denied issue reads or404 do not prove deletion or archiving.",
+  "A deletion is succeeded only when Jira accepted the DELETE and the issue then reads as gone (404); any other read-back, a lost or uncertain response, or a denied read stays succeeded-unconfirmed and is never retried.",
+);
 function write(
   description: string,
   input: CatalogJsonObject,
   required: readonly string[],
   receipt: CatalogJsonObject,
+  confirmable = false,
 ): JiraNativeDefinition {
   return {
-    description: `${description} ${COMMON}`,
+    description: `${description} ${confirmable ? COMMON_CONFIRMABLE : COMMON}`,
     input: object({ ...COMMON_INPUT, ...input }, [...COMMON_REQUIRED, ...required]),
-    result: {
-      ...jiraNativeWriteResult({ userKey: ACTOR, ...receipt }),
-      allOf: [
-        {
-          not: {
-            properties: { outcome: { type: "string", enum: ["succeeded"] } },
-            required: ["outcome"],
-          },
+    result: confirmable
+      ? jiraNativeWriteResult({ userKey: ACTOR, ...receipt })
+      : {
+          ...jiraNativeWriteResult({ userKey: ACTOR, ...receipt }),
+          allOf: [
+            {
+              not: {
+                properties: { outcome: { type: "string", enum: ["succeeded"] } },
+                required: ["outcome"],
+              },
+            },
+          ],
         },
-      ],
-    },
     risk: "write",
     maxResultCount: 1,
   };
@@ -82,6 +93,7 @@ export const JIRA_ISSUE_LIFECYCLE_WRITE_DEFINITIONS = {
     { expectedIssue: ISSUE, expectedSubtasks: { type: "array", maxItems: 0, items: CHILD } },
     ["expectedIssue", "expectedSubtasks"],
     { ...SINGLE_RECEIPT, issuePresent: { type: "boolean", enum: [false] } },
+    true,
   ),
   "jira.move-subtask": write(
     "Reorder subtasks within the same reviewed parent, never reparent. Review the full returned native child sequence and independently observe canMove:true. originalPosition/currentPosition are explicit distinct native sequence values sent as original/current; no zero-/one-based interpretation, array-index conversion or absolute persisted rank is invented. Native Jira validates their bounds. A matching later visible sequence does not establish every reorder consequence.",

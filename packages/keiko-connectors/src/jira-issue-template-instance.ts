@@ -40,7 +40,11 @@ const PROJECT_KEY = /^[A-Za-z]\w{0,127}$/u;
 interface ProjectFacts {
   readonly id: string;
   readonly key: string;
-  readonly issueTypes: readonly { readonly id: string; readonly name: string }[];
+  readonly issueTypes: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly subtask?: boolean;
+  }[];
 }
 
 function projectFacts(body: Record<string, unknown> | undefined): ProjectFacts | undefined {
@@ -52,12 +56,20 @@ function projectFacts(body: Record<string, unknown> | undefined): ProjectFacts |
     types === undefined
   )
     return undefined;
-  const issueTypes = types.flatMap((item): readonly { id: string; name: string }[] => {
-    const record = asRecord(item);
-    return typeof record?.id === "string" && typeof record.name === "string"
-      ? [{ id: record.id, name: record.name }]
-      : [];
-  });
+  const issueTypes = types.flatMap(
+    (item): readonly { id: string; name: string; subtask?: boolean }[] => {
+      const record = asRecord(item);
+      return typeof record?.id === "string" && typeof record.name === "string"
+        ? [
+            {
+              id: record.id,
+              name: record.name,
+              ...(typeof record.subtask === "boolean" ? { subtask: record.subtask } : {}),
+            },
+          ]
+        : [];
+    },
+  );
   return { id: body.id, key: body.key, issueTypes };
 }
 

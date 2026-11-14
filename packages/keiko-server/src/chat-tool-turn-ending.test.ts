@@ -94,7 +94,9 @@ describe("chatToolTurnPartialAnswer", () => {
   it("preserves acknowledged and uncertain receipts with the closed authentication cause", () => {
     const answer = chatToolTurnPartialAnswer(TRANSCRIPT, "authentication-failed");
     expect(answer).toContain("Jira authentication failed");
-    expect(answer).toContain("Open the Knowledge Pods hub and verify the connection again");
+    expect(answer).toContain(
+      "open the Knowledge Pods hub, replace the token and verify the connection",
+    );
     expect(answer).toContain("Completed in this turn:\n- jira_create REQ-12\n- jira_create REQ-13");
     expect(answer).toContain("check these in Jira before retrying:\n- jira_edit REQ-4");
   });
@@ -330,6 +332,49 @@ describe("recordChatToolTurnCorrected", () => {
     expectActivityLogProof("chat.tool-turn.corrected.line", line);
     expect(line).not.toMatch(/message-private-id|LH-0|RPT-/u);
   });
+
+  it("counts the internal report keys an answer printed, never naming them", () => {
+    const logs = createBufferedServerLogSink();
+    recordChatToolTurnCorrected(logs, {
+      correlationId: "turn-raw-report-key-proof",
+      messageId: "message-private-id",
+      settledExchangeCount: 3,
+      correctionKind: "raw-report-key",
+      rawReportKeyCount: 2,
+    });
+    const event = logs.events.find((entry) => entry.op === "chat.tool-turn.corrected");
+    expect(event).toMatchObject({
+      correlationId: "turn-raw-report-key-proof",
+      level: "warn",
+      extra: { correctionKind: "raw-report-key", rawReportKeyCount: 2, settledExchangeCount: 3 },
+    });
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-turn.corrected.line", line);
+    expect(line).not.toMatch(/message-private-id|issuesChecked|issuesJudged/u);
+  });
+
+  it.each(["announced-create", "tool-call-as-text"] as const)(
+    "counts the %s sentences or calls of an answer, never quoting them",
+    (correctionKind) => {
+      const logs = createBufferedServerLogSink();
+      recordChatToolTurnCorrected(logs, {
+        correlationId: "turn-claimed-action-proof",
+        messageId: "message-private-id",
+        settledExchangeCount: 2,
+        correctionKind,
+        announcementCount: 3,
+      });
+      const event = logs.events.find((entry) => entry.op === "chat.tool-turn.corrected");
+      expect(event).toMatchObject({
+        correlationId: "turn-claimed-action-proof",
+        level: "warn",
+        extra: { correctionKind, announcementCount: 3, settledExchangeCount: 2 },
+      });
+      const line = formatActivityLogProofLine(event ?? {});
+      expectActivityLogProof("chat.tool-turn.corrected.line", line);
+      expect(line).not.toMatch(/message-private-id|REQ-|jira_create/u);
+    },
+  );
 
   it("counts the issue keys an answer named without a tool result, never naming them", () => {
     const logs = createBufferedServerLogSink();

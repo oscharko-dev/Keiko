@@ -50,10 +50,13 @@ export const REMOTE_LINK_VALUE_KEYS = [
 ] as const;
 const VALUE_KEYS = new Set<string>(REMOTE_LINK_VALUE_KEYS);
 const URL_KEYS = new Set(["url", "iconUrl", "statusIconUrl", "statusIconLink"]);
+const URL_MAX_CHARS = 2048;
+const TEXT_MAX_CHARS = 255;
+const SUMMARY_MAX_CHARS = 32768;
 /** These are remote-link metadata only. No URL is fetched, followed, or returned as a browse link. */
 function metadataUrl(value: unknown): value is string {
   if (
-    !savedText(value, 2048) ||
+    !savedText(value, URL_MAX_CHARS) ||
     /[\p{Cc}\\]/u.test(value) ||
     value.trim() !== value ||
     !URL.canParse(value)
@@ -70,7 +73,34 @@ function scalar(value: unknown, key: (typeof REMOTE_LINK_VALUE_KEYS)[number]): b
   if (value === null) return key !== "url" && key !== "title";
   if (key === "resolved") return typeof value === "boolean";
   if (URL_KEYS.has(key)) return metadataUrl(value);
-  return savedText(value, key === "summary" ? 32768 : 255, key === "summary");
+  return savedText(
+    value,
+    key === "summary" ? SUMMARY_MAX_CHARS : TEXT_MAX_CHARS,
+    key === "summary",
+  );
+}
+/**
+ * The first rule a remote link value breaks, as one sentence for the model (#4357 AC3): the shape
+ * (the fields themselves are in the descriptor), then the first field that fails in field order. Built from the same keys and limits `scalar`
+ * enforces, within the 200-byte bound of a detail message, and never the refused value.
+ */
+export function remoteLinkValueProblem(value: unknown): string {
+  const raw = asRecord(value);
+  if (
+    raw === undefined ||
+    !Object.keys(raw).every((key) => VALUE_KEYS.has(key)) ||
+    !REMOTE_LINK_VALUE_KEYS.every((key) => Object.hasOwn(raw, key))
+  )
+    return "value must be the complete remote link with every field present, null where it is empty.";
+  const key = REMOTE_LINK_VALUE_KEYS.find((candidate) => !scalar(raw[candidate], candidate));
+  if (key === undefined) return "value is not a remote link this call can send.";
+  if (raw[key] === null) return `${key} must be text, never null.`;
+  if (key === "resolved") return "resolved must be true, false or null.";
+  if (URL_KEYS.has(key))
+    return `${key} must be an http or https URL of at most ${String(URL_MAX_CHARS)} characters, with no credentials, control characters, backslash or surrounding spaces.`;
+  return key === "summary"
+    ? `summary must be text of at most ${String(SUMMARY_MAX_CHARS)} characters without control characters, or null.`
+    : `${key} must be non-blank text of at most ${String(TEXT_MAX_CHARS)} characters without control characters, or null.`;
 }
 function isRemoteLinkValue(value: unknown, snapshot: boolean): value is RemoteLinkValue {
   const raw = asRecord(value);

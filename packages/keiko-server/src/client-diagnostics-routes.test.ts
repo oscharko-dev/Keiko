@@ -315,6 +315,7 @@ describe("POST /api/diagnostics/client", () => {
     "send-failure-skipped-draft",
     "send-failure-skipped-unproven",
     "send-cancel-requested",
+    "send-refused-while-running",
   ])("records %s as correlated body-free composer evidence", async (composerActivity) => {
     const sink = captureServerLog();
     await handleClientDiagnosticIngest(
@@ -2105,6 +2106,53 @@ describe("POST /api/diagnostics/client", () => {
     });
     expect(record).not.toHaveProperty("errorKind");
     expect(line).not.toContain("private hostile");
+  });
+
+  it("persists a Knowledge Pod catalog refresh as routine closed evidence (#4371)", async () => {
+    const sink = captureServerLog();
+    const knowledgeCatalogRefresh = { outcome: "superseded", duration: "5s-10s" };
+    const body = {
+      message: "private hostile browser prose",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_catalog-refresh-0001",
+      knowledgeCatalogRefresh,
+    };
+    expect(await handleClientDiagnosticIngest(context(JSON.stringify(body)))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.knowledge-catalog.refreshed",
+    );
+    if (event === undefined) throw new TypeError("Missing catalog refresh evidence");
+    const line = formatActivityLogProofLine(event);
+    const record = expectActivityLogProof("client.knowledge-catalog.refreshed.line", line);
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_catalog-refresh-0001",
+      ...knowledgeCatalogRefresh,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("errorKind");
+    expect(line).not.toContain("private hostile");
+  });
+
+  it.each([
+    { outcome: "slow", duration: "5s-10s" },
+    { outcome: "ok", duration: "12s" },
+    { outcome: "ok", duration: "1s-5s", podName: "Customer contracts" },
+  ])("refuses a catalog refresh report outside its closed shape (#4371)", async (report) => {
+    const sink = captureServerLog();
+    const body = {
+      message: "catalog refresh",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_catalog-refresh-0002",
+      knowledgeCatalogRefresh: report,
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(400);
+    expect(sink.events.some((e) => e.op === "client.knowledge-catalog.refreshed")).toBe(false);
   });
 
   it.each([

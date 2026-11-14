@@ -227,4 +227,18 @@ describe("one native bulk effect", () => {
     ).toMatchObject({ ok: false, reason: "conflict" });
     expect(native.snapshot()).toEqual({ effects: 0 });
   });
+  // #4354: an actor key the model invented is told where the key comes from, before any effect. Only
+  // the first read says so; a real change of identity between the two reads stays a conflict above.
+  it("tells an invented actor key to come from jira.myself, before any effect", async () => {
+    const native = bulkCreateFixture();
+    const refused = await execute(
+      "jira.create-issues",
+      { ...ARGS, expectedActorKey: "invented-key" },
+      native.request,
+      preparedPorts(),
+    );
+    expect(refused).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(JSON.stringify(refused)).toContain("jira.myself");
+    expect(native.snapshot()).toEqual({ effects: 0 });
+  });
 });

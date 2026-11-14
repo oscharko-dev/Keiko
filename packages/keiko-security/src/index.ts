@@ -151,7 +151,9 @@ export {
   emitSecurityLogEvent,
   bindSecurityLogCorrelation,
   nullSecurityLogSink,
+  unwiredSecurityLogSink,
   securityErrorKind,
+  startSecurityLogTimer,
 } from "./log-port.js";
 // The bounded Java parser's worker starts and retirements (#4212); the server installs its sink,
 // and the real launch starts the first worker once it listens.
@@ -189,6 +191,19 @@ export type {
   WindowsBinaryExistsCheck,
   WindowsSystemDirectoryIdentityCheck,
 } from "./windows-system-directory.js";
+// Windows facts and actions that need the inbox PowerShell host, each bounded as a host start plus
+// its own work (#4358): the tracked UI's command line, and the command that opens a browser.
+export {
+  WINDOWS_PROCESS_IDENTITY_TIMEOUT_MS,
+  readWindowsProcessCommandLine,
+} from "./windows-process-identity.js";
+export type { WindowsProcessIdentityOptions } from "./windows-process-identity.js";
+export { WINDOWS_URL_OPENER_TIMEOUT_MS, resolveWindowsUrlOpener } from "./windows-url-opener.js";
+export { currentWindowsVaultCustody } from "./windows-vault-custody.js";
+export type { WindowsVaultCustodyOutcome } from "./windows-vault-custody.js";
+export { setWindowsProgramObserver } from "./windows-powershell-program.js";
+export type { WindowsProgramObserver } from "./windows-powershell-program.js";
+export type { WindowsBrowserApp, WindowsUrlOpener } from "./windows-url-opener.js";
 export type {
   WindowsShortcutCommandOptions,
   WindowsShortcutDefinition,

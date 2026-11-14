@@ -17,6 +17,7 @@ const REFUSAL_REASONS = [
   "effect-denied",
   "cancelled",
   "auth-failed",
+  "auth-unverified",
   "permission-denied",
   "not-found",
   "rate-limited",
@@ -34,6 +35,7 @@ const FIELD_VALIDATIONS = [
   "invalid-field",
   "invalid-operation",
   "bounds-exceeded",
+  "invalid-epic-link",
 ] as const;
 const MUTATION_STATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",

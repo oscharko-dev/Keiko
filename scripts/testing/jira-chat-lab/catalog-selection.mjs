@@ -13,7 +13,11 @@ import { parseArgs } from "node:util";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import { chatReadLogDirectory, jsonRequest, prepareChat, withLiveChat } from "./chat-read.mjs";
 import { privateJson } from "./chat-write.mjs";
-import { SELECTION_CASES, selectionTruth } from "./catalog-selection-cases.mjs";
+import {
+  SELECTION_CASES,
+  selectionNeedsFieldLift,
+  selectionTruth,
+} from "./catalog-selection-cases.mjs";
 import { gradeSelection, summarizeSelection } from "./catalog-selection-grade.mjs";
 import {
   createSelectionObjects,
@@ -26,6 +30,8 @@ import {
 } from "./catalog-selection-objects.mjs";
 import { loadSession, requireLicense } from "./lab-client.mjs";
 import { readGatewayFailures, readToolRejections } from "./requirements/validity.mjs";
+import { withComposerFieldLift } from "./requirements/scorecard-finish.mjs";
+import { withWorkProjectLock } from "./requirements/work-project-lock.mjs";
 
 const TURN_LIMIT_MS = 480_000;
 const MEMORY_OFF = { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} };
@@ -105,21 +111,23 @@ async function withGateway(session, turn) {
 }
 
 /** The owned scope is clean before a write turn: no effect of this case exists yet. */
-async function cleanBefore(session, fixture, entry, marker, tag) {
-  const existing = await entry.verify(session, fixture, marker, tag);
+async function cleanBefore(session, fixture, entry, marker, tag, subject) {
+  await entry.restore?.(session, fixture);
+  const existing = await entry.verify(session, fixture, marker, tag, subject);
   await removeNative(session, existing.cleanup);
-  const again = await entry.verify(session, fixture, marker, tag);
+  const again = await entry.verify(session, fixture, marker, tag, subject);
   if (again.effects > 0 || again.cleanup.length > 0)
     throw new TypeError(`Owned scope of ${entry.id} is not clean before the turn`);
 }
 
 /** The native effect and stray writes of a finished write turn; removes both again. */
 async function settleWrite(session, run, entry, turnFor, before) {
-  const { fixture, marker, tag } = turnFor;
-  const effect = await entry.verify(session, fixture, marker, tag);
+  const { fixture, marker, tag, subject } = turnFor;
+  const effect = await entry.verify(session, fixture, marker, tag, subject);
   const after = await scopeSnapshot(session, fixture, fixture.selection);
-  const stray = strayWrites(before, after, effect.cleanup, `Auswahl ${run.tag}`);
+  const stray = strayWrites(before, after, effect.cleanup, `Auswahl ${run.tag}`, effect);
   await removeNative(session, [...effect.cleanup, ...stray.remove]);
+  await entry.restore?.(session, fixture);
   // The lane runs alone in its session; a foreign object is never deleted, only reported.
   if (stray.foreign > 0) run.foreignStray += stray.foreign;
   const { foreign, changed, removed, issueChanged } = stray;
@@ -135,11 +143,11 @@ async function settleWrite(session, run, entry, turnFor, before) {
  * shown clean throws, so the run stops with its pending marker kept for reconciliation.
  */
 export async function recoverScope(session, run, entry, turnFor, before) {
-  const { fixture, marker, tag } = turnFor;
+  const { fixture, marker, tag, subject } = turnFor;
   const wide = `Auswahl ${run.tag}`;
   const after = await scopeSnapshot(session, fixture, fixture.selection);
   await removeNative(session, strayWrites(before, after, [], wide).remove);
-  await cleanBefore(session, fixture, entry, marker, tag);
+  await cleanBefore(session, fixture, entry, marker, tag, subject);
   const final = await scopeSnapshot(session, fixture, fixture.selection);
   // A changed or removed baseline object cannot be undone by the lane; only an unchanged scope lets
   // the run continue, otherwise it stops and keeps its pending marker for reconciliation.
@@ -156,16 +164,26 @@ async function writeAttempt(context, run, entry, turnFor) {
   const { session } = context;
   const { fixture, marker, tag } = turnFor;
   privateJson(run.pendingPath, { id: entry.id, marker, tag }, true);
-  await cleanBefore(session, fixture, entry, marker, tag);
+  const unavailable = () => {
+    rmSync(run.pendingPath);
+    const turn = { exchanges: [], gateway: { unrecovered: 0, circuit: 0 } };
+    return { turn, proof: { truthUnavailable: true } };
+  };
+  try {
+    // An object the case consumes (the issue a delete removes) is created fresh for each attempt.
+    turnFor.subject = await entry.prepare?.(session, fixture, tag);
+  } catch (error) {
+    stage("prepare-unavailable", { id: entry.id, errorType: errorName(error) });
+    return unavailable();
+  }
+  await cleanBefore(session, fixture, entry, marker, tag, turnFor.subject);
   let before;
   try {
     before = await scopeSnapshot(session, fixture, fixture.selection);
   } catch (error) {
     // Nothing was sent yet, so this attempt is invalid and the owned scope is still clean.
     stage("verify-unavailable", { id: entry.id, errorType: errorName(error) });
-    rmSync(run.pendingPath);
-    const turn = { exchanges: [], gateway: { unrecovered: 0, circuit: 0 } };
-    return { turn, proof: { truthUnavailable: true } };
+    return unavailable();
   }
   const turn = await withGateway(session, await turnFor.send());
   let settled;
@@ -208,9 +226,15 @@ async function attempt(context, run, entry, round) {
     fixture: run.fixture,
     marker,
     tag,
-    send: () => selectionTurn(context, chat, entry.prompt(run.fixture, marker, tag)),
+    subject: undefined,
+    send: () =>
+      selectionTurn(context, chat, entry.prompt(run.fixture, marker, tag, turnFor.subject)),
   };
-  const outcome = await (write ? writeAttempt : readAttempt)(context, run, entry, turnFor);
+  const attemptOf = () => (write ? writeAttempt : readAttempt)(context, run, entry, turnFor);
+  // A write into the shared work project holds the lock the journeys' reset takes (#4369).
+  const outcome = entry.workProject
+    ? await withWorkProjectLock(context.session.directory, `selection-${entry.id}`, attemptOf)
+    : await attemptOf();
   const verdict = gradeSelection(entry, outcome.turn, outcome.proof);
   stage("attempt", { id: entry.id, round, status: verdict.status, path: verdict.path });
   return {
@@ -248,12 +272,19 @@ async function runAttempts(context, run, batch) {
   }
 }
 
+/** The catalog's refusals of the model's selection call (#4357), measured from the transcript. */
+function describeLine(describe) {
+  if (describe === undefined) return "";
+  return `jira.describe: ${describe.turns}/${describe.validTurns} valid turns used it, ${describe.firstRefusedTurns} had their first call refused, ${describe.refused}/${describe.calls} calls refused for their arguments, ${describe.failed} failed in all, ${describe.gatewayRefused} refused by the gateway itself.`;
+}
+
 function markdown(report) {
   const { summary } = report;
   const lines = [
     `# Jira catalog selection (${report.model}, ${report.repeat} rounds)`,
     "",
     `Selected ${summary.selected}/${summary.valid} valid attempts exactly, ${summary.alternative} through an equivalent alternative, ${summary.wrongArguments} with the right tool but refused arguments; ${summary.invalid} invalid.`,
+    describeLine(summary.describe),
     report.complete ? "" : "**Incomplete: the run stopped before every attempt finished.**",
     summary.sufficient ? "" : "**Insufficient: fewer than half of the attempts were valid.**",
     report.foreignStray > 0
@@ -314,7 +345,11 @@ function finishReport(session, modelId, run, startedAt, complete) {
   report.summary = summarizeSelection(attempts);
   writeReport(session, report);
   const { selected, alternative, wrongArguments, valid, invalid, sufficient } = report.summary;
+  const { describe } = report.summary;
   stage("completed", {
+    describeTurns: describe.turns,
+    describeFirstRefusedTurns: describe.firstRefusedTurns,
+    describeRefused: describe.refused,
     complete,
     selected,
     alternative,
@@ -342,17 +377,22 @@ async function measure(session, modelId, run, cases) {
       throw new TypeError(
         `${orphans} issues summarized "Auswahl Vorgang|Ziel" of an earlier run remain; delete them natively first`,
       );
-    for (const batch of attemptBatches(cases, run.repeat)) {
-      if (run.stop.signal.aborted) break;
-      stage("lifecycle-started", { attempts: batch.length });
-      await withLiveChat({
-        session,
-        modelId,
-        run: async (context) => {
-          await runAttempts(context, run, batch);
-        },
-      });
-    }
+    const runBatches = async () => {
+      for (const batch of attemptBatches(cases, run.repeat)) {
+        if (run.stop.signal.aborted) break;
+        stage("lifecycle-started", { attempts: batch.length });
+        await withLiveChat({
+          session,
+          modelId,
+          run: async (context) => {
+            await runAttempts(context, run, batch);
+          },
+        });
+      }
+    };
+    // The work project inherits the field the lab requires in every project and cannot fill: its
+    // create cases run inside the bracket that lifts the requirement (as the Composer lane does).
+    await withComposerFieldLift(selectionNeedsFieldLift(cases), session, runBatches);
     // A signal during the last attempt ends the loop normally, but the run was still stopped.
     complete = !run.stop.signal.aborted;
   } catch (error) {

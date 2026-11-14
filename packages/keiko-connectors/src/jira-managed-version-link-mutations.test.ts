@@ -399,3 +399,187 @@ it("rejects a contradictory native self instead of following or retargeting it",
     "version/81/remotelink",
   ]);
 });
+
+// #4357 AC3: a refused version-link write names the rule the model must satisfy, one fixed sentence
+// per cause, pinned exactly; none may be cut by the 200-byte bound of a detail message.
+async function refusedWith(
+  name: (typeof CASES)[number]["tool"],
+  args: CatalogJsonObject,
+): Promise<{ readonly reason: string; readonly detail: unknown }> {
+  const request = port([]);
+  const attempt = await mutate(name, args, request);
+  expect(request).not.toHaveBeenCalled();
+  if (attempt.ok) throw new TypeError("Expected a refusal");
+  for (const message of attempt.detail?.messages ?? []) {
+    expect(new TextEncoder().encode(message).length).toBeLessThanOrEqual(200);
+    expect(message).not.toMatch(/…$/u);
+  }
+  return { reason: attempt.reason, detail: attempt.detail };
+}
+const invalidField = (messages: readonly string[], fieldId?: string): unknown => ({
+  validation: "invalid-field",
+  messages,
+  ...(fieldId === undefined ? {} : { fieldId }),
+});
+it("names the arguments a version-link write takes when another one is sent", async () => {
+  expect(
+    await refusedWith(CASES[0].tool, { ...CASES[0].args, headers: { Authorization: "x" } }),
+  ).toEqual({
+    reason: "field-validation",
+    detail: invalidField([
+      "This call takes only versionId, expectedProjectId, expectedActorKey, expectedVersionSnapshot, expectedLinks, globalId, valueNodes. Nothing was written.",
+    ]),
+  });
+  expect(
+    await refusedWith(CASES[3].tool, { ...CASES[3].args, valueNodes: OLD_NODES }),
+  ).toMatchObject({
+    detail: {
+      messages: [
+        "This call takes only versionId, expectedProjectId, expectedActorKey, expectedVersionSnapshot, expectedLinks, confirmAll. Nothing was written.",
+      ],
+    },
+  });
+});
+it("names the version, project, actor and snapshot rule", async () => {
+  expect(await refusedWith(CASES[0].tool, { ...CASES[0].args, versionId: "x" })).toEqual({
+    reason: "field-validation",
+    detail: invalidField([
+      "versionId, expectedProjectId, expectedActorKey and expectedVersionSnapshot must be exactly as the version read lists them, the snapshot with every field. Nothing was written.",
+    ]),
+  });
+});
+const GLOBAL_ID_RULE =
+  "A globalId is non-blank text of at most 2048 characters without control characters; one that selects a link also has no / \\ or % and is not . or .. Nothing was written.";
+it.each([
+  [
+    "expectedLinks that is not a list",
+    { expectedLinks: "x" },
+    "expectedLinks must be the complete current list of the version's remote links, each as { globalId, valueNodes }. Nothing was written.",
+  ],
+  [
+    "an expectedLinks entry of the wrong shape",
+    { expectedLinks: [{ globalId: "release:link" }] },
+    "Each expectedLinks entry takes exactly globalId and valueNodes, as the version's remote link read lists them. Nothing was written.",
+  ],
+  [
+    "an expectedLinks globalId that is not valid",
+    { expectedLinks: [{ globalId: "", valueNodes: [{ path: "", kind: "null" }] }] },
+    GLOBAL_ID_RULE,
+  ],
+  [
+    "a repeated expectedLinks globalId",
+    { expectedLinks: [EXPECTED[0], EXPECTED[0]] },
+    "expectedLinks must not repeat a globalId: list each remote link of the version once. Nothing was written.",
+  ],
+] as const)("names the rule for %s", async (_name, change, message) => {
+  expect(await refusedWith(CASES[0].tool, { ...CASES[0].args, ...change })).toEqual({
+    reason: "field-validation",
+    detail: invalidField([message], "expectedLinks"),
+  });
+});
+it.each([".", "..", "x/y", "x\\y", "x%2fy", "x\n"])(
+  "names the global ID rule for a selected link %j",
+  async (globalId) => {
+    expect(await refusedWith(CASES[1].tool, { ...CASES[1].args, globalId })).toEqual({
+      reason: "field-validation",
+      detail: invalidField([GLOBAL_ID_RULE], "globalId"),
+    });
+  },
+);
+it("names the all-links acceptance a delete of every link needs", async () => {
+  expect(await refusedWith(CASES[3].tool, { ...CASES[3].args, confirmAll: false })).toEqual({
+    reason: "field-validation",
+    detail: invalidField(
+      [
+        "Deleting all remote links takes confirmAll:true and expectedLinks, the complete current list. Nothing was written.",
+      ],
+      "confirmAll",
+    ),
+  });
+});
+it("names the value rule and the size a link value must fit, for a reviewed and a new value", async () => {
+  const huge = [{ path: "", kind: "string", textValue: "界".repeat(12000) }];
+  expect(
+    await refusedWith(CASES[0].tool, {
+      ...CASES[0].args,
+      expectedLinks: [{ globalId: "release:link", valueNodes: [] }],
+    }),
+  ).toEqual({
+    reason: "field-validation",
+    detail: {
+      fieldId: "expectedLinks",
+      validation: "invalid-field",
+      messages: [
+        "Each expectedLinks valueNodes must be that link's complete typed value, within 32768 UTF-8 JSON bytes and the depth and node limits. Nothing was written.",
+      ],
+    },
+  });
+  expect(
+    await refusedWith(CASES[0].tool, {
+      ...CASES[0].args,
+      expectedLinks: [{ globalId: "release:link", valueNodes: huge }],
+    }),
+  ).toMatchObject({ reason: "bounds-exceeded", detail: { validation: "bounds-exceeded" } });
+  expect(await refusedWith(CASES[0].tool, { ...CASES[0].args, valueNodes: [] })).toEqual({
+    reason: "field-validation",
+    detail: {
+      fieldId: "valueNodes",
+      validation: "invalid-field",
+      messages: [
+        "valueNodes must be the complete new link value as typed nodes, null and empty values kept, within 32768 UTF-8 JSON bytes. Nothing was written.",
+      ],
+    },
+  });
+  expect(await refusedWith(CASES[0].tool, { ...CASES[0].args, valueNodes: huge })).toMatchObject({
+    reason: "bounds-exceeded",
+    detail: { fieldId: "valueNodes", validation: "bounds-exceeded" },
+  });
+});
+it("says why a review set over the item bound cannot be reviewed", async () => {
+  expect(
+    await refusedWith(CASES[2].tool, {
+      ...CASES[2].args,
+      expectedLinks: Array.from({ length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 }, (_, index) => ({
+        globalId: `link:${String(index)}`,
+        valueNodes: [{ path: "", kind: "null" }],
+      })),
+    }),
+  ).toEqual({
+    reason: "bounds-exceeded",
+    detail: {
+      messages: [
+        "expectedLinks holds more links, or more argument bytes, than Keiko can review in one call. Nothing was written.",
+      ],
+    },
+  });
+});
+it("keeps the sentence with the unchanged flag when the set already matches", async () => {
+  const f = fixture(CASES[0]);
+  expect(
+    await mutate(CASES[0].tool, { ...CASES[0].args, valueNodes: OLD_NODES }, f.request),
+  ).toMatchObject({
+    ok: false,
+    reason: "conflict",
+    detail: {
+      unchanged: true,
+      messages: [
+        "The complete reviewed link set already matches the requested state. Nothing was written.",
+      ],
+    },
+  });
+});
+it("tells a model whose expectedActorKey is not the connected user's where the key comes from", async () => {
+  const f = fixture(CASES[2]);
+  f.actor.key = "another-actor";
+  const refused = await mutate(CASES[2].tool, CASES[2].args, f.request);
+  expect(refused).toMatchObject({
+    ok: false,
+    detail: {
+      messages: [
+        "expectedActorKey is not the key of the connected Jira user. It must be the key jira.myself returns: read it, then send the write again. Nothing was changed.",
+      ],
+    },
+  });
+  expect(JSON.stringify(refused)).not.toMatch(/reviewed user|replayed/u);
+  expect(f.writes()).toBe(0);
+});

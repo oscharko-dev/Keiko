@@ -26,7 +26,12 @@ import {
   resetServerLogFailureNotices,
   resetServerLogger,
 } from "../../../tests/support/activity-log-test-support.js";
-import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import {
+  buildUiHandlerDeps,
+  currentGateway,
+  recordExplicitModelUse,
+  type UiHandlerDeps,
+} from "./deps.js";
 import {
   adoptReportedContextWindow,
   contextWindowProbesSettledForTests,
@@ -109,6 +114,20 @@ function fixtureOf(
     true,
   );
   return { deps, configPath: holder.storagePath };
+}
+
+// A model a person has used (an explicit Settings verification passed): the configuration holds a
+// positive observation for it and the use is recorded.
+function markUsed(deps: UiHandlerDeps, modelId: string): void {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) throw new Error("expected a runtime gateway config");
+  recordExplicitModelUse(deps, modelId, holder.generation());
+  holder.recordVerifiedCapability(
+    modelId,
+    { conversationReady: true },
+    new Date().toISOString(),
+    holder.generation(),
+  );
 }
 
 function recordedDiagnostics(): {
@@ -676,6 +695,7 @@ describe("context meter reading", () => {
       ),
     );
     const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    markUsed(deps, MODEL);
     const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-project-"));
     roots.push(project);
     deps.store.createProject(project, "Meter");
@@ -693,6 +713,183 @@ describe("context meter reading", () => {
     expect(result.body).toMatchObject({ contextWindowTokens: 32_768 });
     expect(result.body).not.toHaveProperty("contextWindowAssumed");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #4351: opening a Chat saved on a large model must not load it. The probe is a streamed completion;
+// a passive meter read dispatches it only for a model a person has used.
+describe("context meter reading of a model nobody used", () => {
+  function meterRead(
+    deps: UiHandlerDeps,
+    project: string,
+    chatId: string,
+  ): Promise<{ body: unknown }> {
+    return handleChatContextStatus(
+      {
+        correlationId: "corr-meter-unused",
+        params: {},
+        url: new URL(
+          `http://localhost/api/chats/context?${new URLSearchParams({ chatId, projectPath: project, modelId: MODEL }).toString()}`,
+        ),
+      } as unknown as RouteContext,
+      deps,
+    );
+  }
+
+  it("dispatches nothing for a configured model that was never checked, and reports the assumed window", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        rejection("max_tokens=1000000000 cannot be greater than max_model_len=32768."),
+      ),
+    );
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-unused-"));
+    roots.push(project);
+    deps.store.createProject(project, "Meter");
+    const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+    const first = await meterRead(deps, project, chatId);
+    const second = await meterRead(deps, project, chatId);
+    await contextWindowProbesSettledForTests(deps);
+    // Positive control: both reads answered with the window the model is planned with.
+    for (const reading of [first, second]) {
+      expect(reading.body).toMatchObject({ contextWindowAssumed: true });
+      expect(reading.body).not.toHaveProperty("contextWindowProbePending");
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("dispatches nothing for a model that only the startup check observed, never used", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        rejection("max_tokens=1000000000 cannot be greater than max_model_len=32768."),
+      ),
+    );
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    const holder = deps.gatewayConfig;
+    // A positive observation, as startup records it: the model answered a check, nobody used it.
+    holder?.recordVerifiedCapability(
+      MODEL,
+      { conversationReady: true },
+      new Date().toISOString(),
+      holder.generation(),
+    );
+    const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-startup-"));
+    roots.push(project);
+    deps.store.createProject(project, "Meter");
+    const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+    const sink = capture();
+    const reading = await meterRead(deps, project, chatId);
+    await contextWindowProbesSettledForTests(deps);
+    expect(reading.body).toMatchObject({ contextWindowAssumed: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // The customer log shows why the window stayed assumed: one closed line, joined to the read.
+    const withheld = (): readonly unknown[] =>
+      sink.events.filter(
+        (event) =>
+          event.op === "gateway.context-window.probe" &&
+          (event.extra as { state?: string } | undefined)?.state === "skipped-unused",
+      );
+    expect(withheld()).toHaveLength(1);
+    expect(withheld()[0]).toMatchObject({ parentCorrelationId: "corr-meter-unused" });
+    // Once per deployment and generation: a second read adds nothing.
+    await meterRead(deps, project, chatId);
+    expect(withheld()).toHaveLength(1);
+  });
+
+  it("logs no withheld probe for a window the provider already reported", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response("{}", { status: 200 })),
+    );
+    const { deps } = fixture(
+      {
+        ...assumedChatCapability(MODEL),
+        contextWindowAssumed: undefined,
+        contextWindowReported: true,
+      },
+      fetchImpl,
+    );
+    const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-reported-"));
+    roots.push(project);
+    deps.store.createProject(project, "Meter");
+    const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+    const sink = capture();
+    await meterRead(deps, project, chatId);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(sink.events.filter((event) => event.op === "gateway.context-window.probe")).toHaveLength(
+      0,
+    );
+  });
+
+  it("probes once after the model completed one real call through the gateway", async () => {
+    const probeFetch = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        rejection("max_tokens=1000000000 cannot be greater than max_model_len=32768."),
+      ),
+    );
+    const turnFetch = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: "chatcmpl-1",
+            model: MODEL,
+            choices: [
+              { index: 0, finish_reason: "stop", message: { role: "assistant", content: "Hi" } },
+            ],
+            usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", turnFetch);
+    try {
+      const { deps } = fixture(assumedChatCapability(MODEL), probeFetch);
+      const holder = deps.gatewayConfig;
+      holder?.recordVerifiedCapability(
+        MODEL,
+        { conversationReady: true },
+        new Date().toISOString(),
+        holder.generation(),
+      );
+      const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-served-"));
+      roots.push(project);
+      deps.store.createProject(project, "Meter");
+      const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+      await meterRead(deps, project, chatId);
+      expect(probeFetch).not.toHaveBeenCalled();
+      // One real turn through the generation's gateway, as a Chat send makes it.
+      await currentGateway(deps)?.chat({
+        modelId: MODEL,
+        messages: [{ role: "user", content: "Hi" }],
+      });
+      expect(turnFetch).toHaveBeenCalledTimes(1);
+      await meterRead(deps, project, chatId);
+      await contextWindowProbesSettledForTests(deps);
+      expect(probeFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("dispatches nothing for a model that was observed failing", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response("{}", { status: 200 })),
+    );
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    const holder = deps.gatewayConfig;
+    holder?.recordVerifiedCapability(
+      MODEL,
+      { conversationReady: false },
+      new Date().toISOString(),
+      holder.generation(),
+    );
+    const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-failed-"));
+    roots.push(project);
+    deps.store.createProject(project, "Meter");
+    const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+    const reading = await meterRead(deps, project, chatId);
+    expect(reading.body).toMatchObject({ contextWindowAssumed: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 
@@ -715,6 +912,7 @@ describe("context meter reading beside another model's probe", () => {
       return Promise.resolve(new Response(JSON.stringify({ choices: [] }), { status: 200 }));
     });
     const { deps } = fixtureOf([assumedChatCapability(A), assumedChatCapability(B)], fetchImpl);
+    markUsed(deps, A);
     const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-two-models-"));
     roots.push(project);
     deps.store.createProject(project, "Meter");
@@ -764,6 +962,7 @@ describe("context meter reading of a slow probe", () => {
         }),
     );
     const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    markUsed(deps, MODEL);
     const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-slow-"));
     roots.push(project);
     deps.store.createProject(project, "Meter");
@@ -822,6 +1021,7 @@ describe("provider-reported window re-check", () => {
       { ...createDefaultChatCapability(MODEL), contextWindow: 16_384, contextWindowReported: true },
       fetchImpl,
     );
+    markUsed(deps, MODEL);
     const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-recheck-"));
     roots.push(project);
     deps.store.createProject(project, "Meter");

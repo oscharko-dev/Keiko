@@ -9,6 +9,7 @@ import {
   createJiraProviderForCatalog,
   jiraOperationBindingForTool,
 } from "../atlassian/jiraManagedProvider.js";
+import { jiraReadFailureGuidance } from "../atlassian/jiraReadFailureGuidance.js";
 import type {
   ManagedMcpTool,
   ManagedMcpToolResult,
@@ -423,6 +424,12 @@ it("executes the real Jira project provider through gateway, binder and SDK with
 // Owner decision 2026-10-31 (#4176, ADR-0128 bounded field validation): a refused read hands the
 // model Jira's own bounded errorMessages so it can correct the call. They stay in the model-facing
 // result only; the Activity Log and the managed host's log never carry them.
+const LITERAL_GUIDANCE: Readonly<Record<string, string>> = {
+  "permission-denied":
+    "This read was not permitted for this Jira account or connection. Do not retry it. Tell the user in plain language that this account may not read this.",
+  "malformed-payload":
+    "Jira answered, but Keiko could not read or fit the answer. Narrow the request, for example a smaller maxResults or fewer fields, then call this tool once more. If it fails again, tell the user in plain language.",
+};
 it.each([
   {
     status: 403,
@@ -445,7 +452,18 @@ it.each([
     try {
       const operationBinding = jiraOperationBindingForTool("jira.projects");
       if (operationBinding === undefined) throw new TypeError("Missing canonical project binding");
-      const expected = { ...data, operationBinding };
+      // The model also receives what to change (#4357); the sentence comes from its producer.
+      const guidance = jiraReadFailureGuidance({
+        tool: "jira.projects",
+        reason: data.reason,
+        argumentNames: [],
+        administration: false,
+        explained: "messages" in data,
+      });
+      if (guidance === undefined) throw new TypeError("Missing read failure guidance");
+      // One literal sentence per case, so the pin still fails when the text changes by accident.
+      expect(guidance.text).toBe(LITERAL_GUIDANCE[data.reason]);
+      const expected = { ...data, guidance: guidance.text, operationBinding };
       const result = await f.binder.dispatch({ ...f.invocation, arguments: {} }, identity);
       expect(result).toMatchObject({
         kind: "settled",

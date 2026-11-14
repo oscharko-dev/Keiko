@@ -27,8 +27,9 @@ export function isJiraVersionLinkMutation(name: string): name is JiraVersionLink
 async function parent(
   request: JiraMutationRequest,
   input: VersionLinkInput,
+  beforeEffect = false,
 ): Promise<VersionLinkObservation<ReleaseContext>> {
-  const context = await readReleaseContext(request, input.selected);
+  const context = await readReleaseContext(request, input.selected, beforeEffect);
   if (!context.ok) return context;
   const version = await reviewedReleaseEntity(
     request,
@@ -138,7 +139,7 @@ export async function executeJiraVersionLinkMutation(
   const parsed = parseVersionLinkInput(operation, args);
   if (!parsed.ok) return parsed;
   const input = parsed.value;
-  const context = await parent(request, input);
+  const context = await parent(request, input, true);
   if (!context.ok) return context;
   const current = await readVersionLinkSet(request, input.selected.id, input.expected);
   if (!current.ok) return current;
@@ -160,7 +161,14 @@ export async function executeJiraVersionLinkMutation(
         "conflict",
         receipt,
       ),
-      detail: { unchanged: true },
+      // The sentence stays with the flag: the existing-resource guidance tells the model to report
+      // what the messages say, and a flag alone leaves it nothing to report (#4357 AC3).
+      detail: {
+        unchanged: true,
+        messages: [
+          "The complete reviewed link set already matches the requested state. Nothing was written.",
+        ],
+      },
     };
   if (check) return { ok: true, receipt: {} };
   return writeVersionLink(request, input, context.value, receipt);

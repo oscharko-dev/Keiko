@@ -10,13 +10,16 @@ import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 import {
-  resolveWindowsPowerShellExecutable,
+  resolveWindowsUrlOpener,
   securityErrorKind,
   bindSecurityLogCorrelation,
+  unwiredSecurityLogSink,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 import {
   isActivityLogReadinessSnapshot,
+  isCredentialCustodyState,
+  type CredentialCustodyState,
   type ActivityLogReadinessSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 // From the contracts leaf, NOT keiko-server or the keiko-sdk fat barrel: pulling the server
@@ -82,6 +85,11 @@ import {
   liveProcessHasLaunchId,
 } from "./ui-process-identity.js";
 import { terminateUiProcess, type WindowsTreeKill } from "./ui-process-stop.js";
+import {
+  readUiStartupSign,
+  type UiStartupProgressFailureRecorder,
+  type UiStartupSign,
+} from "./ui-startup-progress.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
 type SpawnFn = (command: string, args: readonly string[], opts: SpawnOptions) => ChildProcess;
@@ -193,6 +201,8 @@ export interface LifecycleCliDeps {
   readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
   /** Test seam: the process command line the tracked UI's own endpoint is read from. */
   readonly readCommandLine?: ((pid: number) => string | undefined) | undefined;
+  /** Test seam: the starting UI process's sign of life (ui-startup-progress.ts). */
+  readonly readStartupSign?: StartupSignReader | undefined;
 }
 
 interface LifecycleRuntimeDeps {
@@ -212,6 +222,7 @@ interface LifecycleRuntimeDeps {
   readonly securityLogSink?: SecurityLogSink | undefined;
   readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
   readonly readCommandLine?: ((pid: number) => string | undefined) | undefined;
+  readonly readStartupSign?: StartupSignReader | undefined;
 }
 
 interface HealthProbeResult {
@@ -220,6 +231,8 @@ interface HealthProbeResult {
   readonly launchId?: string | undefined;
   // The server's diagnostic readiness (#3532), when the health body carried a valid block.
   readonly diagnostics?: ActivityLogReadinessSnapshot | undefined;
+  // How the server keeps its credential vaults on Windows (#4358); a closed value or nothing.
+  readonly credentialCustody?: CredentialCustodyState | undefined;
 }
 
 const HEALTH_PROBE_TIMEOUT_MS = 1_000;
@@ -352,6 +365,13 @@ function healthDiagnostics(payload: unknown): ActivityLogReadinessSnapshot | und
   return isActivityLogReadinessSnapshot(diagnostics) ? diagnostics : undefined;
 }
 
+// Untrusted like the rest of the body: only one of the closed states is admitted.
+function healthCredentialCustody(payload: unknown): CredentialCustodyState | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const custody = (payload as { readonly credentialCustody?: unknown }).credentialCustody;
+  return isCredentialCustodyState(custody) ? custody : undefined;
+}
+
 function healthResult(statusCode: number | undefined, body: string): HealthProbeResult {
   if (statusCode === undefined || statusCode < 200 || statusCode >= 300) {
     return { reachable: false, version: undefined };
@@ -366,6 +386,7 @@ function healthResult(statusCode: number | undefined, body: string): HealthProbe
       reachable: true,
       version: healthVersion(payload),
       diagnostics: healthDiagnostics(payload),
+      credentialCustody: healthCredentialCustody(payload),
       ...(isKeikoUiLaunchId(launchId) ? { launchId } : {}),
     };
   } catch {
@@ -591,30 +612,24 @@ function cliEntryPath(cwd: string, env: EnvSource): string {
   return join(dirname(fileURLToPath(import.meta.url)), "index.js");
 }
 
+// How long `keiko start` waits for the platform opener to report its result.
+const EXTERNAL_OPENER_RESULT_TIMEOUT_MS = 5_000;
+
 /**
  * Resolve the platform opener for an external URL without routing it through a shell parser.
  * `cmd /c start` percent-expands its argument, which corrupts a percent-encoded pairing fragment
  * (#2478), so on Windows the URL travels only inside a Base64-encoded PowerShell command — no
- * cmd.exe interpolation ever sees it.
+ * cmd.exe interpolation ever sees it. The Windows opener carries its own result window (#4358): the
+ * inbox PowerShell host may need far longer to start than `Start-Process` needs to run, and the two
+ * are bounded separately by the shared owner in keiko-security.
  */
 export function resolveExternalOpener(
   url: string,
   platform: NodeJS.Platform = process.platform,
   env: EnvSource = process.env,
-): { readonly command: string; readonly args: readonly string[] } {
+): { readonly command: string; readonly args: readonly string[]; readonly timeoutMs?: number } {
   if (platform === "darwin") return { command: "open", args: [url] };
-  if (platform === "win32") {
-    const command = `Start-Process '${url.replaceAll("'", "''")}'`;
-    return {
-      command: resolveWindowsPowerShellExecutable(env),
-      args: [
-        "-NoProfile",
-        "-NonInteractive",
-        "-EncodedCommand",
-        Buffer.from(command, "utf16le").toString("base64"),
-      ],
-    };
-  }
+  if (platform === "win32") return resolveWindowsUrlOpener(url, env);
   return { command: "xdg-open", args: [url] };
 }
 
@@ -645,7 +660,7 @@ const BROWSER_OPENER_ENVIRONMENT = [
   "LC_ALL",
 ] as const;
 
-function waitForExternalOpener(child: ChildProcess): Promise<void> {
+function waitForExternalOpener(child: ChildProcess, timeoutMs: number): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const finish = (error?: Error): void => {
       clearTimeout(timer);
@@ -662,13 +677,27 @@ function waitForExternalOpener(child: ChildProcess): Promise<void> {
     };
     const timer = setTimeout(() => {
       finish(new Error("Browser opener result timed out"));
-    }, 5_000);
+    }, timeoutMs);
     child.once("error", onError);
     child.once("close", onClose);
     child.once("spawn", () => {
       child.unref();
     });
   });
+}
+
+/**
+ * How the platform opener is started. On Windows it runs attached with a hidden window: a detached
+ * PowerShell host owns no console, exited 0 and opened no browser on the Windows guest (#4358). The
+ * opener is bounded and awaited, so it never needed to outlive `keiko start`; every other platform
+ * keeps the detached start.
+ */
+function browserOpenerSpawnOptions(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): SpawnOptions {
+  if (platform === "win32") return { detached: false, windowsHide: true, stdio: "ignore", env };
+  return { detached: true, stdio: "ignore", env };
 }
 
 export async function defaultOpenExternal(
@@ -678,12 +707,12 @@ export async function defaultOpenExternal(
 ): Promise<void> {
   const { buildSandboxEnv } = await import("@oscharko-dev/keiko-tools");
   const opener = resolveExternalOpener(url, platform, env);
-  const child = spawn(opener.command, [...opener.args], {
-    detached: true,
-    stdio: "ignore",
-    env: buildSandboxEnv(env, BROWSER_OPENER_ENVIRONMENT),
-  });
-  await waitForExternalOpener(child);
+  const child = spawn(
+    opener.command,
+    [...opener.args],
+    browserOpenerSpawnOptions(platform, buildSandboxEnv(env, BROWSER_OPENER_ENVIRONMENT)),
+  );
+  await waitForExternalOpener(child, opener.timeoutMs ?? EXTERNAL_OPENER_RESULT_TIMEOUT_MS);
 }
 
 async function maybeOpenBrowser(
@@ -816,34 +845,144 @@ function uiProcessArguments(
 // became healthy, or it stayed alive without answering the health check in time.
 type StartOutcome = "healthy" | "process-exited" | "health-timeout";
 
+type StartupSignReader = (
+  stateDir: string,
+  launchId: string,
+  recordFailure?: UiStartupProgressFailureRecorder,
+) => UiStartupSign | undefined;
+
+interface StartWait {
+  readonly outcome: StartOutcome;
+  /**
+   * Windows only (#4358): how often the UI process's progress restarted the window, and how often
+   * a record was there but could not be read as one (a link, not a regular file).
+   */
+  readonly signs?: { readonly lifeSigns: number; readonly unreadableSigns: number };
+}
+
+// A UI process that keeps making progress is not waited on forever: a start that is still not
+// healthy after this long is ended like one that made none. Fifteen minutes is four times the
+// slowest start measured (239 s, x64 Node under emulation on Windows on ARM); a first start on
+// native x64 hardware is unmeasured. An explicit, longer `--start-timeout` raises it.
+const START_CEILING_MS = 15 * 60_000;
+const STILL_STARTING_NOTICE =
+  "Keiko is still starting. Right after an installation or update this can take a few minutes.\n";
+
+/**
+ * On Windows the window bounds a start that makes no progress (#4358): it restarts whenever the UI
+ * process records a completed startup step (ui-startup-progress.ts), and stretches to the bound
+ * the process announced for a step that blocks it. A process that stops making progress is ended
+ * one window after its last record. On every other platform there is no reader: the deadline is
+ * the fixed one it always was, and nothing is read or counted.
+ */
+class StartWindow {
+  private lastToken: string | undefined;
+  private signs = 0;
+  private unreadable = 0;
+  private readonly ceiling: number;
+
+  public constructor(
+    private readonly windowMs: number,
+    private deadline: number,
+    private readonly read: ((recordFailure: () => void) => UiStartupSign | undefined) | undefined,
+    private readonly onExtended: () => void,
+  ) {
+    this.ceiling = performance.now() + Math.max(START_CEILING_MS, windowMs);
+  }
+
+  public result(outcome: StartOutcome): StartWait {
+    if (this.read === undefined) return { outcome };
+    return { outcome, signs: { lifeSigns: this.signs, unreadableSigns: this.unreadable } };
+  }
+
+  /** The current deadline, after taking a new progress record into account. */
+  public current(): number {
+    if (this.read === undefined) return this.deadline;
+    const sign = this.read(() => {
+      this.unreadable += 1;
+    });
+    if (sign !== undefined && sign.token !== this.lastToken) {
+      this.lastToken = sign.token;
+      const extended = performance.now() + Math.max(this.windowMs, sign.horizonMs);
+      if (extended > this.deadline) {
+        if (this.signs === 0) this.onExtended();
+        this.signs += 1;
+        this.deadline = extended;
+      }
+    }
+    return Math.min(this.deadline, this.ceiling);
+  }
+}
+
+function startWindow(
+  options: LifecycleOptions,
+  launchId: string,
+  deps: Pick<LifecycleRuntimeDeps, "readStartupSign" | "platform">,
+  io: CliIo,
+  deadline: number,
+): StartWindow {
+  const read = deps.readStartupSign ?? readUiStartupSign;
+  return new StartWindow(
+    options.startTimeoutMs,
+    deadline,
+    deps.platform === "win32"
+      ? (recordFailure): UiStartupSign | undefined =>
+          read(options.stateDir, launchId, recordFailure)
+      : undefined,
+    () => {
+      io.out(STILL_STARTING_NOTICE);
+    },
+  );
+}
+
 async function waitForHealth(
   options: LifecycleOptions,
   pid: number,
   launchId: string,
-  deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "sleep" | "isProcessAlive">,
+  deps: Pick<
+    LifecycleRuntimeDeps,
+    "healthProbe" | "sleep" | "isProcessAlive" | "readStartupSign" | "platform"
+  >,
+  io: CliIo,
   deadline = performance.now() + options.startTimeoutMs,
-): Promise<StartOutcome> {
-  // Monotonic clock so a wall-clock adjustment during startup does not skip the health
-  // window (forward jump) or hold it open indefinitely (backward jump).
-  while (performance.now() < deadline) {
-    if (!deps.isProcessAlive(pid)) return "process-exited";
-    const remaining = Math.ceil(deadline - performance.now());
-    if (remaining <= 0) break;
-    const health = await deps.healthProbe(
-      healthUrl(options),
-      Math.min(HEALTH_PROBE_TIMEOUT_MS, remaining),
-    );
-    if (
-      health.version === SDK_VERSION &&
-      health.launchId === launchId &&
-      deps.isProcessAlive(pid) &&
-      performance.now() < deadline
-    ) {
-      return "healthy";
-    }
-    await deps.sleep(Math.min(500, Math.max(0, deadline - performance.now())));
+): Promise<StartWait> {
+  return pollStartHealth(
+    options,
+    pid,
+    launchId,
+    deps,
+    startWindow(options, launchId, deps, io, deadline),
+  );
+}
+
+// One probe, then one wait, then the next probe: strictly sequential and bounded by the start window.
+// A monotonic clock so a wall-clock adjustment during startup does not skip the health window (forward
+// jump) or hold it open indefinitely (backward jump).
+async function pollStartHealth(
+  options: LifecycleOptions,
+  pid: number,
+  launchId: string,
+  deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "sleep" | "isProcessAlive">,
+  window: StartWindow,
+): Promise<StartWait> {
+  if (performance.now() >= window.current()) return window.result("health-timeout");
+  if (!deps.isProcessAlive(pid)) return window.result("process-exited");
+  const remaining = Math.ceil(window.current() - performance.now());
+  if (remaining <= 0) return window.result("health-timeout");
+  const health = await deps.healthProbe(
+    healthUrl(options),
+    Math.min(HEALTH_PROBE_TIMEOUT_MS, remaining),
+  );
+  if (
+    health.version === SDK_VERSION &&
+    health.launchId === launchId &&
+    deps.isProcessAlive(pid) &&
+    performance.now() < window.current()
+  ) {
+    return window.result("healthy");
   }
-  return "health-timeout";
+  await deps.sleep(Math.min(500, Math.max(0, window.current() - performance.now())));
+  return pollStartHealth(options, pid, launchId, deps, window);
 }
 
 async function ensureStartPortAvailable(
@@ -939,7 +1078,12 @@ function trackedEndpointOptions(
   if (record.launchId === undefined) return options;
   const read =
     deps.readCommandLine ??
-    ((pid: number): string | undefined => defaultReadProcessCommandLine(pid, deps.platform));
+    ((pid: number): string | undefined =>
+      defaultReadProcessCommandLine(
+        pid,
+        deps.platform,
+        deps.securityLogSink ?? unwiredSecurityLogSink(),
+      ));
   const commandLine = read(record.pid);
   if (commandLine === undefined || !liveIdentityTextHasLaunchId(commandLine, record.launchId)) {
     return options;
@@ -1108,8 +1252,35 @@ async function cmdStart(
   return startDirectUi({ options, io, env, deps, cwd, pairingSecret, launchId });
 }
 
+// Windows only; other platforms keep their start path unchanged (the directory is created where
+// the UI process is spawned). The state directory defaults to `.keiko` in the working directory. A
+// launch from a directory the
+// person cannot write to (a scheduled task or a shortcut without "Start in" runs in
+// `C:\Windows\System32`) used to end as "failed to spawn the UI process", which names the wrong
+// thing and offers no way out (#4358). The message names the cause and both remedies; the cause is
+// its content-free class, never the path-bearing error text.
+function ensureStartStateDir(
+  options: LifecycleOptions,
+  io: CliIo,
+  sink: SecurityLogSink | undefined,
+): boolean {
+  try {
+    mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
+    return true;
+  } catch (error) {
+    emitLifecycleHealth(sink, "start", "state-dir-unavailable", false);
+    io.err(
+      `keiko start: cannot create the Keiko state directory in the current working directory (${securityErrorKind(error)}). ` +
+        "Start Keiko from a folder you can write to, such as your home folder, or pass --state-dir with a folder inside your home folder.\n",
+    );
+    return false;
+  }
+}
+
 async function startDirectUi(context: OwnedUiStartContext): Promise<number> {
   const { options, io, env, deps, cwd, pairingSecret, launchId } = context;
+  if (deps.platform === "win32" && !ensureStartStateDir(options, io, deps.securityLogSink))
+    return 1;
   let child: ChildProcess;
   try {
     child = spawnUiProcess(options, env, deps, cwd, pairingSecret, launchId);
@@ -1143,8 +1314,15 @@ async function startDirectUi(context: OwnedUiStartContext): Promise<number> {
   if (!publishPidOrKillChild(options, io, deps, child.pid, launchId)) return 1;
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
-  const startOutcome = await waitForHealth(options, child.pid, launchId, deps);
-  emitLifecycleHealth(deps.securityLogSink, "start", startOutcome, startOutcome === "healthy");
+  const started = await waitForHealth(options, child.pid, launchId, deps, io);
+  const startOutcome = started.outcome;
+  emitLifecycleHealth(
+    deps.securityLogSink,
+    "start",
+    startOutcome,
+    startOutcome === "healthy",
+    started.signs,
+  );
   if (startOutcome === "healthy") {
     return reportHealthyStart(
       options,
@@ -1276,8 +1454,9 @@ async function startOwnedUi(
   emitNativeUiOwnership(deps.securityLogSink, "admission", "acknowledged");
   if (!(await publishOwnedUiPid(context, launch))) return 1;
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
-  const outcome = await waitForHealth(options, launch.pid, launchId, deps, deadline);
-  emitLifecycleHealth(deps.securityLogSink, "start", outcome, outcome === "healthy");
+  const started = await waitForHealth(options, launch.pid, launchId, deps, io, deadline);
+  const outcome = started.outcome;
+  emitLifecycleHealth(deps.securityLogSink, "start", outcome, outcome === "healthy", started.signs);
   if (outcome === "healthy") return commitOwnedUi(context, launch, deadline);
   await launch.abort();
   return reportUnhealthyStart(options, io, deps, launch.pid, launchId, outcome);
@@ -1370,6 +1549,26 @@ function readinessStatusLine(health: HealthProbeResult): string {
   return `Diagnostic evidence: ${diagnostics.readiness}${reasons}; lost events: ${String(diagnostics.lostEvents)}.\n`;
 }
 
+// `keiko status` states how the credential vaults are kept on Windows (#4358). Each state has its
+// own sentence: "unattested" and "exposed" never read like "attested". Nothing is printed on other
+// platforms or before the server read a vault key.
+const CREDENTIAL_CUSTODY_STATUS: Readonly<Record<CredentialCustodyState, string>> = {
+  attested: "attested (the credential key file and its folder are private to this Windows account)",
+  protected:
+    "protected (the credential folder was open to other Windows accounts; Keiko made it private, the key itself was not readable)",
+  exposed:
+    "exposed (the credential key file was readable by another Windows account before Keiko protected it; replace stored tokens such as the Jira token)",
+  unattested:
+    "unattested (Windows could not be asked whether the credential key file is private to this account; nothing is claimed)",
+};
+
+function credentialCustodyStatusLine(health: HealthProbeResult): string {
+  const custody = health.credentialCustody;
+  return custody === undefined
+    ? ""
+    : `Credential custody: ${CREDENTIAL_CUSTODY_STATUS[custody]}.\n`;
+}
+
 async function cmdStatus(
   options: LifecycleOptions,
   io: CliIo,
@@ -1381,7 +1580,9 @@ async function cmdStatus(
     return 0;
   }
   io.out(`Keiko UI is running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`);
-  io.out(readinessStatusLine(await deps.healthProbe(healthUrl(options))));
+  const health = await deps.healthProbe(healthUrl(options));
+  io.out(readinessStatusLine(health));
+  io.out(credentialCustodyStatusLine(health));
   return 0;
 }
 
@@ -1434,6 +1635,7 @@ function runtimeDeps(
     securityLogSink,
     verifyLaunchIdentity: deps.verifyLaunchIdentity,
     readCommandLine: deps.readCommandLine,
+    readStartupSign: deps.readStartupSign,
   };
 }
 

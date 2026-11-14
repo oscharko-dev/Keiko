@@ -44,7 +44,7 @@ const REASON_TEXT: Readonly<Record<ChatToolTurnEndReason, string>> = {
   deadline: "this turn reached its time limit",
   "authority-invalid": "the Chat's mode, sources or connection changed",
   "authentication-failed":
-    "Jira authentication failed. Open the Knowledge Pods hub and verify the connection again",
+    "Jira authentication failed. The token may have expired or been revoked: open the Knowledge Pods hub, replace the token and verify the connection",
   "tool-failure": "a tool call could not be settled",
   "output-exhausted": "the model ran out of output budget",
   "context-overflow": "the conversation no longer fits the model's context window",
@@ -418,6 +418,9 @@ const CORRECTED = defineActivityLogOperation({
         "report-coverage",
         "unsupported-issue-key",
         "knowledge-coverage",
+        "raw-report-key",
+        "announced-create",
+        "tool-call-as-text",
       ],
     },
     omittedFindingCount: {
@@ -431,6 +434,16 @@ const CORRECTED = defineActivityLogOperation({
       required: false,
     },
     unsupportedKeyCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    rawReportKeyCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    announcementCount: {
       type: "integer",
       dataClass: "count",
       required: false,
@@ -455,6 +468,57 @@ const CORRECTED = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
+interface ChatToolTurnCorrectionInput {
+  readonly correlationId: string;
+  readonly messageId: string;
+  readonly settledExchangeCount: number;
+  readonly correctionKind:
+    | "tool-schema"
+    | "empty-answer"
+    | "report-omission"
+    | "report-coverage"
+    | "unsupported-issue-key"
+    | "knowledge-coverage"
+    | "raw-report-key"
+    | "announced-create"
+    | "tool-call-as-text";
+  readonly omittedFindingCount?: number;
+  readonly mismatchedRequirementCount?: number;
+  readonly unsupportedKeyCount?: number;
+  readonly rawReportKeyCount?: number;
+  readonly announcementCount?: number;
+  readonly pendingKnowledgePageCount?: number;
+}
+
+type CorrectionCountField =
+  | "omittedFindingCount"
+  | "mismatchedRequirementCount"
+  | "unsupportedKeyCount"
+  | "rawReportKeyCount"
+  | "announcementCount"
+  | "pendingKnowledgePageCount";
+
+/** The optional body-free counts of one correction line: the ones the caller supplied. */
+function correctionCounts(
+  input: ChatToolTurnCorrectionInput,
+): Readonly<Partial<Record<CorrectionCountField, number>>> {
+  const supplied: Readonly<Record<CorrectionCountField, number | undefined>> = {
+    omittedFindingCount: input.omittedFindingCount,
+    mismatchedRequirementCount: input.mismatchedRequirementCount,
+    unsupportedKeyCount: input.unsupportedKeyCount,
+    rawReportKeyCount: input.rawReportKeyCount,
+    announcementCount: input.announcementCount,
+    pendingKnowledgePageCount: input.pendingKnowledgePageCount,
+  };
+  const counts: Partial<Record<CorrectionCountField, number>> = {};
+  for (const [name, value] of Object.entries(supplied) as [
+    CorrectionCountField,
+    number | undefined,
+  ][])
+    if (value !== undefined) counts[name] = value;
+  return counts;
+}
+
 /**
  * Recorded when a turn gets one further round carrying a correction instead of ending: a tool call
  * the gateway rejected again after its own schema correction (`tool-schema`), a round the model
@@ -462,27 +526,15 @@ const CORRECTED = defineActivityLogOperation({
  * out findings the turn's report pages list (`report-omission`, with their count; never the keys),
  * an answer that gave requirements other issues than the report's requirement pages state
  * (`report-coverage`, with the requirement count; never the ids or keys), or an answer that named issue keys no tool result showed (`unsupported-issue-key`, with their
- * count; never the keys), or unfinished Knowledge pages (`knowledge-coverage`, with the pending
+ * count; never the keys), or an answer that printed the report's internal result keys (`raw-report-key`, with
+ * their count; never the keys), an answer that announced a created issue although the turn held no
+ * create call (`announced-create`) or wrote a tool call as text (`tool-call-as-text`), each with
+ * the count of such sentences or calls and never their text, or unfinished Knowledge pages (`knowledge-coverage`, with the pending
  * page count). A combined correction emits one line per kind for the same admitted model round.
  */
 export function recordChatToolTurnCorrected(
   log: ServerLogSink,
-  input: {
-    readonly correlationId: string;
-    readonly messageId: string;
-    readonly settledExchangeCount: number;
-    readonly correctionKind:
-      | "tool-schema"
-      | "empty-answer"
-      | "report-omission"
-      | "report-coverage"
-      | "unsupported-issue-key"
-      | "knowledge-coverage";
-    readonly omittedFindingCount?: number;
-    readonly mismatchedRequirementCount?: number;
-    readonly unsupportedKeyCount?: number;
-    readonly pendingKnowledgePageCount?: number;
-  },
+  input: ChatToolTurnCorrectionInput,
 ): void {
   try {
     log.write(
@@ -493,18 +545,7 @@ export function recordChatToolTurnCorrected(
           messageDigest: sha256Hex(input.messageId),
           settledExchangeCount: input.settledExchangeCount,
           correctionKind: input.correctionKind,
-          ...(input.omittedFindingCount === undefined
-            ? {}
-            : { omittedFindingCount: input.omittedFindingCount }),
-          ...(input.mismatchedRequirementCount === undefined
-            ? {}
-            : { mismatchedRequirementCount: input.mismatchedRequirementCount }),
-          ...(input.unsupportedKeyCount === undefined
-            ? {}
-            : { unsupportedKeyCount: input.unsupportedKeyCount }),
-          ...(input.pendingKnowledgePageCount === undefined
-            ? {}
-            : { pendingKnowledgePageCount: input.pendingKnowledgePageCount }),
+          ...correctionCounts(input),
           completeness: "complete",
           loss: "none",
         },

@@ -61,6 +61,7 @@ import {
   isChatCompatibleDeclaredMode,
   isLikelyRerankModelId,
   modelKindForDeclaredMode,
+  preferredConversationModelOrder,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
@@ -113,6 +114,7 @@ import type {
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
@@ -599,6 +601,8 @@ interface ProviderRawOptions {
   /** True on preserve-mode rebuilds — stored-capability carry-overs are preserve semantics. */
   readonly preserveExisting?: boolean | undefined;
   readonly timeoutMs?: number | undefined;
+  /** False on a rewrite of a timeout nobody named; absent for a submitted value. */
+  readonly timeoutNamed?: boolean | undefined;
   readonly maxRetries?: number | undefined;
   readonly retryBaseDelayMs?: number | undefined;
   readonly apiKeyHeaderName?: string | undefined;
@@ -882,6 +886,28 @@ function providerDeploymentIdentity(
   return identity === undefined ? {} : { deploymentIdentitySha256: identity };
 }
 
+// The request timeout of a stored provider, and who named it (#4351). A person's value is stored with
+// `timeoutNamed: true`; Setup's own 30 s default (its historical value) is stored bare, which the
+// configuration reads back as not named, so the explicit check can lift it. A rewrite of a stored
+// provider passes `timeoutNamed: false` for a timeout nobody named, never as if it were submitted.
+function providerRequestTimeout(options: {
+  readonly timeoutMs?: number | undefined;
+  readonly timeoutNamed?: boolean | undefined;
+}): Record<string, unknown> {
+  const { timeoutMs } = options;
+  return timeoutMs !== undefined && options.timeoutNamed !== false
+    ? { timeoutMs, timeoutNamed: true }
+    : { timeoutMs: timeoutMs ?? 30_000 };
+}
+
+/** What a rewrite of an existing provider carries: its timeout and whether a person named it. */
+function carriedRequestTimeout(provider: ModelProviderConfig): {
+  readonly timeoutMs: number;
+  readonly timeoutNamed: boolean;
+} {
+  return { timeoutMs: provider.timeoutMs, timeoutNamed: provider.timeoutConfigured === true };
+}
+
 function providerRaw(
   modelId: string,
   baseUrl: string,
@@ -914,7 +940,7 @@ function providerRaw(
         : { supportsImageInput: options.imageInputModelIds.includes(modelId) }),
       ...(supportsResponseFormat ? { structuredOutput: true, supportsResponseFormat: true } : {}),
     },
-    timeoutMs: options.timeoutMs ?? 30_000,
+    ...providerRequestTimeout(options),
     maxRetries: options.maxRetries ?? 2,
     retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
   };
@@ -991,6 +1017,8 @@ function createDefaultVoiceCapabilityForSetup(
 interface VoiceProviderRawOptions {
   readonly apiKeyHeaderName?: string | undefined;
   readonly timeoutMs?: number | undefined;
+  /** False on a rewrite of a timeout nobody named; absent for a submitted value. */
+  readonly timeoutNamed?: boolean | undefined;
   readonly maxRetries?: number | undefined;
   readonly retryBaseDelayMs?: number | undefined;
   readonly endpointStyle?: ModelProviderConfig["endpointStyle"];
@@ -1044,7 +1072,7 @@ function voiceProviderRaw(
     // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): re-serialize the
     // per-provider circuit-breaker override so a voice/setup save preserves it.
     ...(options.circuitBreaker === undefined ? {} : { circuitBreaker: options.circuitBreaker }),
-    timeoutMs: options.timeoutMs ?? 30_000,
+    ...providerRequestTimeout(options),
     maxRetries: options.maxRetries ?? 1,
     retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
   };
@@ -1351,6 +1379,16 @@ function storedReasoningHistory(
   };
 }
 
+function storedRequestTimeout(
+  provider: ModelProviderConfig,
+  submitted: number | undefined,
+): Record<string, unknown> {
+  return providerRequestTimeout({
+    timeoutMs: submitted ?? provider.timeoutMs,
+    timeoutNamed: submitted !== undefined || provider.timeoutConfigured === true,
+  });
+}
+
 function rawProviderFromCurrent(
   provider: ModelProviderConfig,
   capability: ModelCapability | undefined,
@@ -1374,7 +1412,8 @@ function rawProviderFromCurrent(
     ...(provider.realtimeAuthMode === undefined
       ? {}
       : { realtimeAuthMode: provider.realtimeAuthMode }),
-    timeoutMs: timeoutMs ?? provider.timeoutMs,
+    // A rewrite keeps who named the timeout: a person's value stays theirs, Setup's default stays its.
+    ...storedRequestTimeout(provider, timeoutMs),
     maxRetries: provider.maxRetries,
     retryBaseDelayMs: provider.retryBaseDelayMs,
     // Persist the credential-tier persona → voice-id mapping so personas survive a save; the
@@ -1473,7 +1512,7 @@ function setupVoiceProviderFromCurrent(
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
       apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
-      timeoutMs: provider.timeoutMs,
+      ...carriedRequestTimeout(provider),
       maxRetries: provider.maxRetries,
       retryBaseDelayMs: provider.retryBaseDelayMs,
       ...voiceProviderEndpointRaw({ capabilities: voiceCapabilities(capability), ...provider }),
@@ -1534,6 +1573,7 @@ function applyVoiceProviders(
         voiceProviderRaw(provider.modelId, provider.baseUrl, provider.apiKey, {
           apiKeyHeaderName: provider.apiKeyHeaderName,
           timeoutMs: provider.timeoutMs,
+          timeoutNamed: provider.timeoutNamed,
           maxRetries: provider.maxRetries,
           retryBaseDelayMs: provider.retryBaseDelayMs,
           endpointStyle: provider.endpointStyle,
@@ -3143,7 +3183,12 @@ async function passingCandidates(
 function allProbesFailedError(failures: readonly ProbeFailureEvidence[]): Error {
   const error = new Error("no discovered model accepted the chat-completions smoke test");
   const worst = mostSevereProbeFailure(failures);
-  if (worst === undefined) return error;
+  // Every probe ended without a verdict (an overloaded or unreachable gateway): the aggregate says
+  // so, so a walk over the catalog does not take a lone 503 for a rejection (#4351).
+  if (worst === undefined)
+    return failures.length > 0 && failures.every(isModelLevelNoVerdict)
+      ? Object.assign(error, { noVerdict: true })
+      : error;
   return Object.assign(error, {
     ...(worst.code === undefined ? {} : { code: worst.code }),
     ...(worst.httpStatus === undefined ? {} : { httpStatus: worst.httpStatus }),
@@ -3205,6 +3250,18 @@ function isUnverifiedSmokeFailure(evidence: ProbeFailureEvidence): boolean {
   const { code, httpStatus } = evidence;
   if (code === ERROR_CODES.RATE_LIMIT || code === ERROR_CODES.CANCELLED) return true;
   if (code !== undefined && SETUP_NETWORK_ERROR_CODES.has(code)) return true;
+  return httpStatus !== undefined && transientGatewayStatus(httpStatus);
+}
+
+// A failure that says nothing about a model while the gateway itself answers (#4351): the model's
+// own completion timed out, the gateway rate-limited it, or an overloaded gateway answered with a
+// transient status. A refused connection, an unknown host, a TLS or proxy failure is not that: the
+// gateway was never reached, so no model has been judged and nothing may be saved from it.
+function isModelLevelNoVerdict(evidence: ProbeFailureEvidence): boolean {
+  const { code, httpStatus } = evidence;
+  if (code === ERROR_CODES.RATE_LIMIT || code === ERROR_CODES.CANCELLED) return true;
+  if (code === ERROR_CODES.TIMEOUT) return true;
+  if (code !== undefined && SETUP_NETWORK_ERROR_CODES.has(code)) return false;
   return httpStatus !== undefined && transientGatewayStatus(httpStatus);
 }
 
@@ -3870,6 +3927,8 @@ interface SetupVoiceProvider {
   readonly followsSetupGateway?: boolean | undefined;
   readonly apiKeyHeaderName: string;
   readonly timeoutMs: number | undefined;
+  /** False for a timeout nobody named (carried from a stored default); absent when submitted. */
+  readonly timeoutNamed?: boolean | undefined;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
   readonly endpointStyle?: ModelProviderConfig["endpointStyle"];
@@ -4443,6 +4502,7 @@ function validateVoiceProviderConnection(
           voiceProviderRaw(provider.modelId, provider.baseUrl, provider.apiKey, {
             apiKeyHeaderName: provider.apiKeyHeaderName,
             timeoutMs: provider.timeoutMs,
+            timeoutNamed: provider.timeoutNamed,
             maxRetries: provider.maxRetries,
             retryBaseDelayMs: provider.retryBaseDelayMs,
             endpointStyle: provider.endpointStyle,
@@ -5080,6 +5140,23 @@ function voiceProviderTemplate(
   );
 }
 
+// A submitted timeout is a person's; otherwise the carried one keeps who named it.
+function voiceRequestTimeout(
+  raw: Record<string, unknown>,
+  template: SetupVoiceProvider | undefined,
+  defaults: SetupVoiceProviderDefaults,
+): Pick<SetupVoiceProvider, "timeoutMs" | "timeoutNamed"> {
+  const carried = template ?? defaults;
+  return {
+    timeoutMs: submittedOrTemplateValue(
+      raw.voiceTimeoutMs,
+      template?.timeoutMs,
+      defaults.timeoutMs,
+    ),
+    timeoutNamed: raw.voiceTimeoutMs === undefined ? carried.timeoutNamed : undefined,
+  };
+}
+
 function voiceProviderConnection(
   raw: Record<string, unknown>,
   defaults: SetupVoiceProviderDefaults,
@@ -5101,11 +5178,7 @@ function voiceProviderConnection(
       template?.apiKeyHeaderName,
       defaults.apiKeyHeaderName,
     ),
-    timeoutMs: submittedOrTemplateValue(
-      raw.voiceTimeoutMs,
-      template?.timeoutMs,
-      defaults.timeoutMs,
-    ),
+    ...voiceRequestTimeout(raw, template, defaults),
     maxRetries: template?.maxRetries ?? defaults.maxRetries,
     retryBaseDelayMs: template?.retryBaseDelayMs ?? defaults.retryBaseDelayMs,
     ...voiceConnectionEndpointOptions(baseUrl, template, defaults, submittedEndpoint),
@@ -5588,6 +5661,7 @@ function setupVoiceProviderDefaults(
     ...sharedGatewayProvenance(sharedGateway),
     apiKeyHeaderName,
     timeoutMs: timeoutMs ?? existing?.timeoutMs,
+    timeoutNamed: timeoutMs === undefined ? existing?.timeoutConfigured === true : undefined,
     maxRetries: existing?.maxRetries ?? 1,
     retryBaseDelayMs: existing?.retryBaseDelayMs ?? 500,
     ...inheritedVoiceEndpoint(connection.baseUrl, existing, gateway, sharedGateway),
@@ -6797,7 +6871,7 @@ function storedDedicatedProviderRaw(
       ? {}
       : { outputTokenParameter: provider.outputTokenParameter }),
     reasoningContinuation: provider.reasoningContinuation,
-    timeoutMs: provider.timeoutMs,
+    ...providerRequestTimeout(carriedRequestTimeout(provider)),
     maxRetries: provider.maxRetries,
     retryBaseDelayMs: provider.retryBaseDelayMs,
     // KEIKO-0167 (PR-review follow-up): the per-provider circuit-breaker override must
@@ -6886,6 +6960,10 @@ interface ChatAdmission {
   readonly skippedModelIds: readonly string[];
   /** Candidates the gateway answered and rejected — not configured (#3591). */
   readonly droppedModelIds: readonly string[];
+  /** Listed models no request reached (#4351): configured and reported unverified. */
+  readonly listedUnverifiedModelIds: readonly string[];
+  /** Wildcard route patterns dropped by their shape, without a request: part of `droppedModelIds`. */
+  readonly wildcardRouteCount: number;
 }
 
 function temporaryChatAdmission(
@@ -6918,6 +6996,8 @@ function temporaryChatAdmission(
     unverifiedModelIds: candidateModels.chatModelIds,
     skippedModelIds: [],
     droppedModelIds: [],
+    listedUnverifiedModelIds: [],
+    wildcardRouteCount: 0,
   };
 }
 
@@ -6933,23 +7013,178 @@ function definitiveGatewaySetupFailure(error: unknown): boolean {
   return status === 401 || status === 403;
 }
 
+// #4351: a gateway that lists many chat models is verified through the one that becomes the default.
+// Models a person named explicitly are verified as before; a discovered listing is walked in the
+// election order, one model at a time, until one answers. A model the walk never reaches is
+// configured as listed and unverified, with no inference request: its first explicit selection
+// checks it, and a rejection surfaces there. Rejected candidates of the walk are dropped, exactly
+// as the full round drops them.
+// The gateway lists wildcard route patterns only: nothing a person could select or Keiko could
+// check. It fails setup with its own readable reason instead of the generic smoke-test refusal.
+class WildcardOnlyDiscoveryError extends Error {
+  public constructor() {
+    super("the gateway lists only wildcard route patterns");
+    this.name = "WildcardOnlyDiscoveryError";
+  }
+}
+
 async function admitChatCandidates(
   input: SetupVerificationInput,
   candidateModels: SetupCandidateModels,
   candidateConfig: GatewayConfig,
 ): Promise<ChatAdmission> {
-  const testResult = normalizeSetupTestResult(
-    await input.tester(candidateConfig, candidateModels.chatModelIds),
+  // A discovered wildcard route pattern (`openai/*`) names no model: it is dropped by its shape,
+  // with no request. A deployment the person named explicitly is never judged by its shape.
+  const discovered = input.deploymentNames.length === 0;
+  const wildcardIds = discovered
+    ? candidateModels.chatModelIds.filter((id) => id.includes("*"))
+    : [];
+  const ids = candidateModels.chatModelIds.filter((id) => !wildcardIds.includes(id));
+  // A model the request itself asserts a capability for is a model the person named: it is tested
+  // with the default, so no claim is ever stored for a model that was not tested.
+  const asserted = input.imageInputModelIdsProvided
+    ? input.imageInputModelIds.filter((id) => ids.includes(id))
+    : [];
+  // Nothing but wildcard patterns was listed: there is no model to test, and the tester is never
+  // called with an empty list. This is the same refusal an all-rejected gateway gives.
+  if (ids.length === 0 && wildcardIds.length > 0) {
+    reportWildcardRoutesDropped(input.diagnostics, input.correlationId, wildcardIds.length);
+    throw new WildcardOnlyDiscoveryError();
+  }
+  if (!discovered || ids.length <= 1 || asserted.length >= ids.length) {
+    return chatAdmissionFromTest(await input.tester(candidateConfig, ids), [], wildcardIds, ids);
+  }
+  const ordered = preferredConversationModelOrder(
+    listConfiguredCapabilities(candidateConfig).filter((model) => model.kind === "chat"),
+  ).map((model) => model.id);
+  const order = [
+    ...ordered.filter((id) => ids.includes(id)),
+    ...ids.filter((id) => !ordered.includes(id)),
+  ].filter((id) => !asserted.includes(id));
+  return walkChatCandidates(input, candidateConfig, order, asserted, wildcardIds, ids);
+}
+
+async function walkChatCandidates(
+  input: SetupVerificationInput,
+  candidateConfig: GatewayConfig,
+  order: readonly string[],
+  asserted: readonly string[],
+  wildcardIds: readonly string[],
+  gatewayOrder: readonly string[],
+): Promise<ChatAdmission> {
+  const dropped: string[] = [...wildcardIds];
+  let lastError: unknown;
+  for (const [index, id] of order.entries()) {
+    input.signal?.throwIfAborted();
+    try {
+      // The models the request asserted a capability for are tested once, with the first step.
+      const tested =
+        await /* NOSONAR typescript:S9382 -- one model at a time by design (#4351). */ input.tester(
+          candidateConfig,
+          index === 0 ? [id, ...asserted] : [id],
+        );
+      return chatAdmissionFromTest(tested, order.slice(index + 1), dropped, gatewayOrder);
+    } catch (error) {
+      // A cancelled request is the caller's decision, not a verdict; a refused credential is the
+      // gateway's answer to every model.
+      input.signal?.throwIfAborted();
+      if (definitiveGatewaySetupFailure(error) || gatewayNotReached(error)) throw error;
+      // One rule for every failure without a verdict on a gateway that answers, thrown or by
+      // status (a timeout of the completion, a rate limit, an overloaded gateway): it is no
+      // rejection. The model stays configured as unverified and the walk stops, so no other model
+      // is loaded on that gateway.
+      if (setupFailureWithoutVerdict(error))
+        return withoutVerdictAdmission(
+          input,
+          candidateConfig,
+          id,
+          order.slice(index + 1),
+          dropped,
+          gatewayOrder,
+        );
+      lastError = error;
+      // The gateway rejected every model of this step, including the ones the request asserted a
+      // capability for: they are reported as dropped, and the walk never tests them again.
+      dropped.push(id, ...(index === 0 ? asserted : []));
+    }
+  }
+  throw lastError;
+}
+
+function setupFailureEvidence(error: unknown): ProbeFailureEvidence {
+  return { code: setupErrorCode(error), httpStatus: setupHttpStatus(error) };
+}
+
+function setupFailureWithoutVerdict(error: unknown): boolean {
+  if (error instanceof Error && "noVerdict" in error && error.noVerdict === true) return true;
+  return isModelLevelNoVerdict(setupFailureEvidence(error));
+}
+
+// A failure to reach the gateway at all (a refused connection, an unknown host, a TLS or proxy
+// fault, a reset) is not a verdict about a model: the walk rethrows it, so the existing fallback
+// across base URLs and the deferred temporary admission decide, and nothing is saved from it.
+function gatewayNotReached(error: unknown): boolean {
+  const evidence = setupFailureEvidence(error);
+  return isUnverifiedSmokeFailure(evidence) && !isModelLevelNoVerdict(evidence);
+}
+
+function withoutVerdictAdmission(
+  input: SetupVerificationInput,
+  candidateConfig: GatewayConfig,
+  modelId: string,
+  listedUnverified: readonly string[],
+  droppedInWalk: readonly string[],
+  gatewayOrder: readonly string[],
+): ChatAdmission {
+  return chatAdmissionFromTest(
+    {
+      testedModelIds: [],
+      responseFormatModelIds: [],
+      toolCallingObservations: unverifiedKeptToolCallingObservations(
+        candidateConfig,
+        [modelId],
+        input.correlationId,
+      ),
+      unverifiedModelIds: [modelId],
+    },
+    listedUnverified,
+    droppedInWalk,
+    gatewayOrder,
   );
+}
+
+// The configured chat models keep the gateway's own order, whichever of them the walk reached.
+function inGatewayOrder(
+  ids: readonly string[],
+  gatewayOrder: readonly string[],
+): readonly string[] {
+  const wanted = new Set(ids);
+  const ordered = gatewayOrder.filter((id) => wanted.has(id));
+  return [...ordered, ...ids.filter((id) => !gatewayOrder.includes(id))];
+}
+
+function chatAdmissionFromTest(
+  result: readonly string[] | GatewaySetupTestResult,
+  listedUnverified: readonly string[] = [],
+  droppedInWalk: readonly string[] = [],
+  gatewayOrder: readonly string[] = [],
+): ChatAdmission {
+  const testResult = normalizeSetupTestResult(result);
   const unverifiedModelIds = testResult.unverifiedModelIds ?? [];
   return {
     testResult,
     // A candidate kept unverified (timeout/transport) is still CONFIGURED, exactly like an
-    // asserted embedding model that failed its probe (#3591).
-    configuredModelIds: [...testResult.testedModelIds, ...unverifiedModelIds],
+    // asserted embedding model that failed its probe (#3591). A listed model the walk never
+    // reached is configured the same way, without having received a request.
+    configuredModelIds: inGatewayOrder(
+      [...testResult.testedModelIds, ...unverifiedModelIds, ...listedUnverified],
+      gatewayOrder,
+    ),
     unverifiedModelIds,
     skippedModelIds: testResult.skippedModelIds ?? [],
-    droppedModelIds: testResult.droppedModelIds ?? [],
+    droppedModelIds: [...(testResult.droppedModelIds ?? []), ...droppedInWalk],
+    listedUnverifiedModelIds: listedUnverified,
+    wildcardRouteCount: droppedInWalk.filter((id) => id.includes("*")).length,
   };
 }
 
@@ -7119,10 +7354,40 @@ async function admitEmbeddingCandidates(
   // NAMES are deliberately NOT exempt — naming a deployment states its identity, not its role; the
   // role there still comes from Keiko's own id heuristic, which is exactly what the probe corrects.
   const asserted = new Set([...input.storedEmbeddingModelIds, ...input.submittedEmbeddingModelIds]);
-  const answered = new Set(await input.embeddingProbe(probeConfig, candidates));
-  const admitted = candidates.filter((id) => answered.has(id) || asserted.has(id));
+  // #4351: only the embedding model in use sends a request. The model a person already chose
+  // (stored or submitted) comes first; the rest of the listing is probed only while no model has
+  // answered, one at a time, and what a person never reaches is admitted as listed and unverified.
+  // A first-use proof settles it when a Knowledge Pod actually selects it.
+  const ordered = [
+    ...candidates.filter((id) => asserted.has(id)),
+    ...candidates.filter((id) => !asserted.has(id)),
+  ];
+  const failed: string[] = [];
+  let answeredId: string | undefined;
+  for (const id of ordered) {
+    input.signal?.throwIfAborted();
+    const answered = new Set(
+      await /* NOSONAR typescript:S9382 -- one model at a time by design (#4351). */ input.embeddingProbe(
+        probeConfig,
+        [id],
+      ),
+    );
+    if (answered.has(id)) {
+      answeredId = id;
+      break;
+    }
+    failed.push(id);
+    // A model the person already chose that does not answer is flagged, never replaced by a model
+    // nobody chose: a transient outage must not load another model on a shared gateway.
+    if (asserted.has(id)) break;
+  }
+  const reached = answeredId === undefined ? failed.length : failed.length + 1;
+  const untried =
+    answeredId === undefined && failed.length === ordered.length ? [] : ordered.slice(reached);
+  const admitted = candidates.filter(
+    (id) => id === answeredId || untried.includes(id) || asserted.has(id),
+  );
   // Split the failures: an asserted model stays configured and is flagged; an inferred one is gone.
-  const failed = candidates.filter((id) => !answered.has(id));
   return {
     admitted,
     retainedUnverified: failed.filter((id) => asserted.has(id)),
@@ -7307,6 +7572,26 @@ function reportUnusableDiscoveredModels(
   });
 }
 
+// Discovered wildcard route patterns (`openai/*`) name no model: they are dropped by their shape
+// and never sent a request. Body-free: the count only, never a pattern.
+function reportWildcardRoutesDropped(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  count: number,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "POST /api/gateway/setup",
+    source: "gateway-setup.discovery",
+    errorClass: "GatewayDiscoveryWildcardRoutes",
+    message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    code: "GATEWAY_DISCOVERY_WILDCARD_ROUTES_DROPPED",
+    // Discovered chat candidates dropped by their shape, never sent a request.
+    droppedChatModelCount: count,
+  });
+}
+
 // Chat counterpart of `reportUnusableDiscoveredModels`, emitted separately because the chat smoke
 // test itself decides whether setup fails closed (an all-rejected gateway throws before this point
 // is ever reached) — see `verifySetupCandidate`. Body-free: counts only, never a model id (#3591).
@@ -7316,7 +7601,10 @@ function reportChatSmokeAdmission(
   chatAdmission: ChatAdmission,
 ): void {
   const unverified = chatAdmission.unverifiedModelIds.length;
-  const dropped = chatAdmission.droppedModelIds.length;
+  // Wildcard patterns were dropped by their shape, not answered and rejected: they have their own line.
+  const dropped = chatAdmission.droppedModelIds.length - chatAdmission.wildcardRouteCount;
+  if (chatAdmission.wildcardRouteCount > 0)
+    reportWildcardRoutesDropped(diagnostics, correlationId, chatAdmission.wildcardRouteCount);
   if (unverified === 0 && dropped === 0) return;
   emitServerDiagnostic(diagnostics, {
     correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
@@ -7482,7 +7770,16 @@ function verifiedSetupFromChatAdmission(
     input,
     rawConfigWithOptionalBlocks,
     candidateConfig,
-    testResult.toolCallingObservations ?? [],
+    [
+      ...(testResult.toolCallingObservations ?? []),
+      // Listed models no request reached carry an explicit "unverified" tool-calling record, the
+      // same closed state a model kept without an answer carries, so Settings reports them as such.
+      ...unverifiedKeptToolCallingObservations(
+        candidateConfig,
+        chatAdmission.listedUnverifiedModelIds,
+        input.correlationId,
+      ),
+    ],
   );
   return verifiedSetupResult(
     parsedConfig.rawConfig,
@@ -7492,6 +7789,12 @@ function verifiedSetupFromChatAdmission(
     embeddingAdmission,
     chatAdmission,
   );
+}
+
+// What Settings reports as unverified: the models kept without an answer and the listed models no
+// request reached. The diagnostic about silent candidates keeps counting only the first kind.
+function reportedUnverifiedChatModelIds(chatAdmission: ChatAdmission): readonly string[] {
+  return [...chatAdmission.unverifiedModelIds, ...chatAdmission.listedUnverifiedModelIds];
 }
 
 function verifiedSetupResult(
@@ -7520,8 +7823,8 @@ function verifiedSetupResult(
     ...(embeddingAdmission.droppedUnverified.length > 0
       ? { droppedEmbeddingModelIds: embeddingAdmission.droppedUnverified }
       : {}),
-    ...(chatAdmission.unverifiedModelIds.length > 0
-      ? { unverifiedChatModelIds: chatAdmission.unverifiedModelIds }
+    ...(reportedUnverifiedChatModelIds(chatAdmission).length > 0
+      ? { unverifiedChatModelIds: reportedUnverifiedChatModelIds(chatAdmission) }
       : {}),
     ...(chatAdmission.droppedModelIds.length > 0
       ? { droppedChatModelIds: chatAdmission.droppedModelIds }
@@ -7706,6 +8009,8 @@ const SETUP_CANDIDATE_AUTH_FAILURE =
   "The provider rejected the credential. Check the API key, endpoint URL, and project/model access.";
 const SETUP_CANDIDATE_RATE_LIMIT_FAILURE =
   "The provider rate-limited setup verification. Wait briefly and retry.";
+const SETUP_CANDIDATE_WILDCARD_ONLY_FAILURE =
+  "The gateway lists only wildcard route patterns (such as openai/*), which name no model Keiko can check. Enter a chat-capable model or deployment name and retry.";
 const SETUP_CANDIDATE_MODEL_FAILURE =
   "The provider endpoint responded, but no discovered model accepted the chat smoke test. Enter a chat-capable model or deployment name and retry.";
 
@@ -8491,9 +8796,15 @@ function temporaryAdmissionOrFailure(
   return setupFailureResult(candidateFailureMessages(failures), request.correlationId);
 }
 
+function candidateErrorMessage(error: unknown): string {
+  return error instanceof WildcardOnlyDiscoveryError
+    ? SETUP_CANDIDATE_WILDCARD_ONLY_FAILURE
+    : setupCandidateError(error);
+}
+
 function candidateFailureMessages(failures: readonly SetupCandidateFailure[]): readonly string[] {
   return failures.map(
-    (failure, index) => `candidate ${String(index + 1)}: ${setupCandidateError(failure.error)}`,
+    (failure, index) => `candidate ${String(index + 1)}: ${candidateErrorMessage(failure.error)}`,
   );
 }
 

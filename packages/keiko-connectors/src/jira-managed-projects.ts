@@ -164,7 +164,7 @@ function keyErrors(body: Record<string, unknown>): JiraMutationFailureDetail | u
   )
     return undefined;
   if (fieldErrors.length + messages.length === 0) return {};
-  return sanitizeJiraMutationFailureDetail({ fieldErrors, messages });
+  return sanitizeJiraMutationFailureDetail({ fromJira: true, fieldErrors, messages });
 }
 async function validateKey(request: JiraMutationRequest, key: string): Promise<KeyValidation> {
   const result = await request(`projectvalidate/key?${new URLSearchParams({ key }).toString()}`);

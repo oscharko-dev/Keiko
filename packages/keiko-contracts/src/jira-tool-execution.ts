@@ -411,8 +411,34 @@ export const JIRA_DRAFT_ID_PATTERN =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 export const JIRA_DRAFT_DIGEST_PATTERN = "^[0-9a-f]{64}$";
 /** Why a `jira.draft` call that names a staged draft is refused before anyone is asked. */
-export const JIRA_DRAFT_REFUSALS = ["draft-not-found", "draft-changed", "draft-invalid"] as const;
+export const JIRA_DRAFT_REFUSALS = [
+  "draft-not-found",
+  "draft-changed",
+  "draft-invalid",
+  "connection-changed",
+] as const;
 export type JiraDraftRefusalReason = (typeof JIRA_DRAFT_REFUSALS)[number];
+/**
+ * Why a draft that resolves is still invalid, as a closed code: the person reads one localized
+ * sentence per code that names what to change (#4355). The model-facing guidance sentence is its
+ * own text; this code carries no draft content.
+ */
+export const JIRA_DRAFT_PROBLEMS = [
+  "draft-shape",
+  "items-missing",
+  "item-shape",
+  "item-ref",
+  "item-ids",
+  "item-fields",
+  "item-parent",
+  "item-links",
+  "item-requirements",
+  "ref-duplicate",
+  "ref-self",
+  "ref-unknown",
+  "ref-cycle",
+] as const;
+export type JiraDraftProblemCode = (typeof JIRA_DRAFT_PROBLEMS)[number];
 /** A model-chosen local reference that relations between draft items use before keys exist. */
 export const JIRA_DRAFT_REF_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,31}$";
 const DRAFT_REF = new RegExp(JIRA_DRAFT_REF_PATTERN, "u");
@@ -678,6 +704,8 @@ export const JIRA_FIELD_VALIDATION_FAILURES = [
   "invalid-field",
   "invalid-operation",
   "bounds-exceeded",
+  /** An Epic Link whose target the instance does not know as an Epic (#4354). */
+  "invalid-epic-link",
 ] as const;
 export type JiraFieldValidationFailure = (typeof JIRA_FIELD_VALIDATION_FAILURES)[number];
 export const JIRA_MUTATION_DETAIL_LIMITS = Object.freeze({
@@ -700,6 +728,12 @@ export interface JiraMutationFieldError {
 export interface JiraMutationFailureDetail {
   /** The adapter independently observed the requested state before any effect. */
   readonly unchanged?: true;
+  /**
+   * Jira's own error document: set only where Keiko parses a refusal Jira sent. A closed fact about
+   * who refused, so the instruction a model reads never guesses it from the detail's shape (#4357).
+   * Never sent to the model.
+   */
+  readonly fromJira?: true;
   readonly fieldId?: string;
   readonly validation?: JiraFieldValidationFailure;
   readonly fieldErrors?: readonly JiraMutationFieldError[];
@@ -733,6 +767,11 @@ export type JiraMutationAttempt =
       /** Internal bounded serializer evidence; omitted from model results and remote receipts. */
       readonly descriptionConvertedHeadingCount?: number;
       readonly descriptionProjection?: "supported-markdown";
+      /**
+       * Template rules the issue already broke in fields this edit did not touch. They did not block
+       * the write; the person is told (#4354).
+       */
+      readonly templateNotices?: readonly JiraTemplateViolation[];
     }
   | {
       readonly ok: false;
@@ -811,6 +850,7 @@ export function sanitizeJiraMutationFailureDetail(
   const messages = detailMessages(Reflect.get(value, "messages"));
   const detail: JiraMutationFailureDetail = {
     ...(Reflect.get(value, "unchanged") === true ? { unchanged: true } : {}),
+    ...(Reflect.get(value, "fromJira") === true ? { fromJira: true } : {}),
     ...(detailFieldId(fieldId) ? { fieldId } : {}),
     ...(VALIDATION_FAILURES.has(validation)
       ? { validation: validation as JiraFieldValidationFailure }
@@ -818,7 +858,9 @@ export function sanitizeJiraMutationFailureDetail(
     ...(fieldErrors.length === 0 ? {} : { fieldErrors }),
     ...(messages.length === 0 ? {} : { messages }),
   };
-  return Object.keys(detail).length === 0 ? undefined : detail;
+  // The fact about who refused explains nothing by itself: without a field error or a message there
+  // is no detail at all, as before.
+  return Object.keys(detail).every((key) => key === "fromJira") ? undefined : detail;
 }
 
 // eslint-disable-next-line no-control-regex -- a link type name is a single-line identifier.
@@ -868,3 +910,14 @@ export function sanitizeJiraMutationLinkAccount(
     ? { requested, created, missing: refs, unconfirmed }
     : undefined;
 }
+
+/**
+ * The most characters of the `guidance` sentence any Jira write result may carry. It is not a guess:
+ * the template refusals' guidance (a parent rule, a section rule, every rule hint) is the longest the
+ * producers write, 1135 characters at its worst, and `jiraTemplateGuidanceVariants` in the producer
+ * enumerates every variant, so one test holds the longest of them within this bound AND the bound
+ * within a stated margin of it. The result schemas of every write tool (the mutation tools, the draft
+ * run, draft-stage) and the producer share this one value: a longer guidance made the catalog reject
+ * the whole result (`result-contract-failed`, data null, #4354).
+ */
+export const JIRA_RESULT_GUIDANCE_MAX_CHARS = 1280;

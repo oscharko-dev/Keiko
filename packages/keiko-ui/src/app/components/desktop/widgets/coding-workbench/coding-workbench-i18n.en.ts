@@ -582,6 +582,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko could not read the state of the Windows runtime gateway. In a terminal, run: keiko gateway-service status",
   "codingWorkbench.gatewayService.unqualified":
     "This Keiko build cannot start coding runs on Windows. They need the Windows runtime gateway, which only a release-qualified Keiko package can use. Selecting another repository does not change this.",
+  "codingWorkbench.installVolume.notLocal":
+    "Coding runs cannot start because Keiko is installed in a network or redirected folder. Install Keiko on a local drive of this computer.",
+  "codingWorkbench.installVolume.unverified":
+    "Keiko could not check its installation folder just now because Windows answered too slowly. Try again in a moment; if it keeps happening, restart Keiko.",
   "codingWorkbench.setup.repairAndBind": "Repair and bind",
   "codingWorkbench.setup.repairing": "Repairing…",
   "codingWorkbench.setup.runtimeUnavailable":
@@ -1396,6 +1400,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The selected model's context window is too small for a coding run (minimum 32,000 tokens; {code}). Keiko could not confirm 32,000 tokens for it. Choose a larger model, or have the gateway declare this model's max_input_tokens, then start again.",
   "codingWorkbench.alert.startRefusedModelVerificationPending":
     "Keiko is still verifying the selected model's context window with the gateway ({code}). On a busy gateway this can take a few minutes; start again once the check has settled.",
+  "codingWorkbench.alert.startEndedModelChanged":
+    "The model changed while it was being checked, so no run was started ({code}). Choose the model you want and press Start again.",
   "codingWorkbench.alert.startRefusedWorkspaceLocation":
     "On Windows, Keiko runs a coding task only in a new worktree, not in your own checkout or folder ({code}). Choose New local worktree as the work location of a Git repository, then start again.",
   "codingWorkbench.alert.startRefusedWorkspaceVolume":

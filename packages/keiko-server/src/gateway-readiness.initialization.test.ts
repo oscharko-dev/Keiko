@@ -10,6 +10,7 @@ import {
   CHAT_MODEL_WALK_BUDGET_MS,
   awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
+  checkSelectedConversationModel,
   initializeConfiguredConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
@@ -466,15 +467,20 @@ it("keeps the existing two-slot ceiling while background and selected requests s
     })),
   });
   deps.gatewayConfig?.set(config, true, "corr-two-slot-source");
+  // Startup checks only the model in use (#4351); the other three listed models are untouched.
   await vi.waitFor(() => {
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
   initializeConfiguredConversationReadiness(deps, "corr-two-slot-reload");
-  const selected = awaitInitializedConversationReadiness(
-    deps,
-    "third-chat",
-    "corr-queued-selection",
+  expect(fetch).toHaveBeenCalledTimes(1);
+  // Explicit picks of three more models share the unchanged two-slot ceiling with the running
+  // startup check: the third waits in the queue instead of loading a third model at once.
+  const picks = ["second-chat", "third-chat", "fourth-chat"].map((modelId) =>
+    checkSelectedConversationModel(deps, modelId, `corr-pick-${modelId}`),
   );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(maximum).toBe(2);
   releases.splice(0).forEach((release) => {
     release();
   });
@@ -484,7 +490,7 @@ it("keeps the existing two-slot ceiling while background and selected requests s
   releases.splice(0).forEach((release) => {
     release();
   });
-  await selected;
+  await Promise.all(picks);
   await vi.advanceTimersByTimeAsync(0);
   expect(fetch).toHaveBeenCalledTimes(4);
   expect(maximum).toBe(2);

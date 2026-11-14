@@ -12,7 +12,8 @@ import {
   reciprocalAlreadyPresent,
 } from "./jira-reciprocal-link-observations.js";
 import {
-  parseReciprocalInput,
+  checkReciprocalInput,
+  reciprocalInputRefusal,
   reciprocalBody,
   reciprocalFailure,
   reciprocalGlobalId,
@@ -44,7 +45,7 @@ async function admit(
 ): Promise<Admitted | ReciprocalFailure> {
   const configuration = await observeReciprocalConfiguration(ports, input);
   if (!configuration.ok) return configuration;
-  const prior = await observeReciprocalLinks(request, input);
+  const prior = await observeReciprocalLinks(request, input, true);
   if (!prior.ok) return prior;
   const absent = reciprocalAlreadyPresent(input, prior.value);
   if (absent !== undefined) return absent;
@@ -66,7 +67,7 @@ async function recheck(
   configuration: ReciprocalManifest,
   prior: Parameters<typeof sameRemoteLinks>[0],
 ): Promise<Admitted | ReciprocalFailure> {
-  const current = await observeReciprocalLinks(request, input);
+  const current = await observeReciprocalLinks(request, input, true);
   if (!current.ok) return current;
   if (!sameRemoteLinks(prior, current.value))
     return reciprocalRefusal(
@@ -119,11 +120,9 @@ export async function executeJiraReciprocalRemoteLink(
   check = false,
   templates?: JiraIssueTemplateSource,
 ): Promise<ReciprocalAttempt> {
-  const input = parseReciprocalInput(args);
-  if (input === undefined)
-    return reciprocalRefusal(
-      "Review the bound local actor/issue, exact configured Jira application link and selected remote issue metadata; require expectLocalLinkAbsent:true and acceptNativeDelegatedEffect:true. No raw destination, authentication header or remote actor is accepted as authority.",
-    );
+  const checked = checkReciprocalInput(args);
+  if (!checked.ok) return reciprocalInputRefusal(checked.cause);
+  const input = checked.input;
   if (ports === undefined)
     return reciprocalRefusal(
       "Fresh same-host application-link configuration and local manifest reads are unavailable. No request was sent.",

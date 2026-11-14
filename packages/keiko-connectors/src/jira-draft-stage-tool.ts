@@ -206,6 +206,8 @@ export interface JiraDraftTemplateRefusal {
   readonly ref: string;
   readonly violations: readonly JiraTemplateViolation[];
 }
+/** The answer of the template dry run when Jira could not be read, so nothing more is read. */
+export const JIRA_DRAFT_TEMPLATE_UNREADABLE = "jira-unreadable" as const;
 /**
  * Every item passes the template check a create passes, now, so the model corrects an item while it
  * is being written instead of after the human has been asked. Items are read one after another
@@ -216,7 +218,7 @@ export async function firstJiraDraftTemplateRefusal(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
   index = 0,
-): Promise<JiraDraftTemplateRefusal | undefined> {
+): Promise<JiraDraftTemplateRefusal | typeof JIRA_DRAFT_TEMPLATE_UNREADABLE | undefined> {
   const item = items[index];
   if (item === undefined) return undefined;
   const result = await checkJiraManagedMutationTemplates(
@@ -225,6 +227,9 @@ export async function firstJiraDraftTemplateRefusal(
     context,
     connection,
   );
+  // Jira could not be read: every later item reads the same metadata and would wait the same.
+  if (!result.ok && result.violations === undefined && result.reason === "unavailable")
+    return JIRA_DRAFT_TEMPLATE_UNREADABLE;
   const violations =
     result.ok || result.violations === undefined ? [] : decidableNow(item, result.violations);
   if (violations.length > 0) return { ref: String(item.ref), violations };
@@ -281,8 +286,27 @@ export const JIRA_DRAFT_TOO_LARGE_GUIDANCE =
   "Tell the user in plain language that the backlog is too big to approve in one piece, that the items already written are still saved, " +
   "and offer to split the rest into several smaller drafts, for example one per epic or theme, each approved on its own. " +
   "Do not show this message, an error code or any numbers.";
+/**
+ * One fixed sentence for each refusal that says what to do next (#4357 AC3). A code alone left a model
+ * to guess whether to stage again, give up or ask. `invalid-fields` and `template-violation` carry
+ * their own results.
+ */
+const REFUSAL_GUIDANCE: Readonly<Partial<Record<JiraDraftRefusal, string>>> = {
+  "too-large": JIRA_DRAFT_TOO_LARGE_GUIDANCE,
+  "draft-not-found":
+    "No draft with this draftId is held for this Chat, so nothing was staged. Call jira.draft-stage again without a draftId: that starts a new draft; then use the draftId it returns, and do not invent one.",
+  "connection-changed":
+    "The Jira connection changed since this draft was staged, so it cannot be extended. Call jira.draft-stage again without a draftId: that starts a new draft on the current connection. Nothing was staged.",
+  "duplicate-ref":
+    "Two items of the draft use the same ref. Give every item its own ref and stage the page again; nothing was staged.",
+  "unsupported-deployment":
+    "Drafts work with Jira Data Center only, and this connection is not one. Tell the user a draft cannot be staged here. Nothing was staged.",
+  "invalid-input":
+    "An item of this page did not pass Keiko's check of its fields, links or requirement references. Send the page again with every item in the jira.draft item form; nothing was staged.",
+};
 function guidanceOf(refusal: JiraDraftRefusal): Record<string, string> {
-  return refusal === "too-large" ? { guidance: JIRA_DRAFT_TOO_LARGE_GUIDANCE } : {};
+  const guidance = REFUSAL_GUIDANCE[refusal];
+  return guidance === undefined ? {} : { guidance };
 }
 
 interface StageRun<Context extends ManagedMcpInvocationContext> {
@@ -463,7 +487,8 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
   // page after page in one invocation: identical reads are answered from the invocation's memo.
   const reads = withJiraDraftReadMemo(connection, context, run.reads, now);
   const template = await firstJiraDraftTemplateRefusal(items, context, reads);
-  if (template !== undefined) return templateRefusalResult(template, run, args.items.length);
+  if (template !== undefined && template !== JIRA_DRAFT_TEMPLATE_UNREADABLE)
+    return templateRefusalResult(template, run, args.items.length);
   const fields = await pageFieldRefusals(items, context, reads);
   const firstField = fields.refusals[0];
   if (firstField !== undefined) {
@@ -502,22 +527,30 @@ export function parseJiraDraftReference(
 }
 export type JiraDraftResolution =
   | { readonly ok: true; readonly arguments: CatalogJsonObject }
-  | { readonly ok: false; readonly reason: "draft-not-found" | "draft-changed" };
+  | {
+      readonly ok: false;
+      readonly reason: "draft-not-found" | "draft-changed" | "connection-changed";
+    };
 
 /**
  * The staged draft a `jira.draft` call names, as the `{ items }` arguments every consumer parses.
  * `undefined` when the call does not name a staged draft. The digest the call carries must be the
  * digest of the items held now: a draft extended after the digest was read is a different draft.
+ * A draft resolves only under the connection it was stored with: project and issue-type ids repeat
+ * between Jira instances, so after a Pod switch the old draft must never run on the new Jira. No
+ * current connection (`undefined`) resolves nothing.
  */
 export function resolveJiraDraftArguments(
   args: Readonly<Record<string, unknown>>,
   lookup: (draftId: string) => StagedJiraDraft | undefined,
+  currentFingerprint: string | undefined,
 ): JiraDraftResolution | undefined {
   if (!("draftId" in args) && !("draftDigest" in args)) return undefined;
   const reference = parseJiraDraftReference(args);
   const draft = reference === undefined ? undefined : lookup(reference.draftId);
   if (reference === undefined || draft === undefined)
     return { ok: false, reason: "draft-not-found" };
+  if (draft.fingerprint !== currentFingerprint) return { ok: false, reason: "connection-changed" };
   return draft.digest === reference.draftDigest &&
     jiraDraftDigest(draft.items, draft.sourceBindings) === draft.digest
     ? { ok: true, arguments: { items: draft.items } as CatalogJsonObject }

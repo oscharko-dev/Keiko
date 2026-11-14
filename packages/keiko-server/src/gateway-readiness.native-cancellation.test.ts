@@ -196,7 +196,13 @@ it("classifies a native provider deadline as inconclusive rather than refuting r
   const deps = readinessDeps(baseUrl);
   const config = {
     ...deps.config,
-    providers: deps.config.providers.map((provider) => ({ ...provider, timeoutMs: 100 })),
+    // The deadline is the operator's own, so the explicit check keeps it exactly (a defaulted timeout
+    // would be lifted to the interactive floor): a provider deadline is inconclusive, never a refutation.
+    providers: deps.config.providers.map((provider) => ({
+      ...provider,
+      timeoutMs: 100,
+      timeoutConfigured: true as const,
+    })),
   };
   const report = await runGatewayReadiness(
     { modelId: "native-readiness", options: { probes: ["chat"] } },

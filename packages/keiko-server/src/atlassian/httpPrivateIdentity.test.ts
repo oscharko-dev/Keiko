@@ -103,6 +103,7 @@ function fixture(
   legacyTemporaryRelease?: "10.3" | "10.4",
   turnLifetimeMs = 60_000,
   inputAvailable = true,
+  observePatPort?: NonNullable<Parameters<typeof createJiraPrivatePorts>[3]["observePatPort"]>,
 ): Fixture {
   const custody = privateJiraCustodyFixture(`jira.${purpose}`);
   const pending = custody.inputs.prepare(custody.binding);
@@ -177,6 +178,7 @@ function fixture(
       cleanupFailures.push(error);
     },
     ...(legacyTemporaryRelease === undefined ? {} : { legacyTemporaryRelease }),
+    ...(observePatPort === undefined ? {} : { observePatPort }),
   };
   const ports = createJiraPrivatePorts(options, options, context, privatePortOptions);
   return {
@@ -517,6 +519,25 @@ describe("real private Jira session composition", () => {
     });
     expect(f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
     expect(f.onConsumed).toHaveBeenCalledOnce();
+  });
+  it("routes the PAT port of the private owner through the one observed wrapper, never the private session port (#4353)", async () => {
+    const observed: string[] = [];
+    const f = fixture(
+      "login",
+      undefined,
+      60_000,
+      true,
+      (port) =>
+        (request): ReturnType<typeof port> => {
+          observed.push(request.url);
+          return port(request);
+        },
+    );
+    await f.ports.identity.perform("login", {});
+    expect(await f.ports.identity.session("logout", "actor-key")).toMatchObject({ ok: true });
+    // Only the PAT identity reads pass the wrapper; login, proof and logout use session ports.
+    expect(observed.length).toBeGreaterThan(0);
+    expect(observed.every((url) => url === `${BASE}/rest/api/2/myself`)).toBe(true);
   });
   it("requires the live expected actor for logout and removes the sealed session after one native DELETE", async () => {
     const f = fixture();

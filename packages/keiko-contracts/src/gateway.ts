@@ -193,6 +193,20 @@ export interface ModelCapability {
    * proof, a verification that gave up, and a model the server never renews (#3905).
    */
   readonly toolCallingRenewalPending?: true | undefined;
+  /**
+   * Transient server observation, never persisted: a basic-chat check of this model is running now,
+   * for example the one a person's first explicit pick of it started (#4351). It lets the picker say
+   * that the model is being checked. Absent when no check of it runs.
+   */
+  readonly conversationCheckPending?: true | undefined;
+  /**
+   * Transient server observation, never persisted and never configuration: this deployment rejected a
+   * tool-turn continuation for want of the previous assistant reasoning and accepted it restored, so
+   * Keiko returns that reasoning on tool turns from then on (#4351). It lives and dies with the
+   * configuration generation; Settings shows it so an operator can see what Keiko learned. Absent
+   * when nothing was detected.
+   */
+  readonly reasoningOnToolTurns?: "detected" | undefined;
   /** Observed repository-citation behavior; absent means unknown and grants no execution authority. */
   readonly citationBehaviour?: "cites" | "cites-after-repair" | "never" | undefined;
   /**

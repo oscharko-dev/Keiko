@@ -9,10 +9,12 @@ import {
   type CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
+import { JIRA_PROPERTY_VALUE_MAX_BYTES } from "./jira-entity-property-values.js";
 import { decodeJiraPropertyInput } from "./jira-entity-property-input.js";
 import { jiraPropertyStatesEqual } from "./jira-entity-property-write-admission.js";
 import {
   projectJiraRemoteVersionLinkValue,
+  JIRA_VERSION_LINK_GLOBAL_ID_MAX_CHARS,
   jiraRemoteVersionLinkGlobalId as versionLinkGlobalId,
 } from "./jira-managed-remote-version-links.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
@@ -61,15 +63,28 @@ const CONTEXT = [
   "expectedLinks",
 ];
 const ITEM_FIELDS = new Set(["globalId", "valueNodes"]);
-const INVALID_INPUT: VersionLinkFailure = {
-  ok: false,
-  reason: "field-validation",
-  detail: {
-    messages: [
-      "Supply the complete reviewed link set with distinct exact global IDs and complete typed values; selected path identities and explicit all-links acceptance must be valid. Nothing was written.",
-    ],
-  },
-};
+const NOT_WRITTEN = "Nothing was written.";
+/** Largest value a link or a new value may carry, as the property value reader bounds it. */
+const VALUE_BYTES = String(JIRA_PROPERTY_VALUE_MAX_BYTES);
+// One sentence per cause (#4357 AC3), each within the 200-byte bound of a detail message so the bound
+// never cuts the rule, and none naming a refused value.
+const EXPECTED_NOT_LIST = `expectedLinks must be the complete current list of the version's remote links, each as { globalId, valueNodes }. ${NOT_WRITTEN}`;
+const EXPECTED_ROW = `Each expectedLinks entry takes exactly globalId and valueNodes, as the version's remote link read lists them. ${NOT_WRITTEN}`;
+const GLOBAL_ID_RULE = String.raw`A globalId is non-blank text of at most ${String(JIRA_VERSION_LINK_GLOBAL_ID_MAX_CHARS)} characters without control characters; one that selects a link also has no / \ or % and is not . or .. ${NOT_WRITTEN}`;
+const EXPECTED_DUPLICATE = `expectedLinks must not repeat a globalId: list each remote link of the version once. ${NOT_WRITTEN}`;
+const CONFIRM_ALL = `Deleting all remote links takes confirmAll:true and expectedLinks, the complete current list. ${NOT_WRITTEN}`;
+const TOO_MANY_LINKS = `expectedLinks holds more links, or more argument bytes, than Keiko can review in one call. ${NOT_WRITTEN}`;
+function invalid(message: string, fieldId?: string): VersionLinkFailure {
+  return {
+    ok: false,
+    reason: "field-validation",
+    detail: {
+      ...(fieldId === undefined ? {} : { fieldId }),
+      validation: "invalid-field",
+      messages: [message],
+    },
+  };
+}
 export function versionLinkRefusal(
   message: string,
   reason: VersionLinkFailure["reason"] = "field-validation",
@@ -82,29 +97,48 @@ export function versionLinkRefusal(
     ...(receipt === undefined ? {} : { receipt }),
   };
 }
+function tooManyLinks(): VersionLinkFailure {
+  return versionLinkRefusal(TOO_MANY_LINKS, "bounds-exceeded");
+}
+/** A value that failed decoding: too large is its own cause, with the field that carried it. */
+function valueRefusal(
+  message: string,
+  cause: "invalid-input" | "bounds-exceeded",
+  fieldId: string,
+): VersionLinkFailure {
+  return {
+    ok: false,
+    reason: cause === "bounds-exceeded" ? "bounds-exceeded" : "field-validation",
+    detail: {
+      fieldId,
+      validation: cause === "bounds-exceeded" ? "bounds-exceeded" : "invalid-field",
+      messages: [message],
+    },
+  };
+}
 function expectedLink(raw: unknown): VersionLinkObservation<VersionLink> {
   const row = asRecord(raw);
   if (
     row === undefined ||
     Object.keys(row).length !== 2 ||
-    !Object.keys(row).every((key) => ITEM_FIELDS.has(key)) ||
-    !versionLinkGlobalId(row.globalId, false)
+    !Object.keys(row).every((key) => ITEM_FIELDS.has(key))
   )
-    return INVALID_INPUT;
+    return invalid(EXPECTED_ROW, "expectedLinks");
+  if (!versionLinkGlobalId(row.globalId, false)) return invalid(GLOBAL_ID_RULE, "expectedLinks");
   const decoded = decodeJiraPropertyInput(row.valueNodes);
   if (decoded.ok) {
     return { ok: true, value: { globalId: row.globalId, value: decoded.value } };
   }
-  return versionLinkRefusal(
-    "Supply the complete bounded typed link value.",
-    decoded.reason === "bounds-exceeded" ? decoded.reason : "field-validation",
+  return valueRefusal(
+    `Each expectedLinks valueNodes must be that link's complete typed value, within ${VALUE_BYTES} UTF-8 JSON bytes and the depth and node limits. ${NOT_WRITTEN}`,
+    decoded.reason,
+    "expectedLinks",
   );
 }
 function expectedLinks(raw: unknown): VersionLinkObservation<readonly VersionLink[]> {
   const values = asArray(raw);
-  if (values === undefined) return INVALID_INPUT;
-  if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems)
-    return { ok: false, reason: "bounds-exceeded" };
+  if (values === undefined) return invalid(EXPECTED_NOT_LIST, "expectedLinks");
+  if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return tooManyLinks();
   const links: VersionLink[] = [];
   const identities = new Set<string>();
   let bytes = 0;
@@ -112,12 +146,11 @@ function expectedLinks(raw: unknown): VersionLinkObservation<readonly VersionLin
     const selected = expectedLink(value);
     if (!selected.ok) return selected;
     const row = selected.value;
-    if (identities.has(row.globalId)) return INVALID_INPUT;
+    if (identities.has(row.globalId)) return invalid(EXPECTED_DUPLICATE, "expectedLinks");
     bytes +=
       Buffer.byteLength(JSON.stringify(row.value), "utf8") +
       Buffer.byteLength(row.globalId, "utf8");
-    if (bytes > TOOL_CATALOG_LIMITS.maxArgumentBytes)
-      return { ok: false, reason: "bounds-exceeded" };
+    if (bytes > TOOL_CATALOG_LIMITS.maxArgumentBytes) return tooManyLinks();
     identities.add(row.globalId);
     links.push(row);
   }
@@ -138,9 +171,10 @@ function newValue(
 ): VersionLinkObservation<CatalogJsonValue> {
   const decoded = decodeJiraPropertyInput(nodes);
   if (!decoded.ok)
-    return versionLinkRefusal(
-      "Supply the complete bounded new value, with literal null/empty values preserved.",
-      decoded.reason === "bounds-exceeded" ? decoded.reason : "field-validation",
+    return valueRefusal(
+      `valueNodes must be the complete new link value as typed nodes, null and empty values kept, within ${VALUE_BYTES} UTF-8 JSON bytes. ${NOT_WRITTEN}`,
+      decoded.reason,
+      "valueNodes",
     );
   const object = asRecord(decoded.value);
   // Collection POST chooses globalId from the actual JSON; never request generated-ID inference.
@@ -162,9 +196,11 @@ function selectedInput(
 ): VersionLinkObservation<VersionLinkInput> {
   const base = { operation, selected, expected };
   if (operation === "jira.delete-version-remote-links")
-    return args.confirmAll === true ? { ok: true, value: { ...base, desired: [] } } : INVALID_INPUT;
+    return args.confirmAll === true
+      ? { ok: true, value: { ...base, desired: [] } }
+      : invalid(CONFIRM_ALL, "confirmAll");
   if (!versionLinkGlobalId(args.globalId, operation !== "jira.upsert-version-remote-link"))
-    return INVALID_INPUT;
+    return invalid(GLOBAL_ID_RULE, "globalId");
   const globalId = args.globalId;
   const retained = expected.filter((item) => item.globalId !== globalId);
   if (operation === "jira.delete-version-remote-link")
@@ -190,10 +226,13 @@ export function parseVersionLinkInput(
   operation: JiraVersionLinkMutation,
   args: CatalogJsonObject,
 ): VersionLinkObservation<VersionLinkInput> {
+  const fields = inputFields(operation);
+  if (!releaseExactFields(args, fields))
+    return invalid(`This call takes only ${[...fields].join(", ")}. ${NOT_WRITTEN}`);
   const selected = releaseSelection("version", args);
-  if (selected === undefined || !releaseExactFields(args, inputFields(operation)))
-    return versionLinkRefusal(
-      "Review the exact actor, project, complete version snapshot and complete native link set. No URL, headers, generated-ID mode or extra input is supported.",
+  if (selected === undefined)
+    return invalid(
+      `versionId, expectedProjectId, expectedActorKey and expectedVersionSnapshot must be exactly as the version read lists them, the snapshot with every field. ${NOT_WRITTEN}`,
     );
   const expected = expectedLinks(args.expectedLinks);
   return expected.ok ? selectedInput(operation, args, selected, expected.value) : expected;

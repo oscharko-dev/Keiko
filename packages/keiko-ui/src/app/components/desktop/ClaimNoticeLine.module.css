@@ -1,0 +1,9 @@
+.cmpClaimNotice {
+  margin-block: 0.5rem 0;
+  padding: 0.25rem 0.75rem;
+  border-inline-start: 3px solid var(--border-strong);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-style: italic;
+}

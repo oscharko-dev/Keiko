@@ -20,12 +20,18 @@ import { ServerResponse, type IncomingMessage } from "node:http";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
-import { currentGatewayConfig, currentContextProfileForModel } from "./deps.js";
+import {
+  currentConversationReadinessObservation,
+  currentGatewayConfig,
+  currentContextProfileForModel,
+} from "./deps.js";
 import { readChatContextStatus } from "./chat-context-status.js";
 import { modelWindowAwareBudget } from "./grounded-qa.js";
 import { buildUiHandlerDeps as createUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
+import { admitCodingRunModel } from "./coding-sidecar-gateway.js";
+import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
   captureConversationReadinessAdmission,
   validateConversationReadinessAdmission,
@@ -70,7 +76,12 @@ import {
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
-import { runGatewayReadiness, stopConfiguredConversationReadiness } from "./gateway-readiness.js";
+import {
+  EXPLICIT_CHECK_TIMEOUT_FLOOR_MS,
+  probeProvider,
+  runGatewayReadiness,
+  stopConfiguredConversationReadiness,
+} from "./gateway-readiness.js";
 import { recommendQiModelPolicy } from "./qualityIntelligence/modelSelection.js";
 import type { RouteContext } from "./routes.js";
 import {
@@ -410,6 +421,23 @@ function voiceElectionProviders(): readonly Record<string, unknown>[] {
       realtimeTranscriptionModel: "realtime-low-transcription",
     }),
   ];
+}
+
+function expectListedModelsReportedUnverified(deps: UiHandlerDeps, body: unknown): void {
+  expect((body as { unverifiedChatModelIds?: readonly string[] }).unverifiedChatModelIds).toEqual([
+    "example-chat-model-fast",
+    "example-vision-model",
+  ]);
+  const verification = currentGatewayConfig(deps)?.capabilities?.find(
+    (capability) => capability.id === "example-chat-model-fast",
+  )?.toolCallingVerification;
+  expect(verification?.status).toBe("unverified");
+}
+
+function verifiedLiteLlmModels(explicit: boolean): readonly string[] {
+  return explicit
+    ? ["litellm-chat-large", "litellm-vision-chat", "litellm-unknown-mode"]
+    : ["litellm-chat-large"];
 }
 
 describe("handleGatewaySetup", () => {
@@ -1264,7 +1292,7 @@ describe("handleGatewaySetup", () => {
       if (href.endsWith("/models")) {
         return Promise.resolve(
           new Response(
-            JSON.stringify({ data: [{ id: "discovered-fast" }, { id: "discovered-slow" }] }),
+            JSON.stringify({ data: [{ id: "discovered-slow" }, { id: "discovered-fast" }] }),
             { status: 200, headers: { "content-type": "application/json" } },
           ),
         );
@@ -1316,9 +1344,11 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
+      // #4351: setup verifies the model that becomes the default. The hung default is classified
+      // within its own smoke timeout; the listed model behind it received no request at all.
       expect(result.body).toMatchObject({
-        testedModelIds: ["discovered-fast"],
-        unverifiedChatModelIds: ["discovered-slow"],
+        testedModelIds: [],
+        unverifiedChatModelIds: ["discovered-slow", "discovered-fast"],
       });
       const config = requiredGatewayConfig(deps);
       expect(config.providers.map((provider) => provider.modelId).sort()).toEqual([
@@ -2188,6 +2218,379 @@ describe("handleGatewaySetup", () => {
     expect(gatewaySetupTargetClass(url)).toBe(expected);
   });
 
+  it("keeps a default that got no verdict configured as unverified and sends nothing to the next model (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-no-verdict-");
+    const evidenceDir = await tempDir("keiko-gw-ev-no-verdict-");
+    const originalFetch = globalThis.fetch;
+    const seenModels: string[] = [];
+    const fakeFetch: typeof fetch = (url, init) => {
+      const href = fetchInputUrl(url);
+      if (href.endsWith("/model/info")) return Promise.resolve(new Response("{}", { status: 404 }));
+      if (href.endsWith("/models"))
+        return Promise.resolve(
+          Response.json({ data: [{ id: "overloaded-default" }, { id: "would-answer" }] }),
+        );
+      const body = JSON.parse((init?.body as string | undefined) ?? "{}") as { model?: string };
+      seenModels.push(body.model ?? "");
+      if (body.model === "overloaded-default")
+        return Promise.resolve(new Response("busy", { status: 503 }));
+      return Promise.resolve(
+        Response.json({
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+        }),
+      );
+    };
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      // An overloaded gateway gave no verdict: the default is not rejected and no other model is loaded.
+      expect(seenModels).not.toContain("would-answer");
+      expect(seenModels).toContain("overloaded-default");
+      expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toContain(
+        "overloaded-default",
+      );
+      expect(
+        (result.body as { unverifiedChatModelIds?: readonly string[] }).unverifiedChatModelIds,
+      ).toEqual(expect.arrayContaining(["overloaded-default", "would-answer"]));
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
+  it.each([
+    ["a thrown timeout", { code: ERROR_CODES.TIMEOUT }],
+    ["a thrown rate limit", { code: ERROR_CODES.RATE_LIMIT }],
+    ["a thrown gateway cancellation", { code: ERROR_CODES.CANCELLED }],
+    ["a thrown 503", { httpStatus: 503 }],
+  ])(
+    "keeps a default that ended without a verdict (%s) configured as unverified and probes nothing else (#4351)",
+    async (_name, failure) => {
+      const uiDir = await tempDir("keiko-gw-ui-thrown-no-verdict-");
+      const evidenceDir = await tempDir("keiko-gw-ev-thrown-no-verdict-");
+      const calls: (readonly string[])[] = [];
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir,
+        env: { ...VAULT_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
+        gatewayModelDiscovery: () => Promise.resolve(["slow-default", "would-answer"]),
+        gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+        gatewaySetupTester: (_config, modelIds) => {
+          calls.push([...modelIds]);
+          return Promise.reject(Object.assign(new Error("no verdict"), failure));
+        },
+      });
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      // One rule: the default is no rejection, it is kept unverified, and nothing else is probed.
+      expect(calls).toEqual([["slow-default"]]);
+      expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toEqual([
+        "slow-default",
+        "would-answer",
+      ]);
+      expect(
+        (result.body as { unverifiedChatModelIds?: readonly string[] }).unverifiedChatModelIds,
+      ).toEqual(["slow-default", "would-answer"]);
+      deps.store.close();
+    },
+  );
+
+  // A default whose check timed out is saved without a verdict. That is allowed only because (a) the
+  // answer names it as not verified, (b) nothing is recorded as a successful observation and (c) the
+  // product treats a request for it exactly like one for a model nobody checked: refused, not probed.
+  it("saves a default without a verdict as not verified: named in the answer, no observation, refused by admission (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-no-verdict-admission-");
+    const evidenceDir = await tempDir("keiko-gw-ev-no-verdict-admission-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["slow-default", "would-answer"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: () =>
+        Promise.reject(Object.assign(new Error("no verdict"), { code: ERROR_CODES.TIMEOUT })),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    // (a) The answer names every model that was not verified; the dialog says so in plain words.
+    expect(
+      (result.body as { unverifiedChatModelIds?: readonly string[] }).unverifiedChatModelIds,
+    ).toEqual(["slow-default", "would-answer"]);
+    // (b) Nothing is recorded as a successful observation: the tool-calling record says unverified
+    // and no verified capability or readiness observation exists for the default.
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.find((entry) => entry.id === "slow-default")
+        ?.toolCallingVerification?.status,
+    ).toBe("unverified");
+    expect(deps.gatewayConfig?.verifiedCapability("slow-default")).toBeUndefined();
+    expect(currentConversationReadinessObservation(deps, "slow-default")).not.toBe(true);
+    // (c) A conversation request for it is refused like one for a model nobody checked, and the
+    // refusal starts no check: admission only reads observations.
+    const admission = captureConversationReadinessAdmission(deps, "slow-default");
+    expect(admission).toMatchObject({
+      status: 400,
+      body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
+    });
+    // The same holds for a coding run: it needs a positive current observation, and starts no check.
+    expect(() =>
+      admitCodingRunModel(
+        currentGatewayConfig(deps),
+        "slow-default",
+        undefined,
+        deps.gatewayConfig,
+      ),
+    ).toThrow(CodingRuntimeLaunchRejectedError);
+    deps.store.close();
+  });
+
+  // A failure to reach the gateway at all is no verdict about a model: it never saves an unverified
+  // default (that would persist a gateway nothing answered on), and the rest of the listing is not
+  // probed either.
+  it.each([
+    ["a refused connection", "ECONNREFUSED"],
+    ["an unknown host", "ENOTFOUND"],
+    ["a TLS failure", ERROR_CODES.TLS_CA_FAILURE],
+    ["an unreachable proxy", ERROR_CODES.PROXY_UNREACHABLE],
+  ])(
+    "fails closed and saves nothing when the gateway is not reached (%s) (#4351)",
+    async (_name, code) => {
+      const uiDir = await tempDir("keiko-gw-ui-unreached-");
+      const evidenceDir = await tempDir("keiko-gw-ev-unreached-");
+      const calls: string[] = [];
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir,
+        env: { ...VAULT_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
+        gatewayModelDiscovery: () => Promise.resolve(["slow-default", "would-answer"]),
+        gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+        gatewaySetupTester: (config, modelIds) => {
+          calls.push(`${config.providers[0]?.baseUrl ?? ""}|${modelIds.join(",")}`);
+          return Promise.reject(Object.assign(new Error("not reached"), { code }));
+        },
+      });
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(502);
+      expect(deps.gatewayConfig?.present()).toBe(false);
+      // Every base URL was tried with the default only; no other model was ever probed.
+      expect(calls.length).toBeGreaterThan(1);
+      expect(calls.every((call) => call.endsWith("|slow-default"))).toBe(true);
+      deps.store.close();
+    },
+  );
+
+  it.each([
+    ["a refused connection", "ECONNREFUSED"],
+    ["a socket timeout", "ETIMEDOUT"],
+  ])(
+    "falls back to the next base URL when the first is not reached (%s) and verifies the default there (#4351)",
+    async (_name, code) => {
+      const uiDir = await tempDir("keiko-gw-ui-url-fallback-");
+      const evidenceDir = await tempDir("keiko-gw-ev-url-fallback-");
+      const calls: string[] = [];
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir,
+        env: { ...VAULT_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
+        gatewayModelDiscovery: () => Promise.resolve(["slow-default", "would-answer"]),
+        gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+        gatewaySetupTester: (config, modelIds) => {
+          const baseUrl = config.providers[0]?.baseUrl ?? "";
+          calls.push(`${baseUrl}|${modelIds.join(",")}`);
+          return baseUrl.endsWith("/v1")
+            ? Promise.resolve([...modelIds])
+            : Promise.reject(Object.assign(new Error("not reached"), { code }));
+        },
+      });
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      // The first URL got the default only and was abandoned; the second one verified the default,
+      // and the answer there is a real verdict, not an unverified keep.
+      expect(calls[0]).toMatch(/^https:\/\/llm-gateway\.example\.com\/?\|slow-default$/);
+      expect(calls.at(-1)).toMatch(/\/v1\|slow-default$/);
+      expect(
+        (result.body as { unverifiedChatModelIds?: readonly string[] }).unverifiedChatModelIds ??
+          [],
+      ).not.toContain("slow-default");
+      expect(requiredGatewayConfig(deps).providers[0]?.baseUrl).toMatch(/\/v1$/);
+      deps.store.close();
+    },
+  );
+
+  it("drops a discovered wildcard route by its shape, with its own diagnostic and no request (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-wildcard-");
+    const evidenceDir = await tempDir("keiko-gw-ev-wildcard-");
+    const calls: (readonly string[])[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+      gatewayModelDiscovery: () => Promise.resolve(["good-chat", "openai/*", "other-chat"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => {
+        calls.push([...modelIds]);
+        return Promise.resolve([modelIds[0] ?? ""]);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(calls.flat()).not.toContain("openai/*");
+    expect(
+      (result.body as { droppedChatModelIds?: readonly string[] }).droppedChatModelIds,
+    ).toEqual(["openai/*"]);
+    const wildcard = diagnostics.find(
+      (record) => record.code === "GATEWAY_DISCOVERY_WILDCARD_ROUTES_DROPPED",
+    );
+    expect(wildcard).toMatchObject({ droppedChatModelCount: 1 });
+    // The wildcard is not "answered and rejected" by the gateway: that wording stays for real rejections.
+    expect(
+      diagnostics.some(
+        (record) =>
+          record.code === "GATEWAY_DISCOVERY_UNUSABLE_MODELS" &&
+          (record as { droppedChatModelCount?: number }).droppedChatModelCount !== undefined,
+      ),
+    ).toBe(false);
+    deps.store.close();
+  });
+
+  it("never calls the tester with an empty list when only wildcard routes were discovered (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-wildcard-only-");
+    const evidenceDir = await tempDir("keiko-gw-ev-wildcard-only-");
+    const calls: (readonly string[])[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+      gatewayModelDiscovery: () => Promise.resolve(["openai/*", "anthropic/*"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => {
+        calls.push([...modelIds]);
+        return Promise.resolve([...modelIds]);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(calls).toEqual([]);
+    expect(result.status).toBe(502);
+    // The failure says why, in its own words, not as a generic smoke-test refusal ...
+    expect(JSON.stringify(result.body)).toContain("only wildcard route patterns");
+    expect(JSON.stringify(result.body)).not.toContain("chat smoke test");
+    // ... and the drop is on record even though setup failed before any admission.
+    expect(
+      diagnostics.find((record) => record.code === "GATEWAY_DISCOVERY_WILDCARD_ROUTES_DROPPED"),
+    ).toMatchObject({ droppedChatModelCount: 2 });
+    expect(deps.gatewayConfig?.present()).toBe(false);
+    deps.store.close();
+  });
+
+  it("does not judge a deployment the person named by its shape (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-wildcard-named-");
+    const evidenceDir = await tempDir("keiko-gw-ev-wildcard-named-");
+    const calls: (readonly string[])[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["named-chat", "named-star-*"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => {
+        calls.push([...modelIds]);
+        return Promise.resolve([...modelIds]);
+      },
+    });
+    await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        deploymentNames: ["named-chat", "named-star-*"],
+      }),
+      deps,
+    );
+    // A named deployment keeps the full round, whatever its spelling.
+    expect(calls[0]).toEqual(["named-chat", "named-star-*"]);
+    deps.store.close();
+  });
+
+  it("tests the models a request asserts once, not on every step of the walk (#4351)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-asserted-once-");
+    const evidenceDir = await tempDir("keiko-gw-ev-asserted-once-");
+    const calls: (readonly string[])[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+      gatewayModelDiscovery: () => Promise.resolve(["text-chat", "second-chat", "vision-chat"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => {
+        calls.push([...modelIds]);
+        // The default is rejected; the next model answers.
+        return calls.length === 1
+          ? Promise.reject(new Error("model rejected"))
+          : Promise.resolve([modelIds[0] ?? ""]);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        imageInputModelIds: ["vision-chat"],
+      }),
+      deps,
+    );
+    // The asserted model is tested with the first step only; a later step of the same walk never
+    // repeats it (a later whole-verification retry on another base URL is a separate attempt).
+    expect(calls.slice(0, 2)).toEqual([["text-chat", "vision-chat"], ["second-chat"]]);
+    // The gateway rejected that whole first step, so the asserted model is reported as dropped with
+    // the default; the diagnostic counts both, and neither is tested again.
+    expect(
+      diagnostics.find((record) => record.code === "GATEWAY_DISCOVERY_UNUSABLE_MODELS"),
+    ).toMatchObject({ droppedChatModelCount: 2 });
+    // The request claimed image input for a model that was never tested, and Setup never stores a
+    // capability claim for an untested model: it fails closed with 502, by design.
+    expect(result.status).toBe(502);
+    deps.store.close();
+  });
+
   it("tests, stores, and activates a local gateway config without returning secrets", async () => {
     const uiDir = await tempDir("keiko-gw-ui-");
     const evidenceDir = await tempDir("keiko-gw-ev-");
@@ -2217,7 +2620,9 @@ describe("handleGatewaySetup", () => {
     expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
       "example-chat-model-large",
     ]);
-    expect(currentGatewayConfig(deps)?.providers).toHaveLength(1);
+    // #4351: the default is the only model verified; the other listed chat models are configured as
+    // listed and unverified, without an inference request.
+    expect(currentGatewayConfig(deps)?.providers).toHaveLength(3);
     expect(deps.gatewayConfig?.present()).toBe(true);
     const savedPath = deps.gatewayConfig?.storagePath;
     expect(savedPath).toBeDefined();
@@ -2228,8 +2633,12 @@ describe("handleGatewaySetup", () => {
     expect(saved).toContain("apiKeySecretRef");
     expect(saved).toContain("cred:example-chat-model-large");
     expect(saved).toContain("example-chat-model-large");
-    expect(saved).not.toContain("example-chat-model-fast");
-    expect(saved).not.toContain("example-vision-model");
+    // Settings reports the listed models no request reached as unverified, and their tool-calling
+    // record carries the same closed "unverified" state a model kept without an answer carries.
+    expectListedModelsReportedUnverified(deps, result.body);
+    // Listed, unverified models are persisted as listed: no secret rides with them.
+    expect(saved).toContain("example-chat-model-fast");
+    expect(saved).toContain("example-vision-model");
     // The credential lives in the encrypted vault next to the config — sealed, never plaintext.
     const vaultStore = readFileSync(
       join(uiDir, "credentials", "provider-credentials.vault"),
@@ -2276,6 +2685,64 @@ describe("handleGatewaySetup", () => {
     const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
     expect(saved).toContain('"timeoutMs": 120000');
     deps.store.close();
+  });
+
+  // #4351: the explicit check lifts the conversational default, never a timeout a person named. A
+  // timeout Setup chose for the person is not theirs, whichever way the configuration is rewritten.
+  describe("who named the request timeout (explicit-check lift)", () => {
+    async function setupDeps(label: string): Promise<UiHandlerDeps> {
+      return buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: await tempDir(`keiko-gw-ev-${label}-`),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(await tempDir(`keiko-gw-ui-${label}-`), "keiko-ui.db"),
+        gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+        gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+        gatewaySetupTester: (_config, modelIds) =>
+          Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+      });
+    }
+
+    function checkTimeoutMs(deps: UiHandlerDeps): number | undefined {
+      const provider = currentGatewayConfig(deps)?.providers[0];
+      return provider === undefined
+        ? undefined
+        : probeProvider(provider, "chat", undefined).timeoutMs;
+    }
+
+    it("lifts a model added without a timeout, through the real Setup write and a later rewrite", async () => {
+      const deps = await setupDeps("timeout-defaulted");
+      const first = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(first.status).toBe(200);
+      expect(currentGatewayConfig(deps)?.providers[0]?.timeoutMs).toBe(30_000);
+      expect(checkTimeoutMs(deps)).toBe(EXPLICIT_CHECK_TIMEOUT_FLOOR_MS);
+      // A later Setup save that names no timeout rewrites the stored provider and keeps that.
+      const updated = await handleGatewaySetup(ctx({ preserveExisting: true }), deps);
+      expect(updated.status).toBe(200);
+      expect(checkTimeoutMs(deps)).toBe(EXPLICIT_CHECK_TIMEOUT_FLOOR_MS);
+      deps.store.close();
+    });
+
+    it("keeps a timeout a person named, at the default's value too, through a later rewrite", async () => {
+      const deps = await setupDeps("timeout-named");
+      const first = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          timeoutMs: 30_000,
+        }),
+        deps,
+      );
+      expect(first.status).toBe(200);
+      expect(checkTimeoutMs(deps)).toBe(30_000);
+      const updated = await handleGatewaySetup(ctx({ preserveExisting: true }), deps);
+      expect(updated.status).toBe(200);
+      expect(checkTimeoutMs(deps)).toBe(30_000);
+      deps.store.close();
+    });
   });
 
   it("updates only the gateway request timeout without re-running setup smoke tests", async () => {
@@ -4805,6 +5272,98 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  // #4351: who named a request timeout survives every rewrite a Setup save makes, for every kind of
+  // provider. A legacy default (30 s, no marker) stays liftable; a timeout a person named stays theirs.
+  it("keeps who named each provider's timeout through a Setup save: chat, voice and embedding", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-timeout-owner-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-timeout-owner-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          // written before the marker existed: Setup's own 30 s default
+          {
+            modelId: "legacy-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+          },
+          // named after the marker: 30 s on purpose
+          {
+            modelId: "named-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+            timeoutNamed: true,
+          },
+          {
+            modelId: "legacy-voice",
+            baseUrl: "https://audio.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+            capability: {
+              kind: "voice",
+              supportsSpeechOutput: true,
+              voiceProviderLocality: "customer-hosted",
+            },
+          },
+          {
+            modelId: "named-voice",
+            baseUrl: "https://audio.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+            timeoutNamed: true,
+            capability: {
+              kind: "voice",
+              supportsSpeechOutput: true,
+              voiceProviderLocality: "customer-hosted",
+            },
+          },
+          {
+            modelId: "legacy-embedding",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+            capability: { kind: "embedding", contextWindow: 8_192, embeddingDimensions: 4 },
+          },
+          {
+            modelId: "named-embedding",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "t",
+            timeoutMs: 30_000,
+            timeoutNamed: true,
+            capability: { kind: "embedding", contextWindow: 8_192, embeddingDimensions: 4 },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+    const named = (modelId: string): boolean | undefined =>
+      requiredGatewayConfig(deps).providers.find((p) => p.modelId === modelId)?.timeoutConfigured;
+    // The loaded configuration: legacy defaults are liftable, named values are not.
+    expect(["legacy-chat", "legacy-voice", "legacy-embedding"].map(named)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(["named-chat", "named-voice", "named-embedding"].map(named)).toEqual([true, true, true]);
+    // A Setup save that names no timeout rewrites the stored providers and keeps who named each.
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceSupportsSemanticTurnDetection: false }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    for (const modelId of ["legacy-chat", "legacy-voice", "legacy-embedding"])
+      expect(named(modelId), modelId).toBeUndefined();
+    for (const modelId of ["named-chat", "named-voice", "named-embedding"])
+      expect(named(modelId), modelId).toBe(true);
+    deps.store.close();
+  });
+
   it("preserves heterogeneous voice providers and replaces only the targeted Realtime role", async () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
@@ -6457,6 +7016,7 @@ describe("handleGatewaySetup", () => {
     // new Knowledge Pod and indexing wrote zero vectors with no earlier signal.
     const uiDir = await tempDir("keiko-gw-ui-embed-probe-");
     const evidenceDir = await tempDir("keiko-gw-ev-embed-probe-");
+    const probedEmbeddings: string[] = [];
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
@@ -6469,8 +7029,10 @@ describe("handleGatewaySetup", () => {
           embeddingModelIds: ["works-vectorizer", "broken-vectorizer"],
         }),
       // Only one of the two declared embedding models actually answers /embeddings.
-      gatewayEmbeddingProbe: (_config, ids) =>
-        Promise.resolve(ids.filter((id) => id !== "broken-vectorizer")),
+      gatewayEmbeddingProbe: (_config, ids) => {
+        probedEmbeddings.push(...ids);
+        return Promise.resolve(ids.filter((id) => id !== "broken-vectorizer"));
+      },
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -6482,7 +7044,46 @@ describe("handleGatewaySetup", () => {
     expect(result.status).toBe(200);
     const storedIds = currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId);
     expect(storedIds).toContain("works-vectorizer");
+    // #4351: the embedding model in use answered; the other listed alias received no request.
+    expect(probedEmbeddings).toEqual(["works-vectorizer"]);
+    expect(selectEmbeddingModelId(currentGatewayConfig(deps))).toBe("works-vectorizer");
+    deps.store.close();
+  });
+
+  it("never persists a NEW embedding model that cannot answer as the model in use, and walks to the next", async () => {
+    // The original invariant of the pin above: an embedding model that cannot embed must never be
+    // bound to a Knowledge Pod. The walk probes one model at a time, in listed order, until one
+    // answers; a model that did not answer is dropped.
+    const uiDir = await tempDir("keiko-gw-ui-embed-walk-");
+    const evidenceDir = await tempDir("keiko-gw-ev-embed-walk-");
+    const probedEmbeddings: string[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve({
+          modelIds: ["example-chat", "broken-vectorizer", "works-vectorizer", "later-vectorizer"],
+          chatModelIds: ["example-chat"],
+          embeddingModelIds: ["broken-vectorizer", "works-vectorizer", "later-vectorizer"],
+        }),
+      gatewayEmbeddingProbe: (_config, ids) => {
+        probedEmbeddings.push(...ids);
+        return Promise.resolve(ids.filter((id) => id !== "broken-vectorizer"));
+      },
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const storedIds = currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId);
     expect(storedIds).not.toContain("broken-vectorizer");
+    expect(storedIds).toContain("works-vectorizer");
+    expect(probedEmbeddings).toEqual(["broken-vectorizer", "works-vectorizer"]);
+    expect(selectEmbeddingModelId(currentGatewayConfig(deps))).toBe("works-vectorizer");
     deps.store.close();
   });
 
@@ -8541,6 +9142,10 @@ describe("handleGatewaySetup", () => {
         "gpt-oss-120b",
         "phi-4",
         "gpt-oss-120b",
+        // The tool-calling check offers the tool first and, for a model that called none, asks once
+        // more with the forced call (#4351): the plain answers here make it a fourth request each.
+        "phi-4",
+        "gpt-oss-120b",
       ]);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "phi-4",
@@ -8622,6 +9227,8 @@ describe("handleGatewaySetup", () => {
         // A generic incompatible-model 400 is terminal; only an explicit optional-field
         // rejection may trigger the compatibility retry.
         "gpt-5.4",
+        "gpt-5.4",
+        // A model that called no tool in the offered request is asked once more, forced (#4351).
         "gpt-5.4",
       ]);
       expect(seen.every((call) => call.firstRole === "system")).toBe(true);
@@ -9244,22 +9851,14 @@ describe("handleGatewaySetup", () => {
         expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model/info");
         expect(seenUrls).not.toContain("https://llm-gateway.example.com/model/info");
         expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(!explicit);
-        expect(seenModels).toEqual([
-          "litellm-chat-large",
-          "litellm-vision-chat",
-          "litellm-unknown-mode",
-          "litellm-chat-large",
-          "litellm-vision-chat",
-          "litellm-unknown-mode",
-          "litellm-chat-large",
-          "litellm-vision-chat",
-          "litellm-unknown-mode",
-        ]);
-        expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
-          "litellm-chat-large",
-          "litellm-vision-chat",
-          "litellm-unknown-mode",
-        ]);
+        // #4351: explicitly named deployments are all verified; a discovered listing verifies only
+        // the model that becomes the default (four requests: the tool-calling check asks a second,
+        // forced time of a model that called no tool), the rest enters as listed.
+        const verified = verifiedLiteLlmModels(explicit);
+        expect(seenModels).toEqual([...verified, ...verified, ...verified, ...verified]);
+        expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual(
+          verified,
+        );
         expect(
           seenAuthHeaders.every(
             (headers) => headers.auth === null && headers.custom === `Bearer ${apiKey}`,
@@ -9686,17 +10285,17 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
+      // #4351: only the model that becomes the default is verified (four requests: the tool-calling
+      // check asks a second, forced time of a model that called no tool); the second listed chat
+      // model is configured as listed and unverified and receives none.
       expect(seenModels).toEqual([
         "example-chat-model-large",
-        "example-chat-model-fast",
         "example-chat-model-large",
-        "example-chat-model-fast",
         "example-chat-model-large",
-        "example-chat-model-fast",
+        "example-chat-model-large",
       ]);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "example-chat-model-large",
-        "example-chat-model-fast",
       ]);
       expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
         "example-chat-model-large",

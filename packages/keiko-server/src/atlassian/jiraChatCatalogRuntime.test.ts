@@ -23,6 +23,7 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   JIRA_READ_TOOL_FAMILIES,
+  jiraOperationInReleaseScope,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { isCoreMutationTool } from "./jiraManagedMutationDescriptors.js";
 import { jiraOperationForTool } from "./jiraManagedProvider.js";
@@ -47,8 +48,11 @@ const CURATED_JIRA_ALIASES = [
   "jira_assign",
   "jira_comment",
   "jira_transition",
-  "jira_attach",
   "jira_draft",
+  // Offered without a search, because a person's first requests need them (#4357).
+  "jira_myself",
+  "jira_watch",
+  "jira_unwatch",
 ] as const;
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -126,6 +130,8 @@ function expectedDefaultCatalogTools(): Set<string> {
   );
   const writes = JIRA_MUTATION_OPERATIONS.filter((tool) => {
     if (!isCoreMutationTool(tool)) return false;
+    // Attachments are outside Release 1 (#4354): the derivation follows the same switch.
+    if (!jiraOperationInReleaseScope(tool)) return false;
     const definition = jiraOperationForTool(tool)?.definition;
     return (
       definition?.kind === "composite" ||
@@ -135,12 +141,26 @@ function expectedDefaultCatalogTools(): Set<string> {
   return new Set<string>([
     ...reads,
     ...writes,
+    // The intended base additions, stated as literals and not derived from the runtime (#4357).
+    "jira.myself",
+    "jira.watch",
+    "jira.unwatch",
     "jira.draft-batch",
     "jira.draft",
     ...JIRA_CATALOG_DISCOVERY_TOOLS,
     ...KNOWLEDGE_CHAT_TOOLS,
   ]);
 }
+
+describe("attachments are left out of Release 1 (#4354)", () => {
+  it("offers neither attachment operation, in the base set or through discovery", () => {
+    const base = expectedDefaultCatalogTools();
+    expect(base.has("jira.attach")).toBe(false);
+    expect(base.has("jira.delete-attachment")).toBe(false);
+    expect(JIRA_DEFAULT_CATALOG_TOOLS).not.toContain("jira.attach");
+    expect(JIRA_DEFAULT_CATALOG_TOOLS).not.toContain("jira.delete-attachment");
+  });
+});
 
 describe("default Jira catalog set", () => {
   it("equals the set derived from the owning contract constants", () => {
@@ -161,7 +181,7 @@ describe("default Jira catalog set", () => {
 });
 
 describe("application-owned Jira catalog initialization", () => {
-  it("advertises all 18 curated Jira tools with discovery, Knowledge and batch before selection", async () => {
+  it(`advertises all ${String(CURATED_JIRA_ALIASES.length)} curated Jira tools with discovery, Knowledge and batch before selection`, async () => {
     const f = fixture();
     expect(
       f.runtime
@@ -195,7 +215,7 @@ describe("application-owned Jira catalog initialization", () => {
     await expect(f.runtime.get()).rejects.toMatchObject({ reason: "log-unavailable" });
     const [first, second] = await Promise.all([f.runtime.get(), f.runtime.get()]);
     expect(second).toBe(first);
-    expect(first.catalog.descriptors).toHaveLength(21 + KNOWLEDGE_CHAT_TOOLS.length);
+    expect(first.catalog.descriptors).toHaveLength(23 + KNOWLEDGE_CHAT_TOOLS.length);
     expect(f.record).toHaveBeenCalledOnce();
     expect(JSON.stringify(f.record.mock.calls)).not.toContain("synthetic-private-sink-failure");
     const records = f.lines.map((line) =>

@@ -56,7 +56,7 @@ import {
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
-import { cx, gatewayServiceMessageKey } from "./codingWorkbenchLabels";
+import { cx, runtimeUnavailableMessageKey } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
 // The opaque single-operator actor identity, mirroring useActiveWorkspaceState. The server treats
 // it as an opaque id only — never a credential.
@@ -577,7 +577,7 @@ function SetupNotices({
       {runtimePosture === "unavailable" ? (
         <p className={styles.boundaryNote} data-testid="coding-workbench-setup-runtime-note">
           {t(
-            gatewayServiceMessageKey(runtimeUnavailableReason) ??
+            runtimeUnavailableMessageKey(runtimeUnavailableReason) ??
               "codingWorkbench.setup.runtimeUnavailable",
           )}
         </p>

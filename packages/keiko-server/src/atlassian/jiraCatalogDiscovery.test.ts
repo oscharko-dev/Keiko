@@ -7,6 +7,7 @@ import * as provider from "./jiraManagedProvider.js";
 import {
   createJiraCatalogDiscoveryProvider,
   JIRA_CATALOG_DISCOVERY_TOOLS,
+  JIRA_OUT_OF_RELEASE_GUIDANCE,
   jiraToolsForIdentities,
 } from "./jiraCatalogDiscovery.js";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
@@ -18,7 +19,8 @@ type Context = CatalogHandlerContext<JiraChatCatalogConsumer>;
 type Tool = ReturnType<ReturnType<typeof createJiraCatalogDiscoveryProvider>["tools"]>[number];
 const INVALID_DESCRIPTION_ARGS: readonly CatalogJsonObject[] = [
   { identities: ["https://private.invalid/path"] },
-  { identities: ["jira.create"] },
+  { identities: ["jira.unknown-operation"] },
+  { identities: ["jira_create_nothing"] },
   { identities: ["GET /rest/api/2/project", "GET /rest/api/2/project"] },
   { identities: ["GET /rest/api/2/project", "GET /rest/api/2/unknown"] },
   { identities: "GET /rest/api/2/project" },
@@ -67,13 +69,22 @@ describe("local Jira operation discovery", () => {
     const all = vi.spyOn(provider, "jiraOperationContracts").mockImplementation(() => {
       throw new TypeError("Unrelated invalid descriptor");
     });
+    // Ranking by ordinary words reads the generated summary table: no descriptor is built, so
+    // a turn that never calls discover pays nothing, and one that does pays no compile (#4357).
+    const one = vi.spyOn(provider, "jiraOperationForTool").mockImplementation(() => {
+      throw new TypeError("Unrelated invalid descriptor");
+    });
     try {
       const f = fixture();
       expect((await f.discover.execute({ maxResults: 1 }, f.context)).data.items).toHaveLength(1);
+      const ranked = await f.discover.execute({ query: "who am I", maxResults: 3 }, f.context);
+      expect((ranked.data.items as readonly { tool: string }[])[0]?.tool).toBe("jira_myself");
       expect(jiraToolsForIdentities(["GET /rest/api/2/project"])).toEqual(["jira.projects"]);
       expect(all).not.toHaveBeenCalled();
+      expect(one).not.toHaveBeenCalled();
     } finally {
       all.mockRestore();
+      one.mockRestore();
     }
   });
 
@@ -116,6 +127,19 @@ describe("local Jira operation discovery", () => {
     expect(f.select).not.toHaveBeenCalled();
   });
 
+  // The lab's qualification found jira.update-comment at rank 7 for "edit a comment" and
+  // jira.create-issue-link at rank 3 for "link two issues" (#4357): the summaries say "update" and
+  // "relation", while a person says "edit" and "link".
+  it.each([
+    ["edit a comment", "jira_update_comment"],
+    ["link two issues", "jira_create_issue_link"],
+  ] as const)("ranks the operation a person means first for %j", async (query, tool) => {
+    const f = fixture();
+    const ranked = await f.discover.execute({ query, maxResults: 100 }, f.context);
+    const names = (ranked.data.items as readonly { tool: string }[]).map((item) => item.tool);
+    expect(names.indexOf(tool) + 1).toBe(1);
+  });
+
   it("ranks operations matching a plain-word query first, before any paging", async () => {
     const f = fixture();
     const unfiltered = await f.discover.execute({ maxResults: 100 }, f.context);
@@ -150,6 +174,90 @@ describe("local Jira operation discovery", () => {
     });
     expect(f.select).toHaveBeenCalledWith(["GET /rest/api/2/project"], result.data);
     expect(jiraToolsForIdentities(["GET /rest/api/2/project"])).toEqual(["jira.projects"]);
+  });
+
+  it("accepts the tool name jira.discover returns beside an identity and selects its exact identity", async () => {
+    // The model copies the `tool` field of a discover item; 53 of 56 first describes were refused for it.
+    const f = fixture();
+    const discovered = await f.discover.execute({ query: "projects", maxResults: 100 }, f.context);
+    const items = discovered.data.items as readonly { identity: string; tool: string }[];
+    const projects = items.find((item) => item.identity === "GET /rest/api/2/project");
+    expect(projects?.tool).toBe("jira_projects");
+    const result = await f.describe.execute({ identities: ["jira_projects"] }, f.context);
+    expect(result.isError).toBeUndefined();
+    expect(result.data).toEqual({
+      outcome: "succeeded",
+      selectedFor: "next-round",
+      items: [{ identity: "GET /rest/api/2/project", tool: "jira_projects" }],
+    });
+    expect(f.select).toHaveBeenCalledWith(["GET /rest/api/2/project"], result.data);
+    const mixed = await f.describe.execute(
+      { identities: ["jira_projects", "POST /rest/api/2/project"] },
+      f.context,
+    );
+    expect(mixed.data).toMatchObject({ outcome: "succeeded" });
+    expect(f.select).toHaveBeenLastCalledWith(
+      ["GET /rest/api/2/project", "POST /rest/api/2/project"],
+      mixed.data,
+    );
+  });
+
+  it("accepts the dotted registry name Keiko's own descriptions use for the same operation", async () => {
+    // Measured 2026-11-13: after only discover's `jira_priorities` was accepted, the model still
+    // called `jira.priorities` first in 6 of 15 discovery turns and succeeded once the separator changed.
+    const f = fixture();
+    for (const name of ["jira.priorities", "jira_priorities"]) {
+      f.select.mockClear();
+      const result = await f.describe.execute({ identities: [name] }, f.context);
+      expect(result.isError, name).toBeUndefined();
+      expect(result.data.items, name).toEqual([
+        { identity: "GET /rest/api/2/priority", tool: "jira_priorities" },
+      ]);
+      expect(f.select).toHaveBeenCalledWith(["GET /rest/api/2/priority"], result.data);
+    }
+    const hyphenated = await f.describe.execute(
+      { identities: ["jira.project-statuses"] },
+      f.context,
+    );
+    expect(hyphenated.data.items).toEqual([
+      expect.objectContaining({ tool: "jira_project_statuses" }),
+    ]);
+    const both = await f.describe.execute(
+      { identities: ["jira.priorities", "jira_priorities"] },
+      f.context,
+    );
+    expect(both.isError).toBe(true);
+    for (const refused of ["jira.priorities.", "jira priorities", "JIRA.PRIORITIES"]) {
+      const result = await f.describe.execute({ identities: [refused] }, f.context);
+      expect(result.isError, refused).toBe(true);
+    }
+  });
+
+  it("accepts the dotted tool name only where jira.discover returns it, and never twice for one operation", async () => {
+    const f = fixture();
+    const native = createJiraCatalogDiscoveryProvider({
+      tools: new Set(["jira.projects"]),
+      nativeToolNames: true,
+    })
+      .tools()
+      .find((tool) => tool.name === "jira.describe");
+    if (native === undefined) throw new TypeError("Missing describe tool");
+    const result = await native.execute({ identities: ["jira.projects"] }, f.context);
+    expect(result.data).toMatchObject({
+      outcome: "succeeded",
+      items: [{ identity: "GET /rest/api/2/project", tool: "jira.projects" }],
+    });
+    expect(f.select).toHaveBeenCalledWith(["GET /rest/api/2/project"], result.data);
+    f.select.mockClear();
+    const twice = await f.describe.execute(
+      { identities: ["jira_projects", "GET /rest/api/2/project"] },
+      f.context,
+    );
+    expect(twice.isError).toBe(true);
+    expect(twice.data).toMatchObject({ reason: "invalid-arguments" });
+    const foreign = await native.execute({ identities: ["jira.create-project"] }, f.context);
+    expect(foreign.isError).toBe(true);
+    expect(f.select).not.toHaveBeenCalled();
   });
 
   it("names the operations a replacing selection drops, so none disappears unannounced (LIM22)", async () => {
@@ -341,7 +449,7 @@ describe("local Jira operation discovery", () => {
     if (binding === undefined) throw new TypeError("Missing describe binding");
     const identities = ["GET /rest/api/2/project"];
     const cases: readonly [string, Error | undefined, CatalogJsonObject][] = [
-      ["invalid-arguments", undefined, { identities: ["jira.create"] }],
+      ["invalid-arguments", undefined, { identities: ["jira.unknown-operation"] }],
       ["selection-too-large", new ToolCatalogError("input-bound"), { identities }],
       ["selection-unavailable", new ToolCatalogError("invalid-schema"), { identities }],
       ["budget-exhausted", new CatalogDispatchFault("denied", "budget-exhausted"), { identities }],
@@ -368,5 +476,150 @@ describe("local Jira operation discovery", () => {
       f.describe.execute({ identities: [] }, { ...f.context, beforeEffect: () => false }),
     ).rejects.toMatchObject({ reason: "effect-denied" });
     expect(f.select).not.toHaveBeenCalled();
+  });
+});
+
+// #4357 discoverability: a person's ordinary words must find the operation, and a hit must read as a
+// plain sentence, not as the authority action. Everything here goes through the real discover and
+// describe tools over the real operation registry.
+const ORDINARY_WORD_QUERIES: readonly (readonly [query: string, tool: string])[] = [
+  ["who am I", "jira.myself"],
+  ["current user", "jira.myself"],
+  ["connected account user name", "jira.myself"],
+  ["project statuses", "jira.project-statuses"],
+  ["statuses of a project", "jira.project-statuses"],
+  ["watch issue", "jira.watch"],
+  ["add me as a watcher", "jira.watch"],
+  ["stop watching", "jira.unwatch"],
+  ["remove watcher", "jira.unwatch"],
+  ["who watches this issue", "jira.watchers"],
+  ["delete issue", "jira.delete-issue"],
+  ["priorities", "jira.priorities"],
+  ["board configuration", "jira.board-configuration"],
+  ["project versions", "jira.versions"],
+  // The everyday operations the lab's deployment model did not reach (3 of 3 wrong tool each).
+  ["list all fields", "jira.fields"],
+  ["all fields", "jira.fields"],
+  ["search users", "jira.users"],
+  ["find a user", "jira.users"],
+];
+const FIRST_PAGE = 5;
+
+describe("finding an operation in ordinary words (#4357)", () => {
+  it.each(ORDINARY_WORD_QUERIES)(
+    "puts the operation for %j on the first page",
+    async (query, tool) => {
+      const f = fixture();
+      const found = await f.discover.execute({ query, maxResults: 100 }, f.context);
+      const items = found.data.items as readonly { identity: string; tool: string }[];
+      const names = items.slice(0, FIRST_PAGE).map((item) => item.tool);
+      expect(names, query).toContain(tool.replace(/[.-]/gu, "_"));
+      // The listed tool name is the one jira.describe accepts for the same operation.
+      const hit = items.find((item) => item.tool === tool.replace(/[.-]/gu, "_"));
+      const selected = await f.describe.execute({ identities: [hit?.tool ?? ""] }, f.context);
+      expect(selected.isError, query).toBeUndefined();
+    },
+  );
+
+  it("describes each hit in one plain sentence instead of the authority action", async () => {
+    const f = fixture();
+    const found = await f.discover.execute(
+      { query: "project statuses", maxResults: 20 },
+      f.context,
+    );
+    const items = found.data.items as readonly { tool: string; description: string }[];
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item.description, item.tool).toMatch(/^[A-Z][^\n]{10,139}$/u);
+      expect(item.description, item.tool).not.toMatch(/^jira[._-]/iu);
+    }
+    const statuses = items.find((item) => item.tool === "jira_project_statuses");
+    expect(statuses?.description).toMatch(/project/iu);
+  });
+
+  it.each(["zzqqxx", "weather forecast tomorrow", "quantum entanglement"])(
+    "returns nothing, and invents no match, for the unrelated query %j",
+    async (query) => {
+      const f = fixture();
+      const none = await f.discover.execute({ query, maxResults: 20 }, f.context);
+      expect(none.data).toMatchObject({ outcome: "succeeded", items: [], total: 0 });
+    },
+  );
+
+  it("tells the model when to search and to phrase another language in English operation words", () => {
+    const f = fixture();
+    const description = f.discover.descriptor.description;
+    expect(description).toMatch(
+      /whenever no offered tool does what was asked, before answering that it cannot be done/u,
+    );
+    expect(description).toMatch(/another language in these English words/u);
+    expect(description).not.toMatch(/stable identity/u);
+  });
+
+  it("keeps an unlisted operation out of reach whatever the words say", async () => {
+    const f = fixture();
+    const restricted = createJiraCatalogDiscoveryProvider({
+      tools: new Set(["jira.projects"]),
+      nativeToolNames: true,
+    }).tools();
+    const discover = restricted.find((tool) => tool.name === "jira.discover");
+    const describeTool = restricted.find((tool) => tool.name === "jira.describe");
+    if (discover === undefined || describeTool === undefined) throw new TypeError("Missing tools");
+    const queries = ["who am I", "watch issue", "delete issue", "project statuses"];
+    const results = await Promise.all(
+      queries.map((query) => discover.execute({ query, maxResults: 100 }, f.context)),
+    );
+    results.forEach((found, index) => {
+      const names = (found.data.items as readonly { tool: string }[]).map((item) => item.tool);
+      expect(
+        names.every((name) => name === "jira.projects"),
+        queries[index],
+      ).toBe(true);
+    });
+    await expect(
+      describeTool.execute({ identities: ["jira.myself"] }, f.context),
+    ).resolves.toMatchObject({ isError: true });
+    expect(f.select).not.toHaveBeenCalled();
+  });
+});
+
+// #4357 AC3: a search for an operation this release leaves out finds nothing, and says why.
+describe("a search for an operation outside this release (#4357 AC3)", () => {
+  it.each(["attach a file to an issue", "attach file", "delete attachment"])(
+    "adds one closed notice to the search %j, whatever it still finds",
+    async (query) => {
+      const f = fixture();
+      const result = await f.discover.execute({ query }, f.context);
+      expect(result.data.guidance).toBe(JIRA_OUT_OF_RELEASE_GUIDANCE);
+      // The withheld operation is never listed, and the notice names nothing.
+      expect(JSON.stringify(result.data.items)).not.toMatch(
+        /jira[._](attach|delete[._-]attachment)\b/iu,
+      );
+      expect(JIRA_OUT_OF_RELEASE_GUIDANCE).not.toMatch(/attach|jira[._]/iu);
+    },
+  );
+  it("is true with results and without: the same sentence either way", async () => {
+    const f = fixture();
+    const withResults = await f.discover.execute({ query: "attach a file to an issue" }, f.context);
+    expect((withResults.data.items as readonly unknown[]).length).toBeGreaterThan(0);
+    expect(withResults.data.guidance).toBe(JIRA_OUT_OF_RELEASE_GUIDANCE);
+    // A provider that offers only search lists nothing for these words, and the notice still holds:
+    // the withheld operations do not depend on the provider's own tool set.
+    const narrow = createJiraCatalogDiscoveryProvider({ tools: new Set(["jira.search"]) });
+    const discover = narrow.tools().find((tool) => tool.name === "jira.discover");
+    if (discover === undefined) throw new TypeError("Missing discover tool");
+    const without = await discover.execute({ query: "attach file" }, f.context);
+    expect(without.data).toMatchObject({ items: [], total: 0 });
+    expect(without.data.guidance).toBe(JIRA_OUT_OF_RELEASE_GUIDANCE);
+    // The sentence does not contradict the release's own attachment refusal, which names it.
+    expect(JIRA_OUT_OF_RELEASE_GUIDANCE).toContain("not part of this release");
+  });
+  it("adds no notice to a search that finds an operation or finds nothing at all", async () => {
+    const f = fixture();
+    const found = await f.discover.execute({ query: "who am I" }, f.context);
+    expect(found.data).not.toHaveProperty("guidance");
+    const nothing = await f.discover.execute({ query: "zzzz qqqq" }, f.context);
+    expect(nothing.data).toMatchObject({ items: [], total: 0 });
+    expect(nothing.data).not.toHaveProperty("guidance");
   });
 });

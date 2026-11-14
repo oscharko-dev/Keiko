@@ -18,6 +18,16 @@ import {
   type SyntheticJira,
 } from "../../../tests/support/jira-managed-remote.js";
 
+// Release 1 switches the attachment operations off (#4354); these tests are about their mechanics,
+// which stay in the code for Release 2, so the switch is on here. The switch itself is proven in
+// jira-release-scope.test.ts.
+vi.mock("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors")
+  >()),
+  jiraOperationInReleaseScope: (): boolean => true,
+}));
+
 const SOURCE = { kind: "connected-file", path: "docs/report.txt" } as const;
 function content(text = "report body", name = "report.txt"): JiraAttachmentContent {
   const bytes = new TextEncoder().encode(text);
@@ -303,7 +313,7 @@ describe("jira.attach", () => {
     expect(result).toEqual({
       ok: false,
       reason: "permission-denied",
-      detail: { messages: ["No."] },
+      detail: { fromJira: true, messages: ["No."] },
     });
   });
 });

@@ -48,14 +48,25 @@ function completeProbe(
   correlationId: string,
   compatibility?: JiraDataCenterCompatibilityFacts,
 ): boolean {
-  const applied = deps.custody.finishVerification(
-    ticket.metadata.authRef,
-    ticket.metadata.generation ?? 1,
-    ticket.revision,
-    status,
-    correlationId,
-    compatibility,
-  );
+  // A 401 Jira did not author neither confirms nor rejects the token: the Pod keeps its previous
+  // state and nothing is invalidated, so a person behind a sign-in proxy can try again or replace
+  // the token at any time.
+  const applied =
+    status === "auth-unverified"
+      ? deps.custody.releaseVerification(
+          ticket.metadata.authRef,
+          ticket.metadata.generation ?? 1,
+          ticket.revision,
+          ticket.previous,
+        )
+      : deps.custody.finishVerification(
+          ticket.metadata.authRef,
+          ticket.metadata.generation ?? 1,
+          ticket.revision,
+          status,
+          correlationId,
+          compatibility,
+        );
   recordConnectionCheck(
     deps,
     correlationId,

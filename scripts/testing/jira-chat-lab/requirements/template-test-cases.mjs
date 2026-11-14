@@ -97,11 +97,20 @@ function templateFailureEvidence({ issue, causes, sections }) {
   return `${issue.key}: causes=${causes.join(",")}; summary=${JSON.stringify(issue.fields.summary ?? null)}; labels=${JSON.stringify(issue.fields.labels ?? null)}; headings=${JSON.stringify(headingSnapshot(issue.fields.description))}; missingSections=${JSON.stringify(sections.missing)}; emptySections=${JSON.stringify(sections.empty)}`;
 }
 
+const CAUSES = Object.freeze(["summary", "label", "section"]);
+
+/** Which of the three checks failed, by the number of issues: an issue can fail more than one. */
+function causeCounts(facts) {
+  return CAUSES.map(
+    (cause) => `${cause} ${facts.filter((fact) => fact.causes.includes(cause)).length}`,
+  ).join(", ");
+}
+
 /**
  * Grades the issues of the turn: exactly one conforming issue per acceptance criterion and nothing
  * else. No issue at all is absent evidence (`unverified`); any other deviation is `red`.
  */
-function gradeTemplateTestCases({ tests, item }) {
+export function gradeTemplateTestCases({ tests, item }) {
   if (tests.credited.length === 0) {
     return { status: "unverified", detail: "no test case issue in Jira" };
   }
@@ -121,7 +130,7 @@ function gradeTemplateTestCases({ tests, item }) {
   const evidence = facts
     .filter((fact) => fact.causes.length > 0)
     .map((fact) => templateFailureEvidence(fact));
-  const detail = `${tests.credited.length} issues for ${item.acceptanceCount} criteria: ${missing.length} criteria without one, ${duplicated.length} duplicated, ${nonconforming} not conforming to the template`;
+  const detail = `${tests.credited.length} issues for ${item.acceptanceCount} criteria: ${missing.length} criteria without one, ${duplicated.length} duplicated, ${nonconforming} not conforming to the template (${causeCounts(facts)})`;
   return {
     status: ok ? "green" : "red",
     detail: [detail, ...evidence].join("; "),

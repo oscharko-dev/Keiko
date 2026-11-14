@@ -80,6 +80,7 @@ import {
 } from "./jiraManagedProvider.js";
 import {
   JIRA_ALREADY_REFUSED_GUIDANCE,
+  JIRA_LOCAL_REFUSAL_GUIDANCE,
   JIRA_UNCERTAIN_GUIDANCE,
   jiraAttemptToolResult,
   jiraMutationToolResult,
@@ -146,6 +147,18 @@ const TEMPLATE = [
   "---",
   "# Story",
   "## Acceptance criteria",
+].join("\n");
+// A template with no rule beyond its existence: a creation is refused without one (#4354).
+const PERMISSIVE_STORY = [
+  "---",
+  "keiko: jira-issue-template",
+  "version: 1",
+  "project: SYN",
+  "issueType: Story",
+  "activateOn: [create]",
+  "summaryMinLength: 1",
+  "---",
+  "# Story",
 ].join("\n");
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -680,7 +693,8 @@ describe("the dry run before approval", () => {
     jira: {
       readonly fields?: readonly unknown[];
       readonly existing?: readonly unknown[];
-      readonly metadataFails?: boolean;
+      /** The HTTP status Jira answers every metadata read with. */
+      readonly metadataFails?: 403 | 503;
       readonly draftRequirements?: JiraChatTemplatePreflightPorts["draftRequirements"];
       readonly readAllowed?: boolean;
       readonly signal?: AbortSignal;
@@ -727,7 +741,8 @@ describe("the dry run before approval", () => {
           response({ issues, startAt: 0, maxResults: 100, total: issues.length }),
         );
       }
-      if (jira.metadataFails === true) return Promise.resolve(response({}, 503));
+      if (jira.metadataFails !== undefined)
+        return Promise.resolve(response({}, jira.metadataFails));
       const extra = jira.fields ?? [];
       const overridden = (id: string): boolean =>
         extra.some((candidate) => (candidate as { fieldId?: unknown }).fieldId === id);
@@ -1116,12 +1131,25 @@ describe("the dry run before approval", () => {
     });
   });
 
-  it("does nothing without proposed arguments or a governing template", async () => {
+  it("does nothing without proposed arguments", async () => {
     expect(await preflight(TEMPLATE, undefined).run()).toBeUndefined();
+  });
+
+  // #4354: this was the pass-through pin "does nothing without a governing template". The owner
+  // decided on 2026-11-13 that nothing is created without one, so a creation no template governs
+  // is refused here, before any approval is asked, in every mode; the refusal names the way out.
+  it("refuses a creation that no template governs before any approval, naming the way out", async () => {
     const f = preflight("# Ordinary skill\n", CREATE);
-    expect(await f.run()).toBeUndefined();
-    const paths = f.http.mock.calls.map(([request]) => new URL(request.url).pathname);
-    expect(paths.some((path) => /\/(project|issuetype)\//u.test(path))).toBe(false);
+    const refusal = await f.run();
+    expect(refusal).toMatchObject({
+      outcome: "rejected",
+      reason: "field-validation",
+      violations: [{ ruleId: "template-missing", template: "SYN/Story" }],
+    });
+    expect(JSON.stringify(refusal)).toMatch(
+      /Propose templates from an existing project|propose templates from an existing project/u,
+    );
+    expect(f.http.mock.calls.some(([request]) => request.method !== "GET")).toBe(false);
   });
 
   describe("a backlog draft (#4178)", () => {
@@ -1284,15 +1312,13 @@ describe("the dry run before approval", () => {
     it("tells the model which item of an invalid draft to correct, in fixed words (S07 of #4173)", async () => {
       const sink = logs();
       const orphan = { ...item("story", GOOD), parent: { fieldId: "customfield_10101" } };
-      const f = preflight(
-        "# Ordinary skill\n",
-        { items: [item("epic", GOOD), orphan] },
-        "jira.draft",
-      );
+      const f = preflight(PERMISSIVE_STORY, { items: [item("epic", GOOD), orphan] }, "jira.draft");
       expect(await f.run()).toEqual({
         outcome: "rejected",
         reason: "field-validation",
         draftRefusal: "draft-invalid",
+        draftProblem: "item-parent",
+        draftItem: 2,
         guidance:
           "Item 2 has a malformed parent. Nest an item by giving it parent { fieldId, ref } for an " +
           "item of this draft, or { fieldId, issueKey } for an existing issue, with fieldId the " +
@@ -1316,17 +1342,35 @@ describe("the dry run before approval", () => {
 
     it("reads one issue type's fields once however large the draft, and no item", async () => {
       const f = preflight(
-        "# Ordinary skill\n",
+        PERMISSIVE_STORY,
         { items: [item("epic", "nothing"), item("story", "nothing"), item("bug", "nothing")] },
         "jira.draft",
       );
       expect(await f.run()).toBeUndefined();
-      expect(f.http).toHaveBeenCalledTimes(1);
+      const urls = f.http.mock.calls.map(([request]) => new URL(request.url).pathname);
+      // One issue type's fields, the project and the issue type that name the governing template:
+      // three reads however many items, and no item is read (#4354).
+      expect(urls).toEqual([
+        "/context/rest/api/2/issue/createmeta/10000/issuetypes/10001",
+        "/context/rest/api/2/project/10000",
+        "/context/rest/api/2/issuetype/10001",
+      ]);
     });
 
     describe("an item Keiko itself would refuse (S05 of #4173)", () => {
       const EPIC_NAME = field("customfield_10103", "string", true);
-      const ORDINARY = "# Ordinary skill\n";
+      // A template with no rules of its own: what these items are refused for is not a template rule.
+      const ORDINARY = [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: SYN",
+        "issueType: Story",
+        "activateOn: [create]",
+        "summaryMinLength: 1",
+        "---",
+        "# Story",
+      ].join("\n");
 
       it("names every such item before any approval and never writes", async () => {
         const sink = logs();
@@ -1342,6 +1386,9 @@ describe("the dry run before approval", () => {
           reason: "field-validation",
           fieldId: "customfield_10103",
           validation: "required-field",
+          messages: [
+            "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+          ],
         });
         expect(await f.run()).toEqual({
           outcome: "rejected",
@@ -1432,16 +1479,41 @@ describe("the dry run before approval", () => {
 
       it("leaves the decision to the write when Jira cannot be read", async () => {
         const f = preflight(ORDINARY, { items: [item("one", "text")] }, "jira.draft", {
-          metadataFails: true,
+          metadataFails: 403,
         });
         expect(await f.run()).toBeUndefined();
+      });
+
+      // A 5xx is read again with backoff, once for the whole series: a dry run that cannot read Jira
+      // decides nothing, it never reads again per stage or per item (#4354). The backoff timer is
+      // driven by the test, so the series runs without waiting for it.
+      it("leaves the decision to the write when Jira answers 503, after one retry series", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout"] });
+        try {
+          const f = preflight(ORDINARY, { items: [item("one", "text")] }, "jira.draft", {
+            metadataFails: 503,
+          });
+          const run = f.run();
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(await run).toBeUndefined();
+          const reads = f.http.mock.calls.map(([request]) => new URL(request.url).pathname);
+          // One series of five attempts on the one metadata read; no later stage reads it again.
+          expect(reads).toEqual(
+            Array.from(
+              { length: 5 },
+              () => "/context/rest/api/2/issue/createmeta/10000/issuetypes/10001",
+            ),
+          );
+        } finally {
+          vi.useRealTimers();
+        }
       });
     });
   });
 
   it("refuses a single write Keiko itself would refuse before any approval", async () => {
     const sink = logs();
-    const f = preflight("# Ordinary skill\n", CREATE, "jira.create", {
+    const f = preflight(PERMISSIVE_STORY, CREATE, "jira.create", {
       fields: [field("customfield_10103", "string", true)],
     });
     expect(await f.run()).toEqual({
@@ -1449,6 +1521,10 @@ describe("the dry run before approval", () => {
       reason: "field-validation",
       fieldId: "customfield_10103",
       validation: "required-field",
+      messages: [
+        "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+      ],
+      guidance: JIRA_LOCAL_REFUSAL_GUIDANCE,
     });
     expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
     const events = sink.events.filter((event) => event.op === "jira.field.admission");

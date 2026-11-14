@@ -84,6 +84,8 @@ export {
   type AtlassianHttpPort,
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
+  type AtlassianAuthenticationObservation,
+  type AtlassianAuthenticationFailure,
 } from "./atlassian-http-port.js";
 export { maintenancePathNode } from "./jira-maintenance-mutation-values.js";
 export {
@@ -210,20 +212,7 @@ export {
 export {
   JIRA_ISSUE_LABELS_MAX_ENTRIES,
   JIRA_SUMMARY_MAX_CHARS,
-  addJiraIssueComment,
-  createJiraIssue,
-  transitionJiraIssue,
-  updateJiraIssueFields,
-  type AddJiraIssueCommentInput,
-  type AddJiraIssueCommentResult,
   type AtlassianWriteActionFailure,
-  type CreateJiraIssueInput,
-  type CreateJiraIssueResult,
-  type JiraWriteActionDeps,
-  type TransitionJiraIssueInput,
-  type TransitionJiraIssueResult,
-  type UpdateJiraIssueFieldsInput,
-  type UpdateJiraIssueFieldsResult,
 } from "./jira-write-actions.js";
 export {
   CONFLUENCE_TITLE_MAX_CHARS,
@@ -324,6 +313,7 @@ export {
   jiraDraftDependencies,
   jiraDraftIdentity,
   checkJiraDraft,
+  isJiraDraftItem,
   parseJiraDraft,
   type JiraDraft,
   type JiraDraftCheck,
@@ -354,6 +344,8 @@ export {
   matchingJiraIssueTemplates,
   resolveJiraTemplateFieldIds,
   jiraTemplateViolationGuidance,
+  jiraTemplateGuidanceVariants,
+  jiraNoGoverningTemplateGuidance,
   validateJiraIssueTemplateAgainstInstance,
   type JiraFieldCatalogEntry,
   type JiraTemplateFinding,
@@ -394,6 +386,7 @@ export {
 export {
   executeJiraDraftStageTool,
   firstJiraDraftTemplateRefusal,
+  JIRA_DRAFT_TEMPLATE_UNREADABLE,
   parseJiraDraftReference,
   resolveJiraDraftArguments,
   type JiraDraftActivity,
@@ -403,8 +396,13 @@ export {
   type JiraDraftResolution,
   type JiraDraftToolDeps,
 } from "./jira-draft-stage-tool.js";
-export { withJiraCreateMetadataMemo, type JiraDraftReadCounts } from "./jira-draft-read-memo.js";
+export {
+  withJiraCreateMetadataMemo,
+  withJiraDraftReadMemo,
+  type JiraDraftReadCounts,
+} from "./jira-draft-read-memo.js";
 export { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
+export { connectionFingerprint } from "./jira-report-tool.js";
 export type {
   JiraReportActivity,
   JiraReportRequirementIds,
@@ -430,3 +428,4 @@ export type {
   JiraEmailTemplatePack,
   JiraEmailTemplateObservation,
 } from "./jira-email-template-values.js";
+export { jiraEpicLinkRefusalMessage } from "./jira-epic-link-target.js";
