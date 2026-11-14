@@ -6139,6 +6139,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "recovery-left",
           "repository-seeded",
           "repository-seed-skipped",
+          "repository-returned",
           "bridge-registration-refused",
           "diff-windowed",
           "notice-held",

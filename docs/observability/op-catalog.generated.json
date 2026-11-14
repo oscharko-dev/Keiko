@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4a25fe5eb10896cc949766b112630d544e137a63ff4fe3e174238da4ae5069b9",
+    "catalogDigest": "cfd15bbd30cef5527fc4ebe96e98cc19865789dc1724e9d5a1831993f37a57c5",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6359,6 +6359,7 @@
               "recovery-left",
               "repository-seeded",
               "repository-seed-skipped",
+              "repository-returned",
               "bridge-registration-refused",
               "diff-windowed",
               "notice-held",
@@ -119389,7 +119390,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1954",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1959",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -120099,7 +120100,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2355",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2360",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -120191,7 +120192,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1436",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1441",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -120778,7 +120779,7 @@
     {
       "op": "coding-runtime.composition.retired-setting",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:6484",
+      "site": "packages/keiko-server/src/deps.ts:6499",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -122147,7 +122148,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1703",
+      "site": "packages/keiko-server/src/deps.ts:1707",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -123183,7 +123184,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2511",
+      "site": "packages/keiko-server/src/deps.ts:2515",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -123768,7 +123769,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4844",
+      "site": "packages/keiko-server/src/deps.ts:4859",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -123934,7 +123935,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3414",
+      "site": "packages/keiko-server/src/deps.ts:3418",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

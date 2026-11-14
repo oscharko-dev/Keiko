@@ -240,6 +240,29 @@ describe("CodingWorkbenchRepositorySelector recovery notices", () => {
     expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toBeDisabled();
   });
 
+  // #4371 F21: with no project chosen the Workbench says so once and leads to choosing a folder.
+  it("says no project is chosen yet and offers one button that leads to choosing a folder", async () => {
+    selectableRepositories.mockResolvedValue([]);
+    const onOpenGit = vi.fn();
+    renderSelector({ root: null, onOpenGit });
+
+    expect(await screen.findByTestId("coding-workbench-no-project")).toHaveTextContent(
+      "No project chosen yet: choose a folder.",
+    );
+    expect(screen.queryByRole("button", { name: "Open Git" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Choose folder" }));
+    expect(onOpenGit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not say it once a project is chosen", async () => {
+    selectableRepositories.mockResolvedValue([project("/repos/plain-folder")]);
+    listBranches.mockResolvedValue(branchList(["main"]));
+    renderSelector();
+
+    await screen.findByRole("combobox", { name: "Choose coding branch" });
+    expect(screen.queryByTestId("coding-workbench-no-project")).not.toBeInTheDocument();
+  });
+
   it("#C reports a catalog failure with closed errorKind, correlationId and error evidence", async () => {
     const failure = new ApiError("SERVICE_UNAVAILABLE", "redacted", 503);
     failure.correlationId = "corr-repo-1";
