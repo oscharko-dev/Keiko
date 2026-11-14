@@ -272,7 +272,6 @@ function qualificationReview(context, preparedTurn, options, call, actionId, pub
     consumerPort,
     humanInput,
     admission: {
-      ...discoveryPorts(context),
       reviewableWrite,
       sourcePreparation,
       ...createJiraChatTurnReviewPorts(options, {
@@ -648,7 +647,9 @@ async function dispatchDiscoveryTool(held, name, args) {
   );
   const { review, actionId } = execution;
   try {
-    const bound = bind(context, preparedTurn.context, managed, review, maxToolCalls, held.shared);
+    // The ports live on the turn's context, as they do on the Chat turn that hosts the discovery tools.
+    const turnContext = { ...preparedTurn.context, ...discoveryPorts(context) };
+    const bound = bind(context, turnContext, managed, review, maxToolCalls, held.shared);
     held.shared = { budget: bound.budget, counters: bound.counters };
     const offered = bound.binder.offerTool(descriptor.toolRef);
     const dispatch = await bound.binder.dispatch(
