@@ -59,12 +59,13 @@ import { hashPortableTreeKht1 } from "@oscharko-dev/keiko-security/portable-tree
 import { loadServer } from "./lazy-modules.js";
 
 // The default startup recovery loads the whole keiko-server package on first use. Under vitest that
-// is a cold module graph of thousands of built files, which vite processes one by one: about 26 to
-// 30 s measured in the gates container against 3.5 s for a native import. The first test that
-// reaches it would carry that one-time cost inside its own 15 s budget and fail on a host that is
-// slower than the CI runner, while proving nothing about portable recovery. Loading it here, during
-// collection, puts the cost where no test budget runs; the loader is memoised, so every test that
-// uses the real recovery then finds the package loaded. No test, assertion or timeout changes.
+// is a cold module graph of thousands of built files, which vite processes one by one: 26 to 29 s
+// measured twice in the gates container (arm64, 16 cores) against 3.5 s for the same import from
+// plain Node. The first test that reaches it would carry that one-time cost inside its own 15 s
+// budget and fail on a host that is slower than the CI runner, while proving nothing about portable
+// recovery. Loading it here, during collection, puts the cost where no test budget runs; the loader
+// is memoised, so every test that uses the real recovery then finds the package loaded. The test's
+// own 15-second budget and every assertion are unchanged.
 await loadServer();
 
 type PortableTarget = "windows-x64" | "macos-arm64" | "macos-x64";
