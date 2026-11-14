@@ -83,7 +83,9 @@ function allowedPhrase(node: Node): string | undefined {
 }
 type Noun = readonly [singular: string, plural: string];
 function counted(count: number, noun: Noun | undefined): string {
-  return noun === undefined ? String(count) : `${String(count)} ${count === 1 ? noun[0] : noun[1]}`;
+  if (noun === undefined) return String(count);
+  const word = count === 1 ? noun[0] : noun[1];
+  return `${String(count)} ${word}`;
 }
 function bounds(node: Node, lower: string, upper: string, noun?: Noun): string | undefined {
   const min = node[lower];
