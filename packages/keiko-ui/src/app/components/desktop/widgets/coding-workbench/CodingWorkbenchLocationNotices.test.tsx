@@ -1,13 +1,20 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { LocationBindingNotices } from "./CodingWorkbenchLocationNotices";
+import { LocationBindingNotices, locationBlockerKey } from "./CodingWorkbenchLocationNotices";
 import type { WorkbenchExecutionLocationState } from "./useWorkbenchExecutionLocation";
 
 function state(
   overrides: Partial<WorkbenchExecutionLocationState>,
 ): WorkbenchExecutionLocationState {
-  return { ready: false, pending: false, error: false, retry: vi.fn(), ...overrides };
+  return {
+    ready: false,
+    pending: false,
+    error: false,
+    denied: false,
+    retry: vi.fn(),
+    ...overrides,
+  };
 }
 
 const PREPARING = "Preparing the selected checkout…";
@@ -41,5 +48,29 @@ describe("LocationBindingNotices", () => {
     const during = container.innerHTML;
     rerender(<LocationBindingNotices locationState={state({ pending: false, error: true })} />);
     expect(container.innerHTML).toBe(during);
+  });
+});
+
+// #4371: a refused folder is explained once (by the selector's own help, with its way out); the
+// notice neither repeats it nor adds the generic sentence that guesses a different cause.
+describe("a checkout refused by the server", () => {
+  it("adds no second sentence beside the selector's own explanation", () => {
+    const { container } = render(
+      <LocationBindingNotices locationState={state({ error: true, denied: true })} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText(/Choose a branch in Git/u)).not.toBeInTheDocument();
+  });
+
+  it("names the one cause the start blocker reports", () => {
+    expect(locationBlockerKey({ error: true, denied: true })).toBe(
+      "codingWorkbench.repository.deniedBlocker",
+    );
+    expect(locationBlockerKey({ error: true, denied: false })).toBe(
+      "codingWorkbench.repository.locationError",
+    );
+    expect(locationBlockerKey({ error: false, denied: false })).toBe(
+      "codingWorkbench.repository.locationBinding",
+    );
   });
 });

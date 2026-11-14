@@ -117,6 +117,12 @@ export interface WorkbenchExecutionLocationState {
   readonly ready: boolean;
   readonly pending: boolean;
   readonly error: boolean;
+  /**
+   * The checkout failed because the server refused the folder as an access decision (the closed
+   * `DENIED` reason), not because of a branch or a failed bind. The cause is known, so the notice
+   * does not guess another one (#4371).
+   */
+  readonly denied: boolean;
   readonly retry: () => void;
 }
 
@@ -129,6 +135,8 @@ interface LocationInput {
   readonly activeInstance: WorkspaceInstance | null;
   readonly branchLoading: boolean;
   readonly branchError: boolean;
+  /** The branch read was refused as an access decision. */
+  readonly branchDenied: boolean;
   readonly workspaceLoading: boolean;
   readonly workspaceError: boolean;
   readonly runIsActive: boolean;
@@ -360,6 +368,11 @@ function bindingError(
   );
 }
 
+/** A failure is a refusal only when the server named the folder's branch read as one. */
+function bindingDenied(error: boolean, input: LocationInput): boolean {
+  return error && input.branchDenied;
+}
+
 export function useWorkbenchExecutionLocation(
   input: LocationInput,
 ): WorkbenchExecutionLocationState {
@@ -375,10 +388,6 @@ export function useWorkbenchExecutionLocation(
     input.locationsPending === true ||
     input.workspaceLoading ||
     (!ready && input.branchLoading);
-  return {
-    ready,
-    pending,
-    error: bindingError(input, ready, pending, key, attempt),
-    retry: attempt.retry,
-  };
+  const error = bindingError(input, ready, pending, key, attempt);
+  return { ready, pending, error, denied: bindingDenied(error, input), retry: attempt.retry };
 }

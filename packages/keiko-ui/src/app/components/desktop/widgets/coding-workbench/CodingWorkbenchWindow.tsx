@@ -166,7 +166,7 @@ import {
 import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
 import { useCodingWorkbenchRevert } from "@/lib/useCodingWorkbenchRevert";
 import { CodingWorkbenchInboxPanel } from "./CodingWorkbenchInboxPanel";
-import { LocationBindingNotices } from "./CodingWorkbenchLocationNotices";
+import { LocationBindingNotices, locationBlockerKey } from "./CodingWorkbenchLocationNotices";
 import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
 import { changesRefreshSignal } from "./codingWorkbenchChangesSignal";
 import { deliveredMessageSignal } from "./codingWorkbenchInboxSignal";
@@ -1061,6 +1061,7 @@ export function CodingWorkbenchWindow({
     activeInstance: activeWorkspace.activeInstance,
     branchLoading: branchInventory.loading,
     branchError: branchInventory.error !== null,
+    branchDenied: branchInventory.denied,
     workspaceLoading: locationSelectionPending(activeWorkspace, history, historySelection),
     workspaceError: activeWorkspace.error !== null,
     runIsActive,
@@ -1572,11 +1573,7 @@ function workbenchStartBlocker(
   locationState: WorkbenchExecutionLocationState,
 ): string | null {
   if (locationState.ready) return startBlockedReason(state, t, showSetup, authorityError);
-  return t(
-    locationState.error
-      ? "codingWorkbench.repository.locationError"
-      : "codingWorkbench.repository.locationBinding",
-  );
+  return t(locationBlockerKey(locationState));
 }
 
 function locationMutationPending(
