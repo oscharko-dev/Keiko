@@ -635,3 +635,12 @@ complete original nine-case producer ran in the Linux arm64 gates container (Nod
 passed. Only the source digests and `generatedAt` in the three records were taken from this run; its
 fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
 behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
+
+## Jira result claim marker in Chat — 2026-11-14 (#4355, #4351)
+
+The Chat window and the message catalogs gained the claim marker wording for Jira results, so the
+freshness gate rejected the changed digests. The complete original nine-case producer ran in the
+Linux arm64 gates container (Node 24.18.0): all nine passed. Only the source digests and
+`generatedAt` in the three records were taken from this run; its fallback-font captures were
+discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or
+numerical ceiling changed. This remains updater fixture evidence.
