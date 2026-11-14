@@ -1,6 +1,9 @@
 // #4358: a pass of the Windows local-volume check may be remembered for passive reads only. These
 // pins hold the points that ACT on the verdict to the enforcing check, which asks Windows every
 // time: the update session's detector and the discovery that starts the portable coding runtime.
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const volumeCheck = vi.hoisted(() => ({
@@ -49,21 +52,40 @@ import {
 } from "./coding-runtime/productionPortableCodingRuntime.js";
 import { defaultDetectorFor } from "./update-session-support.js";
 
+const roots: string[] = [];
 afterEach(() => {
   volumeCheck.calls.length = 0;
   volumeCheck.refuse = undefined;
   detection.args.length = 0;
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("the points that act on the local-volume verdict check fresh", () => {
-  it("the update session's detector never asks for a remembered pass", () => {
+  it("the update session's detector asks Windows every time and never for a remembered pass", () => {
+    // A Windows portable layout on the real file system: the detection reaches the volume check.
+    const root = mkdtempSync(join(tmpdir(), "keiko-session-detector-"));
+    roots.push(root);
+    const installRoot = join(root, "Keiko");
+    mkdirSync(join(installRoot, ".portable"), { recursive: true });
+    mkdirSync(join(installRoot, "app"), { recursive: true });
+    writeFileSync(
+      join(installRoot, ".portable", "setup-manifest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        platformTarget: "windows-x64",
+        packageName: "@oscharko-dev/keiko",
+        packageVersion: "0.2.14",
+        stable: true,
+      }),
+    );
     const detector = defaultDetectorFor(
       {
         facts: () => ({
-          entryPath: "/opt/keiko/app/dist/cli/index.js",
-          packageRoot: "/opt/keiko/app",
+          packageRoot: join(installRoot, "app"),
           packageName: "@oscharko-dev/keiko",
           packageManagerHint: undefined,
+          installScope: "local",
+          portableStateDir: join(root, "state"),
         }),
       },
       {},
@@ -73,7 +95,8 @@ describe("the points that act on the local-volume verdict check fresh", () => {
     expect(detection.args).toHaveLength(2);
     // no fifth argument: the detection's default is the fresh, enforcing check
     expect(detection.args.map((args) => args[4])).toEqual([undefined, undefined]);
-    expect(volumeCheck.calls).not.toContain("passive-read");
+    // and the check was really reached, twice, never through the remembered path
+    expect(volumeCheck.calls).toEqual(["enforcing", "enforcing"]);
   });
 
   it("the portable coding runtime discovery asks Windows every time", () => {

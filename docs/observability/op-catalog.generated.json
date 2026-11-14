@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2b292370f78591ade610803d555f08ecdf0232d6f56722e01b33f560fae72237",
+    "catalogDigest": "091a244b1a89bbe16410582d3db935faa2b087e920090d16d2fd7bc10f11fcc9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -44604,7 +44604,7 @@
         "proofIds": ["security.windows-local-volume.refused.phase"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-security/src/windows-local-volume.ts:30",
-        "emitterSites": ["packages/keiko-security/src/windows-local-volume.ts:202"]
+        "emitterSites": ["packages/keiko-security/src/windows-local-volume.ts:227"]
       },
       {
         "contractKind": "activity-log-operation",

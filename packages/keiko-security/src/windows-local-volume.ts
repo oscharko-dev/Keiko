@@ -132,14 +132,19 @@ function commandFailed(result: BoundedPowerShellResult): boolean {
 export type WindowsLocalVolumePhase = "input" | "resolve" | "host-start" | "verify";
 
 /**
- * What a refusal says about the folder. `not-local`: the check ran and denied it, or the input can
- * never be accepted. `unverifiable`: nothing was learned about the volume, because Windows
- * PowerShell could not be resolved, did not start in time, or the query did not finish in time.
- * Both deny; only the second one can pass a moment later.
+ * What a refusal says about the folder. `not-local`: the query ran to its answer and denied it, or
+ * the input can never be accepted. `unverifiable`: nothing was learned about the volume, because
+ * Windows PowerShell could not be resolved, did not start in time, never ran the query (it could
+ * not be started, or was ended), or the query did not finish in time. Both deny; only the second
+ * one can pass a moment later.
  */
 export type WindowsLocalVolumeVerdict = "not-local" | "unverifiable";
 
-/** Every refusal of the check. The message and the cause are those of the refusal itself. */
+/**
+ * A refusal of the check in the `input`, `host-start` and `verify` phases. The message and the
+ * cause are those of the refusal itself. A `resolve`-phase failure keeps its own error class (the
+ * launcher matches it), and `windowsLocalVolumeVerdict` reads it as `unverifiable`.
+ */
 export class WindowsLocalVolumeError extends Error {
   readonly verdict: WindowsLocalVolumeVerdict;
   readonly phase: WindowsLocalVolumePhase;
@@ -162,9 +167,28 @@ export function windowsLocalVolumeVerdict(error: unknown): WindowsLocalVolumeVer
   return error instanceof WindowsLocalVolumeError ? error.verdict : "unverifiable";
 }
 
+// The process answered without running the query to its end: it could not be started, was ended,
+// or never reached the program. Nothing about the volume was learned.
+class WindowsLocalVolumeQueryNotRunError extends Error {
+  public override readonly name = "WindowsLocalVolumeQueryNotRunError";
+  public readonly code = "query-not-run";
+  public constructor(cause: unknown) {
+    super("Windows managed root could not be verified as a local volume: the check did not run", {
+      cause,
+    });
+  }
+}
+
+function learnedNothing(error: unknown): boolean {
+  return (
+    error instanceof WindowsProgramWorkTimeoutError ||
+    error instanceof WindowsLocalVolumeQueryNotRunError
+  );
+}
+
 function refusalVerdict(phase: WindowsLocalVolumePhase, error: unknown): WindowsLocalVolumeVerdict {
   if (phase === "resolve" || phase === "host-start") return "unverifiable";
-  return error instanceof WindowsProgramWorkTimeoutError ? "unverifiable" : "not-local";
+  return learnedNothing(error) ? "unverifiable" : "not-local";
 }
 
 function localVolumeErrorKind(
@@ -174,6 +198,7 @@ function localVolumeErrorKind(
   if (phase === "input") return "invalid-request";
   if (phase === "resolve") return "unavailable";
   if (phase === "host-start" || error instanceof WindowsProgramWorkTimeoutError) return "timeout";
+  if (error instanceof WindowsLocalVolumeQueryNotRunError) return "unavailable";
   return "unsafe-target";
 }
 
@@ -205,6 +230,9 @@ function reportLocalVolumeRefusal(
       { failureKind: securityErrorKind(error), phase, verdict },
     ),
   );
+  // The resolver's own error classes are matched by the launcher (its "trusted helper
+  // unavailable" handling); they keep their identity. Nothing about the volume was learned.
+  if (phase === "resolve") throw error;
   throw new WindowsLocalVolumeError(refusalMessage(error), verdict, phase, error);
 }
 
@@ -223,6 +251,9 @@ function verifyLocalVolume(
     runner: options.runner ?? spawnSync,
     securityLogSink: options.securityLogSink,
   });
+  if (!result.started || result.error !== undefined || result.status === null) {
+    throw new WindowsLocalVolumeQueryNotRunError(result.error);
+  }
   if (commandFailed(result)) throw new Error(NOT_LOCAL_MESSAGE);
 }
 
@@ -247,9 +278,10 @@ export function assertWindowsLocalVolume(
 const REMEMBERED_LOCAL_VOLUMES = new Set<string>();
 
 /**
- * The same check for PASSIVE reads only: detecting the install mode at start, answering a status
- * or an update-availability read. A folder that passed once is not asked again in this process,
- * because each check runs Windows PowerShell and blocks its caller for as long as that takes. Only
+ * The same check for PASSIVE reads only: the update pre-report, which answers whether an update is
+ * available and how it could be installed. A folder that passed once is not asked again in this
+ * process, because each check runs Windows PowerShell and blocks its caller for as long as that
+ * takes. Only
  * a pass is remembered; a refusal of either verdict is asked again every time.
  *
  * Nothing that ACTS on the verdict may call this: the launcher's root policy, the update session

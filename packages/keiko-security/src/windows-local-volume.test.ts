@@ -388,9 +388,41 @@ describe("the verdict of a refusal", () => {
     ],
   ] as const)("names %s", (_name, options, verdict, phase) => {
     const error = check(String.raw`C:\Keiko`, options);
-    expect(error).toBeInstanceOf(WindowsLocalVolumeError);
-    expect(error).toMatchObject({ verdict, phase });
     expect(windowsLocalVolumeVerdict(error)).toBe(verdict);
+    if (phase === "resolve") {
+      // the resolver's own error keeps its class: the launcher matches it
+      expect(error).toBeInstanceOf(WindowsSystemBinaryMissingError);
+    } else {
+      expect(error).toBeInstanceOf(WindowsLocalVolumeError);
+      expect(error).toMatchObject({ verdict, phase });
+    }
+  });
+
+  // A process that never ran the query learned nothing about the volume: telling a person to
+  // "install on a local drive" for it would be wrong.
+  it.each([
+    ["a host that answered without running the program", { status: 0, stdout: "" }],
+    ["a process that could not be started", { status: null, error: new Error("spawn EPERM") }],
+    ["a process that was ended", { status: null, stdout: STARTED }],
+  ] as const)("reads %s as unverifiable", (_name, result) => {
+    const { message, events } = refusal((securityLogSink) => {
+      assertWindowsLocalVolume(String.raw`C:\Keiko`, {
+        platform: "win32",
+        resolvePowerShell: () => POWERSHELL,
+        runner: runner(result),
+        securityLogSink,
+      });
+    });
+    expect(message).toBe(
+      "Windows managed root could not be verified as a local volume: the check did not run",
+    );
+    const refused = events.find((event) => event.op === "security.windows-local-volume.refused");
+    expect(refused).toMatchObject({ level: "error", errorKind: "unavailable" });
+    expect(refused?.extra).toMatchObject({
+      failureKind: "query-not-run",
+      phase: "verify",
+      verdict: "unverifiable",
+    });
   });
 
   it("treats an input that can never be accepted as not local, and a foreign error as unverifiable", () => {

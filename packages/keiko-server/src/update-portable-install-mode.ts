@@ -748,9 +748,9 @@ export function portableStateDirFromEnv(env: NodeJS.ProcessEnv): string | undefi
 
 /**
  * How the Windows local-volume check may answer. `fresh` runs it now and is the default: whatever
- * ACTS on the answer (the update session) uses it. `passive-read` may reuse a pass that an earlier
- * passive read of this process saw (start-time detection, status and update-availability reads);
- * a refusal is never reused.
+ * ACTS on the answer uses it (the update session, and the start-time detection of the UI command).
+ * `passive-read` may reuse a pass that an earlier passive read of this process saw: the update
+ * pre-report (the preflight service and its route). A refusal is never reused.
  */
 export type PortableVolumeCheck = "fresh" | "passive-read";
 

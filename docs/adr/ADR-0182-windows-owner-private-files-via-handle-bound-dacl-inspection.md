@@ -175,11 +175,13 @@ the portable coding runtime was silently not found. A folder that is not on a lo
 check that could not be made are different facts for a person: the first is final for that folder,
 the second passes a moment later.
 
-- Every refusal is a `WindowsLocalVolumeError` with a closed verdict. `not-local`: the check ran
-  and denied the folder, or the input can never be accepted. `unverifiable`: nothing was learned,
-  because Windows PowerShell could not be resolved, did not start in time, or the query did not
-  finish in time. Both deny. The refusal line `security.windows-local-volume.refused` carries the
-  verdict beside the phase.
+- Every refusal carries a closed verdict. `not-local`: the query ran to its answer and denied the
+  folder, or the input can never be accepted. `unverifiable`: nothing was learned, because Windows
+  PowerShell could not be resolved, did not start in time, never ran the query (the process could
+  not be started or was ended), or the query did not finish in time. Both deny. The refusal line
+  `security.windows-local-volume.refused` carries the verdict beside the phase. Refusals are
+  `WindowsLocalVolumeError`, except in the resolve phase: the resolver's own error classes keep
+  their identity, because the launcher matches them, and read as `unverifiable`.
 - The update detection answers with its own closed reason for each verdict
   (`portable-volume-not-local`, `portable-volume-unverified`); `portable-registration-invalid`
   keeps its real meaning. An unverifiable answer is never final: the next read asks again.
@@ -189,15 +191,17 @@ the second passes a moment later.
 - The update window and the Workbench say which of the two it is and what the person can do, in
   English and German.
 - What is remembered: a PASS, per install root in its exact spelling, for the life of the process,
-  and only through `assertWindowsLocalVolumeForPassiveRead`, which the passive readers use (the
-  update preflight service and the preflight route: start-time detection, status and
-  update-availability reads). Each check is one synchronous Windows PowerShell run, and those reads
-  repeat.
+  and only through `assertWindowsLocalVolumeForPassiveRead`, which one passive reader uses: the
+  update pre-report (the preflight service and its route), which answers whether an update is
+  available and how it could be installed. Each check is one synchronous Windows PowerShell run,
+  and that report is read repeatedly.
 - What is never remembered: a refusal of either verdict; and nothing is remembered for a caller
   that ACTS on the verdict. The launcher's root policy at setup and launch, the update session's
-  detector and the discovery that starts the portable coding runtime call
-  `assertWindowsLocalVolume`, which neither reads nor writes that memory and asks Windows every
-  time. Each of the three is pinned by a test that a remembered pass is not consulted there.
+  detector (on start, status and candidate rejection), the start-time detection of the UI command
+  and the discovery that starts the portable coding runtime call `assertWindowsLocalVolume`, which
+  neither reads nor writes that memory and asks Windows every time. The root policy, the session
+  detector and the runtime discovery are each pinned by a test that a remembered pass is not
+  consulted there.
 
 ## Consequences
 
