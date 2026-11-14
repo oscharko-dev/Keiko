@@ -26,8 +26,10 @@ import {
   ChatWindow,
   clearKnowledgeCatalogCacheForTests,
   copyableMessageText,
+  claimNoticeOfAnswer,
   speakableAnswerText,
   speechPreparationEvidence,
+  speechTextWithNote,
   messageForSelectedResponseVersion,
   MemoryActionForgetButtons,
   normalizeMemoryBudgetInput,
@@ -6070,6 +6072,30 @@ describe("Keiko's note under an answer that claimed an effect its turn did not b
     );
     expect(screen.getByText("Nothing was created.")).toBeInTheDocument();
     expect(document.querySelector("[data-claim-notice]")).toBeNull();
+  });
+
+  it("finds the marker of the turn an answer closes, and only for its first answer", () => {
+    const [user, answer] = turn("tool-call-not-executed");
+    const [other] = turn(undefined);
+    if (user === undefined || answer === undefined || other === undefined)
+      throw new Error("Missing fixture messages");
+    const earlier = { ...other, id: "u-earlier" };
+    expect(claimNoticeOfAnswer([earlier, user, answer], answer)).toBe("tool-call-not-executed");
+    // The nearest earlier user message decides; another turn's marker is never borrowed.
+    expect(
+      claimNoticeOfAnswer([user, answer, { ...other, id: "u-later" }, { ...answer, id: "a2" }], {
+        ...answer,
+        id: "a2",
+      }),
+    ).toBeUndefined();
+    expect(claimNoticeOfAnswer([user, answer], { ...answer, responseVersion: 2 })).toBeUndefined();
+    expect(claimNoticeOfAnswer([answer], answer)).toBeUndefined();
+    expect(claimNoticeOfAnswer([user, answer], undefined)).toBeUndefined();
+  });
+
+  it("reads the note after the answer, as a copy does", () => {
+    expect(speechTextWithNote("Answer", undefined)).toBe("Answer");
+    expect(speechTextWithNote("Answer", "Note")).toBe("Answer\n\nNote");
   });
 
   it("carries the note into a copy of the answer", async () => {

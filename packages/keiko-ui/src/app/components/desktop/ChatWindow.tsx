@@ -567,6 +567,28 @@ const AssessedAnswerBody = dynamic(
 );
 
 /**
+ * The stored claim marker of the turn an assistant answer closes (#4355): the closest earlier user
+ * message's. Only the turn's first answer carries it; a regenerated one never does.
+ */
+export function claimNoticeOfAnswer(
+  messages: readonly ChatMessage[],
+  answer: ChatMessage | undefined,
+): ChatClaimNotice | undefined {
+  if (answer === undefined || (answer.responseVersion ?? 1) !== 1) return undefined;
+  const at = messages.findIndex((message) => message.id === answer.id);
+  for (let index = at - 1; index >= 0; index -= 1) {
+    const earlier = messages[index];
+    if (earlier?.role === "user") return earlier.toolTranscript?.claimNotice;
+  }
+  return undefined;
+}
+
+/** What is read aloud: the answer, then Keiko's note when the turn carries one, as a copy does. */
+export function speechTextWithNote(answerText: string, noteText: string | undefined): string {
+  return noteText === undefined ? answerText : `${answerText}\n\n${noteText}`;
+}
+
+/**
  * The body-free evidence of `speakableAnswerText` by the same rule: whether the answer is grounded
  * and how many marker groups the spoken text drops and keeps (PR #3678 review). Never the text.
  */
@@ -3549,12 +3571,17 @@ function ComposerCoreImpl({
             message.chatId === pendingVoiceAnswer.chatId &&
             message.role === "assistant",
         );
+  const voiceClaimNoticeText = useClaimNoticeText(claimNoticeOfAnswer(messages, voiceAnswer));
   const playback = useAssistantSpeech({
     profile: voiceCapability?.profile ?? "none",
     // Only the canonical assistant answer produced after a spoken user turn is eligible. Typed chat and
-    // pre-existing history remain silent, while synthesized speech is byte-for-byte the visible answer.
+    // pre-existing history remain silent, while synthesized speech is the visible answer followed by
+    // Keiko's visible note, when the turn carries one.
     enabled: voiceDialogActive && voiceAnswer !== undefined,
-    text: voiceAnswer === undefined ? undefined : speakableAnswerText(voiceAnswer),
+    text:
+      voiceAnswer === undefined
+        ? undefined
+        : speechTextWithNote(speakableAnswerText(voiceAnswer), voiceClaimNoticeText),
     preparation: voiceAnswer === undefined ? undefined : speechPreparationEvidence(voiceAnswer),
     messageId: voiceAnswer?.id,
     persona: voiceDialog.persona,
