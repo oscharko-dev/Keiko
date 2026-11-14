@@ -1,6 +1,7 @@
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+  isAtlassianConnectorWriteFailureReason,
   type AtlassianConnectorWriteFailureReason,
   JIRA_READ_TOOL_FAMILIES,
   JIRA_CORE_MUTATIONS,
@@ -146,6 +147,19 @@ const SAVED_VIEW_OPERATIONS = [
   ...JIRA_SAVED_CONFIGURATION_MUTATIONS,
 ] as const;
 
+/**
+ * The closed words of a read that Keiko or Jira refused and the model was told how to repair (#4357),
+ * beyond the write vocabulary: `invalid-input` (refused before any request) and
+ * `unsupported-deployment`.
+ */
+const JIRA_READ_REFUSAL_REASONS = ["invalid-input", "unsupported-deployment"] as const;
+const READ_REFUSAL_REASON_SET: ReadonlySet<unknown> = new Set(JIRA_READ_REFUSAL_REASONS);
+export type JiraProviderRefusalReason =
+  AtlassianConnectorWriteFailureReason | (typeof JIRA_READ_REFUSAL_REASONS)[number];
+export function isJiraProviderRefusalReason(value: unknown): value is JiraProviderRefusalReason {
+  return isAtlassianConnectorWriteFailureReason(value) || READ_REFUSAL_REASON_SET.has(value);
+}
+
 const FACT_FIELDS = {
   stage: {
     type: "string",
@@ -183,6 +197,7 @@ const FACT_FIELDS = {
     required: true,
     values: [
       ...ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+      ...JIRA_READ_REFUSAL_REASONS,
       "none",
       "other",
       "pod-not-found",
@@ -523,7 +538,7 @@ export function recordJiraProviderCall(
   tool: JiraManagedReadToolName | JiraMutationOperation,
   outcome: "completed" | "failed",
   /** The closed word Jira's refusal of a read carried, when the model was told what to change. */
-  refusal?: AtlassianConnectorWriteFailureReason,
+  refusal?: JiraProviderRefusalReason,
 ): void {
   recordGuarded(correlationId, tool, outcome === "failed" ? "warn" : "info", {
     stage: "provider-call",

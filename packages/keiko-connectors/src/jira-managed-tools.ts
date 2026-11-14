@@ -699,7 +699,7 @@ async function projectMetadataRead<Context extends ManagedMcpInvocationContext>(
  * What the model must pass, one sentence per tool, said when a call is refused before it reaches
  * Jira (#4357). Every sentence names only registered tools and stays far below the message bound.
  */
-const INPUT_RULES: Readonly<Record<string, string>> = {
+export const JIRA_READ_INPUT_RULES: Readonly<Record<string, string>> = {
   "jira.assignable-users":
     "Pass exactly one of projectKey or issueKey, optionally with query. Do not pass both.",
   "jira.issue-types": "Pass projectKey: a project key that jira.projects lists.",
@@ -711,9 +711,10 @@ const INPUT_RULES: Readonly<Record<string, string>> = {
   "jira.comments": "Pass issueKey: the key of one issue, for example one jira.search returns.",
   "jira.transitions": "Pass issueKey: the key of one issue, for example one jira.search returns.",
 };
-const GENERIC_INPUT_RULE = "Pass only the arguments this tool lists, each in the form it states.";
+export const JIRA_READ_GENERIC_INPUT_RULE =
+  "Pass only the arguments this tool lists, each in the form it states.";
 function inputRuleOf(name: JiraManagedReadToolName): string {
-  return INPUT_RULES[name] ?? GENERIC_INPUT_RULE;
+  return JIRA_READ_INPUT_RULES[name] ?? JIRA_READ_GENERIC_INPUT_RULE;
 }
 async function readIssueOrMetadata<Context extends ManagedMcpInvocationContext>(
   name: JiraManagedReadToolName,

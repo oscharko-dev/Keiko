@@ -116,7 +116,6 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   type JiraManagedReadToolName,
-  isAtlassianConnectorWriteFailureReason,
   isJiraReleaseScopeRefusal,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -130,7 +129,11 @@ import type {
   ManagedMcpToolDeclaration,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { recordJiraProviderCall, recordJiraReleaseScopeRefusal } from "./jiraOperationActivity.js";
+import {
+  isJiraProviderRefusalReason,
+  recordJiraProviderCall,
+  recordJiraReleaseScopeRefusal,
+} from "./jiraOperationActivity.js";
 import { withJiraReadFailureGuidance } from "./jiraReadFailureGuidance.js";
 import {
   compileExternalCatalogSchema,
@@ -652,7 +655,7 @@ function recordProviderResult(
       correlationId,
       operation,
       outcome,
-      explained && isAtlassianConnectorWriteFailureReason(reason) ? reason : undefined,
+      explained && isJiraProviderRefusalReason(reason) ? reason : undefined,
     );
   }
 }

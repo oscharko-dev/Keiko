@@ -133,6 +133,16 @@ const PLAIN_ALIASES: Readonly<Record<string, readonly string[]>> = {
     "who watch",
     "list watcher",
   ],
+  "jira.update-comment": [
+    // The summary says "update one existing issue comment's body"; people say "edit a comment".
+    "edit comment",
+    "change comment",
+  ],
+  "jira.create-issue-link": [
+    // The summary says "create one exact native issue relation"; people say "link two issues".
+    "link issue",
+    "relate issue",
+  ],
 };
 /** Lowercase words of an identity, tool name or query; separators and HTTP path syntax split words. */
 function rawWords(value: string): readonly string[] {

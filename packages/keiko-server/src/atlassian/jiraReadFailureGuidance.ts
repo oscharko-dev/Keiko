@@ -32,6 +32,8 @@ export interface JiraReadFailureFacts {
   readonly argumentNames: readonly string[];
   /** The registry's explicit fact that a normal Jira user cannot read this operation. */
   readonly administration: boolean;
+  /** Whether the result carries `messages`: only then may a sentence refer to them. */
+  readonly explained: boolean;
 }
 export interface JiraReadFailureGuidance {
   readonly class: JiraReadFailureClass;
@@ -47,7 +49,7 @@ const MAX_NAMES = 6;
  * The identifier arguments a model fills from another read, each with the registered tool that
  * lists valid values. A closed table: a new entry names an existing tool or the scan test fails.
  */
-const READERS: Readonly<Record<string, string>> = {
+export const JIRA_READ_FAILURE_READERS: Readonly<Record<string, string>> = {
   projectKey: "jira.projects",
   projectKeys: "jira.projects",
   projectIdOrKey: "jira.projects",
@@ -71,6 +73,9 @@ const CLASSES: Readonly<Record<string, JiraReadFailureClass>> = {
   "malformed-payload": "unreadable",
 };
 
+/** The closed reason words this rule answers, for tests and the log vocabulary check. */
+export const JIRA_READ_FAILURE_REASONS: readonly string[] = Object.keys(CLASSES);
+
 const FIXED: Readonly<Record<Exclude<JiraReadFailureClass, "argument" | "not-found">, string>> = {
   permission:
     "This read was not permitted for this Jira account or connection. Do not retry it. Tell the user in plain language that this account may not read this.",
@@ -92,24 +97,34 @@ function carried(names: readonly string[]): readonly string[] {
   return [...new Set(names.filter((name) => ARGUMENT_NAME.test(name)))].slice(0, MAX_NAMES);
 }
 function readerHints(names: readonly string[]): string {
-  const hints = names.flatMap((name) => {
-    const reader = READERS[name];
-    return reader === undefined ? [] : [`${reader} for ${name}`];
-  });
-  return hints.length === 0
-    ? "Check the arguments you passed and use values Jira lists."
-    : `Check each identifier against what Jira lists: ${hints.join(", ")}.`;
+  const byReader = new Map<string, string[]>();
+  for (const name of names) {
+    const reader = JIRA_READ_FAILURE_READERS[name];
+    if (reader !== undefined) byReader.set(reader, [...(byReader.get(reader) ?? []), name]);
+  }
+  if (byReader.size === 0) return "Check the arguments you passed and use values Jira lists.";
+  const hints = [...byReader].map(([reader, forNames]) => `${reader} for ${forNames.join(", ")}`);
+  return `Check each identifier against what Jira lists: ${hints.join("; ")}.`;
 }
-function argumentHead(reason: string, names: readonly string[], list: string): string {
-  if (reason === "invalid-input")
-    return `Keiko refused this read before sending it to Jira: an argument is missing, unknown or malformed${list}. Fix it as messages say.`;
+function argumentHead(facts: JiraReadFailureFacts, names: readonly string[], list: string): string {
+  const { reason } = facts;
+  if (reason === "invalid-input") {
+    const repair = facts.explained
+      ? "Fix it as messages say."
+      : "Check the input schema of this tool.";
+    return `Keiko refused this read before sending it to Jira: an argument is missing, unknown or malformed${list}. ${repair}`;
+  }
   if (reason === "not-found")
     return `Jira did not find something this call named${list}. ${readerHints(names)}`;
   return `Jira rejected an argument of this call${list}. ${readerHints(names)}`;
 }
-function argumentSentence(reason: string, names: readonly string[], withList: boolean): string {
+function argumentSentence(
+  facts: JiraReadFailureFacts,
+  names: readonly string[],
+  withList: boolean,
+): string {
   const list = withList && names.length > 0 ? ` (arguments: ${names.join(", ")})` : "";
-  return `${argumentHead(reason, names, list)} Then call this tool once more. If it is refused again, tell the user in plain language what is wrong.`;
+  return `${argumentHead(facts, names, list)} Then call this tool once more. If it is refused again, tell the user in plain language what is wrong.`;
 }
 function bounded(build: (withList: boolean) => string): string {
   const full = build(true);
@@ -127,7 +142,7 @@ export function jiraReadFailureGuidance(
     const names = carried(facts.argumentNames);
     return {
       class: failureClass,
-      text: bounded((withList) => argumentSentence(facts.reason, names, withList)),
+      text: bounded((withList) => argumentSentence(facts, names, withList)),
     };
   }
   return { class: failureClass, text: FIXED[failureClass] };
@@ -144,6 +159,24 @@ function propertyNames(schema: CatalogJsonValue | undefined): readonly string[] 
   return isObject(properties) ? Object.keys(properties) : [];
 }
 
+/** A failed native read that has not been explained yet: the only result this rule may extend. */
+function isUnexplainedReadFailure(
+  contract: JiraOperationContract | undefined,
+  result: ManagedMcpToolResult,
+): contract is JiraOperationContract {
+  const { data } = result;
+  return (
+    contract?.definition.kind === "native" &&
+    !contract.definition.effects.includes("remote-write") &&
+    result.isError === true &&
+    data.outcome === "failed" &&
+    typeof data.reason === "string" &&
+    data.guidance === undefined &&
+    // The release switch's own refusal has its sentence; no class of Jira refusal describes it.
+    !isJiraReleaseScopeRefusal(contract.definition.tool, data.messages)
+  );
+}
+
 /**
  * A failed native read gains its guidance; every other result, and a result that already carries
  * its own guidance, is returned unchanged. The tool's own contract decides whether it is a read, so
@@ -155,16 +188,7 @@ export function withJiraReadFailureGuidance(
   result: ManagedMcpToolResult,
 ): { readonly result: ManagedMcpToolResult; readonly class?: JiraReadFailureClass } {
   const { data } = result;
-  if (
-    contract?.definition.kind !== "native" ||
-    contract.definition.effects.includes("remote-write") ||
-    result.isError !== true ||
-    data.outcome !== "failed" ||
-    typeof data.reason !== "string" ||
-    data.guidance !== undefined ||
-    // The release switch's own refusal has its sentence; no class of Jira refusal describes it.
-    isJiraReleaseScopeRefusal(contract.definition.tool, data.messages)
-  )
+  if (!isUnexplainedReadFailure(contract, result) || typeof data.reason !== "string")
     return { result };
   const declared = new Set(propertyNames(contract.declaration.descriptor.inputSchema));
   const guidance = jiraReadFailureGuidance({
@@ -172,6 +196,7 @@ export function withJiraReadFailureGuidance(
     reason: data.reason,
     argumentNames: Object.keys(args).filter((name) => declared.has(name)),
     administration: "administration" in contract.definition,
+    explained: Array.isArray(data.messages) && data.messages.length > 0,
   });
   return guidance === undefined
     ? { result }

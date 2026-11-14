@@ -18,12 +18,20 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
-import { jiraReadFailureGuidance } from "./jiraReadFailureGuidance.js";
+import {
+  JIRA_READ_FAILURE_GUIDANCE_MAX_BYTES,
+  JIRA_READ_FAILURE_READERS,
+  JIRA_READ_FAILURE_REASONS,
+  jiraReadFailureGuidance,
+  withJiraReadFailureGuidance,
+} from "./jiraReadFailureGuidance.js";
+import { isJiraProviderRefusalReason } from "./jiraOperationActivity.js";
 import {
   createJiraProviderForCatalog,
   jiraOperationContracts,
   jiraOperationForTool,
 } from "./jiraManagedProvider.js";
+import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 
 // #4357: a native error of the Jira side reaches the model as a closed class plus what to change.
 // Every case runs through the result the model RECEIVES: the real provider and its binding, the
@@ -31,7 +39,7 @@ import {
 const BASE = "https://jira.example.invalid/context";
 const AUTH = `atlassian-cred:${"Cc3-_".repeat(4)}Xx`;
 const PROJECTION = "c".repeat(64) as CatalogDigest;
-const GUIDANCE_MAX_BYTES = 380;
+const GUIDANCE_MAX_BYTES = JIRA_READ_FAILURE_GUIDANCE_MAX_BYTES;
 
 interface Native {
   readonly status: number;
@@ -57,6 +65,7 @@ async function receive(
   tool: JiraManagedReadToolName,
   args: CatalogJsonObject,
   native: Native,
+  deployment: "cloud" | "data-center" = "data-center",
 ): Promise<Received> {
   const fetchImpl = vi.fn<typeof fetch>(() =>
     Promise.resolve(
@@ -73,7 +82,7 @@ async function receive(
     fetchImpl,
   });
   const provider = createJiraProviderForCatalog(
-    () => ({ deployment: "data-center", baseUrl: BASE, http: port }),
+    () => ({ deployment, baseUrl: BASE, http: port }),
     [tool],
   );
   const host = createManagedMcpHost({ providers: [provider], log: { write: () => undefined } });
@@ -212,20 +221,72 @@ describe("a native Jira error reaches the model as a class and what to change (#
   });
 });
 
-describe("the activity log records the class the model was told (#4357)", () => {
-  it("names Jira's closed refusal on the provider-call line, without text or arguments", async () => {
+// The failure-surface generator resolves proof ids only from string literals, one call per id.
+function proofOf(op: string, line: string): Record<string, unknown> {
+  switch (op) {
+    case "jira.operation.configuration":
+      return expectActivityLogProof("jira.operation.configuration.line", line);
+    case "jira.operation.planning":
+      return expectActivityLogProof("jira.operation.planning.line", line);
+    case "jira.operation.projects":
+      return expectActivityLogProof("jira.operation.projects.line", line);
+    case "jira.operation.issues":
+      return expectActivityLogProof("jira.operation.issues.line", line);
+    default:
+      throw new TypeError(`No proof registered for ${op}`);
+  }
+}
+
+describe("the activity log records the refusal word the model was told about (#4357)", () => {
+  async function providerCallLine(
+    tool: JiraManagedReadToolName,
+    args: CatalogJsonObject,
+    native: Native,
+    deployment: "cloud" | "data-center" = "data-center",
+  ): Promise<Record<string, unknown>> {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
-    await receive("jira.custom-fields", {}, { status: 403 });
-    const event = sink.events.find(({ op }) => op === "jira.operation.configuration");
+    await receive(tool, args, native, deployment);
+    const event = sink.events.find(({ op }) => op.startsWith("jira.operation."));
     const line = formatActivityLogProofLine(event ?? {});
-    expect(expectActivityLogProof("jira.operation.configuration.line", line)).toMatchObject({
-      operation: "jira.custom-fields",
+    expect(line).not.toMatch(/administration|Do not retry|Pass exactly|projectKey/u);
+    return proofOf(event?.op ?? "", line);
+  }
+  it.each([
+    ["Jira refused with 403", "jira.custom-fields", {}, { status: 403 }, "permission-denied"],
+    [
+      "Jira did not find it (404)",
+      "jira.assignable-users",
+      { projectKey: "NOPE" },
+      { status: 404 },
+      "not-found",
+    ],
+    [
+      "Keiko refused it before any request",
+      "jira.assignable-users",
+      { query: "a" },
+      { status: 400 },
+      "invalid-input",
+    ],
+  ] as const)("%s: the line names %s", async (_label, tool, args, native, reason) => {
+    expect(await providerCallLine(tool, args, native)).toMatchObject({
+      operation: tool,
       stage: "provider-call",
       outcome: "failed",
-      reason: "permission-denied",
+      reason,
     });
-    expect(line).not.toMatch(/administration|Do not retry/u);
+  });
+  it("names unsupported-deployment too", async () => {
+    expect(await providerCallLine("jira.projects", {}, { status: 200 }, "cloud")).toMatchObject({
+      stage: "provider-call",
+      outcome: "failed",
+      reason: "unsupported-deployment",
+    });
+  });
+  it("accepts every closed word the guidance rule answers, so no explained case falls back to tool-failed", () => {
+    for (const reason of JIRA_READ_FAILURE_REASONS)
+      expect(isJiraProviderRefusalReason(reason), reason).toBe(true);
+    expect(isJiraProviderRefusalReason("something-new")).toBe(false);
   });
 });
 
@@ -235,8 +296,17 @@ describe("every Jira read can carry the text through the catalog's result valida
       contract.definition.kind === "native" &&
       !contract.definition.effects.includes("remote-write"),
   );
-  it("covers the whole native read inventory", () => {
-    expect(reads.length).toBeGreaterThan(JIRA_MANAGED_READ_TOOLS.length / 2);
+  it("covers the whole native read inventory, counted from the registered read tools", () => {
+    // Every registered read tool except the composites (report and draft staging) is a native read.
+    const composites = new Set(
+      jiraOperationDefinitions()
+        .filter((definition) => definition.kind === "composite")
+        .map((definition) => definition.tool),
+    );
+    const registered = JIRA_MANAGED_READ_TOOLS.filter((name) => !composites.has(name));
+    expect(reads.map((contract) => contract.definition.tool).sort()).toEqual(
+      [...registered].sort(),
+    );
   });
   it.each(reads.map((contract) => [contract.definition.tool, contract] as const))(
     "%s accepts a failed result with its class and guidance within the byte bound",
@@ -286,7 +356,12 @@ describe("administration is a registry fact, never inferred from one refusal (#4
 });
 
 describe("one sentence per class, from closed facts only", () => {
-  const facts = { tool: "jira.projects", argumentNames: [], administration: false } as const;
+  const facts = {
+    tool: "jira.projects",
+    argumentNames: [],
+    administration: false,
+    explained: false,
+  } as const;
   it.each([
     ["permission-denied", "permission"],
     ["field-validation", "argument"],
@@ -318,5 +393,127 @@ describe("one sentence per class, from closed facts only", () => {
     });
     expect(result?.text).toContain("projectKey");
     expect(result?.text).not.toContain("ignore");
+  });
+  it("says the exact words of two classes", () => {
+    expect(jiraReadFailureGuidance({ ...facts, reason: "permission-denied" })?.text).toBe(
+      "This read was not permitted for this Jira account or connection. Do not retry it. Tell the user in plain language that this account may not read this.",
+    );
+    expect(
+      jiraReadFailureGuidance({ ...facts, reason: "permission-denied", administration: true })
+        ?.text,
+    ).toBe(
+      "This Jira operation needs Jira administration permission, which this account does not have. Do not retry it. Tell the user in plain language that a Jira administrator has to read or share this.",
+    );
+  });
+  it("refers to messages only when the result carries some", () => {
+    const withMessages = jiraReadFailureGuidance({
+      ...facts,
+      reason: "invalid-input",
+      explained: true,
+    });
+    const without = jiraReadFailureGuidance({ ...facts, reason: "invalid-input" });
+    expect(withMessages?.text).toContain("as messages say");
+    expect(without?.text).not.toContain("messages");
+    expect(without?.text).toContain("input schema");
+  });
+  describe("stays within 380 bytes in the worst case", () => {
+    const longNames = ["a", "b", "c", "d", "e", "f"].map((letter) => letter + "x".repeat(39));
+    const readerNames = Object.keys(JIRA_READ_FAILURE_READERS);
+    it.each(["field-validation", "not-found", "invalid-input"] as const)(
+      "%s: six names of forty characters, and the fallback without the name list",
+      (reason) => {
+        for (const explained of [true, false]) {
+          const result = jiraReadFailureGuidance({
+            ...facts,
+            reason,
+            argumentNames: longNames,
+            explained,
+          });
+          expect(Buffer.byteLength(result?.text ?? "")).toBeLessThanOrEqual(GUIDANCE_MAX_BYTES);
+          // Six long names do not fit with the rest of the sentence: the list is the part that goes.
+          expect(result?.text).not.toContain("(arguments:");
+        }
+      },
+    );
+    it.each(["field-validation", "not-found", "invalid-input"] as const)(
+      "%s: every reader argument at once keeps its list and its hints",
+      (reason) => {
+        const result = jiraReadFailureGuidance({
+          ...facts,
+          reason,
+          argumentNames: readerNames,
+          explained: true,
+        });
+        expect(Buffer.byteLength(result?.text ?? "")).toBeLessThanOrEqual(GUIDANCE_MAX_BYTES);
+        if (reason !== "invalid-input")
+          expect(result?.text).toContain("jira.projects for projectKey");
+      },
+    );
+  });
+});
+
+describe("the reader table names only tools that exist (#4357)", () => {
+  // The jiraRefusalToolNames scan reads prose literals only; a bare name in a table is not prose,
+  // so this table is checked here, by exact registered name and by declared argument.
+  const readTools: ReadonlySet<string> = new Set(JIRA_MANAGED_READ_TOOLS);
+  it("points every identifier argument at a registered read tool", () => {
+    for (const [argument, reader] of Object.entries(JIRA_READ_FAILURE_READERS))
+      expect(readTools.has(reader), `${argument} -> ${reader}`).toBe(true);
+  });
+  it("keys the table by arguments some read tool declares", () => {
+    const declared = new Set(
+      jiraOperationContracts().flatMap((contract) => {
+        const properties = contract.declaration.descriptor.inputSchema.properties;
+        return typeof properties === "object" && properties !== null && !Array.isArray(properties)
+          ? Object.keys(properties)
+          : [];
+      }),
+    );
+    for (const argument of Object.keys(JIRA_READ_FAILURE_READERS))
+      expect(declared.has(argument), argument).toBe(true);
+  });
+});
+
+describe("only a failed native read gains guidance (#4357)", () => {
+  const args: CatalogJsonObject = { projectKey: "KEI" };
+  const failed = { isError: true, data: { outcome: "failed", reason: "not-found" } } as const;
+  it("leaves a failed WRITE result unchanged", () => {
+    const result = { isError: true, data: { outcome: "rejected", reason: "not-found" } } as const;
+    expect(withJiraReadFailureGuidance(jiraOperationForTool("jira.comment"), args, result)).toEqual(
+      {
+        result,
+      },
+    );
+    expect(withJiraReadFailureGuidance(jiraOperationForTool("jira.comment"), args, failed)).toEqual(
+      {
+        result: failed,
+      },
+    );
+  });
+  it("leaves a SUCCESS result unchanged", () => {
+    const result = { data: { outcome: "succeeded", items: [] } } as const;
+    expect(
+      withJiraReadFailureGuidance(jiraOperationForTool("jira.projects"), args, result),
+    ).toEqual({
+      result,
+    });
+  });
+  it("leaves a result that already carries its own guidance unchanged", () => {
+    const own = { isError: true, data: { ...failed.data, guidance: "Its own words." } } as const;
+    expect(withJiraReadFailureGuidance(jiraOperationForTool("jira.projects"), args, own)).toEqual({
+      result: own,
+    });
+  });
+  it("leaves an operation without a contract unchanged", () => {
+    expect(withJiraReadFailureGuidance(undefined, args, failed)).toEqual({ result: failed });
+  });
+  it("does gain guidance on a failed native read, as the control", () => {
+    const explained = withJiraReadFailureGuidance(
+      jiraOperationForTool("jira.projects"),
+      args,
+      failed,
+    );
+    expect(explained.class).toBe("not-found");
+    expect(explained.result.data.guidance).toEqual(expect.any(String));
   });
 });

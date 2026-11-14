@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "bf5fd7368c3eec1f9770ec05ed297326d5520ea0d1f8ed26d5417e3a07a49963",
+    "catalogDigest": "8076d24b03bf322480d8b27a1118f1d602d2cc27e7334808ff6b92e7b40a82d9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -34678,6 +34678,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -34717,8 +34719,8 @@
           }
         },
         "proofIds": ["jira.operation.avatars.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:294",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:437"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:309",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:452"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34792,6 +34794,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -34851,8 +34855,8 @@
           }
         },
         "proofIds": ["jira.operation.configuration.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:322",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:443"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:337",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:458"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34926,6 +34930,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -34983,8 +34989,8 @@
           }
         },
         "proofIds": ["jira.operation.core.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:364",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:452"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:379",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:467"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35058,6 +35064,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -35139,8 +35147,8 @@
           }
         },
         "proofIds": ["jira.operation.identities.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:280",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:434"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:295",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:449"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35214,6 +35222,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -35275,8 +35285,8 @@
           }
         },
         "proofIds": ["jira.operation.issues.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:210",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:419"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:225",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:434"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35350,6 +35360,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -35369,8 +35381,8 @@
           }
         },
         "proofIds": ["jira.operation.local.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:378",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:457"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:393",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:472"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35444,6 +35456,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -35489,8 +35503,8 @@
           }
         },
         "proofIds": ["jira.operation.maintenance.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:336",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:446"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:351",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:461"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35564,6 +35578,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -35626,8 +35642,8 @@
           }
         },
         "proofIds": ["jira.operation.metadata.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:252",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:428"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:267",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:443"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35701,6 +35717,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -35752,8 +35770,8 @@
           }
         },
         "proofIds": ["jira.operation.planning.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:224",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:422"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:239",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:437"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35827,6 +35845,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -35881,8 +35901,8 @@
           }
         },
         "proofIds": ["jira.operation.projects.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:238",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:425"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:253",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:440"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35956,6 +35976,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -36008,8 +36030,8 @@
           }
         },
         "proofIds": ["jira.operation.properties.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:308",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:440"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:323",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:455"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36083,6 +36105,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -36120,8 +36144,8 @@
           }
         },
         "proofIds": ["jira.operation.saved-views.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:350",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:449"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:365",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:464"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36195,6 +36219,8 @@
               "conflict",
               "invalid-transition",
               "field-validation",
+              "invalid-input",
+              "unsupported-deployment",
               "none",
               "other",
               "pod-not-found",
@@ -36277,8 +36303,8 @@
           }
         },
         "proofIds": ["jira.operation.schemes.line"],
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:266",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:431"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:281",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraOperationActivity.ts:446"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -119492,7 +119518,7 @@
     {
       "op": "atlassian.action.log-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:511",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:526",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -122587,79 +122613,79 @@
     {
       "op": "jira.operation.avatars",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:296",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:311",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.configuration",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:324",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:339",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.core",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:366",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:381",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.identities",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:282",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:297",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.issues",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:212",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:227",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.local",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:380",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:395",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.maintenance",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:338",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:353",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.metadata",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:254",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:269",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.planning",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:226",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:241",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.projects",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:240",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:255",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.properties",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:310",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:325",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.saved-views",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:352",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:367",
       "package": "keiko-server"
     },
     {
       "op": "jira.operation.schemes",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:268",
+      "site": "packages/keiko-server/src/atlassian/jiraOperationActivity.ts:283",
       "package": "keiko-server"
     },
     {

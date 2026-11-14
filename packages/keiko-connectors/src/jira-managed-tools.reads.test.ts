@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   JIRA_DESCRIPTION_INPUT_SCHEMA,
   JIRA_MANAGED_READ_TOOLS,
+  JIRA_MUTATION_DETAIL_LIMITS,
   type JiraManagedReadToolName,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
@@ -15,7 +16,12 @@ import type {
   ManagedMcpToolDeclaration,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { createJiraManagedProvider, type JiraManagedConnection } from "./jira-managed-tools.js";
+import {
+  JIRA_READ_GENERIC_INPUT_RULE,
+  JIRA_READ_INPUT_RULES,
+  createJiraManagedProvider,
+  type JiraManagedConnection,
+} from "./jira-managed-tools.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { field, response } from "../../../tests/support/jira-managed-remote.js";
 import { asRecord } from "./atlassian-sync-classify.js";
@@ -308,6 +314,32 @@ it.each([
     expect(f.http).not.toHaveBeenCalled();
   },
 );
+
+// The exact rule text one case says (#4357): a pin that still fails when the sentence changes by accident.
+it("says the exact rule when jira.assignable-users is called without a scope", async () => {
+  const f = fixture({});
+  expect(await f.run("jira.assignable-users", { query: "ann" })).toEqual({
+    data: {
+      outcome: "failed",
+      reason: "invalid-input",
+      messages: [
+        "Pass exactly one of projectKey or issueKey, optionally with query. Do not pass both.",
+      ],
+    },
+    isError: true,
+  });
+});
+
+it("keeps every pre-dispatch rule inside the 200-byte message bound", () => {
+  for (const [tool, rule] of [
+    ...Object.entries(JIRA_READ_INPUT_RULES),
+    ["generic", JIRA_READ_GENERIC_INPUT_RULE],
+  ]) {
+    expect(Buffer.byteLength(JSON.stringify(rule)), tool).toBeLessThanOrEqual(
+      JIRA_MUTATION_DETAIL_LIMITS.messageBytes,
+    );
+  }
+});
 
 it.each([
   [401, "auth-failed"],
