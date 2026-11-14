@@ -130,7 +130,7 @@ describe("every effect of a Code Mode program reaches the native policy", () => 
 
   // HELD, not changed (#4359): the owner agreed to drop the program card if every effect of a
   // program is decided on its own. A live run (2026-11-14, Ask for approval and Full access,
-  // OpenCode 2.2.5) showed one that is not: a `fetch` inside a program produced no `webfetch`
+  // OpenCode 2.1.4, the payload of the installed runtime package) showed one that is not: a `fetch` inside a program produced no `webfetch`
   // decision line at all (in Full access it reached the open internet; below Full access only the
   // kernel's egress rule stopped it). Until `fetch` is decided, the program keeps its card.
   it("keeps asking for the program itself below Full access", () => {

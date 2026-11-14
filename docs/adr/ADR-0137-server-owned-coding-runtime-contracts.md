@@ -1324,11 +1324,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   **A `fetch` inside an admitted program is NOT known to be decided (#4359).** With a probe plugin
   and the policy plugin absent, the pinned runtime emits `permission.evaluate:webfetch` for it
   (`opencodeNativeProjectBoundary.real.test.ts`, no `tool.execute.before` for the nested `fetch`).
-  In Keiko's own composition (OpenCode 2.2.5, 2026-11-14) a program's `fetch` produced no
+  In Keiko's own composition on OpenCode 2.1.4 (the payload of the installed runtime package; 2026-11-14) a program's `fetch` produced no
   `webfetch` decision line in Ask for approval or Full access; the runtime records it only as a
   nested tool call (`fetch`, `{method, url}`) and `tool.hook("execute.before")` does not govern it
   (`opencodeNativePolicyPlugin.ts`, `CODE_MODE_GOVERNED`). Until that is resolved nothing decides a
-  program's `fetch` but the program card and the kernel egress rule. What a program's `fetch` can
+  program's `fetch` but the program card and the kernel egress rule on that version. The `since OpenCode 2.2` claim above has not been disproved for 2.2.5 (not yet run live: the installed runtime package still carries 2.1.4, which stays an approved pin until a package with 2.2.5 is published), so a drop of the card would have to depend on the runtime version. What a program's `fetch` can
   reach today: **Ask for approval and Supervised workspace:** loopback only (the kernel's egress
   rule refuses every other address; DNS fails, observed as `ENOTFOUND`/`EPERM`), and only after
   the program card is approved. **Full access:** the open internet (observed: a page of

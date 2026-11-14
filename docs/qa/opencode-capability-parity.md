@@ -443,7 +443,7 @@ these rows:
   the widest mode (`opencodeNativeQualification.real.test.ts`).
 - **T21: `fetch` in Code Mode.** Claimed: a `fetch` inside an admitted program asserts the
   `webfetch` permission, so the policy decides it like the ordinary tool. Observed live (2026-11-14,
-  #4359, OpenCode 2.2.5): no `webfetch` decision line appeared for a program's `fetch`; only the
+  #4359, OpenCode 2.1.4): no `webfetch` decision line appeared for a program's `fetch`; only the
   kernel boundary (`opencodeNativeProjectBoundary.real.test.ts`) stands underneath. Under review.
 - **C02: `/goal` is withheld.** The new goal plugin starts model turns on its own. It stays out by
   owner decision (2026-11-06, #4271). The real-binary inventory suite proves it absent under Keiko's
