@@ -631,12 +631,12 @@ export function isCurrentJiraOperationBinding(
 function recordProviderResult(
   correlationId: string,
   operation: JiraManagedReadToolName | JiraMutationOperation,
-  failed: boolean,
+  outcome: "completed" | "failed",
 ): void {
   // The release switch refused it: the one line names that, not a generic tool failure.
-  if (failed && !jiraOperationInReleaseScope(operation))
+  if (outcome === "failed" && !jiraOperationInReleaseScope(operation))
     recordJiraReleaseScopeRefusal(correlationId, operation);
-  else recordJiraProviderCall(correlationId, operation, failed ? "failed" : "completed");
+  else recordJiraProviderCall(correlationId, operation, outcome);
 }
 
 /** Canonical descriptors are built by the server; the connector owns only Jira behavior. */
@@ -677,7 +677,11 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
             recordJiraProviderCall(args[1].correlationId, operation, "failed");
             throw error;
           }
-          recordProviderResult(args[1].correlationId, operation, result.isError === true);
+          recordProviderResult(
+            args[1].correlationId,
+            operation,
+            result.isError === true ? "failed" : "completed",
+          );
           // Provider response content never chooses the operation or its contract authority.
           return { ...result, data: { ...result.data, operationBinding: binding } };
         },
