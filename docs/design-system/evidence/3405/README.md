@@ -626,3 +626,12 @@ nine-case producer ran in the Linux arm64 gates container (Node 24.18.0): all ni
 catalog digests and `generatedAt` in the three records were taken from this run; its fallback-font
 captures were discarded and the 14 committed captures are unchanged. No updater behavior, fixture,
 assertion or numerical ceiling changed. This remains updater fixture evidence.
+
+## Windows local-volume refusal and update reasons — 2026-11-14 (#4358, #4351)
+
+The update copy and window gained the typed Windows local-volume verdict and its two closed update
+reasons with English and German texts, so the freshness gate rejected the changed digests. The
+complete original nine-case producer ran in the Linux arm64 gates container (Node 24.18.0): all nine
+passed. Only the source digests and `generatedAt` in the three records were taken from this run; its
+fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
+behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
