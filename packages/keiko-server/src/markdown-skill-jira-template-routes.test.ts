@@ -3,7 +3,10 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseJiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
+import {
+  JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX,
+  type AtlassianHttpBodyPort,
+} from "@oscharko-dev/keiko-connectors";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import {
@@ -20,7 +23,14 @@ import {
 import { API_ROUTES, matchRoute, type RouteContext } from "./routes.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { UiStore } from "./store/types.js";
-import { field, response } from "../../../tests/support/jira-managed-remote.js";
+import { REQUIRED_CUSTOM, field, response } from "../../../tests/support/jira-managed-remote.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const PRINCIPAL = "operator-principal";
@@ -189,6 +199,7 @@ function context(cookie: string, body: unknown = {}, id = ""): RouteContext {
 
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
+  resetServerLogger();
 });
 
 describe("template documents in the skill library", () => {
@@ -436,5 +447,223 @@ describe("propose from an existing project", () => {
       (await handleProposeJiraTemplates(context(cookie, { podId: POD, projectKey: "NOPE" }), deps))
         .status,
     ).toBe(404);
+  });
+});
+
+// #4354 F04: "Propose from project" dropped every type it could derive nothing for, without a word.
+// The route answers for EVERY issue type: a proposal, or one closed reason, and the count.
+function accountingGet(request: { readonly url: string }): ReturnType<AtlassianHttpBodyPort> {
+  const url = new URL(request.url);
+  const { pathname } = url;
+  if (pathname.endsWith("/project/ACC"))
+    return Promise.resolve(
+      response({
+        id: "20000",
+        key: "ACC",
+        issueTypes: [
+          { id: "1", name: "Task" },
+          { id: "2", name: "Epic" },
+          { id: "3", name: "Bug" },
+          { id: "4", name: "Sub-task", subtask: true },
+        ],
+      }),
+    );
+  const meta = /createmeta\/20000\/issuetypes\/(\d+)$/u.exec(pathname);
+  if (meta !== null) {
+    if (meta[1] === "3") return Promise.resolve(response({}, 403));
+    const values = [
+      field("summary", "string", true),
+      ...(meta[1] === "1" ? [REQUIRED_CUSTOM] : []),
+    ];
+    return Promise.resolve(
+      response({ values, startAt: 0, maxResults: 100, isLast: true, total: values.length }),
+    );
+  }
+  if (pathname.endsWith("/search")) {
+    const jql = url.searchParams.get("jql") ?? "";
+    if (jql.includes("issuetype = 3 ")) return Promise.resolve(response({}, 403));
+    const sample = jql.includes("issuetype = 1 ")
+      ? [
+          { fields: { description: "h2. Context\nA\nh2. Acceptance criteria\nB" } },
+          { fields: { description: "h2. Context\nC\nh2. Acceptance criteria\nD" } },
+        ]
+      : [];
+    return Promise.resolve(response({ issues: sample }));
+  }
+  return Promise.resolve(response({}, 404));
+}
+
+describe("a proposal accounts for every issue type of the project (#4354 F04)", () => {
+  it("answers with a proposal or a closed reason per type, and the count", async () => {
+    const { deps, cookie, http } = fixture();
+    http.mockImplementation(accountingGet);
+    const result = await handleProposeJiraTemplates(
+      context(cookie, { podId: POD, projectKey: "ACC" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      proposals: { issueType: string }[];
+      withoutProposal: { issueType: string; reason: string }[];
+      typeCount: number;
+    };
+    expect(body.typeCount).toBe(4);
+    expect(body.proposals.map((proposal) => proposal.issueType)).toEqual(["Task"]);
+    expect(body.withoutProposal).toEqual([
+      { issueType: "Epic", reason: "nothing-to-learn" },
+      { issueType: "Bug", reason: "jira-unavailable" },
+      { issueType: "Sub-task", reason: "nothing-to-learn" },
+    ]);
+    expect(body.proposals.length + body.withoutProposal.length).toBe(body.typeCount);
+  });
+
+  it("records the accounting as counts per closed reason on the existing operation, without a name", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const { deps, cookie, http } = fixture();
+    http.mockImplementation(accountingGet);
+    await handleProposeJiraTemplates(context(cookie, { podId: POD, projectKey: "ACC" }), deps);
+    const completed = sink.events.find(
+      (event) =>
+        event.op === "skills.library.operation" &&
+        event.extra?.action === "jira-template-propose" &&
+        event.extra.phase === "completed",
+    );
+    expect(completed?.extra).toMatchObject({
+      typeCount: 4,
+      proposalCount: 1,
+      nothingToLearnCount: 2,
+      templateInvalidCount: 0,
+      jiraUnavailableCount: 1,
+      beyondLimitCount: 0,
+    });
+    const line = formatActivityLogProofLine(completed ?? {});
+    expectActivityLogProof("skills.library.operation.lifecycle", line);
+    expect(line).not.toMatch(/Task|Epic|Bug|Sub-task|ACC/u);
+  });
+});
+
+// #4354 F04 follow-up: a kept proposal one Jira read did not answer for must say so, and a very wide
+// project must not make the response or the line grow with its type count.
+function partialGet(request: { readonly url: string }): ReturnType<AtlassianHttpBodyPort> {
+  const url = new URL(request.url);
+  const { pathname } = url;
+  if (pathname.endsWith("/project/PAR"))
+    return Promise.resolve(
+      response({
+        id: "30000",
+        key: "PAR",
+        issueTypes: [
+          { id: "1", name: "Task" },
+          { id: "2", name: "Story" },
+          { id: "3", name: "Bug" },
+        ],
+      }),
+    );
+  const meta = /createmeta\/30000\/issuetypes\/(\d+)$/u.exec(pathname);
+  if (meta !== null) {
+    // Task: Jira refuses the create metadata; the shared sections still support a proposal.
+    if (meta[1] === "1") return Promise.resolve(response({}, 403));
+    const values = [field("summary", "string", true), REQUIRED_CUSTOM];
+    return Promise.resolve(
+      response({ values, startAt: 0, maxResults: 100, isLast: true, total: values.length }),
+    );
+  }
+  if (pathname.endsWith("/search")) {
+    const jql = url.searchParams.get("jql") ?? "";
+    // Story: the sample search is refused; its required field still supports a proposal.
+    if (jql.includes("issuetype = 2 ")) return Promise.resolve(response({}, 403));
+    const sample = jql.includes("issuetype = 1 ")
+      ? [
+          { fields: { description: "h2. Context\nA\nh2. Acceptance criteria\nB" } },
+          { fields: { description: "h2. Context\nC\nh2. Acceptance criteria\nD" } },
+        ]
+      : [];
+    return Promise.resolve(response({ issues: sample }));
+  }
+  return Promise.resolve(response({}, 404));
+}
+function wideGet(request: { readonly url: string }): ReturnType<AtlassianHttpBodyPort> {
+  const { pathname } = new URL(request.url);
+  if (pathname.endsWith("/project/WID"))
+    return Promise.resolve(
+      response({
+        id: "40000",
+        key: "WID",
+        issueTypes: Array.from({ length: 150 }, (_, index) => ({
+          id: String(index + 1),
+          name: `Type ${String(index + 1)}`,
+        })),
+      }),
+    );
+  if (pathname.includes("createmeta")) {
+    const values = [field("summary", "string", true)];
+    return Promise.resolve(
+      response({ values, startAt: 0, maxResults: 100, isLast: true, total: values.length }),
+    );
+  }
+  return Promise.resolve(response({ issues: [] }));
+}
+
+describe("a partial proposal says so, and the list without a proposal stays bounded (#4354 F04)", () => {
+  it("marks each kept proposal with the read Jira did not answer, and the log counts them", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const { deps, cookie, http } = fixture();
+    http.mockImplementation(partialGet);
+    const result = await handleProposeJiraTemplates(
+      context(cookie, { podId: POD, projectKey: "PAR" }),
+      deps,
+    );
+    const body = result.body as {
+      proposals: { issueType: string; partial?: string }[];
+      withoutProposal: unknown[];
+    };
+    expect(body.proposals.map(({ issueType, partial }) => [issueType, partial])).toEqual([
+      ["Task", "required-fields-unavailable"],
+      ["Story", "samples-unavailable"],
+      ["Bug", undefined],
+    ]);
+    expect(body.withoutProposal).toEqual([]);
+    const completed = sink.events.find(
+      (event) =>
+        event.op === "skills.library.operation" &&
+        event.extra?.action === "jira-template-propose" &&
+        event.extra.phase === "completed",
+    );
+    expect(completed?.extra).toMatchObject({ proposalCount: 3, partialProposalCount: 2 });
+  });
+
+  it("lists a bounded number of types by name and counts the rest exactly", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const { deps, cookie, http } = fixture();
+    http.mockImplementation(wideGet);
+    const result = await handleProposeJiraTemplates(
+      context(cookie, { podId: POD, projectKey: "WID" }),
+      deps,
+    );
+    const body = result.body as {
+      withoutProposal: { issueType: string }[];
+      withoutProposalMoreCount: number;
+      proposals: unknown[];
+      typeCount: number;
+    };
+    expect(body.typeCount).toBe(150);
+    expect(body.proposals).toEqual([]);
+    expect(body.withoutProposal).toHaveLength(JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX);
+    expect(body.withoutProposalMoreCount).toBe(150 - JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX);
+    // The log keeps counting every type, not only the listed ones.
+    const completed = sink.events.find(
+      (event) =>
+        event.op === "skills.library.operation" &&
+        event.extra?.action === "jira-template-propose" &&
+        event.extra.phase === "completed",
+    );
+    expect(completed?.extra).toMatchObject({
+      typeCount: 150,
+      nothingToLearnCount: 12,
+      beyondLimitCount: 138,
+    });
   });
 });

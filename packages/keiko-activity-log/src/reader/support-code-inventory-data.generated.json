@@ -1351,6 +1351,7 @@
     "keiko-server/_support",
     "keiko-server/abort-race",
     "keiko-server/activity-line-fields",
+    "keiko-server/activity-log-field-shapes",
     "keiko-server/activityLogCapture.test-support",
     "keiko-server/agent-run-governance",
     "keiko-server/assistant-response",

@@ -599,6 +599,7 @@
 }
 .cmpProposals li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -606,6 +607,11 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);
   background: var(--surface-secondary);
+}
+/* A note about a proposal (a Jira read that did not answer) takes its own line under the row. */
+.cmpProposalNote {
+  flex-basis: 100%;
+  color: var(--text-secondary);
 }
 
 @media (max-width: 900px) {

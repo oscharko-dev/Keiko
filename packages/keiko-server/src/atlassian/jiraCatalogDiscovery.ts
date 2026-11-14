@@ -245,7 +245,7 @@ function matching(options: DiscoveryOptions, query: string): readonly Summary[] 
  * other search, over the operations the release scope withholds.
  */
 export const JIRA_OUT_OF_RELEASE_GUIDANCE =
-  "This search names an operation that is not part of this release, so no tool for it exists here, whatever else the list holds. Do not use another tool in its place: tell the user it is not available in this release and can be done in Jira itself.";
+  "This search names an operation that is not part of this release, so no tool for it exists here, whatever else the list holds. Do not use another tool in its place: tell the user it is not available in this release; they can do it in Jira itself, or you can describe the file in a comment instead.";
 function topScore(entries: readonly Candidate[], terms: readonly string[]): number {
   return entries.reduce((best, entry) => Math.max(best, scoreOf(entry, terms)), 0);
 }
@@ -502,7 +502,7 @@ function discoveryDescriptor(
   const descriptor = createToolDescriptor({
     toolRef: createToolRef(`keiko.${name}`, 2),
     description: discovery
-      ? "Search the Jira Data Center operations that are not offered directly. This reads local catalog metadata, not Jira data. Use it whenever no offered tool does what was asked, before answering that it cannot be done. Pass a short query of plain English operation words, such as who am I, project statuses, watch issue or create project; each hit has a one-line description. Phrase a request given in another language in these English words. Page until the operation is found, then use jira.describe to load its typed tool."
+      ? "Search the Jira Data Center operations that are not offered directly. This reads local catalog metadata, not Jira data. Use it whenever no offered tool does what was asked, before answering that it cannot be done. Two requests are not available yet and need no search: attaching a file (offer to describe it in a comment) and adding another person as a watcher (offer to watch the issue yourself). Pass a short query of plain English operation words, such as who am I, project statuses, watch issue or create project; each hit has a one-line description. Phrase a request given in another language in these English words. Page until the operation is found, then use jira.describe to load its typed tool."
       : "Select additional native Jira operations by the identity or the tool name that jira.discover returned (jira.priorities and jira_priorities name the same operation). Curated Jira tools stay available. Replaces the additional selected tool set for the next rounds of this turn. Typed argument schemas are offered there subject to current authority and budgets. Include all additional operations needed together. An empty list clears the additional selection. Unknown identities or a subset exceeding the model or authority budget are refused without truncation.",
     inputSchema: discovery
       ? object({
