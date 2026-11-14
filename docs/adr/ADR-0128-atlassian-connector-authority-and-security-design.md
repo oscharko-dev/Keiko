@@ -693,7 +693,12 @@ per window; a rejected or inconclusive result is never cached and a new generati
 inherits a window. `atlassian.connection.checked` carries the closed `decision`
 (`identity-route`, `probe`, `probe-window`) and `routeClass` (`identity`, `other`) so a discard
 decided by the probe is distinguishable from the identity route's own 401, and the closed outcome
-`probe-inconclusive` records an unsettled probe.
+`probe-inconclusive` records an unsettled probe. A token replacement invalidates the Pod's
+verification at the one custody point; the card then runs the existing verify route at once with the
+closed trigger `replace-token`, which the same operation records as `action=verify-after-replace`
+(a check that cannot run leaves the saved Pod plainly unverified, #4353). A rename invalidates
+nothing and verifies nothing; the URL and the certificate authority are not editable on an existing
+Pod, so no other edit needs this rule.
 
 Only a 401 that Jira itself authored can show a rejected token. Jira behind a corporate single
 sign-on proxy answers 401 for every request, `myself` included, once the proxy session ends, and a

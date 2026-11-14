@@ -45,7 +45,9 @@ function client(overrides: Partial<AtlassianConnectorsClient> = {}): AtlassianCo
     ...overrides,
   };
 }
-function rotated(): AtlassianConnectorMetadata {
+function rotatedWith(
+  status: "unverified" | "ok" | "auth-failed" | "tls-failed",
+): AtlassianConnectorMetadata {
   if (LIVE.deployment !== "data-center" || LIVE.livePod === undefined)
     throw new Error("Invalid fixture");
   return {
@@ -55,9 +57,12 @@ function rotated(): AtlassianConnectorMetadata {
       ...LIVE.livePod,
       authenticationGeneration: 2,
       verificationRevision: 2,
-      verificationStatus: "unverified" as const,
+      verificationStatus: status,
     },
   };
+}
+function rotated(): AtlassianConnectorMetadata {
+  return rotatedWith("unverified");
 }
 async function podAction(name: string, menu = "More actions: Lab Jira"): Promise<void> {
   await userEvent.click(await screen.findByRole("button", { name: menu }));
@@ -249,10 +254,12 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
       expectedGeneration: 1,
       displayName: "Renamed Jira",
     });
+    // A rename leaves the verification intact, so nothing is verified afterwards (#4353).
+    expect(api.verifyConnector).not.toHaveBeenCalled();
     expect(screen.getByTestId("acx-connector")).toHaveAttribute("data-auth-ref", LIVE.authRef);
     expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();
   });
-  it("clears a replacement PAT at dispatch, prevents duplicates and shows that verification is required", async () => {
+  it("clears a replacement PAT at dispatch and prevents duplicates while the replacement is saved", async () => {
     let finish: ((value: AtlassianConnectorMetadata) => void) | undefined;
     const api = client({
       updateConnector: vi.fn(
@@ -274,14 +281,134 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
     await act(async () => {
       finish?.(rotated());
     });
-    expect(await screen.findByText("Verify the connection before using this Pod.")).toBeVisible();
+    expect(await screen.findByTestId("acx-verify-status")).toHaveTextContent("Connection verified");
     expect(screen.queryByLabelText("New API token")).toBeNull();
-    expect(screen.queryByText("Connection verified")).toBeNull();
     expect(api.updateConnector).toHaveBeenCalledWith(LIVE.authRef, {
       expectedGeneration: 1,
       apiToken: "synthetic-replacement-pat",
     });
   });
+  async function submitReplacement(api: AtlassianConnectorsClient): Promise<void> {
+    render(<AtlassianConnectorsPanel client={api} jiraLive />);
+    await podAction("Replace token");
+    await userEvent.type(screen.getByLabelText("New API token"), "synthetic-replacement-pat");
+    await userEvent.click(screen.getByRole("button", { name: "Save token" }));
+  }
+  it("verifies a replaced token at once through the existing verify path and shows the true state at each moment (#4353)", async () => {
+    let finish: ((value: { authRef: string; status: "ok" }) => void) | undefined;
+    const api = client({
+      listConnectors: vi
+        .fn()
+        .mockResolvedValueOnce([LIVE])
+        .mockResolvedValue([rotatedWith("ok")]),
+      updateConnector: vi.fn(async () => rotated()),
+      verifyConnector: vi.fn(
+        () =>
+          new Promise<{ authRef: string; status: "ok" }>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    });
+    await submitReplacement(api);
+    // The saved token is never presented as an unverified Pod the person must notice and repair:
+    // the card says it is verifying, and nothing else, until the check ends.
+    expect(await screen.findByTestId("acx-pod-state")).toHaveTextContent("Verifying…");
+    expect(screen.queryByText("Verify the connection before using this Pod.")).toBeNull();
+    expect(api.verifyConnector).toHaveBeenCalledExactlyOnceWith(LIVE.authRef, {
+      trigger: "replace-token",
+    });
+    await act(async () => {
+      finish?.({ authRef: LIVE.authRef, status: "ok" });
+    });
+    expect(await screen.findByTestId("acx-verify-status")).toHaveTextContent("Connection verified");
+    expect(screen.queryByText("Verify the connection before using this Pod.")).toBeNull();
+    expect(api.updateConnector).toHaveBeenCalledOnce();
+    expect(api.verifyConnector).toHaveBeenCalledOnce();
+  });
+  it("leaves a Pod whose replaced token failed verification plainly unverified with its repair action (#4353)", async () => {
+    const api = client({
+      listConnectors: vi
+        .fn()
+        .mockResolvedValueOnce([LIVE])
+        .mockResolvedValue([rotatedWith("auth-failed")]),
+      updateConnector: vi.fn(async () => rotated()),
+      verifyConnector: vi.fn(async () => ({
+        authRef: LIVE.authRef,
+        status: "auth-failed" as const,
+      })),
+    });
+    await submitReplacement(api);
+    const card = await screen.findByTestId("acx-connector");
+    expect(await within(card).findByText("Authentication failed")).toBeVisible();
+    expect(card).toHaveTextContent("The token was rejected.");
+    expect(within(card).getByRole("button", { name: "Verify connection" })).toHaveClass(
+      "lk-btn-primary",
+    );
+  });
+  it("keeps the saved replacement visible as not verified when the follow-up check itself cannot run (#4353)", async () => {
+    const diagnostic = vi.spyOn(diagnostics, "reportClientDiagnostic");
+    const api = client({
+      listConnectors: vi.fn().mockResolvedValueOnce([LIVE]).mockResolvedValue([rotated()]),
+      updateConnector: vi.fn(async () => rotated()),
+      verifyConnector: vi.fn(async () => {
+        throw new ApiError("INTERNAL", "synthetic", 500);
+      }),
+    });
+    await submitReplacement(api);
+    const card = await screen.findByTestId("acx-connector");
+    expect(await within(card).findByText("Not verified yet")).toBeVisible();
+    expect(within(card).getByRole("button", { name: "Verify connection" })).toBeVisible();
+    expect(api.updateConnector).toHaveBeenCalledOnce();
+    expect(diagnostic).toHaveBeenCalledWith(
+      "Connector operation failed.",
+      expect.objectContaining({ kind: "other" }),
+    );
+  });
+  it.each([
+    {
+      locale: "en" as const,
+      menu: "More actions: Lab Jira",
+      sentence:
+        "This Pod stays saved but cannot be used yet. Fix the certificate setting and verify again, or remove the Pod.",
+    },
+    {
+      locale: "de" as const,
+      menu: "Weitere Aktionen: Lab Jira",
+      sentence:
+        "Der Pod bleibt gespeichert, kann aber noch nicht genutzt werden. Korrigiere die Zertifikatseinstellung und verifiziere erneut, oder entferne den Pod.",
+    },
+  ])(
+    "tells a Pod that failed on the certificate what that means and the two ways out, in $locale (#4353)",
+    async ({ locale, menu, sentence }) => {
+      await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+      window.localStorage.setItem("keiko.locale", locale);
+      const failed = rotatedWith("tls-failed");
+      const { container, unmount } = render(
+        <I18nProvider>
+          <AtlassianConnectorsPanel
+            client={client({ listConnectors: vi.fn(async () => [failed]) })}
+            jiraLive
+          />
+        </I18nProvider>,
+      );
+      try {
+        const card = await screen.findByTestId("acx-connector");
+        // The entry stays, with its repair action, and the way out names both exits in one sentence
+        // that never suggests turning verification off.
+        expect(card).toHaveTextContent(sentence);
+        expect(sentence).not.toMatch(/turn|off|disable|abschalt|deaktivier/iu);
+        expect(within(card).getByTestId("acx-pod-state")).toBeVisible();
+        expect(within(card).getByTestId("acx-verify-status")).toBeEmptyDOMElement();
+        await userEvent.click(await screen.findByRole("button", { name: menu }));
+        expect(screen.getAllByRole("menuitem").length).toBeGreaterThanOrEqual(2);
+        expect(await axe(container)).toHaveNoViolations();
+      } finally {
+        unmount();
+        window.localStorage.removeItem("keiko.locale");
+        document.documentElement.lang = "en";
+      }
+    },
+  );
   it("does not restore readiness from a late verification reply after token rotation", async () => {
     let finish: ((value: { authRef: string; status: "ok" }) => void) | undefined;
     const api = client({

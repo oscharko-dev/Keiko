@@ -63,15 +63,27 @@ function StatusChip({ state }: { readonly state: LivePodState }): ReactNode {
   );
 }
 
+// What a failed check means for the Pod and the two ways out. A certificate refusal never fixes
+// itself and its own remedy is a setting outside the card, so the saved entry says what it is.
+function useFailureGuidance(status: AtlassianConnectorVerifyStatus): string {
+  const t = useTranslate();
+  const copy = t(verifyStatusCopyKey(status));
+  return status === "tls-failed"
+    ? `${copy} ${t("atlassianConnectors.live.tlsFailed.wayOut")}`
+    : copy;
+}
+
+function FailedHint({ status }: { readonly status: AtlassianConnectorVerifyStatus }): ReactNode {
+  return (
+    <p className="acx-hint" aria-hidden="true">
+      {useFailureGuidance(status)}
+    </p>
+  );
+}
+
 function StatusHint({ state }: { readonly state: LivePodState }): ReactNode {
   const t = useTranslate();
-  if (state.kind === "failed") {
-    return (
-      <p className="acx-hint" aria-hidden="true">
-        {t(verifyStatusCopyKey(state.status))}
-      </p>
-    );
-  }
+  if (state.kind === "failed") return <FailedHint status={state.status} />;
   if (state.kind === "unknown") {
     return <p className="acx-hint">{t("atlassianConnectors.live.refreshRequired")}</p>;
   }
@@ -104,11 +116,10 @@ function useCheckedStatus(state: LivePodState): AtlassianConnectorVerifyStatus |
 function VerifyAnnouncement({ state }: { readonly state: LivePodState }): ReactNode {
   const t = useTranslate();
   const status = useCheckedStatus(state);
+  const guidance = useFailureGuidance(status ?? "ok");
   return (
     <output className="sr-only" data-status={status} data-testid="acx-verify-status">
-      {status === undefined
-        ? null
-        : `${t(verifyStatusLabelKey(status))}. ${t(verifyStatusCopyKey(status))}`}
+      {status === undefined ? null : `${t(verifyStatusLabelKey(status))}. ${guidance}`}
     </output>
   );
 }

@@ -29,6 +29,15 @@ interface OperationResult {
     failure?: (error: unknown) => string,
   ) => void;
 }
+/** The one body-free client record of a failed connector request. */
+export function reportConnectorFailure(error: unknown): void {
+  reportClientDiagnostic("Connector operation failed.", {
+    kind: "other",
+    correlationId: error instanceof ApiError ? error.correlationId : undefined,
+    errorKind: bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+  });
+}
 const INVALIDATING_OPERATIONS = new Set<ConnectorOperation>(["verify", "rotate", "delete"]);
 async function execute<T>(input: {
   readonly owner: Owner;
@@ -46,12 +55,7 @@ async function execute<T>(input: {
       publish(() => ({ key, unconfirmed: false }));
     }
   } catch (error) {
-    reportClientDiagnostic("Connector operation failed.", {
-      kind: "other",
-      correlationId: error instanceof ApiError ? error.correlationId : undefined,
-      errorKind: bffRequestErrorKind(error),
-      errorEvidence: clientErrorEvidence(error),
-    });
+    reportConnectorFailure(error);
     if (owner.active)
       publish((current) => ({
         key,

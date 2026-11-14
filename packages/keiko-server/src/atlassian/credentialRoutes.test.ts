@@ -2027,6 +2027,60 @@ describe("authenticated Live Pod credential updates", () => {
     expect(lines.join("\n")).not.toContain(SYNTHETIC_TOKEN);
   });
 
+  it("records the verification that follows a token replacement as its own action, once, body-free (#4353)", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    await rebuild({
+      ...wiring,
+      activityLog: sink,
+      httpBodyPortFactory:
+        () =>
+        (request): Promise<AtlassianHttpBodyResult> =>
+          Promise.resolve(jiraProbeResponse(request)),
+    });
+    try {
+      expect(
+        (
+          await updateJiraCredential(credential.authRef, {
+            expectedGeneration: 1,
+            apiToken: `${SYNTHETIC_TOKEN}-replacement`,
+          })
+        ).status,
+      ).toBe(200);
+      const followUp = await fetch(
+        `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(credential.authRef)}/verify`,
+        {
+          method: "POST",
+          headers: csrfHeaders(),
+          body: JSON.stringify({ trigger: "replace-token" }),
+        },
+      );
+      expect(await followUp.json()).toEqual({ authRef: credential.authRef, status: "ok" });
+      // An ordinary explicit verification keeps its own action: only the closed trigger changes it.
+      expect((await verifyCredentialRequest(credential.authRef)).status).toBe(200);
+      const events = readVerificationEvidence(sink).filter((event) => event.action !== undefined);
+      expect(events.map((event) => event.action)).toEqual(["verify-after-replace", "verify"]);
+      expect(events[0]).toMatchObject({ outcome: "ok", verificationState: "applied" });
+      expect(JSON.stringify(events)).not.toContain(SYNTHETIC_TOKEN);
+      expect(JSON.stringify(events)).not.toContain(credential.authRef);
+    } finally {
+      sink.close?.();
+    }
+  });
+
+  it("refuses an unknown verification trigger before any probe is dispatched (#4353)", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    fakePortRequests.length = 0;
+    for (const trigger of ["anything", 1, null, {}]) {
+      const response = await fetch(
+        `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(credential.authRef)}/verify`,
+        { method: "POST", headers: csrfHeaders(), body: JSON.stringify({ trigger }) },
+      );
+      expect(response.status).toBe(400);
+    }
+    expect(fakePortRequests).toHaveLength(0);
+  });
+
   it("refuses foreign Pod updates and malformed bodies without changing custody", async () => {
     const credential = credentialForPod(await readyJiraPod());
     activePrincipal = "another-operator";

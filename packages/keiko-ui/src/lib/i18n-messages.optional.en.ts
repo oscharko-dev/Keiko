@@ -931,7 +931,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.saveToken": "Save token",
   "atlassianConnectors.live.saving": "Saving changes…",
   "atlassianConnectors.live.rotateHint":
-    "The Pod and its Chat connections stay. Replacing the token stops current access and pending actions; verify the connection again afterwards.",
+    "The Pod and its Chat connections stay. Replacing the token stops current access and pending actions; Keiko verifies the new token right away.",
   "atlassianConnectors.live.operationFailed":
     "The operation could not be confirmed. Refresh the Pod status before making another change.",
   "atlassianConnectors.live.refresh": "Refresh status",
@@ -940,6 +940,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.state.ready": "Ready",
   "atlassianConnectors.live.refreshRequired": "Refresh the status before using this Pod.",
   "atlassianConnectors.live.verifyRequired": "Verify the connection before using this Pod.",
+  "atlassianConnectors.live.tlsFailed.wayOut":
+    "This Pod stays saved but cannot be used yet. Fix the certificate setting and verify again, or remove the Pod.",
   "atlassianConnectors.live.remove": "Remove Pod",
   "atlassianConnectors.live.keep": "Keep Pod",
   "atlassianConnectors.live.removeConfirm":
