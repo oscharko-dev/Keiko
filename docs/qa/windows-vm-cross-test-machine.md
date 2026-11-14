@@ -706,18 +706,21 @@ to send Apple events to UTM. (-1743)`. UTM is sandboxed and writes the exported 
    for i in $(seq 1 30); do (sleep 0.2; echo "sendkey spc"; sleep 0.3) | nc -w 1 127.0.0.1 55577 >/dev/null; sleep 0.5; done
    python3 -I "$W/bin/vncshot.py" 127.0.0.1 5977 "$W/shot.png"   # expect: ok <width> <height>
    ```
-   The loop presses space for about a minute (30 calls, about two seconds each) so the Windows CD boot loader ("Press any key to boot
+   The loop presses space for about 40 seconds (30 calls) so the Windows CD boot loader ("Press any key to boot
    from CD or DVD") continues once, at the start. **Do not press keys afterwards.** Setup restarts the
    machine itself; the Windows ISO stays first in the boot order, so each later boot shows the same
    prompt for a few seconds, and leaving it alone lets the machine fall through to the system disk and
    continue Setup (pressing a key there would start Setup from the beginning, a loop). If the first
    screenshot shows the UEFI shell instead, send `"$W/bin/mon.sh" system_reset` and repeat the loop.
    Take a screenshot every five minutes and compare: Setup shows its progress screens ("Getting
-   ready", "Working on updates", the restart countdown) and, **after about 15 minutes**, a desktop
-   with a taskbar and the first-logon script's window. Two screenshots in a row of the language or
+   ready", "Working on updates", the restart countdown; the first screenshot, 40 seconds after the
+   start, already showed "Installing Windows 11, 19 % complete") and, **after about 5 minutes on an M4
+   Max (the first build needed 15)**, a desktop with a taskbar and the first-logon script's window, which
+   closes itself after about three more minutes. The Start menu may be open on that desktop; it does no
+   harm. The desktop shows "Windows License is expired" until step 9. Two screenshots in a row of the language or
    "Install now" page, or a Setup that has started over after 25 minutes, mean a loop: stop and
-   report. The guest has no network yet. The after-reboot behaviour is the first build's, **not yet
-   run** on a rebuild.
+   report. The guest has no network yet. Run on a rebuild: no key was pressed after the loop and Setup
+   continued by itself through its restarts.
 8. **Network driver.** Stop the machine, attach the tools ISO and move the adapter.
    ```sh
    utmctl stop "$VM" --request; waitstopped                 # expect no message
@@ -748,14 +751,18 @@ to send Apple events to UTM. (-1743)`. UTM is sandboxed and writes the exported 
    (`python3 -I "$W/bin/vmkeys.py" --keys alt-y`) and take a screenshot: a second, administrator
    PowerShell window must be in front. Then:
    ```sh
-   typeline 'pnputil /add-driver D:\Drivers\NetKVM\w11\ARM64\netkvm.inf /install'
+   typeline 'pnputil /add-driver F:\Drivers\NetKVM\w11\ARM64\netkvm.inf /install'
    typeline 'ipconfig'
    typeline 'ping www.microsoft.com'
    ```
    Expect the driver added, an address from 10.0.2.0/24 and replies; read each result from a
-   screenshot. If `D:` is not the tools drive, try the next letters. Every later line of steps 9 and 10
-   is typed into this elevated window. The elevation prompt and the drive letter are **not yet run** on a
-   rebuild (the first build used a different line that depended on shell quoting).
+   screenshot. **On a rebuild `D:` is the answer-file ISO and `E:` the Windows ISO, and the tools ISO
+   is `F:`** (the first two lines answer "Failed to add driver package: Missing or invalid driver
+   package specified", the `F:` line "Driver package added successfully", `Published Name: oem0.inf`):
+   type the line with `F:`. Every later line of steps 9 and 10 is typed into this elevated window. The
+   User Account Control prompt (white dialog, "Do you want to allow this app to make changes to your
+   device?") has **No** as its default button, so never press Enter on it: `alt-y` presses Yes.
+   Verified on a rebuild: the prompt appeared once and `alt-y` opened the administrator window.
 9. **Activation.** In the elevated window (PowerShell, so write `$env:windir` for `%windir%`):
    ```sh
    typeline 'cscript //nologo $env:windir\system32\slmgr.vbs /ato'
@@ -773,8 +780,8 @@ to send Apple events to UTM. (-1743)`. UTM is sandboxed and writes the exported 
     typeline 'netsh advfirewall firewall set rule name="OpenSSH SSH Server (sshd)" new profile=any'
     ```
     The script prints its transcript and ends by writing `C:\ProgramData\keiko-setup\done.txt`; the
-    `netsh` line prints `Updated 1 rule(s).` **Not yet run** (the first build reached the same state
-    by other lines). From the host:
+    `netsh` line prints `Updated 1 rule(s).` (verified on a rebuild: the first-logon script took about
+    three minutes and ended with `Online : True`, `RestartNeeded : False`). From the host:
     ```sh
     guest hostname                                   # expect: KEIKO-WIN11 (the answer file's computer name)
     guest 'reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f'   # expect: The operation completed successfully.
@@ -1377,7 +1384,7 @@ host-key file; the guest user is `keiko`.
 ```bash
 #!/bin/bash
 # Reboot the guest, then repeat update passes until none are left. Reboots whenever a pass asks.
-KEY="${KEIKO_SSH_KEY:?set KEIKO_SSH_KEY to the guest's private key}"
+KEY="${KEIKO_SSH_KEY:?set KEIKO_SSH_KEY to the private key of the guest}"
 KH="${KEIKO_KNOWN_HOSTS:-$HOME/.ssh/known_hosts}"
 SSH="ssh -i $KEY -p 2222 -o BatchMode=yes -o ConnectTimeout=10 -o UserKnownHostsFile=$KH -o StrictHostKeyChecking=accept-new keiko@127.0.0.1"
 waitssh() { for i in $(seq 1 120); do $SSH hostname >/dev/null 2>&1 && return 0; sleep 10; done; return 1; }
