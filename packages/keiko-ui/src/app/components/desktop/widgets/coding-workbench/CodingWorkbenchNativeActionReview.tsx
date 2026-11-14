@@ -1,7 +1,17 @@
 "use client";
 
 import type { ReactNode } from "react";
-import type { CodingWorkbenchNativeActionReview } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchNativeActionReview,
+  CodingWorkbenchNativeJiraNames,
+  CodingWorkbenchNativeJiraWriteReview,
+} from "@oscharko-dev/keiko-contracts";
+import { JIRA_MANAGED_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import { jiraActionFacts } from "../../jiraActionFacts";
+import { DraftFields } from "../../JiraDraftPreview";
+import { NO_JIRA_NAMES, type JiraNames } from "../../jiraNames";
+import { jiraCallLabel } from "../../jira-tool-presentation";
 
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
@@ -64,6 +74,16 @@ export function nativePermissionLabel(permission: string, t: CodingWorkbenchTran
   );
 }
 
+/** The card's title: a Jira write is named as a Jira change, any other action by its permission. */
+export function nativeActionTitle(
+  action: CodingWorkbenchNativeActionReview,
+  t: CodingWorkbenchTranslate,
+): string {
+  return action.jira === undefined
+    ? nativePermissionLabel(action.permission, t)
+    : t("codingWorkbench.approval.native.permission.jira");
+}
+
 /** The localized name of a native policy ask's closed command label, or the label itself. */
 export function nativeActionLabel(label: string, t: CodingWorkbenchTranslate): string {
   const key = ownMessageKey(NATIVE_LABEL_MESSAGE_KEYS, label);
@@ -95,6 +115,7 @@ export function CodingWorkbenchNativeActionReview({
   readonly action: CodingWorkbenchNativeActionReview;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  if (action.jira !== undefined) return <JiraWriteReview jira={action.jira} t={t} />;
   const help = ownMessageKey(HELP_MESSAGE_KEYS, action.permission);
   return (
     <fieldset
@@ -127,6 +148,59 @@ export function CodingWorkbenchNativeActionReview({
       )}
       <p className={styles.approvalResearchDetail}>
         {t(help ?? "codingWorkbench.approval.native.help")}
+      </p>
+    </fieldset>
+  );
+}
+
+const WORKBENCH_NAMES_BINDING = "coding-workbench";
+
+function namesOf(entries: CodingWorkbenchNativeJiraNames): ReadonlyMap<string, string> {
+  return new Map(
+    entries.map(([id, name]) => [JSON.stringify([WORKBENCH_NAMES_BINDING, id]), name]),
+  );
+}
+
+function jiraNamesOf(jira: CodingWorkbenchNativeJiraWriteReview): JiraNames {
+  return {
+    ...NO_JIRA_NAMES,
+    projects: namesOf(jira.names.projects),
+    issueTypes: namesOf(jira.names.issueTypes),
+    fields: namesOf(jira.names.fields),
+    binding: WORKBENCH_NAMES_BINDING,
+  };
+}
+
+/**
+ * A Jira write the run's Pod would make, read as the same named facts Chat's approval shows for it
+ * (`jiraActionFacts`): the operation in words, the project and issue type by the names Jira gave
+ * them, the summary and fields; never the tool's native name or its raw arguments (#4359).
+ */
+function JiraWriteReview({
+  jira,
+  t,
+}: {
+  readonly jira: CodingWorkbenchNativeJiraWriteReview;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const widget = useOptionalWidgetTranslate();
+  const operation = Object.hasOwn(JIRA_MANAGED_ACTION_TYPES, jira.tool)
+    ? (jira.tool as keyof typeof JIRA_MANAGED_ACTION_TYPES)
+    : undefined;
+  const facts = jiraActionFacts(jira.input, true, widget, jiraNamesOf(jira), jira.tool);
+  return (
+    <fieldset
+      className={styles.approvalResearch}
+      aria-label={t("codingWorkbench.approval.native.title")}
+    >
+      {operation === undefined ? null : (
+        <p className={styles.approvalResearchDetail}>
+          {widget(jiraCallLabel(operation, jira.input as Record<string, never>))}
+        </p>
+      )}
+      <DraftFields fields={facts} />
+      <p className={styles.approvalResearchDetail}>
+        {t("codingWorkbench.approval.native.help.jira")}
       </p>
     </fieldset>
   );

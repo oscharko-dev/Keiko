@@ -293,6 +293,39 @@ describe("local Jira operation discovery", () => {
     expect(resolveNamedOperation(listed, "jira.unknown")).toBeUndefined();
   });
 
+  // #4359 F29: the Code Mode sandbox resolves one key per tool and a wrong spelling fails there, so
+  // Coding's discover and describe name the exact expression that calls each operation.
+  it("names the exact Code Mode call of every hit and described operation in the Coding catalog only", async () => {
+    const f = fixture();
+    const coding = createJiraCatalogDiscoveryProvider({
+      tools: new Set(["jira.projects", "jira.issue-types"]),
+      nativeToolNames: true,
+      callNamespace: "jira",
+    }).tools();
+    const found = coding.find((tool) => tool.name === "jira.discover");
+    const describe = coding.find((tool) => tool.name === "jira.describe");
+    if (found === undefined || describe === undefined) throw new TypeError("Missing tools");
+    const hits = await found.execute({ maxResults: 10 }, f.context);
+    expect(hits.data.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          tool: "jira.issue-types",
+          callAs: 'tools.jira["jira_issue-types"]',
+        }),
+        expect.objectContaining({ tool: "jira.projects", callAs: 'tools.jira["jira_projects"]' }),
+      ]),
+    );
+    const described = await describe.execute({ identities: ["jira.issue-types"] }, f.context);
+    expect(described.data.items).toEqual([
+      expect.objectContaining({
+        tool: "jira.issue-types",
+        callAs: 'tools.jira["jira_issue-types"]',
+      }),
+    ]);
+    const chat = await f.describe.execute({ identities: ["jira_projects"] }, f.context);
+    expect(JSON.stringify(chat.data.items)).not.toContain("callAs");
+  });
+
   it("accepts the dotted tool name only where jira.discover returns it, and never twice for one operation", async () => {
     const f = fixture();
     const native = createJiraCatalogDiscoveryProvider({

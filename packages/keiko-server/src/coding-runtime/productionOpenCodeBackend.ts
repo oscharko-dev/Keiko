@@ -3,6 +3,7 @@ import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.j
 import { codingRunMcpServers, selectedRunMcpServers } from "./codingJiraPodBinding.js";
 import type { CodingJiraPods, CodingJiraRunAuthority } from "./codingJiraPodMcp.js";
 import { codingJiraCatalogAccounting } from "./codingJiraCatalogBudget.js";
+import { createCodingJiraRunNames } from "./codingJiraWriteReview.js";
 import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -604,6 +605,7 @@ function boundJira(
     binding,
     authority: {
       ...authority,
+      names: createCodingJiraRunNames(),
       ...codingJiraCatalogAccounting({
         geometry,
         usage: () => run.contextUsage?.readLargest(run.request.runId),
@@ -643,6 +645,7 @@ function nativeRunInputs(
   | "nativeWorktrees"
   | "nativeWebSearch"
   | "jiraWritePreflight"
+  | "jiraWriteReview"
   | "externalReadRoots"
   | "configDocuments"
   | "agentModelCatalog"
@@ -666,6 +669,7 @@ function nativeRunInputs(
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
     ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
     ...jiraWritePreflightFor(jira),
+    ...jiraWriteReviewFor(jira),
     externalReadRoots: nativeExternalReadRoots(input, run),
   };
 }
@@ -679,6 +683,14 @@ function jiraWritePreflightFor(
     : {
         jiraWritePreflight: (call) => jira.pods.preflightWrite(jira.binding, jira.authority, call),
       };
+}
+
+// The plain approval of a Jira write: the call and the names this run's reads gave its ids (#4359).
+function jiraWriteReviewFor(
+  jira: BoundJira | undefined,
+): Pick<OpenCodeRuntimeCompositionInput, "jiraWriteReview"> {
+  const names = jira?.authority.names;
+  return names === undefined ? {} : { jiraWriteReview: names.review };
 }
 
 // One resolution per run, shared by the kernel allowlist and the composition's policy, so the two

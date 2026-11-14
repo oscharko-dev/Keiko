@@ -22,6 +22,7 @@ import {
   isCodingJiraDiscovery,
   type CodingJiraCatalog,
 } from "./codingJiraCatalog.js";
+import type { CodingJiraRunNames } from "./codingJiraWriteReview.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
 import {
@@ -137,6 +138,8 @@ export interface CodingJiraRunAuthority {
   readonly catalogFits?: Parameters<typeof createCodingJiraCatalog>[0]["fits"] | undefined;
   /** What the accounting behind `catalogFits` stands on, for a refusal's body-free line. */
   readonly catalogFitBasis?: (() => CodingJiraFitBasis) | undefined;
+  /** The names Jira gave the ids this run read, for the plain approval of a write (#4359). */
+  readonly names?: CodingJiraRunNames | undefined;
 }
 
 function requiredScope(tool: CodingJiraTool): CodingWorkbenchConnectorScope {
@@ -245,6 +248,7 @@ interface NativeCall {
   readonly inputs: Map<string, PendingCodingJiraInput>;
   readonly line: CallLine;
   readonly started: number;
+  readonly authority: CodingJiraRunAuthority;
 }
 
 function boundRunLifetime(authority: CodingJiraRunAuthority): AbortController {
@@ -1017,6 +1021,7 @@ class CodingJiraPodService implements CodingJiraPods {
       inputs,
       line,
       started,
+      authority,
     });
   }
 
@@ -1029,6 +1034,7 @@ class CodingJiraPodService implements CodingJiraPods {
     inputs,
     line,
     started,
+    authority,
   }: NativeCall): Promise<CatalogJsonObject> {
     try {
       const humanInput = await this.prepareCall(binding, name, args, context, inputs);
@@ -1041,6 +1047,7 @@ class CodingJiraPodService implements CodingJiraPods {
               beforeEffect: (): boolean => humanInput.current(),
             };
       const data = await host.call(name, humanInput?.argumentsValue ?? args, preparedContext);
+      authority.names?.note(name, data);
       recordCodingJiraPod(this.log, context.correlationId, {
         ...line,
         outcome: "completed",

@@ -1562,6 +1562,8 @@ export type {
 } from "./coding-workbench-runtime-questions.js";
 export type {
   CodingWorkbenchNativeActionReview,
+  CodingWorkbenchNativeJiraNames,
+  CodingWorkbenchNativeJiraWriteReview,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeApprovalReviewSession,
   CodingWorkbenchRuntimePendingApprovalReview,

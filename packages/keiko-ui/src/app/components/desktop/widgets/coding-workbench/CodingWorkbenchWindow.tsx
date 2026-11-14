@@ -88,7 +88,7 @@ import {
   CodingWorkbenchNativeActionReview,
   nativeActionLabel,
   nativeActionNamesResource,
-  nativePermissionLabel,
+  nativeActionTitle,
 } from "./CodingWorkbenchNativeActionReview";
 import {
   useCodingWorkbenchTranslate,
@@ -2499,7 +2499,7 @@ function approvalTitle(
   nativeAction: Parameters<typeof CodingWorkbenchNativeActionReview>[0]["action"] | undefined,
   t: CodingWorkbenchTranslate,
 ): string {
-  if (nativeAction !== undefined) return nativePermissionLabel(nativeAction.permission, t);
+  if (nativeAction !== undefined) return nativeActionTitle(nativeAction, t);
   if (request.actionKind !== undefined) return t(ACTION_KIND_MESSAGE_KEYS[request.actionKind]);
   return t(PERMISSION_KIND_MESSAGE_KEYS[request.kind]);
 }

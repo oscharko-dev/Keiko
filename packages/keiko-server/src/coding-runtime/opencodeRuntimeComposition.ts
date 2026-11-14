@@ -47,6 +47,7 @@ import {
 } from "./nativeBuildSettings.js";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  CodingWorkbenchNativeJiraWriteReview,
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
   CodingWorkbenchActionClass,
@@ -620,6 +621,16 @@ export interface OpenCodeRuntimeCompositionInput {
       }) => Promise<string | undefined>)
     | undefined;
   /**
+   * Native profile only, a run with a bound Jira Pod (#4359): the plain facts of a managed Jira
+   * write the human is asked about, so the card reads like Chat's approval of the same write.
+   */
+  readonly jiraWriteReview?:
+    | ((call: {
+        readonly tool: string;
+        readonly arguments: CatalogJsonObject;
+      }) => CodingWorkbenchNativeJiraWriteReview)
+    | undefined;
+  /**
    * Native profile only: the user's global and the project's OpenCode configuration documents for
    * one run, in merge order (#3900 AC4, `opencodeConfigDocuments.ts`), read before its launch
    * profile is built. Absent reads none.
@@ -1069,6 +1080,7 @@ function compositionToolBridgeDeps(
     ...(input.jiraWritePreflight === undefined
       ? {}
       : { jiraWritePreflight: input.jiraWritePreflight }),
+    ...(input.jiraWriteReview === undefined ? {} : { jiraWriteReview: input.jiraWriteReview }),
   };
 }
 
@@ -3877,6 +3889,7 @@ interface ToolBridgeExecutionDeps {
   readonly externalReadRoots?: readonly string[] | undefined;
   readonly nativeWebSearch?: NativeWebSearch | undefined;
   readonly jiraWritePreflight?: OpenCodeRuntimeCompositionInput["jiraWritePreflight"];
+  readonly jiraWriteReview?: OpenCodeRuntimeCompositionInput["jiraWriteReview"];
 }
 
 /** Where a delivered tool result's model-facing rendering is recorded (#3873). */
@@ -4608,6 +4621,34 @@ async function jiraTemplateRefusal(
 }
 
 /**
+ * The ask of a managed Jira write names the write in plain facts: the call the model sent and the
+ * names this run's reads gave its ids, which the card renders as Chat's approval does (#4359). Any
+ * other ask, and a run without a review, keep the ask as it is.
+ */
+export function withJiraWriteReview(
+  decision: Extract<OpenCodeNativePolicyDecision, { readonly effect: "ask" }>,
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  deps: ToolBridgeExecutionDeps,
+): Extract<OpenCodeNativePolicyDecision, { readonly effect: "ask" }> {
+  const mutation = run.mcp?.actions.get(request.permission)?.mutation;
+  const args = request.mcpInput === undefined ? undefined : jsonArguments(request.mcpInput);
+  const nativeAction = decision.event.nativeAction;
+  if (
+    deps.jiraWriteReview === undefined ||
+    mutation?.serverName !== CODING_JIRA_SERVER_NAME ||
+    args === undefined ||
+    nativeAction === undefined
+  )
+    return decision;
+  const jira = deps.jiraWriteReview({ tool: mutation.toolName, arguments: args });
+  return {
+    ...decision,
+    event: { ...decision.event, nativeAction: { ...nativeAction, jira } },
+  };
+}
+
+/**
  * The runtime's decoded MCP arguments as plain JSON. They were parsed from the request body, so
  * the copy cannot fail; a value that is not an object is left unchecked.
  */
@@ -4639,7 +4680,13 @@ async function humanDecidedOutcome(
     return { outcome: "template-refused", refusal: templateRefusal };
   const outcome: OpenCodeNativePolicyOutcome =
     decision.effect === "ask"
-      ? await nativePolicyHumanDecision(run, decision, signal, deps, context.approvals)
+      ? await nativePolicyHumanDecision(
+          run,
+          withJiraWriteReview(decision, run, request, deps),
+          signal,
+          deps,
+          context.approvals,
+        )
       : "allowed";
   noteDeniedVerification(deps, request, outcome);
   if (outcome !== "allowed" && outcome !== "approved") return { outcome };

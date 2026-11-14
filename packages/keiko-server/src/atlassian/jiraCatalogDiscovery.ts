@@ -13,6 +13,7 @@ import {
   createToolRef,
   ToolCatalogError,
 } from "@oscharko-dev/keiko-tool-catalog";
+import { mcpToolKey } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import { jiraOperationInReleaseScope } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
@@ -33,6 +34,12 @@ interface DiscoveryOptions {
   /** Server-owned admitted subset; absent retains Chat's ordinary catalog admission. */
   readonly tools?: ReadonlySet<string>;
   readonly nativeToolNames?: true;
+  /**
+   * The Code Mode namespace the tools are called under. Present, every hit and every described
+   * operation names the exact expression that calls it (`callAs`), so a model never probes
+   * spellings: the sandbox resolves one key per tool and a wrong one fails there (#4359).
+   */
+  readonly callNamespace?: string;
 }
 type Context = JiraCatalogDiscoveryContext;
 const IDENTITY = text(512);
@@ -43,9 +50,20 @@ const ITEM = object(
     description: text(4096),
     kind: { type: "string", enum: ["native", "composite"] },
     effects: { type: "array", maxItems: 16, items: text(64) },
+    callAs: text(192),
   },
   ["identity", "tool"],
 );
+
+/** The exact expression that calls a tool in a Code Mode program, when the catalog is Coding's. */
+function callAsField(
+  options: DiscoveryOptions,
+  tool: string,
+): { readonly callAs: string } | Record<string, never> {
+  return options.callNamespace === undefined
+    ? {}
+    : { callAs: `tools.${options.callNamespace}["${mcpToolKey(tool)}"]` };
+}
 
 interface Summary extends CatalogJsonObject {
   readonly identity: string;
@@ -63,6 +81,7 @@ function summaries(options: DiscoveryOptions): readonly Summary[] {
       identity: definition.identity,
       tool:
         options.nativeToolNames === true ? definition.tool : definition.tool.replace(/[.-]/gu, "_"),
+      ...callAsField(options, definition.tool),
       description: JIRA_OPERATION_SUMMARIES[definition.tool] ?? definition.tool,
       kind: definition.kind,
       effects: definition.effects,
@@ -458,7 +477,11 @@ async function describe(
     outcome: "succeeded",
     items: known
       .filter((item) => selected.has(item.identity))
-      .map((item) => ({ identity: item.identity, tool: item.tool })),
+      .map((item) => ({
+        identity: item.identity,
+        tool: item.tool,
+        ...callAsField(options, item.tool),
+      })),
     selectedFor: "next-round",
     ...(deselected.length === 0 ? {} : { deselected, guidance: DESELECTED_GUIDANCE }),
   };

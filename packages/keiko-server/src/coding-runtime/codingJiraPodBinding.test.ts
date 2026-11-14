@@ -175,7 +175,11 @@ describe("the coding-runtime.jira-pod Activity Log operation", () => {
   it("keeps a bounded log class and an exact digest for every executable Jira tool", () => {
     const registry: readonly ActivityLogOperationRegistration[] = ACTIVITY_LOG_OPERATION_REGISTRY;
     const registration = registry.find((entry) => entry.op === "coding-runtime.jira-pod");
-    expect(registration?.fields.toolClass?.values).toEqual(["jira-read", "jira-write"]);
+    expect(registration?.fields.toolClass?.values).toEqual([
+      "jira-read",
+      "jira-write",
+      "jira-discovery",
+    ]);
     expect(registration?.fields.toolDigest).toMatchObject({ dataClass: "digest", maxLength: 64 });
     expect(registration?.fields).not.toHaveProperty("tool");
     const digests = new Set<string>();

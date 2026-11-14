@@ -1,11 +1,14 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-const FIXTURES = [
-  "opencodeProtocolSurface.opencode-2.1.4.fixture.json",
-  "opencodeProtocolSurface.opencode-2.2.5.fixture.json",
-] as const;
+import { OPENCODE_RUNTIME_VERSION_PINS } from "./opencodeRuntimeVersions.js";
+
+// Every pinned runtime version's committed protocol-surface capture that exists; the current pin's
+// follows the constant, so no version is restated here.
+const FIXTURES = OPENCODE_RUNTIME_VERSION_PINS.map(
+  (pin) => `opencodeProtocolSurface.opencode-${pin.version}.fixture.json`,
+).filter((name) => existsSync(new URL(name, import.meta.url)));
 
 /**
  * Event types a reader of the runtime's history depends on that no pinned protocol-surface fixture
@@ -65,6 +68,10 @@ function witnessedBaseNames(): ReadonlySet<string> {
 }
 
 describe("event types the OpenCode history reader depends on", () => {
+  it("reads at least one pinned protocol-surface capture", () => {
+    expect(FIXTURES.length).toBeGreaterThan(0);
+  });
+
   it("finds the reader's event types", () => {
     expect(readerEventTypes()).toEqual(
       expect.arrayContaining(["session.created.1", "message.updated.1"]),

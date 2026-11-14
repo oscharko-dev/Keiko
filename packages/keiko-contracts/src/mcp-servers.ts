@@ -454,7 +454,17 @@ function admitUniqueActions(server: McpServerDefinition, actions: Set<string>): 
  * tool name's characters outside `[A-Za-z0-9_-]` replaced by `_`, as the pinned OpenCode names it.
  */
 export function mcpToolAction(server: string, tool: string): string {
-  return `${server}_${tool.replaceAll(/[^A-Za-z0-9_-]/gu, "_")}`;
+  return `${server}_${mcpToolKey(tool)}`;
+}
+
+/**
+ * The name a tool has inside its server's namespace in a Code Mode program
+ * (`tools.<server>["<key>"]`): the tool name's characters outside `[A-Za-z0-9_-]` replaced by `_`,
+ * as the pinned OpenCode names it. One function for the policy action above and for what a model is
+ * told it may call.
+ */
+export function mcpToolKey(tool: string): string {
+  return tool.replaceAll(/[^A-Za-z0-9_-]/gu, "_");
 }
 
 /** A private native identity may contain both bounded names; admission still requires its exact grant. */

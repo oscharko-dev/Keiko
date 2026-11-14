@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
 import type { CodingWorkbenchNativeActionReview as NativeActionReview } from "@oscharko-dev/keiko-contracts";
 
 import { translateCodingWorkbench, type CodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import {
   CodingWorkbenchNativeActionReview,
   nativeActionLabel,
+  nativeActionTitle,
   nativePermissionLabel,
 } from "./CodingWorkbenchNativeActionReview";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -20,6 +22,48 @@ function review(action: NativeActionReview, t: CodingWorkbenchTranslate = en): R
 }
 
 describe("CodingWorkbenchNativeActionReview", () => {
+  // #4359 F27: the relayed Jira write read "Native action | jira_jira_create | *". It now reads as
+  // Chat's approval of the same write does, from the call and the names the run's reads gave.
+  describe("a Jira write of the run's Pod", () => {
+    const action: NativeActionReview = {
+      permission: "jira_jira_create",
+      resources: ["*"],
+      jira: {
+        tool: "jira.create",
+        input: {
+          projectId: "10002",
+          issueTypeId: "10003",
+          fields: { summary: "Workbench-Freigabe Probe 4359", description: "Details" },
+        },
+        names: {
+          projects: [["10002", "Anforderungen (REQ)"]],
+          issueTypes: [["10003", "Task"]],
+          fields: [],
+        },
+      },
+    };
+
+    it("names the operation, the project by name and key, the issue type and the summary", async () => {
+      await loadOptionalWidgetMessages("en");
+      render(review(action));
+
+      expect(screen.getByText("Create Jira issue")).toBeInTheDocument();
+      expect(screen.getByText("Anforderungen (REQ)")).toBeInTheDocument();
+      expect(screen.getByText("Task")).toBeInTheDocument();
+      expect(screen.getByText("Workbench-Freigabe Probe 4359")).toBeInTheDocument();
+      expect(screen.getByText("Makes exactly this change in Jira, once.")).toBeInTheDocument();
+      expect(document.body.textContent).not.toContain("jira_jira_create");
+      expect(document.body.textContent).not.toContain("Native action");
+      expect(nativeActionTitle(action, en)).toBe("Jira change");
+    });
+
+    it("keeps the ordinary title for every other native action", () => {
+      expect(nativeActionTitle({ permission: "shell", resources: ["npm test"] }, en)).toBe(
+        nativePermissionLabel("shell", en),
+      );
+    });
+  });
+
   // #3897 review: the command rendered collapsed into one line (no pre-wrap), and a long list of
   // resources pushed Approve off screen. Model-selected text keeps its line breaks and scrolls in
   // one bounded, keyboard-focusable block that reuses the commit-message block pattern.

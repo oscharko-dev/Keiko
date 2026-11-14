@@ -29,6 +29,7 @@ import type {
   CodingJiraSelectionStage,
   CodingJiraTool,
 } from "./codingJiraPodBinding.js";
+import { CODING_JIRA_SERVER_NAME } from "./codingJiraPodBinding.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   emitServerDiagnostic,
@@ -131,7 +132,13 @@ class JiraCatalogSelection<Context extends ManagedMcpInvocationContext> {
   constructor(private readonly input: CodingJiraCatalogInput<Context>) {
     const allowed = new Set<string>(input.tools);
     this.discovery = createManagedMcpHost<JiraCatalogDiscoveryContext>({
-      providers: [createJiraCatalogDiscoveryProvider({ tools: allowed, nativeToolNames: true })],
+      providers: [
+        createJiraCatalogDiscoveryProvider({
+          tools: allowed,
+          nativeToolNames: true,
+          callNamespace: CODING_JIRA_SERVER_NAME,
+        }),
+      ],
       log: input.log,
     });
     this.initial = Object.freeze([]);
