@@ -44,7 +44,11 @@ export async function proveDiscovery(specification, call) {
   let pages = 0;
   for (let startAt = 0; found === undefined && pages < PAGES_MAX; pages += 1) {
     const page = await call("jira.discover", { query, startAt });
-    assert.equal(page.outcome, "succeeded", "jira.discover did not succeed");
+    assert.equal(
+      page.outcome,
+      "succeeded",
+      `jira.discover did not succeed (${Object.keys(page).join(",")} ${String(page.reason ?? page.outcome)})`,
+    );
     const items = Array.isArray(page.items) ? page.items : [];
     const at = items.findIndex((item) => item.identity === specification.identity);
     if (at >= 0) {
