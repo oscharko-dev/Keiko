@@ -2828,6 +2828,7 @@
     "keiko-ui/app/components/desktop/jira-agile-presentation",
     "keiko-ui/app/components/desktop/jira-anonymization-unlock-presentation",
     "keiko-ui/app/components/desktop/jira-application-settings-presentation",
+    "keiko-ui/app/components/desktop/jira-approval-dispatch",
     "keiko-ui/app/components/desktop/jira-avatar-identity-presentation",
     "keiko-ui/app/components/desktop/jira-collaboration-presentation",
     "keiko-ui/app/components/desktop/jira-configuration-mutation-approval",
