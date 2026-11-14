@@ -798,6 +798,20 @@ own verification of the record. Before this, the flat rules knew none of these f
 installation that was never updated could neither be removed by `keiko uninstall` nor pass the
 upgrade precondition.
 
+The app files follow the payload's own package (#4358). `app/` is the extracted `npm pack` of the
+root package, so besides `dist/` and the bundled packages it holds what that package's
+`package.json` makes npm pack: the entries of its `files` list, the files of `bin`, `main` and
+`browser`, and README, COPYING, LICENSE and LICENCE, which npm always adds. Inspection reads the
+installed `app/package.json`, the input npm packed from, and admits exactly those entries, as the
+file or folder each is on disk; a pattern, a negation, an absolute or parent path, or a name that
+only resembles an always-packed one admits nothing, and a missing, oversized or invalid package
+file names nothing. No second list of the package's files is kept, so a file added to the package
+needs no edit here. `portable-maintenance.app-payload.test.ts` builds its fixtures from the pack
+step's own file listing and fails when that listing holds an entry the inspection would call unknown.
+Before this, a real payload's `app/LICENSE`, `NOTICE`, `README.md`, `TRADEMARKS.md` and
+`scripts/lib/local-state-audit.mjs` were unknown entries, so `keiko uninstall` and the upgrade
+precondition refused every real installation.
+
 One coordinator owns receipt policy, phase classification, deadlines, forward/restore/cleanup and
 semantic acknowledgment. Compile-selected platform adapters supply secure filesystem operations,
 KHT1 walking, process/port checks and existing supervisor transport. Windows reuses the existing

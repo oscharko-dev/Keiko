@@ -16,7 +16,12 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+
+beforeAll(() => {
+  // The first call runs `npm pack --dry-run`; the upgrade precondition tests read its answer.
+  realRootPackListing();
+}, 120_000);
 
 const renameControl = vi.hoisted(() => ({
   recreateLockTarget: undefined as string | undefined,
@@ -84,6 +89,10 @@ import type {
   ValidatedPortableRoot,
 } from "./portable-install.js";
 import { writeFailedRegistration, writeManagedRegistration } from "./portable-registration.js";
+import {
+  realRootPackListing,
+  writePortableAppPayload,
+} from "./test-support/portable-app-payload.js";
 import { hashPortableTreeKht1 } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 import {
   PACKAGE_NAME,
@@ -485,6 +494,61 @@ describe("portable install decisions", () => {
     expect(existsSync(backupRoot)).toBe(true);
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toContain(backupRoot);
+  });
+
+  // #4358: the click upgrade of a first installation refused a real payload at its precondition,
+  // "portable managed install changed before upgrade", because the inspection did not know the
+  // files npm packs beside `dist`. The installation here carries the real package's entries.
+  it.each([
+    ["holds only what the real package packs", undefined, false],
+    ["holds a file the package does not pack", "app/FOREIGN.txt", true],
+    ["holds a foreign file at the install root", "FOREIGN-ROOT.txt", true],
+    ["holds a foreign file in .portable", ".portable/FOREIGN.json", true],
+  ] as const)("upgrade precondition: a first installation that %s", (_name, foreign, refused) => {
+    const root = makePolicyAllowedRoot();
+    const target = "windows-x64";
+    const source = seedPortableRoot(target, join(root, "source"), "0.2.16");
+    const managedRoot = join(root, "managed", "Keiko");
+    const current = seedPortableRoot(target, managedRoot, "0.2.15");
+    writePortableAppPayload(current.layout.resourceRoot);
+    if (foreign !== undefined) {
+      mkdirSync(dirname(join(managedRoot, ...foreign.split("/"))), { recursive: true });
+      writeFileSync(join(managedRoot, ...foreign.split("/")), "unowned\n");
+    }
+    const stateDir = join(root, ".keiko-state");
+    const env = { APPDATA: join(root, "appdata") };
+    mkdirSync(stateDir, { recursive: true });
+    writeManagedRegistration({
+      stateDir,
+      layout: current.layout,
+      manifest: current.manifest,
+      env,
+      home: root,
+      now: new Date("2026-08-02T00:00:00.000Z"),
+    });
+
+    let thrown: unknown;
+    try {
+      upgradeManagedInstall({
+        target,
+        source,
+        current,
+        managedRoot,
+        stateDir,
+        env,
+        home: root,
+        now: new Date("2026-08-03T00:00:00.000Z"),
+        io: { out: () => undefined, err: () => undefined },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    const message = thrown instanceof Error ? thrown.message : "";
+    expect(message.includes("changed before upgrade")).toBe(refused);
+    if (foreign !== undefined) {
+      expect(existsSync(join(managedRoot, ...foreign.split("/")))).toBe(true);
+    }
   });
 
   it("revokes a managed-upgrade capability before releasing its locks", async () => {
