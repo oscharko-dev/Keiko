@@ -7,7 +7,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { enterActive, withExclusiveRestart } from "./lab-lanes.mjs";
 import {
-  LabOutageError,
   captureOutageEvidence,
   labFrontAnswers,
   labJiraState,
@@ -132,5 +131,3 @@ async function renewedLicense(session, directory, minimumSeconds, ports) {
     remainingAfter: renewed,
   };
 }
-
-export { LabOutageError };

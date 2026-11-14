@@ -13,7 +13,7 @@ import { isMainModule } from "../../../lib/is-main-module.mjs";
 import { runFixtureSeed } from "./fixture-seed-cli.mjs";
 import { moveTo, ensureProject, bulkCreate, fieldIds } from "./seed-projects.mjs";
 
-export const ESTIMATE_MIX_PROJECT = "EST";
+const ESTIMATE_MIX_PROJECT = "EST";
 const STORY_POINTS_SCHEMA = "com.atlassian.jira.plugin.system.customfieldtypes:float";
 const TIME_TRACKING = "timetracking";
 const SHAPES = Object.freeze({
@@ -245,7 +245,7 @@ export function mixTruth({ plan, offered, held, ids }) {
 }
 
 /** The whole seed; returns a body-free summary. Idempotent: a seeded project is only re-read. */
-export async function seedEstimateMix(context, jira, save) {
+async function seedEstimateMix(context, jira, save) {
   await ensureProject(context, ESTIMATE_MIX_PROJECT, "Schätzung gemischt");
   const storyPoints = await findStoryPoints(jira);
   // Story Points go on the default screen, where the field's own Jira Software context limits them

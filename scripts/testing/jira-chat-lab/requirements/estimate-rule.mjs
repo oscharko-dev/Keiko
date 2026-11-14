@@ -10,7 +10,6 @@ import { cellsOf, decimalCell, integerCell } from "./answer-cells.mjs";
 export const TIME_FIELD = "timeoriginalestimate";
 const SECONDS_PER_HOUR = 3600;
 const STORY_POINTS_SCHEMA = "com.atlassian.jira.plugin.system.customfieldtypes:float";
-export const ESTIMATE_CASES = Object.freeze(["configured", "fallback", "both", "neither"]);
 
 /** The field's name as Jira shows it to the reading account when known, else its English default. */
 const labelOf = (fieldId, nativeNames = {}) =>

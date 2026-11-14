@@ -325,7 +325,7 @@ const violationsIn = (value) =>
   );
 
 /** The refusal an exchange carries: a `jira.create` rejection or the failed items of a draft. */
-export function refusalOf(exchange, index) {
+function refusalOf(exchange, index) {
   if (toolExchangeOf(exchange, "jira.create")) {
     const data = exchange.result.data;
     const violations = data?.reason === "field-validation" ? violationsIn(data.violations) : [];

@@ -20,8 +20,7 @@ import { main as seedParentFields } from "./requirements/seed-parent-fields.mjs"
 import { LAB_LOCALES, main as seedLanguage } from "./seed-language.mjs";
 
 /** Pages of 100 the report must read to be compared with JQL over "more than three pages". */
-export const PAGINATION_PAGE_SIZE = 100;
-export const PAGINATION_PAGES_MIN = 4;
+const PAGINATION_PAGE_SIZE = 100;
 
 const readJson = (path) => (existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : undefined);
 
@@ -86,7 +85,7 @@ async function requiredFields(session, fixture) {
  * The fixtures this session holds, as closed facts. A missing one reads `false`/0, never an error:
  * the inventory is how a run learns what its lab lacks.
  */
-export async function fixtureInventory(session) {
+async function fixtureInventory(session) {
   const fixture = readJson(join(session.directory, "fixture.json"));
   if (fixture === undefined) return { baseSeed: false };
   const required = await requiredFields(session, fixture);

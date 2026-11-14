@@ -26,7 +26,7 @@ export const LOCALIZED_ACTORS = Object.freeze([
 const PREFERENCE = "/rest/api/2/mypreferences?key=jira.user.locale";
 
 /** The port to a lab Jira: `get`/`put` take the actor name; `put` sends a bare text body. */
-export function nativeLocalePort(session) {
+function nativeLocalePort(session) {
   const origin = labSessionConnection(session).origin;
   const call = async (actor, method, path, text) => {
     const response = await globalThis.fetch(new globalThis.URL(path, origin), {

@@ -14,7 +14,7 @@ import { privateJson } from "../private-json.mjs";
 
 export const LAB_STATES = Object.freeze(["licensed", "expired", "unreachable", "starting"]);
 /** How long the lab waits for its Jira to answer before the outage is final for this run. */
-export const HEALTH_WAIT_MS = 300_000;
+const HEALTH_WAIT_MS = 300_000;
 const POLL_MS = 5_000;
 const LICENSE_PATH = "/rest/plugins/applications/1.0/installed/jira-software/license";
 const LICENSE_MEDIA = "application/vnd.atl.plugins+json";
@@ -105,7 +105,7 @@ export async function waitForJiraHealth(session, options = {}) {
 }
 
 /** Whether the HTTPS front the product path uses answers Jira's status with the lab's own CA. */
-export function frontAnswers(session, ca) {
+function frontAnswers(session, ca) {
   const { httpsPort } = labSessionConnection(session);
   return new Promise((resolve) => {
     const req = httpsRequest(

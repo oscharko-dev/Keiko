@@ -49,7 +49,7 @@ export function savedMessages(stateDirectory) {
 }
 
 /** The context the step needs: the saved turn instead of a model, the live Jira as the oracle. */
-export function offlineContext({ session, truth, saved }) {
+function offlineContext({ session, truth, saved }) {
   const live = journeyContext({}, session, truth);
   return {
     truth,

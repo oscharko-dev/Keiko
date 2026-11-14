@@ -36,7 +36,7 @@ export const PRODUCER_NO_TEMPLATE_RULES = Object.freeze(
   ),
 );
 /** The rule id of a Sub-task created under a parent of a type its template does not allow. */
-export const PARENT_MISMATCH_RULE = "parent-type-mismatch";
+const PARENT_MISMATCH_RULE = "parent-type-mismatch";
 /** The parent types the lab's Sub-task template allows (the template builder takes the same list). */
 export const SUBTASK_PARENT_TYPES = Object.freeze(["Task"]);
 
@@ -53,7 +53,7 @@ const producerPorts = {
  * refusal. An issue that exists is red whatever the turn did; a turn that only talked, stayed silent
  * or failed proves nothing about the gate, so it is `unverified`, never green.
  */
-export function gradeRefusedNatively({ created, what, turn, exchanges }) {
+function gradeRefusedNatively({ created, what, turn, exchanges }) {
   if (created.length > 0)
     return {
       status: "red",

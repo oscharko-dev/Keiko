@@ -47,7 +47,7 @@ export function rehearsalContext(base, selection) {
 }
 
 /** Deletes the issues the rehearsal left in the work project (a native admin delete, 404 tolerated). */
-export async function removeLeftovers(session, ctx, known) {
+async function removeLeftovers(session, ctx, known) {
   const now = await ctx.search(`project = ${WORK_PROJECT}`, "summary");
   const leftovers = now.map((issue) => issue.key).filter((key) => !known.has(key));
   const auth = basicAuth(session, "admin");

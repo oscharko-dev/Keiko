@@ -63,7 +63,7 @@ function validIssueType(name) {
 }
 
 /** The fixture's display name; it is also the H1 of the template and the listing's `name` stem. */
-export const baselineTemplateTitle = (project, issueType) =>
+const baselineTemplateTitle = (project, issueType) =>
   `${BASELINE_NAME_PREFIX} ${validProject(project)} ${validIssueType(issueType)}`;
 
 /** The rule-free template a lab project and issue type are governed by. */
