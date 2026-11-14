@@ -5771,6 +5771,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Kein Vorgang wurde gegen eine Vorlage geprüft: Für {types} gibt es keine Vorlage.",
   "chat.jira.report.templatePartial":
     "{checked} von {total} Vorgängen wurden gegen eine Vorlage geprüft, {without} nicht: Für {types} gibt es keine Vorlage.",
+  "chat.jira.report.templateNoneUnnamed": "Kein Vorgang wurde gegen eine Vorlage geprüft.",
+  "chat.jira.report.templatePartialUnnamed":
+    "{checked} von {total} Vorgängen wurden gegen eine Vorlage geprüft, {without} nicht.",
+  "chat.jira.report.requiredFieldsPartial":
+    "Pflichtfelder wurden nur für einen Teil der Vorgangstypen geprüft.",
+  "chat.jira.report.requiredFieldsUnavailable": "Pflichtfelder konnten nicht geprüft werden.",
   "chat.jira.report.requiredFieldsClean":
     "Pflichtfelder: {judged} Vorgänge geprüft, keine Abweichung.",
   "chat.jira.report.coverage":

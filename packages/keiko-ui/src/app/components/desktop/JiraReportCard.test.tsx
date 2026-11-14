@@ -422,6 +422,41 @@ describe("the card says what was checked against a template (#4356)", () => {
     expect(screen.getByText(/no template exists for A, B, C, D, E …\./u)).toBeInTheDocument();
   });
 
+  it("makes no claim about types when the result names none", () => {
+    render(<JiraChatTools transcript={transcript(unchecked({ withoutTemplateByType: [] }))} />);
+    expect(screen.getByText("No issue was checked against a template.")).toBeInTheDocument();
+    const partial = unchecked({
+      issuesChecked: 171,
+      issuesWithoutTemplate: 10,
+      withoutTemplateByType: [],
+    });
+    render(<JiraChatTools transcript={transcript(partial)} />);
+    expect(
+      screen.getByText("171 of 181 issues were checked against a template; 10 were not."),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/no template (exists )?for\s*\./u);
+  });
+
+  it.each([
+    ["partial", "Required fields were checked for some issue types only."],
+    ["unavailable", "Required fields could not be checked."],
+  ])(
+    "says the required-field check was %s instead of staying silent beside unchecked issues",
+    (state, sentence) => {
+      render(<JiraChatTools transcript={transcript(unchecked({ requiredFieldRules: state }))} />);
+      expect(screen.getByText(sentence)).toBeInTheDocument();
+      expect(screen.queryByText(/Required fields: \d+ issues checked/u)).not.toBeInTheDocument();
+      expect(screen.queryByText(/deviate/u)).not.toBeInTheDocument();
+    },
+  );
+
+  it("says nothing about required fields when none were asked for", () => {
+    render(
+      <JiraChatTools transcript={transcript(unchecked({ requiredFieldRules: "not-requested" }))} />,
+    );
+    expect(screen.queryByText(/Required fields/u)).not.toBeInTheDocument();
+  });
+
   it("leaves a fully covered report as it was", () => {
     render(<JiraChatTools transcript={transcript(data())} />);
     expect(screen.getByText("235 of 2350 issues deviate (240 deviations)")).toBeInTheDocument();
@@ -481,6 +516,16 @@ describe("the German card (#4356)", () => {
     );
     expect(text).toContain("Pflichtfelder: 181 Vorgänge geprüft, keine Abweichung.");
     expect(text).not.toMatch(/weichen ab/u);
+  });
+
+  it("states the same two cases in German", async () => {
+    const unnamed = await renderGerman(unchecked({ withoutTemplateByType: [] }));
+    expect(unnamed).toContain("Kein Vorgang wurde gegen eine Vorlage geprüft.");
+    expect(unnamed).not.toMatch(/gibt es keine Vorlage/u);
+    const partial = await renderGerman(unchecked({ requiredFieldRules: "partial" }));
+    expect(partial).toContain("Pflichtfelder wurden nur für einen Teil der Vorgangstypen geprüft.");
+    const unavailable = await renderGerman(unchecked({ requiredFieldRules: "unavailable" }));
+    expect(unavailable).toContain("Pflichtfelder konnten nicht geprüft werden.");
   });
 
   it("names the estimate field without its id", async () => {

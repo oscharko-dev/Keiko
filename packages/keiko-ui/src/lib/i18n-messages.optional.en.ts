@@ -5514,6 +5514,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "No issue was checked against a template: no template exists for {types}.",
   "chat.jira.report.templatePartial":
     "{checked} of {total} issues were checked against a template; {without} were not: no template for {types}.",
+  "chat.jira.report.templateNoneUnnamed": "No issue was checked against a template.",
+  "chat.jira.report.templatePartialUnnamed":
+    "{checked} of {total} issues were checked against a template; {without} were not.",
+  "chat.jira.report.requiredFieldsPartial":
+    "Required fields were checked for some issue types only.",
+  "chat.jira.report.requiredFieldsUnavailable": "Required fields could not be checked.",
   "chat.jira.report.requiredFieldsClean": "Required fields: {judged} issues checked, no deviation.",
   "chat.jira.report.coverage":
     "{epics} epics without members, {orphans} issues without an epic or parent",
