@@ -589,6 +589,8 @@ interface StateRemovalOutcome {
   readonly disposition: StateRemovalDisposition;
   readonly ownedFileCount: number;
   readonly retainedCount: number;
+  /** The top-level names of what stays because it is not Keiko's, for the closing line. */
+  readonly retainedNames: readonly string[];
 }
 
 function stateRemovalDisposition(
@@ -611,11 +613,11 @@ function removeStateStep(
   held: ReadonlySet<string> = new Set(),
 ): StateRemovalOutcome {
   if (!opts.scopes.state) {
-    return { disposition: "not-selected", ownedFileCount: 0, retainedCount: 0 };
+    return { disposition: "not-selected", ownedFileCount: 0, retainedCount: 0, retainedNames: [] };
   }
   if (!existsSync(stateDir)) {
     io.out(`state: ${stateDir} not found (nothing to remove)\n`);
-    return { disposition: "absent", ownedFileCount: 0, retainedCount: 0 };
+    return { disposition: "absent", ownedFileCount: 0, retainedCount: 0, retainedNames: [] };
   }
   const scan = scanRuntimeState(stateDir);
   removeOwnedFiles(scan, io, opts.dryRun, held);
@@ -627,6 +629,9 @@ function removeStateStep(
     disposition: stateRemovalDisposition(opts.dryRun, retained, held.size > 0),
     ownedFileCount: scan.files.length,
     retainedCount: scan.retained.length,
+    retainedNames: [
+      ...new Set(scan.retained.map((entry) => entry.relPath.split(/[\\/]/)[0] ?? entry.relPath)),
+    ],
   };
 }
 
@@ -711,6 +716,7 @@ type PreparedUninstallActivity =
   | {
       readonly kind: "ready";
       readonly sink: SecurityLogSink | undefined;
+      readonly activityStateDir: string;
       readonly targetSha256: string;
       readonly packageTargetSha256: string;
     }
@@ -989,6 +995,7 @@ function openUninstallActivity(
   return {
     kind: "ready",
     sink,
+    activityStateDir: context.activityStateDir,
     targetSha256: context.targetSha256,
     packageTargetSha256: context.packageTargetSha256,
   };
@@ -1192,6 +1199,37 @@ function emitUninstallCompleted(
   );
 }
 
+const MAX_KEPT_NAMES = 5;
+
+// The last line of a real run says plainly what stays and where, so "uninstalled completely" can be
+// read off the command: entries that are not Keiko's artifacts are never removed, and the activity
+// log of this command lives outside the state it removes, as the evidence of what it did.
+function printKeptSummary(
+  io: CliIo,
+  opts: UninstallOptions,
+  state: StateRemovalOutcome,
+  stateDir: string,
+  activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
+): void {
+  if (opts.dryRun || !opts.scopes.state) return;
+  const kept: string[] = [];
+  if (state.retainedNames.length > 0) {
+    const shown = state.retainedNames.slice(0, MAX_KEPT_NAMES).join(", ");
+    const more = state.retainedNames.length - MAX_KEPT_NAMES;
+    kept.push(
+      `${String(state.retainedNames.length)} entries in ${stateDir} that are not Keiko's artifacts (${shown}${more > 0 ? `, and ${String(more)} more` : ""})`,
+    );
+  }
+  if (activity.sink !== undefined) {
+    kept.push(`the activity log of this command in ${activity.activityStateDir}`);
+  }
+  io.out(
+    kept.length === 0
+      ? "keiko uninstall: nothing of Keiko's was kept.\n"
+      : `keiko uninstall: kept ${kept.join("; and ")}.\n`,
+  );
+}
+
 async function executeUninstall(
   opts: UninstallOptions,
   io: CliIo,
@@ -1226,6 +1264,7 @@ async function executeUninstall(
   }
   const stateOutcome = removeStateStep(opts, io, stateDir, managed.held);
   printPackageGuidance(io, deps);
+  printKeptSummary(io, opts, stateOutcome, stateDir, activity);
   if (launcherRefused > 0) {
     emitUninstallFailure(activity, "LauncherRemovalRefused", "launcher-removal-refused");
     return 1;

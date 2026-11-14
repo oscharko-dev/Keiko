@@ -957,6 +957,72 @@ describe("runUninstallCli — state directory edge cases", () => {
   });
 });
 
+// #4358, Windows window: after an uninstall that succeeded two entries stood in the state directory
+// and the command did not say which or why. The start's own records are Keiko's and go; what stays is
+// named on the last line, with where it is.
+describe("runUninstallCli — what stays", () => {
+  const lastLine = (out: string): string => out.trimEnd().split("\n").at(-1) ?? "";
+
+  it("removes the start's own records and says nothing of Keiko's was kept", async () => {
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true });
+    for (const name of ["ui.log", "ui.starting", "ui.browser-open"]) {
+      writeFileSync(join(stateDir, name), "x\n", "utf8");
+    }
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
+    expect(existsSync(stateDir)).toBe(false);
+    expect(lastLine(c.out())).toBe("keiko uninstall: nothing of Keiko's was kept.");
+  });
+
+  it("names what it keeps and where on the last line", async () => {
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "ui.log"), "x\n", "utf8");
+    writeFileSync(join(stateDir, "my-notes.txt"), "mine\n", "utf8");
+    const events: SecurityLogEvent[] = [];
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(
+        ["--state"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir: join(root, "control-state"),
+          securityLogSinkFactory: () => ({ write: (event): void => void events.push(event) }),
+        },
+      ),
+    ).resolves.toBe(0);
+    expect(existsSync(join(stateDir, "my-notes.txt"))).toBe(true);
+    expect(c.out()).toContain(
+      `kept: ${join(stateDir, "my-notes.txt")} (not a recognized Keiko artifact)`,
+    );
+    expect(lastLine(c.out())).toBe(
+      `keiko uninstall: kept 1 entries in ${stateDir} that are not Keiko's artifacts (my-notes.txt); and the activity log of this command in ${join(root, "control-state")}.`,
+    );
+  });
+
+  it("prints no kept line for a dry run", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.log"), "x\n", "utf8");
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(["--state", "--dry-run"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
+    expect(c.out()).not.toContain("nothing of Keiko's was kept");
+  });
+});
+
 describe("runUninstallCli — running server guard", () => {
   it("refuses to remove state while the UI is running", async () => {
     const root = makeRoot();

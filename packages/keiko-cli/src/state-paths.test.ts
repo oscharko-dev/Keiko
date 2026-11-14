@@ -422,6 +422,17 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(scan.directories).toHaveLength(0);
   });
 
+  // #4358: a start that was ended while it started (a tree kill on Windows) leaves its own records
+  // behind; the uninstall called them "not a recognized Keiko artifact" and kept the state directory.
+  it.each(["ui.starting", "ui.browser-open"])("owns the start record %s", (name) => {
+    const stateDir = join(makeRoot(), ".keiko");
+    mkdirSync(stateDir, { recursive: true });
+    touch(join(stateDir, name));
+    const scan = scanRuntimeState(stateDir);
+    expect(categoryOf(scan, name)).toBe("lifecycle");
+    expect(scan.retained).toEqual([]);
+  });
+
   it("classifies every Keiko-owned artifact with the correct category", () => {
     const stateDir = seedRuntimeState(makeRoot());
     const scan = scanRuntimeState(stateDir);

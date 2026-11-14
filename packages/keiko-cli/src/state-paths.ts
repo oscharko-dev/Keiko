@@ -757,6 +757,7 @@ export function classifyPid(
 //
 //   <stateDir>/
 //     ui.pid, ui.log, ui.shutdown           lifecycle.ts
+//     ui.starting, ui.browser-open          ui-startup-progress.ts, state-paths.ts (start records)
 //     launcher-state.json                   launcher-state.ts
 //     portable-install-state.json           portable.ts
 //     portable-uninstall-journal.json       uninstall-journal.ts
@@ -1163,10 +1164,20 @@ const activityLogManifestsSubtree: OwnedSubtree = {
   childSubtree: NO_CHILD,
 };
 
+// `ui.starting` and `ui.browser-open` are the start's own short-lived records. A normal start
+// removes them; a UI process that was ended while it started (a tree kill on Windows) leaves them
+// behind, and an uninstall that kept them would call Keiko's own file "not a recognized Keiko
+// artifact" and leave the state directory standing (#4358).
+const LIFECYCLE_STATE_FILES: ReadonlySet<string> = new Set([
+  "ui.pid",
+  "ui.log",
+  UI_SHUTDOWN_REQUEST_FILE,
+  UI_BROWSER_OPEN_REQUEST_FILE,
+  UI_STARTUP_PROGRESS_STATE_FILE,
+]);
+
 function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
-  if (name === "ui.pid" || name === "ui.log" || name === UI_SHUTDOWN_REQUEST_FILE) {
-    return "lifecycle";
-  }
+  if (LIFECYCLE_STATE_FILES.has(name)) return "lifecycle";
   if (
     name === "launcher-state.json" ||
     name === "portable-install-state.json" ||

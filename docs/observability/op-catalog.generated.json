@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8ac89e0a7479a7fbc244947b07eb1e583654a7cffa4a3474a4bd679048fb87f1",
+    "catalogDigest": "9cdcab2dce987c5c8a6d4a0e8aeaff7d6125b2d16d6a887de1652bd6271baeb5",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -5381,8 +5381,8 @@
         "failureClasses": ["cli-uninstall"],
         "proofIds": ["cli.uninstall.completed.persisted"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/uninstall.ts:843",
-        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:1179"]
+        "registrationSite": "packages/keiko-cli/src/uninstall.ts:849",
+        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:1186"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5445,10 +5445,10 @@
         "failureClasses": ["cli-uninstall"],
         "proofIds": ["cli.uninstall.failed.persisted"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/uninstall.ts:763",
+        "registrationSite": "packages/keiko-cli/src/uninstall.ts:769",
         "emitterSites": [
-          "packages/keiko-cli/src/uninstall.ts:904",
-          "packages/keiko-cli/src/uninstall.ts:1047"
+          "packages/keiko-cli/src/uninstall.ts:910",
+          "packages/keiko-cli/src/uninstall.ts:1054"
         ]
       },
       {
@@ -5533,8 +5533,8 @@
         "failureClasses": ["cli-uninstall"],
         "proofIds": ["cli.uninstall.handoff.persisted"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/uninstall.ts:809",
-        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:1098"]
+        "registrationSite": "packages/keiko-cli/src/uninstall.ts:815",
+        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:1105"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5598,8 +5598,8 @@
         "failureClasses": ["cli-uninstall"],
         "proofIds": ["cli.uninstall.started.persisted"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/uninstall.ts:724",
-        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:943"]
+        "registrationSite": "packages/keiko-cli/src/uninstall.ts:730",
+        "emitterSites": ["packages/keiko-cli/src/uninstall.ts:949"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -117618,25 +117618,25 @@
     {
       "op": "cli.uninstall.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:846",
+      "site": "packages/keiko-cli/src/uninstall.ts:852",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:766",
+      "site": "packages/keiko-cli/src/uninstall.ts:772",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.handoff",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:812",
+      "site": "packages/keiko-cli/src/uninstall.ts:818",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.started",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:727",
+      "site": "packages/keiko-cli/src/uninstall.ts:733",
       "package": "keiko-cli"
     },
     {
