@@ -4298,6 +4298,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "output-exhausted",
           "context-overflow",
           "model-failure",
+          "deadline-cancelled",
+          "request-aborted",
         ],
       },
       exchangeCount: {

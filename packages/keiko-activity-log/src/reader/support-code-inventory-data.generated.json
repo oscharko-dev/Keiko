@@ -1574,6 +1574,7 @@
     "keiko-server/chat-tool-sources-turn",
     "keiko-server/chat-tool-turn",
     "keiko-server/chat-tool-turn-budget",
+    "keiko-server/chat-tool-turn-deadline",
     "keiko-server/chat-tool-turn-ending",
     "keiko-server/chat-turn-identity",
     "keiko-server/chat-turn-serializer",
