@@ -512,10 +512,38 @@ export const LANGUAGE_SELECTION_CASES = Object.freeze([
         ? page.issues.map((issue) => issue.key)
         : [f.selection.issueKey, f.selection.linkTargetKey];
     },
+    // "Welche Aufgaben ...?" asks for Tasks only: a search that names no type and returns the other
+    // issues of the project too has not answered it (#4369: gpt-5.4 listed all 36 issues of KEIKO).
+    restriction: async (s, f) => {
+      const jql = encodeURIComponent(
+        `project = ${f.project} AND issuetype != Task ORDER BY key ASC`,
+      );
+      const others = await native(
+        s,
+        `/rest/api/2/search?jql=${jql}&fields=summary&maxResults=100`,
+        "admin",
+      );
+      // The Task type as the administrator (English) and as the connected user (maybe localized) names it.
+      const adminTypes = await native(s, "/rest/api/2/issuetype", "admin");
+      const task = adminTypes.find((type) => type.name === "Task");
+      const apiTypes = await native(s, "/rest/api/2/issuetype", "api");
+      const seen = apiTypes.find((type) => type.id === task?.id);
+      return {
+        forbidden: bounded(others.issues.map((issue) => issue.key)),
+        typeWords: [
+          ...new Set([task?.id, task?.name, seen?.name].filter((word) => word !== undefined)),
+        ],
+      };
+    },
     effect: "read",
     catalog: "base",
   },
 ]);
+
+/** The native keys a restricted read must not return and the words that name its type (see `restriction`). */
+export async function selectionRestriction(session, fixture, entry) {
+  return entry.restriction === undefined ? undefined : entry.restriction(session, fixture);
+}
 
 /** The bounded set of native tokens a correct read result must carry. */
 export async function selectionTruth(session, fixture, entry) {

@@ -17,6 +17,7 @@ import {
   LANGUAGE_SELECTION_CASES,
   SELECTION_CASES,
   selectionNeedsFieldLift,
+  selectionRestriction,
   selectionTruth,
 } from "./catalog-selection-cases.mjs";
 import { gradeSelection, summarizeSelection } from "./catalog-selection-grade.mjs";
@@ -203,7 +204,9 @@ async function writeAttempt(context, run, entry, turnFor) {
 async function readAttempt(context, run, entry, turnFor) {
   const turn = await withGateway(context.session, await turnFor.send());
   try {
-    return { turn, proof: { tokens: await selectionTruth(context.session, run.fixture, entry) } };
+    const tokens = await selectionTruth(context.session, run.fixture, entry);
+    const restriction = await selectionRestriction(context.session, run.fixture, entry);
+    return { turn, proof: { tokens, ...(restriction === undefined ? {} : { restriction }) } };
   } catch (error) {
     stage("truth-unavailable", { id: entry.id, errorType: errorName(error) });
     return { turn, proof: { truthUnavailable: true } };

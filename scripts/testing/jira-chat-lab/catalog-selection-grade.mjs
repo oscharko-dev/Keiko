@@ -132,6 +132,29 @@ function missingTarget(effect, otherCalls) {
   return { status: "wrong-tool", detail };
 }
 
+const escaped = (word) => word.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+
+/**
+ * A read that must return one type only (#4369): selected when the call's JQL names the type (by id
+ * or by a name the caller sees) or when the result carries none of the other types' keys; else the
+ * search answered a broader question. The answer text is still no evidence.
+ */
+function restrictedVerdict(target, verdict, restriction) {
+  if (verdict.status !== "selected" || restriction === undefined) return verdict;
+  const jql = String(target.call?.arguments?.jql ?? "");
+  const named = (word) => new RegExp(`(?<![\\w-])${escaped(word)}(?![\\w-])`, "iu").test(jql);
+  const typed = /\b(?:issuetype|type)\b/iu.test(jql) && restriction.typeWords.some(named);
+  if (typed) return { ...verdict, detail: `${verdict.detail}; the JQL names the type` };
+  const leaves = resultLeaves(target.result?.data);
+  const extra = restriction.forbidden.filter((key) => leaves.has(key));
+  return extra.length === 0
+    ? { ...verdict, detail: `${verdict.detail}; the result holds no other type` }
+    : {
+        status: "wrong-result",
+        detail: `the search named no type and returned ${extra.length} issues of other types`,
+      };
+}
+
 function writeVerdict(target, effect) {
   if ((effect.stray ?? 0) > 0)
     return { status: "wrong-result", detail: `${effect.stray} writes the request did not ask for` };
@@ -224,8 +247,12 @@ function refusalEntry(exchange) {
  * native truth, or a turn that failed before it returned a transcript is invalid, never a product
  * or model verdict: without a transcript the selection is unknowable.
  */
-export function gradeSelection(entry, turn, { tokens = [], effect, truthUnavailable } = {}) {
-  const verdict = gradeTurn(entry, turn, { tokens, effect, truthUnavailable });
+export function gradeSelection(
+  entry,
+  turn,
+  { tokens = [], effect, truthUnavailable, restriction } = {},
+) {
+  const verdict = gradeTurn(entry, turn, { tokens, effect, truthUnavailable, restriction });
   const exchanges = turn.exchanges ?? [];
   return {
     ...verdict,
@@ -282,7 +309,7 @@ function refusedVerdict(entry, turn, verdict, effect) {
   };
 }
 
-function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
+function gradeTurn(entry, turn, { tokens, effect, truthUnavailable, restriction }) {
   const exchanges = turn.exchanges ?? [];
   const path = selectionPath(exchanges);
   const invalid = invalidReason(turn, exchanges, truthUnavailable);
@@ -292,7 +319,7 @@ function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
   if (target !== undefined)
     return entry.effect === "write"
       ? { ...writeVerdict(target, effect), path }
-      : { ...readVerdict(target, tokens), path };
+      : { ...restrictedVerdict(target, readVerdict(target, tokens), restriction), path };
   const verdict = untargetedVerdict(entry, calls, { tokens, effect });
   return { ...refusedVerdict(entry, turn, verdict, effect), path };
 }
