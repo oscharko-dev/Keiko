@@ -53,11 +53,16 @@ function podIdReader(ctx, readPod) {
 export async function bindAfterSave(ctx, skill) {
   const podId = await ctx.templatePodId?.();
   if (podId === undefined || ctx.templateBindPost === undefined) return skill;
-  const { skill: bound } = await asAuthor(ctx, ctx.authorLocale, async () => {
-    // The profile the Pod account really had while the bind ran, for the result's profile line.
-    ctx.lastBindProfile = await ctx.apiLocale?.();
-    return bindSavedTemplate(ctx.templateBindPost, podId, skill);
-  });
+  // The lab writes its templates with the seed's English names unless a case names another author.
+  const { skill: bound } = await asAuthor(
+    ctx,
+    ctx.authorLocale ?? BASELINE_AUTHOR_LOCALE,
+    async () => {
+      // The profile the Pod account really had while the bind ran, for the result's profile line.
+      ctx.lastBindProfile = await ctx.apiLocale?.();
+      return bindSavedTemplate(ctx.templateBindPost, podId, skill);
+    },
+  );
   return bound;
 }
 

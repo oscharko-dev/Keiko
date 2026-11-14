@@ -796,6 +796,8 @@ async function localizedTemplates(ctx) {
     );
   const fixture = await composerFixture(ctx);
   await prepareTemplates(ctx, { types: ["Task"] });
+  // What a German project lead types: the templates named by the German type name are written by a German author.
+  ctx.authorLocale = "de_DE";
   const runs = await sequentially(LOCALIZED_VARIANTS, (variant) => {
     const label = (type) => typeLabel(ctx.language, type, variant.kind);
     const templates = templatesOf(fixture, { label }).filter((entry) => entry.issueType === "Task");
@@ -813,6 +815,8 @@ async function localizedTemplates(ctx) {
         return { turn, part: part(variant.label, [variant.id], noted) };
       }),
     );
+  }).finally(() => {
+    delete ctx.authorLocale;
   });
   return parts(runs);
 }

@@ -145,6 +145,16 @@ describe("bindAfterSave and the baseline binding", () => {
     ]);
   });
 
+  it("binds as the English author when no case names another author (the lab writes English names)", async () => {
+    const { ctx, posts } = harness(GERMAN);
+    delete ctx.authorLocale;
+    await bindAfterSave(ctx, SKILL);
+    expect(posts.map((post) => post.locale)).toEqual(["en_US"]);
+    ctx.authorLocale = "de_DE";
+    await bindAfterSave(ctx, SKILL);
+    expect(posts.map((post) => post.locale)).toEqual(["en_US", "de_DE"]);
+  });
+
   it("returns the skill as saved when no Pod is available or the lab has no bind post", async () => {
     const { ctx } = harness(GERMAN);
     expect(await bindAfterSave({ ...ctx, templatePodId: async () => undefined }, SKILL)).toBe(

@@ -409,6 +409,12 @@ export function wroteIssue(exchange) {
   );
 }
 
+/** The template a refusal names, lower case, without the " #n" the product appends when several templates govern one type. */
+const templateName = (name) =>
+  String(name ?? "")
+    .replace(/ #\d+$/u, "")
+    .toLowerCase();
+
 /**
  * Grades the repair of a template refusal. Detected: a refusal of the turn names a content rule
  * of `template` (the `PROJECT/Issue type` the violation reports). Repaired before write: no
@@ -426,7 +432,7 @@ export function gradeTemplateRepair({
   const violations = refusals.flatMap((refusal) => refusal.violations);
   const content = violations.filter(
     (item) =>
-      CONTENT_RULES.has(item.ruleId) && item.template?.toLowerCase() === template.toLowerCase(),
+      CONTENT_RULES.has(item.ruleId) && templateName(item.template) === template.toLowerCase(),
   );
   const first = refusals[0]?.index;
   const writtenAfter =
