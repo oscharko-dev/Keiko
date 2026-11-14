@@ -24,6 +24,7 @@ import {
   hasPlaintextGatewayCredentials,
   prepareSealedProviderApiKeys,
   pruneProviderCredentialVault,
+  secretRefsOfConfig,
 } from "./credentialVault.js";
 import { figmaTokenStoreFor } from "./qualityIntelligence/figmaSnapshotOrchestration.js";
 import type { FigmaKeychainAccess } from "./qualityIntelligence/figma/index.js";
@@ -72,6 +73,26 @@ function stripAndStoreFigmaToken(
   return withoutFigma;
 }
 
+// The references the config file on disk names right now, which the rewrite is about to replace. An
+// absent, unreadable or malformed file names none: a seal then removes nothing it cannot prove its
+// own config owned (the vault is shared with every other config in the directory).
+function previousSecretRefs(storagePath: string): readonly string[] {
+  if (!existsSync(storagePath)) return [];
+  try {
+    return secretRefsOfConfig(JSON.parse(readFileSync(storagePath, "utf8")));
+  } catch (error) {
+    emitServerDiagnostic(undefined, {
+      correlationId: randomUUID(),
+      timestamp: new Date().toISOString(),
+      operation: "credential.previous-config-unreadable",
+      source: "credentialPersistence.previousSecretRefs",
+      errorClass: contentFreeErrorClass(error),
+      message: "The previous gateway config could not be read; no stored credential is pruned.",
+    });
+    return [];
+  }
+}
+
 // Seals provider apiKeys + the Figma PAT into their vaults, then atomically writes a credential-free
 // keiko.config.json. The in-memory GatewayConfig the caller activates still carries the resolved
 // secrets; only the persisted file is stripped to references + non-secret metadata.
@@ -92,6 +113,8 @@ export function persistSealedGatewayConfig(
       ? withSealedProviders
       : { ...withSealedProviders, reranker: sealedProviders.reranker };
   const sealed = stripAndStoreFigmaToken(withSealedCredentials, ctx);
+  // Read before the rewrite replaces it: what this config named is what it may give up.
+  const previousRefs = previousSecretRefs(ctx.storagePath);
   savePrivateJson(ctx.storagePath, sealed);
   pruneProviderCredentialVault(
     {
@@ -101,6 +124,7 @@ export function persistSealedGatewayConfig(
       securityLogSink: ctx.securityLogSink,
     },
     sealedProviders.activeSecretRefs,
+    previousRefs,
   );
 }
 

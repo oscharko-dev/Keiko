@@ -59,6 +59,20 @@ override, so removing that override restores the same durable source.
 
 Gateway setup seals each persistable provider apiKey into the credential vault (`<config-dir>/credentials/provider-credentials.vault`, namespace `KEIKO_PROVIDER_CREDENTIALS_KEY` / keychain `keiko-provider-credentials-vault`) and the Figma PAT into the existing encrypted Figma token vault, then writes a credential-free config holding only references and non-secret metadata. The in-memory runtime config still carries the resolved secret for live calls; only the on-disk file is stripped. An env-provided credential (one the environment already supplies) is written neither as plaintext nor as a reference, so environment credentials stay transient.
 
+*A seal prunes only what its own config owned (2026-11-14).* The vault lives next to the config
+file's directory, so every config file in one directory shares one vault. After the config rewrite
+succeeds, a seal removes only the references the previous version of THIS config file named and the
+new version no longer names; a reference this config never named (a second config beside it, a
+credential stored by hand) is not its to delete and stays. The first seal of a config with no
+readable previous version prunes nothing. Both writers, the startup migration of a plaintext config
+and the Gateway Setup save, go through `persistSealedGatewayConfig`, the one owner of the rule. The
+vault's own `security.vault.entries-deleted` line reports counts only: `count` of entries removed
+and `foreignRetainedCount` of entries left as not this config's. A vault entry that no config names
+any longer (a seal that crashed between the vault write and the config rewrite) therefore stays
+until its owner config names it again; it is never removed on behalf of another config. Earlier
+text, which removed every entry the sealed config did not name, deleted another config's stored
+provider credentials without asking.
+
 ### D4 — Crash-aware, idempotent one-time migration
 
 On `keiko ui` bootstrap, an existing plaintext `keiko.config.json` is migrated once: secrets are sealed into their vaults **first**, then the config is atomically rewritten without plaintext. If the process dies between the two steps, the old plaintext config remains and the next start re-runs the migration idempotently (vault writes overwrite). Migration is best-effort and never throws into bootstrap. `keiko repair` adds a `Credential storage` diagnostic that flags any lingering plaintext `apiKey`/`figma.accessToken` as an incomplete migration requiring action.

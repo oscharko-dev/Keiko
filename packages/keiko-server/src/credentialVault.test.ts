@@ -25,6 +25,7 @@ import {
   isEnvProvidedRerankerApiKey,
   openProviderCredentialVault,
   prepareSealedProviderApiKeys,
+  secretRefsOfConfig,
   providerSecretRef,
   pruneProviderCredentialVault,
   sealProviderApiKeys,
@@ -97,7 +98,9 @@ it("retains the source's durable reference while an alias shares the same accept
     },
   });
   expect(sealed.activeSecretRefs).toEqual(["existing-source-reference"]);
-  pruneProviderCredentialVault({ configPath, env }, sealed.activeSecretRefs);
+  pruneProviderCredentialVault({ configPath, env }, sealed.activeSecretRefs, [
+    "existing-source-reference",
+  ]);
   expect(vault.get("existing-source-reference")).toBe("durable-source-key");
   expect(vault.get(providerSecretRef("derived"))).toBeUndefined();
 });
@@ -471,7 +474,11 @@ describe("sealProviderApiKeys", () => {
       env,
       configPath,
     });
-    pruneProviderCredentialVault({ configPath, env }, prepared.activeSecretRefs);
+    // The previous version of this config named the reference it now gives up.
+    pruneProviderCredentialVault({ configPath, env }, prepared.activeSecretRefs, [
+      "cred:m1",
+      "cred:stale",
+    ]);
 
     expect(prepared.providers).toEqual([
       { modelId: "m1", baseUrl: "https://gw", apiKeySecretRef: "cred:m1" },
@@ -499,7 +506,10 @@ describe("sealProviderApiKeys", () => {
       env,
       configPath,
     });
-    pruneProviderCredentialVault({ configPath, env }, prepared.activeSecretRefs);
+    pruneProviderCredentialVault({ configPath, env }, prepared.activeSecretRefs, [
+      RERANKER_SECRET_REF,
+      "cred:stale",
+    ]);
 
     expect(vault.get(RERANKER_SECRET_REF)).toBe("rerank-secret");
     expect(vault.get("cred:stale")).toBeUndefined();
@@ -523,6 +533,74 @@ describe("sealProviderApiKeys", () => {
     expect(prepared.activeSecretRefs).toEqual(["cred:m1"]);
     expect(vault.get("cred:m1")).toBe("active-secret");
     expect(vault.get("cred:stale")).toBe("stale-secret");
+  });
+});
+
+describe("a seal prunes only what its own config owned and gave up (shared vault)", () => {
+  it("names the references of a config: providers and reranker, never a plaintext key", () => {
+    expect(
+      secretRefsOfConfig({
+        providers: [
+          { modelId: "a", apiKeySecretRef: "cred:a" },
+          { modelId: "b", apiKey: "plaintext" },
+          "not a provider",
+          { modelId: "c", apiKeySecretRef: "" },
+        ],
+        reranker: { modelId: "r", apiKeySecretRef: RERANKER_SECRET_REF },
+      }),
+    ).toEqual(["cred:a", RERANKER_SECRET_REF]);
+    expect(secretRefsOfConfig(undefined)).toEqual([]);
+    expect(secretRefsOfConfig({ providers: "nope" })).toEqual([]);
+  });
+
+  it("leaves a reference this config never named, and counts it", () => {
+    const configPath = tempConfigPath();
+    const env = envWith(KEY1);
+    const vault = openProviderCredentialVault({ configPath, env });
+    vault.set("cred:mine", "mine");
+    vault.set("cred:beside", "another config's credential");
+    const outcome = pruneProviderCredentialVault({ configPath, env }, ["cred:mine"], ["cred:mine"]);
+    expect(outcome).toEqual({ removedCount: 0, foreignRetainedCount: 1 });
+    expect(vault.get("cred:beside")).toBe("another config's credential");
+  });
+
+  it("still prunes a reference removed from its own config, and only that one", () => {
+    const configPath = tempConfigPath();
+    const env = envWith(KEY1);
+    const vault = openProviderCredentialVault({ configPath, env });
+    vault.set("cred:kept", "kept");
+    vault.set("cred:given-up", "given up");
+    vault.set("cred:beside", "another config's credential");
+    const outcome = pruneProviderCredentialVault(
+      { configPath, env },
+      ["cred:kept"],
+      ["cred:kept", "cred:given-up"],
+    );
+    expect(outcome).toEqual({ removedCount: 1, foreignRetainedCount: 1 });
+    expect([...vault.list()].sort()).toEqual(["cred:beside", "cred:kept"]);
+  });
+
+  it("prunes nothing for a config with no previous version, even when the vault holds others", () => {
+    const configPath = tempConfigPath();
+    const env = envWith(KEY1);
+    const vault = openProviderCredentialVault({ configPath, env });
+    vault.set("cred:beside", "another config's credential");
+    expect(pruneProviderCredentialVault({ configPath, env }, [], [])).toEqual({
+      removedCount: 0,
+      foreignRetainedCount: 1,
+    });
+    expect(vault.get("cred:beside")).toBe("another config's credential");
+  });
+
+  it("does nothing, and creates nothing, when there is no vault yet", () => {
+    const configPath = tempConfigPath();
+    expect(
+      pruneProviderCredentialVault({ configPath, env: envWith(KEY1) }, [], ["cred:x"]),
+    ).toEqual({
+      removedCount: 0,
+      foreignRetainedCount: 0,
+    });
+    expect(existsSync(credentialVaultDir(configPath))).toBe(false);
   });
 });
 
