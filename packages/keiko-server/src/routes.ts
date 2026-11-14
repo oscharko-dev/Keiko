@@ -19,6 +19,7 @@ import {
 import {
   handleListJiraTemplates,
   handleProposeJiraTemplates,
+  handleBindJiraTemplate,
   handleValidateJiraTemplate,
 } from "./markdown-skill-jira-template-routes.js";
 // BFF route dispatch (ADR-0011 D5). The route contract is wired here. The route TABLE
@@ -747,6 +748,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/skills/jira-templates/propose",
     handler: handleProposeJiraTemplates,
+  },
+  {
+    method: "POST",
+    pattern: "/api/skills/jira-templates/bind",
+    handler: handleBindJiraTemplate,
   },
   { method: "GET", pattern: "/api/skills/:id", handler: handleReadMarkdownSkill },
   { method: "PUT", pattern: "/api/skills/:id", handler: handleReplaceMarkdownSkill },

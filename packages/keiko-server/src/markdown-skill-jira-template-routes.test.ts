@@ -3,7 +3,7 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseJiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
+import { jiraInstanceIdentity, type AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import {
@@ -13,6 +13,7 @@ import {
 import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import { handleImportMarkdownSkill, handleReplaceMarkdownSkill } from "./markdown-skill-routes.js";
 import {
+  handleBindJiraTemplate,
   handleListJiraTemplates,
   handleProposeJiraTemplates,
   handleValidateJiraTemplate,
@@ -47,20 +48,19 @@ function upload(
   return { fileName, contentBase64: Buffer.from(text).toString("base64") };
 }
 
-function jiraGet(request: { readonly url: string }): ReturnType<AtlassianHttpBodyPort> {
+const BASE_URL = "https://jira.example.invalid/context";
+const PROJECT_TYPES = [
+  { id: "10001", name: "Story" },
+  { id: "10002", name: "Bug" },
+];
+function jiraGet(
+  request: { readonly url: string },
+  projectTypes: readonly { id: string; name: string }[] = PROJECT_TYPES,
+): ReturnType<AtlassianHttpBodyPort> {
   const url = new URL(request.url);
   const path = url.pathname;
   if (path.endsWith("/project/SYN"))
-    return Promise.resolve(
-      response({
-        id: "10000",
-        key: "SYN",
-        issueTypes: [
-          { id: "10001", name: "Story" },
-          { id: "10002", name: "Bug" },
-        ],
-      }),
-    );
+    return Promise.resolve(response({ id: "10000", key: "SYN", issueTypes: projectTypes }));
   if (path.endsWith("/project/SYN/statuses"))
     return Promise.resolve(
       response([{ id: "10001", name: "Story", statuses: [{ name: "To Do" }, { name: "Done" }] }]),
@@ -121,7 +121,9 @@ function jiraGet(request: { readonly url: string }): ReturnType<AtlassianHttpBod
   return Promise.resolve(response({}, 404));
 }
 
-function fixture(options: { pod?: boolean } = {}): {
+function fixture(
+  options: { pod?: boolean; projectTypes?: readonly { id: string; name: string }[] } = {},
+): {
   deps: RouteDeps;
   cookie: string;
   http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
@@ -134,12 +136,12 @@ function fixture(options: { pod?: boolean } = {}): {
   if (!paired.paired) throw new Error("Pairing fixture failed");
   const store = createInMemoryUiStore();
   stores.push(store);
-  const http = vi.fn<AtlassianHttpBodyPort>(jiraGet);
+  const http = vi.fn<AtlassianHttpBodyPort>((request) => jiraGet(request, options.projectTypes));
   const metadata = {
     schemaVersion: "1",
     authRef: "synthetic-credential",
     displayName: "Synthetic Jira",
-    baseUrl: "https://jira.example.invalid/context",
+    baseUrl: BASE_URL,
     createdAt: 1,
     generation: 1,
     provider: "jira",
@@ -436,5 +438,133 @@ describe("propose from an existing project", () => {
       (await handleProposeJiraTemplates(context(cookie, { podId: POD, projectKey: "NOPE" }), deps))
         .status,
     ).toBe(404);
+  });
+});
+
+// #4354: a template names its issue type by a typed string, and a name is localized per user. Binding
+// resolves the names in the caller's own view and writes the ids into the template's front matter as
+// a new skill revision, so the binding travels with an exported copy. Jira is only read.
+describe("binding a template to this Jira", () => {
+  const INSTANCE = jiraInstanceIdentity(BASE_URL);
+  const FOREIGN = "fedcba9876543210fedcba9876543210";
+  const typed = (type: string, ...extra: readonly string[]): string =>
+    [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      `issueType: ${type}`,
+      ...extra,
+      "activateOn: [create]",
+      "summaryMinLength: 4",
+      "parentField: parent",
+      "parentIssueTypes: [Task]",
+      "---",
+      `# ${type} template`,
+    ].join("\n");
+  async function stored(
+    f: ReturnType<typeof fixture>,
+    markdown: string,
+  ): Promise<{ id: string; revision: number }> {
+    expect(
+      (await handleImportMarkdownSkill(context(f.cookie, upload(markdown)), f.deps)).status,
+    ).toBe(201);
+    const skill = f.deps.store.markdownSkills.list()[0];
+    if (skill === undefined) throw new TypeError("The uploaded skill must be persisted");
+    return skill;
+  }
+  const bind = (
+    f: ReturnType<typeof fixture>,
+    skill: { id: string; revision: number },
+  ): ReturnType<typeof handleBindJiraTemplate> =>
+    handleBindJiraTemplate(
+      context(f.cookie, { podId: POD, skillId: skill.id, revision: skill.revision }),
+      f.deps,
+    );
+
+  it("offers the ids, writes them as a new revision, and does it once", async () => {
+    const f = fixture();
+    const skill = await stored(f, typed("Story"));
+    const checked = await handleValidateJiraTemplate(
+      context(f.cookie, { podId: POD, markdown: f.deps.store.markdownSkills.get(skill.id)?.body }),
+      f.deps,
+    );
+    expect(checked.body).toMatchObject({ binding: { state: "bindable", issueType: "Story" } });
+
+    const result = await bind(f, skill);
+    expect(result.body).toMatchObject({
+      changed: true,
+      issueType: "Story",
+      parentTypeCount: 1,
+      skill: { id: skill.id, revision: 2 },
+    });
+    const body = f.deps.store.markdownSkills.get(skill.id)?.body ?? "";
+    expect(body).toContain('issueTypeId: "10001"');
+    expect(body).toContain('parentIssueTypeIds: ["7"]');
+    expect(body).toContain(`jiraInstance: "${INSTANCE}"`);
+    // Nothing else of the person's file moved, and the name stays the label.
+    expect(body.replace(/^(?:issueTypeId|parentIssueTypeIds|jiraInstance):.*\n/gmu, "")).toBe(
+      typed("Story"),
+    );
+    const template = parseJiraIssueTemplate(body);
+    expect(template.ok && template.template.binding).toEqual({
+      instance: INSTANCE,
+      issueTypeId: "10001",
+      parentIssueTypeIds: ["7"],
+    });
+    expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+
+    const again = await bind(f, { id: skill.id, revision: 2 });
+    expect(again.body).toEqual({ changed: false, issueType: "Story" });
+    expect(f.deps.store.markdownSkills.get(skill.id)?.revision).toBe(2);
+  });
+
+  it("ignores a binding made for another Jira and replaces it with this one's ids", async () => {
+    const f = fixture();
+    const skill = await stored(
+      f,
+      typed("Story", 'issueTypeId: "999"', `jiraInstance: "${FOREIGN}"`),
+    );
+    expect((await bind(f, skill)).body).toMatchObject({ changed: true, issueType: "Story" });
+    const body = f.deps.store.markdownSkills.get(skill.id)?.body ?? "";
+    expect(body).toContain('issueTypeId: "10001"');
+    expect(body).not.toContain(FOREIGN);
+    expect(body.match(/^issueTypeId:/gmu)).toHaveLength(1);
+  });
+
+  it.each([
+    ["a name this Jira does not have in the person's language", "Aufgabe", undefined],
+    [
+      "a name that two types of this Jira share",
+      "Story",
+      [
+        { id: "10001", name: "Story" },
+        { id: "10003", name: "story" },
+      ],
+    ],
+  ])(
+    "refuses, in plain words naming the type, and keeps the template: %s",
+    async (_name, type, projectTypes) => {
+      const f = fixture(projectTypes === undefined ? {} : { projectTypes });
+      const skill = await stored(f, typed(type));
+      const before = f.deps.store.markdownSkills.get(skill.id)?.body;
+      const refused = await bind(f, skill);
+      expect(refused.status).toBe(422);
+      expect(JSON.stringify(refused.body)).toContain(`\\"${type}\\"`);
+      expect(f.deps.store.markdownSkills.get(skill.id)?.body).toBe(before);
+      expect(f.deps.store.markdownSkills.get(skill.id)?.revision).toBe(1);
+    },
+  );
+
+  it("refuses a stale revision, as every skill change does", async () => {
+    const f = fixture();
+    const skill = await stored(f, typed("Story"));
+    expect((await bind(f, { id: skill.id, revision: 5 })).status).toBe(409);
+  });
+
+  it("is a registered route", () => {
+    expect(API_ROUTES.some((route) => route.pattern === "/api/skills/jira-templates/bind")).toBe(
+      true,
+    );
   });
 });

@@ -31,10 +31,20 @@ export interface JiraTemplateFinding {
   readonly subject: string;
 }
 
+/**
+ * What this Jira's own view says about the template's typed issue types: already bound to their ids,
+ * ready to be bound, or a name that is not exactly one type here (#4354).
+ */
+export type JiraTemplateBindingState =
+  | { readonly state: "bound"; readonly issueType: string }
+  | { readonly state: "bindable"; readonly issueType: string }
+  | { readonly state: "unresolved" | "ambiguous"; readonly subject: string };
+
 export type JiraTemplateValidation =
   | { readonly valid: false; readonly errors: readonly JiraTemplateParseError[] }
   | {
       readonly valid: true;
+      readonly binding?: JiraTemplateBindingState;
       readonly findings: readonly JiraTemplateFinding[];
       readonly checked: {
         readonly project: boolean;
@@ -97,4 +107,21 @@ export async function proposeJiraTemplates(
       correlationId,
     )
   ).proposals;
+}
+
+/** What binding a template to this Jira did: the issue type it now names by id. */
+export interface JiraTemplateBound {
+  readonly changed: boolean;
+  readonly issueType: string;
+  readonly parentTypeCount?: number;
+}
+
+/** Writes the ids of this Jira's issue types into the template as a new revision (#4354). */
+export function bindJiraTemplate(
+  podId: string,
+  skillId: string,
+  revision: number,
+  correlationId?: string,
+): Promise<JiraTemplateBound> {
+  return request("/api/skills/jira-templates/bind", { podId, skillId, revision }, correlationId);
 }

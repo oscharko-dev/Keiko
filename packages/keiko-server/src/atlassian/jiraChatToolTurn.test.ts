@@ -4884,7 +4884,7 @@ describe("a clean draft batch is offered for approval by the turn itself (#4173)
           beforeDispatch: () => context.beforeEffect(),
         }),
         // The stage dry-runs each item against the saved templates; without them a create is refused.
-        issueTemplates: jiraIssueTemplateSource(f.deps.store),
+        issueTemplates: jiraIssueTemplateSource(f.deps.store, credential.baseUrl),
       },
       draftTool(f.deps, store),
     );

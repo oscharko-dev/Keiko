@@ -1,11 +1,13 @@
-import type {
-  JiraIssueTemplateSource,
-  JiraManagedConnection,
+import {
+  jiraInstanceIdentity,
+  type JiraIssueTemplateSource,
+  type JiraManagedConnection,
 } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_LINK_MUTATIONS,
   JIRA_MUTATION_OPERATIONS,
   JIRA_TEMPLATE_RULE_IDS,
+  jiraTemplateForInstance,
   type JiraFieldValidationFailure,
   type JiraMutationFailureDetail,
   type JiraMutationAttempt,
@@ -40,6 +42,7 @@ const RULE_COUNT_NAMES = {
   "template-unreadable": "templateUnreadableCount",
   "template-missing": "templateMissingCount",
   "template-not-activated": "templateNotActivatedCount",
+  "template-binding-unresolved": "templateBindingUnresolvedCount",
 } as const satisfies Readonly<Record<JiraTemplateRuleId, string>>;
 type RuleCountField = (typeof RULE_COUNT_NAMES)[JiraTemplateRuleId];
 
@@ -59,6 +62,7 @@ export const JIRA_TEMPLATE_RULE_COUNT_FIELDS = {
   templateUnreadableCount: RULE_COUNT,
   templateMissingCount: RULE_COUNT,
   templateNotActivatedCount: RULE_COUNT,
+  templateBindingUnresolvedCount: RULE_COUNT,
 } satisfies Readonly<Record<RuleCountField, typeof RULE_COUNT>>;
 
 export function jiraTemplateRuleCountFields(
@@ -78,13 +82,18 @@ export function jiraTemplateRuleCountFields(
  */
 export function jiraIssueTemplateSource(
   store: Pick<UiHandlerDeps["store"], "markdownSkills">,
+  baseUrl: string,
 ): JiraIssueTemplateSource {
+  const instance = jiraInstanceIdentity(baseUrl);
   return () => {
     const entries = store.markdownSkills.jiraTemplates();
     const broken = entries.filter((entry) => entry.template === undefined);
-    // The parser cache shares equal bodies; each stored revision needs its own source binding.
+    // The parser cache shares equal bodies; each stored revision needs its own source binding. A
+    // binding made for another Jira is dropped here, so every consumer matches by name there.
     const readable = entries.flatMap(({ skill, template }) =>
-      template === undefined ? [] : [{ skill, template: { ...template } }],
+      template === undefined
+        ? []
+        : [{ skill, template: { ...jiraTemplateForInstance(template, instance) } }],
     );
     return {
       templates: readable.map(({ template }) => template),
@@ -227,6 +236,7 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
         "template-unreadable",
         "template-missing",
         "template-not-activated",
+        "template-binding-unresolved",
       ],
       maxItems: 25,
     },

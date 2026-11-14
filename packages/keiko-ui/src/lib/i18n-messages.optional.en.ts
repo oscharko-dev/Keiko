@@ -2479,6 +2479,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "No template exists for the issue type “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save the template, then ask again.",
   "chat.jira.outcome.rule.template-not-activated":
     "Only rules for entering a status exist for “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save a template for creating, then ask again.",
+  "chat.jira.outcome.rule.template-binding-unresolved":
+    "The template “{subject}” names an issue type that this Jira does not know in your language, so nothing was changed. Open Skills, open the template and bind it to this Jira, then ask again.",
   "chat.jira.outcome.templateNotices":
     "The change was made. The issue already breaks these template rules in fields this change did not touch. Ask Keiko to repair them, or fix them in Jira.",
   "chat.jira.outcome.failure.releaseScope":
@@ -2718,6 +2720,19 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.useInChat": "Use in this chat",
   "chat.skills.jira.proposeDescription":
     "Keiko reads recent issues of a project and proposes one template per issue type. Each opens in the editor for review before you save it.",
+  "chat.skills.jira.bind": "Bind to this Jira",
+  "chat.skills.jira.binding": "Binding…",
+  "chat.skills.jira.bound": "Bound to the issue type “{issueType}” of this Jira.",
+  "chat.skills.jira.boundParents":
+    "Bound to the issue type “{issueType}” and {count} allowed parent types of this Jira.",
+  "chat.skills.jira.validBound": "Matches Jira and is bound to its issue types.",
+  "chat.skills.jira.bindOffer":
+    "Matches Jira by name only. Bind it so it also applies for colleagues who use Jira in another language.",
+  "chat.skills.jira.bindAmbiguous":
+    "More than one issue type is called “{subject}” in this Jira, so the template cannot be bound.",
+  "chat.skills.jira.bindFailed": "The template could not be bound right now. Try again.",
+  "chat.skills.jira.bindRefused":
+    "The template could not be bound: its issue type or parent type is not exactly one type in this Jira. Use the names as you see them in Jira, then check it again.",
   "chat.skills.jira.openProposal": "Open in editor",
 
   "agentLauncher.agent": "Agent",

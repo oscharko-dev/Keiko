@@ -1,11 +1,15 @@
 import {
   createJiraReadRequest,
+  jiraInstanceIdentity,
   proposeJiraIssueTemplates,
   readJiraTemplateInstanceMetadata,
+  resolveJiraTemplateBinding,
   validateJiraIssueTemplateAgainstInstance,
 } from "@oscharko-dev/keiko-connectors";
 import { MARKDOWN_SKILL_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  bindJiraIssueTemplateText,
+  jiraTemplateForInstance,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
   type JiraTemplateActivation,
@@ -123,17 +127,18 @@ export function handleValidateJiraTemplate(
     const parsed = parseJiraIssueTemplate(markdown);
     if (!parsed.ok) return { status: 200, body: { valid: false, errors: parsed.errors } };
     const pod = readyPod(deps, podId);
-    const read = await readJiraTemplateInstanceMetadata(
-      podRequest(deps, ctx, pod),
-      parsed.template,
-    );
+    const instanceId = jiraInstanceIdentity(pod.baseUrl);
+    // A binding made for another Jira means nothing here: the typed names are what this Jira sees.
+    const template = jiraTemplateForInstance(parsed.template, instanceId);
+    const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
     if (!read.ok) throw jiraReadFailure(read.reason);
     return {
       status: 200,
       body: {
         valid: true,
-        template: templateSummary(parsed.template),
-        findings: validateJiraIssueTemplateAgainstInstance(parsed.template, read.instance),
+        template: templateSummary(template),
+        binding: resolveJiraTemplateBinding(template, read.instance, instanceId),
+        findings: validateJiraIssueTemplateAgainstInstance(template, read.instance),
         checked: {
           project: read.instance.project !== undefined,
           fields: read.instance.fields !== undefined,
@@ -157,11 +162,93 @@ export function handleProposeJiraTemplates(
       throw invalidRequest("Provide a Jira project key.");
     }
     const pod = readyPod(deps, podId);
-    const result = await proposeJiraIssueTemplates(podRequest(deps, ctx, pod), projectKey);
+    const result = await proposeJiraIssueTemplates(
+      podRequest(deps, ctx, pod),
+      projectKey,
+      jiraInstanceIdentity(pod.baseUrl),
+    );
     if (!result.ok) {
       if (result.reason === "not-found") throw notFound("Jira project");
       throw jiraReadFailure(result.reason);
     }
     return { status: 200, body: { proposals: result.proposals } };
+  });
+}
+
+const BIND_BODY_BYTES = 4096;
+/** A file name the skill store accepts, derived from the skill's own display name. */
+function skillFileName(name: string): string {
+  const stem = name
+    .replace(/[\\/:\p{Cc}]/gu, "-")
+    .replace(/^\.+/u, "")
+    .trim();
+  return `${stem.length === 0 ? "template" : stem}.md`.slice(-MARKDOWN_SKILL_LIMITS.fileNameChars);
+}
+function refusedBinding(
+  resolution: Extract<
+    ReturnType<typeof resolveJiraTemplateBinding>,
+    { state: "unresolved" | "ambiguous" }
+  >,
+): UiStoreError {
+  const what =
+    resolution.state === "ambiguous"
+      ? `More than one issue type in this Jira is called "${resolution.subject}"`
+      : `This Jira has no issue type called "${resolution.subject}" in your language`;
+  return new UiStoreError(
+    "INVALID_REQUEST",
+    `${what}, so the template cannot be bound. Change the name in the template to a type you see in Jira, then check it again.`,
+    422,
+  );
+}
+
+/**
+ * Binds a stored template to the issue types of the Jira the caller chose (#4354): the typed names are
+ * resolved in the caller's own view and the ids are written into the template's front matter as a new
+ * skill revision, so the binding travels with an exported copy. It writes nothing to Jira.
+ */
+export function handleBindJiraTemplate(
+  ctx: RouteContext,
+  deps: TemplateRouteDeps,
+): Promise<RouteResult> {
+  return withSkillAccess(ctx, deps, "jira-template-bind", async () => {
+    const body = await readMutation(ctx, deps, BIND_BODY_BYTES);
+    if (body.kind === "rejected") return body.response;
+    const { skillId, revision, podId } = body.value;
+    if (typeof skillId !== "string" || typeof revision !== "number")
+      throw invalidRequest("Provide the template and its revision.");
+    const skill = deps.store.markdownSkills.get(skillId);
+    if (skill === undefined) throw notFound("Skill");
+    if (skill.revision !== revision)
+      throw new UiStoreError(
+        "INVALID_REQUEST",
+        "Skill revision is stale. Reload before changing it.",
+        409,
+      );
+    const parsed = parseJiraIssueTemplate(skill.body);
+    if (!parsed.ok) throw invalidRequest("This skill is not a valid Jira issue template.");
+    const pod = readyPod(deps, podId);
+    const instanceId = jiraInstanceIdentity(pod.baseUrl);
+    const template = jiraTemplateForInstance(parsed.template, instanceId);
+    const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
+    if (!read.ok) throw jiraReadFailure(read.reason);
+    const resolution = resolveJiraTemplateBinding(template, read.instance, instanceId);
+    if (resolution.state === "bound")
+      return { status: 200, body: { changed: false, issueType: resolution.issueType } };
+    if (resolution.state !== "bindable") throw refusedBinding(resolution);
+    const bound = bindJiraIssueTemplateText(skill.body, resolution.binding);
+    if (bound === undefined) throw invalidRequest("This template cannot be bound.");
+    const saved = deps.store.markdownSkills.replace(skillId, revision, {
+      fileName: skillFileName(skill.name),
+      contentBase64: Buffer.from(bound, "utf8").toString("base64"),
+    });
+    return {
+      status: 200,
+      body: {
+        changed: true,
+        issueType: resolution.issueType,
+        parentTypeCount: resolution.binding.parentIssueTypeIds?.length ?? 0,
+        skill: { id: saved.id, revision: saved.revision },
+      },
+    };
   });
 }

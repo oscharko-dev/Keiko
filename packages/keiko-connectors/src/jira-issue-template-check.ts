@@ -2,6 +2,8 @@ import {
   JIRA_TEMPLATE_VIOLATIONS_MAX,
   compileJiraTemplatePattern,
   jiraIssueTemplateLabel,
+  jiraTemplateIssueTypeMatches,
+  jiraTemplateParentTypeMatches,
   normalizeJiraSectionHeading,
   readJiraDescriptionSections,
   projectJiraDescriptionInput,
@@ -107,10 +109,7 @@ function activationMatches(
 }
 
 function issueTypeMatches(template: JiraIssueTemplate, subject: JiraTemplateSubject): boolean {
-  return (
-    same(subject.issueType.name, template.issueType) ||
-    (subject.issueType.id !== undefined && subject.issueType.id === template.issueType)
-  );
+  return jiraTemplateIssueTypeMatches(template, subject.issueType);
 }
 
 /** The templates that govern this write: same project and issue type, activated at this point. */
@@ -260,7 +259,7 @@ function checkParentType(context: Context): void {
   if (fieldPresent(context, field) !== true) return;
   const observed = observedParentType(context, field);
   if (observed === undefined) raise(context, "template-unreadable", field);
-  else if (!issueTypes.some((type) => type === observed.id || same(observed.name, type)))
+  else if (!jiraTemplateParentTypeMatches(context.template, observed))
     raise(
       context,
       "parent-type-mismatch",
@@ -491,9 +490,7 @@ function projectFindings(
 ): readonly JiraTemplateFinding[] {
   const project = instance.project;
   if (project === undefined) return [{ code: "unknown-project", subject: template.project }];
-  const known = project.issueTypes.some(
-    (type) => same(type.name, template.issueType) || type.id === template.issueType,
-  );
+  const known = project.issueTypes.some((type) => jiraTemplateIssueTypeMatches(template, type));
   return known ? [] : [{ code: "unknown-issue-type", subject: template.issueType }];
 }
 
@@ -524,8 +521,8 @@ function declaredIssueType(
   template: JiraIssueTemplate,
   instance: JiraTemplateInstanceMetadata,
 ): { readonly name: string; readonly subtask: boolean } | undefined {
-  const found = instance.project?.issueTypes.find(
-    (type) => type.id === template.issueType || same(type.name, template.issueType),
+  const found = instance.project?.issueTypes.find((type) =>
+    jiraTemplateIssueTypeMatches(template, type),
   );
   return found?.subtask === undefined ? undefined : { name: found.name, subtask: found.subtask };
 }
@@ -581,10 +578,20 @@ function parentTypeFindings(
   template: JiraIssueTemplate,
   instance: JiraTemplateInstanceMetadata,
 ): readonly JiraTemplateFinding[] {
-  return (template.parent.issueTypes ?? []).flatMap((reference): readonly JiraTemplateFinding[] =>
-    instance.parentIssueTypes?.some((type) => type.id === reference || same(type.name, reference))
-      ? []
-      : [{ code: "unknown-issue-type", subject: `parentIssueTypes: ${reference}` }],
+  const known = instance.parentIssueTypes ?? [];
+  // A bound template names its allowed parents by id; the typed names stay the label.
+  const ids = template.binding?.parentIssueTypeIds;
+  return (template.parent.issueTypes ?? []).flatMap(
+    (reference, index): readonly JiraTemplateFinding[] => {
+      const id = ids?.[index];
+      const found =
+        id === undefined
+          ? known.some((type) => type.id === reference || same(type.name, reference))
+          : known.some((type) => type.id === id);
+      return found
+        ? []
+        : [{ code: "unknown-issue-type", subject: `parentIssueTypes: ${reference}` }];
+    },
   );
 }
 
@@ -637,6 +644,16 @@ function isImpactViolation(violation: JiraTemplateViolation): boolean {
       violation.subject === JIRA_TEMPLATE_IMPACT_SUBJECTS.schema)
   );
 }
+/**
+ * A template names an issue type that this Jira does not know as the acting user sees it: its typed
+ * name is in another profile language, or the type it was bound to is gone. The rule may govern this
+ * write, so nothing is written; the way out is the product's own check against Jira, which binds the
+ * template to the type's id (#4354).
+ */
+const UNRESOLVED_BINDING_GUIDANCE =
+  "Nothing was changed: a saved issue template of this project names an issue type that Keiko cannot find in this Jira as the person sees it, so it cannot tell whether that template governs this write; the violation names the template and the typed issue type. " +
+  "Do not retry or change the request. Tell the person in plain words that the template has to be checked against Jira once: " +
+  "Skills, Jira template, open the template, choose Check against Jira. Offer to write the same issue afterwards.";
 const IMPACT_GUIDANCE =
   "Nothing was changed: a formal template rule of this project refers to a field this change would alter on issues that Keiko cannot check one by one. Do not retry it. Change the affected issues one at a time with the edit tool, or tell the person it has to be done in Jira.";
 /**
@@ -677,6 +694,8 @@ export function jiraTemplateViolationGuidance(
     (violation) =>
       violation.ruleId === "template-missing" || violation.ruleId === "template-not-activated",
   );
+  if (violations.some((violation) => violation.ruleId === "template-binding-unresolved"))
+    return UNRESOLVED_BINDING_GUIDANCE;
   if (missing !== undefined) return jiraNoGoverningTemplateGuidance(missing);
   if (violations.some(isImpactViolation)) return IMPACT_GUIDANCE;
   if (violations.some((violation) => violation.ruleId === "template-unreadable")) {
@@ -730,6 +749,7 @@ export function jiraTemplateGuidanceVariants(): readonly string[] {
     "template-missing",
     "template-not-activated",
     "template-unreadable",
+    "template-binding-unresolved",
   ] as const) {
     const guidance = jiraTemplateViolationGuidance([violation(ruleId)]);
     if (guidance !== undefined) variants.add(guidance);

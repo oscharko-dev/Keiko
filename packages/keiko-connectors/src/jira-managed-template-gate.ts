@@ -3,6 +3,7 @@ import {
   isSafeAtlassianIdentifier,
   jiraIssueTemplateLabel,
   jiraTemplateGovernsWrites,
+  jiraTemplateIssueTypeMatches,
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldMetadata,
   type JiraIssueTemplate,
@@ -25,7 +26,10 @@ import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
 import { parseJiraFieldMetadata } from "./jira-field-metadata.js";
 import { jiraNativeText } from "./jira-native-values.js";
 import { noteJiraTemplateNotices } from "./jira-template-notices.js";
-import { bindJiraTemplateParentTypes } from "./jira-template-parent-types.js";
+import {
+  bindJiraTemplateParentTypes,
+  jiraTemplateNativeIssueType,
+} from "./jira-template-parent-types.js";
 
 /**
  * Write admission against customer-defined issue templates (#4177). One gate sits between the
@@ -194,6 +198,11 @@ function numericId(value: unknown): value is string {
 
 interface Identity {
   readonly issueId?: string;
+  /**
+   * The project's issue types as this credential sees them, when the identity read already had them;
+   * `null` when that read showed the Jira does not list them.
+   */
+  readonly projectIssueTypes?: readonly { readonly id: string; readonly name: string }[] | null;
   readonly projectKey: string;
   readonly issueType: { readonly id: string; readonly name: string };
   readonly prior: Readonly<Record<string, unknown>>;
@@ -223,7 +232,12 @@ export async function readJiraCreateTemplateIdentity(
   const name = type.body?.name;
   if (type.status !== 200 || type.body?.id !== issueTypeId || !nativeTypeName(name))
     return MALFORMED;
-  return { projectKey, issueType: { id: issueTypeId, name }, prior: {} };
+  return {
+    projectKey,
+    issueType: { id: issueTypeId, name },
+    projectIssueTypes: projectTypesOf(projectRead.body) ?? null,
+    prior: {},
+  };
 }
 
 function nativeTypeName(value: unknown): value is string {
@@ -523,7 +537,9 @@ function typeSchemaRuleAffected(
   template: JiraIssueTemplate,
   types: readonly { readonly id: string; readonly name: string }[],
 ): boolean {
-  return [template.issueType, ...(template.parent.issueTypes ?? [])].some((reference) =>
+  const bound = [template.binding?.issueTypeId, ...(template.binding?.parentIssueTypeIds ?? [])];
+  const typed = [template.issueType, ...(template.parent.issueTypes ?? [])];
+  return [...typed, ...bound.filter((id): id is string => id !== undefined)].some((reference) =>
     types.some((type) => sameType(reference, type.id) || sameType(reference, type.name)),
   );
 }
@@ -739,12 +755,74 @@ function governsOperation(
     ? template.activations.some((activation) => activation.kind === "transition")
     : jiraTemplateGovernsWrites(template);
 }
+function sameProject(template: JiraIssueTemplate, identity: Identity): boolean {
+  return template.project.trim().toLowerCase() === identity.projectKey.trim().toLowerCase();
+}
 function sameTemplateType(template: JiraIssueTemplate, identity: Identity): boolean {
   return (
-    template.project.trim().toLowerCase() === identity.projectKey.trim().toLowerCase() &&
-    (sameType(identity.issueType.name, template.issueType) ||
-      identity.issueType.id === template.issueType)
+    sameProject(template, identity) && jiraTemplateIssueTypeMatches(template, identity.issueType)
   );
+}
+const PROJECT_TYPES_MAX = 200;
+function projectTypesOf(
+  body: Record<string, unknown> | undefined,
+): readonly { readonly id: string; readonly name: string }[] | undefined {
+  const listed = asArray(body?.issueTypes);
+  if (listed === undefined || listed.length > PROJECT_TYPES_MAX) return undefined;
+  return listed.flatMap((item) => {
+    const type = jiraTemplateNativeIssueType(item);
+    return type === undefined ? [] : [type];
+  });
+}
+/** The issue types of the project as the acting user's credential sees them (names are localized). */
+async function readProjectIssueTypes(
+  request: JiraMutationRequest,
+  projectKey: string,
+): Promise<
+  | readonly { readonly id: string; readonly name: string }[]
+  | undefined
+  | Extract<JiraTemplateGateResult, { ok: false }>
+> {
+  const read = await request(`project/${encodeURIComponent(projectKey)}`);
+  if (!read.ok) return read;
+  return read.status === 200 ? projectTypesOf(read.body) : MALFORMED;
+}
+/**
+ * A template of this project that governs writes and names an issue type this Jira does not offer
+ * the acting user (a name typed in another profile language, or a type its binding no longer finds)
+ * may govern this very write: nothing is written, and the violation names the template and the typed
+ * type. Never a silent pass (#4354).
+ */
+async function unresolvedBindingRefusal(
+  input: JiraTemplateGateInput,
+  candidates: readonly JiraIssueTemplate[],
+  identity: Identity,
+): Promise<JiraTemplateGateResult | undefined> {
+  const pending = candidates.filter(
+    (template) => sameProject(template, identity) && !sameTemplateType(template, identity),
+  );
+  if (pending.length === 0) return undefined;
+  const types =
+    identity.projectIssueTypes === undefined
+      ? await readProjectIssueTypes(input.request, identity.projectKey)
+      : (identity.projectIssueTypes ?? undefined);
+  // A Jira that does not list the project's issue types cannot show a template unresolved: the name
+  // matching of before stays. Jira Data Center and Cloud always list them.
+  if (types === undefined) return undefined;
+  if ("ok" in types) return identityRefusal(types, "project-and-type");
+  const unresolved = pending.filter(
+    (template) => !types.some((type) => jiraTemplateIssueTypeMatches(template, type)),
+  );
+  if (unresolved.length === 0) return undefined;
+  return {
+    ok: false,
+    reason: "field-validation",
+    violations: unresolved.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX).map((template) => ({
+      ruleId: "template-binding-unresolved" as const,
+      subject: template.issueType.slice(0, 120),
+      template: jiraIssueTemplateLabel(template).slice(0, 256),
+    })),
+  };
 }
 
 /**
@@ -773,6 +851,8 @@ export async function gateJiraMutationByTemplates(
       : await issueIdentity(input.request, input.target.issueKey);
   if ("ok" in first)
     return identityRefusal(first, input.operation === "create" ? "project-and-type" : "issue");
+  const unresolved = await unresolvedBindingRefusal(input, candidates, first);
+  if (unresolved !== undefined) return unresolved;
   return (
     (input.operation === "create" ? createWithoutTemplate(set, candidates, first) : undefined) ??
     checkCandidates(input, candidates, first)

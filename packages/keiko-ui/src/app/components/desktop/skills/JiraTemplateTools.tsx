@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { listAtlassianConnectors } from "@/lib/atlassian-connectors-api";
 import {
+  bindJiraTemplate,
   fetchJiraTemplates,
   proposeJiraTemplates,
   type JiraTemplateEntry,
@@ -13,7 +14,7 @@ import {
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
-import { bffRequestErrorKind } from "@/lib/http";
+import { ApiError, bffRequestErrorKind } from "@/lib/http";
 import { usePodChoices } from "../useJiraPodChoices";
 import {
   templateKey,
@@ -244,6 +245,53 @@ export function PodSelect({ jira }: { readonly jira: JiraTemplates }): ReactNode
   );
 }
 
+/** The outcome of one bind request, shown on the template's row until the library reloads. */
+type BindOutcome =
+  | "working"
+  | "failed"
+  | "refused"
+  | { readonly issueType: string; readonly parentTypeCount: number };
+
+function bindable(check: AutomaticTemplateCheck | undefined): boolean {
+  return (
+    check !== undefined && check !== "failed" && check.valid && check.binding?.state === "bindable"
+  );
+}
+
+function BindControl({
+  check,
+  outcome,
+  onBind,
+}: {
+  readonly check: AutomaticTemplateCheck | undefined;
+  readonly outcome: BindOutcome | undefined;
+  readonly onBind: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  if (outcome === "working")
+    return <output className={styles.cmpStatus}>{t("chat.skills.jira.binding")}</output>;
+  if (outcome === "failed") return <p role="alert">{t("chat.skills.jira.bindFailed")}</p>;
+  if (outcome === "refused") return <p role="alert">{t("chat.skills.jira.bindRefused")}</p>;
+  if (outcome !== undefined)
+    return (
+      <output className={styles.cmpStatus}>
+        {t(
+          outcome.parentTypeCount > 0 ? "chat.skills.jira.boundParents" : "chat.skills.jira.bound",
+          {
+            issueType: outcome.issueType,
+            count: outcome.parentTypeCount,
+          },
+        )}
+      </output>
+    );
+  if (!bindable(check)) return null;
+  return (
+    <button type="button" className={styles.cmpPrimary} onClick={onBind}>
+      {t("chat.skills.jira.bind")}
+    </button>
+  );
+}
+
 function TemplateRow({
   entry,
   item,
@@ -252,6 +300,7 @@ function TemplateRow({
   open,
   onOpen,
   chat,
+  bind,
 }: {
   readonly entry: JiraTemplateEntry;
   readonly item: MarkdownSkillMetadata | undefined;
@@ -260,6 +309,10 @@ function TemplateRow({
   readonly open: boolean;
   readonly onOpen: (skill: MarkdownSkillMetadata) => void;
   readonly chat: { readonly skill: ChatMarkdownSkill; readonly disabled: boolean } | undefined;
+  readonly bind: {
+    readonly outcome: BindOutcome | undefined;
+    readonly onBind: () => void;
+  };
 }): ReactNode {
   return (
     <li className={styles.cmpRow}>
@@ -275,6 +328,7 @@ function TemplateRow({
         <span className={styles.cmpItemName}>{entry.name}</span>
         <TemplateStatus entry={entry} check={check} />
       </button>
+      <BindControl check={check} outcome={bind.outcome} onBind={bind.onBind} />
       {item === undefined || chat === undefined ? null : (
         <SkillChatToggle
           item={item}
@@ -304,6 +358,27 @@ export function JiraTemplateList({
 }): ReactNode {
   const t = useTranslate();
   const { tools } = jira;
+  const [outcomes, setOutcomes] = useState<ReadonlyMap<string, BindOutcome>>(new Map());
+  const bindEntry = async (entry: JiraTemplateEntry): Promise<void> => {
+    if (jira.podId === undefined) return;
+    const correlationId = newClientCorrelationId();
+    const settle = (outcome: BindOutcome): void =>
+      setOutcomes((current) => new Map(current).set(entry.id, outcome));
+    settle("working");
+    try {
+      const bound = await bindJiraTemplate(jira.podId, entry.id, entry.revision, correlationId);
+      settle({ issueType: bound.issueType, parentTypeCount: bound.parentTypeCount ?? 0 });
+      await library.refresh();
+    } catch (error) {
+      // 422: the typed name is not exactly one issue type of this Jira; anything else is a failure.
+      settle(error instanceof ApiError && error.status === 422 ? "refused" : "failed");
+      reportClientDiagnostic("Jira template binding failed.", {
+        correlationId,
+        errorKind: bffRequestErrorKind(error),
+        errorEvidence: clientErrorEvidence(error),
+      });
+    }
+  };
   if (tools.failed)
     return (
       <p role="alert" className={styles.cmpEmpty}>
@@ -326,6 +401,12 @@ export function JiraTemplateList({
           open={openId === entry.id}
           onOpen={onOpen}
           chat={chat}
+          bind={{
+            outcome: outcomes.get(entry.id),
+            onBind: () => {
+              void bindEntry(entry);
+            },
+          }}
         />
       ))}
     </ul>
@@ -340,6 +421,18 @@ const INSTANCE_CHECKS = {
 } as const satisfies Record<keyof ValidChecked, string>;
 type ValidChecked = Extract<JiraTemplateValidation, { valid: true }>["checked"];
 type Translate = ReturnType<typeof useTranslate>;
+
+/** What this Jira's view says about the template's typed issue types, as one sentence. */
+function bindingSentence(
+  binding: Extract<JiraTemplateValidation, { valid: true }>["binding"],
+  t: Translate,
+): string {
+  if (binding?.state === "bound") return t("chat.skills.jira.validBound");
+  if (binding?.state === "bindable") return t("chat.skills.jira.bindOffer");
+  if (binding?.state === "ambiguous")
+    return t("chat.skills.jira.bindAmbiguous", { subject: binding.subject });
+  return t("chat.skills.jira.valid");
+}
 
 /** What the automatic check found, as one sentence; a mismatch names its cause and nothing else. */
 function checkSentence(check: AutomaticTemplateCheck | undefined, t: Translate): string {
@@ -357,11 +450,10 @@ function checkSentence(check: AutomaticTemplateCheck | undefined, t: Translate):
   const unchecked = (Object.keys(INSTANCE_CHECKS) as (keyof ValidChecked)[]).filter(
     (part) => !check.checked[part],
   );
-  return unchecked.length === 0
-    ? t("chat.skills.jira.valid")
-    : t("chat.skills.jira.partial", {
-        checks: unchecked.map((part) => t(INSTANCE_CHECKS[part])).join(", "),
-      });
+  if (unchecked.length === 0) return bindingSentence(check.binding, t);
+  return t("chat.skills.jira.partial", {
+    checks: unchecked.map((part) => t(INSTANCE_CHECKS[part])).join(", "),
+  });
 }
 
 type CheckState = "ok" | "mismatch" | "pending";
@@ -372,7 +464,8 @@ function checkState(
 ): CheckState {
   if (!entry.valid) return "mismatch";
   if (check === undefined) return "pending";
-  return check === "failed" || !check.valid || check.findings.length > 0 ? "mismatch" : "ok";
+  if (check === "failed" || !check.valid || check.findings.length > 0) return "mismatch";
+  return check.binding?.state === "ambiguous" ? "mismatch" : "ok";
 }
 
 /** One short line per template: which Jira project and issue type it governs, and whether it can. */

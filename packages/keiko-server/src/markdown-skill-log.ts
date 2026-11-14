@@ -30,6 +30,7 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
         "jira-template-list",
         "jira-template-validate",
         "jira-template-propose",
+        "jira-template-bind",
       ],
     },
     phase: {
@@ -62,7 +63,8 @@ export type MarkdownSkillAction =
   | "selection-change"
   | "jira-template-list"
   | "jira-template-validate"
-  | "jira-template-propose";
+  | "jira-template-propose"
+  | "jira-template-bind";
 
 export function logMarkdownSkillOperation(
   correlationId: string | undefined,

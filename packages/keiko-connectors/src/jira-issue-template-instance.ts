@@ -1,9 +1,11 @@
 import {
+  jiraTemplateIssueTypeMatches,
   normalizeJiraSectionHeading,
   parseJiraIssueTemplate,
   readJiraDescriptionSections,
   type AtlassianConnectorWriteFailureReason,
   type JiraIssueTemplate,
+  type JiraTemplateBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import type { JiraTemplateInstanceMetadata } from "./jira-issue-template-check.js";
@@ -122,11 +124,7 @@ async function readStatuses(
   );
   const types = response.ok ? response.items : undefined;
   if (types === undefined || types.length > 200) return undefined;
-  const wanted = project.issueTypes.find(
-    (type) =>
-      type.id === template.issueType ||
-      type.name.toLowerCase() === template.issueType.toLowerCase(),
-  );
+  const wanted = project.issueTypes.find((type) => jiraTemplateIssueTypeMatches(template, type));
   return statusNames(types, wanted?.id);
 }
 
@@ -253,6 +251,8 @@ export interface JiraTemplateProposalInput {
   readonly issueType: string;
   readonly requiredFields: readonly string[];
   readonly sections: readonly string[];
+  /** The ids the typed issue type resolves to in the proposing person's own view of the project. */
+  readonly binding?: JiraTemplateBinding;
 }
 
 /** The proposed template as Markdown the lead edits and saves; it always parses. */
@@ -263,6 +263,12 @@ export function renderProposedJiraIssueTemplate(input: JiraTemplateProposalInput
     "version: 1",
     `project: ${input.projectKey.toUpperCase()}`,
     `issueType: ${listItem(input.issueType)}`,
+    ...(input.binding === undefined
+      ? []
+      : [
+          `issueTypeId: ${JSON.stringify(input.binding.issueTypeId)}`,
+          `jiraInstance: ${JSON.stringify(input.binding.instance)}`,
+        ]),
     "activateOn: [create]",
     ...(input.requiredFields.length === 0
       ? []
@@ -317,6 +323,7 @@ async function proposalFor(
   request: JiraMutationRequest,
   project: ProjectFacts,
   type: { readonly id: string; readonly name: string },
+  instance: string,
 ): Promise<JiraTemplateProposal | undefined> {
   const [requiredFields, descriptions] = await Promise.all([
     requiredCreateFields(request, project, type.id),
@@ -329,6 +336,7 @@ async function proposalFor(
     issueType: type.name,
     requiredFields,
     sections,
+    binding: { instance, issueTypeId: type.id },
   });
   return parseJiraIssueTemplate(markdown).ok
     ? { issueType: type.name, markdown, sampledIssueCount: descriptions.length }
@@ -342,18 +350,92 @@ async function proposalFor(
 export async function proposeJiraIssueTemplates(
   request: JiraMutationRequest,
   projectKey: string,
+  instance: string,
 ): Promise<JiraTemplateInstanceRead<{ proposals: readonly JiraTemplateProposal[] }>> {
   const read = await readProject(request, projectKey);
   if (!read.ok) return read;
   if (read.project === undefined) return { ok: false, reason: "not-found" };
   const { project } = read;
   const proposals = await Promise.all(
-    project.issueTypes.slice(0, ISSUE_TYPES_MAX).map((type) => proposalFor(request, project, type)),
+    project.issueTypes
+      .slice(0, ISSUE_TYPES_MAX)
+      .map((type) => proposalFor(request, project, type, instance)),
   );
   return {
     ok: true,
     proposals: proposals.filter(
       (proposal): proposal is JiraTemplateProposal => proposal !== undefined,
     ),
+  };
+}
+
+/** What the acting person's own view of the Jira says about one template's issue-type names. */
+export type JiraTemplateBindingResolution =
+  | { readonly state: "bound"; readonly issueType: string }
+  | {
+      readonly state: "bindable";
+      readonly issueType: string;
+      readonly binding: JiraTemplateBinding;
+    }
+  | { readonly state: "unresolved" | "ambiguous"; readonly subject: string };
+
+function namedTypes<T extends { readonly id: string; readonly name: string }>(
+  types: readonly T[],
+  typed: string,
+): readonly T[] {
+  const wanted = typed.trim().toLowerCase();
+  return types.filter((type) => type.id === typed || type.name.trim().toLowerCase() === wanted);
+}
+
+type Pick1<T> =
+  { readonly found: T } | { readonly state: "unresolved" | "ambiguous"; readonly subject: string };
+function exactlyOne<T extends { readonly id: string; readonly name: string }>(
+  types: readonly T[],
+  typed: string,
+): Pick1<T> {
+  const found = namedTypes(types, typed);
+  const [only] = found;
+  if (found.length === 1 && only !== undefined) return { found: only };
+  return { state: found.length === 0 ? "unresolved" : "ambiguous", subject: typed.slice(0, 120) };
+}
+
+/**
+ * Resolves a template's typed issue type and parent types, in the view the metadata was read with, to
+ * ids. Exactly one type per name or no binding: none or two types of that name never bind (#4354). A
+ * template already bound for this Jira whose ids all still exist needs nothing.
+ */
+export function resolveJiraTemplateBinding(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+  instanceId: string,
+): JiraTemplateBindingResolution {
+  const types = instance.project?.issueTypes;
+  if (types === undefined) return { state: "unresolved", subject: template.project };
+  const bound = template.binding;
+  if (bound !== undefined) {
+    const type = types.find((candidate) => candidate.id === bound.issueTypeId);
+    const parents = instance.parentIssueTypes ?? [];
+    const parentsKnown = (bound.parentIssueTypeIds ?? []).every((id) =>
+      parents.some((parent) => parent.id === id),
+    );
+    if (type !== undefined && parentsKnown) return { state: "bound", issueType: type.name };
+  }
+  // A binding that no longer finds its ids is resolved again from the typed names.
+  const own = exactlyOne(types, template.issueType);
+  if (!("found" in own)) return own;
+  const parentIssueTypeIds: string[] = [];
+  for (const typed of template.parent.issueTypes ?? []) {
+    const parent = exactlyOne(instance.parentIssueTypes ?? [], typed);
+    if (!("found" in parent)) return parent;
+    parentIssueTypeIds.push(parent.found.id);
+  }
+  return {
+    state: "bindable",
+    issueType: own.found.name,
+    binding: {
+      instance: instanceId,
+      issueTypeId: own.found.id,
+      ...(template.parent.issueTypes === undefined ? {} : { parentIssueTypeIds }),
+    },
   };
 }

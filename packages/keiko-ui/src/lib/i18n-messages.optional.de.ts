@@ -2623,6 +2623,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Für den Vorgangstyp „{subject}“ gibt es keine Vorlage, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere die Vorlage und frage dann erneut.",
   "chat.jira.outcome.rule.template-not-activated":
     "Für „{subject}“ gibt es nur Regeln für den Wechsel in einen Status, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere eine Vorlage zum Anlegen und frage dann erneut.",
+  "chat.jira.outcome.rule.template-binding-unresolved":
+    "Die Vorlage „{subject}“ nennt einen Vorgangstyp, den dieses Jira in deiner Sprache nicht kennt, deshalb wurde nichts geändert. Öffne Skills, öffne die Vorlage, verbinde sie mit diesem Jira und frage dann erneut.",
   "chat.jira.outcome.templateNotices":
     "Die Änderung wurde vorgenommen. Der Vorgang verletzt bereits diese Vorlagenregeln in Feldern, die diese Änderung nicht berührt hat. Bitte Keiko, sie zu beheben, oder korrigiere sie in Jira.",
   "chat.jira.outcome.failure.releaseScope":
@@ -2876,6 +2878,20 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.useInChat": "In diesem Chat verwenden",
   "chat.skills.jira.proposeDescription":
     "Keiko liest aktuelle Vorgänge eines Projekts und schlägt je Vorgangstyp eine Vorlage vor. Jede öffnet sich zur Prüfung im Editor, bevor du sie speicherst.",
+  "chat.skills.jira.bind": "Mit diesem Jira verbinden",
+  "chat.skills.jira.binding": "Verbinde…",
+  "chat.skills.jira.bound": "Mit dem Vorgangstyp „{issueType}“ dieses Jiras verbunden.",
+  "chat.skills.jira.boundParents":
+    "Mit dem Vorgangstyp „{issueType}“ und {count} erlaubten übergeordneten Typen dieses Jiras verbunden.",
+  "chat.skills.jira.validBound": "Passt zu Jira und ist mit dessen Vorgangstypen verbunden.",
+  "chat.skills.jira.bindOffer":
+    "Passt zu Jira nur über den Namen. Verbinde sie, damit sie auch für Kolleginnen und Kollegen gilt, die Jira in einer anderen Sprache nutzen.",
+  "chat.skills.jira.bindAmbiguous":
+    "Mehrere Vorgangstypen heißen in diesem Jira „{subject}“, deshalb kann die Vorlage nicht verbunden werden.",
+  "chat.skills.jira.bindFailed":
+    "Die Vorlage konnte gerade nicht verbunden werden. Versuche es noch einmal.",
+  "chat.skills.jira.bindRefused":
+    "Die Vorlage konnte nicht verbunden werden: Der Vorgangstyp der Vorlage oder ein erlaubter übergeordneter Typ ist in diesem Jira nicht genau ein Typ. Nimm die Namen, wie du sie in Jira siehst, und prüfe sie dann erneut.",
   "chat.skills.jira.openProposal": "Im Editor öffnen",
   "agentLauncher.agent": "Agent",
   "agentLauncher.agentCount": "{count} Agenten",
