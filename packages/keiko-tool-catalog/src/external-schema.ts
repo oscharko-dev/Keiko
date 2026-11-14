@@ -168,12 +168,13 @@ export function externalCatalogSchemaMismatch(
   const validate = validationFor(schema);
   if (validate(value)) return undefined;
   const errors = validate.errors ?? [];
-  const expected = collectExpectations(
+  const { expected, omittedCount } = collectExpectations(
     expectationSites(schema, diagnosticErrors(schema, value).concat(errors)),
   );
   return {
     ...mismatchDetail(schema, errors, value),
     ...(expected.length === 0 ? {} : { expected }),
+    ...(omittedCount === 0 ? {} : { expectedOmittedCount: omittedCount }),
   };
 }
 const MAX_DIAGNOSTIC_ERRORS = 64;

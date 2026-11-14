@@ -44,7 +44,13 @@ const EXPECTED_GUIDANCE_CHARS_MAX = 1280;
  * quoting what was sent. A property whose allowed values the sentence above already names is not
  * repeated.
  */
-function expectedGuidance(shape: CatalogSchemaMismatch): string {
+/** The sentence, the properties it states and how many were left out (here or by the schema owner). */
+export interface StatedExpectations {
+  readonly text: string;
+  readonly statedCount: number;
+  readonly omittedCount: number;
+}
+export function statedExpectations(shape: CatalogSchemaMismatch): StatedExpectations {
   const entries = (shape.expected ?? []).filter((entry) => entry.path !== shape.allowed?.path);
   const kept: string[] = [];
   let chars = " Expected: .".length;
@@ -54,7 +60,14 @@ function expectedGuidance(shape: CatalogSchemaMismatch): string {
     if (chars > EXPECTED_GUIDANCE_CHARS_MAX) break;
     kept.push(text);
   }
-  return kept.length === 0 ? "" : ` Expected: ${kept.join("; ")}.`;
+  return {
+    text: kept.length === 0 ? "" : ` Expected: ${kept.join("; ")}.`,
+    statedCount: kept.length,
+    omittedCount: entries.length - kept.length + (shape.expectedOmittedCount ?? 0),
+  };
+}
+function expectedGuidance(shape: CatalogSchemaMismatch): string {
+  return statedExpectations(shape).text;
 }
 
 function missingGuidance(shape: CatalogSchemaMismatch): string {

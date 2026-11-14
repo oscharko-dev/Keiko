@@ -55,14 +55,22 @@ describe("the rule a schema states at one property", () => {
       path: `p${String(EXPECTATIONS_MAX + 2 - i)}`,
       node: { type: "string" },
     }));
-    const expected = collectExpectations([...entries, { path: "p0", node: { type: "integer" } }]);
+    const { expected, omittedCount } = collectExpectations([
+      ...entries,
+      { path: "p0", node: { type: "integer" } },
+    ]);
     expect(expected).toHaveLength(EXPECTATIONS_MAX);
+    // Eleven distinct paths were explained and eight are kept: the three left out are counted.
+    expect(omittedCount).toBe(3);
     expect(expected.map((entry) => entry.path)).toEqual(
       [...expected.map((entry) => entry.path)].sort(),
     );
     // The first rule of a path wins.
     expect(expected.find((entry) => entry.path === "p0")?.rule).toBe("a string");
-    expect(collectExpectations([{ path: "x", node: { description: "d" } }])).toEqual([]);
+    expect(collectExpectations([{ path: "x", node: { description: "d" } }])).toEqual({
+      expected: [],
+      omittedCount: 0,
+    });
   });
 });
 

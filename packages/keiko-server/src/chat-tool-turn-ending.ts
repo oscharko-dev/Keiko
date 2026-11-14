@@ -4,7 +4,11 @@ import {
   defineActivityLogOperation,
   recordActivityLogLoss,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { ERROR_CODES, GatewayError } from "@oscharko-dev/keiko-model-gateway";
+import {
+  ERROR_CODES,
+  GatewayError,
+  GatewayToolCatalogError,
+} from "@oscharko-dev/keiko-model-gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { ServerLogSink } from "./observability/index.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
@@ -28,6 +32,7 @@ export type ChatToolTurnEndReason =
   | "tool-failure"
   | "output-exhausted"
   | "context-overflow"
+  | "tool-not-offered"
   | "model-failure";
 const REASONS: readonly ChatToolTurnEndReason[] = [
   "budget-exhausted",
@@ -37,6 +42,7 @@ const REASONS: readonly ChatToolTurnEndReason[] = [
   "tool-failure",
   "output-exhausted",
   "context-overflow",
+  "tool-not-offered",
   "model-failure",
 ];
 const REASON_TEXT: Readonly<Record<ChatToolTurnEndReason, string>> = {
@@ -48,6 +54,10 @@ const REASON_TEXT: Readonly<Record<ChatToolTurnEndReason, string>> = {
   "tool-failure": "a tool call could not be settled",
   "output-exhausted": "the model ran out of output budget",
   "context-overflow": "the conversation no longer fits the model's context window",
+  // The model named an action this chat did not offer, twice (the turn allows one correction):
+  // not a failed request, so the person is told what happened and what to do.
+  "tool-not-offered":
+    "the model asked for an action that is not available in this chat. Ask again, or name the action you want",
   "model-failure": "the model request failed",
 };
 
@@ -78,6 +88,8 @@ export function chatToolTurnEndReason(
 ): ChatToolTurnEndReason | undefined {
   if (error instanceof CatalogDispatchFault) return dispatchReason(error);
   if (!(error instanceof GatewayError)) return undefined;
+  if (error instanceof GatewayToolCatalogError && error.unofferedName !== undefined)
+    return "tool-not-offered";
   if (error.code === ERROR_CODES.ATTEMPT_ADMISSION_DENIED && turn.envelopeRefusedAttempt === true)
     return "budget-exhausted";
   return KEPT_GATEWAY_CODES.has(error.code) ? undefined : gatewayReason(error);

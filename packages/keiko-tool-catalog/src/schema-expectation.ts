@@ -136,17 +136,24 @@ function clipped(rule: string): string {
   return rule.length <= RULE_CHARS_MAX ? rule : `${rule.slice(0, RULE_CHARS_MAX - 1)}…`;
 }
 
+/** The explained properties and how many the bound left out (a count, so a log can say it). */
+export interface ExpectationAccount {
+  readonly expected: readonly CatalogExpectation[];
+  readonly omittedCount: number;
+}
+
 /** Distinct paths, first rule wins, sorted by path and bounded; an unexplained path adds nothing. */
 export function collectExpectations(
   entries: Iterable<{ readonly path: string; readonly node: CatalogJsonValue | undefined }>,
-): readonly CatalogExpectation[] {
+): ExpectationAccount {
   const byPath = new Map<string, string>();
   for (const { path, node } of entries) {
     const rule = expectationRule(node);
     if (rule !== undefined && !byPath.has(path)) byPath.set(path, rule);
   }
-  return [...byPath]
-    .sort(([left], [right]) => (left < right ? -1 : Number(left > right)))
-    .slice(0, EXPECTATIONS_MAX)
-    .map(([path, rule]) => ({ path, rule }));
+  const sorted = [...byPath].sort(([left], [right]) => (left < right ? -1 : Number(left > right)));
+  return {
+    expected: sorted.slice(0, EXPECTATIONS_MAX).map(([path, rule]) => ({ path, rule })),
+    omittedCount: Math.max(0, sorted.length - EXPECTATIONS_MAX),
+  };
 }

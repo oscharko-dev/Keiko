@@ -64,6 +64,8 @@ export interface CatalogSchemaMismatch {
    * Covers every mismatching property, not just the first one an external validator reports.
    */
   readonly expected?: readonly CatalogExpectation[];
+  /** Explained properties the bound on `expected` left out; absent when none were. */
+  readonly expectedOmittedCount?: number;
   /** The values a `const` or `enum` property accepts, from the schema; never the rejected value. */
   readonly allowed?: {
     readonly path: string;
