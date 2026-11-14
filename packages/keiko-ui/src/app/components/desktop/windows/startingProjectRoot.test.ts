@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { startingProjectRoot } from "./startingProjectRoot";
+import { startingProjectPaths, startingProjectRoot } from "./startingProjectRoot";
 
 function project(overrides: Partial<ProjectWithAvailability>): ProjectWithAvailability {
   return {
@@ -30,5 +30,18 @@ describe("startingProjectRoot", () => {
   it("offers nothing for a missing or unavailable project", () => {
     expect(startingProjectRoot(null)).toBeNull();
     expect(startingProjectRoot(project({ available: false }))).toBeNull();
+  });
+});
+
+describe("startingProjectPaths", () => {
+  it("keeps the order and leaves out an unavailable or refused project", () => {
+    expect(
+      startingProjectPaths([
+        project({ path: "/refused", readable: false }),
+        project({ path: "/offline", available: false }),
+        project({ path: "/first" }),
+        project({ path: "/second", readable: true }),
+      ]),
+    ).toEqual(["/first", "/second"]);
   });
 });

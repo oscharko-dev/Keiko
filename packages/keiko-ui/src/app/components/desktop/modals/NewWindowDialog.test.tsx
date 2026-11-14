@@ -1106,6 +1106,19 @@ describe("NewWindowDialog dialog controls and Files defaults", () => {
     expect(screen.queryByDisplayValue("/offline")).not.toBeInTheDocument();
   });
 
+  it("does not prefill a Files project the read surface refuses (#4371)", async () => {
+    vi.mocked(fetchProjects).mockResolvedValue({
+      projects: [{ ...project("/refused", "Refused"), readable: false }, project()],
+    });
+
+    render(
+      <NewWindowDialog type="files" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+
+    expect(await screen.findByDisplayValue("/repo")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("/refused")).not.toBeInTheDocument();
+  });
+
   it("does not overwrite a manually entered Files root when project loading resolves later", async () => {
     let resolveProjects: ((value: Awaited<ReturnType<typeof fetchProjects>>) => void) | undefined;
     vi.mocked(fetchProjects).mockReturnValue(

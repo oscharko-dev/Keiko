@@ -8,3 +8,13 @@ import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-
 export function startingProjectRoot(project: ProjectWithAvailability | null): string | null {
   return project?.available === true && project.readable !== false ? project.path : null;
 }
+
+/** The listed projects a window may start in, in list order; a refused one stays out of the defaults. */
+export function startingProjectPaths(
+  projects: readonly ProjectWithAvailability[],
+): readonly string[] {
+  return projects.flatMap((project) => {
+    const root = startingProjectRoot(project);
+    return root === null ? [] : [root];
+  });
+}
