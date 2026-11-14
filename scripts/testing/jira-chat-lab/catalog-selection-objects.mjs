@@ -206,6 +206,8 @@ const VOLATILE_FIELDS = new Set([
   "watches",
   "votes",
   "issuelinks",
+  // A Sub-task created under an owned issue lists itself there: the create case's own effect.
+  "subtasks",
   "worklog",
   "comment",
   "timespent",

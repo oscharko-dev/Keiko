@@ -123,5 +123,5 @@ export function unrepairablePrompt(title, { story }) {
  */
 export function violationPrompt(type, title, { epic, task }) {
   const parent = type === "Sub-task" ? `die Aufgabe ${task}` : `das Epic ${epic}`;
-  return `Lege im Jira-Projekt REQ ${type === "Epic" ? "ein Epic" : `einen Vorgang vom Typ ${type}`} mit genau der Zusammenfassung ${quoted(title)} und genau der Beschreibung „Kurzer Test.“ an. Falls das Anlegen abgelehnt wird, korrigiere den Vorgang anhand der gemeldeten Verstöße${type === "Epic" ? "" : `, ordne ihn bei der Korrektur ${parent} zu`} und lege ihn erneut an. Melde den Vorgangsschlüssel oder den genauen Fehler.`;
+  return `Lege im Jira-Projekt REQ ${type === "Epic" ? "ein Epic" : `einen Vorgang vom Typ ${type}`} mit genau der Zusammenfassung ${quoted(title)} und genau der Beschreibung „Kurzer Test.“ an. Falls das Anlegen abgelehnt wird, korrigiere den Vorgang anhand der gemeldeten Verstöße${type === "Epic" ? "" : `, ordne ihn bei der Korrektur ${parent} zu`} und lege ihn erneut an. Für die Korrektur gilt: ${contentRequest(type)} Melde den Vorgangsschlüssel oder den genauen Fehler.`;
 }

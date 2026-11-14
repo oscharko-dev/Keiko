@@ -193,6 +193,10 @@ function selectedGatewayProvider(modelId) {
     throw new TypeError("Jira qualification requires a local model Gateway");
   const apiKey = selected.apiKey;
   const provider = { ...selected };
+  // A provider the product discovered would make it list EVERY model of the gateway, elect one of
+  // them as the default and check it at startup: with a shared local gateway that loads a second,
+  // large chat model beside the selected one. The laboratory names its models explicitly.
+  delete provider.catalogOrigin;
   delete provider.apiKey;
   delete provider.apiKeySecretRef;
   delete provider.apiKeySourceModelId;

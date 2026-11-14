@@ -324,15 +324,23 @@ const violationsIn = (value) =>
     (item) => isRecord(item) && typeof item.ruleId === "string",
   );
 
-/** The refusal an exchange carries: a `jira.create` rejection or the failed items of a draft. */
+/** The refusal a single result carries on itself: its field-validation violations, and a receipt if any. */
+function resultRefusal(exchange, index, mayHaveReceipt) {
+  const data = exchange.result.data;
+  const violations = data?.reason === "field-validation" ? violationsIn(data.violations) : [];
+  return violations.length === 0
+    ? []
+    : [{ index, violations, receipt: mayHaveReceipt && typeof data.issueKey === "string" }];
+}
+
+/**
+ * The refusal an exchange carries: a `jira.create` rejection, a `jira.draft-stage` rejection (the
+ * staging step of a draft checks the template before anything is written; the violations sit on the
+ * result itself, and nothing can carry a receipt) or the failed items of a draft commit.
+ */
 function refusalOf(exchange, index) {
-  if (toolExchangeOf(exchange, "jira.create")) {
-    const data = exchange.result.data;
-    const violations = data?.reason === "field-validation" ? violationsIn(data.violations) : [];
-    return violations.length === 0
-      ? []
-      : [{ index, violations, receipt: typeof data.issueKey === "string" }];
-  }
+  if (toolExchangeOf(exchange, "jira.draft-stage")) return resultRefusal(exchange, index, false);
+  if (toolExchangeOf(exchange, "jira.create")) return resultRefusal(exchange, index, true);
   if (!toolExchangeOf(exchange, "jira.draft")) return [];
   const items = Array.isArray(exchange.result.data?.items) ? exchange.result.data.items : [];
   return items
