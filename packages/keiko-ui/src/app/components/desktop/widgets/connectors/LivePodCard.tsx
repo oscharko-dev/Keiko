@@ -113,9 +113,11 @@ function useCheckedStatus(state: LivePodState): AtlassianConnectorVerifyStatus |
 
 // The one live region of the card: a check's outcome is announced as its label and guidance,
 // also when it succeeded, while the visible card keeps only the chip and, on failure, one line.
-function VerifyAnnouncement({ state }: { readonly state: LivePodState }): ReactNode {
+export function VerifyAnnouncement({ state }: { readonly state: LivePodState }): ReactNode {
   const t = useTranslate();
-  const status = useCheckedStatus(state);
+  const checked = useCheckedStatus(state);
+  // The previous result is dropped the moment a new check runs, not one render later.
+  const status = state.kind === "verifying" ? undefined : checked;
   const guidance = useFailureGuidance(status ?? "ok");
   return (
     <output className="sr-only" data-status={status} data-testid="acx-verify-status">

@@ -996,7 +996,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.live.verifyRequired":
     "Prüfe die Verbindung, bevor du diesen Pod verwendest.",
   "atlassianConnectors.live.tlsFailed.wayOut":
-    "Der Pod bleibt gespeichert, kann aber noch nicht genutzt werden. Korrigiere die Zertifikatseinstellung und verifiziere erneut, oder entferne den Pod.",
+    "Bis zur erfolgreichen Prüfung bleibt der Pod gespeichert, ist aber nicht nutzbar; du kannst ihn auch entfernen.",
   "atlassianConnectors.live.remove": "Pod entfernen",
   "atlassianConnectors.live.keep": "Pod behalten",
   "atlassianConnectors.live.removeConfirm":

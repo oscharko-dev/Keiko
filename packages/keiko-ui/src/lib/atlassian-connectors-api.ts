@@ -176,18 +176,12 @@ export async function deleteAtlassianConnector(authRef: string): Promise<{ ok: t
   return credentialMutation<{ ok: true }>(credentialPath(authRef), { method: "DELETE" });
 }
 
-/** The one named trigger: the check Keiko runs right after a token replacement (#4353). */
-export interface VerifyAtlassianConnectorOptions {
-  readonly trigger?: "replace-token";
-}
-
 export async function verifyAtlassianConnector(
   authRef: string,
-  options: VerifyAtlassianConnectorOptions = {},
 ): Promise<VerifyAtlassianConnectorResult> {
   return credentialMutation<VerifyAtlassianConnectorResult>(credentialPath(authRef, "/verify"), {
     method: "POST",
-    body: JSON.stringify(options.trigger === undefined ? {} : { trigger: options.trigger }),
+    body: "{}",
   });
 }
 
@@ -287,7 +281,7 @@ export interface AtlassianConnectorsClient {
   ) => Promise<AtlassianConnectorMetadata>;
   readonly updateConnector: typeof updateAtlassianConnector;
   readonly deleteConnector: (authRef: string) => Promise<{ ok: true }>;
-  readonly verifyConnector: typeof verifyAtlassianConnector;
+  readonly verifyConnector: (authRef: string) => Promise<VerifyAtlassianConnectorResult>;
   readonly startSync: (
     authRef: string,
     input: StartAtlassianSyncInput,

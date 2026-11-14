@@ -6,11 +6,7 @@ import type {
   AtlassianConnectorsClient,
   AtlassianConnectorVerifyStatus,
 } from "@/lib/atlassian-connectors-api";
-import {
-  reportConnectorFailure,
-  useConnectorOperation,
-  type ConnectorOperation,
-} from "./useConnectorOperation";
+import { useConnectorOperation, type ConnectorOperation } from "./useConnectorOperation";
 export type ConnectorEditMode = "rename" | "rotate";
 interface CardPanels {
   readonly expanded: boolean;
@@ -32,36 +28,6 @@ export interface CardController extends CardPanels {
   readonly refresh: () => void;
   readonly confirmDelete: () => void;
   readonly update: (patch: AtlassianLivePodUpdateRequest) => void;
-}
-/** An edit that replaces the credential makes the earlier verification worthless; a rename does not. */
-function invalidatesVerification(patch: AtlassianLivePodUpdateRequest): boolean {
-  return patch.apiToken !== undefined;
-}
-// One rule for every edit that invalidates a Pod's verification: the check runs at once, through
-// the same verify route, so the person never learns of it from a refused Chat turn (#4353). The
-// saved edit is kept whatever the check returns; a check that cannot run leaves the Pod plainly
-// unverified with the existing repair action, and is recorded.
-async function verifyAfterEdit(
-  client: AtlassianConnectorsClient,
-  updated: AtlassianConnectorMetadata,
-  inspect: () => Promise<AtlassianConnectorMetadata | undefined>,
-): Promise<AtlassianConnectorMetadata> {
-  try {
-    await client.verifyConnector(updated.authRef, { trigger: "replace-token" });
-    return (await inspect()) ?? updated;
-  } catch (error) {
-    reportConnectorFailure(error);
-    return updated;
-  }
-}
-async function updateAndVerify(
-  client: AtlassianConnectorsClient,
-  authRef: string,
-  patch: AtlassianLivePodUpdateRequest,
-  inspect: () => Promise<AtlassianConnectorMetadata | undefined>,
-): Promise<AtlassianConnectorMetadata> {
-  const updated = await client.updateConnector(authRef, patch);
-  return invalidatesVerification(patch) ? await verifyAfterEdit(client, updated, inspect) : updated;
 }
 function useCardPanels(identity: string, busy: boolean): CardPanels {
   const [expanded, setExpanded] = useState(false);
@@ -134,7 +100,7 @@ export function useConnectorCard(
     update: (patch) =>
       operation.run(
         patch.apiToken === undefined ? "rename" : "rotate",
-        () => updateAndVerify(client, connector.authRef, patch, inspect),
+        () => client.updateConnector(connector.authRef, patch),
         (metadata) => {
           panels.cancelEdit();
           publish(metadata);

@@ -941,7 +941,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.refreshRequired": "Refresh the status before using this Pod.",
   "atlassianConnectors.live.verifyRequired": "Verify the connection before using this Pod.",
   "atlassianConnectors.live.tlsFailed.wayOut":
-    "This Pod stays saved but cannot be used yet. Fix the certificate setting and verify again, or remove the Pod.",
+    "Until it verifies, this Pod stays saved but cannot be used; you can also remove it.",
   "atlassianConnectors.live.remove": "Remove Pod",
   "atlassianConnectors.live.keep": "Keep Pod",
   "atlassianConnectors.live.removeConfirm":

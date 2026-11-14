@@ -693,12 +693,17 @@ per window; a rejected or inconclusive result is never cached and a new generati
 inherits a window. `atlassian.connection.checked` carries the closed `decision`
 (`identity-route`, `probe`, `probe-window`) and `routeClass` (`identity`, `other`) so a discard
 decided by the probe is distinguishable from the identity route's own 401, and the closed outcome
-`probe-inconclusive` records an unsettled probe. A token replacement invalidates the Pod's
-verification at the one custody point; the card then runs the existing verify route at once with the
-closed trigger `replace-token`, which the same operation records as `action=verify-after-replace`
-(a check that cannot run leaves the saved Pod plainly unverified, #4353). A rename invalidates
-nothing and verifies nothing; the URL and the certificate authority are not editable on an existing
-Pod, so no other edit needs this rule.
+`probe-inconclusive` records an unsettled probe. A token replacement invalidates the Pod's verification at the one custody point and the same
+`PATCH` request then runs the existing verification (same probe, bounds, policies and
+credential-epoch check as an explicit verification), so no client needs a second call and a closed
+tab cannot leave the Pod silently unverified (#4353). The answer is the Pod's metadata with the
+state the probe left: verified, a closed failure status such as `auth-failed`, `timeout` or
+`unreachable`, or `unverified` when a newer change superseded the token before the probe ended
+(that change owns the Pod's verification). The token stays stored whatever the probe finds; no retry
+loop. The same operation records the check as `atlassian.connection.checked` with
+`action=verify-after-replace` under the replacement's correlation id; a result for an older token
+never marks a newer one verified. A rename invalidates nothing and verifies nothing; the URL and
+the certificate authority are not editable on an existing Pod, so no other edit needs this rule.
 
 Only a 401 that Jira itself authored can show a rejected token. Jira behind a corporate single
 sign-on proxy answers 401 for every request, `myself` included, once the proxy session ends, and a

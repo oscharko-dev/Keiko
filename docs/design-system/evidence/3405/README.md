@@ -674,10 +674,10 @@ behavior, fixture, assertion or numerical ceiling changed. This remains updater 
 
 ## Jira token replacement verifies at once and the certificate way out — 2026-11-14 (#4353, #4351)
 
-Replacing a Jira Pod token now runs the verification immediately, and a Pod that failed on its
-certificate says in one sentence what that means and the two ways out, so both optional catalogs
+Replacing a Jira Pod token now stores and verifies it in one request, and a Pod that failed on
+its certificate says in one sentence what that means and the way out, so both optional catalogs
 changed and the freshness gate rejected their digests. The complete original nine-case producer ran
-in the Linux arm64 gates container (Node 24.18.0): all nine passed in 2.0 minutes. Only the catalog
+in the Linux arm64 gates container (Node 24.18.0): all nine passed in 2.2 minutes. Only the catalog
 digests and `generatedAt` in the three records were taken from this run; its fallback-font captures
 were discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion
 or numerical ceiling changed. This remains updater fixture evidence.

@@ -1830,32 +1830,132 @@ function credentialForPod(podId: string): AtlassianCredentialMetadata {
 }
 
 describe("authenticated Live Pod credential updates", () => {
-  it("a delayed verification cannot restore readiness after the token replacement route", async () => {
+  it("a delayed verification of the older token cannot mark the replacing token verified (#4353)", async () => {
     const credential = credentialForPod(await readyJiraPod());
     const entered = probeSignal();
     const release = probeSignal();
+    let probes = 0;
     await rebuild({
       ...wiring,
-      httpBodyPortFactory:
-        () =>
-        async (request): Promise<AtlassianHttpBodyResult> => {
+      httpBodyPortFactory: () => {
+        probes += 1;
+        const older = probes === 1;
+        return async (request): Promise<AtlassianHttpBodyResult> => {
+          if (!older) return jiraProbeResponse(request, 401);
           entered.resolve();
           await release.promise;
           return jiraProbeResponse(request);
-        },
+        };
+      },
     });
     const pending = verifyCredentialRequest(credential.authRef);
     await entered.promise;
+    // The replacing token is verified by its own request; Jira rejects it, while the older token's
+    // probe is still in flight and would answer ok if it were allowed to land.
     const changed = await updateJiraCredential(credential.authRef, {
       expectedGeneration: 1,
       apiToken: SYNTHETIC_TOKEN + "rotated",
     }).finally(release.resolve);
     const stale = await pending;
     expect(changed.status).toBe(200);
+    expect(await changed.json()).toMatchObject({ livePod: { verificationStatus: "auth-failed" } });
     expect(stale.status).toBe(409);
     expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
-      generation: 2,
-      livePod: { verificationStatus: "unverified", verificationInProgress: false },
+      livePod: { verificationStatus: "auth-failed", verificationInProgress: false },
+    });
+  });
+
+  it("verifies a replaced token in the same request, so a closed tab leaves the true state, and records it as its own action (#4353)", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    const requests: AtlassianHttpBodyRequest[] = [];
+    await rebuild({
+      ...wiring,
+      activityLog: sink,
+      httpBodyPortFactory:
+        () =>
+        (request): Promise<AtlassianHttpBodyResult> => {
+          requests.push(request);
+          return Promise.resolve(jiraProbeResponse(request));
+        },
+    });
+    try {
+      // The only call: the browser never makes a second one (its tab may be closed already).
+      const response = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 1,
+        apiToken: `${SYNTHETIC_TOKEN}-replacement`,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        authRef: credential.authRef,
+        generation: 2,
+        livePod: { verificationStatus: "ok", verificationInProgress: false },
+      });
+      expect(requests.length).toBeGreaterThan(0);
+      expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+        generation: 2,
+        livePod: { verificationStatus: "ok" },
+      });
+      const checks = readVerificationEvidence(sink);
+      expect(checks).toHaveLength(1);
+      expect(checks[0]).toMatchObject({
+        action: "verify-after-replace",
+        outcome: "ok",
+        verificationState: "applied",
+      });
+      const updated = persistedActivityLogLines(
+        readPersistedActivityLog(configDir),
+        "atlassian.credential.updated",
+      ).map((line) => expectActivityLogProof("atlassian.credential.updated.line", line));
+      // One logical operation: the replacement and its check share the request's correlation.
+      expect(updated.map((event) => event.correlationId)).toEqual([checks[0]?.correlationId]);
+      expect(JSON.stringify(checks)).not.toContain(SYNTHETIC_TOKEN);
+      expect(JSON.stringify(checks)).not.toContain(credential.authRef);
+    } finally {
+      sink.close?.();
+    }
+  });
+
+  it.each([
+    [{ kind: "response", status: 401, authenticationFailure: "jira" } as const, "auth-failed"],
+    [{ kind: "timeout" } as const, "timeout"],
+    [{ kind: "network-error" } as const, "unreachable"],
+  ])(
+    "stores the replaced token and answers the state its failed check left: %o -> %s (#4353)",
+    async (probeResult, expected) => {
+      const credential = credentialForPod(await readyJiraPod());
+      await rebuild({
+        ...wiring,
+        httpBodyPortFactory: () => (): Promise<AtlassianHttpBodyResult> =>
+          Promise.resolve(probeResult as AtlassianHttpBodyResult),
+      });
+      const response = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 1,
+        apiToken: `${SYNTHETIC_TOKEN}-replacement`,
+      });
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(JSON.parse(body)).toMatchObject({ livePod: { verificationStatus: expected } });
+      expect(body).not.toContain(SYNTHETIC_TOKEN);
+      // The token stays stored (the replacement generation advanced) and the Pod is not verified.
+      expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+        livePod: { verificationStatus: expected, verificationInProgress: false },
+      });
+      expect((wiring.custody.getMetadata(credential.authRef)?.generation ?? 0) > 1).toBe(true);
+    },
+  );
+
+  it("verifies nothing after a rename (#4353)", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    fakePortRequests.length = 0;
+    const response = await updateJiraCredential(credential.authRef, {
+      expectedGeneration: 1,
+      displayName: "Renamed Jira",
+    });
+    expect(response.status).toBe(200);
+    expect(fakePortRequests).toHaveLength(0);
+    expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+      livePod: { verificationStatus: "ok" },
     });
   });
 
@@ -1920,7 +2020,8 @@ describe("authenticated Live Pod credential updates", () => {
     expect(rotated.status).toBe(200);
     const current = real.custody.getMetadata(authRef);
     if (current === undefined) throw new Error("Expected rotated credential");
-    expect(current).toMatchObject({ generation: 2, livePod: { verificationStatus: "unverified" } });
+    // The replacement request verified the new token itself (#4353).
+    expect(current).toMatchObject({ generation: 2, livePod: { verificationStatus: "ok" } });
     // The binding survives the rotation: no URL, configuration entry or second admission is needed.
     expect(store.getTargetAdmission(current)).toEqual(binding);
     expect(
@@ -1946,7 +2047,14 @@ describe("authenticated Live Pod credential updates", () => {
     const otherStoredBefore = structuredClone(fixtureStore.findChatById(other.id));
     const grants = [first, second, other].map((chat) => retainedChatReadGrant(chat));
     const sink = createFileServerLogSink(configDir, { level: "debug" });
-    await rebuild({ ...wiring, activityLog: sink });
+    await rebuild({
+      ...wiring,
+      activityLog: sink,
+      httpBodyPortFactory:
+        () =>
+        (request): Promise<AtlassianHttpBodyResult> =>
+          Promise.resolve(jiraProbeResponse(request)),
+    });
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const correlations: (string | null)[] = [];
     try {
@@ -1992,7 +2100,7 @@ describe("authenticated Live Pod credential updates", () => {
       expect(grants.map((state) => state())).toEqual(["revoked", "revoked", "granted"]);
       expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
         generation: 3,
-        livePod: { verificationStatus: "unverified" },
+        livePod: { verificationStatus: "ok" },
       });
     } finally {
       sink.close?.();
@@ -2025,60 +2133,6 @@ describe("authenticated Live Pod credential updates", () => {
     ]);
     expect(lines.join("\n")).not.toContain(credential.authRef);
     expect(lines.join("\n")).not.toContain(SYNTHETIC_TOKEN);
-  });
-
-  it("records the verification that follows a token replacement as its own action, once, body-free (#4353)", async () => {
-    const credential = credentialForPod(await readyJiraPod());
-    const sink = createFileServerLogSink(configDir, { level: "debug" });
-    await rebuild({
-      ...wiring,
-      activityLog: sink,
-      httpBodyPortFactory:
-        () =>
-        (request): Promise<AtlassianHttpBodyResult> =>
-          Promise.resolve(jiraProbeResponse(request)),
-    });
-    try {
-      expect(
-        (
-          await updateJiraCredential(credential.authRef, {
-            expectedGeneration: 1,
-            apiToken: `${SYNTHETIC_TOKEN}-replacement`,
-          })
-        ).status,
-      ).toBe(200);
-      const followUp = await fetch(
-        `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(credential.authRef)}/verify`,
-        {
-          method: "POST",
-          headers: csrfHeaders(),
-          body: JSON.stringify({ trigger: "replace-token" }),
-        },
-      );
-      expect(await followUp.json()).toEqual({ authRef: credential.authRef, status: "ok" });
-      // An ordinary explicit verification keeps its own action: only the closed trigger changes it.
-      expect((await verifyCredentialRequest(credential.authRef)).status).toBe(200);
-      const events = readVerificationEvidence(sink).filter((event) => event.action !== undefined);
-      expect(events.map((event) => event.action)).toEqual(["verify-after-replace", "verify"]);
-      expect(events[0]).toMatchObject({ outcome: "ok", verificationState: "applied" });
-      expect(JSON.stringify(events)).not.toContain(SYNTHETIC_TOKEN);
-      expect(JSON.stringify(events)).not.toContain(credential.authRef);
-    } finally {
-      sink.close?.();
-    }
-  });
-
-  it("refuses an unknown verification trigger before any probe is dispatched (#4353)", async () => {
-    const credential = credentialForPod(await readyJiraPod());
-    fakePortRequests.length = 0;
-    for (const trigger of ["anything", 1, null, {}]) {
-      const response = await fetch(
-        `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(credential.authRef)}/verify`,
-        { method: "POST", headers: csrfHeaders(), body: JSON.stringify({ trigger }) },
-      );
-      expect(response.status).toBe(400);
-    }
-    expect(fakePortRequests).toHaveLength(0);
   });
 
   it("refuses foreign Pod updates and malformed bodies without changing custody", async () => {

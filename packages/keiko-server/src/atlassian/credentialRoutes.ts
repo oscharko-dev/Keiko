@@ -20,7 +20,7 @@ import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 // diagnostic sink — the exact contract `check:error-observability` enforces.
 
 import type { IncomingMessage } from "node:http";
-import { verifyStoredCredential, type VerificationTrigger } from "./credentialVerification.js";
+import { verifyStoredCredential } from "./credentialVerification.js";
 import {
   AtlassianCredentialCustodyError,
   type AtlassianCredentialCustody,
@@ -407,14 +407,6 @@ export function handleDeleteAtlassianConnectorCredential(
   });
 }
 
-// The only trigger a caller may name is the check that follows a token replacement; it changes the
-// action the Activity Log records and nothing about the probe itself (#4353).
-function verificationTriggerOf(body: Record<string, unknown>): VerificationTrigger {
-  if (body.trigger === undefined) return "verify";
-  if (body.trigger === "replace-token") return "verify-after-replace";
-  throw new AtlassianCredentialCustodyError("invalid-input", ["trigger must be replace-token"]);
-}
-
 // POST /api/atlassian-connectors/credentials/:authRef/verify — one bounded, read-only probe
 // against the credential's configured base URL through the injected transport port. Always
 // answers the closed status union on 200; no response body is read, persisted, or echoed.
@@ -425,7 +417,6 @@ export function handleVerifyAtlassianConnectorCredential(
   const guard = requireCustody(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(guard, ctx, async () => {
-    const trigger = verificationTriggerOf(await readJsonObject(ctx.req));
     const authRef = decodeAuthRefParam(ctx);
     const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
     if (metadata === undefined || !ownsAtlassianCredential(deps, metadata))
@@ -434,10 +425,29 @@ export function handleVerifyAtlassianConnectorCredential(
       guard,
       metadata,
       ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-      trigger,
     );
     return { status: 200, body: { authRef: metadata.authRef, status } };
   });
+}
+
+// A replaced token is verified by the same request that stored it, through the same probe, bounds
+// and credential-epoch check as an explicit verification, so no client has to remember a second
+// call and a closed tab cannot leave the Pod silently unverified (#4353). The answer carries the
+// state the probe left: verified, a closed failure status, or unverified when a newer change
+// superseded this token before the probe ended (its own check owns the Pod then). The token stays
+// stored whatever the probe finds; any other fault propagates to the opaque, correlated 500.
+async function verifyReplacedToken(
+  deps: AtlassianConnectorCredentialDeps,
+  updated: AtlassianCredentialMetadata,
+  correlationId: string,
+): Promise<void> {
+  try {
+    await verifyStoredCredential(deps, updated, correlationId, "verify-after-replace");
+  } catch (error) {
+    if (error instanceof AtlassianCredentialCustodyError && error.code === "credential-changed")
+      return;
+    throw error;
+  }
 }
 
 /** PATCH updates the owned Live-Pod resource; secret-bearing input never enters the response. */
@@ -457,12 +467,12 @@ export function handleUpdateAtlassianConnectorCredential(
     let updateKind: "rename" | "replace-token" | "rename-and-replace-token" = "rename";
     if (body.apiToken !== undefined)
       updateKind = body.displayName === undefined ? "replace-token" : "rename-and-replace-token";
-    recordCredentialUpdated(
-      guard,
-      ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-      updated.generation ?? 1,
-      updateKind,
-    );
-    return { status: 200, body: publicAtlassianCredential(updated) };
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    recordCredentialUpdated(guard, correlationId, updated.generation ?? 1, updateKind);
+    if (body.apiToken !== undefined) await verifyReplacedToken(guard, updated, correlationId);
+    return {
+      status: 200,
+      body: publicAtlassianCredential(guard.custody.getMetadata(updated.authRef) ?? updated),
+    };
   });
 }
