@@ -751,6 +751,17 @@ function linkData(links: JiraMutationLinkAccount | undefined): Record<string, un
  */
 export const JIRA_REJECTED_GUIDANCE =
   "Jira refused this change and nothing was changed. Correct the fields named in fieldErrors (fieldId, fieldName, message) or messages, then send the corrected change once. If Jira refuses it again, tell the user in plain language which field is the problem and what Jira said.";
+/**
+ * A refusal made before the change was sent: by Keiko's own checks, or by what Keiko read first
+ * (#4357 AC3). Its `messages` and `fieldId` say what to do; saying "Jira refused" there would be untrue.
+ * Which of the two instructions a result gets is decided by a closed fact set where Jira's error
+ * document is parsed (`detail.fromJira`), never by the shape of the detail.
+ */
+export const JIRA_LOCAL_REFUSAL_GUIDANCE =
+  "Keiko refused this change before sending it to Jira, and nothing was changed. Do what the messages say: correct the argument named in fieldId, or read the current state again, then send the corrected change once. If it is refused again, tell the user in plain language what is wrong.";
+/** A permission refusal is not a field to correct: retrying cannot succeed. */
+export const JIRA_PERMISSION_GUIDANCE =
+  "Jira's permissions do not allow this connection to make this change or to read what it needs, and nothing was changed. Do not retry it. Tell the user in plain language that the Jira account lacks the permission, and what the messages say.";
 export const JIRA_EXISTING_GUIDANCE =
   "Nothing was written: the Jira resource identified by this result already exists or already holds these values, as messages say. Report that as the result. Do not send it again, and do not change its fields to create another one.";
 /** The journal holds no arguments or results, so a replay cannot repeat the earlier reasons. */
@@ -783,7 +794,35 @@ export function jiraResultGuidance(
   // An adapter independently observed the requested state before attempting any effect.
   if (outcome === "rejected" && reason === "conflict" && detail?.unchanged === true)
     return JIRA_EXISTING_GUIDANCE;
-  return outcome === "rejected" && jiraExplained(detail) ? JIRA_REJECTED_GUIDANCE : undefined;
+  return outcome === "rejected" && jiraExplained(detail)
+    ? explainedRefusalGuidance(reason, detail)
+    : undefined;
+}
+export type JiraRefusalSource = "jira" | "keiko";
+/**
+ * Who refused a change that was refused, from the closed fact the detail carries and nothing else
+ * (#4357 AC3): Jira, when its own error document was parsed (`detail.fromJira`), otherwise Keiko. The
+ * guidance of a result and the draft's per-item source both come from this one function. A result
+ * that is not a refusal has no source.
+ */
+export function jiraRefusalSource(
+  outcome: JiraMutationResultState,
+  detail: JiraMutationFailureDetail | undefined,
+): JiraRefusalSource | undefined {
+  if (outcome !== "rejected" && outcome !== "not-dispatched") return undefined;
+  return detail?.fromJira === true ? "jira" : "keiko";
+}
+/**
+ * What the model is told to do after an explained refusal. Only Jira's own refusal can be a
+ * permission one: a Keiko-made `permission-denied` (a read Jira denied before the write) is Keiko's
+ * refusal and gets Keiko's words.
+ */
+function explainedRefusalGuidance(
+  reason: AtlassianConnectorWriteFailureReason | undefined,
+  detail: JiraMutationFailureDetail | undefined,
+): string {
+  if (jiraRefusalSource("rejected", detail) !== "jira") return JIRA_LOCAL_REFUSAL_GUIDANCE;
+  return reason === "permission-denied" ? JIRA_PERMISSION_GUIDANCE : JIRA_REJECTED_GUIDANCE;
 }
 function uncertainOutcome(
   outcome: JiraMutationResultState,

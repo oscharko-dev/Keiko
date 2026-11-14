@@ -228,6 +228,39 @@ function matching(options: DiscoveryOptions, query: string): readonly Summary[] 
     .map((entry) => entry.candidate.summary);
 }
 
+/**
+ * A search that finds nothing in this release, for words that name an operation this release leaves
+ * out, is answered by one closed notice (#4357 AC3): without it an empty list reads as "search again"
+ * or "use another tool", and the model tries both instead of telling the person. Scored like any
+ * other search, over the operations the release scope withholds.
+ */
+export const JIRA_OUT_OF_RELEASE_GUIDANCE =
+  "This search names an operation that is not part of this release, so no tool for it exists here, whatever else the list holds. Do not use another tool in its place: tell the user it is not available in this release and can be done in Jira itself.";
+function topScore(entries: readonly Candidate[], terms: readonly string[]): number {
+  return entries.reduce((best, entry) => Math.max(best, scoreOf(entry, terms)), 0);
+}
+/**
+ * Whether the words of a search name an operation the release scope withholds better than any
+ * operation it offers: nothing found is the plain case, a weaker word shared with an offered one
+ * ("issue" in "attach a file to an issue") is the other.
+ */
+function namesOutOfReleaseOperation(options: DiscoveryOptions, query: string): boolean {
+  const terms = significantTerms(query).slice(0, QUERY_TERMS_MAX);
+  if (terms.length === 0) return false;
+  // Withheld operations are never in the provider's tool set, so the set cannot narrow them.
+  const withheld = jiraOperationDefinitions()
+    .filter((definition) => !jiraOperationInReleaseScope(definition.tool))
+    .map((definition): Candidate => {
+      const summary: Summary = {
+        identity: definition.identity,
+        tool: definition.tool,
+        description: JIRA_OPERATION_SUMMARIES[definition.tool] ?? definition.tool,
+      };
+      return { summary, ...candidateWords(summary, definition) };
+    });
+  return topScore(withheld, terms) > topScore(candidates(options), terms);
+}
+
 /** Exact registry identity lookup: neither user URLs nor HTTP request shapes are accepted. */
 export function jiraToolsForIdentities(identities: readonly string[]): readonly string[] {
   const definitions = jiraOperationDefinitions();
@@ -297,6 +330,8 @@ function discover(
   const available =
     typeof args.query === "string" ? matching(options, args.query) : summaries(options);
   requireDispatch(context.jiraDiscoveryResultFits !== undefined, "failed", "handler-unavailable");
+  const noticeOutOfRelease =
+    typeof args.query === "string" && namesOutOfReleaseOperation(options, args.query);
   const items: CatalogJsonObject[] = [];
   const page = (): CatalogJsonObject => ({
     outcome: "succeeded",
@@ -304,6 +339,7 @@ function discover(
     startAt,
     total: available.length,
     ...(startAt + items.length < available.length ? { nextStartAt: startAt + items.length } : {}),
+    ...(noticeOutOfRelease ? { guidance: JIRA_OUT_OF_RELEASE_GUIDANCE } : {}),
   });
   for (const item of available.slice(startAt, startAt + maxResults)) {
     items.push(item);

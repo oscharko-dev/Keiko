@@ -29,6 +29,7 @@ import {
   remoteLinkBody,
   remoteLinkExpected,
   remoteLinkSelfMatches,
+  remoteLinkValueProblem,
   remoteLinkValue,
   sameRemoteLinks,
   sameRemoteLinkValue,
@@ -365,8 +366,7 @@ function remoteLinkInvalidMessage(operation: Operation, args: CatalogJsonObject)
 }
 function upsertInvalidMessage(args: CatalogJsonObject): string {
   const value = remoteLinkValue(args.value);
-  if (value === undefined)
-    return "value must be the complete remote link with every field present, null where it is empty.";
+  if (value === undefined) return remoteLinkValueProblem(args.value);
   if (value.globalId === null)
     return "value.globalId is required: it identifies the link, so send it inside value.";
   if (args.linkId !== undefined || args.globalId !== undefined)
@@ -381,13 +381,32 @@ function upsertInvalidMessage(args: CatalogJsonObject): string {
   return "expected.globalId must equal value.globalId; to replace another link, use jira.update-remote-link.";
 }
 function snapshotInvalidMessage(operation: Operation, args: CatalogJsonObject): string {
-  if (args.expectAbsent !== undefined || remoteLinkExpected(args.expected) === undefined)
+  const expected = remoteLinkExpected(args.expected);
+  if (args.expectAbsent !== undefined || expected === undefined)
     return "expected must be the current link exactly as jira.remote-links lists it, every field present; expectAbsent is only for an upsert.";
-  if (operation === "jira.delete-remote-link-by-global-id")
+  if (operation === "jira.delete-remote-link-by-global-id") return globalDeleteMessage(args);
+  return selectedLinkMessage(operation, args, expected.id);
+}
+function globalDeleteMessage(args: CatalogJsonObject): string {
+  if (args.value !== undefined || args.linkId !== undefined)
     return "Send only globalId, equal to expected.globalId, and no value or linkId.";
-  return operation === "jira.delete-remote-link"
-    ? "Send linkId equal to expected.id, and no value."
-    : "Send linkId equal to expected.id, and value: the complete replacement link, every field present.";
+  return "globalId must equal expected.globalId, the global ID of the link to delete.";
+}
+function selectedLinkMessage(
+  operation: Operation,
+  args: CatalogJsonObject,
+  expectedId: string,
+): string {
+  const update = operation === "jira.update-remote-link";
+  if (args.globalId !== undefined)
+    return update
+      ? "An update takes linkId, not globalId: send linkId equal to expected.id."
+      : "A delete by link ID takes linkId, not globalId; to delete by global ID use jira.delete-remote-link-by-global-id.";
+  if (args.linkId !== expectedId)
+    return `linkId must equal expected.id, the ID of the link to ${update ? "replace" : "delete"}.`;
+  return update
+    ? remoteLinkValueProblem(args.value)
+    : "Send linkId equal to expected.id, and no value.";
 }
 /** Native POST is an explicitly reviewed upsert. No reciprocal endpoint or external HTTP request. */
 export async function executeJiraRemoteLinkMutation(

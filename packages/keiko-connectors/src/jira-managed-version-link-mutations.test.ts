@@ -568,3 +568,18 @@ it("keeps the sentence with the unchanged flag when the set already matches", as
     },
   });
 });
+it("tells a model whose expectedActorKey is not the connected user's where the key comes from", async () => {
+  const f = fixture(CASES[2]);
+  f.actor.key = "another-actor";
+  const refused = await mutate(CASES[2].tool, CASES[2].args, f.request);
+  expect(refused).toMatchObject({
+    ok: false,
+    detail: {
+      messages: [
+        "expectedActorKey is not the key of the connected Jira user. It must be the key jira.myself returns: read it, then send the write again. Nothing was changed.",
+      ],
+    },
+  });
+  expect(JSON.stringify(refused)).not.toMatch(/reviewed user|replayed/u);
+  expect(f.writes()).toBe(0);
+});
