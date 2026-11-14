@@ -18,6 +18,24 @@
         "sha256": "070e0f2a21e0e55a661db9330165c4a9d6de50daf079bcbcff51aca2b2840e66",
         "integrity": "sha512-BQ20gNcmRes5xReJxdAWhTNun77G7SnatL+DzHjVzDNhEvuR7wqNJgcDaRGeOsdRZBX0VFq1bcqiQZXb4TxA+g=="
       }
+    },
+    "1.1.5": {
+      "macos-arm64": {
+        "name": "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
+        "opencodeVersion": "2.2.5",
+        "tarball": "oscharko-dev-keiko-coding-runtime-darwin-arm64-1.1.5.tgz",
+        "sizeBytes": 107238597,
+        "sha256": "abba4acbbbebfdf302b9d687a8614519a2c9cb0b6eefc52cafbfbbea977c8bdf",
+        "integrity": "sha512-Vk5+KD+dpUClGB1kCQbu+TVEMfl6PCgiUfsF19gABm/Zgzp5GDfCw0kQhmz5yci77wokBYStKqbWEaMPwT1Cig=="
+      },
+      "macos-x64": {
+        "name": "@oscharko-dev/keiko-coding-runtime-darwin-x64",
+        "opencodeVersion": "2.2.5",
+        "tarball": "oscharko-dev-keiko-coding-runtime-darwin-x64-1.1.5.tgz",
+        "sizeBytes": 112445724,
+        "sha256": "1952015177da85b4d29698dbfe96b7fbf1dda03660fca5c56deaa0b02d1b2b73",
+        "integrity": "sha512-fKea5IO0yyAgL7DQLbqBm/3fv+Mva9TLrkStxJintyudmT570RWVOiHGE14skVZa/LsvOztxJWsZLaWpkeIn9Q=="
+      }
     }
   }
 }
