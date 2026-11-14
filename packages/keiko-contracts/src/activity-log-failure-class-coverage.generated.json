@@ -31759,6 +31759,12 @@
               "required": false
             },
             {
+              "name": "expectationsTruncated",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "invalidPathCount",
               "type": "integer",
               "dataClass": "count",
@@ -31793,6 +31799,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "statedExpectationCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "status",

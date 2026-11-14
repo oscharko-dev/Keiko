@@ -26138,6 +26138,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      statedExpectationCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      expectationsTruncated: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
     },
     causal: "none",
     lifecycle: "failure",

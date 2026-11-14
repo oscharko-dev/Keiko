@@ -542,6 +542,29 @@ describe("gateway bridge trust and compatibility boundaries", () => {
     });
   });
 
+  it("records how many rules the correction stated, as a count and a truncation flag, never their text", async () => {
+    const log: ModelGatewayLogEvent[] = [];
+    await expect(
+      adapter(() => Promise.resolve(response({ path: 5 })), log).call(
+        { ...request(), toolCatalog: advertisement() },
+        CONFIG,
+      ),
+    ).rejects.toMatchObject({ status: "invalid" });
+    const rejected = log.filter((event) => event.op === "gateway.tool-catalog.rejected").at(-1);
+    expect(rejected?.extra).toMatchObject({
+      catalogReason: "invalid-shape",
+      invalidPaths: ["path"],
+      statedExpectationCount: 1,
+      expectationsTruncated: false,
+    });
+    const persisted = expectActivityLogProof(
+      "gateway.tool-catalog.rejected.emitted-line",
+      formatActivityLogProofLine(rejected ?? {}),
+    );
+    expect(persisted).toMatchObject({ statedExpectationCount: 1, expectationsTruncated: false });
+    // Counts and a closed flag only: not the rule's words and not the rejected value.
+    expect(JSON.stringify(persisted)).not.toMatch(/must be|string/u);
+  });
   it("retains reported usage when invalid tool arguments reject an HTTP 200 response", async () => {
     const subject = adapter(() =>
       Promise.resolve(

@@ -336,7 +336,7 @@ export function describeCatalogSchemaMismatch(
   if (collectMismatch(schema, value, "", out)) return undefined;
   const missing = cappedPaths(out.missingRequired);
   const invalid = cappedPaths(out.invalidPaths);
-  const expected = collectExpectations(
+  const { expected, omittedCount } = collectExpectations(
     [...missing.listed, ...invalid.listed].map((path) => ({ path, node: out.nodes.get(path) })),
   );
   return Object.freeze({
@@ -345,6 +345,7 @@ export function describeCatalogSchemaMismatch(
     unexpectedPropertyCount: out.unexpectedPropertyCount,
     droppedPathCount: missing.dropped + invalid.dropped,
     ...(expected.length === 0 ? {} : { expected }),
+    ...(omittedCount === 0 ? {} : { expectedOmittedCount: omittedCount }),
   });
 }
 

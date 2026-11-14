@@ -31,7 +31,11 @@ import {
   type CatalogSchemaMismatch,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { MalformedToolCallError } from "@oscharko-dev/keiko-security/errors/gateway";
-import { toolSchemaCorrectionMessage, type GatewayToolCallRepair } from "./toolSchemaCorrection.js";
+import {
+  statedExpectations,
+  toolSchemaCorrectionMessage,
+  type GatewayToolCallRepair,
+} from "./toolSchemaCorrection.js";
 import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import type {
@@ -137,6 +141,10 @@ const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
     invalidPathCount: { type: "integer", dataClass: "count", required: false },
     unexpectedPropertyCount: { type: "integer", dataClass: "count", required: false },
     droppedPathCount: { type: "integer", dataClass: "count", required: false },
+    // What the correction told the model (#4357): how many properties' rules it stated, and whether
+    // the list was cut at a cap. Counts only, never a rule, a path or a value.
+    statedExpectationCount: { type: "integer", dataClass: "count", required: false },
+    expectationsTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
   },
   causal: "none",
   lifecycle: "failure",
@@ -493,6 +501,8 @@ interface CatalogRejectionDetails {
   readonly invalidPathCount?: number;
   readonly unexpectedPropertyCount?: number;
   readonly droppedPathCount?: number;
+  readonly statedExpectationCount?: number;
+  readonly expectationsTruncated?: boolean;
 }
 
 // The schema's account of an `invalid-shape` rejection, in the schema's vocabulary only: declared
@@ -500,7 +510,10 @@ interface CatalogRejectionDetails {
 // the retry budget while the line said `invalid-shape` and nothing else.
 function shapeDetails(shape: CatalogSchemaMismatch | undefined): CatalogRejectionDetails {
   if (shape === undefined) return {};
+  const stated = statedExpectations(shape);
   return {
+    statedExpectationCount: stated.statedCount,
+    expectationsTruncated: stated.omittedCount > 0,
     missingRequired: shape.missingRequired,
     missingRequiredCount: shape.missingRequired.length,
     invalidPaths: shape.invalidPaths,
