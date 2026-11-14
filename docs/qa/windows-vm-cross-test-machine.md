@@ -594,8 +594,12 @@ Where each appendix is saved (create the folders in step 1; every name is the fi
 | M `mon.sh`, N `vmkeys.py`, O `vncshot.py` | `$W/bin/mon.sh`, `$W/bin/vmkeys.py`, `$W/bin/vncshot.py` (`mon.sh` executable)                            |
 | P `mkcfg.py`                              | `$W/bin/mkcfg.py`                                                                                         |
 | Q the six AppleScripts                    | `$W/bin/create.applescript`, `import`, `attach-tools`, `network`, `snapshot`, `restore` (same suffix)     |
+| S `rebuild-env.sh`                        | `$W/bin/rebuild-env.sh`: the block "Variables and helpers" below, saved as a file (paths only, no secret) |
 
-Variables and helpers used below (set them once in the shell you work in):
+Variables and helpers used below (set them once in the shell you work in, or save the block as
+appendix S, `$W/bin/rebuild-env.sh`, and `source` it at the start of every new shell, as a tool that starts a
+fresh shell for each command needs; it holds paths and function definitions only, never the password
+or the key itself):
 
 ```sh
 W="$HOME/keiko-windows-rebuild"   # private work directory; step 1 creates it, mode 700
@@ -615,9 +619,11 @@ Typing into the guest: `typeline '<text>'` sends the text as key presses through
 presses Enter. Put the text in shell **single quotes**; the Windows text then must not contain an
 apostrophe (use double quotes inside it). `typeline` works only while the guest console has the
 keyboard focus; take a screenshot (`vncshot.py`) after each line and read the result from the picture.
-`nc` (macOS's netcat) ends a pipe when its input ends: `mon.sh` and the key loop below return after
-about a second per call, and `nc -w 5` gives up on a monitor that does not answer. If a call hangs
-anyway, press Ctrl-C and check `lsof -nP -iTCP:55577 -sTCP:LISTEN` (the monitor must listen).
+`nc` (macOS's netcat) does not end when its input ends: `-w` is an **idle** timeout, so a call lasts until
+the monitor has been silent for that many seconds. Measured against a silent local listener: with
+`-w 5` one key call took 5 s (the key loop would then press a key every 5.5 s, and the boot prompt
+waits only a few seconds), with `-w 1` it takes 1.5 s. `mon.sh` and the key loop below therefore use
+`nc -w 1`; a call with two monitor commands takes about 3 s. If a call hangs anyway, press Ctrl-C and check `lsof -nP -iTCP:55577 -sTCP:LISTEN` (the monitor must listen).
 
 0. **Preconditions.** Run the four checks of "Ports and names". Expect: the first machine `stopped`, no
    listener on 2222, 5977 and 55577, `name free`, and the first machine's snapshot list noted. Then:
@@ -632,9 +638,10 @@ to send Apple events to UTM. (-1743)`. UTM is sandboxed and writes the exported 
    into `$W/vm`; a folder directly under the home directory is not one of the folders macOS protects.
    If `$W/vm/skel.utm` does not exist after step 4, allow UTM under Privacy & Security → Files and
    Folders (or choose another work folder). **Not yet run** on a Mac without earlier permissions.
-1. **Host tools.**
+1. **Host tools.** **UTM already installed** (the first machine needs it): check the version, do not
+   reinstall; run only the two version lines and go on if they say 5.0.8. Without UTM:
    ```sh
-   brew install --cask utm
+   brew install --cask utm                         # only on a host without UTM
    brew list --cask --versions utm                 # expect: utm 5.0.8
    utmctl version                                  # expect: 5.0.8
    mkdir -p "$W/bin" "$W/ans" "$W/guest" && chmod 700 "$W"
@@ -696,10 +703,10 @@ to send Apple events to UTM. (-1743)`. UTM is sandboxed and writes the exported 
    ```sh
    utmctl start "$VM"; sleep 6; utmctl status "$VM"        # expect: started
    "$W/bin/mon.sh" "info status"                            # expect: VM status: running
-   for i in $(seq 1 30); do (sleep 0.2; echo "sendkey spc"; sleep 0.3) | nc -w 5 127.0.0.1 55577 >/dev/null; sleep 0.5; done
+   for i in $(seq 1 30); do (sleep 0.2; echo "sendkey spc"; sleep 0.3) | nc -w 1 127.0.0.1 55577 >/dev/null; sleep 0.5; done
    python3 -I "$W/bin/vncshot.py" 127.0.0.1 5977 "$W/shot.png"   # expect: ok <width> <height>
    ```
-   The loop presses space for about 30 seconds so the Windows CD boot loader ("Press any key to boot
+   The loop presses space for about a minute (30 calls, about two seconds each) so the Windows CD boot loader ("Press any key to boot
    from CD or DVD") continues once, at the start. **Do not press keys afterwards.** Setup restarts the
    machine itself; the Windows ISO stays first in the boot order, so each later boot shows the same
    prompt for a few seconds, and leaving it alone lets the machine fall through to the system disk and
@@ -1403,7 +1410,7 @@ machine got another monitor port.
 #!/bin/bash
 # usage: mon.sh "cmd" ["cmd"...]  — send commands to the QEMU monitor
 PORT="${KEIKO_MONITOR_PORT:-55577}"
-( sleep 0.3; for c in "$@"; do printf '%s\n' "$c"; sleep 0.4; done; sleep 0.5 ) | nc -w 5 127.0.0.1 "$PORT" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | tr -d '\r' | grep -v -E "^\(qemu\) *$"
+( sleep 0.3; for c in "$@"; do printf '%s\n' "$c"; sleep 0.4; done; sleep 0.5 ) | nc -w 1 127.0.0.1 "$PORT" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | tr -d '\r' | grep -v -E "^\(qemu\) *$"
 ```
 
 ### N. `vmkeys.py` (host)
