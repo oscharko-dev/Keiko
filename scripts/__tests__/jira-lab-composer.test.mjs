@@ -120,6 +120,19 @@ describe("templates and prompts of the lane", () => {
       expect(markdown).toContain("activateOn: [create, edit]");
   });
 
+  // gpt-5.4, 2026-11-14: the violating request named no content for the sections the template asks
+  // for, so a model that does not invent content asked the person instead of repairing in the same
+  // turn. The repair now carries the content, exactly as the create prompts do.
+  it("gives the model the section content for the repair, after the violating first request", () => {
+    for (const type of COMPOSER_TYPES) {
+      const prompt = violationPrompt(type, "Mein Titel", FIXTURE);
+      expect(prompt).toContain("genau der Beschreibung „Kurzer Test.“");
+      const repair = prompt.slice(prompt.indexOf("Für die Korrektur gilt:"));
+      expect(repair).toContain("Synthetischer Inhalt zum Abschnitt");
+      for (const name of SECTIONS[type]) expect(repair).toContain(`${name}:`);
+    }
+  });
+
   it("asks in plain words: a title and the named parents, never a requirement or a structure", () => {
     for (const type of COMPOSER_TYPES) {
       for (const prompt of [
