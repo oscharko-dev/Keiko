@@ -934,13 +934,18 @@ export function jiraTemplateBoundFieldId(
   const { binding } = template;
   if (binding === undefined) return undefined;
   const index = template.requiredFields.findIndex((field) => sameName(field, reference));
-  const id =
-    index >= 0
-      ? binding.requiredFieldIds?.[index]
-      : template.parent.field !== undefined && sameName(template.parent.field, reference)
-        ? binding.parentFieldId
-        : undefined;
+  const id = index >= 0 ? binding.requiredFieldIds?.[index] : parentFieldIdOf(template, reference);
   return id === undefined || id === JIRA_BINDING_UNRESOLVED ? undefined : id;
+}
+
+/** The bound parent-link field id, when the reference names the template's parent field. */
+function parentFieldIdOf(
+  template: Pick<JiraIssueTemplate, "binding" | "parent">,
+  reference: string,
+): string | undefined {
+  return template.parent.field !== undefined && sameName(template.parent.field, reference)
+    ? template.binding?.parentFieldId
+    : undefined;
 }
 
 /**
