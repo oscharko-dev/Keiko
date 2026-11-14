@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
@@ -6,7 +5,8 @@ import {
   hashPortableTreeKht1,
   PortableTreeAttestationError,
 } from "@oscharko-dev/keiko-security/portable-tree-attestation";
-import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { runAsyncSteps, type SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
 const BUFFER_BYTES = 64 * 1024;
@@ -89,8 +89,8 @@ function assertOpenedFile(before: Stats, opened: Stats, maximumBytes: number): v
   }
 }
 
-async function readFileDigest(
-  handle: FileHandle,
+export async function readFileDigest(
+  handle: Pick<FileHandle, "read">,
   expectedSize: number,
   maximumBytes: number,
   operation: PortableHandoffOperation,
@@ -99,19 +99,18 @@ async function readFileDigest(
   const buffer = Buffer.allocUnsafe(BUFFER_BYTES);
   let bytes = 0;
   let reads = 0;
-  // One read per call instead of an await inside a loop: the same checks in the same order.
-  const readNext = async (): Promise<{ readonly bytes: number; readonly digest: Buffer }> => {
+  // One read per call; `runAsyncSteps` keeps memory constant however large the file is.
+  return runAsyncSteps(async () => {
     assertPortableHandoffOperation(operation);
     const result = await handle.read(buffer, 0, buffer.length, null);
-    if (result.bytesRead === 0) return { bytes, digest: hash.digest() };
+    if (result.bytesRead === 0) return { done: true, value: { bytes, digest: hash.digest() } };
     bytes += result.bytesRead;
     if (bytes > expectedSize || bytes > maximumBytes) fail("portable handoff artifact changed");
     hash.update(buffer.subarray(0, result.bytesRead));
     reads += 1;
     if (reads % 64 === 0) await operation.yieldControl();
-    return readNext();
-  };
-  return readNext();
+    return { done: false };
+  });
 }
 
 function assertStableFile(opened: Stats, after: Stats, current: Stats, bytes: number): void {

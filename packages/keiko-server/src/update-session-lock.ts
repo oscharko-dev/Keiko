@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import {
   chmodSync,
   closeSync,
@@ -31,6 +30,7 @@ import {
   processIdentityField,
   PROCESS_START_IDENTITY,
 } from "./process-identity.js";
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 
 const DEFAULT_STALE_LOCK_MS = 10 * 60_000;
 // KEIKO-0812: forensic-evidence retention window for `*.corrupt.*` quarantine files. A file
@@ -299,8 +299,9 @@ function boundLockRenameSink(
   sink: SecurityLogSink | undefined,
   correlationId: string,
 ): { readonly securityLogSink: SecurityLogSink } {
-  const bound = bindSecurityLogCorrelation(sink ?? serverSecurityLogSink(), correlationId);
-  return { securityLogSink: bound ?? serverSecurityLogSink() };
+  return {
+    securityLogSink: bindSecurityLogCorrelation(sink ?? serverSecurityLogSink(), correlationId),
+  };
 }
 
 function flushLockParent(path: string): void {

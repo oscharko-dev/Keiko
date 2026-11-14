@@ -3,7 +3,6 @@
 // The browser receives only configured capability metadata and redacted routing/preflight status.
 // Provider URLs, headers, keys, and raw provider errors never cross this surface.
 
-import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import type { IncomingMessage } from "node:http";
 import {
   lstatSync,
@@ -49,6 +48,7 @@ import {
   tryParseJudgeVerdict,
   withQiJudgeStageFailure,
 } from "./judgePort.js";
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 
 const QI_POLICY_DIR = "quality-intelligence";
 const QI_POLICY_FILE = "model-policy.json";

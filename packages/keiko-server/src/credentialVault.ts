@@ -12,7 +12,6 @@
 // offline `keiko run` and `keiko repair` commands can resolve/detect credentials without loading the
 // full BFF runtime. Figma PAT routing and the migration orchestration live in credentialPersistence.
 
-import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -29,6 +28,7 @@ import {
 // the full-server composition sites (deps.ts, gateway-setup.ts, credentialPersistence.ts).
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 
 // Structurally identical to the gateway's ProviderSecretResolver (kept local so keiko-server does not
 // force a new name onto the gateway's barrel surface, which the root product package re-exports).

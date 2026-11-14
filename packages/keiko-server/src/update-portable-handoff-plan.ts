@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -20,6 +19,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { PORTABLE_STAGE_DIR_PREFIX } from "./update-portable-staging-shared.js";
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 
 const ACTIVATION_ID = /^[a-f0-9]{32}$/u;
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;

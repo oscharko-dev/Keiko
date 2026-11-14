@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -43,6 +42,7 @@ import {
   windowsGenerationBindingsEqual,
   type WindowsGenerationBinding,
 } from "./update-portable-windows-generation.js";
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 
 export interface PortableActivationFileInput {
   readonly sessionId: string;

@@ -71,7 +71,6 @@ import {
   emitSecurityLogEvent,
   securityErrorKind,
   startSecurityLogTimer,
-  unwiredSecurityLogSink,
   type SecurityLogSink,
 } from "./log-port.js";
 import {
@@ -640,7 +639,7 @@ function readWindowsAttestedKey(keyfile: string, options: ResolveLocalVaultKeyOp
   }
 }
 
-function emitKeyResolutionFailed(sink: SecurityLogSink | undefined, error: unknown): void {
+function emitKeyResolutionFailed(sink: SecurityLogSink, error: unknown): void {
   emitSecurityLogEvent(
     sink,
     activityLogEvent(
@@ -663,7 +662,7 @@ export function resolveLocalVaultKey(options: ResolveLocalVaultKeyOptions): Reso
   return resolved;
 }
 
-function emitKeyResolved(sink: SecurityLogSink | undefined, source: LocalVaultKeySource): void {
+function emitKeyResolved(sink: SecurityLogSink, source: LocalVaultKeySource): void {
   emitSecurityLogEvent(
     sink,
     activityLogEvent(SECURITY_VAULT_KEY_RESOLVED_OPERATION, { level: "info" }, { source }),
@@ -802,7 +801,7 @@ function fsyncDirectory(dir: string): void {
 function writeStore(
   storePath: string,
   entries: Record<string, string>,
-  sink?: SecurityLogSink,
+  sink: SecurityLogSink,
 ): void {
   const resolvedPath = resolve(storePath);
   const dir = dirname(resolvedPath);
@@ -822,7 +821,7 @@ function writeStore(
     chmodIfPresent(tempPath, FILE_MODE);
     atomicPublishRename(tempPath, resolvedPath, {
       rename: renameSync,
-      securityLogSink: sink ?? unwiredSecurityLogSink(),
+      securityLogSink: sink,
     });
     chmodIfPresent(resolvedPath, FILE_MODE);
     fsyncDirectory(dir);
@@ -918,7 +917,7 @@ function shardReference(fileName: string): string | undefined {
 
 // Atomic, crash-safe single-entry write. Mirrors writeStore's temp-then-rename discipline; the
 // difference is that the temp file holds ONE envelope, so the cost does not grow with the vault.
-function writeShard(dir: string, filePath: string, envelope: string, sink?: SecurityLogSink): void {
+function writeShard(dir: string, filePath: string, envelope: string, sink: SecurityLogSink): void {
   // Checked twice on purpose, exactly as writeStore does: the first call guards an already
   // symlinked path, the second narrows the window where a parent could be swapped between
   // directory creation and the rename. The atomic temp-then-rename below remains the real
@@ -935,7 +934,7 @@ function writeShard(dir: string, filePath: string, envelope: string, sink?: Secu
     chmodIfPresent(tempPath, FILE_MODE);
     atomicPublishRename(tempPath, filePath, {
       rename: renameSync,
-      securityLogSink: sink ?? unwiredSecurityLogSink(),
+      securityLogSink: sink,
     });
     chmodIfPresent(filePath, FILE_MODE);
     fsyncDirectory(dir);
@@ -950,11 +949,7 @@ function writeShard(dir: string, filePath: string, envelope: string, sink?: Secu
   }
 }
 
-function emitEntriesMerged(
-  sink: SecurityLogSink | undefined,
-  count: number,
-  elapsedMs: () => number,
-): void {
+function emitEntriesMerged(sink: SecurityLogSink, count: number, elapsedMs: () => number): void {
   emitSecurityLogEvent(
     sink,
     activityLogEvent(
@@ -965,11 +960,7 @@ function emitEntriesMerged(
   );
 }
 
-function emitEntriesDeleted(
-  sink: SecurityLogSink | undefined,
-  count: number,
-  elapsedMs: () => number,
-): void {
+function emitEntriesDeleted(sink: SecurityLogSink, count: number, elapsedMs: () => number): void {
   emitSecurityLogEvent(
     sink,
     activityLogEvent(
@@ -981,7 +972,7 @@ function emitEntriesDeleted(
 }
 
 function deleteManyWithLog(
-  sink: SecurityLogSink | undefined,
+  sink: SecurityLogSink,
   references: readonly string[],
   run: () => void,
 ): void {
@@ -1008,7 +999,7 @@ function deleteManyWithLog(
 }
 
 function setManyWithLog(
-  sink: SecurityLogSink | undefined,
+  sink: SecurityLogSink,
   next: ReadonlyMap<string, string>,
   merge: (entries: ReadonlyMap<string, string>) => void,
 ): void {
@@ -1038,7 +1029,7 @@ function mergeStoreEntries(
   storePath: string,
   key: Buffer,
   next: ReadonlyMap<string, string>,
-  sink?: SecurityLogSink,
+  sink: SecurityLogSink,
 ): void {
   if (next.size === 0) return;
   const entries = readStore(storePath);
@@ -1052,7 +1043,7 @@ function replaceStoreEntries(
   storePath: string,
   key: Buffer,
   next: ReadonlyMap<string, string>,
-  sink?: SecurityLogSink,
+  sink: SecurityLogSink,
 ): void {
   if (existsSync(storePath)) {
     readStore(storePath);
@@ -1072,7 +1063,7 @@ function replaceStoreEntries(
 function deleteStoreEntries(
   storePath: string,
   references: readonly string[],
-  sink?: SecurityLogSink,
+  sink: SecurityLogSink,
 ): void {
   if (references.length === 0) return;
   const drop = new Set(references);
@@ -1095,7 +1086,7 @@ function deleteStoreEntries(
   writeStore(storePath, next, sink);
 }
 
-function deleteStoreEntry(storePath: string, reference: string, sink?: SecurityLogSink): void {
+function deleteStoreEntry(storePath: string, reference: string, sink: SecurityLogSink): void {
   deleteStoreEntries(storePath, [reference], sink);
 }
 
@@ -1112,7 +1103,7 @@ function isEnoent(cause: unknown): boolean {
   );
 }
 
-function emitShardUnreadable(sink: SecurityLogSink | undefined, cause: unknown): void {
+function emitShardUnreadable(sink: SecurityLogSink, cause: unknown): void {
   emitSecurityLogEvent(
     sink,
     activityLogEvent(
@@ -1125,7 +1116,7 @@ function emitShardUnreadable(sink: SecurityLogSink | undefined, cause: unknown):
   );
 }
 
-function readShardEnvelope(filePath: string, sink?: SecurityLogSink): string | undefined {
+function readShardEnvelope(filePath: string, sink: SecurityLogSink): string | undefined {
   // The symlink refusal is a guarantee and still throws. A read that fails for any other reason
   // (EISDIR, EACCES, EIO) is one unreadable entry, which says nothing about the others — reporting
   // it as absent is what this layout documents, and what `get`/`has` promise their callers.
@@ -1178,7 +1169,7 @@ function snapshotShardEnvelope(filePath: string): string | undefined {
 function restorePreparedShard(
   storeDir: string,
   item: PreparedShardWrite,
-  sink?: SecurityLogSink,
+  sink: SecurityLogSink,
 ): void {
   if (item.previous === undefined) {
     rmSync(item.path, { force: true });
@@ -1190,7 +1181,7 @@ function restorePreparedShard(
 function rollbackCommittedShards(
   storeDir: string,
   committed: readonly PreparedShardWrite[],
-  sink?: SecurityLogSink,
+  sink: SecurityLogSink,
 ): void {
   for (let index = committed.length - 1; index >= 0; index -= 1) {
     const item = committed[index];
@@ -1213,7 +1204,7 @@ function rollbackCommittedShards(
 function commitShardWrites(
   storeDir: string,
   prepared: readonly PreparedShardWrite[],
-  sink?: SecurityLogSink,
+  sink: SecurityLogSink,
 ): void {
   const committed: PreparedShardWrite[] = [];
   try {
@@ -1232,7 +1223,7 @@ function mergeShardEntries(
   writePath: (reference: string) => string,
   key: Buffer,
   next: ReadonlyMap<string, string>,
-  sink?: SecurityLogSink,
+  sink: SecurityLogSink,
 ): void {
   const prepared: PreparedShardWrite[] = [];
   for (const [reference, secret] of next) {
@@ -1264,7 +1255,7 @@ function replaceAllShards(
   storeDir: string,
   key: Buffer,
   next: ReadonlyMap<string, string>,
-  sink?: SecurityLogSink,
+  sink: SecurityLogSink,
 ): void {
   mergeShardEntries(
     storeDir,
@@ -1302,7 +1293,7 @@ type VaultGuard = <T>(operation: () => T) => T;
 
 function guardedSetMany(
   guarded: VaultGuard,
-  sink: SecurityLogSink | undefined,
+  sink: SecurityLogSink,
   next: ReadonlyMap<string, string>,
   merge: (entries: ReadonlyMap<string, string>) => void,
 ): void {
@@ -1315,7 +1306,7 @@ function guardedSetMany(
 
 function guardedDeleteMany(
   guarded: VaultGuard,
-  sink: SecurityLogSink | undefined,
+  sink: SecurityLogSink,
   references: readonly string[],
   remove: () => void,
 ): void {
@@ -1466,8 +1457,8 @@ function rememberedKeyIsCurrent(
   );
 }
 
-function announceOnce(remembered: RememberedKey, sink: SecurityLogSink | undefined): void {
-  if (sink === undefined || remembered.announcedTo.has(sink)) return;
+function announceOnce(remembered: RememberedKey, sink: SecurityLogSink): void {
+  if (remembered.announcedTo.has(sink)) return;
   remembered.announcedTo.add(sink);
   emitKeyResolved(sink, remembered.source);
 }

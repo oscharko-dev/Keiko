@@ -14,7 +14,6 @@
 // ciphertext. The store directory is created and hardened to 0700 by the store before the key is
 // resolved; resolveLocalVaultKeyOnce additionally hardens it and writes the keyfile at 0600.
 
-import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { dirname } from "node:path";
 import {
   resolveLocalVaultKeyOnce,
@@ -27,6 +26,7 @@ import type {
   KnowledgeStoreProtectionOptions,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 
 const LOCAL_KNOWLEDGE_KEY_ENV = "KEIKO_LOCAL_KNOWLEDGE_KEY";
 const LOCAL_KNOWLEDGE_KEYCHAIN_SERVICE = "keiko-local-knowledge-vault";

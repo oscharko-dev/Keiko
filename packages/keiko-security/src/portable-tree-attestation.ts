@@ -18,6 +18,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { runAsyncSteps, type AsyncStepOutcome } from "./async-steps.js";
 import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
 
 const TREE_HASH_SCHEMA = "KHT1";
@@ -764,11 +765,11 @@ async function runTreeMachineAsync(
   let response: unknown;
   let readSteps = 0;
   let ioSteps = 0;
-  // One machine step per call instead of an await inside a loop: the same checks in the same order.
-  const advance = async (): Promise<PortableSidecarTreeAttestation> => {
+  // One machine step per call; `runAsyncSteps` keeps memory constant however long the tree is.
+  const advance = async (): Promise<AsyncStepOutcome<PortableSidecarTreeAttestation>> => {
     assertAsyncOperation(operation);
     const step = machine.next(response);
-    if (step.done) return step.value;
+    if (step.done) return { done: true, value: step.value };
     response = await io.execute(step.value);
     if (step.value.kind === "read-file") readSteps += 1;
     ioSteps += 1;
@@ -777,10 +778,10 @@ async function runTreeMachineAsync(
       ioSteps = 0;
       await operation.yieldControl();
     }
-    return advance();
+    return { done: false };
   };
   try {
-    return await advance();
+    return await runAsyncSteps(advance);
   } finally {
     await io.closeAll();
   }

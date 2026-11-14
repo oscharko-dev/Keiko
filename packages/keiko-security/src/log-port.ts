@@ -179,6 +179,11 @@ export function emitSecurityLogEvent(
   }
 }
 
+export function bindSecurityLogCorrelation(sink: SecurityLogSink, id: string): SecurityLogSink;
+export function bindSecurityLogCorrelation(
+  sink: SecurityLogSink | undefined,
+  id: string,
+): SecurityLogSink | undefined;
 export function bindSecurityLogCorrelation(
   sink: SecurityLogSink | undefined,
   correlationId: string,

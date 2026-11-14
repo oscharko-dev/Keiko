@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import {
   attestPortableSidecarTreeSync,
   computePortableSidecarPayloadTreeDigest,
@@ -32,6 +31,7 @@ import {
   secureWorkspaceReadNativeProtocol,
   type SecureWorkspaceTextReadArtifact,
 } from "./secureWorkspaceTextReadArtifact.js";
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 
 export const KEIKO_CODING_RUNTIME_DEV_LANE_ENV = "KEIKO_CODING_RUNTIME_DEV_LANE";
 export const DEV_LANE_STAGED_PAYLOADS_DIR = ".portable-sidecar-payloads";

@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -12,6 +11,7 @@ import {
   type LocalSecretVault,
 } from "@oscharko-dev/keiko-security/secret-vault";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 
 const STORE_DIR = "conversation-attachments";
 const KEY_ENV = "KEIKO_CONVERSATION_ATTACHMENT_KEY";

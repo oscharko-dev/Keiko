@@ -12,7 +12,6 @@
 // keychain entry or keyfile, and a deployment that never stores an Atlassian credential must never
 // grow one.
 
-import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import { dirname, join } from "node:path";
 import {
   createLocalSecretVault,
@@ -23,6 +22,7 @@ import {
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { resolveCredentialVaultKey } from "../credentialVault.js";
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 
 const CREDENTIALS_SUBDIR = "credentials";
 const ATLASSIAN_STORE_FILE = "atlassian-connector-credentials.vault";

@@ -155,6 +155,7 @@ export {
   securityErrorKind,
   startSecurityLogTimer,
 } from "./log-port.js";
+export { runAsyncSteps, type AsyncStepOutcome } from "./async-steps.js";
 // The bounded Java parser's worker starts and retirements (#4212); the server installs its sink,
 // and the real launch starts the first worker once it listens.
 export { installJavaParserLogSink, prewarmJavaParserWorker } from "./redaction-java-parser.js";

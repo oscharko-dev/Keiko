@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { realpathSync } from "node:fs";
@@ -13,6 +14,6 @@ it("answers a private home that the managed install root policy admits", () => {
   expect(home.startsWith(realpathSync(tmpdir()))).toBe(false);
   const root = join(home, ".keiko-test-roots", "portable-root");
   expect(() => {
-    assertManagedRootAllowed(root, join(home, ".keiko"), "linux-x64");
+    assertManagedRootAllowed(root, join(home, ".keiko"), "linux-x64", nullSecurityLogSink());
   }).not.toThrow();
 });

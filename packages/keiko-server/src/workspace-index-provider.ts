@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -19,6 +18,7 @@ import {
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 
 interface WorkspaceIndexEnv extends Readonly<Record<string, string | undefined>> {
   readonly KEIKO_WORKSPACE_INDEX_DIR?: string | undefined;

@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import { updateChatToolTranscript } from "./chatToolTranscript.js";
 import { readContinuityCheckpoint, writeContinuityCheckpoint } from "./chatContinuity.js";
 import { createChatToolMutationStore } from "./chatToolMutations.js";
@@ -149,6 +148,7 @@ import {
   updateGitHubIssueReaderAuthorization as sqlUpdateGitHubIssueReaderAuthorization,
 } from "./github-issue-reader-authorization.js";
 import { invalidRequest, UiStoreError } from "./errors.js";
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 
 const STORE_OPENED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",

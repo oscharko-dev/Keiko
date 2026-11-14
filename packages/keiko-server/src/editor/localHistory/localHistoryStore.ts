@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "../../serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -46,6 +45,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertNoSymlinkedPathSegments, savePrivateJson } from "../../private-json.js";
+import { serverSecurityLogSink } from "../../serverSecurityLogSink.js";
 
 const HISTORY_SUBDIR = "editor-local-history";
 const HISTORY_INDEX_FILE = "index.json";

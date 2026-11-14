@@ -73,7 +73,7 @@ describe("bindSecurityLogCorrelation", () => {
       { write: (event): void => void events.push(event) },
       "corr-1",
     );
-    bound?.write({ category: "security", op: "security.vault.entries-merged" });
+    bound.write({ category: "security", op: "security.vault.entries-merged" });
     expect(events).toEqual([
       expect.objectContaining({
         op: "security.vault.entries-merged",
@@ -94,7 +94,7 @@ describe("bindSecurityLogCorrelation", () => {
     );
     const event = activityLogEvent(CORRELATION_WRAPPER_FIXTURE, {}, {});
 
-    bound?.write(event);
+    bound.write(event);
 
     expect(activityLogEventRegistration(events[0] ?? {})).toBe(CORRELATION_WRAPPER_FIXTURE);
   });

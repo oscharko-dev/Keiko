@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -16,6 +15,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_HOT_EXIT_TTL_MS } from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 
 const HOT_EXIT_SUBDIR = "editor-hot-exit";
 const HOT_EXIT_STORE_FILE = "snapshots.vault";

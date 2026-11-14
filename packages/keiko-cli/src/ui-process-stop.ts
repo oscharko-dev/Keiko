@@ -18,6 +18,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   emitSecurityLogEvent,
+  runAsyncSteps,
   securityErrorKind,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
@@ -160,15 +161,14 @@ export async function pollUntilDead(
   confirmAfterTimeout = false,
 ): Promise<boolean> {
   const start = performance.now();
-  // One poll per call instead of an await inside a loop: the same order of checks, the same budget.
-  const poll = async (): Promise<boolean> => {
+  // One poll per call; `runAsyncSteps` keeps memory constant however long the budget is.
+  return runAsyncSteps<boolean>(async () => {
     if (performance.now() - start > budgetMs)
-      return confirmAfterTimeout ? !isProcessAlive(pid) : false;
-    if (!isProcessAlive(pid)) return true;
+      return { done: true, value: confirmAfterTimeout ? !isProcessAlive(pid) : false };
+    if (!isProcessAlive(pid)) return { done: true, value: true };
     await sleep(intervalMs);
-    return poll();
-  };
-  return poll();
+    return { done: false };
+  });
 }
 
 export async function terminateUiProcess(

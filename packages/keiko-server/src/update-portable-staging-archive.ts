@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -56,6 +55,7 @@ import {
 import { type PortableSidecarRuntimeVerification } from "./update-portable-sidecar-verification.js";
 import { verifyStagedSidecarPayloads } from "./update-portable-sidecar-staging-verification.js";
 import { verifyPortablePlatformSignature } from "./update-portable-platform-verification.js";
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 
 interface ContainedEntry {
   readonly relativeName: string;
@@ -886,6 +886,7 @@ function boundRenameSink(
   sink: SecurityLogSink | undefined,
   correlationId: string,
 ): { readonly securityLogSink: SecurityLogSink } {
-  const bound = bindSecurityLogCorrelation(sink ?? serverSecurityLogSink(), correlationId);
-  return { securityLogSink: bound ?? serverSecurityLogSink() };
+  return {
+    securityLogSink: bindSecurityLogCorrelation(sink ?? serverSecurityLogSink(), correlationId),
+  };
 }

@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 import { createHash } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
@@ -13,6 +12,7 @@ import type {
   McpRemoteOAuth,
   McpServerDefinition,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import { serverSecurityLogSink } from "../serverSecurityLogSink.js";
 
 /**
  * Where an MCP server's OAuth credential lives between runs (#3903 AC3): sealed with AES-256-GCM in

@@ -1,4 +1,3 @@
-import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   currentProcessId,
@@ -110,6 +109,7 @@ import {
 } from "./process-identity.js";
 import { digestUpdateCandidate } from "./update-candidate-authority.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 
 interface AuditEventRecord {
   readonly event: UpdateRuntimeAuditEvent;

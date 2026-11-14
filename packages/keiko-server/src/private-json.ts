@@ -6,9 +6,9 @@
 // path segment is checked for symlinks first so a hostile symlink cannot redirect the write outside
 // the intended private directory.
 
-import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { processServerLogSinkFor } from "./process-log-sink.js";
+import { serverSecurityLogSink } from "./serverSecurityLogSink.js";
 import {
   chmodSync,
   closeSync,

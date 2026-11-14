@@ -399,7 +399,7 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
       keychainService: "keiko-test-vault",
       keyfileName: "test-vault.key",
       keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
-      sink: bound ?? sink,
+      sink: bound,
     });
 
     expect(events).toHaveLength(1);
