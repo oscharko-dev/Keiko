@@ -10,7 +10,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
-import { runDetachedWindowsAlert } from "./portable-launch-notifier.js";
+import { notifyPortableSetupStarted, runDetachedWindowsAlert } from "./portable-launch-notifier.js";
 
 describe("portable-launch-notifier activity log proof", () => {
   it("persists portable.windows-alert.spawn-failed when the detached Windows alert child errors", () => {
@@ -51,5 +51,21 @@ describe("portable-launch-notifier activity log proof", () => {
       errorKind: "unavailable",
       level: "error",
     });
+  });
+
+  it("persists portable.setup-notice.requested when the first-installation notice is requested", () => {
+    const events: SecurityLogEvent[] = [];
+    const securityLogSink: SecurityLogSink = { write: (event): void => void events.push(event) };
+
+    notifyPortableSetupStarted(
+      { KEIKO_PORTABLE_UI_LAUNCH: "1", SystemRoot: String.raw`C:\Windows` },
+      { platform: () => "win32", securityLogSink, runWindowsAlert: (): void => undefined },
+    );
+
+    expect(events).toHaveLength(1);
+    const line = formatActivityLogProofLine(events[0] ?? {});
+    const record = expectActivityLogProof("portable.setup-notice.requested.emitted-line", line);
+    expect(record).toMatchObject({ surface: "portable-setup-notice", level: "info" });
+    expect(line).not.toContain("being set up");
   });
 });

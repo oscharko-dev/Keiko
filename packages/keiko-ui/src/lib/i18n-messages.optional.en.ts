@@ -2180,6 +2180,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.permissionGranted": "Permission granted",
   "chat.jira.outcome.permissionDenied": "Permission not granted",
   "chat.jira.outcome.moreResults": "Show {count} more results",
+  "chat.jira.outcome.moreResultsOne": "Show 1 more result",
   "chat.jira.outcome.openBoard": "Open board",
   "chat.jira.outcome.returned": "Returned results: {count}.",
   "chat.jira.outcome.returnedTotal": "{count} of {total} results returned.",
@@ -2371,7 +2372,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.workspaceHint":
     "Drag this Jira Pod onto the workspace, or add it with this button. Connect its port to a Chat.",
   "chat.jira.liveReady": "Verified Jira Pod",
-  "chat.jira.liveUnavailable": "Jira Pod unavailable; open Knowledge Pods to verify or reconnect.",
+  "chat.jira.liveUnavailable":
+    "Jira Pod unavailable; open the Local Knowledge window to verify or reconnect.",
   "chat.connectors.title": "Connectors",
   "chat.connectors.active": "Connectors: {count} active",
   "chat.connectors.mcp": "MCP servers",
@@ -2404,32 +2406,41 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.issues": "Jira issues",
   "chat.jira.outcome.problems": "What Jira said",
   "chat.jira.outcome.itemOrdinal": "Item {position}",
+  "chat.jira.outcome.notCreated": "Not created: {count}",
   "chat.jira.outcome.draftProblem.draft-shape":
     "The draft is not in a readable form. Ask Keiko to draft the issues again.",
   "chat.jira.outcome.draftProblem.items-missing":
     "The draft contains no issues. Ask Keiko to name the issues to create.",
   "chat.jira.outcome.draftProblem.item-shape":
-    "Item {position} contains an entry Keiko cannot read. Ask Keiko to rewrite this issue.",
+    "contains an entry Keiko cannot read. Ask Keiko to rewrite this issue.",
   "chat.jira.outcome.draftProblem.item-ref":
-    "Item {position} has no usable name. Ask Keiko to give every issue its own short name.",
+    "has no usable name. Ask Keiko to give every issue its own short name.",
   "chat.jira.outcome.draftProblem.item-ids":
-    "Item {position} has no valid project or issue type. Choose the project and the issue type again.",
+    "has no valid project or issue type. Choose the project and the issue type again.",
   "chat.jira.outcome.draftProblem.item-fields":
-    "Item {position} needs a summary and must not name another project or issue type. Ask Keiko to complete its fields.",
+    "needs a summary and must not name another project or issue type. Ask Keiko to complete its fields.",
   "chat.jira.outcome.draftProblem.item-parent":
-    "Item {position} has a parent Keiko cannot read. Ask Keiko to name the parent issue again.",
+    "has a parent Keiko cannot read. Ask Keiko to name the parent issue again.",
   "chat.jira.outcome.draftProblem.item-links":
-    "Item {position} has a link Keiko cannot read. Ask Keiko to name the link type, its direction and its target again.",
+    "has a link Keiko cannot read. Ask Keiko to name the link type, its direction and its target again.",
   "chat.jira.outcome.draftProblem.item-requirements":
-    "Item {position} has requirement references Keiko cannot read. Ask Keiko to list them again.",
+    "has requirement references Keiko cannot read. Ask Keiko to list them again.",
   "chat.jira.outcome.draftProblem.ref-duplicate":
     "Two issues share one name. Ask Keiko to give every issue its own name.",
   "chat.jira.outcome.draftProblem.ref-self":
-    "Item {position} names itself as its parent or link target. Ask Keiko to point it at another issue.",
+    "names itself as its parent or link target. Ask Keiko to point it at another issue.",
   "chat.jira.outcome.draftProblem.ref-unknown":
-    "Item {position} points to an issue that is not in this draft. Add that issue to the draft or name an existing issue key.",
+    "points to an issue that is not in this draft. Add that issue to the draft or name an existing issue key.",
   "chat.jira.outcome.draftProblem.ref-cycle":
     "The parent and link relations form a cycle. Ask Keiko to make each parent an issue that does not depend on its child.",
+  "chat.jira.outcome.draftItem": "Item {position}",
+  "chat.jira.outcome.draftItemUnknown": "An item",
+  "chat.jira.outcome.draftRefusal.draft-not-found":
+    "The draft is no longer available, so nothing was changed. Ask Keiko to draft the issues again.",
+  "chat.jira.outcome.draftRefusal.draft-changed":
+    "The draft changed after you reviewed it, so nothing was changed. Review the current draft and approve it again.",
+  "chat.jira.outcome.draftRefusal.connection-changed":
+    "The Jira connection changed since this draft was made, so nothing was changed. Create the draft again for the current Jira.",
   "chat.jira.outcome.itemUnlisted": "Item not in your request",
   "chat.jira.outcome.more": "and {count} more",
   "chat.jira.outcome.newTab": "(opens Jira in a new tab)",
@@ -2437,6 +2448,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.validation.unsupported-field":
     "A required Jira field cannot be filled from Keiko.",
   "chat.jira.outcome.validation.invalid-field": "A Jira field had a value Jira does not accept.",
+  "chat.jira.outcome.validation.invalid-epic-link":
+    "The Epic Link points to an issue that is not an Epic, or that this account cannot see.",
   "chat.jira.outcome.validation.invalid-operation":
     "The requested field change is not possible in Jira.",
   "chat.jira.outcome.validation.bounds-exceeded": "The change was too large to send in one step.",
@@ -2456,6 +2469,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.rule.label-count": "The issue has too few labels.",
   "chat.jira.outcome.rule.parent-missing": "The issue needs a parent ({subject}).",
   "chat.jira.outcome.rule.template-unreadable": "The template “{subject}” could not be read.",
+  "chat.jira.outcome.rule.template-missing":
+    "No template exists for the issue type “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save the template, then ask again.",
+  "chat.jira.outcome.rule.template-not-activated":
+    "Only rules for entering a status exist for “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save a template for creating, then ask again.",
   "chat.jira.tool": "Jira action",
   "chat.jira.catalog.discover": "Find Jira actions",
   "chat.jira.catalog.describe": "Select Jira actions",
@@ -2639,6 +2656,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.finding.unknown-link-type": "Link type {subject} does not exist.",
   "chat.skills.jira.finding.unknown-transition-target":
     "{subject} is not a status of the project. A transition name or id cannot be checked here.",
+  "chat.skills.jira.finding.wrong-parent-field":
+    "The parent field does not link this issue type to its parent here: {subject}. Writes it governs cannot satisfy it.",
   "chat.skills.jira.projectKey": "Project key",
   "chat.skills.jira.propose": "Propose from project",
   "chat.skills.jira.proposeTitle": "Create a template from a Jira project",
@@ -2984,6 +3003,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Pull completed, but editor buffers need recovery. Review open files before continuing.",
   "chat.turn.failed": "Turn failed",
   "chat.turn.cancelled": "Turn cancelled",
+  "chat.claimNotice.label": "Note from Keiko",
+  "chat.claimNotice.noJiraCreate": "No Jira issue was created in this turn.",
+  "chat.claimNotice.toolCallNotExecuted":
+    "A tool call written as text in this answer was not executed.",
   "chat.contextWindow.label": "Context window notice",
   "chat.contextWindow.notice":
     "This transcript shows {count} turns. Context beyond the 48-turn boundary may be compacted.",
@@ -4925,6 +4948,22 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Checked just now. Keiko still cannot verify update download information.",
   "updates.check.portableSetupRequired":
     "Checked just now. Portable setup is still required before in-app updates can run.",
+  "updates.status.portableVolume.notLocal": "Not on a local disk",
+  "updates.status.portableVolume.unverified": "Installation folder not checked",
+  "updates.check.portableVolume.notLocal":
+    "Checked just now. Keiko is not installed on a local disk, so it cannot update itself.",
+  "updates.check.portableVolume.unverified":
+    "Checked just now. Keiko could not check its installation folder; try again in a moment.",
+  "updates.portableVolume.notLocal.title": "Keiko is not installed on a local disk",
+  "updates.portableVolume.notLocal.body":
+    "Keiko is installed in a network or redirected folder. In-app updates work only from this computer's own disk.",
+  "updates.portableVolume.notLocal.action":
+    "Install Keiko on a local drive of this computer, then check again.",
+  "updates.portableVolume.unverified.title": "Keiko could not check its installation folder",
+  "updates.portableVolume.unverified.body":
+    "Windows answered too slowly just now. In-app updates are paused until the check succeeds.",
+  "updates.portableVolume.unverified.action":
+    "Try again in a moment. If it keeps happening, restart Keiko.",
   "updates.check.portableExternallyManaged":
     "Checked just now. This install is still managed outside Keiko, so in-app updates are not available.",
   "updates.check.policyDisabled":

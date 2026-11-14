@@ -10,8 +10,11 @@ import {
 import { recordJiraHumanInput } from "../atlassian/credentialActivity.js";
 import { createJiraPrivateLifetime } from "../atlassian/httpPrivateIdentity.js";
 import {
+  isJiraReleaseScopeRefusal,
   jiraRequiredConnectorScope,
   JIRA_MANAGED_ACTION_TYPES,
+  JIRA_MUTATION_OPERATIONS,
+  sanitizeJiraMutationFailureDetail,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   createCodingJiraCatalog,
@@ -21,6 +24,7 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
 import {
+  checkJiraManagedMutation,
   createJiraReportStore,
   JiraAcknowledgedMutationError,
   type AtlassianCredentialMetadata,
@@ -46,16 +50,20 @@ import { createMcpRelayEndpoint, ManagedMcpError } from "@oscharko-dev/keiko-mcp
 
 import type { AtlassianConnectorCredentialDeps } from "../atlassian/credentialRoutes.js";
 import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
+import { recordJiraReleaseScopeRefusal } from "../atlassian/jiraOperationActivity.js";
 import { recordJiraReportActivity } from "../atlassian/jiraReportActivity.js";
 import {
   jiraAttemptToolResult,
   jiraLinkCountsOfResult,
+  jiraMutationToolResult,
   validJiraMutationAttempt,
 } from "../atlassian/jiraMutationResult.js";
 import {
   jiraIssueTemplateSource,
   recordJiraTemplateAttempt,
   recordJiraTemplateMetadata,
+  recordJiraFieldRefusal,
+  recordJiraTemplateRefusal,
 } from "../atlassian/jiraTemplateLog.js";
 import type { JiraPodAccessDeps, JiraLivePodCredential } from "../atlassian/jiraPodAccess.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -155,6 +163,16 @@ export interface CodingJiraPods {
     binding: CodingJiraPodBinding,
     authority?: CodingJiraRunAuthority,
   ) => CodingJiraConnections;
+  /**
+   * The dry run of a managed Jira write the human is about to be asked about (#4354 L4): the model
+   * facing refusal when the write breaks the customer's issue templates, so no card is raised for a
+   * write that cannot proceed. `undefined` admits the card; the executor gate stays authoritative.
+   */
+  readonly preflightWrite: (
+    binding: CodingJiraPodBinding,
+    authority: CodingJiraRunAuthority,
+    call: { readonly tool: string; readonly arguments: CatalogJsonObject },
+  ) => Promise<string | undefined>;
   /** Late binding: the custody graph exists only after the coding runtime was composed. */
   readonly attach: (deps: CodingJiraPodDeps) => void;
   readonly close: () => Promise<void>;
@@ -172,6 +190,8 @@ interface PodEntry {
 }
 
 const ENTRY_MAX = 8;
+/** The most characters of a dry-run refusal handed to the runtime as its deny message. */
+const PREFLIGHT_REFUSAL_CHARS_MAX = 6000;
 const NOT_ADMITTED = (): ManagedMcpError => new ManagedMcpError("not-admitted");
 
 interface Dispatch {
@@ -304,6 +324,43 @@ function throwScopeFailure(
     undefined,
     context.dispatch.dispatched ? "possible" : "none",
   );
+}
+
+/** The model-facing text of a refused dry run, logged by its violations when there are any. */
+function preflightRefusal(
+  runId: string,
+  operation: JiraMutationOperation,
+  checked: Extract<Awaited<ReturnType<typeof checkJiraManagedMutation>>, { ok: false }>,
+): string {
+  if (isJiraReleaseScopeRefusal(operation, checked.detail?.messages))
+    recordJiraReleaseScopeRefusal(runId, operation);
+  else if (checked.violations !== undefined)
+    recordJiraTemplateRefusal(runId, {
+      operation,
+      stage: "pre-approval",
+      violations: checked.violations,
+    });
+  else if (checked.detail?.validation !== undefined)
+    // A refusal by Keiko's own field validation (an Epic Link, a required field) has no violations:
+    // it is logged on the field admission line, as the Chat dry run does.
+    recordJiraFieldRefusal(runId, {
+      operation,
+      stage: "pre-approval",
+      refusedCount: 1,
+      validations: [checked.detail.validation],
+      ...(checked.detail.fieldId === undefined ? {} : { fieldId: checked.detail.fieldId }),
+    });
+  return JSON.stringify(
+    jiraMutationToolResult(
+      "rejected",
+      checked.reason,
+      {},
+      false,
+      sanitizeJiraMutationFailureDetail(checked.detail),
+      undefined,
+      checked.violations,
+    ).data,
+  ).slice(0, PREFLIGHT_REFUSAL_CHARS_MAX);
 }
 
 class CodingJiraPodService implements CodingJiraPods {
@@ -642,6 +699,49 @@ class CodingJiraPodService implements CodingJiraPods {
         legacyTemporaryRelease: ports.legacyTemporaryRelease,
       },
     };
+  }
+
+  public async preflightWrite(
+    binding: CodingJiraPodBinding,
+    authority: CodingJiraRunAuthority,
+    call: { readonly tool: string; readonly arguments: CatalogJsonObject },
+  ): Promise<string | undefined> {
+    const operation = JIRA_MUTATION_OPERATIONS.find((name) => name === call.tool);
+    if (operation === undefined || this.#closed || authority.signal?.aborted === true)
+      return undefined;
+    const lifetime = boundRunLifetime(authority);
+    const privateLifetime = createJiraPrivateLifetime(lifetime.signal, authority.runId);
+    const context: JiraInvocationContext = {
+      invocationId: `preflight-${authority.runId}`,
+      correlationId: authority.runId,
+      signal: lifetime.signal,
+      beforeEffect: () => !lifetime.signal.aborted,
+      dispatch: { dispatched: false, acknowledged: false },
+      scopeState: { missing: false },
+      inputAuthority: () => undefined,
+    };
+    try {
+      const checked = await checkJiraManagedMutation(
+        operation,
+        call.arguments,
+        context,
+        this.connection(binding, context, privateLifetime),
+      );
+      return checked.ok ? undefined : preflightRefusal(authority.runId, operation, checked);
+    } catch (error) {
+      // A dry run that cannot complete decides nothing: the card is asked and the executor gate
+      // refuses after approval if the write is not allowed. The failure is recorded, never hidden.
+      recordCodingJiraPod(this.log, authority.runId, {
+        action: "call",
+        outcome: "failed",
+        reason: "internal",
+        error,
+      });
+      return undefined;
+    } finally {
+      await privateLifetime.finish();
+      lifetime.abort();
+    }
   }
 
   /** Every request, read or write, is gated on the run and on the Pod being exactly as chosen. */

@@ -1672,6 +1672,7 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "cancelled",
         "unavailable",
         "authority-refused",
+        "template-refused",
       ],
     },
     sessionRelation: {
@@ -1743,7 +1744,8 @@ export type OpenCodeNativePolicyOutcome =
   | "expired"
   | "cancelled"
   | "unavailable"
-  | "authority-refused";
+  | "authority-refused"
+  | "template-refused";
 
 /** The native session that asked: the run's own session or an admitted child session (#3897). */
 export type OpenCodeNativeSessionRelation = "primary" | "child";

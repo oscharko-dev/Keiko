@@ -64,6 +64,17 @@ import {
   syntheticJira,
   SYNTHETIC_JIRA_BASE_URL,
 } from "../../../tests/support/jira-synthetic-draft-remote.js";
+import { seedPermissiveJiraTemplates } from "../../../tests/support/jira-test-templates.js";
+
+// Release 1 switches the attachment operations off (#4354); this file exercises their review and
+// upload mechanics, which stay in the code for Release 2, so the switch is on here. That they are
+// not offered is pinned in jiraChatCatalogRuntime.test.ts and codingJiraPodBinding.test.ts.
+vi.mock("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors")
+  >()),
+  jiraOperationInReleaseScope: (): boolean => true,
+}));
 
 const MODEL = "synthetic-combined-chat";
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
@@ -312,6 +323,7 @@ function fixture(options: Options = {}): Fixture {
     env: { KEIKO_STATE_DIR: root },
     modelPortFactory: () => model(calls, options),
   });
+  seedPermissiveJiraTemplates(base.store, ["SYN"], ["Story"]);
   const settings = base.mcpSettings;
   if (settings === undefined) throw new Error("Missing MCP settings owner");
   const server: McpServerDefinition = {
@@ -1045,7 +1057,10 @@ it("keeps external MCP tools available while Jira typed schemas are selected bet
   const [first, second] = f.calls.map((call) => call.toolCatalog);
   if (first?.kind !== "bound" || second?.kind !== "bound")
     throw new TypeError("Expected round catalogs");
-  // This Chat has no Knowledge scope: only the batch and its draft companion are absent.
+  // This Chat has no Knowledge scope: only the batch and its draft companion are absent. The base
+  // set also carries jira_myself, jira_watch and jira_unwatch: a model asked who it is, or to follow
+  // or stop following an issue, found no tool for it among the 19 and either said it could not or
+  // answered with another tool's result (#4357), so these three are offered from the first round.
   expect(
     first.projection.tools
       .filter((tool) => tool.alias.startsWith("jira_"))
@@ -1072,6 +1087,9 @@ it("keeps external MCP tools available while Jira typed schemas are selected bet
       "jira_attach",
       "jira_discover",
       "jira_describe",
+      "jira_myself",
+      "jira_watch",
+      "jira_unwatch",
     ].sort(),
   );
   const projects = first.projection.tools.find((tool) => tool.alias === "jira_projects");
@@ -1513,7 +1531,8 @@ describe("combined Jira review admission parity", () => {
       fileName: "combined-story-template.md",
       contentBase64: Buffer.from(markdown).toString("base64"),
     });
-    expect(f.deps.store.markdownSkills.jiraTemplates()).toHaveLength(1);
+    // The fixture's own permissive template of the type and the one saved here.
+    expect(f.deps.store.markdownSkills.jiraTemplates()).toHaveLength(2);
     const pending = send(f);
     void pending.catch(() => undefined);
     try {
@@ -1705,7 +1724,8 @@ describe("combined Jira review admission parity", () => {
       jiraAction: { canonicalId: "keiko.jira.draft", arguments: () => reference },
     });
     const jira = useDraftRemote(f);
-    const staged = f.deps.jiraDraftStore?.append(f.chatId, undefined, "combined-fingerprint", [
+    const store = f.deps.jiraDraftStore;
+    const staged = store?.append(f.chatId, undefined, store.connectionOf(f.chatId) ?? "unbound", [
       { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic" } },
       {
         ref: "child",

@@ -116,6 +116,7 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   type JiraManagedReadToolName,
+  isJiraReleaseScopeRefusal,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
@@ -128,7 +129,7 @@ import type {
   ManagedMcpToolDeclaration,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { recordJiraProviderCall } from "./jiraOperationActivity.js";
+import { recordJiraProviderCall, recordJiraReleaseScopeRefusal } from "./jiraOperationActivity.js";
 import {
   compileExternalCatalogSchema,
   createToolDescriptor,
@@ -297,11 +298,13 @@ type CoreReadToolName = Exclude<
       | keyof typeof JIRA_ASSET_READ_DEFINITIONS
     >
 >;
+const SEARCH_FIELDS_DESCRIPTION =
+  "Optional field ids whose value is added to every result row, per issue. Standard fields a row already shows (status, assignee, priority, labels, issue type, project, created, updated) are not repeated. Request only what the question needs.";
 const SEARCH_DEFINITION: ReadDefinition = {
-  description: `Search Jira with bounded opaque JQL. Returns issue summaries; fetch an issue for its description and comments separately. Progress, estimates and template compliance across many issues come from jira.report, not from paging results.`,
+  description: `Search Jira with bounded opaque JQL. A page holds 25 issues by default and at most 100 (maxResults); follow nextStartAt for more. Each result is a compact issue summary; fields adds the values of the field ids you name to each result, per issue. Description and comments come from jira.issue and jira.comments. Progress, estimates and template compliance across many issues come from jira.report, not from paging results.`,
   arguments: {
     jql: { type: "string", minLength: 1, maxLength: ATLASSIAN_JQL_MAX_CHARS },
-    fields: FIELD_IDS,
+    fields: { ...FIELD_IDS, description: SEARCH_FIELDS_DESCRIPTION },
   },
   required: ["jql"],
   item: object(
@@ -406,11 +409,11 @@ const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
   "jira.search-post": {
     ...SEARCH_DEFINITION,
     description:
-      "Perform the same bounded opaque-JQL search through native POST with a typed JSON search request. This is a read, creates no issue or mutation receipt and grants no write authority. Follow nextStartAt for all pages. Progress, estimates and template compliance across many issues come from jira.report, not from paging results. Native query validation stays enabled.",
+      "Perform the same bounded opaque-JQL search through native POST with a typed JSON search request. This is a read, creates no issue or mutation receipt and grants no write authority. A page holds 25 issues by default and at most 100; follow nextStartAt for all pages. fields adds the values of the field ids you name to each result, per issue. Progress, estimates and template compliance across many issues come from jira.report, not from paging results. Native query validation stays enabled.",
   },
   "jira.issue": {
     description:
-      "Read one issue with its summary, plain-text description and selected standard fields. Request up to 20 additional field IDs for supported typed values; unavailable, empty and unsupported fields are distinct. Comments are a separate paged operation. Totals across many issues come from jira.report, not from reading issues one by one.",
+      "Read one issue with its summary, plain-text description and selected standard fields. Request up to 20 additional field IDs for supported typed values; unavailable, empty and unsupported fields are distinct. Comments are a separate paged operation. Progress, estimates and template compliance across many issues come from jira.report, not from reading issues one by one.",
     arguments: { issueKey: text(128), fields: FIELD_IDS },
     required: ["issueKey"],
     paged: false,
@@ -548,6 +551,7 @@ function coreDeclaration(name: CoreReadToolName): ManagedMcpToolDeclaration {
           startAt: PAGE_NUMBER,
           total: PAGE_NUMBER,
           nextStartAt: PAGE_NUMBER,
+          ...(name === "jira.search" || name === "jira.search-post" ? { guidance: text(512) } : {}),
         },
         ["outcome"],
       ),
@@ -626,6 +630,22 @@ export function isCurrentJiraOperationBinding(
   return contract !== undefined && matchesJiraOperationBinding(contract, value);
 }
 
+/**
+ * One closed line per provider call: the release switch's own refusal, or the call's completion.
+ * Only the refusal sentence the switch writes is labelled as the switch's; any other failure of an
+ * operation it withholds stays an ordinary failed call.
+ */
+function recordProviderResult(
+  correlationId: string,
+  operation: JiraManagedReadToolName | JiraMutationOperation,
+  result: ManagedMcpToolResult,
+): void {
+  const outcome = result.isError === true ? "failed" : "completed";
+  if (outcome === "failed" && isJiraReleaseScopeRefusal(operation, result.data.messages))
+    recordJiraReleaseScopeRefusal(correlationId, operation);
+  else recordJiraProviderCall(correlationId, operation, outcome);
+}
+
 /** Canonical descriptors are built by the server; the connector owns only Jira behavior. */
 export function createJiraProviderForCatalog<Context extends ManagedMcpInvocationContext>(
   connection: (context: Context) => JiraManagedConnection | Promise<JiraManagedConnection>,
@@ -664,11 +684,7 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
             recordJiraProviderCall(args[1].correlationId, operation, "failed");
             throw error;
           }
-          recordJiraProviderCall(
-            args[1].correlationId,
-            operation,
-            result.isError === true ? "failed" : "completed",
-          );
+          recordProviderResult(args[1].correlationId, operation, result);
           // Provider response content never chooses the operation or its contract authority.
           return { ...result, data: { ...result.data, operationBinding: binding } };
         },

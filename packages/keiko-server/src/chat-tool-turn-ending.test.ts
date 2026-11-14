@@ -353,6 +353,29 @@ describe("recordChatToolTurnCorrected", () => {
     expect(line).not.toMatch(/message-private-id|issuesChecked|issuesJudged/u);
   });
 
+  it.each(["announced-create", "tool-call-as-text"] as const)(
+    "counts the %s sentences or calls of an answer, never quoting them",
+    (correctionKind) => {
+      const logs = createBufferedServerLogSink();
+      recordChatToolTurnCorrected(logs, {
+        correlationId: "turn-claimed-action-proof",
+        messageId: "message-private-id",
+        settledExchangeCount: 2,
+        correctionKind,
+        announcementCount: 3,
+      });
+      const event = logs.events.find((entry) => entry.op === "chat.tool-turn.corrected");
+      expect(event).toMatchObject({
+        correlationId: "turn-claimed-action-proof",
+        level: "warn",
+        extra: { correctionKind, announcementCount: 3, settledExchangeCount: 2 },
+      });
+      const line = formatActivityLogProofLine(event ?? {});
+      expectActivityLogProof("chat.tool-turn.corrected.line", line);
+      expect(line).not.toMatch(/message-private-id|REQ-|jira_create/u);
+    },
+  );
+
   it("counts the issue keys an answer named without a tool result, never naming them", () => {
     const logs = createBufferedServerLogSink();
     recordChatToolTurnCorrected(logs, {

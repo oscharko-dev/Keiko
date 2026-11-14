@@ -6,6 +6,8 @@
 // path segment is checked for symlinks first so a hostile symlink cannot redirect the write outside
 // the intended private directory.
 
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { processServerLogSinkFor } from "./process-log-sink.js";
 import {
   chmodSync,
   closeSync,
@@ -71,7 +73,9 @@ export function savePrivateJson(path: string, raw: Record<string, unknown>): voi
       // Mode bits mean nothing on Windows: give the file a protected owner-only DACL before it is
       // published, so it never inherits a profile or drive ACL that lets other accounts modify it.
       // A same-volume rename keeps the descriptor; a file that cannot be protected is not written.
-      protectWindowsOwnerPrivateFile(tempPath);
+      protectWindowsOwnerPrivateFile(tempPath, {
+        securityLogSink: processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
+      });
     } else {
       chmodSync(tempPath, 0o600);
     }

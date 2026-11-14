@@ -67,7 +67,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
-      "sha256": "e470cb8c0fe7c18fef7d5b2b7f49eb3d16d39f26f5c3a882aed12f2ae3c715ed"
+      "sha256": "95e2a9890f69cd3187d8b965fe88d12037f79e443a94a7a170422f1353e9e66e"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
@@ -75,7 +75,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts",
-      "sha256": "aab4708993761c799c966f08002759a330910ac5a005a727cecb4ccd453452b8"
+      "sha256": "f14230b25fc403a80ce1e13ba3b26aa04657ee4da5d5468fb78c055e0a081410"
     },
     {
       "path": "packages/keiko-ui/src/app/globals.css",
@@ -87,19 +87,19 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
-      "sha256": "c847c1accac385d92945fdc093d4d30a512c69ef81f061eaf2860ed798f2afcb"
+      "sha256": "663fe8ebdcddf59124bae6e8f3bd5971cc0329cd6748fc2334f3680c1ae6fe24"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.en.ts",
-      "sha256": "898a3daa61e55f438774dfed07571fbce229f5aecca50459e9f61b8a255f4d77"
+      "sha256": "c7af500e5f64c8d747cd5e1d59f4cab8dda4d11cb9737ced4756d928fdad32eb"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "6572af694d941c0d589c138d035a155ffe132087d1da93e3591ed342e8bd7f98"
+      "sha256": "2bb8b72943638629a34736899f646900713649a98847ba5ffff9847a1de0bcce"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "074bbe87d978e83daa04161d756de6f3494ab9d55466c59774ce226a20cbcde7"
+      "sha256": "f94f36e423e0cc88120cb5a9fa252d54760adb77907018458e47dce1d8760b9a"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
@@ -120,7 +120,7 @@
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-11-13T19:29:11.700Z",
+  "generatedAt": "2026-11-14T03:27:57.154Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {

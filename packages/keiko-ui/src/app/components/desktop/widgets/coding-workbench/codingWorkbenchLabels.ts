@@ -714,7 +714,7 @@ function standingConditionAlert(
     state.runtime.value?.runtimeAvailable === false
   ) {
     return t(
-      gatewayServiceMessageKey(state.runtime.value.runtimeUnavailableReason) ??
+      runtimeUnavailableMessageKey(state.runtime.value.runtimeUnavailableReason) ??
         "codingWorkbench.alert.runtimeUnqualified",
     );
   }
@@ -734,6 +734,20 @@ export function gatewayServiceMessageKey(
   reason: string | undefined,
 ): CodingWorkbenchMessageKey | undefined {
   return reason === undefined ? undefined : GATEWAY_SERVICE_MESSAGE_KEYS.get(reason);
+}
+
+// #4358: the Windows installation folder stops the bundled runtime: say which of the two it is.
+const INSTALL_VOLUME_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
+  ["install-volume-not-local", "codingWorkbench.installVolume.notLocal"],
+  ["install-volume-unverified", "codingWorkbench.installVolume.unverified"],
+]);
+
+/** The sentence for a runtime that is unavailable for a reason the human can act on. */
+export function runtimeUnavailableMessageKey(
+  reason: string | undefined,
+): CodingWorkbenchMessageKey | undefined {
+  if (reason === undefined) return undefined;
+  return gatewayServiceMessageKey(reason) ?? INSTALL_VOLUME_MESSAGE_KEYS.get(reason);
 }
 
 // #4068: a start the Windows broker cannot confine names what to change: the work location, or the

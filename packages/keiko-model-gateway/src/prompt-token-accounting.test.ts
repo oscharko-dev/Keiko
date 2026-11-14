@@ -4,6 +4,7 @@ import { countContextTokens } from "@oscharko-dev/keiko-contracts/runtime/contex
 import {
   countGatewayPromptTokens,
   openAiCompatiblePromptMessage,
+  openAiCompatiblePromptTools,
 } from "./prompt-token-accounting.js";
 
 describe("countGatewayPromptTokens", () => {
@@ -122,4 +123,38 @@ it("charges complete opaque continuation state against the prompt budget (#4059)
   };
   expect(openAiCompatiblePromptMessage(message).reasoning_content).toBe(message.reasoningContent);
   expect(countGatewayPromptTokens({ messages: [message] })).toBeGreaterThan(50000);
+});
+
+it("sends every tool source as a plain object schema, and counts what is sent", () => {
+  // A definition that did not come through the governed catalog (a native extension, a direct tool)
+  // still leaves for the provider as a plain object schema.
+  const direct = {
+    name: "direct_tool",
+    description: "Does a thing.",
+    parameters: {
+      type: "object",
+      properties: { a: { type: "string" }, b: { type: "string" } },
+      allOf: [{ oneOf: [{ required: ["a"] }, { required: ["b"] }] }],
+    },
+  };
+  const [sent] = openAiCompatiblePromptTools([direct]);
+  const parameters = (sent?.function as { parameters: Record<string, unknown> }).parameters;
+  for (const key of ["allOf", "oneOf", "anyOf", "not", "enum", "const"])
+    expect(parameters).not.toHaveProperty(key);
+  expect((sent?.function as { description: string }).description).toContain(
+    "Provide exactly one of these argument sets: a; or b.",
+  );
+  // The accounting counts the same projected definition the provider receives.
+  const counted = countGatewayPromptTokens({ messages: [], tools: [direct] });
+  const projected = countGatewayPromptTokens({
+    messages: [],
+    tools: [
+      {
+        ...direct,
+        description: (sent?.function as { description: string }).description,
+        parameters,
+      },
+    ],
+  });
+  expect(counted).toBe(projected);
 });

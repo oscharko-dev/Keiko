@@ -35,15 +35,11 @@
 import { randomUUID } from "node:crypto";
 import {
   addConfluencePageComment,
-  addJiraIssueComment,
   createConfluencePage,
-  createJiraIssue,
   composePlainTextToAdf,
   executeJiraLiveSearch,
   resolveJiraLiveSearchJql,
-  transitionJiraIssue,
   updateConfluencePage,
-  updateJiraIssueFields,
   type AtlassianCredentialMetadata,
   type AtlassianHttpBodyPort,
   type AtlassianWriteActionFailure,
@@ -494,35 +490,6 @@ function failed(failure: AtlassianWriteActionFailure): AtlassianConnectorActionE
   };
 }
 
-type JiraActionInput = Extract<
-  AtlassianWriteActionInput,
-  { type: "create-issue" | "update-issue-fields" | "transition-issue" | "add-issue-comment" }
->;
-
-async function executeJiraAction(
-  deps: ExecutionDeps,
-  action: JiraActionInput,
-): Promise<AtlassianConnectorActionExecutionResult> {
-  switch (action.type) {
-    case "create-issue": {
-      const result = await createJiraIssue(deps, action);
-      return result.ok ? succeeded(result.issueKey) : failed(result);
-    }
-    case "update-issue-fields": {
-      const result = await updateJiraIssueFields(deps, action);
-      return result.ok ? succeeded(action.issueKey) : failed(result);
-    }
-    case "transition-issue": {
-      const result = await transitionJiraIssue(deps, action);
-      return result.ok ? succeeded(action.issueKey) : failed(result);
-    }
-    case "add-issue-comment": {
-      const result = await addJiraIssueComment(deps, action);
-      return result.ok ? succeeded(result.commentId) : failed(result);
-    }
-  }
-}
-
 type ConfluenceActionInput = Extract<
   AtlassianWriteActionInput,
   { type: "create-page" | "update-page" | "add-page-comment" }
@@ -553,11 +520,12 @@ function executeWriteAction(
   action: AtlassianWriteActionInput,
 ): Promise<AtlassianConnectorActionExecutionResult> {
   switch (action.type) {
+    // Retired (#4354): refused before any approval, so no effect can be reached through here.
     case "create-issue":
     case "update-issue-fields":
     case "transition-issue":
     case "add-issue-comment":
-      return executeJiraAction(deps, action);
+      return Promise.resolve(failed({ ok: false, reason: "effect-denied" }));
     case "create-page":
     case "update-page":
     case "add-page-comment":
@@ -704,6 +672,13 @@ interface GovernedActionPlan {
   readonly execute: (correlationId: string) => Promise<RouteResult>;
 }
 
+const RETIRED_JIRA_WRITE_ACTIONS: ReadonlySet<AtlassianConnectorActionType> = new Set([
+  "create-issue",
+  "update-issue-fields",
+  "transition-issue",
+  "add-issue-comment",
+]);
+
 function governedActionResult(
   deps: UiHandlerDeps,
   credential: AtlassianCredentialMetadata,
@@ -721,6 +696,9 @@ function governedActionResult(
       correlationId,
       ...(plan.jqlDigest === undefined ? {} : { jqlDigest: plan.jqlDigest }),
     });
+  // The four legacy Jira write actions are retired (#4354): they bypassed the saved issue templates.
+  // Every caller, in every mode, gets the same closed denial before any approval or effect.
+  if (RETIRED_JIRA_WRITE_ACTIONS.has(plan.actionType)) return denied("connector-write-denied");
   const outcome = decideGovernedAtlassianAction(plan.actionType, authority, deps);
   if (outcome.kind === "authority-denied") return denied(outcome.reason);
   if (outcome.kind === "policy-denied") {

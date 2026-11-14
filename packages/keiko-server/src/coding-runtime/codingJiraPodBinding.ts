@@ -4,6 +4,7 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
+  jiraOperationInReleaseScope,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   McpServerDefinition,
@@ -55,7 +56,10 @@ export type CodingJiraTool =
  * governed by its own workspace authority, which that source does not (yet) consult.
  */
 const CODING_JIRA_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
-  (operation) => operation !== "jira.draft" && operation !== "jira.attach",
+  (operation) =>
+    operation !== "jira.draft" &&
+    operation !== "jira.attach" &&
+    jiraOperationInReleaseScope(operation),
 );
 
 /** Reads are the human's grant; writes keep following the run's autonomy mode. */

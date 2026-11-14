@@ -27,7 +27,7 @@ const HISTORY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["restored", "retained", "unavailable", "capacity-exceeded"],
+      values: ["restored", "retained", "unavailable", "capacity-exceeded", "learned", "unlearned"],
     },
     messageCount: { type: "integer", dataClass: "count", required: true },
     reasoningBytes: { type: "integer", dataClass: "count", required: true },
@@ -55,6 +55,8 @@ interface RetainedReasoning {
   readonly bytes: number;
   ambiguous?: true;
   expiresAt: number;
+  /** Held for the current turn only: no setting asked for it and the deployment is not learned. */
+  readonly turnOnly?: { readonly scope: string; readonly turn: string };
 }
 
 function withoutReasoning(message: ChatMessage): ChatMessage {
@@ -73,18 +75,46 @@ function withoutReasoning(message: ChatMessage): ChatMessage {
   };
 }
 
-function needsHistory(request: GatewayCallRequest, provider: ModelProviderConfig): boolean {
-  return provider.reasoningHistory !== undefined && request.toolCatalog !== undefined;
+/** Conflicting successful reasoning for an identical payload is ambiguous and refused. */
+function conflicts(
+  previous: RetainedReasoning | undefined,
+  reasoning: string,
+): previous is RetainedReasoning {
+  return (
+    previous !== undefined && (previous.ambiguous === true || previous.reasoning !== reasoning)
+  );
+}
+
+type HistoryMode = "required-with-tools" | "current-turn";
+
+type HistoryState =
+  "restored" | "retained" | "unavailable" | "capacity-exceeded" | "learned" | "unlearned";
+
+// The behaviour a deployment gets: what its provider entry says, which always wins, else what Keiko
+// learned from the deployment's own rejection (#4351), else none.
+function historyModeOf(
+  provider: ModelProviderConfig,
+  learned: ReadonlySet<string>,
+): HistoryMode | undefined {
+  if (provider.reasoningHistory !== undefined) return provider.reasoningHistory;
+  return provider.reasoningContinuation === undefined &&
+    learned.has(toolCallingConfigurationFingerprint(provider))
+    ? "current-turn"
+    : undefined;
+}
+
+function needsHistory(request: GatewayCallRequest, mode: HistoryMode | undefined): boolean {
+  return mode !== undefined && request.toolCatalog !== undefined;
 }
 
 function needsMessage(
   request: GatewayCallRequest,
-  provider: ModelProviderConfig,
+  mode: HistoryMode,
   message: ChatMessage,
   index: number,
 ): boolean {
   if (message.role !== "assistant") return false;
-  if (provider.reasoningHistory !== "current-turn") return true;
+  if (mode !== "current-turn") return true;
   return !request.messages.slice(index + 1).some((entry) => entry.role === "user");
 }
 
@@ -181,16 +211,38 @@ function completedAssistant(response: NormalizedResponse): ChatMessage {
   });
 }
 
-function retainable(
-  request: GatewayCallRequest,
-  provider: ModelProviderConfig,
-  response: NormalizedResponse,
-): boolean {
+function completedForRetention(request: GatewayCallRequest, response: NormalizedResponse): boolean {
   return (
-    provider.reasoningHistory !== undefined &&
     request.reasoningScope !== undefined &&
     request.cancellationSignal?.aborted !== true &&
     (response.finishReason === "stop" || response.finishReason === "tool_calls")
+  );
+}
+
+// No setting and nothing learned (#4351): a tool-calling response that carried reasoning is kept for
+// this turn only, so that a provider which rejects the next round for want of it can be answered
+// once. Nothing else is kept for such a deployment. The gateway ends the turn on a final answer, a
+// failed or a cancelled call (`endTurn`). A turn that ends outside the gateway (a Chat round cap, a
+// tool error with no further model call) makes no further request, so its entries go when the
+// session's next turn begins (`dropEndedTurns`) or, at the latest, after REASONING_HISTORY_TTL_MS
+// (30 minutes) or by the entry and byte caps; they are never persisted.
+function keptForCurrentTurn(request: GatewayCallRequest, response: NormalizedResponse): boolean {
+  return (
+    request.toolCatalog !== undefined &&
+    response.finishReason === "tool_calls" &&
+    response.toolCalls.length > 0 &&
+    (response.reasoning ?? "").trim().length > 0
+  );
+}
+
+function retainable(
+  request: GatewayCallRequest,
+  mode: HistoryMode | undefined,
+  response: NormalizedResponse,
+): boolean {
+  return (
+    completedForRetention(request, response) &&
+    (mode !== undefined || keptForCurrentTurn(request, response))
   );
 }
 
@@ -200,6 +252,13 @@ export class GatewayReasoningHistory {
   private parent: GatewayReasoningHistory | undefined;
   private readonly entries = new Map<string, RetainedReasoning>();
   private readonly calls = new Map<string, Set<string>>();
+  // Deployments that rejected a continuation for want of their reasoning and accepted it restored
+  // (#4351): a content-free fact bound to this instance, so to the configuration generation. Never
+  // persisted, never logged beyond the closed state.
+  private readonly learned = new Set<string>();
+  // Deployments that completed an actual model call through this gateway generation (#4351): the
+  // content-free fact the passive context-window probe is gated on. Same lifecycle as `learned`.
+  private readonly served = new Set<string>();
   private bytes = 0;
 
   constructor(
@@ -210,22 +269,140 @@ export class GatewayReasoningHistory {
   prepare(request: GatewayCallRequest, provider: ModelProviderConfig): GatewayCallRequest {
     const root = this.root();
     if (root !== this) return root.prepare(request, provider);
-    if (!needsHistory(request, provider))
+    const mode = historyModeOf(provider, this.learned);
+    if (mode === undefined) this.endEndedTurn(request, provider);
+    if (mode === undefined || !needsHistory(request, mode))
       return { ...request, messages: request.messages.map(withoutReasoning) };
     this.prune();
+    const restored = this.restore(request, provider, mode);
+    if (restored === undefined) this.unavailable(request);
+    this.record(request, "restored", restored.count, restored.bytes);
+    return restored.request;
+  }
+
+  /**
+   * Whether a rejected continuation can be answered once with the current turn's reasoning (#4351):
+   * the deployment has no setting and nothing learned, and every assistant message of the current turn
+   * has its own retained, unambiguous reasoning. Missing or ambiguous state is a no.
+   */
+  canRestoreCurrentTurn(request: GatewayCallRequest, provider: ModelProviderConfig): boolean {
+    const root = this.root();
+    if (root !== this) return root.canRestoreCurrentTurn(request, provider);
+    if (historyModeOf(provider, this.learned) !== undefined) return false;
+    if (request.toolCatalog === undefined || request.reasoningScope === undefined) return false;
+    this.prune();
+    const restored = this.restore(request, provider, "current-turn");
+    return restored !== undefined && restored.count > 0;
+  }
+
+  /** The request with the current turn's reasoning restored; the caller checked `canRestoreCurrentTurn`. */
+  restoreCurrentTurn(
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+  ): GatewayCallRequest {
+    const root = this.root();
+    if (root !== this) return root.restoreCurrentTurn(request, provider);
+    const restored = this.restore(request, provider, "current-turn");
+    if (restored === undefined) this.unavailable(request);
+    this.record(request, "restored", restored.count, restored.bytes);
+    return restored.request;
+  }
+
+  /** The retry with the restored reasoning succeeded: this deployment wants it back (#4351). */
+  learn(request: GatewayCallRequest, provider: ModelProviderConfig): void {
+    const root = this.root();
+    if (root !== this) {
+      root.learn(request, provider);
+      return;
+    }
+    this.learned.add(toolCallingConfigurationFingerprint(provider));
+    this.record(request, "learned", 0, 0);
+  }
+
+  /**
+   * Whether a rejected continuation that carried a LEARNED deployment's reasoning can be answered
+   * once without it (#4351): the deployment has no setting, Keiko learned it wants reasoning back,
+   * and the request really carries some. Anything else is a no.
+   */
+  canWithholdCurrentTurn(request: GatewayCallRequest, provider: ModelProviderConfig): boolean {
+    const root = this.root();
+    if (root !== this) return root.canWithholdCurrentTurn(request, provider);
+    return (
+      provider.reasoningHistory === undefined &&
+      provider.reasoningContinuation === undefined &&
+      root.learned.has(toolCallingConfigurationFingerprint(provider)) &&
+      request.toolCatalog !== undefined &&
+      request.messages.some(
+        (message) => message.role === "assistant" && message.reasoningContent !== undefined,
+      )
+    );
+  }
+
+  /** The request without any reasoning, as it goes to a deployment that does not take it back. */
+  withholdReasoning(request: GatewayCallRequest): GatewayCallRequest {
+    return { ...request, messages: request.messages.map(withoutReasoning) };
+  }
+
+  /** The retry without reasoning succeeded: the deployment no longer wants it (#4351). */
+  unlearn(request: GatewayCallRequest, provider: ModelProviderConfig): void {
+    const root = this.root();
+    if (root !== this) {
+      root.unlearn(request, provider);
+      return;
+    }
+    if (this.learned.delete(toolCallingConfigurationFingerprint(provider)))
+      this.record(request, "unlearned", 0, 0);
+  }
+
+  /**
+   * The turn of this request has ENDED (a final answer, a failure or a cancellation): whatever was
+   * kept for that turn alone is dropped (#4351). Deployments with a setting or learned keep their
+   * own, longer-lived state and are untouched.
+   */
+  endTurn(request: GatewayCallRequest, provider: ModelProviderConfig): void {
+    const root = this.root();
+    if (root !== this) {
+      root.endTurn(request, provider);
+      return;
+    }
+    const current = this.currentTurnOnly(request, provider);
+    if (current === undefined) return;
+    for (const [key, entry] of this.entries) {
+      if (entry.turnOnly?.scope === current.scope && entry.turnOnly.turn === current.turn)
+        this.remove(key);
+    }
+  }
+
+  /** A call to this deployment completed through this gateway generation. */
+  noteServed(provider: ModelProviderConfig): void {
+    this.root().served.add(toolCallingConfigurationFingerprint(provider));
+  }
+
+  /** Whether a call to this deployment ever completed through this gateway generation. */
+  hasServed(provider: ModelProviderConfig): boolean {
+    return this.root().served.has(toolCallingConfigurationFingerprint(provider));
+  }
+
+  /** Whether Keiko learned that this deployment returns its reasoning on tool turns. */
+  isLearned(provider: ModelProviderConfig): boolean {
+    return this.root().learned.has(toolCallingConfigurationFingerprint(provider));
+  }
+
+  private restore(
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+    mode: HistoryMode,
+  ): { request: GatewayCallRequest; count: number; bytes: number } | undefined {
     const messages = this.restoreGroups(request, provider);
     let count = 0;
     let bytes = 0;
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index];
-      if (
-        message === undefined ||
-        !needsMessage({ ...request, messages }, provider, message, index)
-      )
+      if (message === undefined || !needsMessage({ ...request, messages }, mode, message, index))
         continue;
       const key = historyKey(request, provider, messages, index);
       const retained = request.reasoningScope === undefined ? undefined : this.entries.get(key);
-      if (retained === undefined || retained.ambiguous === true) this.unavailable(request);
+      if (retained === undefined || retained.ambiguous === true) return undefined;
       retained.expiresAt = this.now() + REASONING_HISTORY_TTL_MS;
       this.entries.delete(key);
       this.entries.set(key, retained);
@@ -240,8 +417,7 @@ export class GatewayReasoningHistory {
       count++;
       bytes += Buffer.byteLength(retained.reasoning, "utf8");
     }
-    this.record(request, "restored", count, bytes);
-    return { ...request, messages };
+    return { request: { ...request, messages }, count, bytes };
   }
 
   remember(
@@ -254,7 +430,8 @@ export class GatewayReasoningHistory {
       root.remember(request, provider, response);
       return;
     }
-    if (!retainable(request, provider, response)) return;
+    const mode = historyModeOf(provider, this.learned);
+    if (!retainable(request, mode, response)) return;
     const message = completedAssistant(response);
     const messages = [...request.messages, message];
     const key = historyKey(request, provider, messages, messages.length - 1);
@@ -267,25 +444,71 @@ export class GatewayReasoningHistory {
     const bytes =
       Buffer.byteLength(reasoning, "utf8") + Buffer.byteLength(canonicalise(assistant), "utf8");
     this.prune();
+    const turnOnly = this.turnOnlyFor(request, provider, mode);
     const previous = this.entries.get(key);
-    if (
-      previous !== undefined &&
-      (previous.ambiguous === true || previous.reasoning !== reasoning)
-    ) {
+    if (conflicts(previous, reasoning)) {
       previous.ambiguous = true;
       this.record(request, "unavailable", 1, 0);
       return;
     }
     const callKeys = (assistant.toolCalls ?? []).map((call) => callKey(request, provider, call.id));
-    const entry = {
+    const entry: RetainedReasoning = {
       reasoning,
       assistant,
       callKeys,
       bytes,
       expiresAt: this.now() + REASONING_HISTORY_TTL_MS,
+      ...(turnOnly === undefined ? {} : { turnOnly }),
     };
     const state = this.retain(key, entry);
     this.record(request, state, 1, Buffer.byteLength(reasoning, "utf8"));
+  }
+
+  /** The turn an unconfigured deployment's reasoning is kept for; a request of a new turn ends the old one. */
+  private turnOnlyFor(
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+    mode: HistoryMode | undefined,
+  ): { readonly scope: string; readonly turn: string } | undefined {
+    if (mode !== undefined) return undefined;
+    const turnOnly = this.currentTurnOnly(request, provider);
+    if (turnOnly !== undefined) this.dropEndedTurns(turnOnly);
+    return turnOnly;
+  }
+
+  /** The scope and turn an unconfigured deployment's reasoning is kept for: the turn's own user message. */
+  private currentTurnOnly(
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+  ): { readonly scope: string; readonly turn: string } | undefined {
+    if (request.reasoningScope === undefined) return undefined;
+    let start = request.messages.length - 1;
+    while (start >= 0 && request.messages[start]?.role !== "user") start--;
+    const user = start < 0 ? undefined : request.messages[start];
+    return {
+      scope: request.reasoningScope,
+      turn: sha256Hex(
+        canonicalise([
+          request.reasoningScope,
+          toolCallingConfigurationFingerprint(provider),
+          user?.role === "user" ? withoutReasoning(user) : null,
+        ]),
+      ),
+    };
+  }
+
+  /** A request of a new turn ends the turn before it: nothing kept for that turn alone survives. */
+  private endEndedTurn(request: GatewayCallRequest, provider: ModelProviderConfig): void {
+    const current = this.currentTurnOnly(request, provider);
+    if (current !== undefined) this.dropEndedTurns(current);
+  }
+
+  /** A new user message ends the turn: its reasoning, kept only for that turn, is dropped. */
+  private dropEndedTurns(current: { readonly scope: string; readonly turn: string }): void {
+    for (const [key, entry] of this.entries) {
+      if (entry.turnOnly?.scope === current.scope && entry.turnOnly.turn !== current.turn)
+        this.remove(key);
+    }
   }
 
   private retain(key: string, entry: RetainedReasoning): "retained" | "capacity-exceeded" {
@@ -320,6 +543,8 @@ export class GatewayReasoningHistory {
     target.prune();
     other.prune();
     for (const [key, entry] of other.entries) target.mergeEntry(key, entry);
+    for (const deployment of other.learned) target.learned.add(deployment);
+    for (const deployment of other.served) target.served.add(deployment);
     other.entries.clear();
     other.calls.clear();
     other.bytes = 0;
@@ -421,7 +646,7 @@ export class GatewayReasoningHistory {
 
   private record(
     request: GatewayCallRequest,
-    state: "restored" | "retained" | "unavailable" | "capacity-exceeded",
+    state: HistoryState,
     messageCount: number,
     reasoningBytes: number,
   ): void {

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { DE_MESSAGES } from "./i18n-messages.de";
 import { OPTIONAL_WIDGET_DE_MESSAGES } from "./i18n-messages.optional.de";
 import { OPTIONAL_WIDGET_EN_MESSAGES } from "./i18n-messages.optional.en";
 
@@ -45,7 +46,9 @@ describe("Jira Pod terminology (#4353)", () => {
     const texts = [...core.matchAll(refusal)].map((match) => match[1] ?? "");
     expect(texts).toHaveLength(3);
     for (const text of texts) expect(text).not.toMatch(/\b(?:Sie|Ihnen|Ihr\w*)\b/u);
-    expect(texts.join(" ")).toContain("Öffne den Knowledge Pods Hub");
+    expect(texts.join(" ")).toContain(
+      `Öffne das Fenster ${DE_MESSAGES["window.type.localKnowledge.title"]}`,
+    );
   });
   it("names the 10.3.0 floor and the remedy in the unsupported-release Pod dialog copy, in English and German (#4353 AC3)", () => {
     const key = "atlassianConnectors.verify.unsupported-version.copy";

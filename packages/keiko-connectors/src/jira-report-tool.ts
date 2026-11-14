@@ -116,7 +116,9 @@ export interface JiraReportToolDeps<Context extends ManagedMcpInvocationContext>
 }
 
 /** The Jira instance and credential a report was started with; never the credential itself. */
-export function connectionFingerprint(connection: JiraManagedConnection): string {
+export function connectionFingerprint(
+  connection: Pick<JiraManagedConnection, "baseUrl" | "identity">,
+): string {
   return sha256Hex(
     canonicalise({ baseUrl: connection.baseUrl, identity: connection.identity ?? "" }),
   );

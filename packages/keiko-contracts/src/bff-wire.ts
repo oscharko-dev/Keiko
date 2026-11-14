@@ -594,9 +594,22 @@ export function isChatToolBatchProgress(value: unknown): value is ChatToolBatchP
   );
 }
 
+/**
+ * A fact Keiko states about the answer a turn published (#4355): the answer claimed an effect its
+ * own turn does not bear out and the correction could not remove the claim. The server states the
+ * closed marker; the Chat words it from its message catalog, so no language is guessed here.
+ */
+export const CHAT_CLAIM_NOTICES = ["no-jira-create", "tool-call-not-executed"] as const;
+export type ChatClaimNotice = (typeof CHAT_CLAIM_NOTICES)[number];
+export function isChatClaimNotice(value: unknown): value is ChatClaimNotice {
+  return (CHAT_CLAIM_NOTICES as readonly unknown[]).includes(value);
+}
+
 export interface ChatToolTranscript {
   readonly schemaVersion: 1;
   readonly exchanges: readonly ChatToolExchange[];
+  /** Absent unless the published answer carries a claim the turn does not bear out. */
+  readonly claimNotice?: ChatClaimNotice | undefined;
   /** Latest update retained for older clients and the existing consent event. */
   readonly readGrant?: ChatToolReadGrantView | undefined;
   /** At most one current disclosure per source kind; older transcripts contain only readGrant. */
@@ -2689,6 +2702,21 @@ export type GatewayReadinessProbeName =
 
 export type GatewayReadinessProbeStatus = "passed" | "failed" | "unsupported" | "skipped";
 
+/**
+ * How a tool-calling check ended (#4351). The check first offers the tool the way production does, with
+ * no forced `tool_choice`; only a model that called none gets a second attempt with the forced named call.
+ * `forced-refused` and `inconclusive` are never a verdict that the model cannot call tools.
+ */
+export const GATEWAY_TOOL_CALLING_OUTCOMES = [
+  "called-unforced",
+  "called-only-forced",
+  "forced-refused",
+  "no-call",
+  "tools-refused",
+  "inconclusive",
+] as const;
+export type GatewayToolCallingOutcome = (typeof GATEWAY_TOOL_CALLING_OUTCOMES)[number];
+
 export type GatewayReadinessOverallStatus = "ready" | "partial" | "failed";
 
 export interface GatewayReadinessProbeResult {
@@ -2699,6 +2727,8 @@ export interface GatewayReadinessProbeResult {
   readonly latencyMs: number;
   readonly evidence: string;
   readonly warning?: string | undefined;
+  /** Only on the tool-calling probe: which closed outcome the two-step check reached. */
+  readonly toolCallingOutcome?: GatewayToolCallingOutcome | undefined;
   // Present only when transport-level evidence conclusively proves a capability value. A semantic
   // sentinel mismatch remains unsupported in the report but must not rewrite durable capability
   // configuration as false.

@@ -1,3 +1,5 @@
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { processServerLogSinkFor } from "./process-log-sink.js";
 import {
   closeSync,
   constants,
@@ -143,7 +145,7 @@ function inspectOrRefuse(
   inspect: typeof inspectWindowsOwnerPrivateFiles,
 ): WindowsOwnerPrivateInspection {
   try {
-    return inspect(paths);
+    return inspect(paths, { securityLogSink: processServerLogSinkFor(UNKNOWN_CORRELATION_ID) });
   } catch {
     throw new OwnerPrivateFileRefused("not-owner-private");
   }

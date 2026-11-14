@@ -411,7 +411,12 @@ export const JIRA_DRAFT_ID_PATTERN =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 export const JIRA_DRAFT_DIGEST_PATTERN = "^[0-9a-f]{64}$";
 /** Why a `jira.draft` call that names a staged draft is refused before anyone is asked. */
-export const JIRA_DRAFT_REFUSALS = ["draft-not-found", "draft-changed", "draft-invalid"] as const;
+export const JIRA_DRAFT_REFUSALS = [
+  "draft-not-found",
+  "draft-changed",
+  "draft-invalid",
+  "connection-changed",
+] as const;
 export type JiraDraftRefusalReason = (typeof JIRA_DRAFT_REFUSALS)[number];
 /**
  * Why a draft that resolves is still invalid, as a closed code: the person reads one localized
@@ -699,6 +704,8 @@ export const JIRA_FIELD_VALIDATION_FAILURES = [
   "invalid-field",
   "invalid-operation",
   "bounds-exceeded",
+  /** An Epic Link whose target the instance does not know as an Epic (#4354). */
+  "invalid-epic-link",
 ] as const;
 export type JiraFieldValidationFailure = (typeof JIRA_FIELD_VALIDATION_FAILURES)[number];
 export const JIRA_MUTATION_DETAIL_LIMITS = Object.freeze({
@@ -754,6 +761,11 @@ export type JiraMutationAttempt =
       /** Internal bounded serializer evidence; omitted from model results and remote receipts. */
       readonly descriptionConvertedHeadingCount?: number;
       readonly descriptionProjection?: "supported-markdown";
+      /**
+       * Template rules the issue already broke in fields this edit did not touch. They did not block
+       * the write; the person is told (#4354).
+       */
+      readonly templateNotices?: readonly JiraTemplateViolation[];
     }
   | {
       readonly ok: false;

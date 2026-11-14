@@ -3,7 +3,7 @@ import * as api from "./api";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import {
   noteConnectedServerInstance,
-  resetServerRestartStorageReport,
+  resetServerRestartReports,
   sessionEndedByRestart,
 } from "./server-restart";
 
@@ -19,7 +19,7 @@ function health(instanceId: string | undefined): void {
 }
 
 beforeEach(() => {
-  resetServerRestartStorageReport();
+  resetServerRestartReports();
   window.sessionStorage.clear();
   setClientDiagnosticWriter(() => undefined);
 });
@@ -95,6 +95,26 @@ describe("recognizing that Keiko was restarted (#4370)", () => {
     ).resolves.toBeUndefined();
     expect(writer).toHaveBeenCalledTimes(1);
     await expect(sessionEndedByRestart()).resolves.toBe(true);
+  });
+
+  it("reports an unreadable confirmation once per outage, and again after the next success", async () => {
+    // The refresh timer ticks every 30 s; while the server is unreachable that must not be a report
+    // per tick. A confirmation that works again ends the outage, so a later failure is news (#4370).
+    health(FIRST);
+    await noteConnectedServerInstance();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    const offline = async (): Promise<boolean> => {
+      throw new Error("offline");
+    };
+    await noteConnectedServerInstance(offline);
+    await noteConnectedServerInstance(offline);
+    await noteConnectedServerInstance(offline);
+    expect(writer).toHaveBeenCalledTimes(1);
+    await noteConnectedServerInstance(async () => true);
+    await noteConnectedServerInstance(offline);
+    await noteConnectedServerInstance(offline);
+    expect(writer).toHaveBeenCalledTimes(2);
   });
 
   it("makes no claim when tab storage is unavailable, and reports it once without a value", async () => {

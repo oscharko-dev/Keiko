@@ -47,6 +47,10 @@ const ORIGINAL_TOOL_ALIASES = [
   "jira_transition",
   "jira_draft",
   "jira_attach",
+  // The base additions of #4357.
+  "jira_myself",
+  "jira_watch",
+  "jira_unwatch",
   "knowledge_requirements",
 ] as const;
 
@@ -216,7 +220,7 @@ describe("the Jira draft schema actually offered to Chat", () => {
   });
 
   it("preserves the declared union in the model projection without changing the other tools", () => {
-    expect(ORIGINAL_TOOL_ALIASES).toHaveLength(19);
+    expect(ORIGINAL_TOOL_ALIASES).toHaveLength(22);
     expect([KNOWLEDGE_DOCUMENTS_TOOL, KNOWLEDGE_REVIEW_TOOL]).toEqual([
       "knowledge.documents",
       "knowledge.review",
@@ -250,7 +254,7 @@ describe("the Jira draft schema actually offered to Chat", () => {
   it("leaves an unknown, syntactically valid saved reference to the existing runtime guard", () => {
     expect(describeCatalogSchemaMismatch(parameters("jira_draft"), REFERENCE)).toBeUndefined();
     const lookup = vi.fn(() => undefined);
-    expect(resolveJiraDraftArguments(REFERENCE, lookup)).toEqual({
+    expect(resolveJiraDraftArguments(REFERENCE, lookup, undefined)).toEqual({
       ok: false,
       reason: "draft-not-found",
     });

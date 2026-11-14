@@ -1249,7 +1249,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["staged", "submitted", "refused", "progress", "executed", "named"],
+        values: ["staged", "submitted", "refused", "progress", "executed", "named", "held"],
       },
       refusal: {
         type: "string",
@@ -1267,6 +1267,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "draft-changed",
           "draft-invalid",
           "requirements-untraced",
+          "approval-expired",
         ],
       },
       newDraft: {
@@ -1365,6 +1366,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       templateUnreadableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateNotActivatedCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -1607,6 +1618,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       templateUnreadableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateNotActivatedCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -3894,6 +3915,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "invalid-field",
           "invalid-operation",
           "bounds-exceeded",
+          "invalid-epic-link",
         ],
       },
       linkRequestedCount: {
@@ -4010,6 +4032,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "read-consent",
           "write-approval",
           "human-input",
+          "claim-notice",
         ],
       },
       batchPhase: {
@@ -4032,6 +4055,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      claimNotice: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["no-jira-create", "tool-call-not-executed"],
       },
       exchangeCount: {
         type: "integer",
@@ -4190,6 +4219,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "unsupported-issue-key",
           "knowledge-coverage",
           "raw-report-key",
+          "announced-create",
+          "tool-call-as-text",
         ],
       },
       omittedFindingCount: {
@@ -4208,6 +4239,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       rawReportKeyCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      announcementCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -12714,6 +12750,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "cancelled",
           "unavailable",
           "authority-refused",
+          "template-refused",
         ],
       },
       sessionRelation: {
@@ -23344,7 +23381,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["reported", "not-reported", "failed", "skipped-spend-budget"],
+        values: ["reported", "not-reported", "failed", "skipped-spend-budget", "skipped-unused"],
       },
       httpStatus: {
         type: "integer",
@@ -24053,6 +24090,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      toolCallingOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "called-unforced",
+          "called-only-forced",
+          "forced-refused",
+          "no-call",
+          "tools-refused",
+          "inconclusive",
+        ],
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -24480,6 +24530,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      toolCallingOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "called-unforced",
+          "called-only-forced",
+          "forced-refused",
+          "no-call",
+          "tools-refused",
+          "inconclusive",
+        ],
+      },
       embeddingModelIdDigest: {
         type: "string",
         dataClass: "digest",
@@ -24678,7 +24741,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["restored", "retained", "unavailable", "capacity-exceeded"],
+        values: [
+          "restored",
+          "retained",
+          "unavailable",
+          "capacity-exceeded",
+          "learned",
+          "unlearned",
+        ],
       },
       messageCount: {
         type: "integer",
@@ -24979,7 +25049,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["retryable-error", "output-exhausted-repair", "empty-answer-repair"],
+        values: [
+          "retryable-error",
+          "output-exhausted-repair",
+          "empty-answer-repair",
+          "reasoning-restore-repair",
+          "reasoning-withhold-repair",
+        ],
       },
       httpStatus: {
         type: "integer",
@@ -33104,8 +33180,9 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "invalid-field",
           "invalid-operation",
           "bounds-exceeded",
+          "invalid-epic-link",
         ],
-        maxItems: 5,
+        maxItems: 6,
       },
     },
     causal: "correlation",
@@ -33144,6 +33221,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33255,6 +33333,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33386,6 +33465,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33515,6 +33595,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33668,6 +33749,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33801,6 +33883,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -33892,6 +33975,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34009,6 +34093,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34143,6 +34228,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34266,6 +34352,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34392,6 +34479,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34516,6 +34604,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34625,6 +34714,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "coding-binding",
           "description-projection",
           "field-admission",
+          "release-scope",
         ],
       },
       outcome: {
@@ -34817,7 +34907,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["pre-approval", "dispatch"],
+        values: ["pre-approval", "dispatch", "notice"],
       },
       violationCount: {
         type: "integer",
@@ -34842,6 +34932,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "parent-missing",
           "parent-type-mismatch",
           "template-unreadable",
+          "template-missing",
+          "template-not-activated",
         ],
         maxItems: 25,
       },
@@ -37273,6 +37365,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "portable.setup-notice.requested",
+    category: "diagnostic",
+    owner: "keiko-cli",
+    emitter: "portable-launch-notifier.emitSetupNoticeRequested",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["portable-setup-notice"],
+      },
+    },
+    causal: "none",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["windows-alert-spawn"],
+    proofIds: ["portable.setup-notice.requested.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "portable.windows-alert.spawn-failed",
     category: "diagnostic",
     owner: "keiko-cli",
@@ -37292,7 +37416,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["portable-failure-alert"],
+        values: ["portable-failure-alert", "portable-setup-notice"],
       },
       failureKind: {
         type: "string",
@@ -42832,6 +42956,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["input", "resolve", "host-start", "verify"],
       },
+      verdict: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["not-local", "unverifiable"],
+      },
     },
     causal: "none",
     lifecycle: "failure",
@@ -47355,6 +47485,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "portable-setup-failed",
           "portable-it-managed",
           "portable-registration-invalid",
+          "portable-volume-not-local",
+          "portable-volume-unverified",
           "portable-non-stable",
         ],
       },

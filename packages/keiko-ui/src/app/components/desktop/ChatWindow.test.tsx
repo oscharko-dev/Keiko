@@ -9,7 +9,7 @@ import {
 } from "./connectedEvidenceInspection.test-fixtures";
 import { useState, type ComponentProps, type Dispatch, type SetStateAction } from "react";
 import { flushSync } from "react-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CapsuleSetId,
   KnowledgeCapsuleId,
@@ -26,15 +26,20 @@ import {
   ChatWindow,
   clearKnowledgeCatalogCacheForTests,
   copyableMessageText,
+  claimNoticeOfAnswer,
   speakableAnswerText,
   speechPreparationEvidence,
+  speechTextWithNote,
   messageForSelectedResponseVersion,
   MemoryActionForgetButtons,
   normalizeMemoryBudgetInput,
   rootDisplayName,
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
-import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
+import { OPTIONAL_WIDGET_DE_MESSAGES } from "@/lib/i18n-messages.optional.de";
+import { OPTIONAL_WIDGET_EN_MESSAGES } from "@/lib/i18n-messages.optional.en";
 import {
   translateOptionalWidget as translate,
   type OptionalWidgetTranslate as I18nTranslate,
@@ -5982,4 +5987,133 @@ it("keeps connected Files sources visible without explanatory paragraphs", async
   expect(screen.queryByTestId("grounding-help")).toBeNull();
   expect(screen.queryByText("No ready Knowledge Pods or Pod Sets are available.")).toBeNull();
   expect(screen.queryByText(/Keiko may inspect only/)).toBeNull();
+});
+
+// #4355 AC4: the server states a closed marker with the stored turn; the Chat words it from its
+// catalog under the answer, whatever language the person writes, and the answer stays untouched.
+describe("Keiko's note under an answer that claimed an effect its turn did not bear out", () => {
+  const CATALOGS = {
+    en: OPTIONAL_WIDGET_EN_MESSAGES as Readonly<Record<string, string>>,
+    de: OPTIONAL_WIDGET_DE_MESSAGES as Readonly<Record<string, string>>,
+  } as const;
+  const SENTENCE_KEYS = {
+    "no-jira-create": "chat.claimNotice.noJiraCreate",
+    "tool-call-not-executed": "chat.claimNotice.toolCallNotExecuted",
+  } as const;
+  const CLAIM = "I created the Epic REQ-1 for you.";
+  function turn(
+    notice: keyof typeof SENTENCE_KEYS | undefined,
+    answer: Partial<ChatMessage> = {},
+  ): ChatMessage[] {
+    return [
+      makeMessage({
+        id: "u-claim",
+        content: "Create the epic",
+        toolTranscript: {
+          schemaVersion: 1,
+          exchanges: [],
+          ...(notice === undefined ? {} : { claimNotice: notice }),
+        },
+      }),
+      makeMessage({ id: "a-claim", role: "assistant", content: CLAIM, timestamp: 2, ...answer }),
+    ];
+  }
+  async function renderIn(locale: "en" | "de", messages: ChatMessage[]): Promise<void> {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    render(
+      <I18nProvider>
+        <ChatSessionProvider value={makeSession({ activeChat: makeChat(), messages })}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      </I18nProvider>,
+    );
+  }
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  it.each([
+    ["en", "no-jira-create"],
+    ["de", "no-jira-create"],
+    ["en", "tool-call-not-executed"],
+    ["de", "tool-call-not-executed"],
+  ] as const)(
+    "shows the %s sentence for %s from the catalog, after the unchanged answer",
+    async (locale, notice) => {
+      await renderIn(locale, turn(notice));
+      const catalog = CATALOGS[locale];
+      const expected = `${catalog["chat.claimNotice.label"] ?? ""}: ${catalog[SENTENCE_KEYS[notice]] ?? ""}`;
+      const line = await screen.findByText(expected);
+      expect(line).toHaveAttribute("data-claim-notice");
+      const answer = screen.getByText(CLAIM);
+      expect(answer.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(answer.textContent).toBe(CLAIM);
+    },
+  );
+
+  it("shows nothing when the turn carries no marker", async () => {
+    await renderIn("en", turn(undefined));
+    expect(screen.getByText(CLAIM)).toBeInTheDocument();
+    expect(document.querySelector("[data-claim-notice]")).toBeNull();
+  });
+
+  it("does not put the note under a regenerated answer", async () => {
+    await renderIn(
+      "en",
+      turn("no-jira-create", {
+        content: "Nothing was created.",
+        responseVersion: 2,
+        responseVersions: [
+          { version: 1, content: CLAIM, timestamp: 2 },
+          { version: 2, content: "Nothing was created.", timestamp: 3, supersedesVersion: 1 },
+        ],
+      }),
+    );
+    expect(screen.getByText("Nothing was created.")).toBeInTheDocument();
+    expect(document.querySelector("[data-claim-notice]")).toBeNull();
+  });
+
+  it("finds the marker of the turn an answer closes, and only for its first answer", () => {
+    const [user, answer] = turn("tool-call-not-executed");
+    const [other] = turn(undefined);
+    if (user === undefined || answer === undefined || other === undefined)
+      throw new Error("Missing fixture messages");
+    const earlier = { ...other, id: "u-earlier" };
+    expect(claimNoticeOfAnswer([earlier, user, answer], answer)).toBe("tool-call-not-executed");
+    // The nearest earlier user message decides; another turn's marker is never borrowed.
+    expect(
+      claimNoticeOfAnswer([user, answer, { ...other, id: "u-later" }, { ...answer, id: "a2" }], {
+        ...answer,
+        id: "a2",
+      }),
+    ).toBeUndefined();
+    expect(claimNoticeOfAnswer([user, answer], { ...answer, responseVersion: 2 })).toBeUndefined();
+    expect(claimNoticeOfAnswer([answer], answer)).toBeUndefined();
+    expect(claimNoticeOfAnswer([user, answer], undefined)).toBeUndefined();
+  });
+
+  it("reads the note after the answer, as a copy does", () => {
+    expect(speechTextWithNote("Answer", undefined)).toBe("Answer");
+    expect(speechTextWithNote("Answer", "Note")).toBe("Answer\n\nNote");
+  });
+
+  it("carries the note into a copy of the answer", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    try {
+      await renderIn("en", turn("no-jira-create"));
+      const catalog = CATALOGS.en;
+      const expected = `${catalog["chat.claimNotice.label"] ?? ""}: ${catalog["chat.claimNotice.noJiraCreate"] ?? ""}`;
+      await screen.findByText(expected);
+      fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+      await waitFor(() => {
+        expect(writeText.mock.calls).toEqual([[`${CLAIM}\n\n${expected}`]]);
+      });
+    } finally {
+      if (clipboardDescriptor === undefined) Reflect.deleteProperty(navigator, "clipboard");
+      else Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
 });

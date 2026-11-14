@@ -1892,6 +1892,18 @@
               "required": false
             },
             {
+              "name": "templateMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "templateNotActivatedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "templateUnreadableCount",
               "type": "integer",
               "dataClass": "count",
@@ -2145,6 +2157,18 @@
             },
             {
               "name": "summaryTooShortCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "templateMissingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "templateNotActivatedCount",
               "type": "integer",
               "dataClass": "count",
               "required": false
@@ -5086,6 +5110,12 @@
               "required": false
             },
             {
+              "name": "claimNotice",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "draftReceiptCount",
               "type": "integer",
               "dataClass": "count",
@@ -5199,6 +5229,12 @@
           "causal": "correlation",
           "analyzerProjection": "timeline",
           "safeContextFields": [
+            {
+              "name": "announcementCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
             {
               "name": "correctionKind",
               "type": "string",
@@ -29303,6 +29339,12 @@
               "required": true
             },
             {
+              "name": "toolCallingOutcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "verifiedContextTokens",
               "type": "integer",
               "dataClass": "count",
@@ -29536,6 +29578,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "toolCallingOutcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "trigger",
@@ -52551,24 +52599,52 @@
       "failureClass": "windows-alert-spawn",
       "requirementContract": "windows-alert-spawn",
       "productSurfaces": ["keiko-cli"],
-      "lifecycleTransitions": ["failure"],
+      "lifecycleTransitions": ["failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": [],
+        "state": ["portable.setup-notice.requested"],
         "end": [],
         "failure": ["portable.windows-alert.spawn-failed"],
         "loss": []
       },
       "causalEdges": [
         {
+          "op": "portable.setup-notice.requested",
+          "mode": "none"
+        },
+        {
           "op": "portable.windows-alert.spawn-failed",
           "mode": "none"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": [],
+      "resourceSignals": ["portable.setup-notice.requested"],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "portable.setup-notice.requested",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["portable.setup-notice.requested.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "portable.windows-alert.spawn-failed",
           "owner": "keiko-cli",
@@ -52741,6 +52817,12 @@
             },
             {
               "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "verdict",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
