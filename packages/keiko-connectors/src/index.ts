@@ -427,3 +427,4 @@ export type {
   JiraEmailTemplatePack,
   JiraEmailTemplateObservation,
 } from "./jira-email-template-values.js";
+export { jiraEpicLinkRefusalMessage } from "./jira-epic-link-target.js";

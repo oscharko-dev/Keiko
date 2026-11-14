@@ -26,6 +26,11 @@ import {
   JIRA_MUTATION_OPERATIONS,
   JIRA_TEMPLATE_GOVERNANCE,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  fixtureRead,
+  response,
+  type SyntheticJira,
+} from "../../../tests/support/jira-managed-remote.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { checkJiraManagedMutation } from "./jira-managed-mutations.js";
 import type { JiraIssueTemplateSet } from "./jira-managed-template-gate.js";
@@ -50,17 +55,27 @@ interface Pin {
   /** A fragment of the pinning test's title, exactly as written in the file. */
   readonly title: string;
 }
-/** The function or constant `declares` is declared in `file`, and its body uses `calls`. */
+/**
+ * The function or constant `declares` is declared in `file`, and its body uses `calls`: as a CALL
+ * (`calls(`) in code, with comments and every string removed, or, for a classification constant, as
+ * the quoted `literal` it carries.
+ */
 interface Site {
   readonly file: string;
   readonly declares: string;
   readonly calls: string;
+  readonly kind: "call" | "literal";
 }
 interface WritePath {
   readonly site: Site;
   readonly pin: Pin;
 }
-const site = (file: string, declares: string, calls: string): Site => ({ file, declares, calls });
+const site = (file: string, declares: string, calls: string): Site => ({
+  file,
+  declares,
+  calls,
+  kind: "call",
+});
 
 const GATE = "gateJiraMutationByTemplates";
 const MUTATIONS = "jira-managed-mutations.ts";
@@ -284,8 +299,12 @@ const GOVERNED: Readonly<Record<string, WritePath>> = {
 const GOVERNANCE_SOURCE = "../../keiko-contracts/src/jira-template-governance.ts";
 const GOVERNANCE_TEST = "../../keiko-contracts/src/jira-template-governance.test.ts";
 const FREE_PIN = (title: string): Pin => ({ file: GOVERNANCE_TEST, title });
-const governanceSite = (constant: string, reason: string): Site =>
-  site(GOVERNANCE_SOURCE, constant, reason);
+const governanceSite = (constant: string, reason: string): Site => ({
+  file: GOVERNANCE_SOURCE,
+  declares: constant,
+  calls: reason,
+  kind: "literal",
+});
 /**
  * Free by rule: the owner decided that a status change, a comment, a watcher or a vote is not
  * judged by a template, and archive, restore and subtask reordering change no governed field. The
@@ -457,13 +476,89 @@ const notIssueContent = OPERATIONS.filter(
   (operation) => classOf(operation) === "free:not-issue-content",
 );
 
-/** The source with every comment removed, so a comment can never satisfy a site. */
-function code(source: string): string {
-  return source.replaceAll(/\/\*[\s\S]*?\*\//gu, "").replaceAll(/^\s*\/\/.*$/gmu, "");
+/** Where the string or template literal that opens at `start` ends (after its closing quote). */
+function literalEnd(source: string, start: number): number {
+  const quote = source[start];
+  let index = start + 1;
+  while (index < source.length && source[index] !== quote) index += source[index] === "\\" ? 2 : 1;
+  return index + 1;
+}
+/** Where the regular expression literal that opens at `start` ends, flags included. */
+function regexEnd(source: string, start: number): number {
+  let index = start + 1;
+  let inClass = false;
+  while (index < source.length && (inClass || source[index] !== "/")) {
+    if (source[index] === "\\") index += 1;
+    else if (source[index] === "[") inClass = true;
+    else if (source[index] === "]") inClass = false;
+    index += 1;
+  }
+  index += 1;
+  while (/[a-z]/u.test(source[index] ?? "")) index += 1;
+  return index;
+}
+/** One step of the scanner: what it emitted, the last significant character, and where it goes on. */
+interface Step {
+  readonly emit: string;
+  readonly previous: string;
+  readonly next: number;
+}
+const REGEX_CAN_START_AFTER = "(,=:[!&|?{};";
+/** A line or block comment at `index`: nothing (or one space) is emitted. */
+function commentStep(source: string, index: number, previous: string): Step | undefined {
+  const pair = source.slice(index, index + 2);
+  if (pair === "//") {
+    const lineEnd = source.indexOf("\n", index);
+    return { emit: "", previous, next: lineEnd < 0 ? source.length : lineEnd };
+  }
+  if (pair !== "/*") return undefined;
+  const end = source.indexOf("*/", index + 2);
+  return { emit: " ", previous, next: end < 0 ? source.length : end + 2 };
+}
+/** A string, template or regular expression literal at `index`. */
+function literalStep(
+  source: string,
+  index: number,
+  previous: string,
+  keepStrings: boolean,
+): Step | undefined {
+  const char = source[index] ?? "";
+  if (char === '"' || char === "'" || char === "`") {
+    const end = literalEnd(source, index);
+    const emit = keepStrings ? source.slice(index, end) : `${char}${char}`;
+    return { emit, previous: char, next: end };
+  }
+  const startsRegex = char === "/" && (previous === "" || REGEX_CAN_START_AFTER.includes(previous));
+  return startsRegex ? { emit: "/r/", previous: "/", next: regexEnd(source, index) } : undefined;
+}
+/** The scanner's step at `index`: a comment, a literal or an ordinary character. */
+function scanStep(source: string, index: number, previous: string, keepStrings: boolean): Step {
+  const special =
+    commentStep(source, index, previous) ?? literalStep(source, index, previous, keepStrings);
+  if (special !== undefined) return special;
+  const char = source[index] ?? "";
+  return { emit: char, previous: /\s/u.test(char) ? previous : char, next: index + 1 };
+}
+/**
+ * The source reduced to what runs: every comment (own-line, trailing and block) is removed and every
+ * string, template and regular expression literal is emptied, unless `keepStrings` keeps strings (a
+ * classification constant carries its meaning in a quoted literal). A comment or a string can never
+ * satisfy a site.
+ */
+function code(source: string, keepStrings = false): string {
+  let out = "";
+  let previous = "";
+  let index = 0;
+  while (index < source.length) {
+    const step = scanStep(source, index, previous, keepStrings);
+    out += step.emit;
+    previous = step.previous;
+    index = step.next;
+  }
+  return out;
 }
 /** The body of the top-level function or constant `name`, up to the next top-level declaration. */
-function declarationBody(source: string, name: string): string | undefined {
-  const text = code(source);
+function declarationBody(text: string, name: string): string | undefined {
   const declaration = new RegExp(
     `^(?:export\\s+)?(?:async\\s+)?(?:function\\s+${name}\\b|const\\s+${name}\\b)`,
     "mu",
@@ -475,16 +570,53 @@ function declarationBody(source: string, name: string): string | undefined {
   );
   return next === null ? rest : rest.slice(0, next.index);
 }
-/** Whether `declares` is declared in `source` and its body names `calls` (word-bounded or quoted). */
-function siteHolds(source: string, { declares, calls }: Pick<Site, "declares" | "calls">): boolean {
-  const body = declarationBody(source, declares);
-  return body !== undefined && new RegExp(`(?<![\\w-])${calls}(?![\\w-])`, "u").test(body);
+/** Whether `declares` is declared in `source` and its body CALLS `calls` (or carries the literal). */
+function siteHolds(
+  source: string,
+  { declares, calls, kind }: Pick<Site, "declares" | "calls" | "kind">,
+): boolean {
+  const body = declarationBody(code(source, kind === "literal"), declares);
+  if (body === undefined) return false;
+  const pattern = kind === "call" ? `(?<![\\w$])${calls}\\s*\\(` : `(?<![\\w-])${calls}(?![\\w-])`;
+  return new RegExp(pattern, "u").test(body);
 }
 /** A title fragment opens a test registration: `it("…`, `it.each(…)("…` or `it.each(…)(\n "…`. */
 function registersTest(source: string, title: string): boolean {
   const at = source.indexOf(`"${title}`);
   if (at < 0) return false;
   return /\bit(?:\.each\([\s\S]*?\))?\(\s*$/u.test(source.slice(Math.max(0, at - 4000), at));
+}
+
+/** The dry run of one operation with a template library that refuses every governed write. */
+async function dryRun(
+  operation: Parameters<typeof checkJiraManagedMutation>[0],
+  args: Parameters<typeof checkJiraManagedMutation>[1],
+  answer: (path: string) => ReturnType<typeof response>,
+): Promise<{
+  readonly templates: ReturnType<typeof vi.fn<() => JiraIssueTemplateSet>>;
+  readonly result: Awaited<ReturnType<typeof checkJiraManagedMutation>>;
+}> {
+  const templates = vi.fn<() => JiraIssueTemplateSet>(() => ({ templates: [], unreadable: 1 }));
+  const http = vi.fn<AtlassianHttpBodyPort>((request) =>
+    Promise.resolve(answer(new URL(request.url).pathname)),
+  );
+  const result = await checkJiraManagedMutation(
+    operation,
+    args,
+    {
+      invocationId: "inventory",
+      correlationId: "inventory",
+      signal: new AbortController().signal,
+      beforeEffect: () => true,
+    },
+    {
+      deployment: "data-center",
+      baseUrl: "https://jira.example.invalid/context",
+      http,
+      issueTemplates: templates,
+    },
+  );
+  return { templates, result };
 }
 
 const ENTRIES: readonly (readonly [name: string, rule: string, path: WritePath])[] = [
@@ -553,40 +685,44 @@ describe("the write-path inventory (#4354)", () => {
   // automatically, and this runs once per member: the dry run of a not-issue-content operation never
   // so much as asks for the template library, even when the library would refuse every governed
   // write, and is never refused by a template rule. The arguments are empty on purpose: the case
-  // proves the gate is not reached, not that the operation succeeds.
+  // proves the gate is not reached by an operation that fails validation first, so the positive
+  // control below proves the same harness DOES see a governed operation consult the library.
   describe.each(notIssueContent)("%s [free:not-issue-content]", (operation) => {
     it("is classified once, outside every governed table, and never consults the templates", async () => {
       expect(classOf(operation)).toBe("free:not-issue-content");
       for (const table of [GOVERNED, FREE, SWITCHED_OFF])
         expect(table).not.toHaveProperty(operation);
-      const templates = vi.fn<() => JiraIssueTemplateSet>(() => ({ templates: [], unreadable: 1 }));
-      const http = vi.fn<AtlassianHttpBodyPort>(() =>
-        Promise.resolve({
-          kind: "response",
-          status: 404,
-          bodyText: "",
-          bodyBytes: 0,
-          truncated: false,
-        }),
-      );
-      const result = await checkJiraManagedMutation(
-        operation,
-        {},
-        {
-          invocationId: "inventory",
-          correlationId: "inventory",
-          signal: new AbortController().signal,
-          beforeEffect: () => true,
-        },
-        {
-          deployment: "data-center",
-          baseUrl: "https://jira.example.invalid/context",
-          http,
-          issueTemplates: templates,
-        },
-      );
+      const { templates, result } = await dryRun(operation, {}, () => response({}, 404));
       expect(templates).not.toHaveBeenCalled();
       expect(result.ok || result.violations === undefined).toBe(true);
+    });
+  });
+
+  // The control: the very same harness, with valid arguments, sees a governed operation ask for the
+  // library and be refused by it. Without this the per-member cases above would pass for a harness
+  // that never reaches the gate at all.
+  describe("the positive control of the administration cases", () => {
+    const state = (): SyntheticJira => ({
+      fields: {
+        summary: "Original summary of the synthetic issue",
+        status: { id: "1" },
+        labels: ["initial"],
+        project: { id: "10000", key: "SYN" },
+        issuetype: { id: "3", name: "Task" },
+      },
+      comment: "",
+    });
+
+    it.each([
+      ["jira.edit", { issueKey: "SYN-1", fields: { summary: "A different summary text" } }],
+      ["jira.assign", { issueKey: "SYN-1", assigneeName: "synthetic-user" }],
+    ] as const)("%s consults the library and is refused by it", async (operation, args) => {
+      const issue = state();
+      const { templates, result } = await dryRun(operation, args, (path) =>
+        fixtureRead(path, issue),
+      );
+      expect(templates).toHaveBeenCalled();
+      expect(result).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
     });
   });
 
@@ -604,21 +740,60 @@ describe("the write-path inventory (#4354)", () => {
       "  return gate();",
       "}",
       "const declared = () => 1;",
+      "function trailing() {",
+      "  const x = 1; // gate();",
+      "}",
+      "function stringy() {",
+      '  const x = "gate()";',
+      "  return `gate()`;",
+      "}",
+      "function reference() {",
+      "  const used = gate;",
+      "  return used;",
+      "}",
+      "function pattern() {",
+      '  const quote = /"/u;',
+      "  return gate();",
+      "}",
     ].join("\n");
+    const holds = (declares: string, calls = "gate"): boolean =>
+      siteHolds(source, { declares, calls, kind: "call" });
 
-    it("resolves a declaration whose body uses the gate", () => {
-      expect(siteHolds(source, { declares: "applies", calls: "gate" })).toBe(true);
-      expect(siteHolds(source, { declares: "other", calls: "gate" })).toBe(true);
+    it("resolves a declaration whose body calls the gate, regular expression literals included", () => {
+      expect(holds("applies")).toBe(true);
+      expect(holds("other")).toBe(true);
+      expect(holds("pattern")).toBe(true);
     });
 
-    it("does not accept an import, a comment, an undeclared name or another function's call", () => {
-      expect(siteHolds(source, { declares: "missing", calls: "gate" })).toBe(false);
-      expect(siteHolds(source, { declares: "declared", calls: "gate" })).toBe(false);
-      expect(siteHolds(source, { declares: "applies", calls: "gat" })).toBe(false);
+    it("does not accept an import, a comment, a string, a bare reference or another name", () => {
+      expect(holds("missing")).toBe(false);
+      expect(holds("declared")).toBe(false);
+      expect(holds("applies", "gat")).toBe(false);
+      expect(holds("trailing")).toBe(false);
+      expect(holds("stringy")).toBe(false);
+      expect(holds("reference")).toBe(false);
       expect(
         siteHolds('import { gate } from "x";\n// function f() { gate(); }\nconst g = 1;', {
           declares: "f",
           calls: "gate",
+          kind: "call",
+        }),
+      ).toBe(false);
+    });
+
+    it("keeps a quoted literal for a classification constant, and only there", () => {
+      const constant = 'const CLASS = { reason: "issue-lifecycle" }; // issue-lifecycle';
+      expect(
+        siteHolds(constant, { declares: "CLASS", calls: "issue-lifecycle", kind: "literal" }),
+      ).toBe(true);
+      expect(
+        siteHolds(constant, { declares: "CLASS", calls: "issue-lifecycle", kind: "call" }),
+      ).toBe(false);
+      expect(
+        siteHolds("const CLASS = {}; // issue-lifecycle", {
+          declares: "CLASS",
+          calls: "issue-lifecycle",
+          kind: "literal",
         }),
       ).toBe(false);
     });

@@ -18,6 +18,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { JiraChatToolTurn } from "./jiraChatToolTurn.js";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
+import { jiraOperationInReleaseScope } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createJiraDraftBatchExecutor, type JiraDraftBatchContext } from "./jiraDraftBatchTool.js";
 import { draftTool } from "./jiraChatCatalogRuntime.js";
@@ -33,7 +34,7 @@ import { readJiraDraftRoute } from "./jiraDraftRoutes.js";
 import { handleSendDesktopChatStream } from "../chat-stream-handlers.js";
 import { handleUpdateChat } from "../store-handlers.js";
 import { deriveChatGroundingScopeIdentity } from "../store/chat-grounding-scope-identity.js";
-import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -101,15 +102,23 @@ import { specification } from "../_requirementSupport.js";
 import { jiraIssueTemplateSource } from "./jiraTemplateLog.js";
 import { seedPermissiveJiraTemplates } from "../../../../tests/support/jira-test-templates.js";
 
-// Release 1 switches the attachment operations off (#4354); this file exercises their review and
-// upload mechanics, which stay in the code for Release 2, so the switch is on here. That they are
-// not offered is pinned in jiraChatCatalogRuntime.test.ts and codingJiraPodBinding.test.ts.
-vi.mock("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors")
-  >()),
-  jiraOperationInReleaseScope: (): boolean => true,
-}));
+// Release 1 switches the attachment operations off (#4354). The switch is the production one by
+// default; only the attachment describe block turns it on, because it exercises their review and
+// upload mechanics, which stay in the code for Release 2. That they are not offered is pinned in
+// jiraChatCatalogRuntime.test.ts and codingJiraPodBinding.test.ts, and the base round here is
+// pinned as production offers it, without `jira_attach`.
+const releaseScope = vi.hoisted(() => ({ attachmentsOn: false }));
+vi.mock("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors", async (importOriginal) => {
+  const original =
+    await importOriginal<
+      typeof import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors")
+    >();
+  return {
+    ...original,
+    jiraOperationInReleaseScope: (operation: string): boolean =>
+      releaseScope.attachmentsOn || original.jiraOperationInReleaseScope(operation),
+  };
+});
 
 // Pass-through spies: the turn's completeness check and its log line run as in production unless a
 // test scripts the detection (the detection itself is proven in chat-tool-report-coverage.test.ts).
@@ -454,7 +463,7 @@ async function* syntheticStream(
   yield { type: "done", response: resolved };
 }
 // These lifecycle scenarios exercise the original issue workflows, not every newly registered API.
-const FIXTURE_OPERATION_TOOLS: ReadonlySet<string> = new Set([
+const BASE_FIXTURE_TOOLS: readonly string[] = [
   "jira.projects",
   "jira.issue-types",
   "jira.create-fields",
@@ -472,12 +481,15 @@ const FIXTURE_OPERATION_TOOLS: ReadonlySet<string> = new Set([
   "jira.comment",
   "jira.transition",
   "jira.draft",
-  "jira.attach",
   // The base additions of #4357.
   "jira.myself",
   "jira.watch",
   "jira.unwatch",
-]);
+];
+/** The tools a fixture Chat offers: production's, plus the attachment only while the switch is on. */
+function fixtureOperationTools(): ReadonlySet<string> {
+  return new Set([...BASE_FIXTURE_TOOLS, ...(releaseScope.attachmentsOn ? ["jira.attach"] : [])]);
+}
 function preselectFixtureCatalog(deps: UiHandlerDeps): void {
   // These lower-level lifecycle fixtures start with an explicitly selected set. The demand-entry
   // tests below restore get() and exercise discovery and typed next-round admission end to end.
@@ -486,7 +498,7 @@ function preselectFixtureCatalog(deps: UiHandlerDeps): void {
   vi.spyOn(catalog, "get").mockImplementation((scope) =>
     catalog.select(
       jiraOperationDefinitions()
-        .filter((definition) => FIXTURE_OPERATION_TOOLS.has(definition.tool))
+        .filter((definition) => fixtureOperationTools().has(definition.tool))
         .map((definition) => definition.identity),
       scope,
     ),
@@ -1076,7 +1088,7 @@ function expectJiraDraftUnionOffered(calls: readonly GatewayCallRequest[]): void
   const offered = calls[0]?.toolCatalog;
   if (offered?.kind !== "bound") throw new Error("Missing real Chat catalog offer");
   // The fixture Chat has no Knowledge scope, so the requirement batch is not offered to it.
-  expect(offered.projection.tools).toHaveLength(FIXTURE_OPERATION_TOOLS.size + 5);
+  expect(offered.projection.tools).toHaveLength(fixtureOperationTools().size + 5);
   expect(offered.projection.tools.map((tool) => tool.alias)).not.toContain("jira_draft_batch");
   expect(
     offered.projection.tools.find((tool) => tool.alias === "jira_draft")?.inputSchema.oneOf,
@@ -3065,6 +3077,12 @@ describe.each([false, true])("Jira preparation failure settlement (stream=%s)", 
 });
 
 describe("attaching a connected file through the ordinary Chat turn (#4176)", () => {
+  beforeEach(() => {
+    releaseScope.attachmentsOn = true;
+  });
+  afterEach(() => {
+    releaseScope.attachmentsOn = false;
+  });
   const BODY = "synthetic report body";
   function attachFixture(path = "docs/report.txt"): ReturnType<typeof fixture> & {
     readonly folder: string;
@@ -4312,7 +4330,7 @@ it("extends the curated Jira base after a settled describe round and preserves e
   const firstAliases = first.projection.tools.map((tool) => tool.alias);
   expect(firstAliases.filter((alias) => alias.startsWith("jira_")).sort()).toEqual(
     [
-      ...[...FIXTURE_OPERATION_TOOLS]
+      ...[...fixtureOperationTools()]
         .filter((tool) => tool !== "jira.draft")
         .map((tool) => tool.replace(/[.-]/gu, "_")),
       "jira_discover",
@@ -4370,7 +4388,9 @@ it("records the closed too-large selection refusal on the settled tool-result li
   const f = fixture(false, undefined, true, false, false, undefined, true);
   configure(f.deps, true, 32768);
   // The demand model already selects the project read first; every other contract follows it.
+  // Every contract this release offers: a withheld attachment operation is not selectable at all.
   const everything = jiraOperationDefinitions()
+    .filter((definition) => jiraOperationInReleaseScope(definition.tool))
     .map((definition) => definition.identity)
     .filter((identity) => identity !== "GET /rest/api/2/project");
   demandSelectedModel(f, false, undefined, everything);

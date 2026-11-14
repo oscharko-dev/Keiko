@@ -1765,7 +1765,9 @@ the approval.
   `update-issue-fields`, `transition-issue`, `add-issue-comment`) are retired in this change. The
   route answers each of them, for every caller and in every autonomy mode, with the closed denial
   `connector-write-denied` before any approval is created, any budget is reserved or any request is sent, and
-  records one body-free activity record. Their executors (`jira-write-actions.ts`) are deleted. They
+  records one body-free activity record. Their executors are removed; `jira-write-actions.ts` keeps only
+  the two shared bounds and the failure type the Confluence executors and the BFF's input validation
+  still use. They
   created and changed issues with no template gate, had no caller in the product (UI, CLI, SDK, MCP,
   scripts) and used the Jira Cloud REST shape, which is outside the supported scope. The action names
   and their policy-class rows stay: the governed Jira tools map onto the same rows (`jira.create` is
@@ -1781,8 +1783,9 @@ the approval.
   `create-issue-link`, `delete-issue-link` (`jira-managed-issue-link-mutations.ts`); the four remote
   link operations (`jira-managed-remote-link-mutations.ts`); `create-reciprocal-remote-link`
   (`jira-managed-reciprocal-link.ts`); `create-worklog`, `update-worklog`, `delete-worklog`
-  (`jira-worklog-templates.ts`); `sprint-move-issues`, `backlog-move-issues`, `epic-move-issues`,
-  `epic-update` (`jira-agile-templates.ts`); `epic-remove-issues`, `rank-epic`, `rank-issues`,
+  (`jira-managed-worklog-mutations.ts`, `jira-managed-worklog-delete.ts`); `sprint-move-issues`,
+  `backlog-move-issues`, `epic-move-issues` (`jira-agile-membership.ts`); `epic-update`
+  (`jira-agile-mutations.ts`); `epic-remove-issues`, `rank-epic`, `rank-issues`,
   `set-issue-estimation` (`jira-agile-planning-admission.ts`). 13 operations change issues in bulk or remove
   them under the rule-impact gates (`gateJiraBulkReferenceChange`, `gateJiraSchemaRuleImpact`):
   `sprint-update`, `delete-sprint`, `replace-sprint`, `delete-component`, `merge-version`,
