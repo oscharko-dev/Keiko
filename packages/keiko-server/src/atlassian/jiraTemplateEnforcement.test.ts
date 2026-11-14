@@ -80,6 +80,7 @@ import {
 } from "./jiraManagedProvider.js";
 import {
   JIRA_ALREADY_REFUSED_GUIDANCE,
+  JIRA_LOCAL_REFUSAL_GUIDANCE,
   JIRA_UNCERTAIN_GUIDANCE,
   jiraAttemptToolResult,
   jiraMutationToolResult,
@@ -1385,6 +1386,9 @@ describe("the dry run before approval", () => {
           reason: "field-validation",
           fieldId: "customfield_10103",
           validation: "required-field",
+          messages: [
+            "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+          ],
         });
         expect(await f.run()).toEqual({
           outcome: "rejected",
@@ -1517,6 +1521,10 @@ describe("the dry run before approval", () => {
       reason: "field-validation",
       fieldId: "customfield_10103",
       validation: "required-field",
+      messages: [
+        "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+      ],
+      guidance: JIRA_LOCAL_REFUSAL_GUIDANCE,
     });
     expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
     const events = sink.events.filter((event) => event.op === "jira.field.admission");

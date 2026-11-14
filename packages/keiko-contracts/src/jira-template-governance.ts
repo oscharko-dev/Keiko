@@ -79,6 +79,15 @@ const NOT_ISSUE_CONTENT: JiraTemplateGovernance = {
 
 /** Every name `classified` was given, so a name classified twice is found when the module loads. */
 const CLASSIFIED: string[] = [];
+/** A name classified twice would silently take the later class; this refuses it, loudly. */
+export function assertEachClassifiedOnce(names: readonly string[]): void {
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (seen.has(name))
+      throw new TypeError(`${name} is classified twice in the template governance table`);
+    seen.add(name);
+  }
+}
 /**
  * One class for a short list of operations. A list instead of one `"name": CLASS` line each keeps
  * the table from reading as a hundred copies of the same line, and the result type keeps every name,
@@ -96,9 +105,10 @@ function classified<const Names extends readonly JiraMutationOperation[]>(
 }
 
 /**
- * Every operation of the families that are administration through and through (avatars, accounts,
- * groups, schemes, roles, screens, boards, saved configuration, instance settings, …) is not issue
- * content. The families are the registry's own (`JIRA_MUTATION_OPERATIONS` is built from them), so a
+ * Every operation of the 20 family arrays that are administration through and through (avatars and
+ * their uploads, accounts, groups, schemes, roles, screens, boards, saved configuration, instance
+ * settings, …) is not issue content; the avatar uploads are a subset of the avatars, so the 20 arrays
+ * name fewer distinct operations than their lengths add up to. The families are the registry's own (`JIRA_MUTATION_OPERATIONS` is built from them), so a
  * new member of such a family is classified with its family, never re-listed here. A family that
  * mixes issue and administration operations is NOT taken whole: its members are classified one by
  * one below, so a new operation there fails to compile until someone decides what it is. A family
@@ -225,8 +235,7 @@ export const JIRA_TEMPLATE_GOVERNANCE = Object.freeze({
     JIRA_ANONYMIZATION_UNLOCK_MUTATIONS,
   ]),
 } satisfies Record<JiraMutationOperation, JiraTemplateGovernance>);
-if (new Set(CLASSIFIED).size !== CLASSIFIED.length)
-  throw new TypeError("A Jira mutation is classified twice in the template governance table");
+assertEachClassifiedOnce(CLASSIFIED);
 
 /** The classification of one registered mutating operation, or undefined for an unregistered name. */
 export function jiraTemplateGovernanceOf(operation: string): JiraTemplateGovernance | undefined {

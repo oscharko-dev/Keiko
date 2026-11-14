@@ -620,6 +620,52 @@ const SECTION_RULES: ReadonlySet<JiraTemplateViolation["ruleId"]> = new Set([
   "section-empty",
 ]);
 /**
+ * The two subjects the gate gives a bulk or schema change that touches a field a formal rule refers
+ * to. They are one shared value, written here and used by the gate, so the guidance below is chosen by
+ * the producer's own constant and not by an independent copy of its prose (#4357 AC3). That is not
+ * "evidence we could not read": the rule exists, and the issues it would change cannot be checked one
+ * by one.
+ */
+export const JIRA_TEMPLATE_IMPACT_SUBJECTS = {
+  bulkPrefix: "Bulk issue-field impact: ",
+  schema: "Schema changes require complete governed issue migration",
+} as const;
+function isImpactViolation(violation: JiraTemplateViolation): boolean {
+  return (
+    violation.ruleId === "template-unreadable" &&
+    (violation.subject.startsWith(JIRA_TEMPLATE_IMPACT_SUBJECTS.bulkPrefix) ||
+      violation.subject === JIRA_TEMPLATE_IMPACT_SUBJECTS.schema)
+  );
+}
+const IMPACT_GUIDANCE =
+  "Nothing was changed: a formal template rule of this project refers to a field this change would alter on issues that Keiko cannot check one by one. Do not retry it. Change the affected issues one at a time with the edit tool, or tell the person it has to be done in Jira.";
+/**
+ * What a rule's subject alone does not say (#4357 AC3), one short fixed sentence for the rules whose
+ * violation the model cannot correct from the subject. A placeholder is exactly what the section
+ * reader treats as no content.
+ */
+const RULE_HINTS: readonly (readonly [JiraTemplateViolation["ruleId"], string])[] = [
+  [
+    "section-empty",
+    " A section that holds only a placeholder (TBD, TODO, ..., -, or <text>) counts as empty: write real content.",
+  ],
+  [
+    "label-pattern",
+    " A label rule has a pattern: the subject is the label that does not match it; use a label the template's labels rule allows.",
+  ],
+  [
+    "field-unavailable",
+    " A field-unavailable subject is a field this project's screen does not offer, so it cannot be set: do not retry with it, tell the person.",
+  ],
+];
+function ruleHints(violations: readonly JiraTemplateViolation[]): string {
+  return RULE_HINTS.filter(([ruleId]) =>
+    violations.some((violation) => violation.ruleId === ruleId),
+  )
+    .map(([, hint]) => hint)
+    .join("");
+}
+/**
  * Fixed words for a refusal that names template rules, never derived from remote text. The rule ids
  * alone do not say how a section is written, so a model would otherwise guess at its heading form.
  */
@@ -632,6 +678,7 @@ export function jiraTemplateViolationGuidance(
       violation.ruleId === "template-missing" || violation.ruleId === "template-not-activated",
   );
   if (missing !== undefined) return jiraNoGoverningTemplateGuidance(missing);
+  if (violations.some(isImpactViolation)) return IMPACT_GUIDANCE;
   if (violations.some((violation) => violation.ruleId === "template-unreadable")) {
     return (
       "Nothing was changed: the formal rule or its current Jira evidence could not be read completely and bound to this issue. " +
@@ -651,7 +698,7 @@ export function jiraTemplateViolationGuidance(
     : "";
   return (
     "Nothing was changed: this breaks the issue template of the project. " +
-    `Correct what violations name (ruleId, subject), then send it again.${parents}${sections}` +
+    `Correct what violations name (ruleId, subject), then send it again.${parents}${sections}${ruleHints(violations)}` +
     " When you explain a refusal to the person, say in plain words what is wrong and what to change; never quote the rule id or a field id as the explanation."
   );
 }

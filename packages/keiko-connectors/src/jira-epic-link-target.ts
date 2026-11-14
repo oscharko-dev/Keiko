@@ -4,7 +4,10 @@ import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraAgileRequest } from "./jira-agile-request.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
-import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_MUTATION_DETAIL_LIMITS,
+  type JiraMutationAttempt,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 /**
  * An Epic Link that points to an issue that is not an Epic passed the preflight and was then
@@ -61,9 +64,20 @@ function candidateKeys(fields: Readonly<Record<string, unknown>>): boolean {
   );
 }
 
+/**
+ * The rule the model must satisfy, after the target it named. The whole message is one detail message
+ * and a detail message is cut at its JSON-encoded byte bound, so what varies must never be able to
+ * reach it (#4357 AC3): the target is echoed only when it is an issue key short enough for the room
+ * left, which is plain ASCII that needs no escaping. Any other value of the field (text, quotes,
+ * non-ASCII, an over-long key) is named as "The Epic Link target", never repeated.
+ */
+const EPIC_LINK_RULE =
+  " is not an Epic, or this account cannot see it. The Epic Link must be the key of an existing Epic of this project that you can see; create the Epic first. This write was not made.";
 /** What the model is told when an Epic Link names an issue the instance does not know as an Epic. */
 export function jiraEpicLinkRefusalMessage(target: string): string {
-  return `${target} is not an Epic, or this account cannot see it, so it cannot be the Epic Link. Link to the key of an existing Epic of this project that you can see, or create the Epic first. Nothing was changed.`;
+  const room = JIRA_MUTATION_DETAIL_LIMITS.messageBytes - EPIC_LINK_RULE.length;
+  const named = ISSUE_KEY.test(target) && target.length <= room ? target : "The Epic Link target";
+  return `${named}${EPIC_LINK_RULE}`;
 }
 /**
  * The refusal for an Epic Link whose target the instance does not know as an Epic, or undefined:

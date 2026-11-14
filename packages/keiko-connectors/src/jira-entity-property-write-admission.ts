@@ -12,6 +12,7 @@ import {
   projectJiraPropertyKeys,
   projectJiraPropertyValue,
 } from "./jira-managed-entity-properties.js";
+import { jiraReadFailureDetail } from "./jira-managed-metadata.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 
@@ -64,7 +65,7 @@ export function jiraPropertyBindingFailure(
   // The subject of a binding failure is the entity, never the property: an unknown reason says so.
   if (!isAtlassianConnectorWriteFailureReason(data.reason))
     return refusal("malformed-payload", ENTITY_UNREADABLE);
-  const detail = sanitizeJiraMutationFailureDetail(data);
+  const detail = jiraReadFailureDetail(binding.result, sanitizeJiraMutationFailureDetail(data));
   // Jira's own explanation stands; without one, the model gets the sentence for the cause.
   const message = explainedByJira(detail) ? undefined : BINDING_MESSAGES[data.reason];
   if (message === undefined)

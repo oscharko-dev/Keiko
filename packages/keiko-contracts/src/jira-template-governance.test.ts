@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { JIRA_MUTATION_OPERATIONS } from "./jira-tool-execution.js";
 import {
+  assertEachClassifiedOnce,
   JIRA_NOT_GOVERNED_REASONS,
   JIRA_TEMPLATE_GOVERNANCE,
   jiraTemplateGovernanceOf,
@@ -84,5 +85,16 @@ describe("template governance of every Jira mutating operation (#4354 A.7)", () 
       ),
     );
     expect([...used].sort()).toEqual([...JIRA_NOT_GOVERNED_REASONS].sort());
+  });
+
+  // A name given to two classes would silently take the later one; the table refuses it when the
+  // module loads, through exactly this check.
+  it("refuses a name classified twice, and accepts each name once", () => {
+    expect(() => {
+      assertEachClassifiedOnce(["jira.create", "jira.edit"]);
+    }).not.toThrow();
+    expect(() => {
+      assertEachClassifiedOnce(["jira.create", "jira.edit", "jira.create"]);
+    }).toThrow(/jira\.create is classified twice/u);
   });
 });

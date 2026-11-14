@@ -14,8 +14,10 @@ The normal user path is intentionally simple:
 2. On Linux or macOS, extract the ZIP and open the extracted `Keiko` folder.
 3. Open `Keiko` on Linux or `Keiko.app` on macOS. The Windows setup companion installs and launches
    the same reviewed portable ZIP automatically.
-4. On macOS, approve the one-time Administrator, System Extension, and Full Disk Access dialogs when
-   macOS presents them; organization-managed Macs may have these permissions preapproved by MDM.
+4. On macOS, approve the one-time Gatekeeper dialog (**System Settings → Privacy & Security → Open
+   Anyway**). Application startup does not wait for Endpoint Security activation: an unsigned install
+   launches without it (ADR-0163 D9). Only the optional Endpoint Security Coding backend keeps its own
+   signing and activation requirements; application startup does not qualify it.
 5. Keiko continues automatically after the required approval and opens its local UI.
 6. Start Keiko afterward from the same app surface, the Linux application menu, Windows search, the
    Start Menu entry, Finder, or Spotlight.
@@ -96,8 +98,8 @@ payload, customer repositories, credentials, prompts, model output, or raw logs.
 
 Setup must refuse roots that are temporary directories, customer repositories, `.keiko` state
 directories, shared/network roots, symlinked paths, or noncanonical machine-wide locations. The
-sole macOS exception is `/Applications/Keiko.app`; macOS may request administrator, System
-Extension, and Full Disk Access approval once, or MDM may preapprove them.
+sole macOS exception is `/Applications/Keiko.app`. The optional Endpoint Security Coding backend
+keeps its own activation requirements; application startup does not depend on it.
 The canonical `/Applications` parent and every checked app component must remain root-owned,
 non-symlinked, and not group- or world-writable. A host policy that weakens those ownership or
 write boundaries makes activation fail closed; MDM must preserve or restore the canonical

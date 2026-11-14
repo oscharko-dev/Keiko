@@ -957,6 +957,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.writeApproval.rejected": "Action declined",
   "chat.jira.writeApproval.expired": "Action approval expired",
   "chat.jira.writeApproval.revoked": "Action approval revoked",
+  "chat.jira.writeApproval.expiredHint":
+    "The approval expired before anyone decided, so nothing was changed in Jira. Ask again and approve while the card is open.",
+  "chat.jira.writeApproval.revokedHint":
+    "The approval was revoked, so nothing was changed in Jira. Ask again if you still want the change, then approve it.",
+  "chat.jira.writeApproval.outcomeUnknownHint":
+    "This card cannot show whether the action ran. Its result shows the outcome; if there is none, check the issue in Jira.",
   "chat.jira.writeApproval.preview": "Proposed action details",
   "chat.jira.writeApproval.working": "Checking this action…",
   "chat.jira.writeApproval.failed":
@@ -2473,6 +2479,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "No template exists for the issue type “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save the template, then ask again.",
   "chat.jira.outcome.rule.template-not-activated":
     "Only rules for entering a status exist for “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save a template for creating, then ask again.",
+  "chat.jira.outcome.templateNotices":
+    "The change was made. The issue already breaks these template rules in fields this change did not touch. Ask Keiko to repair them, or fix them in Jira.",
+  "chat.jira.outcome.failure.releaseScope":
+    "Attachments are not part of this release, so nothing was changed in Jira. Describe the file in a comment instead, or add it in Jira itself.",
   "chat.jira.tool": "Jira action",
   "chat.jira.catalog.discover": "Find Jira actions",
   "chat.jira.catalog.describe": "Select Jira actions",

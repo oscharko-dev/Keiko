@@ -269,6 +269,7 @@ describe("the refusal detail of every single-issue mutation fits its descriptor 
   }
   function refusedWith(text: string, fieldId: string): JiraMutationAttempt {
     const detail = sanitizeJiraMutationFailureDetail({
+      fromJira: true,
       fieldErrors: Array.from({ length: 16 }, () => ({ fieldId, fieldName: text, message: text })),
       messages: [text, text, text, text],
     });

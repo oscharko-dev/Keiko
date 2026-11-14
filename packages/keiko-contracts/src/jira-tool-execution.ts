@@ -728,6 +728,12 @@ export interface JiraMutationFieldError {
 export interface JiraMutationFailureDetail {
   /** The adapter independently observed the requested state before any effect. */
   readonly unchanged?: true;
+  /**
+   * Jira's own error document: set only where Keiko parses a refusal Jira sent. A closed fact about
+   * who refused, so the instruction a model reads never guesses it from the detail's shape (#4357).
+   * Never sent to the model.
+   */
+  readonly fromJira?: true;
   readonly fieldId?: string;
   readonly validation?: JiraFieldValidationFailure;
   readonly fieldErrors?: readonly JiraMutationFieldError[];
@@ -844,6 +850,7 @@ export function sanitizeJiraMutationFailureDetail(
   const messages = detailMessages(Reflect.get(value, "messages"));
   const detail: JiraMutationFailureDetail = {
     ...(Reflect.get(value, "unchanged") === true ? { unchanged: true } : {}),
+    ...(Reflect.get(value, "fromJira") === true ? { fromJira: true } : {}),
     ...(detailFieldId(fieldId) ? { fieldId } : {}),
     ...(VALIDATION_FAILURES.has(validation)
       ? { validation: validation as JiraFieldValidationFailure }
@@ -851,7 +858,9 @@ export function sanitizeJiraMutationFailureDetail(
     ...(fieldErrors.length === 0 ? {} : { fieldErrors }),
     ...(messages.length === 0 ? {} : { messages }),
   };
-  return Object.keys(detail).length === 0 ? undefined : detail;
+  // The fact about who refused explains nothing by itself: without a field error or a message there
+  // is no detail at all, as before.
+  return Object.keys(detail).every((key) => key === "fromJira") ? undefined : detail;
 }
 
 // eslint-disable-next-line no-control-regex -- a link type name is a single-line identifier.

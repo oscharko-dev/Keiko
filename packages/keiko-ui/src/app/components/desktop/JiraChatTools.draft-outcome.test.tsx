@@ -429,10 +429,8 @@ describe("Jira draft results as the production draft tool reports them", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  // The expired and revoked approvals get their closed reason and hint in #4354 (closed reason
-  // `expired` end to end); this case is proven after merging child/4354-approval-and-project-message.
-  it.todo("tells the person what to do after an expired approval (waits for #4354)");
-  it.todo("tells the person what to do after a revoked approval (waits for #4354)");
+  // The expired and revoked approvals, the missing template, the template notices of an edit and the
+  // release switch's refusal are proven in JiraChatTools.dependent-texts.test.tsx (#4354 texts).
 
   // #4355 AC6: every text added for the results exists in both languages with the same placeholders.
   it("has an English and a German text, with the same placeholders, for every added result text", () => {

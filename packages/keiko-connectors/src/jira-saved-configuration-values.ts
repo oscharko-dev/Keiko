@@ -106,20 +106,32 @@ const ACTOR_KEY_NOT_CONNECTED =
 export async function readSavedActor(
   request: JiraMutationRequest,
   expectedKey: string,
-  options: { readonly beforeEffect?: true } = {},
+  options: {
+    readonly beforeEffect?: true;
+    /** Keep the reason a pinned caller already returns for the key that is not the user's. */
+    readonly mismatchAs?: "conflict";
+  } = {},
 ): Promise<SavedObservation<SavedActor>> {
   const response = await request("myself", "GET", undefined, "json");
   if (!response.ok) return dispatchFailure(response);
   const user = response.status === 200 ? jiraDirectoryUser(response.body) : undefined;
   if (user === undefined || !savedText(user.key, 255) || !savedText(user.name, 255))
     return SAVED_MALFORMED;
-  if (user.key !== expectedKey && options.beforeEffect === true)
-    return jiraFieldValidationFailure(ACTOR_KEY_NOT_CONNECTED);
-  if (user.key !== expectedKey)
+  if (user.key !== expectedKey) return actorMismatch(options);
+  return { ok: true, value: { key: user.key, name: user.name } };
+}
+/** The refusal for a key that is not the connected user's, by whether the write was sent yet. */
+function actorMismatch(options: {
+  readonly beforeEffect?: true;
+  readonly mismatchAs?: "conflict";
+}): SavedObservation<SavedActor> {
+  if (options.beforeEffect !== true)
     return savedConflict(
       "The connected Jira user no longer matches the reviewed user. Review the current identity; an acknowledged operation remains unconfirmed and must not be replayed.",
     );
-  return { ok: true, value: { key: user.key, name: user.name } };
+  return options.mismatchAs === "conflict"
+    ? savedConflict(ACTOR_KEY_NOT_CONNECTED)
+    : jiraFieldValidationFailure(ACTOR_KEY_NOT_CONNECTED);
 }
 export function projectSavedFilter(value: unknown): SavedFilter | undefined {
   const raw = asRecord(value);

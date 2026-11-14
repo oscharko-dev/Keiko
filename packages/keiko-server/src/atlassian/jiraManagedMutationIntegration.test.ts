@@ -196,7 +196,10 @@ type RemoteMode =
   | "voting-disabled"
   | "time-tracking-disabled"
   | "transition-moved-404"
-  | "transition-moved-400";
+  | "transition-moved-400"
+  | "transition-moved-empty"
+  | "transition-moved-html"
+  | "transition-moved-truncated";
 /** The value this synthetic Jira refuses, as Data Center does for a bad option. */
 const REJECTED_VALUE = "Rot";
 const JIRA_FIELD_ERROR = "Option 'Rot' is not valid.";
@@ -212,19 +215,30 @@ const REFUSALS: Readonly<Record<string, { readonly status: number; readonly body
   "server-error": { status: 503, body: JIRA_ERROR_DOCUMENT },
 };
 /** The workflow moved between the listing and the write: Jira refuses the listed transition (KEIKO-0814). */
-const MOVED_TRANSITION = {
-  "transition-moved-404": { status: 404, messages: ["Issue Does Not Exist"] },
+const MOVED_TRANSITION: Readonly<
+  Record<string, { readonly status: number; readonly body: string }>
+> = {
+  "transition-moved-404": {
+    status: 404,
+    body: JSON.stringify({ errorMessages: ["Issue Does Not Exist"], errors: {} }),
+  },
   "transition-moved-400": {
     status: 400,
-    messages: ["Transition id '31' is not valid for this issue."],
+    body: JSON.stringify({
+      errorMessages: ["Transition id '31' is not valid for this issue."],
+      errors: {},
+    }),
   },
-} as const;
+  // No Jira error document: a proxy or a cut connection may have answered, not Jira.
+  "transition-moved-empty": { status: 404, body: "" },
+  "transition-moved-html": { status: 400, body: "<html><body>Bad Request</body></html>" },
+  "transition-moved-truncated": { status: 400, body: '{"errorMessages":["Transition id' },
+};
 function movedTransitionRefusal(mode: RemoteMode, request: Request): Response | undefined {
-  const moved =
-    mode in MOVED_TRANSITION ? MOVED_TRANSITION[mode as keyof typeof MOVED_TRANSITION] : undefined;
+  const moved = MOVED_TRANSITION[mode];
   if (moved === undefined || request.method !== "POST") return undefined;
   if (!new URL(request.url).pathname.endsWith("/transitions")) return undefined;
-  return new Response(JSON.stringify({ errorMessages: moved.messages, errors: {} }), {
+  return new Response(moved.body, {
     status: moved.status,
     headers: { "content-type": "application/json" },
   });
@@ -1290,6 +1304,32 @@ it.each(["transition-moved-404", "transition-moved-400"] as const)(
       result: { data: { outcome: "succeeded" } },
     });
     expect(f.writes()).toBe(2);
+  },
+);
+// The no-replay rule (#2953): a moved-away transition answered WITHOUT Jira's error document (an
+// empty, HTML or truncated body) is still told to the model as invalid-transition, but the journal
+// cannot say that Jira, and not a proxy, refused it, so the write stays uncertain and the turn's
+// later writes are blocked. Only the error document settles it rejected (the test above).
+it.each(["transition-moved-empty", "transition-moved-html", "transition-moved-truncated"] as const)(
+  "keeps a moved-away transition answered without Jira's error document uncertain under the no-replay rule (%s)",
+  async (mode) => {
+    const f = await fixture(mode, undefined, "jira.transition");
+
+    const refused = await f.invoke("jira.transition", {
+      issueKey: "SYN-1",
+      transitionId: "31",
+      fields: { customfield_10000: "Required" },
+    });
+
+    expect(refused).toMatchObject({
+      kind: "settled",
+      result: { status: "failed", data: { outcome: "unknown" } },
+    });
+    expect(await f.invoke("jira.comment", { issueKey: "SYN-1", body: "Moving on" })).toMatchObject({
+      kind: "settled",
+      result: { data: { outcome: "not-dispatched", reason: "conflict" } },
+    });
+    expect(f.writes()).toBe(1);
   },
 );
 it.each(["html-error-page", "server-error"] as const)(

@@ -2,6 +2,7 @@ import {
   isSafeAtlassianIdentifier,
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldMetadata,
+  type JiraMutationFailureDetail,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   CatalogJsonObject,
@@ -32,7 +33,12 @@ export type JiraMutationRequest = (
 ) => Promise<AtlassianWriteHttpOutcome>;
 export type JiraMutationMetadata =
   | { readonly ok: true; readonly fields: readonly JiraFieldMetadata[] }
-  | { readonly ok: false; readonly reason: AtlassianConnectorWriteFailureReason };
+  | {
+      readonly ok: false;
+      readonly reason: AtlassianConnectorWriteFailureReason;
+      /** The sentence of a refusal Keiko itself decided, e.g. a transition that is not offered (#4357). */
+      readonly detail?: JiraMutationFailureDetail;
+    };
 const MALFORMED = { ok: false, reason: "malformed-payload" } as const;
 function parsedMetadata(parsed: JiraMetadataResult): JiraMutationMetadata {
   return parsed.ok
@@ -133,7 +139,17 @@ export async function jiraTransitionMutationMetadata(
   if (response.status !== 200 || transitions === undefined || transitions.length > 1000)
     return MALFORMED;
   const matches = transitions.map(asRecord).filter((item) => item?.id === transitionId);
-  if (matches.length === 0) return { ok: false, reason: "invalid-transition" };
+  if (matches.length === 0)
+    return {
+      ok: false,
+      reason: "invalid-transition",
+      detail: {
+        fieldId: "transitionId",
+        messages: [
+          "The transition id is not available for this issue in its current status: read jira.transitions for the ids it offers now. Nothing was changed.",
+        ],
+      },
+    };
   return matches.length === 1 ? selectedTransitionMetadata(matches[0]) : MALFORMED;
 }
 /** The bound on a known-target receipt that is journaled before any native request is sent. */
