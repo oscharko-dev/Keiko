@@ -1321,9 +1321,19 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   governed like a move: it sets only the title of the run's own session, so it is allowed in every
   mode for that session and refused for another, one line of at most 200 characters. The worktree
   listing and the model search change nothing and stay reads.
-  A `fetch` inside an admitted program
-  asserts the `webfetch` permission since OpenCode 2.2, so the policy decides it like the ordinary
-  tool; the kernel egress rule stays underneath (loopback below Full access).
+  **A `fetch` inside an admitted program is NOT known to be decided (#4359).** With a probe plugin
+  and the policy plugin absent, the pinned runtime emits `permission.evaluate:webfetch` for it
+  (`opencodeNativeProjectBoundary.real.test.ts`, no `tool.execute.before` for the nested `fetch`).
+  In Keiko's own composition (OpenCode 2.2.5, 2026-11-14) a program's `fetch` produced no
+  `webfetch` decision line in Ask for approval or Full access; the runtime records it only as a
+  nested tool call (`fetch`, `{method, url}`) and `tool.hook("execute.before")` does not govern it
+  (`opencodeNativePolicyPlugin.ts`, `CODE_MODE_GOVERNED`). Until that is resolved nothing decides a
+  program's `fetch` but the program card and the kernel egress rule. What a program's `fetch` can
+  reach today: **Ask for approval and Supervised workspace:** loopback only (the kernel's egress
+  rule refuses every other address; DNS fails, observed as `ENOTFOUND`/`EPERM`), and only after
+  the program card is approved. **Full access:** the open internet (observed: a page of
+  example.com), the program card not being asked. The confined interpreter has no `process`,
+  `Bun` or `require`, so a program holds none of the run's capabilities.
 - **A Code Mode session move stays inside the task workspace (#3903 AC4).** The policy plugin sends
   `opencode_session_move`'s `directory` and the session it names to the policy. The run's own
   session may move to an existing directory inside the task workspace, named by its absolute,
@@ -2790,7 +2800,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     and so keeps a denied native tool advertised. `/goal` starts model turns on its own and stays out
     by owner decision (2026-11-06).
   - **Changed producer contracts.** The producer repairs a model's `bash` call into `shell`, which
-    the policy decides as `shell`. A Code Mode `fetch` asserts `webfetch`. `GET /api/agent` waits for
+    the policy decides as `shell`. `GET /api/agent` waits for
     plugins and answers 503 after five seconds: Keiko reads it again within the existing location
     bound, and `coding-runtime.location.activation-wait` records the outcome and the number of those
     answers, never a name.
