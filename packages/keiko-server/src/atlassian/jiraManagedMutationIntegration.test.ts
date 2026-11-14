@@ -39,6 +39,7 @@ import {
   JIRA_MUTATION_OPERATIONS,
   jiraOperationInReleaseScope,
   parseJiraIssueTemplate,
+  type JiraIssueTemplate,
   jiraRequiredConnectorScope,
   type JiraMutationOperation,
   type JiraLivePodMetadata,
@@ -203,7 +204,8 @@ type RemoteMode =
   | "transition-moved-empty"
   | "transition-moved-html"
   | "transition-moved-truncated"
-  | "parent-offered";
+  | "parent-offered"
+  | "epic-link-unknown";
 /** The value this synthetic Jira refuses, as Data Center does for a bad option. */
 const REJECTED_VALUE = "Rot";
 const JIRA_FIELD_ERROR = "Option 'Rot' is not valid.";
@@ -335,6 +337,7 @@ function parentOfferedRead(
   path: string,
   state: MutationRemoteState,
 ): ReturnType<typeof fixtureRead> | undefined {
+  if (mode === "epic-link-unknown") return epicLinkUnknownRead(path, state);
   if (mode !== "parent-offered") return undefined;
   if (path.includes("createmeta")) {
     const values = [...FIELDS, field("parent", "issuelink")];
@@ -360,6 +363,37 @@ function parentOfferedRead(
       },
     },
   });
+}
+const EPIC_LINK_FIELD = {
+  ...field("customfield_10109", "any"),
+  name: "Epic Link",
+  schema: { type: "any", custom: "com.pyxis.greenhopper.jira:gh-epic-link" },
+};
+/**
+ * A Jira whose create and edit screens offer the Epic Link and whose agile endpoint knows no epic
+ * under the key the write names: the instance's own "no such epic" answer.
+ */
+function epicLinkUnknownRead(
+  path: string,
+  state: MutationRemoteState,
+): ReturnType<typeof fixtureRead> | undefined {
+  if (path.includes("/rest/agile/1.0/epic/"))
+    return response({ errorMessages: ["Epic does not exist"], errors: {} }, 404);
+  if (path.endsWith("/rest/api/2/field"))
+    return response([
+      { id: "summary", name: "Summary", schema: { type: "string", system: "summary" } },
+      { id: "customfield_10109", name: "Epic Link", schema: EPIC_LINK_FIELD.schema },
+    ]);
+  if (path.includes("createmeta")) {
+    const values = [...FIELDS, EPIC_LINK_FIELD];
+    return response({ values, start: 0, size: 100, last: true, total: values.length });
+  }
+  if (!path.endsWith("editmeta")) return undefined;
+  const answered = fixtureRead(path, state);
+  const body = JSON.parse(answered.kind === "response" ? answered.bodyText : "{}") as {
+    fields?: Record<string, unknown>;
+  };
+  return response({ fields: { ...body.fields, customfield_10109: EPIC_LINK_FIELD } });
 }
 async function fixtureReadResult(
   mode: RemoteMode,
@@ -1903,4 +1937,62 @@ it("keeps each of the 35 new administrative/issue outcomes explicit through gate
     "jira.start-cluster-upgrade",
     "jira.start-reindex",
   ]);
+});
+
+// #4354 AC2 (and #4357 AC3, who refused): an Epic Link that names an issue the instance does not know
+// as an Epic is refused before anything is sent. The refusal is proven at the connector; here it is
+// proven once through what the model receives, for a create and for a single edit: a valid result of
+// the catalog that names the rule, the field and the way out.
+const epicStory = (): JiraIssueTemplate => {
+  const parsed = parseJiraIssueTemplate(
+    [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Story",
+      "activateOn: [create]",
+      "summaryMinLength: 4",
+      "---",
+      "# Story",
+    ].join("\n"),
+  );
+  if (!parsed.ok) throw new TypeError("Expected a parseable template");
+  return parsed.template;
+};
+it.each([
+  [
+    "create",
+    "jira.create",
+    {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: {
+        summary: "A story in an epic",
+        customfield_10000: "Required",
+        customfield_10109: "SYN-9",
+      },
+    },
+  ],
+  ["single edit", "jira.edit", { issueKey: "SYN-1", fields: { customfield_10109: "SYN-9" } }],
+] as const)("settles a %s as a valid, explained refusal", async (_name, tool, args) => {
+  const f = await fixture("epic-link-unknown", undefined, tool, {}, () => ({
+    templates: [epicStory()],
+    unreadable: 0,
+  }));
+  const refused = await f.invoke(tool, args);
+  expect(refused).toMatchObject({
+    kind: "settled",
+    result: {
+      status: "failed",
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        validation: "invalid-epic-link",
+        fieldId: "customfield_10109",
+      },
+    },
+  });
+  expect(f.writes()).toBe(0);
+  expect(JSON.stringify(refused)).toContain("SYN-9 is not an Epic");
 });
