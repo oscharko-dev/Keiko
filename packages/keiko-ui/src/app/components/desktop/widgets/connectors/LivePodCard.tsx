@@ -16,6 +16,7 @@ import type {
 } from "@/lib/atlassian-connectors-api";
 import { JiraPodWorkspaceAction } from "../cards/JiraPodWorkspaceAction";
 import { verifyStatusCopyKey, verifyStatusLabelKey, verifyStatusTone } from "./connector-labels";
+import { VerifyConnectionStatus } from "./VerifyConnectionStatus";
 import { PodActionsMenu, type PodMenuItem } from "./PodActionsMenu";
 import type { CardController } from "./useConnectorCard";
 import styles from "./connectors.module.css";
@@ -99,11 +100,14 @@ function useCheckedStatus(state: LivePodState): AtlassianConnectorVerifyStatus |
   return checked;
 }
 
-// The one live region of the card: a check's outcome is announced as its label and guidance,
-// also when it succeeded, while the visible card keeps only the chip and, on failure, one line.
+// The one live region of the card. A check run in this view that succeeded is shown, not only
+// announced: the person who just connected a Pod must see that it is connected and ready, in the
+// words of the connection page (#4371). A failed check keeps the chip and its one remediation line
+// and is announced here; a card loaded at rest stays silent.
 function VerifyAnnouncement({ state }: { readonly state: LivePodState }): ReactNode {
   const t = useTranslate();
   const status = useCheckedStatus(state);
+  if (status === "ok") return <VerifyConnectionStatus status={status} />;
   return (
     <output className="sr-only" data-status={status} data-testid="acx-verify-status">
       {status === undefined

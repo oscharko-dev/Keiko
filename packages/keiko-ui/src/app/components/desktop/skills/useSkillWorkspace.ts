@@ -180,7 +180,8 @@ export function useSkillWorkspace(library: MarkdownSkillLibrary): SkillWorkspace
       skillTextFits(document.text) &&
       library.available &&
       !library.busy,
-    confirming: pending !== undefined,
+    // The question is about unsaved text: once the text is saved there is nothing left to discard.
+    confirming: pending !== undefined && dirty,
     guard,
     ...workspaceActions({ library, document, expected, drafts, setView, setPending, pending }),
   };
@@ -211,6 +212,7 @@ function libraryActions({
   document,
   expected,
   drafts,
+  setPending,
 }: ActionContext): Pick<SkillWorkspace, "open" | "importFile" | "save"> {
   return {
     open: (skill): void => {
@@ -232,6 +234,8 @@ function libraryActions({
     },
     save: (): void => {
       if (document === undefined) return;
+      // Saving answers the discard question: a leave that waited for it is not carried out later.
+      setPending(undefined);
       expected.current = { kind: "save", key: document.key, sent: document.text };
       const fileName =
         document.stored === undefined

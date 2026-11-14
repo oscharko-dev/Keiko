@@ -4713,12 +4713,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
   "chat.error.memoryUpdate": "Speicher konnte nicht aktualisiert werden.",
-  "chat.grounding.dataLabel": "Datenquellen",
-  "chat.grounding.noDataSources": "Keine Datenquellen",
-  "chat.grounding.dataCatalogEmpty": "Keine einsatzbereiten Daten-Pods oder Pod-Sets verfügbar.",
   "chat.grounding.label": "Wissensquellen",
   "chat.grounding.mode": "Grounding-Modus",
   "chat.grounding.strategy": "Strategie",
+  "chat.grounding.jiraOnly": "Nur Jira Pod",
   "chat.grounding.modelOnly": "Nur Modell",
   "chat.grounding.liveFiles": "Live-Dateikontext",
   "chat.grounding.liveFilesUnavailableHint":

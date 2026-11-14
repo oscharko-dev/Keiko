@@ -101,7 +101,7 @@ describe("formatUserError", () => {
       const notice = toUserErrorNotice(new ApiError(code, "Server text", 409), "Could not send.");
 
       expect(notice.remediation).toContain(controlName);
-      expect(notice.remediation).not.toContain(optional["chat.grounding.dataLabel"]);
+      expect(notice.remediation).not.toContain(optional["chat.grounding.label"]);
     } finally {
       window.localStorage.removeItem(I18N_STORAGE_KEY);
       resetLoadedMessageCatalogs();

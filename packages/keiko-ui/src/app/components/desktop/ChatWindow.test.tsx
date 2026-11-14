@@ -2181,17 +2181,17 @@ describe("ChatWindow local knowledge scope disclosure", () => {
   it.each([
     {
       locale: "en",
-      label: "Data sources",
-      none: "No Data sources",
+      label: "Sources",
+      none: "Jira Pod only",
       mode: "Grounding mode",
-      empty: "No ready Data Pods or Pod Sets are available.",
+      empty: "No ready Knowledge Pods or Pod Sets are available.",
     },
     {
       locale: "de",
-      label: "Datenquellen",
-      none: "Keine Datenquellen",
+      label: "Wissensquellen",
+      none: "Nur Jira Pod",
       mode: "Grounding-Modus",
-      empty: "Keine einsatzbereiten Daten-Pods oder Pod-Sets verfügbar.",
+      empty: "Keine bereiten Knowledge Pods oder Pod Sets sind verfügbar.",
     },
   ])(
     "distinguishes bound Jira tools from empty and mixed grounding in $locale",
@@ -2214,9 +2214,13 @@ describe("ChatWindow local knowledge scope disclosure", () => {
           </ChatSessionProvider>
         </I18nProvider>,
       );
-      expect(await screen.findByText(empty)).toBeVisible();
-      expect(screen.getByText(label)).toBeVisible();
+      // A Jira Pod is on: the picker says so and shows no empty-catalog sentence that contradicts it.
+      expect(await screen.findByText(label)).toBeVisible();
       expect(screen.getByRole("combobox", { name: mode })).toHaveTextContent(none);
+      expect(screen.queryByText(empty)).toBeNull();
+      expect(document.body).not.toHaveTextContent(
+        /Data Pods|Daten-Pods|Data sources|Datenquellen/u,
+      );
       const mixed = {
         ...live,
         localKnowledgeScopes: [

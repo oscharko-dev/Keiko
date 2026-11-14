@@ -395,7 +395,7 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Expect:** nothing is sent to Jira. The result card says "The Jira connection changed since this
   draft was made, so nothing was changed. Create the draft again for the current Jira." A message
   sent after the switch without choosing the Pod again shows the notice **Jira connection changed**
-  with "Choose the Jira Pod again" and the hint to open the Data sources menu above the conversation.
+  with "Choose the Jira Pod again" and the hint to open the Connectors menu above the conversation.
   The Chat and its draft text stay.
 - **Jira:** nothing was created.
 - **Proves:** epic AC8; #4359 step 7.
@@ -606,10 +606,11 @@ Export Markdown / Export CSV: chat.jira.report.exportMarkdown, chat.jira.report.
 Settings → General → Language → Interface language: settings.title, settings.tabs.general,
   settings.language.title, settings.language.label (SET)
 Jira connection changed: chat.error.jiraPodConnectionChanged.title (CORE)
-Choose the Jira Pod again / Data sources menu above the conversation:
+Choose the Jira Pod again / Connectors menu above the conversation:
   chat.error.jiraPodConnectionChanged.message and .remediation (CORE)
-  The picker itself is labelled "Connectors" (chat.connectors.title); the "Data sources" label
-  (chat.grounding.dataLabel, OPT) is the knowledge-scope control above the conversation.
+  The picker itself is labelled "Connectors" (chat.connectors.title); the "Sources" label
+  (chat.grounding.label, OPT) is the knowledge-scope control above the conversation. With a Jira
+  Pod on, its "none" entry reads "Jira Pod only" (chat.grounding.jiraOnly, OPT).
 Create error report / Download report: supportReport.create, supportReport.download (CORE)
 Support ID: chat.error.supportId (CORE) "Support ID: {correlationId}"
 Report ready. Download it and send it to support.: supportReport.saved (CORE)

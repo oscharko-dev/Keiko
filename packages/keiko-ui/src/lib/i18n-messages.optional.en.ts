@@ -4488,12 +4488,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The selected model did not answer its check, so nothing was sent. Pick another model, or check it in Settings > Models and try again.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "chat.error.memoryUpdate": "Unable to update memory.",
-  "chat.grounding.dataLabel": "Data sources",
-  "chat.grounding.noDataSources": "No Data sources",
-  "chat.grounding.dataCatalogEmpty": "No ready Data Pods or Pod Sets are available.",
   "chat.grounding.label": "Sources",
   "chat.grounding.mode": "Grounding mode",
   "chat.grounding.strategy": "Strategy",
+  "chat.grounding.jiraOnly": "Jira Pod only",
   "chat.grounding.modelOnly": "Model only",
   "chat.grounding.liveFiles": "Live Files context",
   "chat.grounding.liveFilesUnavailableHint":

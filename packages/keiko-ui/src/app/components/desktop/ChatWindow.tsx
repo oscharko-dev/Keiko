@@ -4588,7 +4588,8 @@ function GroundingCatalogStatus({
 }: {
   readonly loading: boolean;
   readonly empty: boolean;
-  readonly emptyLabel: string;
+  /** Absent while something else is active (a Jira Pod): no empty sentence then. */
+  readonly emptyLabel: string | undefined;
   readonly error: string | null;
   /** Present only when the catalog itself failed to load: a failed load is retryable, not empty. */
   readonly onRetry: (() => void) | undefined;
@@ -4601,7 +4602,9 @@ function GroundingCatalogStatus({
           {t("chat.grounding.catalogLoading")}
         </span>
       ) : null}
-      {empty ? <span className="scope-connect-hint">{emptyLabel}</span> : null}
+      {empty && emptyLabel !== undefined ? (
+        <span className="scope-connect-hint">{emptyLabel}</span>
+      ) : null}
       {error !== null ? (
         <span role="alert" className="scope-connect-error">
           {error}
@@ -4648,15 +4651,18 @@ function knowledgeScopeChoices(
   };
 }
 
+// With a Jira Pod on, the picker keeps the product's ordinary terms: its "none" entry names what is
+// active instead of claiming there are no sources, and no empty-catalog sentence contradicts the
+// Pod that is on (#4371).
 function groundingTerminology(
   chat: Chat,
   t: I18nTranslate,
-): { label: string; none: string; empty: string } {
+): { label: string; none: string; empty: string | undefined } {
   if (chat.jiraPodBinding !== undefined)
     return {
-      label: t("chat.grounding.dataLabel"),
-      none: t("chat.grounding.noDataSources"),
-      empty: t("chat.grounding.dataCatalogEmpty"),
+      label: t("chat.grounding.label"),
+      none: t("chat.grounding.jiraOnly"),
+      empty: undefined,
     };
   return {
     label: t("chat.grounding.label"),
