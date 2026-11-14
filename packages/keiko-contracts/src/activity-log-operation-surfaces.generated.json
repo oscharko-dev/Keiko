@@ -471,6 +471,7 @@
   "indexing.source.started": "memory-knowledge",
   "indexing.start.accepted": "memory-knowledge",
   "indexing.start.refused": "memory-knowledge",
+  "jira.approval.project": "bff",
   "jira.attachment.source": "bff",
   "jira.catalog.selection": "bff",
   "jira.citation.markers": "bff",

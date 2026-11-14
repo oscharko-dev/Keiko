@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8076d24b03bf322480d8b27a1118f1d602d2cc27e7334808ff6b92e7b40a82d9",
+    "catalogDigest": "0b930d2277a0cd48945b92b22fab0a56a345f750c1afb7b895545e1c629a819c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -34337,6 +34337,78 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "jira.approval.project",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "atlassian.jiraChatApprovalProjects.recordJiraApprovalProjects",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "projectCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "resolvedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "unresolvedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "failure": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "not-admitted",
+              "failed",
+              "malformed-payload",
+              "auth-failed",
+              "auth-unverified",
+              "permission-denied",
+              "effect-denied",
+              "cancelled",
+              "not-found",
+              "rate-limited",
+              "timeout",
+              "unavailable",
+              "bounds-exceeded",
+              "conflict",
+              "invalid-transition",
+              "field-validation",
+              "none"
+            ]
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["atlassian-action-execution"],
+        "proofIds": ["jira.approval.project.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:61",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:112"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "jira.attachment.source",
         "category": "process",
         "owner": "keiko-server",
@@ -51002,6 +51074,7 @@
             "atlassian.jira-draft",
             "atlassian.jira-draft-batch",
             "atlassian.jira-report",
+            "jira.approval.project",
             "jira.attachment.source",
             "jira.catalog.selection",
             "jira.citation.markers",
@@ -51029,6 +51102,7 @@
           "atlassian.jira-draft",
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
+          "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
           "jira.citation.markers",
@@ -51053,6 +51127,7 @@
           "atlassian.jira-draft",
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
+          "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
           "jira.citation.markers",
@@ -51077,6 +51152,7 @@
           "atlassian.jira-draft",
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
+          "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
           "jira.citation.markers",
@@ -64157,6 +64233,7 @@
               "atlassian.jira-draft",
               "atlassian.jira-draft-batch",
               "atlassian.jira-report",
+              "jira.approval.project",
               "jira.attachment.source",
               "jira.catalog.selection",
               "jira.citation.markers",
@@ -64194,6 +64271,10 @@
             },
             {
               "op": "atlassian.jira-report",
+              "mode": "correlation"
+            },
+            {
+              "op": "jira.approval.project",
               "mode": "correlation"
             },
             {
@@ -64271,6 +64352,7 @@
             "atlassian.jira-draft",
             "atlassian.jira-draft-batch",
             "atlassian.jira-report",
+            "jira.approval.project",
             "jira.attachment.source",
             "jira.catalog.selection",
             "jira.citation.markers",
@@ -65018,6 +65100,60 @@
                 "causeChain": false
               },
               "proofIds": ["atlassian.jira-report.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "jira.approval.project",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "failure",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "projectCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "resolvedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "unresolvedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "duration",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["jira.approval.project.line"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -122559,6 +122695,26 @@
       "package": "keiko-server"
     },
     {
+      "op": "jira.approval.project",
+      "category": "process",
+      "site": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:64",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.approval.project-log-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:132",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.approval.project-read-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.ts:190",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "jira.attachment.source",
       "category": "process",
       "site": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts:73",
@@ -124602,6 +124758,9 @@
     "indexing.start.accepted",
     "indexing.start.refused",
     "invalidation-failed",
+    "jira.approval.project",
+    "jira.approval.project-log-failed",
+    "jira.approval.project-read-failed",
     "jira.attachment.source",
     "jira.attachment.source-log-failed",
     "jira.attachment.source-read-failed",

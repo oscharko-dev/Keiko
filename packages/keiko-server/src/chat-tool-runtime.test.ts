@@ -1504,6 +1504,39 @@ describe("combined Jira review admission parity", () => {
       }
     },
   );
+  it("names the project by key and name on the first approval of a fresh Chat (F09)", async () => {
+    const f = fixture({
+      jiraAction: {
+        canonicalId: "keiko.jira.draft",
+        arguments: () => ({
+          items: [
+            {
+              ref: "story",
+              projectId: "10000",
+              issueTypeId: "10001",
+              fields: { summary: "Reviewed Story", description: "## Context\nKnown context." },
+            },
+          ],
+        }),
+      },
+    });
+    const jira = useDraftRemote(f);
+    const pending = send(f);
+    void pending.catch(() => undefined);
+    try {
+      const exchange = await observedJiraExchange(f);
+      // The Chat read no project before: the name can only come from the server's own read.
+      expect(exchange.approval).toMatchObject({
+        kind: "jira-chat-write",
+        operation: "jira.draft",
+        state: "pending",
+        projects: [{ ref: "10000", key: "SYN", name: "Synthetic Project" }],
+      });
+      expect(jira.posts()).toEqual([]);
+    } finally {
+      await settlePendingJira(f, pending);
+    }
+  });
   it("refuses an invalid saved template before any combined-path Jira write approval", async () => {
     const f = fixture({
       jiraAction: {

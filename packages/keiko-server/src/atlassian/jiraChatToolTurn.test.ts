@@ -2552,6 +2552,21 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     expect(f.deps.jiraDraftStore?.latest(f.chatId)).toBeUndefined();
   });
 
+  it("names the project of a staged draft's approval, read through the draft's own reference (F09)", async () => {
+    const { f } = stagedFixture();
+    const pending = handleSendDesktopChat(sendContext(f, "staged-names"), f.deps);
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    const approval = await pendingWriteApproval(f);
+    // The call names only the staged draft; the names come from the server's own read.
+    expect(approval).toMatchObject({
+      operation: "jira.draft",
+      projects: [{ ref: "10000", key: "SYN", name: "Synthetic Project" }],
+    });
+    await decidePendingWrite(f, "reject");
+    expect((await pending).status).toBe(200);
+  });
+
   it("refuses a draft extended after its digest was read before anyone is asked", async () => {
     const { f, reference } = stagedFixture();
     const store = f.deps.jiraDraftStore;
