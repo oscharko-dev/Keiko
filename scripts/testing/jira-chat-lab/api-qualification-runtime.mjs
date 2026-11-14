@@ -32,6 +32,11 @@ import {
   resetAssertionCount,
 } from "./api-qualification-assert.mjs";
 import { hasOutcome, productRefusalDetail, succeededOutcome } from "./api-qualification-cause.mjs";
+import {
+  DISCOVERY_QUERIES,
+  discoveryDescriptor,
+  proveDiscovery,
+} from "./api-qualification-discovery.mjs";
 
 function readRequest(request, url) {
   return (
@@ -470,13 +475,14 @@ export async function withQualificationLifetime(preparedTurn, _witness, managed,
   }
 }
 
-function declaredQualificationTools(specification) {
+function declaredQualificationTools(specification, discoveryProofRequested = false) {
   qualificationOperation(specification);
   const auxiliary = specification.prerequisiteTools ?? [];
   assert.ok(Array.isArray(auxiliary));
   assert.equal(new Set(auxiliary).size, auxiliary.length);
   assert.ok(!auxiliary.includes(specification.tool));
-  const maxToolCalls = 1 + auxiliary.length;
+  // A discovery proof adds one discover (up to three pages) and one describe call to the turn.
+  const maxToolCalls = 1 + auxiliary.length + (discoveryProofRequested ? 4 : 0);
   assert.ok(
     maxToolCalls <= DEFAULT_LIMITS.maxToolCalls,
     "The declared turn exceeds its tool budget",
@@ -493,7 +499,10 @@ function declaredQualificationTools(specification) {
   return { auxiliary, maxToolCalls, operations };
 }
 async function prepareHeldQualification(context, chat, specification) {
-  const { auxiliary, maxToolCalls, operations } = declaredQualificationTools(specification);
+  const { auxiliary, maxToolCalls, operations } = declaredQualificationTools(
+    specification,
+    context.qualifyDiscovery === true && DISCOVERY_QUERIES[specification.tool] !== undefined,
+  );
   const accepted = await acceptedContext(context, chat);
   assert.ok(
     maxToolCalls <= accepted.authority.envelope.budget.maxToolCalls,
@@ -608,9 +617,60 @@ async function verifiedInvocation(held, specification, attempted) {
   );
   return { readback, measuredAssertionCount: measuredAssertionCount() };
 }
+/** One discovery tool dispatched like the held call itself; returns the settled result's data. */
+async function dispatchDiscoveryTool(held, name, args) {
+  const { context, accepted, managed, preparedTurn, maxToolCalls } = held;
+  const descriptor = await discoveryDescriptor(name);
+  const execution = await prepareQualificationCall(
+    context,
+    accepted,
+    managed,
+    preparedTurn,
+    { tool: name, mutation: false },
+    args,
+  );
+  const { review, actionId } = execution;
+  try {
+    const bound = bind(context, preparedTurn.context, managed, review, maxToolCalls, held.shared);
+    held.shared = { budget: bound.budget, counters: bound.counters };
+    const offered = bound.binder.offerTool(descriptor.toolRef);
+    const dispatch = await bound.binder.dispatch(
+      {
+        kind: "bound",
+        toolRef: descriptor.toolRef,
+        projectionDigest: offered.binding.projectionDigest,
+        offerId: offered.offerId,
+        arguments: args,
+      },
+      { actionId, idempotencyKey: actionId },
+    );
+    retainQualificationResult(
+      context,
+      { ...execution, operation: { declaration: { descriptor } } },
+      dispatch,
+      bound.budget,
+    );
+    assert.equal(dispatch.kind, "settled", `${name} did not settle`);
+    return dispatch.result?.data ?? {};
+  } finally {
+    preparedTurn.humanInput.finalize(actionId);
+  }
+}
+
+/** The proof of the discovery path for an operation the proof lists, kept on the run's context. */
+async function discoveryProofFor(held, specification) {
+  const { context } = held;
+  if (!context.qualifyDiscovery || DISCOVERY_QUERIES[specification.tool] === undefined) return;
+  const proof = await proveDiscovery(specification, (name, args) =>
+    dispatchDiscoveryTool(held, name, args),
+  );
+  (context.discoveryProofs ??= []).push(proof);
+}
+
 async function runHeldCase(held, specification, args, auxiliaries) {
   const { context, accepted } = held;
   await specification.prepareInvocation?.(context, context.qualificationFixtureState);
+  await discoveryProofFor(held, specification);
   // A preparation may replace source-derived arguments, e.g. the current temporary crop.
   const actualArgs = typeof args === "function" ? args() : args;
   const attempted = await dispatchHeldCall(held, specification, actualArgs);

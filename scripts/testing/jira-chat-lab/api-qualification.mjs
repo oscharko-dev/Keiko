@@ -575,6 +575,8 @@ async function executeCases(context, specifications, report, directory, witness,
   fixture.runId = report.runId;
   context.qualificationFixtureState = fixture;
   context.qualificationWitness = witness;
+  // KEIKO_JIRA_LAB_QUALIFY_DISCOVERY=1 puts the product's own discover and describe before the dispatch.
+  context.qualifyDiscovery = process.env.KEIKO_JIRA_LAB_QUALIFY_DISCOVERY === "1";
   const state = {
     context,
     fixture,
@@ -593,6 +595,8 @@ async function executeCases(context, specifications, report, directory, witness,
       verificationReferences:
         evidence.runtimeAvailability === "unknown" ? [] : [`${report.file}#${evidence.id}`],
     });
+    if (context.discoveryProofs !== undefined)
+      report.discoveryProofs = [...context.discoveryProofs];
     recordLeftoverState(report, evidence);
     recordFailedRoot(state.failedRoots, specification, evidence);
     privateJson(join(directory, report.file), report);
