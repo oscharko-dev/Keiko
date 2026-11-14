@@ -559,9 +559,14 @@ measurement; its first host step only reached "waiting for a free slot".
 
 ## Rebuild checklist
 
-**Status:** documented, not proven by a rebuild; due at the latest when the evaluation license
-expires on 2027-02-11. The proof is a second guest built from this page alone by someone who never
-touched the first one; until it has run, this sentence stays.
+**Status:** documented, not proven by a complete rebuild. A rebuild from this page alone was carried
+out up to step 11 on 2026-11-14 and **not completed**: the owner cancelled it while the third update
+pass of step 11 was unfinished, so steps 12 to 14 (toolchain, license check and snapshot, Keiko
+release and start proof) were never run on the second guest. Steps 0 to 10 were verified and the page
+was corrected for every deviation they showed; two update passes of step 11 were observed (pass 1
+about 4 minutes with `reboot=False`, pass 2 about 12 minutes). The full proof, a second guest built
+from this page alone by someone who never touched the first one, is still due at the latest when the
+evaluation license expires on 2027-02-11; until it has run, this sentence stays.
 
 Each step names its commands, the result to expect and where every input comes from. The host shell
 is zsh (the macOS default); the commands also run in bash. Placeholders in angle brackets are yours to
