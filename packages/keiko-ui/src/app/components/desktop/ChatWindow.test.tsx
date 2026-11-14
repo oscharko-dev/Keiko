@@ -2194,7 +2194,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       empty: "Keine bereiten Knowledge Pods oder Pod Sets sind verfügbar.",
     },
   ])(
-    "distinguishes bound Jira tools from empty and mixed grounding in $locale",
+    "with a Jira Pod on: ordinary source terms and no empty-catalog sentence, and clearing a mixed selection removes only the data sources, in $locale",
     async ({ locale, label, none, mode, empty }) => {
       window.localStorage.setItem(I18N_STORAGE_KEY, locale);
       const user = userEvent.setup();

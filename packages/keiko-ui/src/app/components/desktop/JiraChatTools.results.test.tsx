@@ -1200,6 +1200,78 @@ describe.each(["en", "de"] as const)("local Jira catalog results in %s", (locale
     expect(screen.queryByRole("list", { name: /Jira actions|Jira-Aktionen/u })).toBeNull();
   });
 
+  // The lookup's calm line and "Completed" belong to a succeeded lookup only (#4371).
+  it.each(["jira_discover", "jira_describe"] as const)(
+    "never reports %s as completed or looked up unless it succeeded",
+    (name) => {
+      const calm =
+        locale === "en"
+          ? "Keiko looked up which Jira actions fit."
+          : "Keiko hat nachgesehen, welche Jira-Aktionen passen.";
+      // The turn's own summary may say "Completed with issues"; only the lookup's state matters here.
+      const completed = /(Completed|Abgeschlossen)(?! (with|mit))/u;
+      const withData = (data: CatalogJsonObject): ChatToolExchange =>
+        exchange("failed", { call: { id: name, name, arguments: {} }, data });
+      const failedResult = (): ChatToolExchange => {
+        const base = withData({ outcome: "failed", reason: "unavailable", items: [] });
+        return base.result === undefined
+          ? base
+          : { ...base, result: { ...base.result, status: "failed" } };
+      };
+      const cases: readonly {
+        readonly label: string;
+        readonly exchange: ChatToolExchange;
+        readonly turnState: "pending" | "completed" | "cancelled";
+        readonly expected: string;
+      }[] = [
+        {
+          label: "failed",
+          exchange: withData({ outcome: "failed", reason: "unavailable", items: [] }),
+          turnState: "completed",
+          expected: locale === "en" ? "Could not complete" : "Konnte nicht abgeschlossen werden",
+        },
+        {
+          label: "failed result",
+          exchange: failedResult(),
+          turnState: "completed",
+          expected: locale === "en" ? "Could not complete" : "Konnte nicht abgeschlossen werden",
+        },
+        {
+          label: "refused",
+          exchange: withData({ outcome: "failed", reason: "invalid-arguments", items: [] }),
+          turnState: "completed",
+          expected: locale === "en" ? "Could not complete" : "Konnte nicht abgeschlossen werden",
+        },
+        {
+          label: "cancelled",
+          exchange: { call: { id: name, name, arguments: {} } },
+          turnState: "cancelled",
+          expected: locale === "en" ? "Result unavailable" : "Ergebnis nicht verfügbar",
+        },
+        {
+          label: "running",
+          exchange: { call: { id: name, name, arguments: {} } },
+          turnState: "pending",
+          expected: locale === "en" ? "In progress" : "In Bearbeitung",
+        },
+      ];
+      for (const entry of cases) {
+        const { container, unmount } = render(
+          <I18nProvider>
+            <JiraChatTools
+              transcript={{ schemaVersion: 1, exchanges: [entry.exchange] }}
+              turnState={entry.turnState}
+            />
+          </I18nProvider>,
+        );
+        expect(container, entry.label).toHaveTextContent(entry.expected);
+        expect(container, entry.label).not.toHaveTextContent(calm);
+        expect(container, entry.label).not.toHaveTextContent(completed);
+        unmount();
+      }
+    },
+  );
+
   it("shows an empty successful selection without inventing an action or a Jira effect", () => {
     render(
       <I18nProvider>
