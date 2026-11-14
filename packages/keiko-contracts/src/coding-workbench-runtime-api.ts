@@ -560,6 +560,8 @@ export type CodingWorkbenchRuntimeUnavailableReason =
   | "payload-missing"
   | "payload-unapproved"
   | "payload-tampered"
+  // The installed runtime is an earlier, retired OpenCode (#4359): the person updates Keiko.
+  | "runtime-outdated"
   | "secure-read-unavailable"
   | "loopback-unavailable"
   | "runtime-unqualified"
@@ -580,6 +582,7 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "payload-missing",
     "payload-unapproved",
     "payload-tampered",
+    "runtime-outdated",
     "secure-read-unavailable",
     "loopback-unavailable",
     "runtime-unqualified",

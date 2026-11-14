@@ -33,6 +33,7 @@ import {
   portableInstallCarriesReleaseSignature,
   releasedWindowsGatewayHelperPin,
 } from "./productionPortableCodingRuntime.js";
+import { OPENCODE_RUNTIME_VERSION_PINS } from "./opencodeRuntimeVersions.js";
 
 const TARGET = "windows-x64";
 const COMMIT = "c".repeat(40);
@@ -1040,9 +1041,9 @@ function sidecarFixture(lane: FixtureLane = "production"): {
         owner: "anomalyco",
         repository: "opencode",
         name: "opencode",
-        version: "2.1.4",
-        tag: "v2.1.4",
-        commit: "68bc26b7da1990ce10ffecfbc1e09eb13aa5d824",
+        version: "2.2.5",
+        tag: "v2.2.5",
+        commit: "9bbb8ce18c80f099e0e448775f59d965ead40a21",
       },
       adapterCompatibility: {
         adapterName: "keiko-coding-sidecar",
@@ -1051,7 +1052,7 @@ function sidecarFixture(lane: FixtureLane = "production"): {
       },
       protocolSchema: {
         path: "packages/protocol/openapi.json",
-        sha256: "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9",
+        sha256: OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "",
         hashAlgorithm: "sha256",
         hashEncoding: "lowercase-hex",
         digestInput: "upstream-raw-bytes",

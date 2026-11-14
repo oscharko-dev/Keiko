@@ -18,7 +18,7 @@ function runtime(
         name: "opencode-compatible",
         kind: "coding-runtime",
         upstreamName: "opencode",
-        upstreamVersion: "2.1.4",
+        upstreamVersion: "2.2.5",
         adapterName: "keiko-coding-sidecar",
         adapterVersion: "1",
         protocolVersion: "coding-sidecar-v1",

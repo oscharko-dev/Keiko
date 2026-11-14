@@ -336,7 +336,7 @@ Publication order is explicit:
 
 1. Qualify the private native candidates with the staged product, including a bounded read beyond
    64 KiB, the existing `init` → project start script → authenticated browser journey, cold model
-   discovery and reload. Keep the helper compatibility path of the previous approved packages.
+   discovery and reload. No earlier package stays approved: Keiko runs exactly one OpenCode (#4359).
 2. Publish both exact native tarballs through npm Trusted Publishing (#3898 AC8), as described in
    "Publishing the npm coding-runtime packages" below. The root package's binding does not cover
    these package names; each has its own binding to `coding-runtime-publish.yml`.
@@ -389,8 +389,10 @@ The 1.1.4 runtime packages carry OpenCode 2.1.4 and address F18's one-MiB secure
 `coding-runtime-publish.yml` published both on 2026-10-26 (#3898 AC8), and the root optional
 dependency pins and `package-lock.json` name 1.1.4 since that date (step 3). Public 1.1.3 stays capped
 at 64 KiB and has left the approvals with the OpenCode 2.2.5 bump (#4271): an installation that still
-holds it reports `payload-unapproved` until it updates, while 1.1.4 stays approved as the previous
-entry until packages built from the current pin are selected. The final fresh npm/Yarn installation validation against the next
+holds it reports `payload-unapproved` until it updates. The 1.1.4 packages are retired the same way
+(#4359): the change that selects the runtime packages built from the current pin also removes the
+previous pin and approval, and an installation still holding 1.1.4 is refused with `runtime-outdated`
+and told to update Keiko (never run silently). The final fresh npm/Yarn installation validation against the next
 product release remains pending (#3898 AC9). The existing Yarn qualification uses the `node-modules`
 linker and does not prove Plug'n'Play support. Linux npm runtime availability is unchanged; its
 coding engine remains on the packaged lane described by ADR-0140. The Windows package is built and

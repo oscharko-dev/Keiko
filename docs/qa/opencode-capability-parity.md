@@ -4,8 +4,9 @@ Status: working inventory for [#3874](https://github.com/oscharko-dev/Keiko/issu
 [#3897](https://github.com/oscharko-dev/Keiko/issues/3897), refreshed 2026-10-23 against the
 working tree of PR oscharko-dev/Keiko#4064, and for the runtime upgrade of
 [#4271](https://github.com/oscharko-dev/Keiko/issues/4271) on 2026-11-05. Pinned runtime: OpenCode
-2.2.5 (`OPENCODE_PINNED_VERSION`, commit `9bbb8ce1`, [versions][versions]); 2.1.4 stays admissible
-only until npm runtime packages built from 2.2.5 are published. Executed heads and pending qualification are recorded separately in
+2.2.5 (`OPENCODE_PINNED_VERSION`, commit `9bbb8ce1`, [versions][versions]); Keiko runs
+exactly this one OpenCode on every channel (#4359); 2.1.4 is not approved and an installation that
+still holds its runtime package is refused (`runtime-outdated`). Executed heads and pending qualification are recorded separately in
 the live lab ledger ([lab][lab]). This document does not qualify an unexecuted current head, and no
 row records a run of the opt-in real-binary suites on the current head, except the five rows of
 [section 3.5](#35-real-binary-qualification-of-2026-10-24) and the suites named in

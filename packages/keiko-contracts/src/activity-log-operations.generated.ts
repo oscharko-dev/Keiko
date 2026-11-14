@@ -10572,6 +10572,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "payload-missing",
           "payload-unapproved",
           "payload-tampered",
+          "payload-outdated",
           "native-helper-directory-untrusted",
           "secure-read-helper-missing",
           "secure-read-helper-stale",

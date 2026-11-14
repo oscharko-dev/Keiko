@@ -6,14 +6,13 @@ import { describe, expect, it } from "vitest";
 
 import { hashHelperSourceTree } from "./devLanePortableCodingRuntime.js";
 import {
-  NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
+  NPM_LANE_RETIRED_EXECUTABLE_TREES,
   NPM_LANE_RUNTIME_APPROVALS,
 } from "./npmLaneRuntimeApprovals.js";
 import {
   OPENCODE_PINNED_VERSION,
   OPENCODE_RUNTIME_VERSION_PINS,
 } from "./opencodeRuntimeVersions.js";
-import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 
 /** The helper source of the retired 1.1.3 packages, which no table may approve again. */
 const RETIRED_HELPER_SOURCE_TREE_SHA256 =
@@ -91,25 +90,22 @@ describe("npm-lane runtime approvals", () => {
     expect(NPM_LANE_RUNTIME_APPROVALS["macos-x64"].runtimeSupervisor).toBeUndefined();
   });
 
+  // #4359: Keiko admits exactly one OpenCode. The retired 1.1.4 packages (2.1.4) approve nothing;
+  // their executable trees are only recognised so the person is told to update.
   it.each(Object.entries(NPM_LANE_RUNTIME_APPROVALS))(
-    "%s approves the current and the published previous runtime and no other",
-    (target, approval) => {
-      const previous =
-        NPM_LANE_PREVIOUS_RUNTIME_APPROVALS[target as keyof typeof NPM_LANE_RUNTIME_APPROVALS];
+    "%s approves the current runtime only and refuses the retired helper source",
+    (_target, approval) => {
       expect(approval.upstreamVersion).toBe(OPENCODE_PINNED_VERSION);
-      // No Windows package was ever published, so nothing earlier may be approved for it (#4068).
-      if (target === "windows-x64") {
-        expect(previous).toBeUndefined();
-        return;
-      }
-      if (previous === undefined) throw new TypeError(`no previous approval for ${target}`);
-      expect(previous.upstreamVersion).toBe(OPENCODE_RUNTIME_VERSION_PINS[1]?.version);
-      expect(previous.executableTreeSha256).not.toBe(approval.executableTreeSha256);
-      expect(previous.protocolSchemaSha256).not.toBe(approval.protocolSchemaSha256);
-      expect(previous.helperMaxBytes).toBe(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES);
-      for (const entry of [approval, previous]) {
-        expect(entry.helperSourceTreeSha256).not.toBe(RETIRED_HELPER_SOURCE_TREE_SHA256);
-      }
+      expect(OPENCODE_RUNTIME_VERSION_PINS).toHaveLength(1);
+      expect(NPM_LANE_RETIRED_EXECUTABLE_TREES.has(approval.executableTreeSha256)).toBe(false);
+      expect(approval.helperSourceTreeSha256).not.toBe(RETIRED_HELPER_SOURCE_TREE_SHA256);
     },
   );
+
+  it("names the two retired 1.1.4 executable trees and nothing else", () => {
+    expect([...NPM_LANE_RETIRED_EXECUTABLE_TREES].sort()).toEqual([
+      "2ebf820d99c5df9d9097268f763ae406aceff555322dbd1fcb66f1ff2b85cff8",
+      "c29fb7e5a9593e8072f0694ca1156e761386901fb4f53ac527ca863d2d40eba0",
+    ]);
+  });
 });

@@ -613,6 +613,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Coding-Läufe können nicht starten, weil Keiko in einem Netzwerkordner oder einem umgeleiteten Ordner installiert ist. Installiere Keiko auf einem lokalen Laufwerk dieses Computers.",
   "codingWorkbench.installVolume.unverified":
     "Keiko konnte seinen Installationsordner gerade nicht prüfen, weil Windows zu langsam geantwortet hat. Versuch es gleich noch einmal; wenn es so bleibt, starte Keiko neu.",
+  "codingWorkbench.runtime.outdated":
+    "Coding-Läufe können nicht starten, weil die mit diesem Keiko installierte Coding-Engine eine ältere Version ist, die Keiko nicht mehr freigibt. Aktualisiere Keiko auf die neueste Version.",
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":

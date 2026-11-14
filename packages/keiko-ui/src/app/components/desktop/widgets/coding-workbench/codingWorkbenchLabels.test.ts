@@ -1245,6 +1245,9 @@ describe("runtimeUnavailableMessageKey", () => {
     expect(runtimeUnavailableMessageKey("install-volume-unverified")).toBe(
       "codingWorkbench.installVolume.unverified",
     );
+    expect(runtimeUnavailableMessageKey("runtime-outdated")).toBe(
+      "codingWorkbench.runtime.outdated",
+    );
     expect(runtimeUnavailableMessageKey("runtime-unqualified")).toBeUndefined();
     expect(runtimeUnavailableMessageKey("constructor")).toBeUndefined();
     expect(runtimeUnavailableMessageKey(undefined)).toBeUndefined();

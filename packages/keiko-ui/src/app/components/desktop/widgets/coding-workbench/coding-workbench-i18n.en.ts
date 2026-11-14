@@ -586,6 +586,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Coding runs cannot start because Keiko is installed in a network or redirected folder. Install Keiko on a local drive of this computer.",
   "codingWorkbench.installVolume.unverified":
     "Keiko could not check its installation folder just now because Windows answered too slowly. Try again in a moment; if it keeps happening, restart Keiko.",
+  "codingWorkbench.runtime.outdated":
+    "Coding runs cannot start because the coding engine installed with this Keiko is an older version that Keiko no longer approves. Update Keiko to the latest version.",
   "codingWorkbench.setup.repairAndBind": "Repair and bind",
   "codingWorkbench.setup.repairing": "Repairing…",
   "codingWorkbench.setup.runtimeUnavailable":

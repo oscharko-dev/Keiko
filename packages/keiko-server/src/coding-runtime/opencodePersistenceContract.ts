@@ -1,6 +1,6 @@
 /**
  * The private SQLite schema the pinned OpenCode runtime's own migrations create, derived from the
- * producers: fresh admitted 2.2.5 and 2.1.4 servers' `opencode.db`, every table (SQLite's internal `sqlite_*` tables
+ * producer: a fresh admitted 2.2.5 server's `opencode.db`, every table (SQLite's internal `sqlite_*` tables
  * excepted) with its complete column set. `opencodeNativeSessionResume.real.test.ts` proves that the
  * database of a real settled run still has exactly this schema.
  *
@@ -26,7 +26,7 @@ export type OpenCodePersistenceTableClass =
 
 type OpenCodePersistenceTableClasses = Readonly<Record<string, OpenCodePersistenceTableClass>>;
 
-const OPENCODE_2_1_4_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.freeze({
+const OPENCODE_BASE_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.freeze({
   account: [
     "access_token",
     "email",
@@ -100,7 +100,6 @@ const OPENCODE_2_1_4_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.free
     "type",
   ],
   session_message: ["data", "id", "seq", "session_id", "time_created", "time_updated", "type"],
-  session_pending: ["admitted_seq", "data", "delivery", "id", "session_id", "time_created", "type"],
   session_v2: [
     "agent",
     "cost",
@@ -144,15 +143,12 @@ const OPENCODE_2_1_4_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.free
 });
 
 /**
- * 2.2.5 adds schedules, background jobs, session parts and attachment blobs and drops
- * session_pending, whose queued input moved to session_inbox.
+ * The 2.2.5 schema: the tables below plus schedules, background jobs, session parts and attachment
+ * blobs. Queued input lives in session_inbox (an earlier producer's session_pending is gone, and
+ * with it the earlier runtime: Keiko admits exactly one OpenCode, #4359).
  */
 const OPENCODE_2_2_5_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.freeze({
-  ...Object.fromEntries(
-    Object.entries(OPENCODE_2_1_4_PERSISTENCE_SCHEMA).filter(
-      ([table]) => table !== "session_pending",
-    ),
-  ),
+  ...OPENCODE_BASE_PERSISTENCE_SCHEMA,
   blob: ["bytes", "data", "hash", "height", "mime", "time_created", "width"],
   blob_ref: ["hash", "message_id", "seq", "session_id"],
   job: [
@@ -243,13 +239,12 @@ const OPENCODE_2_2_5_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.free
   ],
 });
 
-const OPENCODE_2_1_4_TABLE_CLASSES: OpenCodePersistenceTableClasses = Object.freeze({
+const OPENCODE_BASE_TABLE_CLASSES: OpenCodePersistenceTableClasses = Object.freeze({
   permission: "grant",
   credential: "credential",
   account: "credential",
   account_state: "credential",
   control_account: "credential",
-  session_pending: "pending-input",
   session_inbox: "pending-input",
   kv: "unknown-state",
   workspace: "unknown-state",
@@ -271,9 +266,7 @@ const OPENCODE_2_1_4_TABLE_CLASSES: OpenCodePersistenceTableClasses = Object.fre
  * refused; a schedule is the session's own pending wake, which Keiko resumes (ADR-0137 D10).
  */
 const OPENCODE_2_2_5_TABLE_CLASSES: OpenCodePersistenceTableClasses = Object.freeze({
-  ...Object.fromEntries(
-    Object.entries(OPENCODE_2_1_4_TABLE_CLASSES).filter(([table]) => table !== "session_pending"),
-  ),
+  ...OPENCODE_BASE_TABLE_CLASSES,
   schedule: "schedule-state",
   blob: "unknown-state",
   blob_ref: "unknown-state",
@@ -285,11 +278,9 @@ export const OPENCODE_PERSISTENCE_TABLE_CLASSES: Readonly<
   Record<string, OpenCodePersistenceTableClasses>
 > = Object.freeze({
   "2.2.5": OPENCODE_2_2_5_TABLE_CLASSES,
-  "2.1.4": OPENCODE_2_1_4_TABLE_CLASSES,
 });
 
 export const OPENCODE_PERSISTENCE_SCHEMAS: Readonly<Record<string, OpenCodePersistenceSchema>> =
   Object.freeze({
     "2.2.5": OPENCODE_2_2_5_PERSISTENCE_SCHEMA,
-    "2.1.4": OPENCODE_2_1_4_PERSISTENCE_SCHEMA,
   });
