@@ -65,6 +65,48 @@ describe("estimate deviations (S11)", () => {
   });
 });
 
+// Lab C07 (Gemma, 2026-11-14): the model answered with a table of the report's own rule ids under a
+// lead that says which issues deviate; the oracle found 49 of 49 issues and credited none of the 53
+// seeded deviations as described, because a rule id such as "section-missing" is one hyphenated word.
+describe("rule ids as the description of a deviation (S11)", () => {
+  const issues = [
+    { key: "RPT-5", deviations: ["summary"] },
+    { key: "RPT-6", deviations: ["section:Abgrenzung"] },
+    { key: "RPT-8", deviations: ["label:anforderung"] },
+  ];
+  const structured = new Map([
+    ["RPT-5", { ruleIds: new Set(["summary-pattern"]), fieldIds: new Set() }],
+    ["RPT-6", { ruleIds: new Set(["section-missing"]), fieldIds: new Set() }],
+    ["RPT-8", { ruleIds: new Set(["label-missing"]), fieldIds: new Set() }],
+  ]);
+  const grade = (answer) => gradeDeviationReport(answer, issues, structured, {});
+  const TABLE = [
+    "Hier sind alle Vorgänge des Projekts **RPT**, die von der Strukturvorgabe abweichen:",
+    "",
+    "| Schlüssel | Abweichungen |",
+    "| :--- | :--- |",
+    "| **RPT-5** | summary-pattern: `^\\[LH-\\d{3}\\] \\S` |",
+    "| **RPT-6** | section-missing: Abgrenzung |",
+    "| **RPT-8** | label-missing: anforderung |",
+  ].join("\n");
+
+  it("credits the rule ids the report itself states, in a table", () => {
+    const result = grade(TABLE);
+    expect(result.found).toBe(3);
+    expect(result.undescribed).toEqual([]);
+  });
+
+  it("still credits nothing for a bare field word, and nothing for a denial", () => {
+    expect(grade("RPT-5: Zusammenfassung").undescribed).toContain("RPT-5 summary");
+    expect(
+      grade("RPT-6: section-missing ist nicht der Fall, Abgrenzung korrekt").undescribed,
+    ).toContain("RPT-6 section:Abgrenzung");
+    expect(grade("RPT-8: Label anforderung ist korrekt").undescribed).toContain(
+      "RPT-8 label:anforderung",
+    );
+  });
+});
+
 describe("quality findings (S15)", () => {
   it("accepts exactly the seeded defects and rejects an omission or an extra id", () => {
     const exact = `UNKLAR: ${VAGUE.join(", ")}\nOHNE ABNAHMEKRITERIEN: ${NO_CRITERIA.join(", ")}`;

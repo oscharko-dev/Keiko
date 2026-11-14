@@ -137,8 +137,12 @@ function deniesDeviation(clause) {
 // A description of a deviation states a violation: a field that is absent, empty, wrong or unlike the
 // template. Naming the checked fields ("Geprüft wurden Summary, Parent ...") or calling them present
 // states none, so it describes no deviation however many field words it holds.
+// The report's own rule ids ("section-missing", "summary-pattern", "label-missing") are the tool's
+// statement of a violation: an answer that repeats them states one. A hyphen continues a word, so
+// the bare word "missing" inside such an id needs its own alternative.
+const RULE_ID = String.raw`[a-z]+-(?:missing|empty|pattern|mismatch|unavailable|count|too-short|too-long)`;
 const VIOLATION = phrase(
-  String.raw`fehl\p{L}*|missing|lack\p{L}*|absent|ohne|without|kein\p{L}*|nicht|not|no|n't|never|ungültig\p{L}*|invalid|falsch\p{L}*|wrong|incorrect|leer\p{L}*|empty|unset|verletz\p{L}*|violat\p{L}*|weicht\s+ab|abweich\p{L}*|deviat\p{L}*|mangel\p{L}*|m[äa]ngel\p{L}*|fehlerhaft\p{L}*|unvollständig\p{L}*|incomplete|unzulässig\p{L}*|mismatch\p{L}*|differs?|expected|erwartet|statt`,
+  String.raw`${RULE_ID}|fehl\p{L}*|missing|lack\p{L}*|absent|ohne|without|kein\p{L}*|nicht|not|no|n't|never|ungültig\p{L}*|invalid|falsch\p{L}*|wrong|incorrect|leer\p{L}*|empty|unset|verletz\p{L}*|violat\p{L}*|weicht\s+ab|abweich\p{L}*|deviat\p{L}*|mangel\p{L}*|m[äa]ngel\p{L}*|fehlerhaft\p{L}*|unvollständig\p{L}*|incomplete|unzulässig\p{L}*|mismatch\p{L}*|differs?|expected|erwartet|statt`,
 );
 const VIOLATION_RE = new RegExp(VIOLATION, "iu");
 const DEVIATION_SCOPE_RE = new RegExp(phrase(DEVIATION_NOUN), "iu");

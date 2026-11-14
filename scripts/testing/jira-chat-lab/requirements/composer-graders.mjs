@@ -470,12 +470,19 @@ const ATTACHMENT_NOUN = /anh(?:ä|ae)nge|anhang|attachment|datei/iu;
 const NOT_PART =
   /nicht\s+(?:teil|bestandteil|unterst(?:ü|ue)tzt|m(?:ö|oe)glich|verf(?:ü|ue)gbar)|(?:kein|keine)\s+\w*\s*(?:unterst(?:ü|ue)tzung|anh(?:ä|ae)nge)|not\s+(?:part|supported|available)/iu;
 
+/** The product binds every write to a native method: a read is a GET, a composition or a discovery has none. */
+const WRITE_BINDING = /^(?:POST|PUT|PATCH|DELETE) /u;
+
 /**
- * Every settled write of the turn, whatever its tool: the product's closed `outcome` is `succeeded`,
- * or a draft item of it is in state `created` (a draft reports items, not one outcome).
+ * Every settled WRITE of the turn, whatever its tool: the product's closed `outcome` is `succeeded`
+ * on a result bound to a writing native method (a read, a discovery or a description also report
+ * `succeeded` and write nothing), or a draft item of it is in state `created` (a draft reports items,
+ * not one outcome).
  */
 export const succeededWrite = (exchange) =>
-  exchange?.result?.data?.outcome === "succeeded" || wroteIssue(exchange);
+  (exchange?.result?.data?.outcome === "succeeded" &&
+    WRITE_BINDING.test(String(exchange.result.data.operationBinding?.identity ?? ""))) ||
+  wroteIssue(exchange);
 const succeededWrites = (exchanges) =>
   (Array.isArray(exchanges) ? exchanges : []).filter(succeededWrite);
 

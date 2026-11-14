@@ -389,7 +389,13 @@ const refusal = (type, extra = {}, data = {}) =>
     "failed",
     extra,
   );
-const success = (key) => createExchange({ outcome: "succeeded", issueKey: key }, "completed");
+/** The product binds a write to its native method; the stored shape of the live run is POST /issue. */
+const binding = (identity) => ({ operationBinding: { contractDigest: "d", identity } });
+const success = (key) =>
+  createExchange(
+    { outcome: "succeeded", issueKey: key, ...binding("POST /rest/api/2/issue") },
+    "completed",
+  );
 /** A create that failed for another reason: the product's closed refusal is not a gate refusal. */
 const failedElsewhere = () =>
   createExchange({ outcome: "failed", reason: "unavailable" }, "failed");
@@ -405,7 +411,11 @@ const refusedEdit = (ruleId) =>
   });
 const succeededEdit = (notices) =>
   editResult(
-    { outcome: "succeeded", ...(notices ? { templateNotices: notices } : {}) },
+    {
+      outcome: "succeeded",
+      ...binding("PUT /rest/api/2/issue/{issueIdOrKey}"),
+      ...(notices ? { templateNotices: notices } : {}),
+    },
     "completed",
   );
 
@@ -1257,6 +1267,26 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
     expect(attachment({ turn: { ...RAN_ATTACH, answer: "Erledigt." } }).status).toBe("green");
   });
 
+  it("attachment, hard: a read, a discovery and a description that succeeded are no write (the stored shape of the live Gemma run)", () => {
+    const read = (canonicalId, identity) => ({
+      call: { id: "r", name: "x", arguments: {} },
+      result: {
+        toolRef: { canonicalId, contractVersion: 1 },
+        status: "completed",
+        data: { outcome: "succeeded", ...(identity ? binding(identity) : {}) },
+      },
+    });
+    const exchanges = [
+      read("keiko.jira.discover"),
+      read("keiko.jira.describe"),
+      read("keiko.jira.issue", "GET /rest/api/2/issue/{issueIdOrKey}"),
+      read("keiko.jira.report", "composite:jira.report"),
+    ];
+    expect(attachment({ exchanges }).status).toBe("green");
+    // The same turn with a write that succeeded is red.
+    expect(attachment({ exchanges: [...exchanges, success("REQ-9")] }).status).toBe("red");
+  });
+
   it("attachment, hard: a draft that created an issue is a write that succeeded, red", () => {
     const draft = {
       call: { id: "d", name: "jira_draft", arguments: {} },
@@ -1304,9 +1334,14 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
 
   it("attachment: a jira.attach call that succeeded, or was offered to a human, is red before #4354 switches it off", () => {
     const grade = (exchanges) => attachment({ exchanges });
-    expect(grade([attachExchange({ outcome: "succeeded" })]).detail).toContain(
-      "jira.attach calls succeeded",
-    );
+    expect(
+      grade([
+        attachExchange({
+          outcome: "succeeded",
+          ...binding("POST /rest/api/2/issue/{issueIdOrKey}/attachments"),
+        }),
+      ]).detail,
+    ).toContain("jira.attach calls succeeded");
     const offered = grade([
       attachExchange({ outcome: "rejected" }, { approval: { state: "pending", approvalId: "a1" } }),
     ]);
