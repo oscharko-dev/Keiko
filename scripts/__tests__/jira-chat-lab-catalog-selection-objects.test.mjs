@@ -184,6 +184,18 @@ describe("scopeSnapshot content", () => {
     reads.set(`${issue("K-2")}/comment`, { comments: [] });
   });
 
+  it("does not count the sub-task a create case adds under an owned issue as a stray write", async () => {
+    reads.set(`${issue("K-1")}?`, { fields: { summary: "K-1", subtasks: [] } });
+    const before = await scopeSnapshot({}, { project: "KEIKO" }, created);
+    reads.set(`${issue("K-1")}?`, { fields: { summary: "K-1", subtasks: [{ key: "K-9" }] } });
+    const after = await scopeSnapshot({}, { project: "KEIKO" }, created);
+    expect(strayWrites(before, after, [], "Auswahl t")).toMatchObject({ issueChanged: 0 });
+    // Any other change of the owned issue's fields is still a stray write.
+    reads.set(`${issue("K-1")}?`, { fields: { summary: "other", subtasks: [{ key: "K-9" }] } });
+    const edited = await scopeSnapshot({}, { project: "KEIKO" }, created);
+    expect(strayWrites(before, edited, [], "Auswahl t")).toMatchObject({ issueChanged: 1 });
+  });
+
   it("sees an edited comment and a removed agile object as stray writes", async () => {
     const before = await scopeSnapshot({}, { project: "KEIKO" }, created);
     reads.set(`${issue("K-1")}/comment`, { comments: [{ id: "5", body: "edited" }] });
