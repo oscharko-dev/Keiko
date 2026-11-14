@@ -496,6 +496,16 @@ export interface CodingWorkbenchGitTarget {
   readonly descriptionReview?: WorkbenchDescriptionReviewTarget;
 }
 
+/**
+ * Opening Git from the repository control. Without a project the person is led straight to choosing
+ * a folder, and the choice returns to this window (#4371).
+ */
+function repositoryGitTarget(root: string | null): CodingWorkbenchGitTarget {
+  return root === null
+    ? { root, binding: "repository", repositoryDialog: "open" }
+    : { root, binding: "repository" };
+}
+
 function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
 function noopSelectRepository(_root: string): void {}
 
@@ -712,7 +722,7 @@ function WorkbenchContextControls({
       location={location}
       offeredLocations={offeredLocations}
       onSelectLocation={onSelectLocation}
-      onOpenGit={() => onOpenGit({ root: repositoryRoot, binding: "repository" })}
+      onOpenGit={() => onOpenGit(repositoryGitTarget(repositoryRoot))}
       placement={placement}
     />
   );

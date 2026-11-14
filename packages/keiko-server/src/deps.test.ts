@@ -2110,6 +2110,25 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     await deps.dispose?.();
   });
 
+  // #4371 F21: the launch directory is the default project only when the read surface lets the
+  // person use it. One inside a tool's own state area (here `.claude`) is refused by every Git and
+  // Files read, so seeding it made the first project a refused one.
+  it("does not seed a launch directory that the read surface refuses", async () => {
+    const refused = join(tmp("launch-refused-"), ".claude", "worktrees", "keiko");
+    mkdirSync(refused, { recursive: true });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-launch-refused-"),
+      env: {},
+      uiDbPath: join(tmp("db-launch-refused-"), "keiko-ui.db"),
+      initialProjectPath: refused,
+    });
+
+    expect(deps.preferredProjectPath).toBeUndefined();
+    expect(deps.store.listProjects()).toEqual([]);
+    await deps.dispose?.();
+  });
+
   it("grants package-script trust for an explicitly launcher-selected initial project", async () => {
     const projectDir = tmp("launcher-selected-project-");
     const deps = buildUiHandlerDeps({

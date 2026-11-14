@@ -507,6 +507,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.noBranch": "No branch",
   "codingWorkbench.repository.loading": "Loading repositories…",
   "codingWorkbench.repository.none": "Select a repository",
+  "codingWorkbench.repository.noProject": "No project chosen yet: choose a folder.",
+  "codingWorkbench.repository.chooseFolder": "Choose folder",
   "codingWorkbench.repository.unavailable": "unavailable",
   "codingWorkbench.repository.unavailableHelp":
     "This repository is no longer available in Git. Choose another repository or reconnect it in Git.",

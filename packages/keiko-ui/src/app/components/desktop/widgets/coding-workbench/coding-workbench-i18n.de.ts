@@ -533,6 +533,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.noBranch": "Kein Branch",
   "codingWorkbench.repository.loading": "Repositories werden geladen…",
   "codingWorkbench.repository.none": "Repository auswählen",
+  "codingWorkbench.repository.noProject": "Noch kein Projekt gewählt: Wähle einen Ordner.",
+  "codingWorkbench.repository.chooseFolder": "Ordner wählen",
   "codingWorkbench.repository.unavailable": "nicht verfügbar",
   "codingWorkbench.repository.unavailableHelp":
     "Dieses Repository ist in Git nicht mehr verfügbar. Wähle ein anderes Repository oder verbinde es in Git erneut.",
