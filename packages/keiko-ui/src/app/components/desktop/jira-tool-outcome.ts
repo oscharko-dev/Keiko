@@ -1012,7 +1012,7 @@ function itemProblemsOf(
 }
 /** Whether Keiko's own field check refused this result or item before Jira saw it. */
 function keikoRefused(data: UnknownRecord | undefined): boolean {
-  return JIRA_FIELD_VALIDATION_FAILURES.some((value) => value === data?.validation);
+  return (JIRA_FIELD_VALIDATION_FAILURES as readonly unknown[]).includes(data?.validation);
 }
 /** The name Jira shows for the field Keiko's own check refused, when the refusal carries one. */
 function validationFieldOf(data: UnknownRecord): { readonly validationField: string } | undefined {
