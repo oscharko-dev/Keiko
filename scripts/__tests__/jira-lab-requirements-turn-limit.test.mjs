@@ -79,12 +79,14 @@ vi.mock("../testing/jira-chat-lab/chat-read.mjs", () => {
     "skill-import": { skill: { id: "skill", revision: 1, digest: "synthetic" } },
     "skill-read": { selection: { revision: 1 } },
     "skill-select": {},
+    // The baseline templates bound before a Chat (#4369): the library holds none here.
+    "template-list": { templates: [] },
     readiness: {},
   };
   return {
     chatReadLogDirectory: () => "/unused-synthetic-log-directory",
     prepareChat: async () => ({ id: "chat", groundingScopeIdentity: "scope" }),
-    // A template bind is never reached by these journeys (no template is saved); a call would be a defect.
+    // No template is saved here, so a bind is never reached; the Pod id is only read for the baseline binding.
     requestStatus: async () => ({ status: 404, value: {} }),
     createLabPodId: async () => "synthetic-pod",
     withLiveChat: async ({ run }) => run(fixture.live),
