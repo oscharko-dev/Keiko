@@ -904,6 +904,8 @@ function holdDraftPhase(
 interface DraftDeadlineScenario {
   readonly phase: DraftDeadlinePhase;
   readonly stream: boolean;
+  /** Names the turn: the same scenario run twice in one test file needs two distinct client turn ids. */
+  readonly label: string;
   /** How the turn's deadline (and anything racing it) arrives; the default is the bare deadline. */
   readonly trigger?: (
     deadline: ReturnType<typeof controlledTurnDeadline>,
@@ -939,6 +941,7 @@ function startSend(
 async function runDraftDeadlineScenario({
   phase,
   stream,
+  label,
   trigger = (deadline): void => {
     deadline.expire();
   },
@@ -949,7 +952,7 @@ async function runDraftDeadlineScenario({
   stallAfterFirstRound(f);
   const held = holdDraftPhase(f, phase);
   const response = mockResponse({ captureBody: true });
-  const clientTurnId = `draft-${phase}-${String(stream)}-${String(Math.random())}`;
+  const clientTurnId = `draft-${label}-${phase}-${String(stream)}`;
   const ctx = { ...sendContext(f, clientTurnId), res: response.res };
   const pending = startSend(f, ctx, stream);
   await awaitReadGrantedForWrite(f);
@@ -988,7 +991,7 @@ const DRAFT_DEADLINE_CASES = (["response-unobserved", "acknowledged", "settled"]
 it.each(DRAFT_DEADLINE_CASES)(
   "keeps observed draft keys across a controlled $phase deadline (stream=$stream)",
   async ({ phase, stream }) => {
-    await runDraftDeadlineScenario({ phase, stream });
+    await runDraftDeadlineScenario({ phase, stream, label: "bare" });
   },
 );
 
@@ -996,12 +999,13 @@ it.each(DRAFT_DEADLINE_CASES)(
 // Jira had accepted. Whether a deadline answers or cancels is decided by WHICH signal fired, never by
 // re-reading the wall clock inside the timer's own callback.
 describe("a deadline that fires early by the wall clock still answers from the transcript (#4355)", () => {
-  it.each(DRAFT_DEADLINE_CASES.filter(({ phase }) => phase !== "settled"))(
+  it.each(DRAFT_DEADLINE_CASES)(
     "delivers the receipt when the deadline signal fires 1 ms before the wall clock reaches it ($phase, stream=$stream)",
     async ({ phase, stream }) => {
       await runDraftDeadlineScenario({
         phase,
         stream,
+        label: "early",
         trigger: (deadline): void => {
           deadline.expire(1);
         },
@@ -1010,10 +1014,48 @@ describe("a deadline that fires early by the wall clock still answers from the t
   );
 });
 
+type Order = "deadline-first" | "abort-first";
+/** The request is gone: a cancellation for the caller, and the receipt of the accepted write kept. */
+function expectCancelledWithReceipt(
+  f: ReturnType<typeof fixture>,
+  seen: {
+    readonly stream: boolean;
+    readonly outcome: unknown;
+    readonly body: string;
+    readonly order: Order;
+  },
+): void {
+  // The request is gone either way: the buffered answer is the cancellation, the stream never
+  // reaches its done frame, and no assistant message was stored for a request nobody waits for.
+  if (seen.stream) expect(seen.body).not.toContain("event: done");
+  else
+    expect(seen.outcome).toMatchObject({
+      status: 499,
+      body: { error: { code: "REQUEST_CANCELLED" } },
+    });
+  const stored = f.deps.store.listMessages(f.chatId);
+  expect(stored.map((message) => [message.role, message.turnState])).toEqual([
+    ["user", "cancelled"],
+  ]);
+  // What the person kept is the receipt of the accepted write, in the stored transcript.
+  expect(stored[0]?.toolTranscript?.exchanges[0]).toMatchObject({
+    // The first cause decides the call's own status: a deadline first is a timeout, a stop first a
+    // cancellation. Either way the accepted write's key stays in the receipt.
+    result:
+      seen.order === "deadline-first"
+        ? { status: "timeout", reason: "deadline-exceeded" }
+        : { status: "cancelled", reason: "parent-cancelled" },
+    draftProgress: {
+      outcome: "unknown",
+      items: expect.arrayContaining([
+        expect.objectContaining({ issueKey: "SYN-1", state: "uncertain" }),
+      ]) as unknown,
+    },
+  });
+}
 // The deadline and a request abort (a person's stop, a dropped connection) in the same tick: the first
 // cause that fired decides, and either way the accepted write keeps its receipt and is not repeated.
 describe("a deadline and a request abort in the same tick (#4355)", () => {
-  type Order = "deadline-first" | "abort-first";
   const SAME_TICK = (["deadline-first", "abort-first"] as const).flatMap((order) =>
     [false, true].map((stream) => ({ order, stream })),
   );
@@ -1035,6 +1077,7 @@ describe("a deadline and a request abort in the same tick (#4355)", () => {
       await decidePendingWrite(f, "approve");
       await held.entered;
       const dispatched = f.requests();
+      let outcome: unknown;
       try {
         if (order === "deadline-first") {
           deadline.expire();
@@ -1043,13 +1086,17 @@ describe("a deadline and a request abort in the same tick (#4355)", () => {
           ctx.req.emit("aborted");
           deadline.expire();
         }
-        await pending.catch(() => undefined);
+        outcome = await pending.then(
+          (result) => result,
+          (error: unknown) => error,
+        );
       } finally {
         held.release();
       }
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
+      expectCancelledWithReceipt(f, { stream, outcome, body: response.body(), order });
       // Nothing is repeated and the accepted key stays in the journal and the stored transcript.
       expect(f.requests()).toBe(dispatched);
       expect(f.writes()).toBe(1);

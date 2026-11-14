@@ -247,7 +247,12 @@ export function recordChatToolTurnEnded(
     log.write(
       activityLogEvent(
         TURN_ENDED,
-        { correlationId: input.correlationId, level: "warn" },
+        // A person's stop or a dropped connection is a routine ending, not a warning; every other
+        // ending is a turn that ran out of room or time.
+        {
+          correlationId: input.correlationId,
+          level: input.reason === "request-aborted" ? "info" : "warn",
+        },
         {
           messageDigest: sha256Hex(input.messageId),
           reason: input.reason,

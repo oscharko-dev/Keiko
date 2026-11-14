@@ -65,6 +65,8 @@ import {
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import * as groundedOrchestrator from "./grounded-orchestrator.js";
 import * as gatewayWindow from "./gateway-context-window.js";
 import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
@@ -1382,6 +1384,50 @@ it.each(["deadline-first", "abort-first"] as const)(
     }
   },
 );
+
+// One chat.tool-turn.ended line per turn, whichever of the deadline and the request abort came first.
+it.each(["deadline-first", "abort-first"] as const)(
+  "records exactly one ending when the deadline and a request abort share a tick (%s)",
+  async (order) => {
+    const sink = createBufferedServerLogSink();
+    const { f, pending, request } = await startDeadlineMixedTurn();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      if (order === "deadline-first") {
+        vi.advanceTimersByTime(1001);
+        request.req.emit("aborted");
+      } else {
+        request.req.emit("aborted");
+        vi.advanceTimersByTime(1001);
+      }
+      await pending;
+      const endings = sink.events.filter((event) => event.op === "chat.tool-turn.ended");
+      // The request is gone, so no deadline answer was delivered: the one line names the request abort.
+      expect(endings.map((event) => event.extra?.reason)).toEqual(["request-aborted"]);
+    } finally {
+      interruptChatGenerations(f.deps, f.chatId);
+      await pending;
+    }
+  },
+);
+
+it("records no ending for a request abort that arrives after the turn completed normally", async () => {
+  const sink = createBufferedServerLogSink();
+  const { f, pending, request } = await startDeadlineMixedTurn();
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  try {
+    await vi.advanceTimersByTimeAsync(1001);
+    const result = await pending;
+    expect(result.status).toBe(200);
+    const before = sink.events.filter((event) => event.op === "chat.tool-turn.ended").length;
+    request.req.emit("aborted");
+    expect(sink.events.filter((event) => event.op === "chat.tool-turn.ended")).toHaveLength(before);
+    expect(sink.events.some((event) => event.extra?.reason === "request-aborted")).toBe(false);
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
 
 it("keeps a human stop during mixed synthesis a cancellation although an exchange settled", async () => {
   const { f, requests, pending } = await startDeadlineMixedTurn();

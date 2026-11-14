@@ -52,7 +52,7 @@ import { createHarnessCatalogBudget, type ModelPort } from "@oscharko-dev/keiko-
 import type { HarnessLimits } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { chatToolTurnLimits } from "./chat-tool-turn-budget.js";
-import { isChatTurnDeadlineReason } from "./chat-tool-turn-deadline.js";
+import { chatTurnDeadlineSignal, isChatTurnDeadlineReason } from "./chat-tool-turn-deadline.js";
 import {
   chatToolTurnEndReason,
   chatToolTurnHoldsWrite,
@@ -248,7 +248,7 @@ export function mintAndBoundChatTurn<
   requireDispatch(authority.ok, "denied", "authority-invalid");
   const remaining = Date.parse(authority.envelope.expiresAt) - Date.now();
   requireDispatch(remaining > 0, "denied", "authority-expired");
-  return { authority, signal: AbortSignal.any([...signals, AbortSignal.timeout(remaining)]) };
+  return { authority, signal: AbortSignal.any([...signals, chatTurnDeadlineSignal(remaining)]) };
 }
 /**
  * Whether a turn's answer reports a change tool's outcome (#4292). A change Keiko did not send
@@ -495,6 +495,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private scopeChangeEnded = false;
   private scopeInterruption: ChatGenerationInterruption | undefined;
   private readonly abortController = new AbortController();
+  /** The turn ended: nothing it logs or answers afterwards may describe it again. */
+  private finished = false;
+  private endingRecorded = false;
+  private readonly finishedListeners: (() => void)[] = [];
   private promptTokens = 0;
   private completionTokens = 0;
   private activeModelId: string | undefined;
@@ -708,6 +712,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     await Promise.all([pending?.close(), selected?.close(), prepared?.close()]);
   }
   private async finalizeTurn(): Promise<void> {
+    this.finished = true;
+    for (const listener of this.finishedListeners.splice(0)) listener();
     try {
       await this.releaseToolSelection();
     } catch (error) {
@@ -1362,13 +1368,16 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const exchanges = stored.length > 0 ? stored : this.settledExchanges;
     if (reason === undefined || !exchanges.some((exchange) => exchange.result !== undefined))
       return undefined;
-    recordChatToolTurnEnded(processServerLogSink(), {
-      correlationId,
-      messageId: message.id,
-      reason,
-      exchanges,
-      budget,
-    });
+    if (!this.endingRecorded) {
+      this.endingRecorded = true;
+      recordChatToolTurnEnded(processServerLogSink(), {
+        correlationId,
+        messageId: message.id,
+        reason,
+        exchanges,
+        budget,
+      });
+    }
     logKnowledgeCoverage(
       correlationId,
       knowledgeTurnCoverage(exchanges, {
@@ -1423,11 +1432,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
 
   /**
    * The Activity Log line of a turn that ended without an answer of its own: the closed reason and the
-   * counts of what this turn settled in memory. Runs inside an abort listener, so it reads no store and
-   * never throws.
+   * counts of what this turn settled in memory. Exactly one line per turn: a finished turn, or one whose
+   * ending is already recorded (by the cancellation or by the deadline answer, whichever came first),
+   * adds none. Runs inside an abort listener, so it reads no store and never throws.
    */
   public recordEnding(reason: ChatToolTurnCancelReason): void {
     const { message, correlationId, budget } = this.options;
+    if (this.finished || this.endingRecorded) return;
+    this.endingRecorded = true;
     try {
       recordChatToolTurnEnded(processServerLogSink(), {
         correlationId,
@@ -1439,6 +1451,17 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     } catch (error: unknown) {
       reportTurnFailure(this.options, error, "chat.tool-turn.state-unreadable");
     }
+  }
+
+  /** Runs `listener` once when the turn finishes; a finished turn runs it at once. */
+  public onFinished(listener: () => void): void {
+    if (this.finished) listener();
+    else this.finishedListeners.push(listener);
+  }
+
+  /** Whether this abort reason is this turn's own deadline: identity, never the error's class. */
+  public isDeadlineReason(reason: unknown): boolean {
+    return isChatTurnDeadlineReason(reason);
   }
 
   /** The stored transcript's exchanges; unreadable is empty and recorded under the closed diagnostic. */

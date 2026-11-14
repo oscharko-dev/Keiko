@@ -208,7 +208,11 @@ describe("the turn records why it ended without an answer (#4355)", () => {
   it("records deadline-cancelled once when the deadline fires and nothing settled", async () => {
     const endings: string[] = [];
     install(false, 0, endings);
-    await vi.advanceTimersByTimeAsync(DEADLINE_MS + 2);
+    // The timers are driven by the fake clock: nothing is recorded before the deadline, so the line
+    // below cannot be an artefact of a real timer.
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS - 1);
+    expect(endings).toEqual([]);
+    await vi.advanceTimersByTimeAsync(3);
     expect(endings).toEqual(["deadline-cancelled"]);
   });
   it("records nothing when the deadline answers from the transcript", async () => {
@@ -257,5 +261,64 @@ describe("the turn records why it ended without an answer (#4355)", () => {
     expect(() => {
       human.abort();
     }).not.toThrow();
+  });
+  it("does not take a timeout that is not the turn's deadline for it (identity, not class)", () => {
+    const endings: string[] = [];
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const turn = fakeTurn(true);
+    const own = new DOMException("Deadline reached", "TimeoutError");
+    const human = new AbortController();
+    const signal = chatToolTurnCancellationSignal(
+      human.signal,
+      Object.defineProperties(
+        {
+          isDeadlineReason: (reason: unknown): boolean => reason === own,
+          recordEnding: (reason: string): void => {
+            endings.push(reason);
+          },
+        },
+        Object.getOwnPropertyDescriptors(turn.port),
+      ) as FakeTurn["port"],
+      "c-1",
+    );
+    // A provider's own timeout surfaced on the turn's signal: a cancellation, with no ending line.
+    turn.controller.abort(new DOMException("Provider timed out", "TimeoutError"));
+    expect(signal.aborted).toBe(true);
+    expect(endings).toEqual([]);
+  });
+
+  it("detaches from the request signal once the turn finished: a later abort is nobody's ending", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const endings: string[] = [];
+    const turn = fakeTurn(true);
+    const finished: (() => void)[] = [];
+    const human = new AbortController();
+    const signal = chatToolTurnCancellationSignal(
+      human.signal,
+      Object.defineProperties(
+        {
+          onFinished: (listener: () => void): void => {
+            finished.push(listener);
+          },
+          recordEnding: (reason: string): void => {
+            endings.push(reason);
+          },
+        },
+        Object.getOwnPropertyDescriptors(turn.port),
+      ) as FakeTurn["port"],
+      "c-1",
+    );
+    for (const listener of finished) listener();
+    human.abort();
+    expect(endings).toEqual([]);
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("records one ending when a deadline cancellation is followed by a stop", async () => {
+    const endings: string[] = [];
+    const { human } = install(false, 0, endings);
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS + 1);
+    human.abort();
+    expect(endings).toEqual(["deadline-cancelled"]);
   });
 });
