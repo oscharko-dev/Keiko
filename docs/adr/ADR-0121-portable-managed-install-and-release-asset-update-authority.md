@@ -782,6 +782,22 @@ does not admit arbitrary contents. Generic inspection remains selected-generatio
 uninstall and removal APIs receive no allowance and refuse extra retained generations. No CLI
 receipt parser or additional server package-root entry point is introduced.
 
+Runtime files follow the payload's own record (#4358). Every staged payload carries
+`.portable/runtime-activation.json`, written by the staging producer; it names each native helper,
+add-on, tool, licence text and the sidecar root. Inspection admits that record and exactly the files
+it names below `runtime/native/`, `runtime/licenses/` and `runtime/sidecars/`, relative to the
+resource root: for the flat tree of a first installation and for a selected generation, on Windows,
+macOS and Linux alike. The upgrade precondition, repair, uninstall and removal share this
+inspection. A record cannot name a path outside those three folders, and the record of a selected
+generation speaks for that generation only. A missing record, one that is not a regular file of at
+most 1 MiB, or one that is not valid JSON names nothing: the runtime files then remain unknown
+entries and removal refuses; a storage error while reading it is not swallowed. The fixed payload
+rules stay in force beside it. The record bounds what inspection and removal accept; it is not an
+integrity proof of the files it names, which stays with the runtime attestation and the server's
+own verification of the record. Before this, the flat rules knew none of these files, so a first
+installation that was never updated could neither be removed by `keiko uninstall` nor pass the
+upgrade precondition.
+
 One coordinator owns receipt policy, phase classification, deadlines, forward/restore/cleanup and
 semantic acknowledgment. Compile-selected platform adapters supply secure filesystem operations,
 KHT1 walking, process/port checks and existing supervisor transport. Windows reuses the existing

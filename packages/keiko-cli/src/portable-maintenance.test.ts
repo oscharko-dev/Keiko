@@ -21,7 +21,10 @@ import {
 } from "@oscharko-dev/keiko-security";
 
 import { windowsLauncher } from "./launcher-platforms.js";
-import { layoutFor } from "./portable-shared.js";
+import { layoutFor, type PortableLayout, type PortableTarget } from "./portable-shared.js";
+import { RUNTIME_ACTIVATION_RECORD_PATH } from "./portable-runtime-record.js";
+import { RUNTIME_ACTIVATION_RELATIVE_PATH } from "../../../scripts/runtime-activation-manifest.mjs";
+import { writePortableRuntimePayload } from "./test-support/portable-runtime-payload.js";
 import { createCliSecurityLogSink } from "./security-log.js";
 import {
   installNativeRegistration,
@@ -55,6 +58,176 @@ it("admits the Linux supervisor without admitting arbitrary native runtime entri
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// #4358, Windows guest: `keiko uninstall` refused a real first installation with "unknown entry:
+// .portable/runtime-activation.json". Every real payload carries that record and the runtime files
+// it names; the earlier fixtures carried neither, so the suite stayed green over the defect.
+describe("managed install inspection follows the payload's own runtime record", () => {
+  const FLAT_TARGETS = ["windows-x64", "linux-x64", "macos-arm64"] as const;
+
+  function flatInstall(target: PortableTarget): { root: string; layout: PortableLayout } {
+    const root = mkdtempSync(join(tmpdir(), "keiko-runtime-record-"));
+    const layout = layoutFor(target, target.startsWith("macos") ? join(root, "Keiko.app") : root);
+    for (const path of [
+      layout.primaryLauncherPath,
+      layout.setupManifestPath,
+      layout.packageJsonPath,
+      layout.runtimeNodePath,
+    ]) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "fixture\n");
+    }
+    return { root, layout };
+  }
+
+  function resourcePath(layout: PortableLayout, relPath: string): string {
+    return join(layout.resourceRoot, ...relPath.split("/"));
+  }
+
+  it("reads the record where its producer writes it", () => {
+    expect(RUNTIME_ACTIVATION_RECORD_PATH).toBe(RUNTIME_ACTIVATION_RELATIVE_PATH);
+  });
+
+  it.each(FLAT_TARGETS)("accepts the record and every runtime file it names (%s)", (target) => {
+    const { root, layout } = flatInstall(target);
+    try {
+      const runtimeFiles = writePortableRuntimePayload(layout.resourceRoot, target);
+      const scan = inspectPortableManagedInstall(layout);
+      expect(scan.issues).toEqual([]);
+      expect(scan.files).toContain(resourcePath(layout, RUNTIME_ACTIVATION_RECORD_PATH));
+      for (const file of runtimeFiles) expect(scan.files).toContain(resourcePath(layout, file));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(FLAT_TARGETS)("removes such an installation completely (%s)", (target) => {
+    const { root, layout } = flatInstall(target);
+    try {
+      writePortableRuntimePayload(layout.resourceRoot, target);
+      const io = {
+        out: (_text: string): void => undefined,
+        err: (_text: string): void => undefined,
+      };
+      removePortableManagedInstall(layout, io, false);
+      expect(existsSync(layout.installRoot)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a runtime file the record does not name", () => {
+    const { root, layout } = flatInstall("windows-x64");
+    try {
+      writePortableRuntimePayload(layout.resourceRoot, "windows-x64");
+      writeFileSync(resourcePath(layout, "runtime/native/unknown.exe"), "unowned\n");
+      expect(inspectPortableManagedInstall(layout).issues).toEqual([
+        "portable managed install contains unknown entry: runtime/native/unknown.exe",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses the runtime files of a payload that carries no record", () => {
+    const { root, layout } = flatInstall("windows-x64");
+    try {
+      writePortableRuntimePayload(layout.resourceRoot, "windows-x64");
+      rmSync(resourcePath(layout, RUNTIME_ACTIVATION_RECORD_PATH));
+      expect([...inspectPortableManagedInstall(layout).issues].sort()).toEqual([
+        "portable managed install contains unknown entry: runtime/licenses",
+        "portable managed install contains unknown entry: runtime/native",
+        "portable managed install contains unknown entry: runtime/sidecars",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a record that is not valid JSON as naming nothing", () => {
+    const { root, layout } = flatInstall("windows-x64");
+    try {
+      writePortableRuntimePayload(layout.resourceRoot, "windows-x64");
+      writeFileSync(resourcePath(layout, RUNTIME_ACTIVATION_RECORD_PATH), "{not json");
+      expect([...inspectPortableManagedInstall(layout).issues].sort()).toEqual([
+        "portable managed install contains unknown entry: runtime/licenses",
+        "portable managed install contains unknown entry: runtime/native",
+        "portable managed install contains unknown entry: runtime/sidecars",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses folders whose names only begin like a recorded one", () => {
+    const { root, layout } = flatInstall("windows-x64");
+    try {
+      writePortableRuntimePayload(layout.resourceRoot, "windows-x64");
+      const lookalikes = ["runtime/native-evil", "runtime/sidecars/opencode-compatible-evil"];
+      for (const folder of lookalikes) {
+        mkdirSync(resourcePath(layout, folder), { recursive: true });
+        writeFileSync(resourcePath(layout, `${folder}/x`), "unowned\n");
+      }
+      expect([...inspectPortableManagedInstall(layout).issues].sort()).toEqual(
+        lookalikes.map((folder) => `portable managed install contains unknown entry: ${folder}`),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("follows the record of the selected Windows generation and of no other place", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-runtime-record-generation-"));
+    try {
+      const generation = `.portable/generations/${"a".repeat(64)}`;
+      const flat = layoutFor("windows-x64", root);
+      const resourceRoot = join(root, ...generation.split("/"));
+      const layout = { ...flat, resourceRoot };
+      for (const path of [
+        flat.primaryLauncherPath,
+        flat.setupManifestPath,
+        join(resourceRoot, "app", "package.json"),
+        join(resourceRoot, "runtime", "node", "node.exe"),
+      ]) {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, "fixture\n");
+      }
+      writePortableRuntimePayload(resourceRoot, "windows-x64");
+      expect(inspectPortableManagedInstall(layout).issues).toEqual([]);
+      // The generation's record names runtime files of that generation only: the same names at
+      // the install root stay unknown.
+      mkdirSync(join(root, "runtime", "native"), { recursive: true });
+      writeFileSync(join(root, "runtime", "native", "usearch.node"), "unowned\n");
+      expect(inspectPortableManagedInstall(layout).issues).toEqual([
+        "portable managed install contains unknown entry: runtime",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("never lets a record name files outside the runtime folders", () => {
+    const { root, layout } = flatInstall("windows-x64");
+    try {
+      writePortableRuntimePayload(layout.resourceRoot, "windows-x64");
+      const hostile = ["notes/keep.txt", "runtime/native/../../notes/keep.txt", "/notes/keep.txt"];
+      writeFileSync(
+        resourcePath(layout, RUNTIME_ACTIVATION_RECORD_PATH),
+        JSON.stringify({
+          nativeHelpers: hostile.map((executablePath) => ({ executablePath })),
+          sidecarRuntimes: [{ payloadRootPath: "notes", executablePath: "notes/keep.txt" }],
+        }),
+      );
+      mkdirSync(resourcePath(layout, "notes"), { recursive: true });
+      writeFileSync(resourcePath(layout, "notes/keep.txt"), "not Keiko's\n");
+      expect(inspectPortableManagedInstall(layout).issues).toContain(
+        "portable managed install contains unknown entry: notes",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // Frozen historical bytes: migration coverage must not move in lockstep with today's generator.
