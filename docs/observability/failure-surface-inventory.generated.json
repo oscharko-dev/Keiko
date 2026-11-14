@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9cd32fbd139fa741cbe781fc849fb767cc6238bd71b41cda4ff2805a33c682ff"
+    "catalogDigest": "8ac89e0a7479a7fbc244947b07eb1e583654a7cffa4a3474a4bd679048fb87f1"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 701,
-    "proofCount": 724,
-    "resolvedProofCount": 724,
+    "operationCount": 702,
+    "proofCount": 725,
+    "resolvedProofCount": 725,
     "failureClassCount": 403,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -827,6 +827,7 @@
         "cli.support.export.failed",
         "cli.uninstall.completed",
         "cli.uninstall.failed",
+        "cli.uninstall.handoff",
         "cli.uninstall.started",
         "evidence.retention",
         "portable.normal-startup-recovery.completed",
@@ -1559,6 +1560,7 @@
     "cli.uninstall.failed.persisted": [
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],
+    "cli.uninstall.handoff.persisted": ["packages/keiko-cli/src/uninstall.test.ts"],
     "cli.uninstall.started.persisted": [
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],

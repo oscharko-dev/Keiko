@@ -6280,10 +6280,10 @@
       "failureClass": "cli-uninstall",
       "requirementContract": "cli-uninstall",
       "productSurfaces": ["keiko-cli"],
-      "lifecycleTransitions": ["end", "failure", "start"],
+      "lifecycleTransitions": ["end", "failure", "start", "state"],
       "lifecycleOperations": {
         "start": ["cli.uninstall.started"],
-        "state": [],
+        "state": ["cli.uninstall.handoff"],
         "end": ["cli.uninstall.completed"],
         "failure": ["cli.uninstall.failed"],
         "loss": []
@@ -6298,12 +6298,20 @@
           "mode": "none"
         },
         {
+          "op": "cli.uninstall.handoff",
+          "mode": "none"
+        },
+        {
           "op": "cli.uninstall.started",
           "mode": "none"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["cli.uninstall.completed", "cli.uninstall.started"],
+      "resourceSignals": [
+        "cli.uninstall.completed",
+        "cli.uninstall.handoff",
+        "cli.uninstall.started"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -6411,6 +6419,79 @@
             "causeChain": false
           },
           "proofIds": ["cli.uninstall.failed.persisted"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "cli.uninstall.handoff",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "packageTargetSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "refusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "removedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "residueDirectoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "residueFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "targetSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.uninstall.handoff.persisted"],
           "replayReferences": [],
           "missingObligations": []
         },

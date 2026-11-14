@@ -833,6 +833,40 @@ Before this, a real payload's `app/LICENSE`, `NOTICE`, `README.md`, `TRADEMARKS.
 `scripts/lib/local-state-audit.mjs` were unknown entries, so `keiko uninstall` and the upgrade
 precondition refused every real installation.
 
+`keiko uninstall` never leaves a half-removed installation (#4358). Windows does not let a running
+program, or a native file it loaded, be removed, and the installed copy's own command runs from
+inside the installation it removes: the file-by-file removal stopped at the first refused file and
+left the install folder, the registration and the Start-menu entry behind. Three rules now hold on
+every platform. First, the removal keeps going past an entry that is held open (a refusal with
+`EPERM`, `EBUSY`, `EACCES` or a folder that still holds something) and reports exactly what remains;
+any other error still stops it. Second, the files a later run needs to find and judge the
+installation are removed last, and only when nothing else is left: the runtime record and
+`app/package.json`, which inspection reads, then the launcher the registration binds, then the setup
+manifest. Third, the registration, the Start-menu entry and the state directory stay until the
+installation is gone, so a run that did not finish leaves a registered, resumable installation and
+says so, and a second `keiko uninstall` completes it. A journal written to the state directory
+before the first deletion (`portable-uninstall-journal.json`: a platform label and the digests the
+registration already records, no path) lets that second run find an installation whose tree
+attestation can no longer succeed; it still inspects every entry against the payload rules, so a
+foreign entry stays refused, and it needs the registration to carry the same digests.
+
+On Windows, when the command's own executable, script or working directory lies inside the
+installation, it first starts a helper outside it, before the first deletion: the trusted System32
+PowerShell, started attached with a hidden window through the one visible-helper start the browser
+opener and the launcher's message boxes use (a detached PowerShell showed no browser and no box on
+the Windows guest, #4358). The helper reports ready by writing a file and then waits for this process
+to end. If it does not report ready, nothing is removed and the person is told to run the uninstall
+from the downloaded release package, whose runtime lies outside the installation. The command then
+removes what it can and commits the remainder, as a list written atomically, and the helper removes
+exactly that list once the process has ended: files and folders by path, a folder only if it is
+empty, entries of the installation only under its root, the payload residue first, then the
+identity files, then the Start-menu entry, the registration, the journal and the state directory.
+A command that ends or a helper that dies before it has finished leaves the installation registered
+and resumable. macOS and Linux remove a running program's files, so they start no helper; the other
+two rules apply to them unchanged. Which of this a unit test cannot show, and only a Windows run
+can, is recorded in the delivery of the change: that the helper runs and survives the end of the
+command, that it removes the loaded native files, and the real refusal semantics of a held file.
+
 One coordinator owns receipt policy, phase classification, deadlines, forward/restore/cleanup and
 semantic acknowledgment. Compile-selected platform adapters supply secure filesystem operations,
 KHT1 walking, process/port checks and existing supervisor transport. Windows reuses the existing

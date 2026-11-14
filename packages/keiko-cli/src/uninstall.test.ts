@@ -3,6 +3,7 @@ import {
   cpSync,
   existsSync,
   linkSync,
+  readdirSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -16,6 +17,10 @@ import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import {
@@ -1568,6 +1573,355 @@ function seedFullState(root: string, pid = "2147483646"): string {
   }
   return stateDir;
 }
+
+// #4358, Windows window on build cb59ec31f: `keiko uninstall` run with the installed copy's own
+// command stopped at the first file Windows would not let it remove and left the installation half
+// removed. A removal now keeps going past an entry that is held open, says what remains, keeps the
+// installation registered until its last file is gone, and a second run completes. Run from inside
+// the installation on Windows, it first starts a helper outside it and hands over the rest.
+describe("runUninstallCli — held-open entries and a run from inside the installation", () => {
+  const HELD = join("runtime", "native", "usearch.node");
+  const WIN = { SystemRoot: String.raw`D:\Windows` };
+  const activityDeps = (
+    root: string,
+    events: SecurityLogEvent[],
+  ): Pick<UninstallCliDeps, "activityStateDir" | "securityLogSinkFactory"> => ({
+    activityStateDir: join(root, "control-state"),
+    securityLogSinkFactory: () => ({ write: (event): void => void events.push(event) }),
+  });
+  const heldOpen =
+    (suffix: string) =>
+    (path: string): void => {
+      if (path.endsWith(suffix)) {
+        throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      }
+      unlinkSync(path);
+    };
+
+  async function installReal(): Promise<{
+    readonly root: string;
+    readonly home: string;
+    readonly managedRoot: string;
+    readonly shortcut: string;
+    readonly env: { readonly APPDATA: string; readonly LOCALAPPDATA: string };
+  }> {
+    const root = makeRoot();
+    const installed = await installPortableWindows(root, { runtimePayload: true });
+    writeFileSync(join(root, ".keiko", "ui.log"), "log\n", "utf8");
+    return { root, ...installed };
+  }
+
+  function fileCount(path: string): number {
+    return readdirSync(path, { recursive: true }).length;
+  }
+
+  it("keeps going past a held-open file, says what remains, stays registered, and a second run completes", async () => {
+    const { root, home, managedRoot, shortcut, env } = await installReal();
+    const events: SecurityLogEvent[] = [];
+    const c = makeIo();
+
+    const code = await runUninstallCli(["--state"], c.io, env, {
+      cwd: root,
+      homedir: () => home,
+      ...activityDeps(root, events),
+      managedRemoval: { unlink: heldOpen(HELD) },
+    });
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain(`remaining: ${join(managedRoot, HELD)}`);
+    expect(c.err()).toContain("10 entries of the installation could not be removed");
+    expect(c.err()).toContain("run keiko uninstall again");
+    expect(existsSync(join(managedRoot, HELD))).toBe(true);
+    // never half-removed from the product's point of view: still registered, still resumable
+    expect(existsSync(join(root, ".keiko", "portable-install-state.json"))).toBe(true);
+    expect(existsSync(join(root, ".keiko", "portable-uninstall-journal.json"))).toBe(true);
+    expect(existsSync(join(root, ".keiko", "ui.log"))).toBe(true);
+    expect(existsSync(shortcut)).toBe(true);
+    expect(existsSync(join(managedRoot, ".portable", "setup-manifest.json"))).toBe(true);
+    expect(existsSync(join(managedRoot, "runtime", "node", "node.exe"))).toBe(false);
+    const handoff = events.filter(({ op }) => op === "cli.uninstall.handoff");
+    expect(handoff.map((event) => extraOf(event).outcome)).toEqual(["residue-reported"]);
+    expect(extraOf(handoff[0])).toMatchObject({
+      residueFileCount: 5,
+      residueDirectoryCount: 5,
+      refusal: "none",
+    });
+    expect(extraOf(events.find(({ op }) => op === "cli.uninstall.failed")).reason).toBe(
+      "removal-incomplete",
+    );
+
+    const second = makeIo();
+    await expect(
+      runUninstallCli(["--state"], second.io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(0);
+    expect(second.err()).toBe("");
+    expect(existsSync(managedRoot)).toBe(false);
+    expect(existsSync(join(root, ".keiko"))).toBe(false);
+    expect(existsSync(shortcut)).toBe(false);
+  });
+
+  it("accepts a partly removed installation of its own making and still refuses a foreign entry", async () => {
+    const { root, home, managedRoot, env } = await installReal();
+    await runUninstallCli(["--state"], makeIo().io, env, {
+      cwd: root,
+      homedir: () => home,
+      managedRemoval: { unlink: heldOpen(HELD) },
+    });
+    writeFileSync(join(managedRoot, "FOREIGN.txt"), "unowned\n", "utf8");
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(1);
+    expect(c.err()).toContain("unknown entry: FOREIGN.txt");
+    expect(existsSync(join(managedRoot, "FOREIGN.txt"))).toBe(true);
+    expect(existsSync(join(managedRoot, HELD))).toBe(true);
+  });
+
+  // The helper stand-in reports ready the way the real one does, by writing the file its caller
+  // waits for; what it would delete is the list the command commits.
+  function helperSeam(
+    root: string,
+    reportsReady: boolean,
+  ): {
+    readonly calls: { readonly command: string; readonly options: Record<string, unknown> }[];
+    readonly tempParent: string;
+    readonly seam: NonNullable<UninstallCliDeps["managedRemoval"]>["helper"];
+  } {
+    const calls: { command: string; options: Record<string, unknown> }[] = [];
+    const tempParent = join(root, "helper-temp");
+    mkdirSync(tempParent);
+    return {
+      calls,
+      tempParent,
+      seam: {
+        tempParent,
+        identityCheck: () => true,
+        existsAsFile: () => true,
+        readyTimeoutMs: 3,
+        pollMs: 1,
+        sleep: () => Promise.resolve(),
+        spawnFn: (command, _args, options): { on: () => void; unref: () => void } => {
+          calls.push({ command, options: { ...options } });
+          const directory = options.env.KEIKO_UNINSTALL_DIR ?? "";
+          if (reportsReady) writeFileSync(join(directory, "ready"), "ready");
+          return { on: (): void => undefined, unref: (): void => undefined };
+        },
+      },
+    };
+  }
+
+  function insideCopy(
+    managedRoot: string,
+  ): Pick<UninstallCliDeps, "platform" | "execPath" | "argv1"> {
+    return {
+      platform: () => "win32",
+      execPath: join(managedRoot, "runtime", "node", "node.exe"),
+      argv1: join(managedRoot, "app", "dist", "cli", "index.js"),
+    };
+  }
+
+  it("started from inside the installation on Windows it hands the last files to a helper and keeps the registration to the end", async () => {
+    const { root, home, managedRoot, shortcut, env } = await installReal();
+    const helper = helperSeam(root, true);
+    const events: SecurityLogEvent[] = [];
+    const c = makeIo();
+
+    const code = await runUninstallCli(
+      ["--state"],
+      c.io,
+      { ...env, ...WIN },
+      {
+        cwd: root,
+        homedir: () => home,
+        ...activityDeps(root, events),
+        ...insideCopy(managedRoot),
+        managedRemoval: {
+          helper: helper.seam,
+          unlink: heldOpen(join("runtime", "node", "node.exe")),
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    // one start, attached with a hidden window like the opener, on the trusted PowerShell
+    expect(helper.calls).toHaveLength(1);
+    expect(helper.calls[0]?.command).toBe(
+      String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+    );
+    expect(helper.calls[0]?.options).toMatchObject({
+      detached: false,
+      windowsHide: true,
+      stdio: "ignore",
+      shell: false,
+    });
+    expect(c.out()).toMatch(
+      /The last \d+ entries of this copy are removed when this command ends/u,
+    );
+    // the installation is still registered and resumable until the helper has removed the rest
+    expect(existsSync(join(managedRoot, "runtime", "node", "node.exe"))).toBe(true);
+    expect(existsSync(join(managedRoot, ".portable", "setup-manifest.json"))).toBe(true);
+    expect(existsSync(join(root, ".keiko", "portable-install-state.json"))).toBe(true);
+    expect(existsSync(join(root, ".keiko", "portable-uninstall-journal.json"))).toBe(true);
+    expect(existsSync(shortcut)).toBe(true);
+    expect(existsSync(join(root, ".keiko", "ui.log"))).toBe(false);
+    // what the helper removes: payload residue, then the identity files, then the registration
+    const directory = join(helper.tempParent, readdirSync(helper.tempParent)[0] ?? "");
+    const lines = readFileSync(join(directory, "residue.txt"), "utf8").trim().split("\n");
+    const kinds = lines.map((line) => line.slice(0, 1)).join("");
+    expect(kinds).toMatch(/^F+D+X+S$/u);
+    const files = lines.filter((line) => line.startsWith("F\t")).map((line) => line.slice(2));
+    expect(files[0]).toBe(join(managedRoot, "runtime", "node", "node.exe"));
+    expect(files.slice(-2)).toEqual([
+      join(managedRoot, "Keiko.exe"),
+      join(managedRoot, ".portable", "setup-manifest.json"),
+    ]);
+    expect(lines.at(-1)).toBe(`S\t${join(root, ".keiko")}`);
+    expect(lines.slice(-4, -1).map((line) => line.slice(2))).toEqual([
+      shortcut,
+      join(root, ".keiko", "portable-install-state.json"),
+      join(root, ".keiko", "portable-uninstall-journal.json"),
+    ]);
+    const handoff = events.filter(({ op }) => op === "cli.uninstall.handoff");
+    expect(handoff.map((event) => extraOf(event).outcome)).toEqual([
+      "helper-ready",
+      "residue-committed",
+    ]);
+    const record = expectActivityLogProof(
+      "cli.uninstall.handoff.persisted",
+      formatActivityLogProofLine(handoff[1] ?? {}),
+    );
+    expect(record).toMatchObject({ outcome: "residue-committed", refusal: "none" });
+    expect(JSON.stringify(events)).not.toContain(managedRoot);
+
+    // a helper that died: the next run, from anywhere, completes the removal
+    const second = makeIo();
+    await expect(
+      runUninstallCli(["--state"], second.io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(0);
+    expect(existsSync(managedRoot)).toBe(false);
+    expect(existsSync(join(root, ".keiko"))).toBe(false);
+    expect(existsSync(shortcut)).toBe(false);
+  });
+
+  it.each([
+    ["reports nothing", false, "not-ready"],
+    ["cannot be started", true, "spawn-failed"],
+  ] as const)(
+    "refuses before the first deletion when the helper %s, with the installation intact",
+    async (_name, throws, refusal) => {
+      const { root, home, managedRoot, env } = await installReal();
+      const helper = helperSeam(root, false);
+      const before = fileCount(managedRoot);
+      const events: SecurityLogEvent[] = [];
+      const c = makeIo();
+
+      const code = await runUninstallCli(
+        ["--state"],
+        c.io,
+        { ...env, ...WIN },
+        {
+          cwd: root,
+          homedir: () => home,
+          ...activityDeps(root, events),
+          ...insideCopy(managedRoot),
+          managedRemoval: {
+            helper: {
+              ...helper.seam,
+              spawnFn: (...args) => {
+                if (throws) throw new Error("spawn EACCES");
+                return (
+                  helper.seam?.spawnFn?.(...args) ?? {
+                    on: (): void => undefined,
+                    unref: (): void => undefined,
+                  }
+                );
+              },
+            },
+          },
+        },
+      );
+
+      expect(code).toBe(1);
+      expect(c.err()).toContain("nothing was removed");
+      expect(c.err()).toContain("downloaded Keiko release package");
+      expect(fileCount(managedRoot)).toBe(before);
+      expect(existsSync(join(root, ".keiko", "portable-install-state.json"))).toBe(true);
+      expect(existsSync(join(root, ".keiko", "portable-uninstall-journal.json"))).toBe(false);
+      expect(existsSync(join(root, ".keiko", "ui.log"))).toBe(true);
+      expect(readdirSync(helper.tempParent)).toEqual([]);
+      const handoff = events.filter(({ op }) => op === "cli.uninstall.handoff");
+      expect(handoff.map((event) => [extraOf(event).outcome, extraOf(event).refusal])).toEqual([
+        ["helper-refused", refusal],
+      ]);
+      expect(extraOf(events.find(({ op }) => op === "cli.uninstall.failed")).reason).toBe(
+        "helper-refused",
+      );
+    },
+  );
+
+  it("refuses when PowerShell cannot be resolved", async () => {
+    const { root, home, managedRoot, env } = await installReal();
+    const helper = helperSeam(root, true);
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(
+        ["--state"],
+        c.io,
+        { ...env, ...WIN },
+        {
+          cwd: root,
+          homedir: () => home,
+          ...insideCopy(managedRoot),
+          managedRemoval: { helper: { ...helper.seam, existsAsFile: () => false } },
+        },
+      ),
+    ).resolves.toBe(1);
+    expect(helper.calls).toEqual([]);
+    expect(c.err()).toContain("nothing was removed");
+    expect(existsSync(join(managedRoot, "Keiko.exe"))).toBe(true);
+  });
+
+  it("starts no helper on another platform or on a dry run, and a dry run names the handoff", async () => {
+    const { root, home, managedRoot, env } = await installReal();
+    const helper = helperSeam(root, true);
+    const outside = {
+      execPath: join(managedRoot, "runtime", "node", "node.exe"),
+      argv1: join(managedRoot, "app", "dist", "cli", "index.js"),
+    };
+
+    const dry = makeIo();
+    await expect(
+      runUninstallCli(
+        ["--state", "--dry-run"],
+        dry.io,
+        { ...env, ...WIN },
+        {
+          cwd: root,
+          homedir: () => home,
+          ...insideCopy(managedRoot),
+          managedRemoval: { helper: helper.seam },
+        },
+      ),
+    ).resolves.toBe(0);
+    expect(dry.out()).toContain("this command runs from inside the installation");
+    expect(existsSync(managedRoot)).toBe(true);
+
+    const posix = makeIo();
+    await expect(
+      runUninstallCli(["--state"], posix.io, env, {
+        cwd: root,
+        homedir: () => home,
+        platform: () => "linux",
+        ...outside,
+        managedRemoval: { helper: helper.seam },
+      }),
+    ).resolves.toBe(0);
+    expect(helper.calls).toEqual([]);
+    expect(existsSync(managedRoot)).toBe(false);
+  });
+});
 
 describe("runUninstallCli — runtime state manifest", () => {
   it("removes every Keiko-owned sensitive artifact and then the state dir", async () => {

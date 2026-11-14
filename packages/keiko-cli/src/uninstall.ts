@@ -66,11 +66,14 @@ import {
   localPackageRoot,
   writeInstallLayoutOverrideEvidenceWithFactory,
 } from "./install-layout.js";
-import { attestedPortableInstallRecord } from "./portable-install.js";
 import {
-  removePortableManagedInstall,
-  removePortableRegistrationArtifacts,
-} from "./portable-maintenance.js";
+  applyManagedRemoval,
+  planManagedRemoval,
+  type ManagedRemovalContext,
+  type ManagedRemovalDeps,
+  type ManagedRemovalPlanResult,
+  type ManagedRemovalResult,
+} from "./uninstall-managed-removal.js";
 import { isPortableInstallRegistrationCorrupt } from "./portable-registration.js";
 import {
   classifyPid,
@@ -139,6 +142,12 @@ export interface UninstallCliDeps {
   readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
   readonly activityStateDir?: string | undefined;
   readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
+  /** Where this command runs from; the process's own values unless a test names others. */
+  readonly execPath?: string | undefined;
+  readonly argv1?: string | undefined;
+  readonly pid?: number | undefined;
+  /** Test seams of the managed-install removal: the helper start and the entry removal. */
+  readonly managedRemoval?: Pick<ManagedRemovalDeps, "helper" | "unlink" | "rmdir"> | undefined;
 }
 
 interface RawUninstallArgs {
@@ -237,20 +246,41 @@ interface ResolvedDeps {
   readonly killWindowsTree?: WindowsTreeKill | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
+  readonly managedRemoval: ManagedRemovalDeps;
 }
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolveWait) => setTimeout(resolveWait, ms));
 }
 
-function resolveDeps(deps: UninstallCliDeps): ResolvedDeps {
+function resolveManagedRemovalDeps(
+  deps: UninstallCliDeps,
+  platform: NodeJS.Platform,
+  cwd: string,
+): ManagedRemovalDeps {
   return {
-    cwd: deps.cwd ?? process.cwd(),
+    platform,
+    execPath: deps.execPath ?? process.execPath,
+    argv1: deps.argv1 ?? process.argv[1],
+    cwd,
+    pid: deps.pid ?? process.pid,
+    helper: deps.managedRemoval?.helper,
+    unlink: deps.managedRemoval?.unlink,
+    rmdir: deps.managedRemoval?.rmdir,
+  };
+}
+
+function resolveDeps(deps: UninstallCliDeps): ResolvedDeps {
+  const platform = deps.platform?.() ?? process.platform;
+  const cwd = deps.cwd ?? process.cwd();
+  return {
+    managedRemoval: resolveManagedRemovalDeps(deps, platform, cwd),
+    cwd,
     homedir: deps.homedir ?? defaultHomedir,
     isProcessAlive: deps.isProcessAlive ?? defaultIsProcessAlive,
     killProcess: deps.killProcess ?? process.kill.bind(process),
     sleep: deps.sleep ?? defaultSleep,
-    platform: deps.platform?.() ?? process.platform,
+    platform,
     killWindowsTree: deps.killWindowsTree,
     processEnv: deps.processEnv,
     verifyLaunchIdentity: deps.verifyLaunchIdentity,
@@ -467,8 +497,14 @@ function applyScriptsStep(plan: PreparedScriptsStep, io: CliIo, dryRun: boolean)
 // credential vaults, config, logs). Anything the manifest does not recognize — an unknown
 // customer file or a symlink — is reported and left in place, and a directory is removed
 // only when no such retained entry survives beneath it. Content-free: paths only.
-function removeOwnedFiles(scan: RuntimeStateScan, io: CliIo, dryRun: boolean): void {
+function removeOwnedFiles(
+  scan: RuntimeStateScan,
+  io: CliIo,
+  dryRun: boolean,
+  held: ReadonlySet<string>,
+): void {
   for (const file of scan.files) {
+    if (held.has(file.absPath)) continue;
     if (dryRun) {
       io.out(`would-remove: ${file.absPath}\n`);
       continue;
@@ -494,9 +530,15 @@ function reportRetained(scan: RuntimeStateScan, io: CliIo): void {
 // Owned directories are visited deepest-first (the scan lists them shallowest-first). A
 // directory is removed only when no retained entry lives beneath it, so an unknown file or
 // a refused symlink anywhere inside keeps the whole chain up to the state root in place.
-function removeOwnedDirectories(scan: RuntimeStateScan, io: CliIo, dryRun: boolean): void {
+function removeOwnedDirectories(
+  scan: RuntimeStateScan,
+  io: CliIo,
+  dryRun: boolean,
+  held: ReadonlySet<string>,
+): void {
   for (const dir of [...scan.directories].reverse()) {
     if (scan.retained.some((entry) => isInsidePath(dir.absPath, entry.absPath))) continue;
+    if ([...held].some((path) => isInsidePath(dir.absPath, path))) continue;
     if (dryRun) {
       io.out(`would-remove: ${dir.absPath}\n`);
       continue;
@@ -511,7 +553,12 @@ function finalizeStateDir(
   stateDir: string,
   io: CliIo,
   dryRun: boolean,
+  held: ReadonlySet<string>,
 ): void {
+  if (held.size > 0) {
+    io.out(`state: ${stateDir} is removed by the helper when this command ends\n`);
+    return;
+  }
   if (scan.retained.length === 0) {
     if (dryRun) io.out(`would-remove: ${stateDir} (empty after removals)\n`);
     else {
@@ -530,7 +577,13 @@ function finalizeStateDir(
 }
 
 type StateRemovalDisposition =
-  "not-selected" | "absent" | "removed" | "retained" | "would-remove" | "would-retain";
+  | "not-selected"
+  | "absent"
+  | "removed"
+  | "retained"
+  | "would-remove"
+  | "would-retain"
+  | "handed-off";
 
 interface StateRemovalOutcome {
   readonly disposition: StateRemovalDisposition;
@@ -538,12 +591,25 @@ interface StateRemovalOutcome {
   readonly retainedCount: number;
 }
 
-function stateRemovalDisposition(dryRun: boolean, retained: boolean): StateRemovalDisposition {
+function stateRemovalDisposition(
+  dryRun: boolean,
+  retained: boolean,
+  handedOff: boolean,
+): StateRemovalDisposition {
+  if (handedOff) return "handed-off";
   if (dryRun) return retained ? "would-retain" : "would-remove";
   return retained ? "retained" : "removed";
 }
 
-function removeStateStep(opts: UninstallOptions, io: CliIo, stateDir: string): StateRemovalOutcome {
+// `held` names state files that stay until the end because a helper removes them last: the
+// registration and the journal keep an installation registered, and resumable, until its last file
+// is gone.
+function removeStateStep(
+  opts: UninstallOptions,
+  io: CliIo,
+  stateDir: string,
+  held: ReadonlySet<string> = new Set(),
+): StateRemovalOutcome {
   if (!opts.scopes.state) {
     return { disposition: "not-selected", ownedFileCount: 0, retainedCount: 0 };
   }
@@ -552,81 +618,16 @@ function removeStateStep(opts: UninstallOptions, io: CliIo, stateDir: string): S
     return { disposition: "absent", ownedFileCount: 0, retainedCount: 0 };
   }
   const scan = scanRuntimeState(stateDir);
-  removeOwnedFiles(scan, io, opts.dryRun);
+  removeOwnedFiles(scan, io, opts.dryRun, held);
   reportRetained(scan, io);
-  removeOwnedDirectories(scan, io, opts.dryRun);
-  finalizeStateDir(scan, stateDir, io, opts.dryRun);
+  removeOwnedDirectories(scan, io, opts.dryRun, held);
+  finalizeStateDir(scan, stateDir, io, opts.dryRun, held);
   const retained = scan.retained.length > 0;
   return {
-    disposition: stateRemovalDisposition(opts.dryRun, retained),
+    disposition: stateRemovalDisposition(opts.dryRun, retained, held.size > 0),
     ownedFileCount: scan.files.length,
     retainedCount: scan.retained.length,
   };
-}
-
-function removePortableManagedStep(
-  opts: UninstallOptions,
-  io: CliIo,
-  env: EnvSource,
-  stateDir: string,
-  homedir: string,
-  securityLogSink?: SecurityLogSink,
-): void {
-  if (!opts.scopes.state) return;
-  const record = attestedPortableInstallRecord(stateDir, env, homedir, { securityLogSink });
-  if (record === undefined || record.registration.status === "setup-failed") return;
-  if (record.layout === undefined || record.managedRoot === undefined) {
-    throw new Error(
-      "recorded portable-managed install could not be attested from user-local registration or default roots",
-    );
-  }
-  if (!opts.dryRun) {
-    inspectPortableManagedInstallForRemoval(record.layout);
-    assertPortableRegistrationRemovable(record, env, homedir, securityLogSink);
-    removePortableManagedInstall(record.layout, io, false);
-  } else {
-    removePortableManagedInstall(record.layout, io, true);
-    assertPortableRegistrationRemovable(record, env, homedir, securityLogSink);
-  }
-  removePortableRegistrationArtifacts({
-    layout: record.layout,
-    target: record.target,
-    managedRoot: record.managedRoot,
-    env,
-    home: homedir,
-    dryRun: opts.dryRun,
-    io,
-    options: { securityLogSink },
-  });
-}
-
-function inspectPortableManagedInstallForRemoval(
-  layout: Parameters<typeof removePortableManagedInstall>[0],
-): void {
-  removePortableManagedInstall(
-    layout,
-    { out: (_text: string): void => undefined, err: (_text: string): void => undefined },
-    true,
-  );
-}
-
-function assertPortableRegistrationRemovable(
-  record: Exclude<ReturnType<typeof attestedPortableInstallRecord>, undefined>,
-  env: EnvSource,
-  homedir: string,
-  securityLogSink?: SecurityLogSink,
-): void {
-  if (record.layout === undefined || record.managedRoot === undefined) return;
-  removePortableRegistrationArtifacts({
-    layout: record.layout,
-    target: record.target,
-    managedRoot: record.managedRoot,
-    env,
-    home: homedir,
-    dryRun: true,
-    io: { out: (_text: string): void => undefined, err: (_text: string): void => undefined },
-    options: { securityLogSink },
-  });
 }
 
 function refuseUnsafeStateRoot(
@@ -753,6 +754,8 @@ const CLI_UNINSTALL_FAILURE_REASONS = [
   "launcher-error",
   "package-read-failed",
   "package-parse-failed",
+  "helper-refused",
+  "removal-incomplete",
 ] as const;
 
 type CliUninstallFailureReason = (typeof CLI_UNINSTALL_FAILURE_REASONS)[number];
@@ -782,20 +785,83 @@ const CLI_UNINSTALL_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const UNINSTALL_HANDOFF_OUTCOMES = [
+  "resumed",
+  "helper-ready",
+  "helper-refused",
+  "residue-committed",
+  "residue-reported",
+] as const;
+
+const UNINSTALL_HELPER_REFUSALS = [
+  "none",
+  "powershell-unavailable",
+  "temp-inside-installation",
+  "spawn-failed",
+  "not-ready",
+] as const;
+
+type UninstallHandoffOutcome = (typeof UNINSTALL_HANDOFF_OUTCOMES)[number];
+
+// How a removal that could not finish in one go was carried on (#4358): the helper that removes the
+// running copy's own files after this command ends, the entries that stay and an interrupted
+// earlier run that this one resumed. Closed outcomes and counts only, never a path.
+const CLI_UNINSTALL_HANDOFF_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.uninstall.handoff",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "uninstall.emitUninstallHandoff",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: UNINSTALL_HANDOFF_OUTCOMES,
+    },
+    refusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: UNINSTALL_HELPER_REFUSALS,
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    removedCount: { type: "integer", dataClass: "count", required: true },
+    residueFileCount: { type: "integer", dataClass: "count", required: true },
+    residueDirectoryCount: { type: "integer", dataClass: "count", required: true },
+    ...UNINSTALL_TARGET_FIELDS,
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["cli-uninstall"],
+  proofIds: ["cli.uninstall.handoff.persisted"],
+  releaseImpact: "patch",
+});
+
 const CLI_UNINSTALL_COMPLETED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   op: "cli.uninstall.completed",
   category: "diagnostic",
   owner: "keiko-cli",
-  emitter: "uninstall.executeUninstall",
+  emitter: "uninstall.emitUninstallCompleted",
   fields: {
     ...UNINSTALL_TARGET_FIELDS,
     stateDisposition: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["not-selected", "absent", "removed", "retained", "would-remove", "would-retain"],
+      values: [
+        "not-selected",
+        "absent",
+        "removed",
+        "retained",
+        "would-remove",
+        "would-retain",
+        "handed-off",
+      ],
     },
     ownedFileCount: { type: "integer", dataClass: "count", required: true },
     retainedCount: { type: "integer", dataClass: "count", required: true },
@@ -991,33 +1057,123 @@ function emitUninstallFailure(
   );
 }
 
-async function executeUninstall(
+const HELPER_REFUSED_MESSAGE =
+  "keiko uninstall: nothing was removed. This command runs from inside the installation it is asked to remove, " +
+  "and the helper that finishes the removal after the command ends could not be started here " +
+  "(PowerShell may be blocked by policy). Run the uninstall from the downloaded Keiko release package " +
+  "instead: its own runtime lies outside the installation.\n";
+
+function managedRemovalContext(
   opts: UninstallOptions,
   io: CliIo,
   env: EnvSource,
   deps: ResolvedDeps,
   stateDir: string,
+  securityLogSink: SecurityLogSink | undefined,
+): ManagedRemovalContext {
+  return {
+    dryRun: opts.dryRun,
+    io,
+    env,
+    stateDir,
+    homedir: deps.homedir(),
+    securityLogSink,
+    deps: deps.managedRemoval,
+  };
+}
+
+function emitUninstallHandoff(
   activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
-): Promise<number> {
-  const preflight = uninstallPreflight(opts, io, stateDir);
-  if (preflight.refused) {
-    emitUninstallFailure(activity, "UninstallPreflightError", "preflight-refused");
-    return 1;
+  outcome: UninstallHandoffOutcome,
+  fields: {
+    readonly refusal?: (typeof UNINSTALL_HELPER_REFUSALS)[number];
+    readonly failureKind?: string | undefined;
+    readonly removedCount?: number;
+    readonly residueFileCount?: number;
+    readonly residueDirectoryCount?: number;
+  } = {},
+): void {
+  emitSecurityLogEvent(
+    activity.sink,
+    activityLogEvent(
+      CLI_UNINSTALL_HANDOFF_OPERATION,
+      { level: outcome === "helper-refused" || outcome === "residue-reported" ? "warn" : "info" },
+      {
+        outcome,
+        refusal: fields.refusal ?? "none",
+        ...(fields.failureKind === undefined ? {} : { failureKind: fields.failureKind }),
+        removedCount: fields.removedCount ?? 0,
+        residueFileCount: fields.residueFileCount ?? 0,
+        residueDirectoryCount: fields.residueDirectoryCount ?? 0,
+        targetSha256: activity.targetSha256,
+        packageTargetSha256: activity.packageTargetSha256,
+      },
+    ),
+  );
+}
+
+function refuseHelperStart(
+  refused: Extract<ManagedRemovalPlanResult, { readonly kind: "refused" }>,
+  io: CliIo,
+  activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
+): number {
+  io.err(HELPER_REFUSED_MESSAGE);
+  emitUninstallHandoff(activity, "helper-refused", {
+    refusal: refused.reason,
+    failureKind: refused.failureKind,
+  });
+  emitUninstallFailure(activity, refused.failureKind ?? "UninstallHelperRefused", "helper-refused");
+  return 1;
+}
+
+interface ManagedStepOutcome {
+  /** State files that stay until a helper removes them last. */
+  readonly held: ReadonlySet<string>;
+  /** Entries of the installation remain and no helper takes them: the run did not finish. */
+  readonly incomplete: boolean;
+}
+
+function reportManagedResult(
+  result: ManagedRemovalResult,
+  io: CliIo,
+  activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
+): ManagedStepOutcome {
+  if (result.kind === "handed-off") {
+    emitUninstallHandoff(activity, "residue-committed", result);
+    io.out(
+      `keiko uninstall: removed ${String(result.removedCount)} files. The last ${String(result.residueFileCount + result.residueDirectoryCount)} ` +
+        "entries of this copy are removed when this command ends.\n",
+    );
+    return { held: new Set(result.deferredStatePaths), incomplete: false };
   }
-  const scripts = prepareScriptsStep(opts);
-  if ((await ensureServerStoppable(opts, io, deps, stateDir, activity.sink)) === "refused") {
-    emitUninstallFailure(activity, "UninstallStateInUseError", "server-stop-refused");
-    return 1;
+  if (result.kind === "incomplete") {
+    emitUninstallHandoff(activity, "residue-reported", result);
+    io.err(
+      `keiko uninstall: ${String(result.residueFileCount + result.residueDirectoryCount)} entries of the installation could not be removed ` +
+        "(another program holds them). Nothing else was changed. Close that program and run keiko uninstall again; it continues where this run stopped.\n",
+    );
+    return { held: new Set(), incomplete: true };
   }
-  const launcherRefused = removeLaunchersStep(opts, io, deps, stateDir);
-  const scriptCount = applyScriptsStep(scripts, io, opts.dryRun);
-  removePortableManagedStep(opts, io, env, stateDir, deps.homedir(), activity.sink);
-  const stateOutcome = removeStateStep(opts, io, stateDir);
-  printPackageGuidance(io, deps);
-  if (launcherRefused > 0) {
-    emitUninstallFailure(activity, "LauncherRemovalRefused", "launcher-removal-refused");
-    return 1;
-  }
+  return { held: new Set(), incomplete: false };
+}
+
+function applyManagedStep(
+  planned: ManagedRemovalPlanResult,
+  context: ManagedRemovalContext,
+  activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
+): ManagedStepOutcome {
+  if (planned.kind !== "ready") return { held: new Set(), incomplete: false };
+  if (planned.plan.resumed) emitUninstallHandoff(activity, "resumed");
+  if (planned.plan.helper !== undefined) emitUninstallHandoff(activity, "helper-ready");
+  return reportManagedResult(applyManagedRemoval(planned.plan, context), context.io, activity);
+}
+
+function emitUninstallCompleted(
+  activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
+  opts: UninstallOptions,
+  stateOutcome: StateRemovalOutcome,
+  scriptCount: number,
+): void {
   emitSecurityLogEvent(
     activity.sink,
     activityLogEvent(
@@ -1034,6 +1190,47 @@ async function executeUninstall(
       },
     ),
   );
+}
+
+async function executeUninstall(
+  opts: UninstallOptions,
+  io: CliIo,
+  env: EnvSource,
+  deps: ResolvedDeps,
+  stateDir: string,
+  activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
+): Promise<number> {
+  const preflight = uninstallPreflight(opts, io, stateDir);
+  if (preflight.refused) {
+    emitUninstallFailure(activity, "UninstallPreflightError", "preflight-refused");
+    return 1;
+  }
+  const scripts = prepareScriptsStep(opts);
+  const context = managedRemovalContext(opts, io, env, deps, stateDir, activity.sink);
+  const planned: ManagedRemovalPlanResult = opts.scopes.state
+    ? await planManagedRemoval(context)
+    : { kind: "none" };
+  if (planned.kind === "refused") {
+    return refuseHelperStart(planned, io, activity);
+  }
+  if ((await ensureServerStoppable(opts, io, deps, stateDir, activity.sink)) === "refused") {
+    emitUninstallFailure(activity, "UninstallStateInUseError", "server-stop-refused");
+    return 1;
+  }
+  const launcherRefused = removeLaunchersStep(opts, io, deps, stateDir);
+  const scriptCount = applyScriptsStep(scripts, io, opts.dryRun);
+  const managed = applyManagedStep(planned, context, activity);
+  if (managed.incomplete) {
+    emitUninstallFailure(activity, "UninstallRemovalIncomplete", "removal-incomplete");
+    return 1;
+  }
+  const stateOutcome = removeStateStep(opts, io, stateDir, managed.held);
+  printPackageGuidance(io, deps);
+  if (launcherRefused > 0) {
+    emitUninstallFailure(activity, "LauncherRemovalRefused", "launcher-removal-refused");
+    return 1;
+  }
+  emitUninstallCompleted(activity, opts, stateOutcome, scriptCount);
   return 0;
 }
 

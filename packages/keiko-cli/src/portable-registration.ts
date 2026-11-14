@@ -622,6 +622,31 @@ export function registrationMatches(
   );
 }
 
+/**
+ * Whether a registration still describes a partly removed installation: the same checks as
+ * `registrationMatches` for the setup manifest, the root identity and the Windows generation, but a
+ * launcher that a first removal run already deleted is not a mismatch (a present one must match).
+ */
+export function registrationResumeMatches(
+  registration: ManagedSetupRegistration,
+  layout: PortableLayout,
+  manifest: SetupManifest,
+): boolean {
+  const launcherMatches =
+    !existsSync(layout.primaryLauncherPath) ||
+    registration.launcherIdentitySha256 === sha256File(layout.primaryLauncherPath);
+  return (
+    registration.platformTarget === manifest.platformTarget &&
+    registration.packageVersion === manifest.packageVersion &&
+    registration.stable === manifest.stable &&
+    registration.setupManifestSha256 === sha256File(layout.setupManifestPath) &&
+    registration.installRootIdentitySha256 ===
+      portableInstallRootIdentitySha256(layout.installRoot) &&
+    launcherMatches &&
+    registrationGenerationMatches(registration, layout, manifest)
+  );
+}
+
 function registrationIdentityMatches(
   registration: ManagedSetupRegistration,
   layout: PortableLayout,

@@ -28,6 +28,7 @@ import {
   type ManagedSetupRegistration,
   readManagedRegistration,
   registrationMatches,
+  registrationResumeMatches,
   writeFailedRegistration,
   writeManagedRegistration,
   hasPortableInstallRegistration,
@@ -48,6 +49,7 @@ import {
 } from "./portable-maintenance.js";
 import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import type { CliIo } from "./runner.js";
+import type { UninstallJournal } from "./uninstall-journal.js";
 import {
   defaultManagedRoot,
   isPortableTarget,
@@ -1827,6 +1829,66 @@ export function attestedPortableInstallRecord(
     layout: undefined,
     manifest: undefined,
   };
+}
+
+// A candidate that is not allowed, absent or bound to another installation is skipped; a setup
+// manifest that exists but cannot be read is an error the person must see, not a silent mismatch.
+function resumedManagedLayout(
+  registration: ManagedSetupRegistration,
+  managedRoot: string,
+  stateDir: string,
+): { readonly layout: PortableLayout; readonly manifest: SetupManifest } | undefined {
+  const target = registration.platformTarget;
+  if (!managedRootAllowedForTarget(managedRoot, stateDir, target)) return undefined;
+  const rootLayout = layoutFor(target, managedRoot);
+  if (!existsSync(rootLayout.setupManifestPath)) return undefined;
+  const manifest = parseSetupManifest(rootLayout.setupManifestPath);
+  validateSetupManifest(manifest, target);
+  const layout = layoutForSetupManifest(target, managedRoot, manifest);
+  return registrationResumeMatches(registration, layout, manifest)
+    ? { layout, manifest }
+    : undefined;
+}
+
+/**
+ * The installation a first `keiko uninstall` left partly removed, found through the journal that
+ * run wrote before its first deletion. The ordinary attestation cannot succeed any more: it needs
+ * the files that run already removed (a Windows generation's tree digest breaks with the first
+ * one). What remains bound is the registration: its setup manifest digest, its root identity and
+ * its Windows generation. The journal must carry the same digests, and the caller still inspects
+ * every entry against the payload rules, so a foreign entry stays refused.
+ */
+export function resumedPortableInstallRecord(
+  stateDir: string,
+  env: EnvSource,
+  home: string,
+  journal: UninstallJournal,
+  options: PortableRegistrationOptions = {},
+):
+  | {
+      readonly registration: PortableInstallRegistration;
+      readonly target: PortableTarget;
+      readonly managedRoot: string;
+      readonly layout: PortableLayout;
+      readonly manifest: SetupManifest;
+    }
+  | undefined {
+  const registration = readPortableInstallRegistration(stateDir);
+  if (registration?.status !== "managed") return undefined;
+  if (
+    journal.platformTarget !== registration.platformTarget ||
+    journal.setupManifestSha256 !== registration.setupManifestSha256 ||
+    journal.installRootIdentitySha256 !== registration.installRootIdentitySha256
+  ) {
+    return undefined;
+  }
+  for (const managedRoot of candidateManagedRoots(registration, env, home, options)) {
+    const resumed = resumedManagedLayout(registration, managedRoot, stateDir);
+    if (resumed !== undefined) {
+      return { registration, target: registration.platformTarget, managedRoot, ...resumed };
+    }
+  }
+  return undefined;
 }
 
 export function spawnManagedLauncher(layout: PortableLayout, spawnFn: SpawnFn): void {

@@ -11,6 +11,7 @@
 // `--state-dir`/KEIKO_STATE_DIR can never escalate into data loss outside Keiko's
 // own files.
 
+import { UNINSTALL_JOURNAL_FILE } from "./uninstall-journal.js";
 import { isProcessAlive, isProcessId } from "@oscharko-dev/keiko-security/process-scope";
 import { isKeikoUiLaunchId } from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
 export {
@@ -93,6 +94,7 @@ export const KEIKO_STATE_FILES = [
   UI_STARTUP_PROGRESS_STATE_FILE,
   "launcher-state.json",
   "portable-install-state.json",
+  UNINSTALL_JOURNAL_FILE,
 ] as const;
 
 // `launcher-state.ts` writes ephemeral mkdtemp dirs with this prefix during atomic
@@ -757,6 +759,7 @@ export function classifyPid(
 //     ui.pid, ui.log, ui.shutdown           lifecycle.ts
 //     launcher-state.json                   launcher-state.ts
 //     portable-install-state.json           portable.ts
+//     portable-uninstall-journal.json       uninstall-journal.ts
 //     .launcher-state-*/                    launcher-state.ts atomic-save temp dirs
 //     keiko-ui.db, keiko.config.json         legacy root-local UI data
 //     credentials/*.vault, *.key            legacy provider credential custody
@@ -1164,7 +1167,11 @@ function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
   if (name === "ui.pid" || name === "ui.log" || name === UI_SHUTDOWN_REQUEST_FILE) {
     return "lifecycle";
   }
-  if (name === "launcher-state.json" || name === "portable-install-state.json") {
+  if (
+    name === "launcher-state.json" ||
+    name === "portable-install-state.json" ||
+    name === UNINSTALL_JOURNAL_FILE
+  ) {
     return "launcher";
   }
   if (name === GATEWAY_CONFIG_FILENAME) return "gateway-config";
