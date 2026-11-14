@@ -25,7 +25,7 @@ export function languageData(session) {
 }
 
 /** How a template or a request names an issue type: by the name its audience sees, or by id. */
-export const TYPE_LABELS = Object.freeze(["name", "id"]);
+const TYPE_LABELS = Object.freeze(["name", "id"]);
 
 /**
  * The label of an English type name for a session: the localized name (identity for an English or

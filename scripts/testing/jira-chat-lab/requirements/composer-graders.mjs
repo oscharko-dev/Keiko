@@ -209,6 +209,15 @@ export function gradeComposerRefusal({ type, exchanges, created, template, confo
     return { status: "red", detail: `${detail}; a card was shown for a refused write` };
   if (repair.receipts > 0)
     return { status: "red", detail: `${detail}; a refusal carries a receipt` };
+  // The gate did its part (a refusal before any card, receipt or effect). Whether the MODEL then repaired
+  // the request in the same turn is its behaviour: asking the person for the missing content is correct
+  // and a model observation, never red; a second issue is a defect.
+  if (own.length === 0)
+    return {
+      status: "unverified",
+      observation: true,
+      detail: `model observation: the gate refused correctly, but no conformant ${type} followed in the same turn (${detail})`,
+    };
   return own.length === 1
     ? { status: "green", detail }
     : { status: "red", detail: `${detail}; exactly one conformant ${type} was expected` };

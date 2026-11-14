@@ -486,7 +486,7 @@ async function editRules(ctx) {
   );
 }
 
-/** C05 (one conversation): create, read the stored conversation again, the same order again, and once more straight away. */
+/** C05 (one conversation): create, read the stored conversation again, the same order again, and a follow-up "did that arrive?" straight away. */
 async function rereadAndRepeat(ctx) {
   const fixture = await composerFixture(ctx);
   await prepareTemplates(ctx, { types: ["Task"] });
@@ -505,7 +505,11 @@ async function rereadAndRepeat(ctx) {
     const stored = await ctx.readStoredConversation(chat);
     const two = await composerTurn(ctx, fixture, { prompt, chat });
     const afterTwo = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
-    const three = await composerTurn(ctx, fixture, { prompt, chat });
+    // The third turn is a repetition WITHOUT a new order: the person asks whether it arrived. The same
+    // wording again would be a second order as far as the text shows (gpt-5.4 answered the identical
+    // text once with the existing key and once with a new issue), so a duplicate here is unambiguous.
+    const followUp = `Kam das an? Ist der Vorgang „${title}“ angelegt? Nenne mir den Vorgangsschlüssel.`;
+    const three = await composerTurn(ctx, fixture, { prompt: followUp, chat });
     const afterThree = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
     const graded = (run, listed) => ({
       title,

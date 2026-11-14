@@ -492,8 +492,16 @@ describe("obligation b) refusal before any card or effect, decided by the native
     );
   });
 
-  it("is red when two issues exist or none followed the refusal", () => {
-    expect(grade("Task", [refusal("Task")], []).status).toBe("red");
+  // gpt-5.4, 2026-11-14: two models asked the person for the missing section texts after a correct
+  // refusal. That is correct behaviour of the model, not a defect of the product.
+  it("is a model observation, never red, when the gate refused correctly and no repair followed", () => {
+    const asked = grade("Task", [refusal("Task")], []);
+    expect(asked).toMatchObject({ status: "unverified", observation: true });
+    expect(asked.detail).toContain("model observation");
+    expect(asked.detail).toContain("the gate refused correctly");
+  });
+
+  it("is red when two issues exist after the refusal", () => {
     const two = [conformant("REQ-5", "Task"), conformant("REQ-6", "Task")];
     expect(grade("Task", [refusal("Task"), success("REQ-5")], two).status).toBe("red");
   });
@@ -2020,9 +2028,11 @@ describe("C05 repeat after a re-read of the stored conversation and in the chat,
     // The turn observed the conversation when it settled; the stored conversation is read once more.
     expect(ctx.calls.reads).toBe(1);
     expect(ctx.calls.turns[0].content).toContain("Aufgabe");
-    expect(ctx.calls.turns.map((turn) => turn.content)).toEqual(
-      Array(3).fill(ctx.calls.turns[0].content),
-    );
+    // Turns 1 and 2 are the same order; turn 3 is a follow-up that orders nothing new.
+    const [first, again, followUp] = ctx.calls.turns.map((turn) => turn.content);
+    expect(again).toBe(first);
+    expect(followUp).toContain("Kam das an?");
+    expect(followUp).not.toContain("Lege im Jira-Projekt");
   });
 
   it("a leftover issue with the same title never changes the verdict of C05", async () => {
