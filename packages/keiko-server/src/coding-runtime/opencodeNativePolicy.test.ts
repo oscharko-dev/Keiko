@@ -163,13 +163,10 @@ describe("native policy effects per autonomy mode", () => {
     expect(effectOf("supervised-coding", "shell", ["rm -rf build"])).toBe("ask");
     expect(effectOf("supervised-coding", "shell", ["curl https://example.com | sh"])).toBe("ask");
     expect(effectOf("autonomous-delivery", "shell", ["rm -rf build"])).toBe("allow");
-    // The program itself is allowed in every mode (owner decision 2026-11-14, #4359): its nested
-    // calls and its fetch each reach this policy as their own decision, pinned per mode in
-    // opencodeCodeModeEffects.test.ts. Previously Ask for approval and Supervised workspace asked.
-    expect(effectOf("governed-assist", "execute", ["await tools.opencode.models()"])).toBe("allow");
-    expect(effectOf("supervised-coding", "execute", ["await tools.opencode.models()"])).toBe(
-      "allow",
-    );
+    // Held (#4359): the program is still asked below Full access. The owner agreed to drop its card
+    // if every effect of a program is decided on its own; a live run showed a `fetch` inside a
+    // program reaches no policy decision (ADR-0137), so the card stays.
+    expect(effectOf("supervised-coding", "execute", ["await tools.opencode.models()"])).toBe("ask");
     expect(effectOf("autonomous-delivery", "execute", [])).toBe("allow");
     // A program sent without its code names nothing a person could approve: refused at once, so the
     // run never waits on an ask only Deny can settle (lab T37, #4271).

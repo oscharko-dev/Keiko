@@ -142,8 +142,8 @@ All points are [R] unless tagged.
   effect of every evaluated action. It can only keep or narrow the configured effect; a missing,
   failed or oversized answer denies, and so does a resource list over 64 entries of 2,048
   characters. Its shell hook strips the server password and every `KEIKO_*` binding from each shell
-  the agent starts; its `execute.before` hook decides the Code Mode program (allowed in every mode, #4359) and the
-  three state-changing management tools (session move and rename, worktree creation).
+  the agent starts; its `execute.before` hook decides the Code Mode program and the three state-changing management
+  tools (session move and rename, worktree creation).
   A run is ready only once `GET /api/plugin` reports the three generated plugins
   (`keiko.native-policy`, `keiko.native-context`, `keiko.native-delivery`) active within 10 seconds
   ([readiness][native-readiness]).
@@ -441,9 +441,10 @@ these rows:
 - **T12, S18: a model's `bash` call.** The runtime repairs the tool name `bash` into `shell` and
   notes that in the result. The policy decides it as the `shell` it runs, proven in the strictest and
   the widest mode (`opencodeNativeQualification.real.test.ts`).
-- **T21: `fetch` in Code Mode.** A `fetch` inside an admitted program now asserts the `webfetch`
-  permission, so the policy decides it like the ordinary tool. The kernel boundary stays underneath
-  (`opencodeNativeProjectBoundary.real.test.ts`).
+- **T21: `fetch` in Code Mode.** Claimed: a `fetch` inside an admitted program asserts the
+  `webfetch` permission, so the policy decides it like the ordinary tool. Observed live (2026-11-14,
+  #4359, OpenCode 2.2.5): no `webfetch` decision line appeared for a program's `fetch`; only the
+  kernel boundary (`opencodeNativeProjectBoundary.real.test.ts`) stands underneath. Under review.
 - **C02: `/goal` is withheld.** The new goal plugin starts model turns on its own. It stays out by
   owner decision (2026-11-06, #4271). The real-binary inventory suite proves it absent under Keiko's
   profile and present without Keiko's removals.
@@ -650,11 +651,11 @@ The order is by developer impact, not a schedule.
   shell classification applies (T09).
 - **Q3.** Superseded: the native `shell` replaced the planned governed command tool, so the order of
   work between it and the connector, plugin and MCP packs (#2287) no longer applies.
-- **Q4.** Decided (owner, 2026-11-14, #4359): the runtime evaluates no permission for a Code Mode
-  `execute` call (T21), and Keiko no longer asks for the program itself in any mode. Every effect
-  of a program (nested tools, `fetch`, the management tools) reaches the native policy as its own
-  decision, pinned per mode in `opencodeCodeModeEffects.test.ts`; `opencode_session_rename` is now
-  governed like a move. See ADR-0137.
+- **Q4.** The runtime evaluates no permission for a Code Mode `execute` call (T21). The owner
+  agreed (2026-11-14, #4359) to drop the program card if every effect of a program is decided on
+  its own; `opencodeCodeModeEffects.test.ts` pins each one per mode, and `opencode_session_rename`
+  is now governed like a move. HELD: a live run showed a `fetch` inside a program reaches no
+  policy decision (T21's claim does not hold at runtime), so the card stays. See ADR-0137.
 - **Q5.** ADR-0124 and the Workbench text say internet use asks below Full access, but the native
   policy refuses it at once because the kernel profile has no route outside the machine. Keep the
   immediate refusal, or ask and let the kernel profile follow the decision?

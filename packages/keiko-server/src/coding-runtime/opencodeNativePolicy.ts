@@ -884,7 +884,7 @@ interface AdmittedRoots {
   readonly webSearch?: boolean | undefined;
 }
 
-/** The program and the management tools of Code Mode, each decided by its own rule. */
+/** The management tools of Code Mode, each decided by its own rule. */
 function classifyCodeModeAction(
   request: OpenCodeNativePolicyRequest,
   roots: AdmittedRoots,
@@ -898,8 +898,6 @@ function classifyCodeModeAction(
       return classifyWorktreeCreate(request);
     case OPENCODE_CODE_MODE_SCHEDULE:
       return classifySchedule(request);
-    case "execute":
-      return classifyProgram(request);
     default:
       return undefined;
   }
@@ -992,19 +990,6 @@ function classifySessionRename(request: OpenCodeNativePolicyRequest): Classified
         "Keiko refused this action: a session may set only its own title, one line of at most 200 characters.",
     };
   return READ;
-}
-
-/**
- * A Code Mode program (#4359, owner decision 2026-11-14): the program itself runs nothing. Its only
- * effects are its nested tool calls and a `fetch`, and each reaches this policy as its own decision
- * (`opencodeCodeModeEffects.test.ts` pins every one in every mode), so the program is allowed in
- * every mode and the human decides about what it does. A program that names no code is refused.
- */
-
-function classifyProgram(request: OpenCodeNativePolicyRequest): Classified {
-  // A program that names no code keeps the matrix: below Full access it is refused at once, since
-  // there is nothing a person could approve (lab T37, #4271).
-  return request.resources.some((resource) => resource.trim().length > 0) ? PROGRAM : EXECUTE;
 }
 
 /**
@@ -1135,11 +1120,6 @@ const READ: OpenCodeNativeActionClassification = Object.freeze({
   scope: "workspace-contained",
   risk: "low",
   label: "native-read",
-});
-/** A Code Mode program (#4359): allowed in every mode; see `classifyProgram`. */
-const PROGRAM: OpenCodeNativeActionClassification = Object.freeze({
-  ...READ,
-  label: "native-execute",
 });
 /** A read in an accepted external reference: decided by the mode's `external-file` row. */
 const EXTERNAL_READ: OpenCodeNativeActionClassification = Object.freeze({

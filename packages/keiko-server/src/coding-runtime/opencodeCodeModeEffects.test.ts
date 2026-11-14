@@ -128,9 +128,13 @@ describe("every effect of a Code Mode program reaches the native policy", () => 
     expect(reads).toEqual(["opencode_models", "opencode_worktree_list"]);
   });
 
-  it("allows the program itself in every mode, since each of its effects is decided on its own", () => {
-    expect(decisions("execute", ["return 1;"])).toEqual(["allow", "allow", "allow"]);
-    // A program that names no code keeps the matrix: refused below Full access, nothing to approve.
+  // HELD, not changed (#4359): the owner agreed to drop the program card if every effect of a
+  // program is decided on its own. A live run (2026-11-14, Ask for approval and Full access,
+  // OpenCode 2.2.5) showed one that is not: a `fetch` inside a program produced no `webfetch`
+  // decision line at all (in Full access it reached the open internet; below Full access only the
+  // kernel's egress rule stopped it). Until `fetch` is decided, the program keeps its card.
+  it("keeps asking for the program itself below Full access", () => {
+    expect(decisions("execute", ["return 1;"])).toEqual(["ask", "ask", "allow"]);
     expect(decisions("execute", [])).toEqual([
       "deny:nothing-to-review",
       "deny:nothing-to-review",
@@ -156,47 +160,30 @@ describe("every effect of a Code Mode program reaches the native policy", () => 
     }
   });
 
-  it("logs the allowed program with its closed permission and class, and a rename the same way", () => {
+  it("logs an allowed rename with its closed permission, body-free", () => {
     const lines: ServerLogEvent[] = [];
-    for (const [permission, resources] of [
-      ["execute", ["return 1;"]],
-      ["opencode_session_rename", ["A title"]],
-    ] as const) {
-      const req = request(permission, resources);
-      recordOpenCodeNativePolicyDecision(
-        { write: (event) => void lines.push(event) },
-        "run-code-mode",
-        {
+    const req = request("opencode_session_rename", ["A title"]);
+    recordOpenCodeNativePolicyDecision(
+      { write: (event) => void lines.push(event) },
+      "run-code-mode",
+      {
+        mode: "governed-assist",
+        request: req,
+        decision: decideOpenCodeNativePolicy({
           mode: "governed-assist",
+          workspaceRoot: workspace,
           request: req,
-          decision: decideOpenCodeNativePolicy({
-            mode: "governed-assist",
-            workspaceRoot: workspace,
-            request: req,
-            nowMs: NOW,
-          }),
-          outcome: "allowed",
-        },
-      );
-    }
-    const proofs = lines.map((line) =>
+          nowMs: NOW,
+        }),
+        outcome: "allowed",
+      },
+    );
+    expect(
       expectActivityLogProof(
         "coding-runtime.native-policy.decided.emitted-line",
-        formatActivityLogProofLine(line),
+        formatActivityLogProofLine(lines[0] ?? {}),
       ),
-    );
-    expect(proofs[0]).toMatchObject({
-      permission: "execute",
-      effect: "allow",
-      outcome: "allowed",
-      risk: "low",
-    });
-    expect(proofs[1]).toMatchObject({
-      permission: "opencode_session_rename",
-      effect: "allow",
-      outcome: "allowed",
-    });
-    expect(JSON.stringify(lines)).not.toContain("return 1;");
+    ).toMatchObject({ permission: "opencode_session_rename", effect: "allow", outcome: "allowed" });
     expect(JSON.stringify(lines)).not.toContain("A title");
   });
 
