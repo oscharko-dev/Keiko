@@ -150,6 +150,25 @@ function deviation(
   };
 }
 
+/**
+ * An issue record without an issue type id cannot be matched to a template bound by id, and its
+ * localized name proves nothing about one: it is neither covered nor uncovered, so it is judged
+ * `unavailable` and the report says so instead of counting it "without template" (#4354).
+ */
+function needsTypeId(
+  templates: readonly JiraIssueTemplate[],
+  facts: Pick<JiraReportIssueFacts, "projectKey" | "issueTypeId">,
+): boolean {
+  return (
+    facts.issueTypeId.length === 0 &&
+    templates.some(
+      (template) =>
+        template.binding !== undefined &&
+        template.project.trim().toLowerCase() === facts.projectKey.trim().toLowerCase(),
+    )
+  );
+}
+
 function checkerOf(
   templates: readonly JiraIssueTemplate[],
   catalog: readonly JiraFieldCatalogEntry[],
@@ -159,8 +178,13 @@ function checkerOf(
     ...(templates.some((template) => template.parent.issueTypes !== undefined)
       ? { requiresNativeEvidence: true as const }
       : {}),
-    covers: (facts) => matchingJiraIssueTemplates(templates, subjectOf(facts)).length > 0,
-    check: (facts, request) => checkSubject(templates, catalog, subjectOf(facts), request),
+    covers: (facts) =>
+      needsTypeId(templates, facts) ||
+      matchingJiraIssueTemplates(templates, subjectOf(facts)).length > 0,
+    check: (facts, request) =>
+      needsTypeId(templates, facts)
+        ? Promise.resolve("unavailable" as const)
+        : checkSubject(templates, catalog, subjectOf(facts), request),
   };
 }
 

@@ -144,6 +144,37 @@ describe("the lines of the #4354 write path", () => {
     expect(sink.lines().join("\n")).not.toContain("Private section title");
   });
 
+  // S3 (#4354): a write let through because Jira listed no issue types is recorded, body-free.
+  it("records a gate decision taken without the project's issue type list on the notice stage", () => {
+    const sink = logs();
+    recordJiraTemplateAttempt("corr-gate-fact", "jira.edit", {
+      ok: true,
+      receipt: { issueKey: "SYN-1" },
+      templateGateFacts: ["type-list-unavailable"],
+    });
+    const events = sink.events.filter(({ op }) => op === "jira.template.admission");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.level).toBe("info");
+    expect(events[0]?.extra).toMatchObject({
+      operation: "jira.edit",
+      stage: "notice",
+      violationCount: 0,
+      ruleIds: [],
+      gateFacts: ["type-list-unavailable"],
+    });
+    expectActivityLogProof(
+      "jira.template.admission.line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    // A healthy write records nothing.
+    const quiet = logs();
+    recordJiraTemplateAttempt("corr-quiet", "jira.edit", {
+      ok: true,
+      receipt: { issueKey: "SYN-1" },
+    });
+    expect(quiet.events.filter(({ op }) => op === "jira.template.admission")).toHaveLength(0);
+  });
+
   it("tells an Epic Link refusal apart on the field admission line, without key or text", () => {
     const sink = logs();
     recordJiraTemplateAttempt("corr-epic", "jira.create", {

@@ -5,6 +5,7 @@ import {
   readJiraDescriptionSections,
   type AtlassianConnectorWriteFailureReason,
   type JiraIssueTemplate,
+  jiraTemplateBindingDigest,
   type JiraTemplateBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
@@ -267,7 +268,7 @@ export function renderProposedJiraIssueTemplate(input: JiraTemplateProposalInput
       ? []
       : [
           `issueTypeId: ${JSON.stringify(input.binding.issueTypeId)}`,
-          `jiraInstance: ${JSON.stringify(input.binding.instance)}`,
+          `jiraBinding: ${JSON.stringify(input.binding.digest)}`,
         ]),
     "activateOn: [create]",
     ...(input.requiredFields.length === 0
@@ -336,7 +337,10 @@ async function proposalFor(
     issueType: type.name,
     requiredFields,
     sections,
-    binding: { instance, issueTypeId: type.id },
+    binding: {
+      digest: jiraTemplateBindingDigest(instance, { issueType: type.name, parent: {} }),
+      issueTypeId: type.id,
+    },
   });
   return parseJiraIssueTemplate(markdown).ok
     ? { issueType: type.name, markdown, sampledIssueCount: descriptions.length }
@@ -377,7 +381,12 @@ export type JiraTemplateBindingResolution =
       readonly issueType: string;
       readonly binding: JiraTemplateBinding;
     }
-  | { readonly state: "unresolved" | "ambiguous"; readonly subject: string };
+  | { readonly state: "unresolved" | "ambiguous"; readonly subject: string }
+  /**
+   * Bound for this Jira, but its bound issue type is no type of the project any more and the typed
+   * name finds none either: the template governs nothing and blocks nothing (#4354).
+   */
+  | { readonly state: "dead"; readonly subject: string };
 
 function namedTypes<T extends { readonly id: string; readonly name: string }>(
   types: readonly T[],
@@ -415,18 +424,28 @@ export function resolveJiraTemplateBinding(
   if (current !== undefined) return { state: "bound", issueType: current };
   // A binding that no longer finds its ids is resolved again from the typed names.
   const own = exactlyOne(types, template.issueType);
-  if (!("found" in own)) return own;
+  if (!("found" in own)) return unresolvedOrDead(template, own);
   const parents = parentTypeIds(template, instance.parentIssueTypes ?? []);
   if ("state" in parents) return parents;
   return {
     state: "bindable",
     issueType: own.found.name,
     binding: {
-      instance: instanceId,
+      digest: jiraTemplateBindingDigest(instanceId, template),
       issueTypeId: own.found.id,
       ...(template.parent.issueTypes === undefined ? {} : { parentIssueTypeIds: parents }),
     },
   };
+}
+
+/** A bound template whose typed name finds no type either is dead; any other miss is what it says. */
+function unresolvedOrDead(
+  template: JiraIssueTemplate,
+  own: Extract<JiraTemplateBindingResolution, { state: "unresolved" | "ambiguous" }>,
+): JiraTemplateBindingResolution {
+  return template.binding !== undefined && own.state === "unresolved"
+    ? { state: "dead", subject: own.subject }
+    : own;
 }
 
 interface TypeRef {

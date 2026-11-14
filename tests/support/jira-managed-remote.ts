@@ -125,11 +125,31 @@ function fixtureMetadataRead(path: string): AtlassianHttpBodyResult | undefined 
     });
   return undefined;
 }
+/**
+ * The issue types the synthetic project lists, as Jira always does (#4354): every name and numeric id
+ * the fixtures' templates use resolves to one of them, so no template reads as naming a type nobody sees.
+ */
+export const FIXTURE_PROJECT_ISSUE_TYPES = [
+  { id: "10000", name: "Epic" },
+  { id: "10001", name: "Story" },
+  { id: "10002", name: "Task" },
+  { id: "10003", name: "Sub-task" },
+  { id: "1", name: "Bug" },
+  { id: "2", name: "Improvement" },
+  { id: "3", name: "New Feature" },
+  { id: "4", name: "Type 4" },
+  { id: "5", name: "Type 5" },
+  { id: "7", name: "Type 7" },
+];
 /** The identity a creation is judged by: a template governs a project and an issue type (#4354). */
 function fixtureIdentityRead(path: string): AtlassianHttpBodyResult | undefined {
   const project = /\/project\/([A-Za-z0-9_]{1,40})$/u.exec(path);
   if (project?.[1] !== undefined)
-    return response({ id: "10000", key: /^\d+$/u.test(project[1]) ? "SYN" : project[1] });
+    return response({
+      id: "10000",
+      key: /^\d+$/u.test(project[1]) ? "SYN" : project[1],
+      issueTypes: FIXTURE_PROJECT_ISSUE_TYPES,
+    });
   const issueType = /\/issuetype\/(\d{1,10})$/u.exec(path);
   return issueType === null ? undefined : response({ id: issueType[1], name: "Task" });
 }

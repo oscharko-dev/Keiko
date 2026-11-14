@@ -2480,7 +2480,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.rule.template-not-activated":
     "Only rules for entering a status exist for “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save a template for creating, then ask again.",
   "chat.jira.outcome.rule.template-binding-unresolved":
-    "The template “{subject}” names an issue type that this Jira does not know in your language, so nothing was changed. Open Skills, open the template and bind it to this Jira, then ask again.",
+    "The template “{subject}” names an issue type that this Jira does not show you, so nothing was changed. Either open the template in Skills, write the issue type as this Jira shows it to you and save it, or ask its author to check it against Jira. Then ask again.",
   "chat.jira.outcome.templateNotices":
     "The change was made. The issue already breaks these template rules in fields this change did not touch. Ask Keiko to repair them, or fix them in Jira.",
   "chat.jira.outcome.failure.releaseScope":
@@ -2731,8 +2731,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.bindAmbiguous":
     "More than one issue type is called “{subject}” in this Jira, so the template cannot be bound.",
   "chat.skills.jira.bindFailed": "The template could not be bound right now. Try again.",
-  "chat.skills.jira.bindRefused":
-    "The template could not be bound: its issue type or parent type is not exactly one type in this Jira. Use the names as you see them in Jira, then check it again.",
+  "chat.skills.jira.bindDead":
+    "This template is bound to an issue type that no longer exists in this project (“{subject}”), so it governs nothing and blocks nothing. Change the issue type or delete the template.",
   "chat.skills.jira.openProposal": "Open in editor",
 
   "agentLauncher.agent": "Agent",

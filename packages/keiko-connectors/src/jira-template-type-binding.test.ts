@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  jiraTemplateBindingDigest,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { resolveJiraTemplateBinding } from "./jira-issue-template-instance.js";
 import {
   checkJiraIssueTemplate,
   matchingJiraIssueTemplates,
@@ -40,7 +42,7 @@ function bound(
   return {
     ...base,
     binding: {
-      instance: INSTANCE,
+      digest: jiraTemplateBindingDigest(INSTANCE, base),
       issueTypeId,
       ...(parentIssueTypeIds === undefined ? {} : { parentIssueTypeIds }),
     },
@@ -98,5 +100,47 @@ describe("a bound parent rule compares parent types by id", () => {
     expect(
       checkJiraIssueTemplate(governing, create("Epic", "10009"), catalog).map((v) => v.ruleId),
     ).toEqual(["parent-type-mismatch"]);
+  });
+});
+
+// B1/B2: what the acting person's own view says about a template that is already bound.
+describe("resolving a template's binding in the acting person's view", () => {
+  const PROJECT = (
+    types: readonly { id: string; name: string }[],
+  ): { project: { key: string; issueTypes: readonly { id: string; name: string }[] } } => ({
+    project: { key: "SYN", issueTypes: types },
+  });
+  it("offers a fresh binding whose digest is the producer's, from the typed names", () => {
+    const plain = template("Aufgabe");
+    const resolution = resolveJiraTemplateBinding(
+      plain,
+      PROJECT([{ id: "10002", name: "Aufgabe" }]),
+      INSTANCE,
+    );
+    expect(resolution).toMatchObject({
+      state: "bindable",
+      binding: { digest: jiraTemplateBindingDigest(INSTANCE, plain), issueTypeId: "10002" },
+    });
+  });
+
+  it("calls a binding whose type is gone and whose typed name finds none dead", () => {
+    const dead = bound(template("Aufgabe"), "99999");
+    expect(
+      resolveJiraTemplateBinding(dead, PROJECT([{ id: "10002", name: "Task" }]), INSTANCE),
+    ).toEqual({ state: "dead", subject: "Aufgabe" });
+  });
+
+  it("binds again from the typed name when the type was recreated under a new id", () => {
+    const stale = bound(template("Aufgabe"), "99999");
+    expect(
+      resolveJiraTemplateBinding(stale, PROJECT([{ id: "10077", name: "Aufgabe" }]), INSTANCE),
+    ).toMatchObject({ state: "bindable", binding: { issueTypeId: "10077" } });
+  });
+
+  it("keeps a binding that still finds its type as it is", () => {
+    const current = bound(template("Aufgabe"), "10002");
+    expect(
+      resolveJiraTemplateBinding(current, PROJECT([{ id: "10002", name: "Task" }]), INSTANCE),
+    ).toEqual({ state: "bound", issueType: "Task" });
   });
 });

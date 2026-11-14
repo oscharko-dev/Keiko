@@ -24,7 +24,11 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 import type { MarkdownSkillMetadata } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { SkillChatToggle } from "./SkillChatToggle";
-import { useJiraTemplateBinding, type BindOutcome } from "./useJiraTemplateBinding";
+import {
+  useAutomaticTemplateBinding,
+  useJiraTemplateBinding,
+  type BindOutcome,
+} from "./useJiraTemplateBinding";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 import styles from "./MarkdownSkillControl.module.css";
 
@@ -251,6 +255,14 @@ function bindable(check: AutomaticTemplateCheck | undefined): boolean {
   );
 }
 
+/** The templates whose automatic check offers the binding. */
+function useBindableEntries(tools: JiraTemplates["tools"]): readonly JiraTemplateEntry[] {
+  return useMemo(
+    () => tools.templates.filter((entry) => bindable(tools.checks.get(templateKey(entry)))),
+    [tools.templates, tools.checks],
+  );
+}
+
 function BindControl({
   check,
   outcome,
@@ -263,8 +275,27 @@ function BindControl({
   const t = useTranslate();
   if (outcome === "working")
     return <output className={styles.cmpStatus}>{t("chat.skills.jira.binding")}</output>;
-  if (outcome === "failed") return <p role="alert">{t("chat.skills.jira.bindFailed")}</p>;
-  if (outcome === "refused") return <p role="alert">{t("chat.skills.jira.bindRefused")}</p>;
+  const recheck = (
+    <button type="button" className={styles.cmpPrimary} onClick={onBind}>
+      {t("chat.skills.jira.bind")}
+    </button>
+  );
+  // A refusal shows the server's own plain sentence, which names the template and both ways out; the
+  // button stays as a re-check once the type was written the way this Jira shows it.
+  if (outcome === "failed")
+    return (
+      <>
+        <p role="alert">{t("chat.skills.jira.bindFailed")}</p>
+        {recheck}
+      </>
+    );
+  if (outcome !== undefined && "refused" in outcome)
+    return (
+      <>
+        <p role="alert">{outcome.refused}</p>
+        {recheck}
+      </>
+    );
   if (outcome !== undefined)
     return (
       <output className={styles.cmpStatus}>
@@ -277,12 +308,7 @@ function BindControl({
         )}
       </output>
     );
-  if (!bindable(check)) return null;
-  return (
-    <button type="button" className={styles.cmpPrimary} onClick={onBind}>
-      {t("chat.skills.jira.bind")}
-    </button>
-  );
+  return bindable(check) ? recheck : null;
 }
 
 function TemplateRow({
@@ -352,6 +378,7 @@ export function JiraTemplateList({
   const t = useTranslate();
   const { tools } = jira;
   const binding = useJiraTemplateBinding(jira.podId, library);
+  useAutomaticTemplateBinding(binding.bind, useBindableEntries(tools));
   if (tools.failed)
     return (
       <p role="alert" className={styles.cmpEmpty}>
@@ -404,6 +431,8 @@ function bindingSentence(
   if (binding?.state === "bindable") return t("chat.skills.jira.bindOffer");
   if (binding?.state === "ambiguous")
     return t("chat.skills.jira.bindAmbiguous", { subject: binding.subject });
+  if (binding?.state === "dead")
+    return t("chat.skills.jira.bindDead", { subject: binding.subject });
   return t("chat.skills.jira.valid");
 }
 
@@ -438,7 +467,9 @@ function checkState(
   if (!entry.valid) return "mismatch";
   if (check === undefined) return "pending";
   if (check === "failed" || !check.valid || check.findings.length > 0) return "mismatch";
-  return check.binding?.state === "ambiguous" ? "mismatch" : "ok";
+  return check.binding?.state === "ambiguous" || check.binding?.state === "dead"
+    ? "mismatch"
+    : "ok";
 }
 
 /** One short line per template: which Jira project and issue type it governs, and whether it can. */

@@ -2624,7 +2624,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.rule.template-not-activated":
     "Für „{subject}“ gibt es nur Regeln für den Wechsel in einen Status, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere eine Vorlage zum Anlegen und frage dann erneut.",
   "chat.jira.outcome.rule.template-binding-unresolved":
-    "Die Vorlage „{subject}“ nennt einen Vorgangstyp, den dieses Jira in deiner Sprache nicht kennt, deshalb wurde nichts geändert. Öffne Skills, öffne die Vorlage, verbinde sie mit diesem Jira und frage dann erneut.",
+    "Die Vorlage „{subject}“ nennt einen Vorgangstyp, den dieses Jira dir nicht zeigt, deshalb wurde nichts geändert. Öffne die Vorlage in Skills, schreibe den Vorgangstyp so, wie dieses Jira ihn dir zeigt, und speichere sie, oder bitte die Autorin oder den Autor, sie gegen Jira zu prüfen. Frage dann erneut.",
   "chat.jira.outcome.templateNotices":
     "Die Änderung wurde vorgenommen. Der Vorgang verletzt bereits diese Vorlagenregeln in Feldern, die diese Änderung nicht berührt hat. Bitte Keiko, sie zu beheben, oder korrigiere sie in Jira.",
   "chat.jira.outcome.failure.releaseScope":
@@ -2890,8 +2890,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Mehrere Vorgangstypen heißen in diesem Jira „{subject}“, deshalb kann die Vorlage nicht verbunden werden.",
   "chat.skills.jira.bindFailed":
     "Die Vorlage konnte gerade nicht verbunden werden. Versuche es noch einmal.",
-  "chat.skills.jira.bindRefused":
-    "Die Vorlage konnte nicht verbunden werden: Der Vorgangstyp der Vorlage oder ein erlaubter übergeordneter Typ ist in diesem Jira nicht genau ein Typ. Nimm die Namen, wie du sie in Jira siehst, und prüfe sie dann erneut.",
+  "chat.skills.jira.bindDead":
+    "Diese Vorlage ist mit einem Vorgangstyp verbunden, den es in diesem Projekt nicht mehr gibt („{subject}“), deshalb gilt sie für nichts und blockiert nichts. Ändere den Vorgangstyp oder lösche die Vorlage.",
   "chat.skills.jira.openProposal": "Im Editor öffnen",
   "agentLauncher.agent": "Agent",
   "agentLauncher.agentCount": "{count} Agenten",

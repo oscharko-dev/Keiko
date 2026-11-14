@@ -2035,7 +2035,7 @@ it.each(["jira.create-worklog", "jira.upsert-remote-link"] as const)(
     }));
     const refused = await f.invoke(operation);
     const violations = [
-      { ruleId: "template-binding-unresolved", subject: "Aufgabe", template: "SYN/Aufgabe" },
+      { ruleId: "template-binding-unresolved", subject: "SYN/Aufgabe", template: "SYN/Aufgabe" },
     ] as const;
     expect(refused).toMatchObject({
       kind: "settled",

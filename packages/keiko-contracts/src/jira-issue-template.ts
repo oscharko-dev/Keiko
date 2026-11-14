@@ -8,6 +8,7 @@
  * Parsing is deterministic and fails closed: any unknown key, malformed line or unsafe pattern
  * rejects the whole document. Errors carry closed codes, key names and line numbers, never text.
  */
+import { createHash } from "node:crypto";
 import { readJiraDescriptionSections } from "./jira-description-sections.js";
 import {
   JIRA_TEMPLATE_PATTERN_CHARS_MAX,
@@ -55,19 +56,20 @@ export function jiraTemplateGovernsWrites(template: {
 
 /**
  * The ids a template's typed names resolve to, written by the product (never typed by a person) when
- * the template is checked against a Jira: the issue type's id, the allowed parent types' ids and the
- * stable identity of the Jira the ids belong to. A name is localized per user and an id is not, so a
- * bound template governs by id in every profile language; on another Jira the ids mean other types and
- * are ignored (#4354).
+ * the template is checked against a Jira: the issue type's id and the allowed parent types' ids. A
+ * name is localized per user and an id is not, so a bound template governs by id in every profile
+ * language (#4354). The digest says what the ids were resolved from: the Jira (its identity) and the
+ * typed names. A binding is in force only while both are still what they were; an edited name, a
+ * hand-written id or another Jira leaves it unconfirmed and the template is matched by name.
  */
 export interface JiraTemplateBinding {
-  /** Digest of the Jira's normalised base URL; never the URL itself. */
-  readonly instance: string;
+  /** Digest over the Jira's identity and the typed names the ids were resolved from; see `jiraTemplateBindingDigest`. */
+  readonly digest: string;
   readonly issueTypeId: string;
   /** Native ids of the allowed parent types, when the template names parent types. */
   readonly parentIssueTypeIds?: readonly string[];
 }
-const BINDING_INSTANCE = /^[a-f0-9]{32}$/u;
+const BINDING_DIGEST = /^[a-f0-9]{32}$/u;
 const NATIVE_TYPE_ID = /^[1-9]\d{0,15}$/u;
 
 export interface JiraIssueTemplate {
@@ -152,6 +154,16 @@ export const JIRA_TEMPLATE_RULE_IDS = [
 ] as const;
 export type JiraTemplateRuleId = (typeof JIRA_TEMPLATE_RULE_IDS)[number];
 
+/**
+ * What the template gate recorded about a decision it took on less than the full picture and let the
+ * write go on with (#4354). Closed words for the Activity Log; never a rule shown to the person.
+ */
+export const JIRA_TEMPLATE_GATE_FACTS = [
+  /** Jira's project read did not list the project's issue types (or listed more than the bound), so no template could be shown unresolved. */
+  "type-list-unavailable",
+] as const;
+export type JiraTemplateGateFact = (typeof JIRA_TEMPLATE_GATE_FACTS)[number];
+
 /** Body-free counts use only the checker's closed rule vocabulary, never its subjects or text. */
 export function countJiraTemplateViolations(
   violations: readonly { readonly ruleId: JiraTemplateRuleId }[],
@@ -194,7 +206,7 @@ const KEYS = [
   "optionalSections",
   "issueTypeId",
   "parentIssueTypeIds",
-  "jiraInstance",
+  "jiraBinding",
 ] as const;
 type TemplateKey = (typeof KEYS)[number];
 const KEY_SET: ReadonlySet<string> = new Set(KEYS);
@@ -520,21 +532,18 @@ function readHeader(reader: Reader): { project: string; issueType: string } | un
   return { project: project.toUpperCase(), issueType };
 }
 
-function matches(pattern: RegExp, value: string | undefined): boolean {
-  return value !== undefined && pattern.test(value);
-}
-
-/** The binding keys a template wrote wrongly: one binding or none, since ids mean nothing without their Jira. */
+/** The binding keys written with a value that is no id or digest. A missing key is no binding, not an error. */
 function invalidBindingKeys(found: {
   readonly issueTypeId: string | undefined;
-  readonly instance: string | undefined;
+  readonly digest: string | undefined;
   readonly parentIds: readonly string[];
   readonly namesParentIds: boolean;
   readonly namesParentTypes: boolean;
 }): readonly TemplateKey[] {
   const wrong: TemplateKey[] = [];
-  if (!matches(NATIVE_TYPE_ID, found.issueTypeId)) wrong.push("issueTypeId");
-  if (!matches(BINDING_INSTANCE, found.instance)) wrong.push("jiraInstance");
+  if (found.issueTypeId !== undefined && !NATIVE_TYPE_ID.test(found.issueTypeId))
+    wrong.push("issueTypeId");
+  if (found.digest !== undefined && !BINDING_DIGEST.test(found.digest)) wrong.push("jiraBinding");
   const badId = found.parentIds.some((id) => !NATIVE_TYPE_ID.test(id));
   if (badId || (found.namesParentIds && !found.namesParentTypes)) wrong.push("parentIssueTypeIds");
   return wrong;
@@ -545,22 +554,23 @@ function readBinding(
   entries: readonly RawEntry[],
 ): JiraTemplateBinding | undefined {
   const issueTypeId = reader.scalar("issueTypeId", 16);
-  const instance = reader.scalar("jiraInstance", 32);
+  const digest = reader.scalar("jiraBinding", 32);
   const parentIds = reader.list("parentIssueTypeIds", JIRA_ISSUE_TEMPLATE_LIMITS.listItems, 16);
   const named = entryOf(entries, "parentIssueTypeIds");
-  if (issueTypeId === undefined && instance === undefined && named === undefined) return undefined;
   const wrong = invalidBindingKeys({
     issueTypeId,
-    instance,
+    digest,
     parentIds,
     namesParentIds: named !== undefined,
     namesParentTypes: entryOf(entries, "parentIssueTypes") !== undefined,
   });
   for (const key of wrong)
     reader.errors.push({ code: "invalid-value", key, line: entryOf(entries, key)?.line ?? 0 });
-  if (issueTypeId === undefined || instance === undefined) return undefined;
+  // Ids without the digest that says what they were resolved from are nobody's binding: the
+  // template is matched by name (a hand-written id never governs by itself).
+  if (issueTypeId === undefined || digest === undefined) return undefined;
   return {
-    instance,
+    digest,
     issueTypeId,
     ...(named === undefined ? {} : { parentIssueTypeIds: parentIds }),
   };
@@ -715,66 +725,167 @@ export function jiraTemplateIssueTypeMatches(
   );
 }
 
-/** The same rule for the parent types a template allows. */
+/**
+ * The same rule for ONE parent type the template allows, by its position in `parentIssueTypes`: a bound
+ * template compares the id it was bound to at that position, any other the typed name or id.
+ */
+export function jiraTemplateParentEntryMatches(
+  template: Pick<JiraIssueTemplate, "parent" | "binding">,
+  index: number,
+  type: { readonly id: string; readonly name: string },
+): boolean {
+  const ids = template.binding?.parentIssueTypeIds;
+  if (ids !== undefined) return ids[index] === type.id;
+  const typed = template.parent.issueTypes?.[index];
+  return typed !== undefined && (typed === type.id || sameName(type.name, typed));
+}
+
+/** The same rule for the parent types a template allows: whether any allowed entry is this type. */
 export function jiraTemplateParentTypeMatches(
   template: Pick<JiraIssueTemplate, "parent" | "binding">,
   type: { readonly id: string; readonly name: string },
 ): boolean {
-  const ids = template.binding?.parentIssueTypeIds;
-  if (ids !== undefined) return ids.includes(type.id);
-  return (template.parent.issueTypes ?? []).some(
-    (allowed) => allowed === type.id || sameName(type.name, allowed),
+  return (template.parent.issueTypes ?? []).some((_, index) =>
+    jiraTemplateParentEntryMatches(template, index, type),
   );
 }
 
-/** A template as it governs one Jira: its binding stays only when it was made for that Jira. */
+const normalisedName = (value: string): string => value.trim().toLowerCase();
+
+/**
+ * What a binding was resolved from: the identity of the Jira and the template's typed names, in a
+ * normal form (case and surrounding blanks do not matter, nothing else does). THE one rule that says
+ * whether a binding is still in force: `jiraTemplateForInstance` recomputes it.
+ */
+export function jiraTemplateBindingDigest(
+  instance: string,
+  template: Pick<JiraIssueTemplate, "issueType" | "parent">,
+): string {
+  const source = JSON.stringify([
+    "keiko-jira-template-binding",
+    1,
+    instance,
+    normalisedName(template.issueType),
+    template.parent.issueTypes?.map(normalisedName) ?? null,
+  ]);
+  return createHash("sha256").update(source, "utf8").digest("hex").slice(0, 32);
+}
+
+/**
+ * A template as it governs one Jira: its binding stays only when it was resolved for this Jira from
+ * the names the template still types. Any other binding (another Jira, an edited name, a hand-written
+ * id) is dropped here, so every consumer matches that template by name instead.
+ */
 export function jiraTemplateForInstance(
   template: JiraIssueTemplate,
   instance: string | undefined,
 ): JiraIssueTemplate {
-  if (template.binding === undefined || template.binding.instance === instance) return template;
-  const { binding: _foreign, ...rest } = template;
+  const { binding } = template;
+  if (binding === undefined) return template;
+  if (instance !== undefined && binding.digest === jiraTemplateBindingDigest(instance, template))
+    return template;
+  const { binding: _unconfirmed, ...rest } = template;
   return rest;
 }
 
-const BINDING_KEYS = /^(?:issueTypeId|parentIssueTypeIds|jiraInstance)\s*:/u;
-const ISSUE_TYPE_KEY = /^issueType\s*:/u;
+const BINDING_KEY_LINE = /^(?:issueTypeId|parentIssueTypeIds|jiraBinding)[ \t]*:/u;
+const ISSUE_TYPE_KEY_LINE = /^issueType[ \t]*:/u;
+const BLOCK_ITEM_LINE = /^[ \t]*-(?:\s|$)/u;
+
+interface TextLine {
+  readonly line: string;
+  readonly ending: string;
+}
+
+/** The document as lines with the exact line ending each carried, so nothing but the binding moves. */
+function textLines(markdown: string): readonly TextLine[] {
+  const parts = markdown.split(/(\r\n|\n|\r)/u);
+  const lines: TextLine[] = [];
+  for (let index = 0; index < parts.length; index += 2)
+    lines.push({ line: parts[index] ?? "", ending: parts[index + 1] ?? "" });
+  return lines;
+}
+
+/** The index of the line that closes the front matter, or undefined without a closed front matter. */
+function closingLine(lines: readonly TextLine[]): number | undefined {
+  if (lines[0]?.line.trimEnd() !== "---") return undefined;
+  const closing = lines.findIndex((entry, index) => index > 0 && entry.line.trimEnd() === "---");
+  return closing < 0 ? undefined : closing;
+}
+
+type BindingLineKind = "key" | "list-key" | "item" | "other";
+
+/** What one front-matter line is to the binding: its key, the key of a block list, or a block item of it. */
+function bindingLineKind(line: string, inList: boolean): BindingLineKind {
+  if (BINDING_KEY_LINE.test(line))
+    return line.startsWith("parentIssueTypeIds") && !line.includes("[") ? "list-key" : "key";
+  return inList && BLOCK_ITEM_LINE.test(line) ? "item" : "other";
+}
+
+/** The lines without any binding line (a key in the first column and its block items), and where `issueType` sits. */
+function withoutBinding(
+  lines: readonly TextLine[],
+  closing: number,
+): { readonly kept: TextLine[]; readonly at: number } {
+  const kept: TextLine[] = [];
+  let at = -1;
+  let inList = false;
+  for (const [index, entry] of lines.entries()) {
+    const inFront = index > 0 && index < closing;
+    const kind: BindingLineKind = inFront ? bindingLineKind(entry.line, inList) : "other";
+    if (kind !== "other") {
+      inList = kind !== "key";
+      continue;
+    }
+    inList = false;
+    if (inFront && at < 0 && ISSUE_TYPE_KEY_LINE.test(entry.line)) at = kept.length;
+    kept.push(entry);
+  }
+  return { kept, at };
+}
+
+function bindingText(binding: JiraTemplateBinding): readonly string[] {
+  return [
+    `issueTypeId: ${JSON.stringify(binding.issueTypeId)}`,
+    ...(binding.parentIssueTypeIds === undefined
+      ? []
+      : [`parentIssueTypeIds: ${JSON.stringify(binding.parentIssueTypeIds)}`]),
+    `jiraBinding: ${JSON.stringify(binding.digest)}`,
+  ];
+}
+
+/** Whether the text parses back to a template carrying exactly this binding. */
+function carriesBinding(text: string, binding: JiraTemplateBinding): boolean {
+  const check = parseJiraIssueTemplate(text);
+  const found = check.ok ? check.template.binding : undefined;
+  return (
+    found?.digest === binding.digest &&
+    found.issueTypeId === binding.issueTypeId &&
+    JSON.stringify(found.parentIssueTypeIds ?? null) ===
+      JSON.stringify(binding.parentIssueTypeIds ?? null)
+  );
+}
 
 /**
- * The template's Markdown with its binding lines written beside `issueType`, replacing any earlier
- * binding and touching nothing else. Undefined when the document has no closed front matter.
+ * The template's Markdown with its binding lines written beside `issueType`. Only the binding lines
+ * (a key starting in the first column and the block items that follow it) are replaced: every other
+ * byte, and the line endings of the document, stay as they were. Undefined when the document has no
+ * closed front matter, no `issueType` line, or when the result does not parse back to a template
+ * carrying exactly this binding: nothing the product writes is a template that does not validate.
  */
 export function bindJiraIssueTemplateText(
   markdown: string,
   binding: JiraTemplateBinding,
 ): string | undefined {
-  const lines = splitDocument(markdown);
-  const front = frontMatterOf(lines);
-  if (front.kind !== "found") return undefined;
-  const closing = front.bodyStart - 1;
-  const kept: string[] = [];
-  let inBindingList = false;
-  for (const line of lines.slice(1, closing)) {
-    const text = line.trim();
-    if (BINDING_KEYS.test(text)) {
-      inBindingList = text.startsWith("parentIssueTypeIds") && !text.includes("[");
-      continue;
-    }
-    if (inBindingList && text.startsWith("-")) continue;
-    inBindingList = false;
-    kept.push(line);
-  }
-  const at = kept.findIndex((line) => ISSUE_TYPE_KEY.test(line.trim()));
+  const lines = textLines(markdown);
+  const closing = closingLine(lines);
+  if (closing === undefined) return undefined;
+  const { kept, at } = withoutBinding(lines, closing);
   if (at < 0) return undefined;
-  const written = [
-    `issueTypeId: ${JSON.stringify(binding.issueTypeId)}`,
-    ...(binding.parentIssueTypeIds === undefined
-      ? []
-      : [`parentIssueTypeIds: ${JSON.stringify(binding.parentIssueTypeIds)}`]),
-    `jiraInstance: ${JSON.stringify(binding.instance)}`,
-  ];
-  kept.splice(at + 1, 0, ...written);
-  return [lines[0] ?? "---", ...kept, ...lines.slice(closing)].join("\n");
+  const ending = /\r\n|\n|\r/u.exec(markdown)?.[0] ?? "\n";
+  kept.splice(at + 1, 0, ...bindingText(binding).map((line) => ({ line, ending })));
+  const text = kept.map((entry) => entry.line + entry.ending).join("");
+  return carriesBinding(text, binding) ? text : undefined;
 }
 
 /** Stable label of a template in violations, summaries and logs. */

@@ -617,13 +617,30 @@ describe("binding a template to this Jira", () => {
   const refresh = vi.fn(() => Promise.resolve());
   const stored = { ...library, refresh } as unknown as MarkdownSkillLibrary;
 
-  it("offers the binding only where the names resolve, and says what a bound template is", async () => {
+  // The lead saves a template; nobody has to find a button: the check offers the binding and it is
+  // made once for that revision.
+  it("binds automatically once per saved revision, says what was bound and reloads the library", async () => {
     vi.mocked(templates.validateJiraTemplate).mockResolvedValue(bindable);
+    vi.mocked(templates.bindJiraTemplate).mockResolvedValue({
+      changed: true,
+      issueType: "Story",
+      parentTypeCount: 0,
+    });
     render(<Panel stored={stored} />);
     const story = await row("Story template");
-    expect(await within(story).findByText(/Matches Jira by name only/u)).toBeInTheDocument();
-    expect(within(story).getByRole("button", { name: "Bind to this Jira" })).toBeInTheDocument();
-    cleanup();
+    expect(await within(story).findByText(/Bound to the issue type “Story”/u)).toBeInTheDocument();
+    expect(templates.bindJiraTemplate).toHaveBeenCalledTimes(1);
+    expect(templates.bindJiraTemplate).toHaveBeenCalledWith(
+      "pod-1",
+      ENTRY.id,
+      ENTRY.revision,
+      expect.any(String),
+    );
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("says what a bound template is and does not bind it again", async () => {
     vi.mocked(templates.validateJiraTemplate).mockResolvedValue({
       ...MATCH,
       binding: { state: "bound", issueType: "Story" },
@@ -632,50 +649,61 @@ describe("binding a template to this Jira", () => {
     const bound = await row("Story template");
     expect(await within(bound).findByText(/bound to its issue types/u)).toBeInTheDocument();
     expect(within(bound).queryByRole("button", { name: "Bind to this Jira" })).toBeNull();
+    expect(templates.bindJiraTemplate).not.toHaveBeenCalled();
   });
 
-  it("binds the stored revision on this Pod, says what was bound and reloads the library", async () => {
+  it("shows a template bound to a type that is gone as dead", async () => {
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue({
+      ...MATCH,
+      binding: { state: "dead", subject: "Aufgabe" },
+    });
+    render(<Panel stored={stored} />);
+    const dead = await row("Story template");
+    expect(
+      await within(dead).findByText(
+        /no longer exists in this project \(“Aufgabe”\).*blocks nothing/u,
+      ),
+    ).toBeInTheDocument();
+    expect(templates.bindJiraTemplate).not.toHaveBeenCalled();
+  });
+
+  it("shows the server's plain sentence for a refused binding and keeps a button to check again", async () => {
     vi.mocked(templates.validateJiraTemplate).mockResolvedValue(bindable);
+    const sentence =
+      'This Jira shows no issue type called "Aufgabe" to you, so the template "SYN/Aufgabe" cannot be bound. Write the type as this Jira shows it to you and save the template again, or ask its author to check it against Jira.';
+    vi.mocked(templates.bindJiraTemplate).mockRejectedValueOnce(
+      new ApiError("INVALID_REQUEST", sentence, 422),
+    );
+    const user = userEvent.setup();
+    render(<Panel stored={stored} />);
+    const story = await row("Story template");
+    expect(await within(story).findByRole("alert")).toHaveTextContent(sentence);
+    expect(refresh).not.toHaveBeenCalled();
     vi.mocked(templates.bindJiraTemplate).mockResolvedValue({
       changed: true,
       issueType: "Story",
       parentTypeCount: 0,
     });
-    const user = userEvent.setup();
-    render(<Panel stored={stored} />);
-    const story = await row("Story template");
-    await user.click(await within(story).findByRole("button", { name: "Bind to this Jira" }));
-    expect(templates.bindJiraTemplate).toHaveBeenCalledWith(
-      "pod-1",
-      ENTRY.id,
-      ENTRY.revision,
-      expect.any(String),
-    );
+    await user.click(within(story).getByRole("button", { name: "Bind to this Jira" }));
     expect(await within(story).findByText(/Bound to the issue type “Story”/u)).toBeInTheDocument();
-    expect(refresh).toHaveBeenCalledTimes(1);
-    expect(await axe(document.body)).toHaveNoViolations();
+    expect(templates.bindJiraTemplate).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    [new ApiError("INVALID_REQUEST", "x", 422), /not exactly one type in this Jira/u],
-    [new Error("offline"), /could not be bound right now/u],
-  ])(
-    "tells a refused or failed binding in plain words and keeps the template",
-    async (error, text) => {
-      vi.mocked(templates.validateJiraTemplate).mockResolvedValue(bindable);
-      vi.mocked(templates.bindJiraTemplate).mockRejectedValue(error);
-      const user = userEvent.setup();
-      render(<Panel stored={stored} />);
-      const story = await row("Story template");
-      await user.click(await within(story).findByRole("button", { name: "Bind to this Jira" }));
-      expect(await within(story).findByRole("alert")).toHaveTextContent(text);
-      expect(refresh).not.toHaveBeenCalled();
-      expect(reportClientDiagnostic).toHaveBeenCalledWith(
-        "Jira template binding failed.",
-        expect.objectContaining({ correlationId: expect.any(String) }),
-      );
-    },
-  );
+  it("tells a failed binding in plain words, keeps the template and offers the button again", async () => {
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue(bindable);
+    vi.mocked(templates.bindJiraTemplate).mockRejectedValue(new Error("offline"));
+    render(<Panel stored={stored} />);
+    const story = await row("Story template");
+    expect(await within(story).findByRole("alert")).toHaveTextContent(
+      /could not be bound right now/u,
+    );
+    expect(within(story).getByRole("button", { name: "Bind to this Jira" })).toBeInTheDocument();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "Jira template binding failed.",
+      expect.objectContaining({ correlationId: expect.any(String) }),
+    );
+  });
 
   it("names a type that two issue types share, instead of offering a binding", async () => {
     vi.mocked(templates.validateJiraTemplate).mockResolvedValue({

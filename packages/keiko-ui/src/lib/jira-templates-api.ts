@@ -38,7 +38,7 @@ export interface JiraTemplateFinding {
 export type JiraTemplateBindingState =
   | { readonly state: "bound"; readonly issueType: string }
   | { readonly state: "bindable"; readonly issueType: string }
-  | { readonly state: "unresolved" | "ambiguous"; readonly subject: string };
+  | { readonly state: "unresolved" | "ambiguous" | "dead"; readonly subject: string };
 
 export type JiraTemplateValidation =
   | { readonly valid: false; readonly errors: readonly JiraTemplateParseError[] }

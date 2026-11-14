@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  jiraTemplateBindingDigest,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
   type JiraMutationOperation,
@@ -319,6 +320,16 @@ function readRoutes(remote: Remote): readonly ReadRoute[] {
 }
 /** The project as the acting user sees it: issue types are named in the user's own language. */
 function projectBody(remote: Remote): Record<string, unknown> {
+  if (remote.typeList === "absent") return { id: "10000", key: "SYN" };
+  if (remote.typeList === "oversized")
+    return {
+      id: "10000",
+      key: "SYN",
+      issueTypes: Array.from({ length: 201 }, (_, index) => ({
+        id: String(1000 + index),
+        name: `Type ${String(index)}`,
+      })),
+    };
   return {
     id: "10000",
     key: "SYN",
@@ -331,6 +342,8 @@ function projectBody(remote: Remote): Record<string, unknown> {
   };
 }
 interface Remote {
+  /** How Jira lists the project's issue types: not at all, or more than the gate reads. */
+  typeList?: "absent" | "oversized";
   /** The project's issue types as the acting user sees them. */
   projectTypes?: readonly { id: string; name: string }[];
   issue: Record<string, unknown>;
@@ -436,14 +449,17 @@ describe("localized issue type names", () => {
     id: string,
     frontMatter: readonly string[],
     parentIssueTypeIds?: readonly string[],
-  ): JiraIssueTemplate => ({
-    ...template(frontMatter, SECTIONS, typed),
-    binding: {
-      instance: INSTANCE,
-      issueTypeId: id,
-      ...(parentIssueTypeIds === undefined ? {} : { parentIssueTypeIds }),
-    },
-  });
+  ): JiraIssueTemplate => {
+    const base = template(frontMatter, SECTIONS, typed);
+    return {
+      ...base,
+      binding: {
+        digest: jiraTemplateBindingDigest(INSTANCE, base),
+        issueTypeId: id,
+        ...(parentIssueTypeIds === undefined ? {} : { parentIssueTypeIds }),
+      },
+    };
+  };
   const MIN = ["activateOn: [create, edit]", "summaryMinLength: 30"];
   /** The acting user's own view: the type 10001 is called `name`, and Story is 7. */
   const view = (name: string): Partial<Remote> => ({
@@ -466,6 +482,20 @@ describe("localized issue type names", () => {
       issuelinks: [],
     },
   });
+  /** An edit of a Story (7) of a project whose other type, 10001, is called Task. */
+  const storyEditRemote: Remote = {
+    ...view("Task"),
+    fieldCatalog: true,
+    issue: {
+      project: { key: "SYN" },
+      issuetype: { id: "7", name: "Story" },
+      status: { id: "1", name: "To Do" },
+      summary: "A long enough original summary for the template rule",
+      description: FULL_DESCRIPTION,
+      labels: [],
+      issuelinks: [],
+    },
+  };
   const SHORT = { ...CREATE, fields: { summary: "Add login", description: FULL_DESCRIPTION } };
 
   it.each([
@@ -512,13 +542,13 @@ describe("localized issue type names", () => {
       ok: false,
       reason: "field-validation",
       violations: [
-        { ruleId: "template-binding-unresolved", subject: "Task", template: "SYN/Task" },
+        { ruleId: "template-binding-unresolved", subject: "SYN/Task", template: "SYN/Task" },
       ],
     });
     expect(f.writes()).toEqual([]);
   });
 
-  it("refuses a create, an edit and a transition the same way, and a bound template whose type is gone", async () => {
+  it("refuses a create, an edit and a transition the same way for a template that names an unknown type", async () => {
     const legacy = template(
       ["activateOn: [create, edit, transition]", ...MIN.slice(1)],
       SECTIONS,
@@ -532,15 +562,55 @@ describe("localized issue type names", () => {
       const f = fixture(SET(legacy), editRemote("Task"));
       expect(await f.run(op, args), op).toMatchObject({
         ok: false,
-        violations: [{ ruleId: "template-binding-unresolved", subject: "Aufgabe" }],
+        violations: [{ ruleId: "template-binding-unresolved", subject: "SYN/Aufgabe" }],
       });
       expect(f.writes(), op).toEqual([]);
     }
-    const gone = fixture(SET(bound("Aufgabe", "99999", MIN)), editRemote("Task"));
-    expect(await gone.run("jira.create", SHORT)).toMatchObject({
-      violations: [{ ruleId: "template-binding-unresolved" }],
-    });
   });
+
+  // B2 (a): a template bound for this Jira whose bound id is no type of the project is dead.
+  it("lets a Story edit through beside a dead bound template, which blocks nothing", async () => {
+    const dead = bound("Task", "99999", MIN);
+    const f = fixture(SET(dead), storyEditRemote);
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { summary: "A summary that is long enough for the rule" },
+    });
+    expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
+  });
+
+  // B2 (b): an unbound template whose typed name is in nobody's view stays fail-closed project-wide,
+  // and the refusal names the template.
+  it("refuses a Story edit beside an unbound template that names an unknown type, and names the template", async () => {
+    const f = fixture(SET(template(MIN, SECTIONS, "Aufgabe")), storyEditRemote);
+    expect(
+      await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Short" } }),
+    ).toMatchObject({
+      ok: false,
+      violations: [
+        { ruleId: "template-binding-unresolved", subject: "SYN/Aufgabe", template: "SYN/Aufgabe" },
+      ],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  // S3: the escape was silent. The write still goes on, and the Activity Log is told.
+  it.each(["absent", "oversized"] as const)(
+    "records that the type list was %s when it lets a write through unresolved",
+    async (typeList) => {
+      const f = fixture(SET(template(MIN, SECTIONS, "Aufgabe")), {
+        ...storyEditRemote,
+        typeList,
+      });
+      const result = await f.run("jira.edit", {
+        issueKey: "SYN-1",
+        fields: { summary: "A summary that is long enough for the rule" },
+      });
+      // The fact describes the gate's decision, whatever the write did afterwards.
+      expect(result).toMatchObject({ templateGateFacts: ["type-list-unavailable"] });
+      expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
+    },
+  );
 
   it("does not refuse for a template of another type that this Jira does offer", async () => {
     const f = fixture(

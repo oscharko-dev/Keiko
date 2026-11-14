@@ -34974,6 +34974,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         ],
         maxItems: 25,
       },
+      gateFacts: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["type-list-unavailable"],
+        maxItems: 4,
+      },
     },
     causal: "correlation",
     lifecycle: "state",

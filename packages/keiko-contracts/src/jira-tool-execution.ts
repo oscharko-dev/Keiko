@@ -1,5 +1,5 @@
 import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connectors.js";
-import type { JiraTemplateViolation } from "./jira-issue-template.js";
+import type { JiraTemplateGateFact, JiraTemplateViolation } from "./jira-issue-template.js";
 import { compareStrings } from "./comparators.js";
 
 export const JIRA_AVATAR_MUTATIONS = Object.freeze([
@@ -772,6 +772,8 @@ export type JiraMutationAttempt =
        * the write; the person is told (#4354).
        */
       readonly templateNotices?: readonly JiraTemplateViolation[];
+      /** Closed facts of the template gate that went on with less than the full picture; Activity Log only. */
+      readonly templateGateFacts?: readonly JiraTemplateGateFact[];
     }
   | {
       readonly ok: false;
@@ -785,6 +787,8 @@ export type JiraMutationAttempt =
       /** A prepared description is evidence even when the provider refuses the subsequent write. */
       readonly descriptionConvertedHeadingCount?: number;
       readonly descriptionProjection?: "supported-markdown";
+      /** Closed facts of the template gate; a write the gate let through may still fail afterwards. */
+      readonly templateGateFacts?: readonly JiraTemplateGateFact[];
     };
 
 // eslint-disable-next-line no-control-regex -- remote text is shown to a model, not a terminal.

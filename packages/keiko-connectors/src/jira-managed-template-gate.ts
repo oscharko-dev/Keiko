@@ -25,7 +25,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
 import { parseJiraFieldMetadata } from "./jira-field-metadata.js";
 import { jiraNativeText } from "./jira-native-values.js";
-import { noteJiraTemplateNotices } from "./jira-template-notices.js";
+import { noteJiraTemplateGateFact, noteJiraTemplateNotices } from "./jira-template-notices.js";
 import {
   bindJiraTemplateParentTypes,
   jiraTemplateNativeIssueType,
@@ -807,11 +807,19 @@ async function unresolvedBindingRefusal(
       ? await readProjectIssueTypes(input.request, identity.projectKey)
       : (identity.projectIssueTypes ?? undefined);
   // A Jira that does not list the project's issue types cannot show a template unresolved: the name
-  // matching of before stays. Jira Data Center and Cloud always list them.
-  if (types === undefined) return undefined;
+  // matching of before stays. Jira Data Center and Cloud always list them, so this is recorded.
+  if (types === undefined) {
+    noteJiraTemplateGateFact("type-list-unavailable");
+    return undefined;
+  }
   if ("ok" in types) return identityRefusal(types, "project-and-type");
+  // A template bound for this Jira whose id is no type of the project is dead: it names a type that
+  // does not exist here, so it governs nothing and blocks nothing. Only a template matched by NAME
+  // (unbound, or bound for another Jira or to other typed names) can be in a language nobody sees.
   const unresolved = pending.filter(
-    (template) => !types.some((type) => jiraTemplateIssueTypeMatches(template, type)),
+    (template) =>
+      template.binding === undefined &&
+      !types.some((type) => jiraTemplateIssueTypeMatches(template, type)),
   );
   if (unresolved.length === 0) return undefined;
   return {
@@ -819,7 +827,8 @@ async function unresolvedBindingRefusal(
     reason: "field-validation",
     violations: unresolved.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX).map((template) => ({
       ruleId: "template-binding-unresolved" as const,
-      subject: template.issueType.slice(0, 120),
+      // The template itself, so a person knows which one to fix: its project and typed issue type.
+      subject: jiraIssueTemplateLabel(template).slice(0, 120),
       template: jiraIssueTemplateLabel(template).slice(0, 256),
     })),
   };

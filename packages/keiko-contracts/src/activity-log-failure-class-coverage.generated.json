@@ -39784,6 +39784,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "gateFacts",
+              "type": "string-array",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "operation",
               "type": "string",
               "dataClass": "closed-enum",

@@ -3,6 +3,7 @@ import {
   compileJiraTemplatePattern,
   jiraIssueTemplateLabel,
   jiraTemplateIssueTypeMatches,
+  jiraTemplateParentEntryMatches,
   jiraTemplateParentTypeMatches,
   normalizeJiraSectionHeading,
   readJiraDescriptionSections,
@@ -579,19 +580,12 @@ function parentTypeFindings(
   instance: JiraTemplateInstanceMetadata,
 ): readonly JiraTemplateFinding[] {
   const known = instance.parentIssueTypes ?? [];
-  // A bound template names its allowed parents by id; the typed names stay the label.
-  const ids = template.binding?.parentIssueTypeIds;
+  // The one parent matcher decides, by id for a bound template; the typed names stay the label.
   return (template.parent.issueTypes ?? []).flatMap(
-    (reference, index): readonly JiraTemplateFinding[] => {
-      const id = ids?.[index];
-      const found =
-        id === undefined
-          ? known.some((type) => type.id === reference || same(type.name, reference))
-          : known.some((type) => type.id === id);
-      return found
+    (reference, index): readonly JiraTemplateFinding[] =>
+      known.some((type) => jiraTemplateParentEntryMatches(template, index, type))
         ? []
-        : [{ code: "unknown-issue-type", subject: `parentIssueTypes: ${reference}` }];
-    },
+        : [{ code: "unknown-issue-type", subject: `parentIssueTypes: ${reference}` }],
   );
 }
 
@@ -651,9 +645,9 @@ function isImpactViolation(violation: JiraTemplateViolation): boolean {
  * template to the type's id (#4354).
  */
 const UNRESOLVED_BINDING_GUIDANCE =
-  "Nothing was changed: a saved issue template of this project names an issue type that Keiko cannot find in this Jira as the person sees it, so it cannot tell whether that template governs this write; the violation names the template and the typed issue type. " +
-  "Do not retry or change the request. Tell the person in plain words that the template has to be checked against Jira once: " +
-  "Skills, Jira template, open the template, choose Check against Jira. Offer to write the same issue afterwards.";
+  "Nothing was changed: a saved issue template of this project names an issue type that Keiko cannot find in this Jira as the person sees it, so it cannot tell whether that template governs this write; the violation names that template. " +
+  "Do not retry or change the request. Tell the person in plain words which template it is and the two ways out: write the issue type in the template as this Jira shows it to them and save the template, " +
+  "or have the template's author check it against Jira (Skills, Jira template, Check against Jira). Offer to write the same issue afterwards.";
 const IMPACT_GUIDANCE =
   "Nothing was changed: a formal template rule of this project refers to a field this change would alter on issues that Keiko cannot check one by one. Do not retry it. Change the affected issues one at a time with the edit tool, or tell the person it has to be done in Jira.";
 /**

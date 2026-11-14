@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseJiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  jiraTemplateBindingDigest,
+  parseJiraIssueTemplate,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { jiraInstanceIdentity, type AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
@@ -501,14 +504,18 @@ describe("binding a template to this Jira", () => {
     const body = f.deps.store.markdownSkills.get(skill.id)?.body ?? "";
     expect(body).toContain('issueTypeId: "10001"');
     expect(body).toContain('parentIssueTypeIds: ["7"]');
-    expect(body).toContain(`jiraInstance: "${INSTANCE}"`);
+    // The digest says what the ids were resolved from: this Jira and the typed names.
+    const plain = parseJiraIssueTemplate(typed("Story"));
+    if (!plain.ok) throw new TypeError("Expected a parseable template");
+    const digest = jiraTemplateBindingDigest(INSTANCE, plain.template);
+    expect(body).toContain(`jiraBinding: "${digest}"`);
     // Nothing else of the person's file moved, and the name stays the label.
-    expect(body.replace(/^(?:issueTypeId|parentIssueTypeIds|jiraInstance):.*\n/gmu, "")).toBe(
+    expect(body.replace(/^(?:issueTypeId|parentIssueTypeIds|jiraBinding):.*\n/gmu, "")).toBe(
       typed("Story"),
     );
     const template = parseJiraIssueTemplate(body);
     expect(template.ok && template.template.binding).toEqual({
-      instance: INSTANCE,
+      digest,
       issueTypeId: "10001",
       parentIssueTypeIds: ["7"],
     });
@@ -523,7 +530,7 @@ describe("binding a template to this Jira", () => {
     const f = fixture();
     const skill = await stored(
       f,
-      typed("Story", 'issueTypeId: "999"', `jiraInstance: "${FOREIGN}"`),
+      typed("Story", 'issueTypeId: "999"', `jiraBinding: "${FOREIGN}"`),
     );
     expect((await bind(f, skill)).body).toMatchObject({ changed: true, issueType: "Story" });
     const body = f.deps.store.markdownSkills.get(skill.id)?.body ?? "";
@@ -551,10 +558,69 @@ describe("binding a template to this Jira", () => {
       const refused = await bind(f, skill);
       expect(refused.status).toBe(422);
       expect(JSON.stringify(refused.body)).toContain(`\\"${type}\\"`);
+      // The sentence names the template and both ways out.
+      const sentence = JSON.stringify(refused.body);
+      expect(sentence).toContain(`SYN/${type}`);
+      expect(sentence).toContain("as this Jira shows it to you");
+      expect(sentence).toContain("check it against Jira");
       expect(f.deps.store.markdownSkills.get(skill.id)?.body).toBe(before);
       expect(f.deps.store.markdownSkills.get(skill.id)?.revision).toBe(1);
     },
   );
+
+  // B1: a binding is in force only for the typed names it was resolved from.
+  it("resolves the binding again when the typed issue type was edited after it was bound", async () => {
+    const f = fixture({
+      projectTypes: [
+        { id: "10001", name: "Story" },
+        { id: "10005", name: "Bug" },
+      ],
+    });
+    const skill = await stored(f, typed("Story"));
+    expect((await bind(f, skill)).body).toMatchObject({ changed: true, issueType: "Story" });
+    const bound = f.deps.store.markdownSkills.get(skill.id);
+    // The lead changes the typed value; the old id and digest stay in the file.
+    const edited = (bound?.body ?? "").replace("issueType: Story", "issueType: Bug");
+    const replaced = f.deps.store.markdownSkills.replace(skill.id, 2, {
+      fileName: "template.md",
+      contentBase64: Buffer.from(edited, "utf8").toString("base64"),
+    });
+    const checked = await handleValidateJiraTemplate(
+      context(f.cookie, { podId: POD, markdown: replaced.body }),
+      f.deps,
+    );
+    expect(checked.body).toMatchObject({ binding: { state: "bindable", issueType: "Bug" } });
+    expect((await bind(f, { id: skill.id, revision: replaced.revision })).body).toMatchObject({
+      changed: true,
+      issueType: "Bug",
+    });
+    const after = f.deps.store.markdownSkills.get(skill.id)?.body ?? "";
+    expect(after).toContain('issueTypeId: "10005"');
+    expect(after.match(/^issueTypeId:/gmu)).toHaveLength(1);
+  });
+
+  // B2 (a): bound for this Jira, but the bound type no longer exists: dead, and said so.
+  it("reports a template bound to a type that is gone as dead, and writes nothing", async () => {
+    const f = fixture();
+    const plain = parseJiraIssueTemplate(typed("Aufgabe"));
+    if (!plain.ok) throw new TypeError("Expected a parseable template");
+    const digest = jiraTemplateBindingDigest(INSTANCE, plain.template);
+    const skill = await stored(
+      f,
+      typed("Aufgabe", 'issueTypeId: "99999"', `jiraBinding: "${digest}"`),
+    );
+    const checked = await handleValidateJiraTemplate(
+      context(f.cookie, { podId: POD, markdown: f.deps.store.markdownSkills.get(skill.id)?.body }),
+      f.deps,
+    );
+    expect(checked.body).toMatchObject({ binding: { state: "dead", subject: "Aufgabe" } });
+    expect((await bind(f, skill)).body).toEqual({
+      changed: false,
+      dead: true,
+      issueType: "Aufgabe",
+    });
+    expect(f.deps.store.markdownSkills.get(skill.id)?.revision).toBe(1);
+  });
 
   it("refuses a stale revision, as every skill change does", async () => {
     const f = fixture();

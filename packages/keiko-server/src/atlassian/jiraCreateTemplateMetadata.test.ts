@@ -9,6 +9,10 @@ import {
   type JiraManagedConnection,
 } from "@oscharko-dev/keiko-connectors";
 import type { MarkdownSkillDocument } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  jiraTemplateBindingDigest,
+  parseJiraIssueTemplate,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
@@ -201,11 +205,17 @@ describe("applicable create template metadata through the managed read", () => {
   // under whatever name the acting user sees; a binding made for another Jira means nothing here.
   it("offers a template bound by id under any profile language, and ignores another Jira's binding", async () => {
     const f = fixture();
-    const bound = (instance: string): string =>
-      template("Aufgabe").replace(
+    const bound = (instance: string): string => {
+      const plain = template("Aufgabe");
+      const parsed = parseJiraIssueTemplate(plain);
+      if (!parsed.ok) throw new TypeError("Expected a parseable template");
+      // The digest comes from its producer: the Jira's identity and the typed names it was resolved from.
+      const digest = jiraTemplateBindingDigest(instance, parsed.template);
+      return plain.replace(
         "issueType: Aufgabe",
-        `issueType: Aufgabe\nissueTypeId: "10003"\njiraInstance: "${instance}"`,
+        `issueType: Aufgabe\nissueTypeId: "10003"\njiraBinding: "${digest}"`,
       );
+    };
     f.add(bound("fedcba9876543210fedcba9876543210"));
     expect((await f.read()).data.applicableTemplates).toMatchObject({ matchedCount: 0 });
     f.add(bound(jiraInstanceIdentity(BASE_URL)));

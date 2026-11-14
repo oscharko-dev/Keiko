@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   bindJiraIssueTemplateText,
+  jiraIssueTemplateLabel,
   jiraTemplateForInstance,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
@@ -189,6 +190,7 @@ function skillFileName(name: string): string {
   return `${stem.length === 0 ? "template" : stem}.md`.slice(-MARKDOWN_SKILL_LIMITS.fileNameChars);
 }
 function refusedBinding(
+  template: JiraIssueTemplate,
   resolution: Extract<
     ReturnType<typeof resolveJiraTemplateBinding>,
     { state: "unresolved" | "ambiguous" }
@@ -197,10 +199,10 @@ function refusedBinding(
   const what =
     resolution.state === "ambiguous"
       ? `More than one issue type in this Jira is called "${resolution.subject}"`
-      : `This Jira has no issue type called "${resolution.subject}" in your language`;
+      : `This Jira shows no issue type called "${resolution.subject}" to you`;
   return new UiStoreError(
     "INVALID_REQUEST",
-    `${what}, so the template cannot be bound. Change the name in the template to a type you see in Jira, then check it again.`,
+    `${what}, so the template "${jiraIssueTemplateLabel(template)}" cannot be bound. Write the type as this Jira shows it to you and save the template again, or ask its author to check it against Jira.`,
     422,
   );
 }
@@ -261,7 +263,9 @@ export function handleBindJiraTemplate(
     const resolution = resolveJiraTemplateBinding(template, read.instance, instanceId);
     if (resolution.state === "bound")
       return { status: 200, body: { changed: false, issueType: resolution.issueType } };
-    if (resolution.state !== "bindable") throw refusedBinding(resolution);
+    if (resolution.state === "dead")
+      return { status: 200, body: { changed: false, dead: true, issueType: resolution.subject } };
+    if (resolution.state !== "bindable") throw refusedBinding(template, resolution);
     const saved = saveBinding(deps, skill, resolution.binding);
     return {
       status: 200,

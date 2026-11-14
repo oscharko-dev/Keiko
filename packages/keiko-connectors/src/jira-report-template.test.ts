@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  jiraTemplateBindingDigest,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -551,7 +552,7 @@ describe("the report under a localized issue type name", () => {
   const SEEN = { Story: "Geschichte" } as const;
   const bound = (): JiraIssueTemplate => ({
     ...template(),
-    binding: { instance: INSTANCE, issueTypeId: "11" },
+    binding: { digest: jiraTemplateBindingDigest(INSTANCE, template()), issueTypeId: "11" },
   });
   const stories = (): readonly FixtureIssue[] =>
     project().issues.filter((issue) => issue.type === "Story");

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7029ed9250f9c1cce82e3b7d95be0f64efca3a4d4eac2e7bfefd74a2b7b66d01",
+    "catalogDigest": "5178e16e051f56e9eb347c4f0390db153c141a3bb096efa6342300813f32e63b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -34613,8 +34613,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["jira.field.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:254",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:450"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:264",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:464"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36413,6 +36413,13 @@
               "template-binding-unresolved"
             ],
             "maxItems": 25
+          },
+          "gateFacts": {
+            "type": "string-array",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["type-list-unavailable"],
+            "maxItems": 4
           }
         },
         "causal": "correlation",
@@ -36421,8 +36428,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:156",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:384"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:157",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:395"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36469,8 +36476,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.metadata.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:116",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:146"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:117",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:147"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -102776,6 +102783,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "gateFacts",
+                  "type": "string-array",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "operation",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -122617,7 +122630,7 @@
     {
       "op": "jira.field.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:257",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:267",
       "package": "keiko-server"
     },
     {
@@ -122722,13 +122735,13 @@
     {
       "op": "jira.template.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:159",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:160",
       "package": "keiko-server"
     },
     {
       "op": "jira.template.metadata",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:119",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:120",
       "package": "keiko-server"
     },
     {
