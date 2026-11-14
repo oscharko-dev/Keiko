@@ -11,7 +11,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   atomicPublishRename,
   WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
@@ -117,6 +117,24 @@ function sha256File(path: string): string {
 
 export function portableInstallRootIdentitySha256(path: string): string {
   return sha256Text(realpathSync(path));
+}
+
+/**
+ * The same identity for a root that may no longer exist: the real path of its nearest existing
+ * ancestor with the missing tail appended. A root the managed-root policy admitted has no symbolic
+ * link in its path, so this equals the identity recorded while it existed.
+ */
+export function portableInstallRootIdentityForRemoval(path: string): string {
+  let cursor = resolve(path);
+  const missing: string[] = [];
+  while (!existsSync(cursor)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    missing.unshift(basename(cursor));
+    cursor = parent;
+  }
+  const existing = existsSync(cursor) ? realpathSync(cursor) : cursor;
+  return sha256Text(join(existing, ...missing));
 }
 
 // #KEIKO-0333: fail closed to `undefined` on a truncated / non-JSON registration file
@@ -618,6 +636,31 @@ export function registrationMatches(
 ): boolean {
   return (
     registrationIdentityMatches(registration, layout, manifest) &&
+    registrationGenerationMatches(registration, layout, manifest)
+  );
+}
+
+/**
+ * Whether a registration still describes a partly removed installation: the same checks as
+ * `registrationMatches` for the setup manifest, the root identity and the Windows generation, but a
+ * launcher that a first removal run already deleted is not a mismatch (a present one must match).
+ */
+export function registrationResumeMatches(
+  registration: ManagedSetupRegistration,
+  layout: PortableLayout,
+  manifest: SetupManifest,
+): boolean {
+  const launcherMatches =
+    !existsSync(layout.primaryLauncherPath) ||
+    registration.launcherIdentitySha256 === sha256File(layout.primaryLauncherPath);
+  return (
+    registration.platformTarget === manifest.platformTarget &&
+    registration.packageVersion === manifest.packageVersion &&
+    registration.stable === manifest.stable &&
+    registration.setupManifestSha256 === sha256File(layout.setupManifestPath) &&
+    registration.installRootIdentitySha256 ===
+      portableInstallRootIdentitySha256(layout.installRoot) &&
+    launcherMatches &&
     registrationGenerationMatches(registration, layout, manifest)
   );
 }

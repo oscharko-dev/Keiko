@@ -72,6 +72,7 @@
   "cli.support.export.failed": "runtime-packages",
   "cli.uninstall.completed": "runtime-packages",
   "cli.uninstall.failed": "runtime-packages",
+  "cli.uninstall.handoff": "runtime-packages",
   "cli.uninstall.started": "runtime-packages",
   "client.answer.copied": "client-diagnostics",
   "client.answer.speech-prepared": "client-diagnostics",

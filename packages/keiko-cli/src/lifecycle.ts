@@ -85,6 +85,7 @@ import {
   liveProcessHasLaunchId,
 } from "./ui-process-identity.js";
 import { terminateUiProcess, type WindowsTreeKill } from "./ui-process-stop.js";
+import { visibleWindowsHelperSpawnOptions } from "./windows-helper-start.js";
 import {
   readUiStartupSign,
   type UiStartupProgressFailureRecorder,
@@ -687,16 +688,16 @@ function waitForExternalOpener(child: ChildProcess, timeoutMs: number): Promise<
 }
 
 /**
- * How the platform opener is started. On Windows it runs attached with a hidden window: a detached
- * PowerShell host owns no console, exited 0 and opened no browser on the Windows guest (#4358). The
- * opener is bounded and awaited, so it never needed to outlive `keiko start`; every other platform
- * keeps the detached start.
+ * How the platform opener is started. On Windows it starts through the shared visible-helper start,
+ * attached with a hidden window: a detached PowerShell host owns no console, exited 0 and opened no
+ * browser on the Windows guest (#4358). The opener is bounded and awaited, so it never needed to
+ * outlive `keiko start`; every other platform keeps the detached start.
  */
 function browserOpenerSpawnOptions(
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
 ): SpawnOptions {
-  if (platform === "win32") return { detached: false, windowsHide: true, stdio: "ignore", env };
+  if (platform === "win32") return visibleWindowsHelperSpawnOptions(env);
   return { detached: true, stdio: "ignore", env };
 }
 

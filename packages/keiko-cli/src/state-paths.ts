@@ -11,6 +11,7 @@
 // `--state-dir`/KEIKO_STATE_DIR can never escalate into data loss outside Keiko's
 // own files.
 
+import { UNINSTALL_JOURNAL_FILE } from "./uninstall-journal.js";
 import { isProcessAlive, isProcessId } from "@oscharko-dev/keiko-security/process-scope";
 import { isKeikoUiLaunchId } from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
 export {
@@ -93,6 +94,7 @@ export const KEIKO_STATE_FILES = [
   UI_STARTUP_PROGRESS_STATE_FILE,
   "launcher-state.json",
   "portable-install-state.json",
+  UNINSTALL_JOURNAL_FILE,
 ] as const;
 
 // `launcher-state.ts` writes ephemeral mkdtemp dirs with this prefix during atomic
@@ -755,8 +757,10 @@ export function classifyPid(
 //
 //   <stateDir>/
 //     ui.pid, ui.log, ui.shutdown           lifecycle.ts
+//     ui.starting, ui.browser-open          ui-startup-progress.ts, state-paths.ts (start records)
 //     launcher-state.json                   launcher-state.ts
 //     portable-install-state.json           portable.ts
+//     portable-uninstall-journal.json       uninstall-journal.ts
 //     .launcher-state-*/                    launcher-state.ts atomic-save temp dirs
 //     keiko-ui.db, keiko.config.json         legacy root-local UI data
 //     credentials/*.vault, *.key            legacy provider credential custody
@@ -1160,11 +1164,25 @@ const activityLogManifestsSubtree: OwnedSubtree = {
   childSubtree: NO_CHILD,
 };
 
+// `ui.starting` and `ui.browser-open` are the start's own short-lived records. A normal start
+// removes them; a UI process that was ended while it started (a tree kill on Windows) leaves them
+// behind, and an uninstall that kept them would call Keiko's own file "not a recognized Keiko
+// artifact" and leave the state directory standing (#4358).
+const LIFECYCLE_STATE_FILES: ReadonlySet<string> = new Set([
+  "ui.pid",
+  "ui.log",
+  UI_SHUTDOWN_REQUEST_FILE,
+  UI_BROWSER_OPEN_REQUEST_FILE,
+  UI_STARTUP_PROGRESS_STATE_FILE,
+]);
+
 function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
-  if (name === "ui.pid" || name === "ui.log" || name === UI_SHUTDOWN_REQUEST_FILE) {
-    return "lifecycle";
-  }
-  if (name === "launcher-state.json" || name === "portable-install-state.json") {
+  if (LIFECYCLE_STATE_FILES.has(name)) return "lifecycle";
+  if (
+    name === "launcher-state.json" ||
+    name === "portable-install-state.json" ||
+    name === UNINSTALL_JOURNAL_FILE
+  ) {
     return "launcher";
   }
   if (name === GATEWAY_CONFIG_FILENAME) return "gateway-config";

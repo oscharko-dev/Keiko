@@ -6,14 +6,18 @@ import {
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   emitSecurityLogEvent,
-  resolveWindowsPowerShellExecutable,
-  resolveWindowsSystemDirectory,
   securityErrorKind,
   type SecurityLogSink,
   type WindowsBinaryExistsCheck,
   type WindowsSystemDirectoryIdentityCheck,
 } from "@oscharko-dev/keiko-security";
 import { emitCliWindowsSystemFailure } from "./security-log.js";
+import {
+  resolveWindowsPowerShellHelper,
+  startVisibleWindowsHelper,
+  windowsHelperEnv,
+  type WindowsHelperSystem,
+} from "./windows-helper-start.js";
 
 /**
  * A desktop double-click gives the portable launcher no terminal: every `io.err` line vanishes and
@@ -28,9 +32,10 @@ import { emitCliWindowsSystemFailure } from "./security-log.js";
  * test runner or CI pipe, and the first version of this notifier proved it by raising real alert
  * dialogs on the desktop while the test suite exercised its failure paths.
  *
- * The alert runs detached and unreferenced: it waits for the human at its own pace, never blocks
- * or outlives-holds the CLI process, and is strictly best-effort — it must never turn a
- * diagnosable failure into a different one.
+ * The alert runs unreferenced: it waits for the human at its own pace and never blocks the CLI
+ * process, and is strictly best-effort — it must never turn a diagnosable failure into a different
+ * one. On macOS it is detached; on Windows it starts through the shared visible-helper start
+ * (attached, hidden window), because a detached PowerShell showed no box there (#4358).
  */
 
 const MAX_ALERT_MESSAGE_LENGTH = 400;
@@ -161,6 +166,8 @@ function alertScript(message: string): string {
 interface DetachedAlertChild {
   on(event: "error", listener: (error: Error) => void): unknown;
   unref(): void;
+  readonly exitCode?: number | null;
+  readonly signalCode?: NodeJS.Signals | null;
 }
 
 type DetachedAlertSpawn = (
@@ -172,6 +179,7 @@ type DetachedAlertSpawn = (
     readonly shell: false;
     readonly stdio: "ignore";
     readonly windowsHide?: boolean;
+    readonly cwd?: string;
   },
 ) => DetachedAlertChild;
 
@@ -250,7 +258,8 @@ export interface DetachedWindowsBoxOptions {
 }
 
 /**
- * The one detached Windows message box behind both uses: the failure alert and the setup notice.
+ * The one Windows message box behind both uses: the failure alert and the setup notice. It starts
+ * through the shared visible-helper start and is unreferenced, so the launcher never waits for it.
  * Exported for its direct tests; production callers go through the two notify functions.
  */
 export function runDetachedWindowsBox(
@@ -260,7 +269,7 @@ export function runDetachedWindowsBox(
 ): void {
   const reportAlertFailure = options.reportAlertFailure ?? defaultAlertFailureReport;
   const log: WindowsAlertLog = { kind: box.kind, sink: options.securityLogSink };
-  const system = resolveWindowsAlertSystem(env, options.identityCheck, options.existsAsFile, log);
+  const system = resolveWindowsHelperSystem(env, options.identityCheck, options.existsAsFile, log);
   const child = spawnWindowsAlertChild(box, env, system, options.spawnFn ?? spawn, log);
   child.on("error", (error) => {
     logWindowsAlertSpawnFailure(error, log);
@@ -274,22 +283,14 @@ interface WindowsAlertLog {
   readonly sink: SecurityLogSink | undefined;
 }
 
-interface WindowsAlertSystem {
-  readonly command: string;
-  readonly systemRoot: string;
-}
-
-function resolveWindowsAlertSystem(
+function resolveWindowsHelperSystem(
   env: EnvSource,
   identityCheck: WindowsSystemDirectoryIdentityCheck | undefined,
   existsAsFile: WindowsBinaryExistsCheck | undefined,
   log: WindowsAlertLog,
-): WindowsAlertSystem {
+): WindowsHelperSystem {
   try {
-    return {
-      systemRoot: resolveWindowsSystemDirectory(env, identityCheck),
-      command: resolveWindowsPowerShellExecutable(env, existsAsFile, identityCheck),
-    };
+    return resolveWindowsPowerShellHelper(env, identityCheck, existsAsFile);
   } catch (error) {
     // The refusal belongs to the alert path both boxes share and keeps its security line; a setup
     // notice adds its own line so the refusal can be told from a failed launch.
@@ -302,12 +303,14 @@ function resolveWindowsAlertSystem(
 function spawnWindowsAlertChild(
   box: WindowsBox,
   env: EnvSource,
-  system: WindowsAlertSystem,
+  system: WindowsHelperSystem,
   spawnFn: DetachedAlertSpawn,
   log: WindowsAlertLog,
 ): DetachedAlertChild {
   try {
-    return spawnFn(
+    // The shared visible-helper start: attached with a hidden window, like the browser opener. The
+    // launcher still never waits for the box; its caller unreferences the child.
+    return startVisibleWindowsHelper(
       system.command,
       [
         "-NoLogo",
@@ -321,18 +324,8 @@ function spawnWindowsAlertChild(
         "-Command",
         windowsAlertCommand(box),
       ],
-      {
-        detached: true,
-        env: {
-          SystemRoot: system.systemRoot,
-          WINDIR: system.systemRoot,
-          ...(env.TEMP === undefined ? {} : { TEMP: env.TEMP }),
-          ...(env.TMP === undefined ? {} : { TMP: env.TMP }),
-        },
-        shell: false,
-        stdio: "ignore",
-        windowsHide: true,
-      },
+      windowsHelperEnv(env, system),
+      spawnFn,
     );
   } catch (error) {
     logWindowsAlertSpawnFailure(error, log);

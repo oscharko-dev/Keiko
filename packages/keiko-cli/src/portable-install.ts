@@ -28,6 +28,8 @@ import {
   type ManagedSetupRegistration,
   readManagedRegistration,
   registrationMatches,
+  portableInstallRootIdentityForRemoval,
+  registrationResumeMatches,
   writeFailedRegistration,
   writeManagedRegistration,
   hasPortableInstallRegistration,
@@ -48,6 +50,7 @@ import {
 } from "./portable-maintenance.js";
 import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import type { CliIo } from "./runner.js";
+import type { UninstallJournal } from "./uninstall-journal.js";
 import {
   defaultManagedRoot,
   isPortableTarget,
@@ -1827,6 +1830,112 @@ export function attestedPortableInstallRecord(
     layout: undefined,
     manifest: undefined,
   };
+}
+
+// A candidate that is not allowed, absent or bound to another installation is skipped; a setup
+// manifest that exists but cannot be read is an error the person must see, not a silent mismatch.
+function resumedManagedLayout(
+  registration: ManagedSetupRegistration,
+  managedRoot: string,
+  stateDir: string,
+): { readonly layout: PortableLayout; readonly manifest: SetupManifest } | undefined {
+  const target = registration.platformTarget;
+  if (!managedRootAllowedForTarget(managedRoot, stateDir, target)) return undefined;
+  const rootLayout = layoutFor(target, managedRoot);
+  if (!existsSync(rootLayout.setupManifestPath)) return undefined;
+  const manifest = parseSetupManifest(rootLayout.setupManifestPath);
+  validateSetupManifest(manifest, target);
+  const layout = layoutForSetupManifest(target, managedRoot, manifest);
+  return registrationResumeMatches(registration, layout, manifest)
+    ? { layout, manifest }
+    : undefined;
+}
+
+// An installation whose setup manifest is gone, or whose root is gone altogether: a removal that
+// was interrupted after its identity files. The registration still binds the root by its identity
+// digest, so a candidate whose identity differs is some other folder.
+function goneManagedLayout(
+  registration: ManagedSetupRegistration,
+  managedRoot: string,
+  stateDir: string,
+): PortableLayout | undefined {
+  const target = registration.platformTarget;
+  if (!managedRootAllowedForTarget(managedRoot, stateDir, target)) return undefined;
+  const rootLayout = layoutFor(target, managedRoot);
+  if (existsSync(rootLayout.setupManifestPath)) return undefined;
+  const identity = portableInstallRootIdentityForRemoval(managedRoot);
+  return identity === registration.installRootIdentitySha256 ? rootLayout : undefined;
+}
+
+export interface ResumedPortableInstallRecord {
+  readonly registration: PortableInstallRegistration;
+  readonly target: PortableTarget;
+  readonly managedRoot: string;
+  readonly layout: PortableLayout;
+  /** `files-remaining`: attested by its setup manifest; `installation-gone`: no manifest left. */
+  readonly state: "files-remaining" | "installation-gone";
+}
+
+function journalMatchesRegistration(
+  journal: UninstallJournal,
+  registration: ManagedSetupRegistration,
+): boolean {
+  return (
+    journal.platformTarget === registration.platformTarget &&
+    journal.setupManifestSha256 === registration.setupManifestSha256 &&
+    journal.installRootIdentitySha256 === registration.installRootIdentitySha256
+  );
+}
+
+function findResumed(
+  registration: ManagedSetupRegistration,
+  roots: readonly string[],
+  stateDir: string,
+): ResumedPortableInstallRecord | undefined {
+  const target = registration.platformTarget;
+  for (const managedRoot of roots) {
+    const resumed = resumedManagedLayout(registration, managedRoot, stateDir);
+    if (resumed !== undefined) {
+      const { layout } = resumed;
+      return { registration, target, managedRoot, layout, state: "files-remaining" };
+    }
+  }
+  for (const managedRoot of roots) {
+    const layout = goneManagedLayout(registration, managedRoot, stateDir);
+    if (layout !== undefined) {
+      return { registration, target, managedRoot, layout, state: "installation-gone" };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The installation a first `keiko uninstall` left partly removed, found through the journal that
+ * run wrote before its first deletion. The ordinary attestation cannot succeed any more: it needs
+ * the files that run already removed (a Windows generation's tree digest breaks with the first
+ * one). What remains bound is the registration: its setup manifest digest, its root identity and
+ * its Windows generation. The journal must carry the same digests, and the caller still inspects
+ * every entry against the payload rules, so a foreign entry stays refused. When even the setup
+ * manifest is gone (the removal had reached its last files, or the root itself), the registration's
+ * root identity alone binds the candidate, and the caller removes only empty folders and the
+ * registration artifacts.
+ */
+export function resumedPortableInstallRecord(
+  stateDir: string,
+  env: EnvSource,
+  home: string,
+  journal: UninstallJournal,
+  options: PortableRegistrationOptions = {},
+): ResumedPortableInstallRecord | undefined {
+  const registration = readPortableInstallRegistration(stateDir);
+  if (registration?.status !== "managed" || !journalMatchesRegistration(journal, registration)) {
+    return undefined;
+  }
+  return findResumed(
+    registration,
+    candidateManagedRoots(registration, env, home, options),
+    stateDir,
+  );
 }
 
 export function spawnManagedLauncher(layout: PortableLayout, spawnFn: SpawnFn): void {

@@ -9,7 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, win32 as win32Path } from "node:path";
+import { dirname, join, relative, resolve, sep, win32 as win32Path } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
@@ -31,7 +31,10 @@ import type { CliIo } from "./runner.js";
 import { emitCliWindowsSystemFailure } from "./security-log.js";
 import { defaultManagedRoot, type PortableLayout, type PortableTarget } from "./portable-shared.js";
 import { portableAppEntries } from "./portable-app-record.js";
-import { portableRuntimeRecordEntries } from "./portable-runtime-record.js";
+import {
+  portableRuntimeRecordEntries,
+  RUNTIME_ACTIVATION_RECORD_PATH,
+} from "./portable-runtime-record.js";
 
 export type ManagedRootMode = "default" | "custom";
 export type NativeRegistrationKind = "windows-start-menu" | "macos-system-applications";
@@ -896,6 +899,120 @@ export function removePortableManagedInstall(
   }
 }
 
+// A file or folder another program holds open cannot be removed on Windows, and the running
+// program's own files are held by that very program (#4358). These codes name such a refusal; any
+// other error is a real failure and stops the removal where it is.
+const LOCKED_ENTRY_CODES: ReadonlySet<string> = new Set(["EPERM", "EBUSY", "EACCES", "ENOTEMPTY"]);
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+export interface ManagedRemovalOptions {
+  /**
+   * Leave the launcher and the setup manifest, which identify the installation to a second run,
+   * to the caller: the removal reports them as remaining without touching them.
+   */
+  readonly deferIdentity: boolean;
+  readonly unlink?: ((path: string) => void) | undefined;
+  readonly rmdir?: ((path: string) => void) | undefined;
+}
+
+export interface ManagedRemovalOutcome {
+  readonly removedCount: number;
+  /** Files that could not be removed or were deferred, in removal order. */
+  readonly residueFiles: readonly string[];
+  /** The part of `residueFiles` that identifies the installation; always the last entries. */
+  readonly identityResidue: readonly string[];
+  /** Folders still holding something, deepest first. */
+  readonly residueDirectories: readonly string[];
+}
+
+// The files a second run needs to find and judge an interrupted removal go last: the record that
+// names the runtime files and the package.json that names the app files (inspection reads both),
+// then the launcher the registration binds and the setup manifest that identifies the installation.
+function identityLast(
+  layout: PortableLayout,
+  files: readonly string[],
+): { readonly payload: readonly string[]; readonly identity: readonly string[] } {
+  const identityPaths = [
+    join(layout.resourceRoot, ...RUNTIME_ACTIVATION_RECORD_PATH.split("/")),
+    layout.packageJsonPath,
+    layout.primaryLauncherPath,
+    layout.setupManifestPath,
+  ];
+  return {
+    payload: files.filter((file) => !identityPaths.includes(file)),
+    identity: identityPaths.filter((path) => files.includes(path)),
+  };
+}
+
+function removeEntryTolerant(path: string, remove: (path: string) => void): "removed" | "locked" {
+  try {
+    remove(path);
+    return "removed";
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "ENOENT") return "removed";
+    if (code !== undefined && LOCKED_ENTRY_CODES.has(code)) return "locked";
+    throw error;
+  }
+}
+
+/**
+ * Removes a managed installation file by file and keeps going past an entry that cannot be removed,
+ * instead of stopping at the first refusal and leaving the rest to chance. The caller learns exactly
+ * what remains. Only entries the inspection accepted are touched, so a foreign file is never
+ * removed; a folder that still holds one stays.
+ */
+export function removePortableManagedInstallTolerant(
+  layout: PortableLayout,
+  io: CliIo,
+  options: ManagedRemovalOptions,
+): ManagedRemovalOutcome {
+  if (!existsSync(layout.installRoot)) {
+    return { removedCount: 0, residueFiles: [], identityResidue: [], residueDirectories: [] };
+  }
+  const scan = inspectPortableManagedInstall(layout);
+  if (scan.issues.length > 0) throw new Error(scan.issues[0]);
+  const unlink = options.unlink ?? unlinkSync;
+  const rmdir = options.rmdir ?? rmdirSync;
+  const { payload, identity } = identityLast(layout, scan.files);
+  const residueFiles: string[] = [];
+  let removedCount = 0;
+  const removeAll = (paths: readonly string[]): void => {
+    for (const file of paths) {
+      if (removeEntryTolerant(file, unlink) === "removed") {
+        removedCount += 1;
+        io.out(`removed: ${file}\n`);
+      } else residueFiles.push(file);
+    }
+  };
+  removeAll(payload);
+  // The identity files are touched only when nothing else is left: a second run needs them to find
+  // the installation. A caller that hands the rest to a helper takes them over as well.
+  const identityResidue: string[] = [];
+  if (options.deferIdentity || residueFiles.length > 0) {
+    residueFiles.push(...identity);
+    identityResidue.push(...identity);
+  } else {
+    const before = residueFiles.length;
+    removeAll(identity);
+    identityResidue.push(...residueFiles.slice(before));
+  }
+  const residueDirectories: string[] = [];
+  for (const directory of [...scan.directories].reverse()) {
+    const holdsResidue = [...residueFiles, ...residueDirectories].some((entry) =>
+      entry.startsWith(`${directory}${sep}`),
+    );
+    if (!holdsResidue && removeEntryTolerant(directory, rmdir) === "removed") {
+      io.out(`removed: ${directory}\n`);
+    } else residueDirectories.push(directory);
+  }
+  return { removedCount, residueFiles, identityResidue, residueDirectories };
+}
+
 export function removePortableRegistrationArtifacts({
   layout,
   target,
@@ -914,4 +1031,71 @@ export function removePortableRegistrationArtifacts({
     removed += removeLegacyWindowsRegistration(layout, env, home, dryRun, io, options) ? 1 : 0;
   }
   return removed;
+}
+
+function emptyTreeDirectories(root: string, directories: string[]): void {
+  directories.push(root);
+  for (const name of readdirSync(root)) {
+    const entry = join(root, name);
+    const stat = lstatSync(entry);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(topLevelUnknown(normalizedRelativePath(directories[0] ?? root, entry)));
+    }
+    emptyTreeDirectories(entry, directories);
+  }
+}
+
+/**
+ * Removes what is left of an installation that an interrupted removal reduced to folders: the
+ * folders, deepest first, each without its content. It holds no file; any entry that is not a
+ * folder is a foreign one and refuses the whole removal, so nothing is deleted through it. A folder
+ * another program holds open stays and is reported, as in the file-by-file removal.
+ */
+export function removeEmptyInstallTree(
+  root: string,
+  io: CliIo,
+  rmdir: (path: string) => void = rmdirSync,
+): ManagedRemovalOutcome {
+  if (!existsSync(root)) {
+    return { removedCount: 0, residueFiles: [], identityResidue: [], residueDirectories: [] };
+  }
+  const directories: string[] = [];
+  emptyTreeDirectories(root, directories);
+  const residueDirectories: string[] = [];
+  let removedCount = 0;
+  for (const directory of [...directories].reverse()) {
+    const holdsResidue = residueDirectories.some((entry) => entry.startsWith(`${directory}${sep}`));
+    if (!holdsResidue && removeEntryTolerant(directory, rmdir) === "removed") {
+      removedCount += 1;
+      io.out(`removed: ${directory}\n`);
+    } else residueDirectories.push(directory);
+  }
+  return { removedCount, residueFiles: [], identityResidue: [], residueDirectories };
+}
+
+const WOULD_REMOVE_PREFIX = "would-remove: ";
+
+/**
+ * The registration artifacts (the Windows Start-menu entry and its legacy launcher) a removal would
+ * delete, each already verified as Keiko's own by the same checks the removal runs. Nothing is
+ * deleted; a caller that hands the deletion to a helper learns the exact paths through this.
+ */
+export function portableRegistrationArtifactPaths(
+  input: Omit<PortableRegistrationRemovalInput, "dryRun" | "io">,
+): readonly string[] {
+  const paths: string[] = [];
+  removePortableRegistrationArtifacts({
+    ...input,
+    dryRun: true,
+    io: {
+      out: (text: string): void => {
+        for (const line of text.split("\n")) {
+          if (line.startsWith(WOULD_REMOVE_PREFIX))
+            paths.push(line.slice(WOULD_REMOVE_PREFIX.length));
+        }
+      },
+      err: (_text: string): void => undefined,
+    },
+  });
+  return paths;
 }

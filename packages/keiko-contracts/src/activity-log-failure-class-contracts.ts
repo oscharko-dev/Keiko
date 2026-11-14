@@ -1230,7 +1230,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-cli"],
     requiredLifecycleOperations: {
       start: ["cli.uninstall.started"],
-      state: [],
+      state: ["cli.uninstall.handoff"],
       end: ["cli.uninstall.completed"],
       failure: ["cli.uninstall.failed"],
       loss: [],
@@ -1240,10 +1240,15 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: [
       "cli.uninstall.completed",
       "cli.uninstall.failed",
+      "cli.uninstall.handoff",
       "cli.uninstall.started",
     ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["cli.uninstall.completed", "cli.uninstall.started"],
+    requiredResourceOperations: [
+      "cli.uninstall.completed",
+      "cli.uninstall.handoff",
+      "cli.uninstall.started",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",
