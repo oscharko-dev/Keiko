@@ -755,13 +755,19 @@ export const REVIEW_RUN_DEFAULT_DURATION_MINUTES = 20;
 /**
  * The read, search and discover calls one Reviewer session gets answered (ADR-0182 D1, Issue
  * #4130). Every call resends the whole conversation, so a session that keeps reading uses up its
- * prompt allowance before it reports. In the 418 stored reviews of the 4-bit gate runs, the 127
- * that ran out of prompt budget made 39 to 45 model calls (first to third quartile), and 73 of them
- * had reported nothing. After 26 model calls a review had used 703,000 prompt tokens at the median
- * and 1,143,000 at most, which leaves room for the reports. The Reviewer prompt still plans for
- * about 15 calls.
+ * prompt allowance before it reports.
+ *
+ * The first value, 24, came from the stored reviews of the 4-bit gate runs, which had one session
+ * per review. Development iteration 7 measured it with one session per diff part. Of its 100
+ * sessions, 52 used all 24 reads. Those used 444,000 to 1,562,000 prompt tokens, 885,000 at the
+ * median, and four of them ran out of the prompt budget of 1,500,000; a fifth session did after
+ * 23 reads. The 9 sessions that stopped on their own after 9 to 16 reads used 472,000 at the
+ * median and 1,011,000 at most. Half of all sessions read up to whatever the allowance is, so the
+ * allowance decides what they cost.
+ *
+ * The Reviewer prompt still plans for about 15 calls.
  */
-export const REVIEW_RUN_DEFAULT_MAX_READ_CALLS = 24;
+export const REVIEW_RUN_DEFAULT_MAX_READ_CALLS = 16;
 /**
  * The most parts one review's diff package is split into (ADR-0182 D1). Each part fits the
  * runtime's first-prompt bound and gets its own Reviewer session, which the run budgets above
@@ -881,10 +887,15 @@ export const REVIEW_RUN_DIFF_CONTEXT_MAX = 64;
 
 /** Counter-check bounds per candidate finding (ADR-0182 D5); operators may configure them. */
 export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS = 32;
-// #4138: 600 s, tuned on the development set. A local Gemma 4 31B 4-bit counter-checker generates
-// about 12 tokens per second: at 120 s it ended candidates undecided after 1 to 5 tool calls, and at
-// 300 s 20 of 48 checks still ended undecided while the decided ones took up to 285 s.
-export const REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS = 600_000;
+// #4138, #4130: 900 s, tuned on the development set. A local Gemma 4 31B 4-bit counter-checker
+// generates about 10 to 12 tokens per second: at 120 s it ended candidates undecided after 1 to 5
+// tool calls, and at 300 s 20 of 48 checks still ended undecided while the decided ones took up to
+// 285 s. At 600 s (development iteration 7) 25 of 202 checks ended undecided on the limit. The 176
+// decided ones took 210 s at the median, 485 s at the ninth decile and 571 s at most, and 18 of
+// them finished in the last 120 s before the limit, so the limit cut the slow end of one spread.
+// The longer limit goes together with the phase's stop once the presentation is full (ADR-0182
+// D5), which removes more checks than the limit lengthens.
+export const REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS = 900_000;
 /**
  * Prompt tokens one counter-check may spend, and all counter-checks of one run together for each
  * part of its diff package (#4130: each part's Reviewer session may file its own candidates).
@@ -894,10 +905,10 @@ export const REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS = 1_200_000;
 /**
  * Wall time the `counter-checking` phase of one run may take for each part of its diff package
  * (#4130). No counter-check starts after it; a check in flight ends at its own limit, so the phase
- * overruns by at most one check. 60 minutes is six checks at the per-check limit, the number the run
- * prompt allowance covers. On the offline gate's sets the longest single-part phase of the local
+ * overruns by at most one check. 60 minutes is four checks at the per-check limit; the run prompt
+ * allowance covers six. On the offline gate's sets the longest single-part phase of the local
  * 4-bit pair took 54 minutes for eight candidates; without the limit a twelve-part review could
- * spend 96 checks of 600 s, 16 hours, in this phase.
+ * spend 96 checks of 900 s, 24 hours, in this phase.
  */
 export const REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS = 3_600_000;
 

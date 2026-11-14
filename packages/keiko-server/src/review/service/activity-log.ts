@@ -181,6 +181,9 @@ const REVIEW_RUN_PART = defineActivityLogOperation({
     // admission, and the ones it refused once it was used up. Absent when no session started.
     readCallCount: OPTIONAL_COUNT,
     refusedReadCallCount: OPTIONAL_COUNT,
+    // #4130: present (2) only on the line of a part's second session, which is started once when
+    // the first ended on a model failure before any report was accepted.
+    attempt: OPTIONAL_COUNT,
     promptTokens: COUNT,
     completionTokens: COUNT,
     durationMs: DURATION,
@@ -218,6 +221,10 @@ const REVIEW_RUN_SETTLED = defineActivityLogOperation({
     refutedCount: COUNT,
     undecidedCount: COUNT,
     presentedCount: COUNT,
+    // #4130: candidates no counter-check ran for because the run already presented as many
+    // findings as it may. They carry no verdict and do not make the run incomplete. Present only
+    // when there are any.
+    surplusCandidateCount: OPTIONAL_COUNT,
     reviewerPromptTokens: COUNT,
     reviewerCompletionTokens: COUNT,
     reviewerDurationMs: DURATION,
@@ -356,6 +363,8 @@ export interface ReviewRunPartLine {
   readonly candidateCount: number;
   /** The session's admitted and refused read calls (#4130); absent when no session started. */
   readonly readCalls?: { readonly admitted: number; readonly refused: number } | undefined;
+  /** Only on a part's second session (#4130). */
+  readonly attempt?: number | undefined;
   readonly totals: ReviewRoleTotals;
 }
 
@@ -385,12 +394,20 @@ export function logReviewRunPart(
               readCallCount: line.readCalls.admitted,
               refusedReadCallCount: line.readCalls.refused,
             }),
+        ...(line.attempt === undefined ? {} : { attempt: line.attempt }),
         promptTokens: line.totals.promptTokens,
         completionTokens: line.totals.completionTokens,
         durationMs: Math.max(0, Math.round(line.totals.durationMs)),
       },
     ),
   );
+}
+
+/** The surplus count as a field, only when there is a surplus. */
+function surplusCandidateCount(surplus: number | undefined): {
+  readonly surplusCandidateCount?: number;
+} {
+  return surplus !== undefined && surplus > 0 ? { surplusCandidateCount: surplus } : {};
 }
 
 export interface ReviewRunSettledLine {
@@ -403,6 +420,8 @@ export interface ReviewRunSettledLine {
     readonly refuted: number;
     readonly undecided: number;
     readonly presented: number;
+    /** Candidates left unchecked because the presentation was already full (#4130). */
+    readonly surplus?: number | undefined;
   };
   readonly reviewer: ReviewRoleTotals;
   readonly counterChecker: ReviewRoleTotals;
@@ -452,6 +471,7 @@ export function logReviewRunSettled(
         refutedCount: line.verdicts.refuted,
         undecidedCount: line.verdicts.undecided,
         presentedCount: line.verdicts.presented,
+        ...surplusCandidateCount(line.verdicts.surplus),
         reviewerPromptTokens: line.reviewer.promptTokens,
         reviewerCompletionTokens: line.reviewer.completionTokens,
         reviewerDurationMs: Math.round(line.reviewer.durationMs),

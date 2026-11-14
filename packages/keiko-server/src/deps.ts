@@ -41,7 +41,7 @@ import {
   type OwnAssessmentPolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import {
-  awaitInitializedConversationReadiness,
+  ensureReviewModelReady,
   stopConfiguredConversationReadiness,
 } from "./gateway-readiness.js";
 import { createGatewayStartupChecks } from "./gateway-startup.js";
@@ -5361,8 +5361,8 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
       // Issue #4137: the operator and user policy in front of eligibility at every run start.
       admit: reviewRunAdmission(() => reviewPolicyDeps(args), activityLog),
       // Issue #4138: a lapsed readiness observation is checked again, as for a conversation.
-      ensureReady: (modelId, correlationId) =>
-        awaitInitializedConversationReadiness(deps, modelId, correlationId),
+      // Issue #4130: so is a lapsed tool-call proof, which the session's launch needs as well.
+      ensureReady: (modelId, correlationId) => ensureReviewModelReady(deps, modelId, correlationId),
     },
     activityLog,
     reviewerPromptBudget: budget.promptTokenBudget,

@@ -141,14 +141,31 @@ describe("review run service: complete runs and presentation (AC2)", () => {
     expect(view.presentedFindings.map((finding) => finding.report.startLine)).toEqual([3, 10, 4]);
     expect(view.presentedFindings.map((finding) => finding.presentationRank)).toEqual([1, 2, 3]);
     expect(view.candidateCount).toBe(5);
+    // #4130: the three presented findings are the first three checked (severity, then the
+    // Reviewer's order). The two candidates after them could not be presented, so no
+    // counter-check ran for them: they are stored without a verdict, and the run is complete.
+    expect(h.counterInputs.map((input) => input.candidate.report.startLine)).toEqual([3, 10, 4]);
     const stored = h.store.findings(view.runId);
     expect(stored).toHaveLength(5);
     expect(
-      stored.filter((finding) => !finding.presented).map((finding) => finding.verdict?.verdict),
-    ).toEqual(expect.arrayContaining(["confirmed", "refuted"]));
+      stored
+        .filter((finding) => !finding.presented)
+        .map((finding) => [finding.report.startLine, finding.verdict]),
+    ).toEqual([
+      [7, null],
+      [2, null],
+    ]);
+    expect(h.log.events.find((event) => event.op === "review.run.settled")?.extra).toMatchObject({
+      candidateCount: 5,
+      confirmedCount: 3,
+      refutedCount: 0,
+      undecidedCount: 0,
+      presentedCount: 3,
+      surplusCandidateCount: 2,
+    });
     expect(view.totals.reviewer.promptTokens).toBe(4_321);
     expect(view.totals.reviewer.completionTokens).toBe(612);
-    expect(view.totals.counterChecker.promptTokens).toBe(2_500);
+    expect(view.totals.counterChecker.promptTokens).toBe(1_500);
     expect(view.coverageEntries.map((entry) => entry.path).sort()).toEqual([
       "src/total.ts",
       "src/util.ts",
@@ -889,8 +906,12 @@ describe("review run service: fault injection", () => {
   it("announces abandoned/interrupted when a store read fails during settling", async () => {
     const record = vi.spyOn(defaultServerDiagnosticSink, "record");
     const reads = { fail: false };
+    // #4130: the settling phase's store read is the run row behind the exclusion of dismissed
+    // fingerprints, read when a candidate is first asked about. Without counter-checks that is
+    // during settling, as before; with them the counter-check phase has already asked.
     const h = setUp({
-      runtime: reviewerFiling([]),
+      evaluation: { counterCheck: "off" },
+      runtime: reviewerFiling([reportAt(3, "high")]),
       store: (db) => {
         const store = new ReviewRunStore(db);
         const get = store.get.bind(store);

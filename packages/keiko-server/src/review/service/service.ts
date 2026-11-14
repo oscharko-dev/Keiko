@@ -355,10 +355,11 @@ class ReviewRunServiceImpl implements ReviewRunService {
   private async execute(ctx: ReviewRunContext, live: LiveRun): Promise<void> {
     const state = newReviewRunState();
     const deps = this.sequenceDeps();
+    const excluded = this.exclusionFor(ctx);
     try {
       const diffPackage = await prepareReviewRun(deps, ctx, state);
       if (diffPackage !== undefined && (await runReviewer(deps, ctx, state, diffPackage))) {
-        await counterCheckCandidates(deps, ctx, state);
+        await counterCheckCandidates(deps, ctx, state, excluded);
       }
     } catch (error) {
       // A failure no building block turned into a closed outcome (a store write, a thrown port)
@@ -366,7 +367,28 @@ class ReviewRunServiceImpl implements ReviewRunService {
       state.preparation ??= { kind: "abandoned", reason: "interrupted" };
       reportReviewFailure("review.run.execute", ctx.correlationId, error);
     }
-    await this.settle(ctx, state, live);
+    await this.settle(ctx, state, live, excluded);
+  }
+
+  /**
+   * The run's exclusion of dismissed fingerprints (Issue #4141), one answer per fingerprint for
+   * the whole run. The counter-check phase stops once the presentation is full (#4130), and the
+   * settlement then presents on the same answers, so a dismissal that arrives between the two
+   * cannot leave a place empty that an unchecked candidate could have taken.
+   */
+  private exclusionFor(ctx: ReviewRunContext): (fingerprint: string) => boolean {
+    const answers = new Map<string, boolean>();
+    return (fingerprint): boolean => {
+      const known = answers.get(fingerprint);
+      if (known !== undefined) return known;
+      // The run's row is read when a fingerprint is first asked for: a failed read surfaces in the
+      // phase that asked, where the run's failure handling is.
+      const row = this.deps.store.get(ctx.runId);
+      const answer =
+        row !== undefined && this.deps.excludedFingerprint?.(row, fingerprint) === true;
+      answers.set(fingerprint, answer);
+      return answer;
+    };
   }
 
   /**
@@ -375,10 +397,15 @@ class ReviewRunServiceImpl implements ReviewRunService {
    * of rejecting the run's unawaited `done` promise (R4130-020); the row then settles at the next
    * start or cancel, which writes the run's one `review.run.settled` line.
    */
-  private async settle(ctx: ReviewRunContext, state: ReviewRunState, live: LiveRun): Promise<void> {
+  private async settle(
+    ctx: ReviewRunContext,
+    state: ReviewRunState,
+    live: LiveRun,
+    excluded: (fingerprint: string) => boolean,
+  ): Promise<void> {
     let settled: ReviewSettledRun = { settlement: INTERRUPTED, presentedCount: 0 };
     try {
-      settled = await this.settleRecord(ctx, state, live);
+      settled = await this.settleRecord(ctx, state, live, excluded);
     } catch (error) {
       reportReviewFailure("review.run.persist", ctx.correlationId, error);
       await removeReviewWorktree(this.deps, ctx, state, INTERRUPTED);
@@ -392,13 +419,13 @@ class ReviewRunServiceImpl implements ReviewRunService {
     ctx: ReviewRunContext,
     state: ReviewRunState,
     live: LiveRun,
+    excluded: (fingerprint: string) => boolean,
   ): Promise<ReviewSettledRun> {
     try {
       enterReviewRunPhase(this.sequenceDeps(), ctx, "settling");
     } catch (error) {
       reportReviewFailure("review.run.persist", ctx.correlationId, error);
     }
-    const row = this.deps.store.get(ctx.runId);
     return settleRunRecord(
       {
         store: this.deps.store,
@@ -406,8 +433,7 @@ class ReviewRunServiceImpl implements ReviewRunService {
         activityLog: this.deps.activityLog,
         stale: this.stale,
         now: this.now,
-        excluded: (fingerprint) =>
-          row !== undefined && this.deps.excludedFingerprint?.(row, fingerprint) === true,
+        excluded,
       },
       ctx,
       state,

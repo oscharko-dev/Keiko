@@ -72,7 +72,7 @@ holdout motivated the split: 158 of 226 measured reviews left diff files unproce
 whole package had to fit one task.
 
 Each session also has a read allowance (Issue #4130): the tool facade answers at most
-`REVIEW_RUN_DEFAULT_MAX_READ_CALLS` (24) read, search and discover calls of a session. It refuses
+`REVIEW_RUN_DEFAULT_MAX_READ_CALLS` (16) read, search and discover calls of a session. It refuses
 every further one before any admission, with one fixed instruction to report the confirmed findings
 and end the turn. `keiko_review_report` is never counted or refused by it. The task already carries
 every changed hunk of the part, so the allowance bounds only how much surrounding code a session
@@ -95,10 +95,34 @@ reason is the measured behaviour of a local Reviewer: every tool call resends th
 conversation, and in the 418 stored reviews of the 4-bit gate runs the 127 that ran out of prompt
 budget had made 39 to 45 model calls (first to third quartile), 73 of them without one report.
 After 26 model calls a review had used 703,000 prompt tokens at the median and 1,143,000 at most,
-which leaves room for its reports within the default prompt budget. The Reviewer prompt names the
+which leaves room for its reports within the default prompt budget. That gave the first value,
+24. Development iteration 7 then measured the allowance with one session per diff part, and 24
+proved too many: of its 100 sessions, 52 used all 24 reads, and those used 444,000 to 1,562,000
+prompt tokens (885,000 at the median). Four of them ran out of the prompt budget, and a fifth
+session did after 23 reads. The 9 sessions that stopped on their own after 9 to 16 reads used
+472,000 at the median and 1,011,000 at most. Half of all sessions read up to whatever the
+allowance is, so the allowance decides what they cost, and 16 keeps such a session inside the
+prompt budget with room for its reports. The figures above about the 418 stored reviews describe
+the allowance of 24 and are kept as its record. The Reviewer prompt names the
 allowance and still plans for about 15 calls. The counter and its predicate live beside the layer-4
 guard (`reviewRuntimeGuard.ts`); the review runtime creates one per session and returns its counts
 with the session's result.
+
+A part's Reviewer session that ends on a model failure before one report was accepted is started
+once more (Issue #4130). A local model sometimes ends a session with a tool call the gateway's
+corrections do not repair, or with an empty answer, and the review then lost the whole part and
+settled `incomplete/model-failed`. In development iteration 7 that happened in 5 of 100 sessions,
+spread over 4 of the 30 reviews (3 invalid tool calls after two corrections each, 2 empty answers);
+the gateway had corrected 62 of 65 rejected tool calls before that. Only a session without an
+accepted report is started again: nothing of it is kept, so the part is reviewed from the start.
+That covers 2 of those 5 sessions. A session that already filed a candidate is not started again:
+its candidates are kept, and a second session over the same hunks would file most of them again. A
+finding on the same defect lines keeps its fingerprint (D7) and would merge, but one reported on
+other lines would not, and a duplicate counts against the gated rate (D9). Whether a second session
+is worth that for the other 3 sessions is not measured. A session out of budget or time is not
+started again either. Each session
+writes its own `review.run.part` line, the second with `attempt: 2`, and the part's outcome is the
+last session's.
 
 ### D2 — Read-only by construction, independent of the autonomy mode
 
@@ -268,8 +292,11 @@ task: location, category, condition, mechanism, consequence and evidence locatio
 rules block the Reviewer received, as nonce-bound untrusted data, never the Reviewer's reasoning, transcript, title, remedy, failure-mode prose or any
 other candidate. The verdict tool records the first valid `CounterCheckVerdict` (the server binds
 the fingerprint) and ends the session; free text is ignored and a missing or invalid verdict is
-`undecided/insufficient-context`. Defaults per candidate: 32 tool calls, 600 seconds (raised from
-120 and then 300 seconds on the offline gate's development set, Issue #4138), 200,000 prompt
+`undecided/insufficient-context`. Defaults per candidate: 32 tool calls, 900 seconds (raised from
+120, 300 and then 600 seconds on the offline gate's development set, Issues #4138 and #4130; at
+600 seconds, 25 of the 202 checks of development iteration 7 ended undecided on the limit, while
+the 176 decided ones took 210 seconds at the median, 485 at the ninth decile and 571 at most, and
+18 of them finished in the last 120 seconds before the limit), 200,000 prompt
 tokens, and 1,200,000 prompt tokens for all counter-checks of a run for each part of its diff
 package (Issue #4130: each part's Reviewer session may file up to eight candidates, so a fixed run
 allowance left the candidates of a many-part review unchecked; the `counter-checking` phase line
@@ -280,19 +307,33 @@ ceiling or a refused reservation ends a session `undecided/out-of-budget` and th
 model `incomplete/model-failed`. Candidates are checked by severity, then in the Reviewer's order;
 candidates left when the run's allowance ran out stay unchecked and make the run incomplete.
 
+The phase stops when the run already presents as many findings as it may (Issue #4130).
+Counter-checks run in the order the presentation rule ranks by, so once three checked candidates
+are presentable, every candidate that is still unchecked ranks after them and can never be
+presented. Its verdict would change nothing a person sees. Such candidates are surplus: no
+counter-check runs for them, they stay in the run record without a verdict, the settled line counts
+them as `surplusCandidateCount`, and they do not make the run incomplete. "Presentable" is the
+presentation rule itself (`presentationIsFull` calls `presentReviewFindings`), with the run's
+exclusion of dismissed fingerprints; the service asks that exclusion once per fingerprint for the
+whole run, so the phase and the settlement decide on the same answers. A check before the stop that
+could not finish still makes the run incomplete, because that candidate could have ranked among the
+presented ones. In development iteration 7, 5.30 of the 16.24 hours of counter-checks were spent
+after the third presentable candidate, and in one review a check after it ran into its limit and
+alone made the review incomplete.
+
 The `counter-checking` phase has its own wall-time limit (Issue #4130): 60 minutes for each part of
 the diff package, recorded on the phase line as `counterCheckPhaseWallTimeMs`. The per-candidate
-limit alone bounded one check, so a twelve-part review with 96 candidates could spend 16 hours in
+limit alone bounded one check, so a twelve-part review with 96 candidates could spend 24 hours in
 this phase. Once the limit has passed the phase starts no further counter-check; the candidates left
 stay unchecked and the run settles `incomplete/deadline-exceeded`, or `incomplete/budget-exhausted`
 when the prompt allowance ran out as well. A check in flight is not cut and ends at its own limit,
-so the phase overruns by at most one check: the configured per-candidate wall time (600 seconds by
+so the phase overruns by at most one check: the configured per-candidate wall time (900 seconds by
 default) plus the reads that verify that check's evidence in the head commit after its session.
-60 minutes is six checks at the per-candidate limit, the number the run prompt allowance covers. On
+60 minutes is four checks at the per-candidate limit; the run prompt allowance covers six. On
 the offline gate's sets the longest single-part phase of the local 4-bit pair took 54 minutes for
 eight candidates, and a 30-minute limit would have left candidates unchecked in many measured
-reviews. The settled line's `candidateCount` minus its three verdict counts is the number of
-candidates left unchecked.
+reviews. The settled line's `candidateCount` minus its three verdict counts and its
+`surplusCandidateCount` is the number of candidates the allowance or the limit left unchecked.
 
 The presentation rule is one pure function (`review/service/presentation.ts`): a candidate is
 presented only when its verdict is `confirmed`, bound to its own fingerprint, every verdict evidence
@@ -349,7 +390,9 @@ rules read `abandoned/interrupted`. A Reviewer that fails with an exhausted prom
 authority budget is `incomplete/budget-exhausted`, and so is a Reviewer session that the read
 allowance (D1) refused a read and that filed no accepted report; with an exhausted envelope duration
 `incomplete/deadline-exceeded`, otherwise `incomplete/model-failed`; its candidates are still
-counter-checked, and findings confirmed before an incomplete settlement are presented. A Reviewer
+counter-checked, and findings confirmed before an incomplete settlement are presented. Candidates
+the allowance or the phase limit left unchecked make the run incomplete; surplus candidates, which
+the phase skipped because the presentation was already full (D5), do not. A Reviewer
 runtime run that settled `recovery-required` is such a failed Reviewer, with one exception (#4136):
 the orchestrator's `succeededTurnReapUnproven` names a run whose turn settled `succeeded` and whose
 settlement stop revoked every authority but could not prove the process tree's exit
@@ -503,7 +546,19 @@ verifies the Reviewer model's again right before its self-check reads the model'
 (Issue #4130): that authority is minted only for a readiness observation younger than five minutes,
 and the preparation, the rules read, the instance start or an earlier part's session can outlast
 it. A fresh observation makes the check a no-op; a lapsed one is probed under the run's correlation
-(`gateway.readiness.automatic.*`). A check that fails is reported as a `review.run.model-readiness`
+(`gateway.readiness.automatic.*`). The same check renews the model's forced tool-call proof when
+it has lapsed (Issue #4130). The launch is admitted like a coding run, which needs that proof, and
+the proof expires after 24 hours (`TOOL_CALLING_VERIFICATION_MAX_AGE_MS`). Only the Coding
+Workbench renewed it, when its gateway profile was read; a review has no such read. A server that
+had run for more than a day therefore refused every Reviewer session as `model-unavailable`
+(`review.run.profile-refused`, layer `authority`) although the model had just answered: in
+development iteration 7 the first refusal came 24 hours and 8 minutes after the server's start, 0.3
+seconds after the same model had finished the previous part. `ensureReviewModelReady`
+(`gateway-readiness.ts`) asks for the named model's proof through the Workbench's own bounded
+probe queue, with the trigger `review-launch` on `gateway.readiness.automatic.started`, and then
+for its chat readiness. Only the named model is probed, and only when it needs a probe: a current
+proof costs no request, and a refuted proof is a verdict that is not probed again. A probe the
+gateway never answered runs again, because the review is asking. A check that fails is reported as a `review.run.model-readiness`
 diagnostic and leaves the decision to the self-check. A run cancelled during the check does not
 wait for it and starts no Reviewer session.
 Operators may set defaults and restrict the choice; invalid explicit configuration fails closed.

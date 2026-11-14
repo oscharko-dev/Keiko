@@ -21644,7 +21644,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["profile-read", "startup"],
+        values: ["profile-read", "startup", "review-launch"],
       },
     },
     causal: "correlation",
@@ -34568,6 +34568,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      attempt: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       promptTokens: {
         type: "integer",
         dataClass: "count",
@@ -35060,6 +35065,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      surplusCandidateCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       reviewerPromptTokens: {
         type: "integer",

@@ -178,6 +178,15 @@ describe("review run Activity Log proofs", () => {
     // A part whose session never started carries no read counts.
     expect(JSON.parse(failed)).not.toHaveProperty("readCallCount");
     expect(JSON.parse(failed)).not.toHaveProperty("refusedReadCallCount");
+    // #4130: only the line of a part's second session says which attempt it is.
+    expect(JSON.parse(failed)).not.toHaveProperty("attempt");
+    const second = onlyLine((sink) => {
+      logReviewRunPart(sink, CORRELATION, { ...part, outcome: "completed", attempt: 2 });
+    });
+    expect(expectActivityLogProof("review.run.part.line", second)).toMatchObject({
+      outcome: "completed",
+      attempt: 2,
+    });
   });
 
   it("proves review.run.settled with settlement, verdict counts and role totals", () => {
@@ -199,6 +208,40 @@ describe("review run Activity Log proofs", () => {
       presentedCount: 2,
       stale: true,
     });
+  });
+
+  // #4130: candidates the counter-check phase skipped because the presentation was already full
+  // are counted on the settled line, and only when there are any.
+  it("proves review.run.settled with its surplus candidates", () => {
+    const settled = (surplus: number | undefined): string =>
+      onlyLine((sink) => {
+        logReviewRunSettled(sink, CORRELATION, {
+          runId: "review-run-1",
+          settlement: { kind: "complete" },
+          coverage: null,
+          verdicts: {
+            candidates: 7,
+            confirmed: 3,
+            refuted: 1,
+            undecided: 0,
+            presented: 3,
+            surplus,
+          },
+          reviewer: TOTALS,
+          counterChecker: TOTALS,
+          durationMs: 9_000,
+          stale: false,
+        });
+      });
+    expect(expectActivityLogProof("review.run.settled.line", settled(3))).toMatchObject({
+      settlement: "complete",
+      candidateCount: 7,
+      confirmedCount: 3,
+      presentedCount: 3,
+      surplusCandidateCount: 3,
+    });
+    expect(JSON.parse(settled(0))).not.toHaveProperty("surplusCandidateCount");
+    expect(JSON.parse(settled(undefined))).not.toHaveProperty("surplusCandidateCount");
   });
 
   // #4136: a review that settled on its coverage while the Reviewer runtime's end stayed unproven
