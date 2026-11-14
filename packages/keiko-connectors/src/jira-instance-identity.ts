@@ -17,11 +17,9 @@ function withoutTrailingSlashes(text: string): string {
 }
 
 function normalisedBase(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl.trim());
-    return `${url.protocol}//${url.host.toLowerCase()}${withoutTrailingSlashes(url.pathname)}`;
-  } catch {
-    // An unparsable base URL cannot reach a request; it still gets one stable identity.
-    return withoutTrailingSlashes(baseUrl.trim().toLowerCase());
-  }
+  const text = baseUrl.trim();
+  // An unparsable base URL cannot reach a request; it still gets one stable identity.
+  if (!URL.canParse(text)) return withoutTrailingSlashes(text.toLowerCase());
+  const url = new URL(text);
+  return `${url.protocol}//${url.host.toLowerCase()}${withoutTrailingSlashes(url.pathname)}`;
 }
