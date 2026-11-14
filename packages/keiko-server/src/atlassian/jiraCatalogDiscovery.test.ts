@@ -8,8 +8,12 @@ import {
   createJiraCatalogDiscoveryProvider,
   JIRA_CATALOG_DISCOVERY_TOOLS,
   JIRA_OUT_OF_RELEASE_GUIDANCE,
+  jiraOperationNameKey,
   jiraToolsForIdentities,
+  resolveNamedOperation,
 } from "./jiraCatalogDiscovery.js";
+import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
+import { mcpToolKey } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
 import { jiraChatCatalogRoutes, type JiraChatCatalogConsumer } from "./jiraChatCatalogConsumer.js";
 import { createManagedProviderCatalog } from "../tool-catalog/managedProviderCatalog.js";
@@ -231,6 +235,109 @@ describe("local Jira operation discovery", () => {
       const result = await f.describe.execute({ identities: [refused] }, f.context);
       expect(result.isError, refused).toBe(true);
     }
+  });
+
+  it("accepts both name forms in the Coding catalog too and answers an unknown name with the valid form (#4359)", async () => {
+    const f = fixture();
+    const native = createJiraCatalogDiscoveryProvider({
+      tools: new Set(["jira.projects"]),
+      nativeToolNames: true,
+    })
+      .tools()
+      .find((tool) => tool.name === "jira.describe");
+    if (native === undefined) throw new TypeError("Missing describe tool");
+    for (const name of ["jira.projects", "jira_projects"]) {
+      f.select.mockClear();
+      const result = await native.execute({ identities: [name] }, f.context);
+      expect(result.isError, name).toBeUndefined();
+      expect(result.data.items, name).toEqual([
+        { identity: "GET /rest/api/2/project", tool: "jira.projects" },
+      ]);
+    }
+    const unknown = await native.execute({ identities: ["jira.get-issue"] }, f.context);
+    expect(unknown.isError).toBe(true);
+    expect(unknown.data).toMatchObject({ reason: "invalid-arguments" });
+    expect(JSON.stringify(unknown.data.guidance)).toContain("jira.priorities");
+  });
+
+  // #4359 audit: the dotted and the underscore spelling of a tool name resolve to one operation
+  // only while no two registered names share a normalised form; a future operation that collides
+  // fails the build instead of making a model reach another tool than the one it named.
+  it("registers no two tool names that collapse to one normalised form", () => {
+    const tools = jiraOperationDefinitions().map((definition) => definition.tool);
+    expect(new Set(tools).size).toBe(tools.length);
+    const byKey = new Map<string, string[]>();
+    for (const tool of tools)
+      byKey.set(jiraOperationNameKey(tool), [
+        ...(byKey.get(jiraOperationNameKey(tool)) ?? []),
+        tool,
+      ]);
+    expect([...byKey.values()].filter((names) => names.length > 1)).toEqual([]);
+  });
+
+  // The Code Mode sandbox resolves one key per tool; two tools sharing a key after sanitising would
+  // reach the wrong one, so every key and every `callAs` must be unique over the real registry.
+  it("gives every tool of the Coding catalog a unique sandbox key and callAs", () => {
+    const tools = [
+      ...jiraOperationDefinitions().map((definition) => definition.tool),
+      ...JIRA_CATALOG_DISCOVERY_TOOLS,
+    ];
+    const keys = tools.map((tool) => mcpToolKey(tool));
+    expect(new Set(keys).size).toBe(keys.length);
+    const callAs = keys.map((key) => `tools.jira["${key}"]`);
+    expect(new Set(callAs).size).toBe(callAs.length);
+  });
+
+  it("resolves every registered tool name, by either spelling, to its own operation only", () => {
+    const listed = jiraOperationDefinitions();
+    for (const definition of listed) {
+      for (const spelling of [definition.tool, jiraOperationNameKey(definition.tool)])
+        expect(resolveNamedOperation(listed, spelling), spelling).toBe(definition);
+    }
+  });
+
+  it("refuses a name two operations share after normalisation, and never returns the first", () => {
+    const listed = [
+      { identity: "GET /a", tool: "jira.x-y" },
+      { identity: "GET /b", tool: "jira.x.y" },
+    ];
+    expect(resolveNamedOperation(listed, "jira_x_y")).toBeUndefined();
+    expect(resolveNamedOperation(listed, "jira.x-y")).toBe(listed[0]);
+    expect(resolveNamedOperation(listed, "jira.x.y")).toBe(listed[1]);
+    expect(resolveNamedOperation(listed, "jira.unknown")).toBeUndefined();
+  });
+
+  // #4359 F29: the Code Mode sandbox resolves one key per tool and a wrong spelling fails there, so
+  // Coding's discover and describe name the exact expression that calls each operation.
+  it("names the exact Code Mode call of every hit and described operation in the Coding catalog only", async () => {
+    const f = fixture();
+    const coding = createJiraCatalogDiscoveryProvider({
+      tools: new Set(["jira.projects", "jira.issue-types"]),
+      nativeToolNames: true,
+      callNamespace: "jira",
+    }).tools();
+    const found = coding.find((tool) => tool.name === "jira.discover");
+    const describe = coding.find((tool) => tool.name === "jira.describe");
+    if (found === undefined || describe === undefined) throw new TypeError("Missing tools");
+    const hits = await found.execute({ maxResults: 10 }, f.context);
+    expect(hits.data.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          tool: "jira.issue-types",
+          callAs: 'tools.jira["jira_issue-types"]',
+        }),
+        expect.objectContaining({ tool: "jira.projects", callAs: 'tools.jira["jira_projects"]' }),
+      ]),
+    );
+    const described = await describe.execute({ identities: ["jira.issue-types"] }, f.context);
+    expect(described.data.items).toEqual([
+      expect.objectContaining({
+        tool: "jira.issue-types",
+        callAs: 'tools.jira["jira_issue-types"]',
+      }),
+    ]);
+    const chat = await f.describe.execute({ identities: ["jira_projects"] }, f.context);
+    expect(JSON.stringify(chat.data.items)).not.toContain("callAs");
   });
 
   it("accepts the dotted tool name only where jira.discover returns it, and never twice for one operation", async () => {

@@ -32,6 +32,7 @@ import {
   OPENCODE_CODE_MODE_SCHEDULE,
   OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS,
   OPENCODE_CODE_MODE_SESSION_MOVE,
+  OPENCODE_CODE_MODE_SESSION_RENAME,
   OPENCODE_CODE_MODE_WORKTREE_CREATE,
   OPENCODE_NATIVE_POLICY_ACTION,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCES,
@@ -175,6 +176,7 @@ const PERMISSION_LOG_VALUES = [
   "external_directory",
   "doom_loop",
   "opencode_session_move",
+  "opencode_session_rename",
   "opencode_worktree_create",
   "opencode_schedule",
 ] as const;
@@ -902,14 +904,20 @@ interface AdmittedRoots {
   readonly codeModeNestedEffectsDecided?: boolean | undefined;
 }
 
-/** The Code Mode actions the hook sends under their own names: the program and its governed tools. */
-function classifyManagementAction(
+function classifyCodeModeProgram(roots: AdmittedRoots): Classified {
+  return roots.codeModeNestedEffectsDecided === true ? CODE_MODE_PROGRAM : EXECUTE;
+}
+
+/** The management tools of Code Mode, each decided by its own rule. */
+function classifyCodeModeAction(
   request: OpenCodeNativePolicyRequest,
   roots: AdmittedRoots,
 ): Classified | undefined {
   switch (request.permission) {
     case OPENCODE_CODE_MODE_SESSION_MOVE:
       return classifySessionMove(request, roots.workspaceRoot);
+    case OPENCODE_CODE_MODE_SESSION_RENAME:
+      return classifySessionRename(request);
     case OPENCODE_CODE_MODE_WORKTREE_CREATE:
       return classifyWorktreeCreate(request);
     case OPENCODE_CODE_MODE_SCHEDULE:
@@ -921,17 +929,13 @@ function classifyManagementAction(
   }
 }
 
-function classifyCodeModeProgram(roots: AdmittedRoots): Classified {
-  return roots.codeModeNestedEffectsDecided === true ? CODE_MODE_PROGRAM : EXECUTE;
-}
-
 function classifyNativeAction(
   request: OpenCodeNativePolicyRequest,
   roots: AdmittedRoots,
 ): Classified {
   const { permission, resources } = request;
-  const managed = classifyManagementAction(request, roots);
-  if (managed !== undefined) return managed;
+  const codeMode = classifyCodeModeAction(request, roots);
+  if (codeMode !== undefined) return codeMode;
   if (permission === "websearch") return roots.webSearch === true ? EGRESS : WEBSEARCH_UNCONFIGURED;
   if (!KNOWN_ACTIONS.has(permission))
     return {
@@ -978,6 +982,45 @@ function classifySessionMove(
           "Keiko refused this action: the target is not an existing directory inside the task workspace.",
       }
     : guarded;
+}
+
+/**
+ * Code Mode's `session_rename` (#4359): it sets the title of the run's own OpenCode session and
+ * nothing else (no file, command, network or repository), so like a move it is allowed in every
+ * mode for the run's own session and refused for another, with one bounded single-line title.
+ */
+const SESSION_TITLE_MAX_CHARS = 200;
+
+function hasControlCharacter(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    // C0 and C1 controls (U+0085 NEXT LINE among them) and the Unicode line and paragraph breaks.
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029)
+      return true;
+  }
+  return false;
+}
+
+function classifySessionRename(request: OpenCodeNativePolicyRequest): Classified {
+  // The calling session must be known: two missing identities never "match".
+  const own = typeof request.sessionID === "string" && request.sessionID.length > 0;
+  const target = request.targetSessionID ?? request.sessionID;
+  const [title, ...rest] = request.resources;
+  if (
+    !own ||
+    target !== request.sessionID ||
+    title === undefined ||
+    rest.length > 0 ||
+    title.trim().length === 0 ||
+    title.length > SESSION_TITLE_MAX_CHARS ||
+    hasControlCharacter(title)
+  )
+    return {
+      reason: "unsupported-action",
+      message:
+        "Keiko refused this action: a session may set only its own title, one line of at most 200 characters.",
+    };
+  return READ;
 }
 
 /**
@@ -1695,6 +1738,7 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "external_directory",
         "doom_loop",
         "opencode_session_move",
+        "opencode_session_rename",
         "opencode_worktree_create",
         "opencode_schedule",
         "mcp",

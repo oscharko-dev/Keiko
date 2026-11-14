@@ -50,6 +50,7 @@ import {
   readSchedules,
   scheduleOptions,
   selectCheckout as selectUiCheckout,
+  switchJiraPodOn,
 } from "../testing/coding-workbench-lab/wb-ui.mjs";
 
 const TEMP_PATHS = [];
@@ -339,6 +340,71 @@ describe("wb-ui.mjs: the gates of a run in the Workbench", () => {
     await answerGates(page, "run-1", awaiting("permission-1"), state);
     await answerGates(page, "run-1", awaiting("permission-1", 3), state);
     expect(page.clicks).toEqual([APPROVE]);
+  });
+});
+
+describe("wb-ui.mjs: switching the Jira Pod on in the Connectors menu (#4359)", () => {
+  // The Connectors menu replaced the "Jira Pod for this run" select: one switch per Pod, found by
+  // the Pod's own name. The fake models exactly that menu.
+  function connectorsPage(pods) {
+    const state = new Map(pods.map(({ name, on }) => [name, on]));
+    const events = [];
+    const toggleOf = (xpath) => {
+      const name = /normalize-space\(text\(\)\)="([^"]*)"/u.exec(xpath)?.[1];
+      return {
+        first: () => ({
+          count: async () => (state.has(name) ? 1 : 0),
+          getAttribute: async () => String(state.get(name)),
+          click: async () => {
+            state.set(name, !state.get(name));
+            events.push(`toggle ${name}`);
+          },
+        }),
+      };
+    };
+    const page = {
+      locator: (selector) =>
+        selector.startsWith("button")
+          ? {
+              last: () => ({
+                click: async () => {
+                  events.push("open");
+                },
+              }),
+            }
+          : { locator: (xpath) => toggleOf(xpath) },
+      keyboard: {
+        press: async (key) => {
+          events.push(key);
+        },
+      },
+    };
+    return { page, events, state };
+  }
+
+  it("opens Connectors, turns the named Pod on and closes the menu", async () => {
+    const { page, events, state } = connectorsPage([
+      { name: "Lab Pod", on: false },
+      { name: "Lab Pod 2", on: false },
+    ]);
+    await switchJiraPodOn(page, "Lab Pod");
+    expect(events).toEqual(["open", "toggle Lab Pod", "Escape"]);
+    expect(state.get("Lab Pod")).toBe(true);
+    expect(state.get("Lab Pod 2")).toBe(false);
+  });
+
+  it("leaves a Pod that is already on alone", async () => {
+    const { page, events } = connectorsPage([{ name: "Lab Pod", on: true }]);
+    await switchJiraPodOn(page, "Lab Pod");
+    expect(events).toEqual(["open", "Escape"]);
+  });
+
+  it("stops the lab when no Pod carries the name, instead of running without Jira", async () => {
+    const { page, events } = connectorsPage([{ name: "Another Pod", on: false }]);
+    await expect(switchJiraPodOn(page, "Lab Pod")).rejects.toThrow(
+      /no Jira Pod is named "Lab Pod"/u,
+    );
+    expect(events).toEqual(["open"]);
   });
 });
 

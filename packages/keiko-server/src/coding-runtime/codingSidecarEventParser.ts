@@ -2,6 +2,7 @@ import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchApprovalRisk,
   CodingWorkbenchConnectorScope,
+  CodingWorkbenchNativeJiraWriteReview,
   CodingWorkbenchPermissionRequestKind,
   CodingWorkbenchRuntimeHealth,
   CodingWorkbenchSupervisedActionKind,
@@ -62,6 +63,8 @@ export interface SidecarPermissionEvent {
 export interface SidecarNativeAction {
   readonly permission: string;
   readonly resources: readonly string[];
+  /** A managed Jira write in plain facts, set by the server's own policy (#4359). */
+  readonly jira?: CodingWorkbenchNativeJiraWriteReview | undefined;
 }
 
 const NATIVE_ACTION_MAX_RESOURCES = 64;

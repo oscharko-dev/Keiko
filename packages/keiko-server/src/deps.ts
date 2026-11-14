@@ -29,6 +29,7 @@ import {
   type JiraChatCatalogRuntime,
 } from "./atlassian/jiraChatCatalogRuntime.js";
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import type { CodingRuntimeConversation } from "./coding-runtime/codingRuntimeContextUsage.js";
 import { createCodingJiraPods, type CodingJiraPods } from "./coding-runtime/codingJiraPodMcp.js";
 import { jiraEmailTemplateInspection } from "./atlassian/jiraEmailTemplateComposition.js";
 import {
@@ -895,6 +896,16 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
               capability: string,
               reservedPromptTokens: number,
               actualPromptTokens: number,
+              modelCallId?: number,
+            ) => unknown)
+          | undefined;
+        // A prompt size the provider itself reported for an admitted call (never an estimate): the
+        // run's context usage reads it (#4359).
+        readonly observeProviderPromptTokens?:
+          | ((
+              capability: string,
+              providerPromptTokens: number,
+              conversation: CodingRuntimeConversation,
               modelCallId?: number,
             ) => unknown)
           | undefined;

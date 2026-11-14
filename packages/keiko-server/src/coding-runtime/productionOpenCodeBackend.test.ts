@@ -40,10 +40,6 @@ afterEach(() => vi.restoreAllMocks());
 
 import { createOpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
-import {
-  expectActivityLogProof,
-  formatActivityLogProofLine,
-} from "../../../../tests/support/activity-log-proof.js";
 import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
 import type { CodingJiraPods } from "./codingJiraPodMcp.js";
@@ -81,7 +77,6 @@ import type {
   RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
-import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 import type { OperatorPluginRegistry } from "./opencodeOperatorPlugins.js";
 import { plantDirectoryRedirect, WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
 
@@ -379,89 +374,45 @@ describe("production OpenCode backend composition", () => {
     }
   });
 
-  it("records accepted and rejected provider context samples with body-free evidence", () => {
+  it("records a completed compaction once on the run's context usage, and nothing else", () => {
+    const AT = "2026-09-15T06:30:00.000Z";
     const root = mkdtempSync(join(tmpdir(), "keiko-production-opencode-context-log-"));
     try {
-      const events: ServerLogEvent[] = [];
-      const geometry: OpenCodeContextGeometry = {
-        contextWindowTokens: 128_000,
-        maxInputTokens: 123_904,
-        maxOutputTokens: 4_096,
-      };
-      const run: ProductionRuntimeBackendInput = {
-        ...runInput(root),
-        contextUsage: createCodingRuntimeContextUsageRegistry(),
-      };
-      const log = { write: (event: ServerLogEvent): void => void events.push(event) };
+      const contextUsage = createCodingRuntimeContextUsageRegistry();
+      const run: ProductionRuntimeBackendInput = { ...runInput(root), contextUsage };
       const event = {
         id: "provider-event-1",
         aggregateId: "session-1",
         sequence: 1,
         digest: "e".repeat(64),
         kind: "observation" as const,
-        providerTokenUsage: { inputTokens: 42_000 },
       };
 
-      recordContextTelemetry(run, event, geometry, log);
-      recordContextTelemetry(
-        run,
-        {
-          ...event,
-          id: "provider-event-2",
-          sequence: 2,
-          digest: "f".repeat(64),
-          providerTokenUsage: { inputTokens: 124_000 },
-        },
-        geometry,
-        log,
+      contextUsage.bindGeometry("run-windows", {
+        capacityTokens: 128_000,
+        reservedOutputTokens: 4_096,
+      });
+      contextUsage.recordGatewayPrompt(
+        "run-windows",
+        { agentKey: "build", headKey: "build-head", toolBearing: true },
+        "call-1",
+        42_000,
+        AT,
       );
 
-      expect(events).toHaveLength(2);
-      expect(events[0]).toMatchObject({
-        op: "coding-runtime.context-usage.observed",
-        correlationId: "run-windows",
-        level: "info",
-        extra: {
-          state: "accepted",
-          capacityTokens: 128_000,
-          usedInputTokens: 42_000,
-          reservedOutputTokens: 4_096,
-          sampleDigest: "e".repeat(64),
-        },
+      recordContextTelemetry(run, event);
+      expect(contextUsage.read("run-windows")?.compaction).toBeUndefined();
+      recordContextTelemetry(run, {
+        ...event,
+        compaction: { event: "completed", compactionIdSha256: "c".repeat(64) },
       });
-      expect(events[1]).toMatchObject({
-        op: "coding-runtime.context-usage.observed",
-        correlationId: "run-windows",
-        level: "warn",
-        errorKind: "conflict",
-        extra: {
-          state: "rejected",
-          capacityTokens: 128_000,
-          usedInputTokens: 124_000,
-          reservedOutputTokens: 4_096,
-          sampleDigest: "f".repeat(64),
-        },
+      recordContextTelemetry(run, {
+        ...event,
+        compaction: { event: "completed", compactionIdSha256: "c".repeat(64) },
       });
-      const acceptedProof = expectActivityLogProof(
-        "coding-runtime.context-usage.observed.emitted-line",
-        formatActivityLogProofLine(events[0] ?? {}),
-      );
-      expect(acceptedProof).toMatchObject({
-        correlationId: "run-windows",
-        state: "accepted",
-        capacityTokens: 128_000,
+      expect(contextUsage.read("run-windows")).toMatchObject({
         usedInputTokens: 42_000,
-        reservedOutputTokens: 4_096,
-        sampleDigest: "e".repeat(64),
-      });
-      const rejectedProof = expectActivityLogProof(
-        "coding-runtime.context-usage.observed.emitted-line",
-        formatActivityLogProofLine(events[1] ?? {}),
-      );
-      expect(rejectedProof).toMatchObject({
-        correlationId: "run-windows",
-        state: "rejected",
-        sampleDigest: "f".repeat(64),
+        compaction: { count: 1 },
       });
     } finally {
       rmSync(root, { force: true, recursive: true });

@@ -394,5 +394,23 @@
     "textStatus": "proposed",
     "text": "Run sleep 150 && ./mvnw -B verify as one command and report how long it took and whether it passed.",
     "expected": "The command is not cut at two minutes: it settles with its real exit status and elapsed time, the run completes, and a stop request during the sleep ends the command with no process left"
+  },
+  {
+    "id": "J1",
+    "title": "Read one Jira issue with the chosen Jira Pod",
+    "mode": "Full access",
+    "baseline": "any",
+    "textStatus": "proposed",
+    "text": "Read the Jira issue named in the task with the Jira Pod and tell me its summary, its status and who it is assigned to. Also tell me which Jira user and instance you are connected as. Do not change any file.",
+    "expected": "The run reads the issue through the Jira Pod (run with --jira-pod and the issue key in the text), names the connected Jira user, shows the issue key as a link and changes no file or Jira issue"
+  },
+  {
+    "id": "J2",
+    "title": "Create one Jira issue with the chosen Jira Pod",
+    "mode": "Ask for approval",
+    "baseline": "any",
+    "textStatus": "proposed",
+    "text": "Create one Task in the Jira project named in the task with the Jira Pod. Use the summary and description sections the project template asks for. Do not change any file.",
+    "expected": "The run asks for approval once for the create, creates exactly one issue after approval (none after a decline), shows the new issue key as a link and a refusal by the template reads as it does in Chat"
   }
 ]

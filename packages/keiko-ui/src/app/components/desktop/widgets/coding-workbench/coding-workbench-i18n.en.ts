@@ -1112,6 +1112,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Runs this Code Mode program once in OpenCode's script sandbox.",
   "codingWorkbench.approval.native.help.worktree":
     "Creates a new task workspace on its own branch; this run keeps working here.",
+  "codingWorkbench.approval.native.help.jira": "Makes exactly this change in Jira, once.",
   "codingWorkbench.approval.native.help.schedule":
     "Changes when Keiko continues this task on its own, in the mode you chose for it.",
   "codingWorkbench.approval.native.resources": "Requested command, paths, or addresses",
@@ -1130,6 +1131,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.native.permission.websearch": "Web search",
   "codingWorkbench.approval.native.permission.execute": "Code Mode script",
   "codingWorkbench.approval.native.permission.worktree": "New task workspace",
+  "codingWorkbench.approval.native.permission.jira": "Jira change",
   "codingWorkbench.approval.native.permission.schedule": "Scheduled continuation",
   "codingWorkbench.approval.native.permission.other": "Native action",
   "codingWorkbench.approval.native.label.native-shell": "Native shell command",

@@ -1490,8 +1490,10 @@ describe("pinned native OpenCode Code Mode semantics", () => {
     120_000,
   );
 
-  // A Code Mode `fetch` asserts the `webfetch` permission, so the policy decides it like the
-  // ordinary tool; the kernel's egress rule stays underneath (loopback only below Full access).
+  // With a probe plugin and no policy plugin, a Code Mode `fetch` evaluates the `webfetch`
+  // permission; the kernel's egress rule stays underneath (loopback only below Full access). NOT
+  // established for Keiko's own composition: a live run (#4359, 2026-11-14) logged no policy
+  // decision for a program's `fetch`, so it must not be read as "decided" (ADR-0137).
   it.skipIf(skip)(
     "evaluates the webfetch permission for a Code Mode fetch and keeps the kernel boundary",
     async () => {

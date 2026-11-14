@@ -105,6 +105,7 @@ import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
+import { withJiraWriteReview } from "./opencodeRuntimeComposition.js";
 import type {
   McpOAuthIssuerPort,
   OpenCodeRuntimeCompositionInput,
@@ -12243,5 +12244,61 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
     expect(world.calls.retains).toMatchObject([
       { binding: { taskId: TASK }, sessionId: "ses_tool" },
     ]);
+  });
+});
+
+// #4359 F27: the ask of a managed Jira write carries the call and the names its ids were given, so
+// the card reads like Chat's approval of the same write; every other ask stays as it is.
+describe("the plain approval of a managed Jira write", () => {
+  const ask = {
+    effect: "ask",
+    event: {
+      type: "permission-request",
+      requestId: "per_1",
+      nativeAction: { permission: "jira_jira_create", resources: ["*"] },
+    },
+  } as unknown as Parameters<typeof withJiraWriteReview>[0];
+  const request = {
+    permission: "jira_jira_create",
+    mcpInput: { projectId: "10002", issueTypeId: "10003", fields: { summary: "Probe" } },
+  } as unknown as Parameters<typeof withJiraWriteReview>[2];
+  const run = (serverName: string): Parameters<typeof withJiraWriteReview>[1] =>
+    ({
+      mcp: {
+        actions: new Map([
+          [
+            "jira_jira_create",
+            { risk: "write", remote: true, mutation: { serverName, toolName: "jira.create" } },
+          ],
+        ]),
+      },
+    }) as unknown as Parameters<typeof withJiraWriteReview>[1];
+  const review = vi.fn((call: { readonly tool: string }) => ({
+    tool: call.tool,
+    input: {},
+    names: { projects: [], issueTypes: [], fields: [] },
+  }));
+  const deps = { jiraWriteReview: review } as unknown as Parameters<typeof withJiraWriteReview>[3];
+
+  it("adds the call and the names to the Pod's write", () => {
+    const decided = withJiraWriteReview(ask, run("jira"), request, deps);
+    expect(review).toHaveBeenCalledWith({
+      tool: "jira.create",
+      arguments: { projectId: "10002", issueTypeId: "10003", fields: { summary: "Probe" } },
+    });
+    expect(decided.event.nativeAction).toMatchObject({
+      permission: "jira_jira_create",
+      resources: ["*"],
+      jira: { tool: "jira.create" },
+    });
+    // What the card shows is the very input the approval is prepared for and dispatched with.
+    expect(review.mock.calls.at(-1)?.[0]).toMatchObject({
+      arguments: request.mcpInput,
+    });
+  });
+
+  it("leaves a write of any other server, and a run without a review, as asked", () => {
+    expect(withJiraWriteReview(ask, run("other"), request, deps)).toBe(ask);
+    expect(withJiraWriteReview(ask, run("jira"), request, {} as typeof deps)).toBe(ask);
   });
 });

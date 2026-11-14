@@ -31,6 +31,7 @@ const context: ManagedMcpInvocationContext = {
 };
 const PROJECTS = "GET /rest/api/2/project";
 const ISSUE = "GET /rest/api/2/issue/{issueIdOrKey}";
+const COMMENTS = "GET /rest/api/2/issue/{issueIdOrKey}/comment";
 function fixture(): {
   catalog: ReturnType<typeof createCodingJiraCatalog<ManagedMcpInvocationContext>>;
   provider: Mock<
@@ -84,7 +85,7 @@ function fixture(): {
     }),
   );
   const catalog = createCodingJiraCatalog({
-    tools: ["jira.projects", "jira.issue"],
+    tools: ["jira.projects", "jira.issue", "jira.comments"],
     provider,
     admitted,
     fits,
@@ -158,7 +159,7 @@ it("checks the live prompt allowance after admission and preserves the old subse
   await f.catalog.call("jira.projects", {}, context);
 });
 
-it("compiles only selected tools, replaces the subset, and clears it without an empty host", async () => {
+it("compiles only selected tools, merges a later describe into them, and clears on an empty one", async () => {
   const f = fixture();
   await f.catalog.ready;
   expect(f.provider).not.toHaveBeenCalled();
@@ -170,33 +171,43 @@ it("compiles only selected tools, replaces the subset, and clears it without an 
   expect(f.provider).toHaveBeenLastCalledWith(["jira.projects"]);
   await f.catalog.call("jira.projects", {}, context);
   await f.select([ISSUE]);
+  // The earlier selection stays callable: the model never loses a tool it did not give up.
+  expect(f.provider).toHaveBeenLastCalledWith(["jira.issue", "jira.projects"]);
   expect(f.catalog.tools.map((tool) => tool.name)).toEqual([
     "jira.discover",
     "jira.describe",
     "jira.issue",
+    "jira.projects",
   ]);
-  await expect(f.catalog.call("jira.projects", {}, context)).rejects.toMatchObject({
-    reason: "not-admitted",
-  });
+  await f.catalog.call("jira.projects", {}, context);
   await f.select([]);
   expect(f.catalog.tools).toHaveLength(2);
-  expect(f.execute).toHaveBeenCalledOnce();
+  expect(f.execute).toHaveBeenCalledTimes(2);
 });
 
-it("reports the operations a replacing selection drops to the model (LIM22)", async () => {
+// LIM22 (relocated, not relaxed): a model never calls a tool it lost unknowingly. A describe that
+// merges tells the model what stays callable and, exactly, what left and how to call the rest.
+it("tells the model what stays, what left and when a described operation becomes callable", async () => {
   const log = vi.spyOn(processServerLogSink(), "write").mockImplementation(() => undefined);
   onTestFinished(() => {
     log.mockRestore();
   });
   const f = fixture();
   await f.catalog.ready;
-  expect(await f.select([PROJECTS])).not.toHaveProperty("deselected");
-  expect(await f.select([ISSUE])).toMatchObject({
-    deselected: [{ identity: PROJECTS, tool: "jira.projects" }],
+  const first = await f.select([PROJECTS]);
+  expect(first).not.toHaveProperty("retained");
+  expect(first).not.toHaveProperty("dropped");
+  expect(first).not.toHaveProperty("deselected");
+  expect(first.guidance).toContain("callable in your next program, not in this one");
+  const second = await f.select([ISSUE]);
+  expect(second).toMatchObject({
+    retained: [
+      { identity: PROJECTS, tool: "jira.projects", callAs: 'tools.jira["jira_projects"]' },
+    ],
   });
-  expect(await f.select([ISSUE])).not.toHaveProperty("deselected");
+  expect(second).not.toHaveProperty("deselected");
   expect(await f.select([])).toMatchObject({
-    deselected: [{ identity: ISSUE, tool: "jira.issue" }],
+    dropped: [{ identity: ISSUE }, { identity: PROJECTS }],
   });
   expect(
     log.mock.calls
@@ -205,9 +216,47 @@ it("reports the operations a replacing selection drops to the model (LIM22)", as
       .map((event) => event.extra),
   ).toEqual([
     expect.objectContaining({ surface: "coding", selectedCount: 1, deselectedCount: 0 }),
-    expect.objectContaining({ surface: "coding", selectedCount: 1, deselectedCount: 1 }),
-    expect.objectContaining({ surface: "coding", selectedCount: 1, retainedCount: 1 }),
-    expect.objectContaining({ surface: "coding", selectedCount: 0, deselectedCount: 1 }),
+    expect.objectContaining({ surface: "coding", selectedCount: 2, deselectedCount: 0 }),
+    expect.objectContaining({ surface: "coding", selectedCount: 0, deselectedCount: 2 }),
+  ]);
+});
+
+it("drops the least recently used operation when the budget is full, and names it", async () => {
+  const f = fixture();
+  f.fits.mockImplementation(((tools: readonly unknown[]) => tools.length <= 4) as never);
+  await f.catalog.ready;
+  await f.select([PROJECTS]);
+  await f.select([ISSUE]);
+  // Using projects makes issue the least recently used.
+  await f.catalog.call("jira.projects", {}, context);
+  const third = await f.select([COMMENTS]);
+  expect(third).toMatchObject({
+    dropped: [{ identity: ISSUE, tool: "jira.issue", callAs: 'tools.jira["jira_issue"]' }],
+    retained: [{ identity: PROJECTS }],
+  });
+  expect(f.catalog.tools.map((tool) => tool.name)).toEqual([
+    "jira.discover",
+    "jira.describe",
+    "jira.comments",
+    "jira.projects",
+  ]);
+  await expect(f.catalog.call("jira.issue", {}, context)).rejects.toMatchObject({
+    reason: "not-admitted",
+  });
+});
+
+it("refuses a describe whose own operations do not fit, without dropping anything else", async () => {
+  const f = fixture();
+  await f.catalog.ready;
+  await f.select([PROJECTS]);
+  f.fits.mockReturnValue(false);
+  await expect(f.select([ISSUE])).rejects.toMatchObject({
+    structuredResult: { reason: "budget-exhausted" },
+  });
+  expect(f.catalog.tools.map((tool) => tool.name)).toEqual([
+    "jira.discover",
+    "jira.describe",
+    "jira.projects",
   ]);
 });
 
@@ -242,14 +291,14 @@ it("keeps a committed selection successful when the retired SDK host fails durin
     throw new TypeError("Private SDK cleanup body must not escape");
   });
   expect(await f.select([ISSUE])).toMatchObject({ outcome: "succeeded" });
+  // The describe merged: the retired host failed to clean up, the committed selection did not.
   expect(f.catalog.tools.map((tool) => tool.name)).toEqual([
     "jira.discover",
     "jira.describe",
     "jira.issue",
+    "jira.projects",
   ]);
-  await expect(f.catalog.call("jira.projects", {}, context)).rejects.toMatchObject({
-    reason: "not-admitted",
-  });
+  await f.catalog.call("jira.projects", {}, context);
   await f.catalog.call("jira.issue", {}, context);
   expect(diagnostic).toHaveBeenCalledOnce();
   expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private SDK cleanup body");
