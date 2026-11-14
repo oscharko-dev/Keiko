@@ -250,7 +250,7 @@ describe("the Jira draft schema actually offered to Chat", () => {
   it("leaves an unknown, syntactically valid saved reference to the existing runtime guard", () => {
     expect(describeCatalogSchemaMismatch(parameters("jira_draft"), REFERENCE)).toBeUndefined();
     const lookup = vi.fn(() => undefined);
-    expect(resolveJiraDraftArguments(REFERENCE, lookup)).toEqual({
+    expect(resolveJiraDraftArguments(REFERENCE, lookup, undefined)).toEqual({
       ok: false,
       reason: "draft-not-found",
     });

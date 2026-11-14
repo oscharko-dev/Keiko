@@ -21,7 +21,8 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import { processServerLogSink } from "../process-log-sink.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink, processServerLogSinkFor } from "../process-log-sink.js";
 import type {
   LongLivedRuntimeQualification,
   RuntimeQualificationComponentDigest,
@@ -841,7 +842,9 @@ function trustedPortableRoots(
     if (lexicalInstallRoot === undefined) return undefined;
     try {
       // This must precede realpathSync: a canonical path is evidence, not locality authority.
-      assertWindowsLocalVolume(lexicalInstallRoot);
+      assertWindowsLocalVolume(lexicalInstallRoot, {
+        securityLogSink: processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
+      });
     } catch {
       return undefined;
     }
