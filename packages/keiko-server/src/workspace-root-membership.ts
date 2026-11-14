@@ -8,6 +8,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { containsPath } from "@oscharko-dev/keiko-git";
+import { pathIsDenied } from "./files-deny.js";
 import { isProjectAvailable, type Project, type UiStore } from "./store/index.js";
 import { parseWorkspaceManifestRecord } from "./workspace-manifests.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
@@ -195,7 +196,10 @@ export function userFacingProjects(
   projects: readonly Project[],
   managedTaskWorkspaceRoot: string | undefined,
 ): readonly Project[] {
-  if (managedTaskWorkspaceRoot === undefined) return projects;
+  // A project the read surface refuses (every Files and Git read of it is denied) is never offered:
+  // it would start the person on a folder that cannot be opened (#4371).
+  const readable = projects.filter((project) => !pathIsDenied(project.path));
+  if (managedTaskWorkspaceRoot === undefined) return readable;
   const managedRoot = resolve(managedTaskWorkspaceRoot);
-  return projects.filter((project) => !containsPath(managedRoot, resolve(project.path)));
+  return readable.filter((project) => !containsPath(managedRoot, resolve(project.path)));
 }
