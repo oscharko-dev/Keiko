@@ -37,6 +37,7 @@ export { assertIdentityCompatibility, assertCompatibilityTime } from "./compatib
 export { validateToolArguments } from "./arguments.js";
 export { copyCatalogJson as captureCatalogJson, catalogBytes as catalogJsonBytes } from "./json.js";
 export { createToolInvocationNormalizer } from "./invocation.js";
-export type { ToolInvocationNormalizer } from "./invocation.js";
+export { resolveToolName } from "./invocation.js";
+export type { ToolInvocationNormalizer, ToolNameResolution } from "./invocation.js";
 
 export { copyCatalogEnvelope as captureCatalogEnvelope } from "./json.js";

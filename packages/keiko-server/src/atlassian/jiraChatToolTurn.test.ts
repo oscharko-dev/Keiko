@@ -4523,6 +4523,69 @@ it("stops after the second unoffered alias with a truthful nonretryable HTTP fai
   expect(f.writes()).toBe(0);
 });
 
+/** A read settles first, then the model names an action the round never offered, twice. */
+function unofferedAfterReadModel(calls: GatewayCallRequest[]): ModelPort {
+  return {
+    call: async (request): Promise<NormalizedResponse> => {
+      await Promise.resolve();
+      calls.push(request);
+      const usage = {
+        requestId: `unoffered-${String(calls.length)}`,
+        promptTokens: 100,
+        completionTokens: 10,
+        latencyMs: 1,
+        costClass: "low" as const,
+      };
+      const admission = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 500 });
+      if (admission === undefined) throw new TypeError("Expected admitted call");
+      admission.settle(usage, true, "observed");
+      const bridge = createGatewayToolCatalogBridge(request, Date.now);
+      const name = calls.length === 1 ? "jira_projects" : "jira_frobnicate";
+      try {
+        return {
+          modelId: MODEL,
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            bridge.bind({ id: `unoffered-call-${String(calls.length)}`, name, arguments: {} }),
+          ],
+          structuredOutput: null,
+          usage,
+        };
+      } catch (error) {
+        if (error instanceof GatewayError)
+          error.partialUsage = { promptTokens: 100, completionTokens: 10, streamedChars: 0 };
+        throw error;
+      }
+    },
+  };
+}
+
+it("tells the person a true sentence when the model names an unoffered action twice after a settled read", async () => {
+  const f = fixture();
+  const calls: GatewayCallRequest[] = [];
+  const result = await handleSendDesktopChat(sendContext(f, "unoffered-twice"), {
+    ...f.deps,
+    modelPortFactory: () => unofferedAfterReadModel(calls),
+  });
+  expect(result.status).toBe(200);
+  expect(calls).toHaveLength(3);
+  // The first refusal reached the model as a correction that says what to do.
+  expect(
+    calls[2]?.messages.some(
+      (message) =>
+        message.role === "system" &&
+        message.content.includes("is not offered, so nothing ran") &&
+        message.content.includes("select it first"),
+    ),
+  ).toBe(true);
+  const answer = f.deps.store.listMessages(f.chatId).at(-1)?.content ?? "";
+  expect(answer).toContain("the model asked for an action that is not available in this chat");
+  expect(answer).toContain("Ask again, or name the action you want");
+  expect(answer).not.toContain("the model request failed");
+  expect(f.writes()).toBe(0);
+});
+
 function demandExchanges(f: ReturnType<typeof fixture>): readonly ChatToolExchange[] {
   return f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges ?? [];
 }

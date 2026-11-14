@@ -5,6 +5,7 @@ import {
   CallerAttemptAdmissionError,
   CancelledError,
   ContextOverflowError,
+  GatewayToolCatalogError,
   ProviderError,
   TimeoutError,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -67,6 +68,32 @@ describe("chatToolTurnEndReason", () => {
     [new ProviderError("synthetic provider failure", 502), "model-failure"],
   ])("classifies %s", (error, reason) => {
     expect(chatToolTurnEndReason(error)).toBe(reason);
+  });
+
+  it("ends a turn whose model named an action the round did not offer with a reason of its own", () => {
+    for (const nameClass of ["unknown", "known-not-offered", "folds-to-several"] as const) {
+      const error = new GatewayToolCatalogError(
+        "invalid-arguments",
+        undefined,
+        false,
+        undefined,
+        "The previous call named a tool that is not offered, so nothing ran.",
+        nameClass,
+      );
+      expect(chatToolTurnEndReason(error)).toBe("tool-not-offered");
+    }
+    // A catalog refusal that is not about the name is still a failed model request.
+    expect(
+      chatToolTurnEndReason(new GatewayToolCatalogError("invalid-arguments", undefined, false)),
+    ).toBe("model-failure");
+  });
+
+  it("tells the person what happened and what to do, not that the request failed", () => {
+    const answer = chatToolTurnPartialAnswer(TRANSCRIPT, "tool-not-offered");
+    expect(answer).toContain(
+      "This request was not finished: the model asked for an action that is not available in this chat. Ask again, or name the action you want.",
+    );
+    expect(answer).not.toContain("the model request failed");
   });
 
   it("never replaces a cancellation, a caller cap refusal or an unknown failure", () => {

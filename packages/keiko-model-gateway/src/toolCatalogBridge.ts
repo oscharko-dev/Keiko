@@ -28,9 +28,11 @@ import {
   ToolCatalogError,
   type CatalogFailureReason,
   type ToolInvocationNormalizer,
+  type ToolNameResolution,
   type CatalogSchemaMismatch,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { MalformedToolCallError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   statedExpectations,
   toolSchemaCorrectionMessage,
@@ -145,6 +147,16 @@ const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
     // the list was cut at a cap. Counts only, never a rule, a path or a value.
     statedExpectationCount: { type: "integer", dataClass: "count", required: false },
     expectationsTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    // A call to a name the round did not offer (#4357): what the name was, never its text. The class
+    // is closed; length and a short digest let a log be matched against a known name afterwards.
+    unofferedNameClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["folds-to-several", "known-not-offered", "unknown"],
+    },
+    calledNameLength: { type: "integer", dataClass: "count", required: false },
+    calledNameDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
   },
   causal: "none",
   lifecycle: "failure",
@@ -185,6 +197,14 @@ const TOOL_CATALOG_CALL_BOUND_OPERATION = defineActivityLogOperation({
   fields: {
     projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 128 },
     toolCount: { type: "integer", dataClass: "count", required: true },
+    // Present only when the called name was not an offered alias but equalled exactly one after the
+    // single spelling fold (dots and hyphens to underscores) and was bound to it (#4357).
+    nameResolution: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["folded"],
+    },
   },
   causal: "none",
   lifecycle: "end",
@@ -247,6 +267,8 @@ export class GatewayToolCatalogError extends MalformedToolCallError {
     retryable = false,
     readonly repair?: GatewayToolCallRepair | undefined,
     aliasCorrection?: string,
+    /** Set when the call named a tool this round did not offer: the turn can say so to a person. */
+    readonly unofferedName?: UnofferedNameClass,
   ) {
     super(`catalog tool request ${reason}`);
     this.#aliasCorrection = aliasCorrection;
@@ -503,7 +525,12 @@ interface CatalogRejectionDetails {
   readonly droppedPathCount?: number;
   readonly statedExpectationCount?: number;
   readonly expectationsTruncated?: boolean;
+  readonly unofferedNameClass?: UnofferedNameClass;
+  readonly calledNameLength?: number;
+  readonly calledNameDigest?: string;
 }
+/** What a name the round did not offer was (a name folding to one offered alias is bound instead). */
+export type UnofferedNameClass = "folds-to-several" | "known-not-offered" | "unknown";
 
 // The schema's account of an `invalid-shape` rejection, in the schema's vocabulary only: declared
 // property paths and counts. Run 7 (2026-09-10): three identical rejections of one call exhausted
@@ -543,6 +570,7 @@ function recordAndReject(
   details: CatalogRejectionDetails = {},
   repair?: GatewayToolCallRepair,
   aliasCorrection?: string,
+  unofferedName?: UnofferedNameClass,
 ): never {
   const reason = phase === "projection" ? "projection-mismatch" : "invalid-arguments";
   const error =
@@ -554,6 +582,7 @@ function recordAndReject(
           retryableResponseRejection(phase, cause, repair),
           repair,
           aliasCorrection,
+          unofferedName,
         );
   log.write(
     activityLogEvent(
@@ -581,7 +610,7 @@ function schemaRepair(
 }
 
 const ALIAS_CORRECTION_PREFIX =
-  "The previous call named a tool that is not offered and executed nothing. Use a native tool from the current advertised list. Examples of valid names: ";
+  "The previous call named a tool that is not offered, so nothing ran. Call one of the offered tools exactly as named; if the action you need is not offered, select it first. Examples of valid names: ";
 const ALIAS_CORRECTION_BYTES_MAX = 8192;
 const ALIAS_CORRECTION_NAMES_MAX = 128;
 const CORRECTION_UTF8 = new TextEncoder();
@@ -684,6 +713,39 @@ function bindNativeExtensionCall(
   return call;
 }
 
+/** What the called name means in this round, and the call under the offered alias when it binds. */
+function resolvedCall(
+  normalizer: ToolInvocationNormalizer,
+  call: NormalizedToolCall,
+  now: () => number,
+): { readonly named: NormalizedToolCall; readonly resolution: ToolNameResolution } {
+  const resolution = normalizer.resolveName(call.name, now());
+  const binds = resolution.kind === "exact" || resolution.kind === "folded";
+  return { named: binds ? { ...call, name: resolution.alias } : call, resolution };
+}
+
+function unofferedNameClass(
+  cause: unknown,
+  resolution: ToolNameResolution | undefined,
+): UnofferedNameClass | undefined {
+  if (!(cause instanceof ToolCatalogError) || cause.reason !== "invalid-identity") return undefined;
+  if (resolution?.kind === "ambiguous") return "folds-to-several";
+  if (resolution?.kind === "not-offered") return "known-not-offered";
+  return resolution?.kind === "unknown" ? "unknown" : undefined;
+}
+
+/** Closed class, length and a short digest of the called name: attribution without its text. */
+function unofferedAttribution(
+  name: string,
+  nameClass: UnofferedNameClass,
+): CatalogRejectionDetails {
+  return {
+    unofferedNameClass: nameClass,
+    calledNameLength: name.length,
+    calledNameDigest: sha256Hex(name).slice(0, 16),
+  };
+}
+
 function bindCall(
   normalizer: ToolInvocationNormalizer | undefined,
   input: NormalizedToolCall,
@@ -692,6 +754,7 @@ function bindCall(
   native?: GatewayNativeToolAdvertisement,
 ): NormalizedToolCall {
   let captured: NormalizedToolCall | undefined;
+  let resolution: ToolNameResolution | undefined;
   try {
     const call = captureCall(input, normalizer, native);
     captured = call;
@@ -700,26 +763,35 @@ function bindCall(
     if (isNativeExtensionAlias(normalizer, call.name))
       return bindNativeExtensionCall(normalizer, call, now, log);
     requireBridge(!isCodeModeProjection(normalizer), "unoffered-tool");
-    const invocation = normalizer.bindAlias(call.name, call.arguments, now());
+    const resolved = resolvedCall(normalizer, call, now);
+    resolution = resolved.resolution;
+    captured = resolved.named;
+    const invocation = normalizer.bindAlias(resolved.named.name, call.arguments, now());
     log.write(
       activityLogEvent(TOOL_CATALOG_CALL_BOUND_OPERATION, toolCatalogEnvelope(log, "info"), {
         projectionDigest: invocation.projectionDigest,
         toolCount: 1,
+        ...(resolution.kind === "folded" ? { nameResolution: "folded" } : {}),
       }),
     );
     return Object.freeze({
-      ...call,
+      ...resolved.named,
       arguments: invocation.arguments as Record<string, unknown>,
       invocation,
     });
   } catch (cause) {
+    const nameClass = unofferedNameClass(cause, resolution);
     return recordAndReject(
       log,
       "response",
       cause,
-      rejectionDetails(normalizer, input, cause),
+      {
+        ...rejectionDetails(normalizer, captured ?? input, cause),
+        ...(nameClass === undefined ? {} : unofferedAttribution(input.name, nameClass)),
+      },
       captured === undefined ? undefined : schemaRepair(normalizer, captured, cause),
       unofferedAliasCorrection(normalizer, captured, cause, now, log),
+      nameClass,
     );
   }
 }

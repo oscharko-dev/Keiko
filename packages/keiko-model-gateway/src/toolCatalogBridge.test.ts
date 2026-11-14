@@ -1927,6 +1927,141 @@ describe("file content in a model tool call", () => {
   });
 });
 
+describe("a name the round did not offer (#4357)", () => {
+  const offered = (aliases?: readonly string[]): GatewayToolCatalogAdvertisement =>
+    gatewayCatalogAdvertisement(NOW, aliases);
+  const bridgeFor = (
+    advertised: GatewayToolCatalogAdvertisement,
+    log: ModelGatewayLogEvent[] = [],
+  ): ReturnType<typeof createGatewayToolCatalogBridge> =>
+    createGatewayToolCatalogBridge({ ...request(), toolCatalog: advertised }, (): number => NOW, {
+      write: (event): void => {
+        log.push(event);
+      },
+    });
+  const rejection = (
+    call: { name: string; arguments: Record<string, unknown> },
+    log: ModelGatewayLogEvent[] = [],
+  ): unknown => {
+    try {
+      bridgeFor(offered(), log).bind({ id: "call-1", ...call });
+    } catch (error) {
+      return error;
+    }
+    throw new TypeError("Expected a rejection");
+  };
+
+  it("binds the exact offered alias as before, without a resolution mark", () => {
+    const log: ModelGatewayLogEvent[] = [];
+    const bound = bridgeFor(offered(), log).bind({
+      id: "call-1",
+      name: "read_file",
+      arguments: { path: "src/example.ts" },
+    });
+    expect(bound.name).toBe("read_file");
+    const line = log.find((event) => event.op === "gateway.tool-catalog.call-bound");
+    expect(line?.extra).not.toHaveProperty("nameResolution");
+  });
+
+  it("binds a name that equals exactly one offered alias after the one fold, and records it", () => {
+    for (const spelled of ["read.file", "read-file"]) {
+      const log: ModelGatewayLogEvent[] = [];
+      const bound = bridgeFor(offered(), log).bind({
+        id: "call-1",
+        name: spelled,
+        arguments: { path: "src/example.ts" },
+      });
+      // The same tool under its offered alias; everything after it (schema, authority, budget) is
+      // the call the model would have made with the exact name.
+      expect(bound.name).toBe("read_file");
+      expect(bound.invocation?.arguments).toEqual({ path: "src/example.ts" });
+      const line = log.find((event) => event.op === "gateway.tool-catalog.call-bound");
+      expect(line?.extra).toMatchObject({ toolCount: 1, nameResolution: "folded" });
+      const persisted = expectActivityLogProof(
+        "gateway.tool-catalog.call-bound.emitted-line",
+        formatActivityLogProofLine(line ?? {}),
+      );
+      expect(persisted).toMatchObject({ nameResolution: "folded" });
+    }
+  });
+
+  it("validates a folded call's arguments against the same schema, under the offered tool's identity", () => {
+    const log: ModelGatewayLogEvent[] = [];
+    expect(() =>
+      bridgeFor(offered(), log).bind({ id: "call-1", name: "read.file", arguments: { path: 5 } }),
+    ).toThrow(GatewayToolCatalogError);
+    const rejected = log.find((event) => event.op === "gateway.tool-catalog.rejected");
+    expect(rejected?.extra).toMatchObject({
+      catalogReason: "invalid-shape",
+      canonicalToolId: "keiko.file.read",
+    });
+    expect(rejected?.extra).not.toHaveProperty("unofferedNameClass");
+  });
+
+  it("refuses a name nothing matches: class unknown, attribution without its text, a true sentence", () => {
+    const log: ModelGatewayLogEvent[] = [];
+    const error = rejection({ name: "frobnicate", arguments: { secret: "PRIVATE" } }, log);
+    expect(error).toBeInstanceOf(GatewayToolCatalogError);
+    if (!(error instanceof GatewayToolCatalogError)) throw new TypeError("Expected catalog error");
+    expect(error.unofferedName).toBe("unknown");
+    const rejected = log.find((event) => event.op === "gateway.tool-catalog.rejected");
+    expect(rejected?.extra).toMatchObject({
+      catalogReason: "invalid-identity",
+      unofferedNameClass: "unknown",
+      calledNameLength: 10,
+      calledNameDigest: sha256Hex("frobnicate").slice(0, 16),
+    });
+    expect(rejected?.extra).not.toHaveProperty("canonicalToolId");
+    const persisted = expectActivityLogProof(
+      "gateway.tool-catalog.rejected.emitted-line",
+      formatActivityLogProofLine(rejected ?? {}),
+    );
+    expect(persisted).toMatchObject({ unofferedNameClass: "unknown", calledNameLength: 10 });
+    expect(JSON.stringify(persisted)).not.toMatch(/frobnicate|PRIVATE/u);
+    const correction = error.correction() ?? "";
+    expect(correction).toContain("is not offered, so nothing ran");
+    expect(correction).toContain("if the action you need is not offered, select it first");
+    expect(correction).toContain("read_file");
+    expect(correction).not.toContain("PRIVATE");
+    expect(new TextEncoder().encode(correction).byteLength).toBeLessThanOrEqual(8192);
+  });
+
+  it("refuses the name of a tool the catalog has but this round did not offer: no widening", () => {
+    const projected = compileToolProjection(createInitialToolCatalog(), {
+      id: "legacy-native",
+      version: 1,
+    }).tools.map((tool) => tool.alias);
+    const hidden = projected.find((alias) => alias !== "read_file" && alias.includes("_"));
+    if (hidden === undefined) throw new TypeError("Expected a second tool alias");
+    for (const spelled of [hidden, hidden.replaceAll("_", ".")]) {
+      const log: ModelGatewayLogEvent[] = [];
+      let error: unknown;
+      try {
+        bridgeFor(offered(["read_file"]), log).bind({ id: "call-1", name: spelled, arguments: {} });
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(GatewayToolCatalogError);
+      if (!(error instanceof GatewayToolCatalogError)) throw new TypeError("Expected error");
+      expect(error.unofferedName).toBe("known-not-offered");
+      const rejected = log.find((event) => event.op === "gateway.tool-catalog.rejected");
+      expect(rejected?.extra).toMatchObject({
+        catalogReason: "invalid-identity",
+        unofferedNameClass: "known-not-offered",
+      });
+    }
+  });
+
+  it("does not mark a refusal that is not about the name", () => {
+    const log: ModelGatewayLogEvent[] = [];
+    expect(() =>
+      bridgeFor(offered(), log).bind({ id: "call-1", name: "read_file", arguments: { path: 5 } }),
+    ).toThrow(GatewayToolCatalogError);
+    const rejected = log.find((event) => event.op === "gateway.tool-catalog.rejected");
+    expect(rejected?.extra).not.toHaveProperty("unofferedNameClass");
+  });
+});
+
 function toolCallsResponse(calls: readonly unknown[]): Response {
   return new Response(
     JSON.stringify({
