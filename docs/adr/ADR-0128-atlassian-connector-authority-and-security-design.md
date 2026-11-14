@@ -800,7 +800,7 @@ call without that identity is refused before any request as `invalid-arguments` 
 `catalogReason=invalid-shape` and the missing names in `missingRequired`, and the correction the
 model receives in the next round names the same properties. A refused `jira.issue-property-keys` in
 the selection run of 2026-11-12 was this refusal and not a descriptor defect (#4357 AC4): the model
-sent no `issueIdOrKey` while the same tool completed 82 times in the lab logs. A class pin holds the
+sent no `issueIdOrKey` while the same tool completed 41 times in the lab logs. A class pin holds the
 invariant for all sixteen tools.
 
 Entity-property set and delete actions use the same high-risk authority, reviewed action digest
