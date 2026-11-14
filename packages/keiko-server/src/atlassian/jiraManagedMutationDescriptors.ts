@@ -142,6 +142,7 @@ import {
   JIRA_MUTATION_RESULT_STATES,
   JIRA_TEMPLATE_RULE_IDS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
+  jiraTemplateGovernanceOf,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
@@ -384,7 +385,7 @@ const LINK_REF_BYTES_MAX = LINK_TYPE_UNITS_MAX * JSON_BYTES_PER_UNIT_MAX + 128 +
 // The usual result without its guidance (3584) plus the most guidance the schema allows.
 const USUAL_RESULT_BYTES_MAX = 3584 + JIRA_RESULT_GUIDANCE_MAX_CHARS;
 const SINGLE_RESULT_BYTES_MAX = USUAL_RESULT_BYTES_MAX + DETAIL_BYTES_MAX;
-const GATED_RESULT_BYTES_MAX =
+export const GATED_RESULT_BYTES_MAX =
   SINGLE_RESULT_BYTES_MAX + JIRA_TEMPLATE_VIOLATIONS_MAX * VIOLATION_BYTES_MAX;
 // A write waits in place for the human's decision, so its settlement budget declares that wait on
 // top of its own work (ADR-0175). Charging the decision to the work budget ended every card after
@@ -729,7 +730,44 @@ const DEFINITIONS: Readonly<
 export function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationToolName {
   return Object.hasOwn(DEFINITIONS, name);
 }
+/**
+ * Every write the template gate can refuse (a governed class of the inventory) answers a refusal with
+ * the violations it names, so its result schema declares them and its byte bound holds the most the
+ * gate can write. The family builders each declare their own result; this is the one place that makes
+ * a refusal by a template a valid result for every governed tool, never a contract failure that hides
+ * the reason from the model (#4354). The draft run carries its violations per item in a result of its own.
+ */
+const OWN_RESULT_PRODUCERS: ReadonlySet<JiraMutationOperation> = new Set(["jira.draft"]);
+export function jiraGovernedResultDeclaration(
+  name: JiraMutationOperation,
+  declaration: ManagedMcpToolDeclaration,
+): ManagedMcpToolDeclaration {
+  const governed = jiraTemplateGovernanceOf(name);
+  if (governed === undefined || governed.class === "not-governed" || OWN_RESULT_PRODUCERS.has(name))
+    return declaration;
+  const { descriptorDigest: _digest, ...declared } = declaration.descriptor;
+  const schema = declared.resultSchema as {
+    readonly properties?: Readonly<Record<string, unknown>>;
+  };
+  const declares = schema.properties !== undefined && "violations" in schema.properties;
+  const maxResultBytes = Math.max(declared.bounds.maxResultBytes, GATED_RESULT_BYTES_MAX);
+  if (declares && maxResultBytes === declared.bounds.maxResultBytes) return declaration;
+  return Object.freeze({
+    ...declaration,
+    descriptor: createToolDescriptor({
+      ...declared,
+      resultSchema: {
+        ...schema,
+        properties: { ...schema.properties, violations: JIRA_VIOLATIONS_SCHEMA },
+      },
+      bounds: { ...declared.bounds, maxResultBytes },
+    }),
+  });
+}
 export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
+  return jiraGovernedResultDeclaration(name, composedMutationDeclaration(name));
+}
+function composedMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
   for (const producer of [
     jiraAnonymizationUnlockDeclarationForTool,
     jiraAvatarMutationDeclarationForTool,

@@ -127,6 +127,19 @@ describe("local Jira operation discovery", () => {
     expect(f.select).not.toHaveBeenCalled();
   });
 
+  // The lab's qualification found jira.update-comment at rank 7 for "edit a comment" and
+  // jira.create-issue-link at rank 3 for "link two issues" (#4357): the summaries say "update" and
+  // "relation", while a person says "edit" and "link".
+  it.each([
+    ["edit a comment", "jira_update_comment"],
+    ["link two issues", "jira_create_issue_link"],
+  ] as const)("ranks the operation a person means first for %j", async (query, tool) => {
+    const f = fixture();
+    const ranked = await f.discover.execute({ query, maxResults: 100 }, f.context);
+    const names = (ranked.data.items as readonly { tool: string }[]).map((item) => item.tool);
+    expect(names.indexOf(tool) + 1).toBe(1);
+  });
+
   it("ranks operations matching a plain-word query first, before any paging", async () => {
     const f = fixture();
     const unfiltered = await f.discover.execute({ maxResults: 100 }, f.context);

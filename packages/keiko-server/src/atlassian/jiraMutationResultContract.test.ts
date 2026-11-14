@@ -1,6 +1,9 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+  JIRA_DRAFT_ITEM_STATES,
   JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_MUTATION_LINKS_MAX,
@@ -10,6 +13,7 @@ import {
   JIRA_TEMPLATE_RULE_IDS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
   jiraOperationInReleaseScope,
+  jiraTemplateGovernanceOf,
   parseJiraIssueTemplate,
   type JiraMutationAttempt,
   type JiraMutationFailureDetail,
@@ -29,7 +33,9 @@ import {
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { field, response } from "../../../../tests/support/jira-managed-remote.js";
 import { jiraDeclarationForTool, jiraOperationBindingForTool } from "./jiraManagedProvider.js";
+import { GATED_RESULT_BYTES_MAX } from "./jiraManagedMutationDescriptors.js";
 import { jiraAttemptToolResult, jiraMutationToolResult } from "./jiraMutationResult.js";
+import { draftResult, type DraftItemResult } from "./jiraChatDraft.js";
 
 // #4354 (live Gemma composer run, 2026-11-14): a Sub-task asked under a Story was refused by the
 // template's parent rule, and the refusal's guidance (549 characters) did not fit the 512 the result
@@ -47,10 +53,7 @@ const CARRIERS = [
 ] as const;
 /** The tools whose results the mutation producers build (the draft producers have their own proof). */
 const WRITE_TOOLS = JIRA_MUTATION_OPERATIONS.filter(
-  (operation) =>
-    jiraOperationInReleaseScope(operation) &&
-    operation !== "jira.draft" &&
-    operation !== "jira.create-issues",
+  (operation) => jiraOperationInReleaseScope(operation) && operation !== "jira.draft",
 );
 type ResultData = ReturnType<typeof jiraMutationToolResult>["data"];
 
@@ -64,15 +67,17 @@ function received(tool: string, data: ResultData): ResultData {
   return { ...data, operationBinding: jiraOperationBindingForTool(tool) ?? null };
 }
 /** The catalog's own checks of a provider result: its schema, and its byte bound. */
-function catalogProblem(tool: string, data: ResultData): string | undefined {
+function catalogProblem(
+  tool: string,
+  data: ResultData,
+  bytesMax = descriptorOf(tool).descriptor.bounds.maxResultBytes,
+): string | undefined {
   const descriptor = descriptorOf(tool).descriptor;
   const model = received(tool, data);
   const mismatch = describeCatalogSchemaMismatch(descriptor.resultSchema, model);
   if (mismatch !== undefined) return JSON.stringify(mismatch);
   const bytes = Buffer.byteLength(JSON.stringify(model));
-  return bytes > descriptor.bounds.maxResultBytes
-    ? `${String(bytes)} bytes exceed ${String(descriptor.bounds.maxResultBytes)}`
-    : undefined;
+  return bytes > bytesMax ? `${String(bytes)} bytes exceed ${String(bytesMax)}` : undefined;
 }
 function guidanceBound(tool: string): number | undefined {
   const schema = descriptorOf(tool).descriptor.resultSchema as {
@@ -150,21 +155,21 @@ const MAX_LINKS: JiraMutationLinkAccount = {
 };
 
 /**
- * What a producer can attach to a result: the template gate checks a create, an edit, a transition
- * and an assignment, so only their refusals carry violations, and only a create or an edit lists
- * requested links. The catalog bounds each tool by what it can reach, so a shape is walked through
- * exactly the tools that can produce it.
+ * What a producer can attach to a result: every write the template gate can refuse (a governed class
+ * of the write-path inventory) carries violations, and only a create or an edit lists requested links.
+ * The catalog bounds each tool by what it can reach, so a shape is walked through exactly the tools
+ * that can produce it; the walk fails when a governed tool's schema cannot hold what the gate writes.
  */
 type Reach = "any" | "gated" | "linked";
-const GATED_TOOLS: readonly string[] = [
-  "jira.create",
-  "jira.edit",
-  "jira.transition",
-  "jira.assign",
-];
+/** The draft run builds its result itself, walked in its own block below. */
+const OWN_PRODUCERS: readonly string[] = ["jira.draft"];
+function governed(tool: string): boolean {
+  const verdict = jiraTemplateGovernanceOf(tool);
+  return verdict !== undefined && verdict.class !== "not-governed" && !OWN_PRODUCERS.includes(tool);
+}
 const SHAPE_BEARERS: Readonly<Record<Reach, (tool: string) => boolean>> = {
   any: () => true,
-  gated: (tool) => GATED_TOOLS.includes(tool),
+  gated: governed,
   linked: (tool) => tool === "jira.create" || tool === "jira.edit",
 };
 const REACHES = [
@@ -263,12 +268,11 @@ describe("every shape the write producers build is a valid result of every write
 
   it("walks a real set of shapes", () => {
     expect(shapes.length).toBeGreaterThan(500);
-    expect(WRITE_TOOLS.length).toBeGreaterThan(100);
     // Each kind of shape reaches at least one tool: nothing is walked through no one.
     for (const reach of ["any", "gated", "linked"] as const)
       expect(WRITE_TOOLS.filter(SHAPE_BEARERS[reach]).length, reach).toBeGreaterThan(0);
-    // Every tool the gate checks declares the violations it can carry.
-    for (const tool of GATED_TOOLS)
+    // Every tool the gate can refuse declares the violations it can carry.
+    for (const tool of WRITE_TOOLS.filter(governed))
       expect(
         Object.keys(descriptorOf(tool).descriptor.resultSchema.properties ?? {}),
         tool,
@@ -375,5 +379,222 @@ describe("the draft-stage refusal by a parent rule is a valid result as the mode
     expect(refused.isError).toBe(true);
     expect(refused.data).toMatchObject({ outcome: "rejected", reason: "field-validation" });
     expect(catalogProblem("jira.draft-stage", refused.data)).toBeUndefined();
+  });
+});
+
+// The walk is tied to the write-path inventory: every write tool of the release is classified there,
+// and each class is walked through the producers its family shares. A new write tool changes a count
+// here, so it cannot join the product without a decision about its walk.
+describe("the walk covers the write-path inventory", () => {
+  const inScope = JIRA_MUTATION_OPERATIONS.filter((operation) =>
+    jiraOperationInReleaseScope(operation),
+  );
+  function classOf(tool: string): string {
+    const verdict = jiraTemplateGovernanceOf(tool);
+    if (verdict === undefined) return "unclassified";
+    return verdict.class === "not-governed" ? `not-governed:${verdict.reason}` : verdict.class;
+  }
+
+  it("classifies every write tool of the release and counts each family", () => {
+    const counts: Record<string, number> = {};
+    for (const tool of inScope) counts[classOf(tool)] = (counts[classOf(tool)] ?? 0) + 1;
+    expect(counts).toEqual({
+      "not-governed:not-issue-content": 172,
+      "not-governed:issue-lifecycle": 4,
+      "not-governed:comment": 5,
+      "not-governed:participation": 4,
+      "bulk-impact": 13,
+      "create-batch": 1,
+      create: 1,
+      edit: 20,
+      transition: 1,
+      draft: 1,
+    });
+  });
+
+  it("walks every one of them except the draft run, which has its own producer and walk", () => {
+    expect(WRITE_TOOLS).toHaveLength(inScope.length - OWN_PRODUCERS.length);
+    expect(WRITE_TOOLS.filter(governed)).toHaveLength(36);
+    expect(WRITE_TOOLS.filter(SHAPE_BEARERS.linked)).toHaveLength(2);
+    expect(inScope.filter((tool) => OWN_PRODUCERS.includes(tool))).toEqual(OWN_PRODUCERS);
+  });
+
+  it("holds the governed families to the bound the gate needs, through their own descriptors", () => {
+    for (const tool of WRITE_TOOLS.filter(governed))
+      expect(descriptorOf(tool).descriptor.bounds.maxResultBytes, tool).toBeGreaterThanOrEqual(
+        GATED_RESULT_BYTES_MAX,
+      );
+  });
+});
+
+// A walk that cannot fail proves nothing: the same check rejects an oversized guidance and a result
+// over its byte bound.
+describe("the walk's own check can fail", () => {
+  const refusal = jiraMutationToolResult("rejected", "field-validation").data;
+
+  it("accepts the ordinary refusal and rejects a guidance one character over the shared bound", () => {
+    expect(catalogProblem("jira.edit", refusal)).toBeUndefined();
+    const over = { ...refusal, guidance: "g".repeat(JIRA_RESULT_GUIDANCE_MAX_CHARS + 1) };
+    expect(catalogProblem("jira.edit", over)).toContain("guidance");
+    const exact = { ...refusal, guidance: "g".repeat(JIRA_RESULT_GUIDANCE_MAX_CHARS) };
+    expect(catalogProblem("jira.edit", exact)).toBeUndefined();
+  });
+
+  it("rejects a result over its byte bound, and a result of a tool that does not declare it", () => {
+    expect(catalogProblem("jira.edit", refusal, 10)).toMatch(/bytes exceed 10/u);
+    expect(
+      catalogProblem("jira.unlock-user-anonymization", {
+        ...refusal,
+        violations: [{ ruleId: "section-missing", subject: "x", template: "SYN/Task" }],
+      }),
+    ).toContain("unexpectedPropertyCount");
+  });
+});
+
+// The worst case in one result: the longest template guidance beside maximal detail, links and
+// violations (every subject and template at its bound, each unit a lone surrogate that JSON writes as
+// six bytes). A success carries notices instead of a refusal, so its mix is in the walked shapes.
+describe("the worst-case mix of one refusal", () => {
+  const WIDE = "\ud800";
+  const ordinary = JIRA_TEMPLATE_RULE_IDS.filter(
+    (ruleId) =>
+      ruleId !== "template-missing" &&
+      ruleId !== "template-not-activated" &&
+      ruleId !== "template-unreadable",
+  );
+  const violations: readonly JiraTemplateViolation[] = Array.from(
+    { length: JIRA_TEMPLATE_VIOLATIONS_MAX },
+    (_, index) => ({
+      ruleId: ordinary[index % ordinary.length] ?? "summary-too-short",
+      subject: WIDE.repeat(120),
+      template: WIDE.repeat(256),
+    }),
+  );
+  const longest = Math.max(...jiraTemplateGuidanceVariants().map((variant) => variant.length));
+
+  it.each([
+    ["without detail: the longest guidance", undefined],
+    ["with maximal detail", MAX_DETAIL("invalid-field", true)],
+  ] as const)("fits every tool that can carry it, %s", (_name, detail) => {
+    const data = jiraMutationToolResult(
+      "rejected",
+      "field-validation",
+      {},
+      false,
+      detail,
+      MAX_LINKS,
+      violations,
+    ).data;
+    if (detail === undefined)
+      expect(typeof data.guidance === "string" ? data.guidance.length : -1).toBe(longest);
+    for (const tool of WRITE_TOOLS.filter(SHAPE_BEARERS.linked))
+      expect(catalogProblem(tool, data), tool).toBeUndefined();
+    const withoutLinks = jiraMutationToolResult(
+      "rejected",
+      "field-validation",
+      {},
+      false,
+      detail,
+      undefined,
+      violations,
+    ).data;
+    for (const tool of WRITE_TOOLS.filter(governed))
+      expect(catalogProblem(tool, withoutLinks), tool).toBeUndefined();
+  });
+});
+
+// The "observed" sentence of the no-governing-template guidance is a hook for a caller that has seen
+// something the owner cannot. Production passes none, so no variant carries it; if a caller ever does,
+// its sentence has to enter the variants and their bound.
+describe("the no-governing-template guidance takes no caller sentence in production", () => {
+  function sources(directory: URL): readonly string[] {
+    return readdirSync(directory, { recursive: true, withFileTypes: true })
+      .filter(
+        (entry) => entry.isFile() && /\.tsx?$/u.test(entry.name) && !entry.name.includes(".test."),
+      )
+      .map((entry) => join(entry.parentPath, entry.name));
+  }
+
+  it("calls it with the violation alone", () => {
+    const calls: string[] = [];
+    for (const root of [
+      new URL("../../../keiko-connectors/src/", import.meta.url),
+      new URL("../../", import.meta.url),
+    ])
+      for (const file of sources(root)) {
+        const text = readFileSync(file, "utf8");
+        for (const match of text.matchAll(/jiraNoGoverningTemplateGuidance\(([^)]*)\)/gu))
+          if (!/^\s*(?:violation|[A-Za-z]+:\s*Pick)/u.test(match[1] ?? "")) calls.push(match[0]);
+      }
+    expect(calls).toEqual(["jiraNoGoverningTemplateGuidance(missing)"]);
+  });
+});
+
+// The draft run builds its result itself, from the states of its items. Every combination of item
+// states, with and without an explained refusal and with each source of a refusal, through the same
+// check, and a full draft of maximal refused items within its byte bound.
+describe("the draft run's result is a valid result of jira.draft", () => {
+  const BASE_URL = "https://jira.example.invalid/context";
+  const failure = jiraMutationToolResult(
+    "rejected",
+    "field-validation",
+    {},
+    false,
+    MAX_DETAIL("invalid-field", true),
+    MAX_LINKS,
+    ALL_VIOLATIONS,
+  ).data;
+  const { outcome: _outcome, guidance: _guidance, reason: _reason, ...detail } = failure;
+  function item(
+    state: (typeof JIRA_DRAFT_ITEM_STATES)[number],
+    index: number,
+    variant: { explained: boolean; refusedBy: "jira" | "keiko" | undefined },
+  ): DraftItemResult {
+    return {
+      ref: `item-${String(index)}`,
+      state,
+      ...(state === "created" || state === "existing"
+        ? { issueKey: `SYN-${String(index + 1)}` }
+        : {}),
+      ...(state === "failed" && variant.explained ? { detail } : {}),
+      ...(state === "failed" && variant.refusedBy !== undefined
+        ? { refusedBy: variant.refusedBy }
+        : {}),
+    };
+  }
+  const variants = [
+    { explained: true, refusedBy: "jira" as const },
+    { explained: true, refusedBy: "keiko" as const },
+    { explained: true, refusedBy: undefined },
+    { explained: false, refusedBy: "keiko" as const },
+    { explained: false, refusedBy: undefined },
+  ];
+
+  it("holds for every combination of item states", () => {
+    const states = JIRA_DRAFT_ITEM_STATES;
+    let walked = 0;
+    for (let mask = 1; mask < 2 ** states.length; mask += 1) {
+      const chosen = states.filter((_, index) => (mask >> index) % 2 === 1);
+      for (const variant of variants) {
+        const result = draftResult(
+          BASE_URL,
+          chosen.map((state, index) => item(state, index, variant)),
+        );
+        expect(catalogProblem("jira.draft", result.data), chosen.join("+")).toBeUndefined();
+        walked += 1;
+      }
+    }
+    expect(walked).toBe((2 ** states.length - 1) * variants.length);
+  });
+
+  it("holds for a full draft of maximal refused items, and for a full draft that all succeeded", () => {
+    const refused = Array.from({ length: 200 }, (_, index) =>
+      item("failed", index, { explained: true, refusedBy: "jira" }),
+    );
+    expect(catalogProblem("jira.draft", draftResult(BASE_URL, refused).data)).toBeUndefined();
+    const created = Array.from({ length: 200 }, (_, index) =>
+      item("created", index, { explained: false, refusedBy: undefined }),
+    );
+    expect(catalogProblem("jira.draft", draftResult(BASE_URL, created).data)).toBeUndefined();
   });
 });

@@ -30,6 +30,7 @@ import {
 import type { CliIo } from "./runner.js";
 import { emitCliWindowsSystemFailure } from "./security-log.js";
 import { defaultManagedRoot, type PortableLayout, type PortableTarget } from "./portable-shared.js";
+import { portableAppEntries } from "./portable-app-record.js";
 import { portableRuntimeRecordEntries } from "./portable-runtime-record.js";
 
 export type ManagedRootMode = "default" | "custom";
@@ -729,9 +730,10 @@ function selectedWindowsGenerationRoot(layout: PortableLayout): string | undefin
   return /^\.portable\/generations\/[a-f0-9]{64}$/u.test(relativeRoot) ? relativeRoot : undefined;
 }
 
-// The runtime files the selected payload's own record names, as paths below the install root. A
-// first installation is a flat copy of the payload and an updated one a generation folder; both
-// carry the record their staging wrote, so neither needs a hand-kept list of these files (#4358).
+// The runtime files the selected payload's own record names and the app files its own package
+// names, as paths below the install root. A first installation is a flat copy of the payload and an
+// updated one a generation folder; both carry the record their staging wrote and the package npm
+// packed, so neither needs a hand-kept list of these files (#4358).
 interface InstalledRuntimeEntries {
   readonly files: ReadonlySet<string>;
   readonly prefixes: readonly string[];
@@ -740,10 +742,11 @@ interface InstalledRuntimeEntries {
 function installedRuntimeEntries(layout: PortableLayout): InstalledRuntimeEntries {
   const base = normalizedRelativePath(layout.installRoot, layout.resourceRoot);
   const prefix = base === "" ? "" : `${base}/`;
-  const entries = portableRuntimeRecordEntries(layout.resourceRoot);
+  const runtime = portableRuntimeRecordEntries(layout.resourceRoot);
+  const app = portableAppEntries(layout.resourceRoot);
   return {
-    files: new Set([...entries.files].map((file) => `${prefix}${file}`)),
-    prefixes: entries.prefixes.map((folder) => `${prefix}${folder}`),
+    files: new Set([...runtime.files, ...app.files].map((file) => `${prefix}${file}`)),
+    prefixes: [...runtime.prefixes, ...app.prefixes].map((folder) => `${prefix}${folder}`),
   };
 }
 
