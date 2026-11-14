@@ -644,3 +644,12 @@ Linux arm64 gates container (Node 24.18.0): all nine passed. Only the source dig
 `generatedAt` in the three records were taken from this run; its fallback-font captures were
 discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or
 numerical ceiling changed. This remains updater fixture evidence.
+
+## Jira claim note read aloud — 2026-11-14 (#4355, #4351)
+
+The Chat window now reads the claim note aloud after the first answer of a turn, so the freshness
+gate rejected the changed `ChatWindow.tsx` digest. The complete original nine-case producer ran in
+the Linux arm64 gates container (Node 24.18.0): all nine passed. Only the source digests and
+`generatedAt` in the changed records were taken from this run; its fallback-font captures were
+discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or
+numerical ceiling changed. This remains updater fixture evidence.
