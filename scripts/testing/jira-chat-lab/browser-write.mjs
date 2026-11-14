@@ -57,7 +57,10 @@ async function decideWrite(chat, intent, beforeDecision) {
   const preview = await review
     .getByRole("group", { name: "Proposed action details", exact: true })
     .innerText();
-  assert.ok(preview.includes(intent.key) && preview.includes(intent.marker));
+  // A creation has no issue key yet: the person reads the summary it is about to write.
+  assert.ok(
+    (intent.key === undefined || preview.includes(intent.key)) && preview.includes(intent.marker),
+  );
   assert.doesNotMatch(preview, /[{}]/u);
   await beforeDecision();
   await review.getByRole("button", { name: "Approve this action", exact: true }).click();

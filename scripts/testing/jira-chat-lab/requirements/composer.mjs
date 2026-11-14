@@ -34,10 +34,25 @@ import {
   gradeWatcher,
   composerRelation,
   ofType,
+  gradeKeysAfterReread,
+  severalPath,
 } from "./composer-graders.mjs";
-import { gradeNoTemplate, gradeUnrepairable } from "./composer-refusals.mjs";
+import {
+  SUBTASK_PARENT_TYPES,
+  gradeNoTemplate,
+  gradeTemplateRecognised,
+  gradeUnrepairable,
+} from "./composer-refusals.mjs";
+import { isLocalized, typeLabel } from "./language-names.mjs";
+import { withActorLocale } from "../seed-language.mjs";
 import { JOURNEYS } from "./journey-checks.mjs";
-import { NO_TURN, aggregateParts, sequentially, snapshotBefore } from "./journey-support.mjs";
+import {
+  NO_TURN,
+  aggregateParts,
+  result,
+  sequentially,
+  snapshotBefore,
+} from "./journey-support.mjs";
 import { modesAndReadableApproval } from "./modes.mjs";
 import { turnIssues } from "./oracles.mjs";
 import { listTemplates, removeTemplate, withTemplates } from "./templates.mjs";
@@ -90,7 +105,10 @@ async function composerFixture(ctx) {
     [epicLink]: epic,
     description: SYNTHETIC_BODY(requiredSections("Story")),
   });
-  return { epic, task, story, epicLink };
+  // How the session's audience names a type (the localized name in a German session) and whether the
+  // requests speak German words: from the language data the seed recorded, never from a word list.
+  const label = (type, kind = "name") => typeLabel(ctx.language, type, kind);
+  return { epic, task, story, epicLink, german: isLocalized(ctx.language), label };
 }
 
 const OWN_TEMPLATE = /Composer-/u;
@@ -125,7 +143,10 @@ export async function templateState(ctx) {
  * as a lab state (`invalid`), never a verdict about the product. `ungoverned` types must have no
  * template at all, baseline included.
  */
-export async function prepareTemplates(ctx, { types, ungoverned = [] }) {
+export async function prepareTemplates(ctx, { types: english, ungoverned: untemplated = [] }) {
+  // Templates are stored under the name their author wrote: the localized one in a German session.
+  const types = english.map((type) => typeLabel(ctx.language, type));
+  const ungoverned = untemplated.map((type) => typeLabel(ctx.language, type));
   const state = await templateState(ctx);
   for (const entry of state.own) {
     if (entry.revision === undefined)
@@ -149,7 +170,8 @@ export async function prepareTemplates(ctx, { types, ungoverned = [] }) {
     );
 }
 
-const templatesOf = (fixture, options) => composerTemplates(PROJECT, fixture.epicLink, options);
+const templatesOf = (fixture, options) =>
+  composerTemplates(PROJECT, fixture.epicLink, { label: fixture.label, ...options });
 
 /** One fresh composer Chat and one turn; every issue the project gained is read natively. */
 async function composerTurn(
@@ -165,7 +187,7 @@ async function composerTurn(
     issues: await ctx.search(`project = ${PROJECT}`, composerFields(fixture.epicLink)),
     exchanges: turn.toolExchanges,
   });
-  return { turn, issues };
+  return { turn, issues, chat };
 }
 
 const part = (label, covers, grade) => ({ label, covers, ...grade });
@@ -210,6 +232,7 @@ async function unrepairableRequest(ctx, fixture) {
     prompt: unrepairablePrompt("Composer Teilaufgabe unter Story", fixture),
   });
   const grade = gradeUnrepairable({
+    allowed: SUBTASK_PARENT_TYPES.map((type) => fixture.label(type)),
     created: issues.created,
     exchanges: turn.toolExchanges,
     answer: turn.answer,
@@ -232,37 +255,95 @@ async function unrepairableRequest(ctx, fixture) {
   ];
 }
 
-const SEVERAL_TITLES = ["Composer Teil A", "Composer Teil B", "Composer Teil C"];
+/** The two ways a person asks for several Tasks: the lab's own wording and a plain one they would type. */
+const SEVERAL_PHRASINGS = Object.freeze([
+  { key: "lab", label: "lab wording" },
+  { key: "plain", label: "plain wording" },
+]);
+const severalTitles = (mode, phrasing) =>
+  ["A", "B", "C"].map((letter) => `Composer Teil ${letter} ${mode.key} ${phrasing.key}`);
+const quoted = (titles) => titles.map((title) => `„${title}“`).join(", ");
 
-/** One request, three Tasks under the named Epic: all created natively, every key listed. */
-async function createSeveralTasks(ctx, fixture) {
-  const { turn, issues } = await composerTurn(ctx, fixture, {
-    prompt: `Lege im Jira-Projekt REQ drei Aufgaben (Vorgangstyp Task) mit den Titeln ${SEVERAL_TITLES.map((title) => `„${title}“`).join(", ")} im Epic ${fixture.epic} an. ${contentRequest("Task", "jede")} Melde alle Vorgangsschlüssel.`,
+function severalPrompt(phrasing, titles, fixture) {
+  return phrasing.key === "lab"
+    ? `Lege im Jira-Projekt REQ drei Aufgaben (Vorgangstyp Task) mit den Titeln ${quoted(titles)} im Epic ${fixture.epic} an. ${contentRequest("Task", "jede")} Melde alle Vorgangsschlüssel.`
+    : `Lege in REQ drei Aufgaben an: ${quoted(titles)}. Sie gehören ins Epic ${fixture.epic}.`;
+}
+
+/**
+ * The hard created-part of one run: the native verdict, the path the model took and the review cards
+ * the person got. A stage that was never committed is red with its own reason; with the plain wording a
+ * model that asked the person for the section content creates nothing at all, which is its observation.
+ */
+function severalCreated({ grade, exchanges, phrasing, cards }) {
+  const path = severalPath(exchanges);
+  const detail = `${grade.created.detail}; path: ${path}; review cards: ${String(cards)}`;
+  if (grade.created.status === "green") return { ...grade.created, detail };
+  if (path === "staged, not committed")
+    return { status: "red", detail: `staged, not committed: ${detail}` };
+  if (path === "no write" && phrasing.key === "plain")
+    return {
+      status: "unverified",
+      observation: true,
+      detail: `model observation: nothing was staged or created for the plain request (${detail})`,
+    };
+  return { ...grade.created, detail };
+}
+
+/** One request, three Tasks under the named Epic, in one mode and one wording: created, listed, listed after a re-read. */
+async function createSeveralIn(ctx, fixture, mode, phrasing) {
+  const titles = severalTitles(mode, phrasing);
+  const { turn, issues, chat } = await composerTurn(ctx, fixture, {
+    mode: mode.mode,
+    prompt: severalPrompt(phrasing, titles, fixture),
   });
   const grade = gradeMultiCreate({
     type: "Task",
-    titles: SEVERAL_TITLES,
+    titles,
     issues,
     conforms: composerConformity("Task", fixture),
     related: composerRelation("Task", fixture),
     answer: turn.answer,
     exchanges: turn.toolExchanges,
   });
-  // Hard from Jira and the stored result card, soft from the answer; one turn serves all three.
+  const made = ofType(issues, "Task").created;
+  const where = `several Tasks, ${mode.label}, ${phrasing.label}`;
+  const id = (name) => `multi-create-${name}-${mode.key}-${phrasing.key}`;
+  const created = severalCreated({
+    grade,
+    exchanges: turn.toolExchanges,
+    phrasing,
+    cards: turn.approvals?.writes ?? 0,
+  });
   return [
+    { turn, part: part(`${where}: created`, [id("all-created")], created) },
     {
-      turn,
-      part: part("create several Tasks", ["multi-create-all-created"], grade.created),
+      turn: NO_TURN,
+      part: part(`${where}: keys in the result`, [id("keys-listed")], grade.listed),
     },
     {
       turn: NO_TURN,
-      part: part("several Tasks: keys in the result", ["multi-create-keys-listed"], grade.listed),
+      part: part(
+        `${where}: keys after the stored conversation was read again`,
+        [id("keys-after-reread")],
+        gradeKeysAfterReread(made, await ctx.readStoredMessages(chat)),
+      ),
     },
     {
       turn: NO_TURN,
-      part: part("several Tasks: keys in the answer", ["multi-create-answer-keys"], grade.answered),
+      part: part(`${where}: keys in the answer`, [id("answer-keys")], grade.answered),
     },
   ];
+}
+
+/** C01: several Tasks from one request in every selected mode, each in both wordings. */
+async function createSeveralTasks(ctx, fixture) {
+  const { modes } = composerSelection(ctx);
+  const runs = modes.flatMap((mode) => SEVERAL_PHRASINGS.map((phrasing) => ({ mode, phrasing })));
+  const results = await sequentially(runs, ({ mode, phrasing }) =>
+    createSeveralIn(ctx, fixture, mode, phrasing),
+  );
+  return results.flat();
 }
 
 /** C02: a violating request is refused before any card or effect, per type and per mode. */
@@ -282,7 +363,9 @@ async function refuseViolations(ctx) {
           type,
           exchanges: turn.toolExchanges,
           created: issues.created,
-          template: `${PROJECT}/${type}`,
+          // The template is authored with the type as the caller's token names it ("Aufgabe" in a German profile),
+          // and the product's violation reports exactly that label.
+          template: `${PROJECT}/${fixture.label(type)}`,
           conforms: composerConformity(type, fixture),
         });
         return {
@@ -465,7 +548,18 @@ async function editRules(ctx) {
   );
 }
 
-/** C05 (one conversation): create, read the stored conversation again, the same order again, and once more straight away. */
+/**
+ * The two repetitions of C05 are WITHOUT a new order: the person asks whether the issue arrived. The
+ * same wording again would be a second order as far as the text shows (gpt-5.4 answered the identical
+ * text once with the existing key and once with a new issue, in English and in German), so a
+ * duplicate after a question is unambiguous.
+ */
+const repetitionQuestions = (title) => [
+  `Kam das an? Ist der Vorgang „${title}“ angelegt? Nenne mir den Vorgangsschlüssel.`,
+  `Ich bin mir nicht sicher: Gibt es den Vorgang „${title}“ jetzt wirklich in Jira? Nenne mir bitte seinen Schlüssel.`,
+];
+
+/** C05 (one conversation): create, read the stored conversation again, and two questions whether it arrived (the second straight away). */
 async function rereadAndRepeat(ctx) {
   const fixture = await composerFixture(ctx);
   await prepareTemplates(ctx, { types: ["Task"] });
@@ -482,9 +576,10 @@ async function rereadAndRepeat(ctx) {
     // when read again afterwards (the lab has no browser and performs no page reload).
     const observed = one.turn.messageIds;
     const stored = await ctx.readStoredConversation(chat);
-    const two = await composerTurn(ctx, fixture, { prompt, chat });
+    const [ask, askAgain] = repetitionQuestions(title);
+    const two = await composerTurn(ctx, fixture, { prompt: ask, chat });
     const afterTwo = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
-    const three = await composerTurn(ctx, fixture, { prompt, chat });
+    const three = await composerTurn(ctx, fixture, { prompt: askAgain, chat });
     const afterThree = await ctx.search(typeQuery("Task"), composerFields(fixture.epicLink));
     const graded = (run, listed) => ({
       title,
@@ -519,15 +614,15 @@ async function rereadAndRepeat(ctx) {
   });
 }
 
-/** The repeated order's two parts: hard (nothing created, the first issue stands), soft (reply names it). */
+/** The repetition's two parts: hard (nothing created, the first issue stands), soft (reply names it). */
 function repeatParts(label, id, grading) {
   return [
     {
-      part: part(`same order again ${label}`, [`${id}-no-duplicate`], gradeRepeat(grading)),
+      part: part(`repetition ${label}`, [`${id}-no-duplicate`], gradeRepeat(grading)),
     },
     {
       part: part(
-        `same order again ${label}: the reply refers to the first issue`,
+        `repetition ${label}: the reply refers to the first issue`,
         [`${id}-reply-refers`],
         gradeRepeatReference(grading),
       ),
@@ -650,17 +745,89 @@ async function attachmentRefused(ctx) {
   );
 }
 
+/**
+ * C10: a template written for a LOCALIZED issue type (what a German project lead types: the name the
+ * German session shows) must govern a create, whoever asks. The same violating Task request is sent
+ * with the template written by name and a German profile, by name and an English profile (the acting
+ * user's token then shows another name than the author wrote), and by id and an English profile. The
+ * product binds a template to a type by comparing the free string with the name the calling user's
+ * token sees, or the id; the middle case is where that differs. Needs a session that recorded its
+ * localized type names.
+ */
+const LOCALIZED_VARIANTS = [
+  {
+    id: "localized-template-german-user-governs",
+    kind: "name",
+    locale: "de_DE",
+    label: "template by name, German profile",
+  },
+  {
+    id: "localized-template-english-user-governs",
+    kind: "name",
+    locale: "en_US",
+    label: "template by name, English profile",
+  },
+  {
+    id: "id-template-english-user-governs",
+    kind: "id",
+    locale: "en_US",
+    label: "template by id, English profile",
+  },
+];
+
+async function localizedTemplates(ctx) {
+  if (!isLocalized(ctx.language))
+    return result(
+      "unverified",
+      NO_TURN,
+      "this session shows no localized issue type names; run seed-language.mjs <session> de",
+      [],
+    );
+  const fixture = await composerFixture(ctx);
+  await prepareTemplates(ctx, { types: ["Task"] });
+  const runs = await sequentially(LOCALIZED_VARIANTS, (variant) => {
+    const label = (type) => typeLabel(ctx.language, type, variant.kind);
+    const templates = templatesOf(fixture, { label }).filter((entry) => entry.issueType === "Task");
+    return withTemplates(ctx.http, templates, () =>
+      (ctx.withActorLocale ?? withActorLocale)(ctx.session, "api", variant.locale, async () => {
+        const { turn, issues } = await composerTurn(ctx, fixture, {
+          prompt: violationPrompt("Task", `Sprachtest ${variant.kind} ${variant.locale}`, fixture),
+        });
+        const grade = gradeTemplateRecognised({
+          created: ofType(issues, "Task").created,
+          exchanges: turn.toolExchanges,
+          turn,
+        });
+        return { turn, part: part(variant.label, [variant.id], grade) };
+      }),
+    );
+  });
+  return parts(runs);
+}
+
+/** Every Composer journey but C07 reads the native state as the administrator: English names, in any session. */
+const asAdministrator = (journey) => async (ctx, chat) => {
+  ctx.readAs = "admin";
+  try {
+    return await journey(ctx, chat);
+  } finally {
+    ctx.readAs = undefined;
+  }
+};
+
 export const COMPOSER_JOURNEYS = Object.freeze({
-  C01: createEveryType,
-  C02: refuseViolations,
-  C03: refuseWithoutTemplate,
-  C04: editRules,
-  C05: rereadAndRepeat,
-  C06: modesAndApproval,
+  C01: asAdministrator(createEveryType),
+  C02: asAdministrator(refuseViolations),
+  C03: asAdministrator(refuseWithoutTemplate),
+  C04: asAdministrator(editRules),
+  C05: asAdministrator(rereadAndRepeat),
+  C06: asAdministrator(modesAndApproval),
+  // C07 runs the document lane's S10 and S11, which read as the product's own account in a German session.
   C07: reportsOnJiraPodOnly,
-  C08: watchAndComment,
-  C09: attachmentRefused,
+  C08: asAdministrator(watchAndComment),
+  C09: asAdministrator(attachmentRefused),
+  C10: asAdministrator(localizedTemplates),
 });
 export const COMPOSER_JOURNEY_IDS = Object.freeze(Object.keys(COMPOSER_JOURNEYS));
 /** Journeys that need a product started without the lab's baseline template set (#4369). */
-export const COMPOSER_WITHOUT_BASELINE = Object.freeze(["C03", "C04"]);
+export const COMPOSER_WITHOUT_BASELINE = Object.freeze(["C03", "C04", "C10"]);

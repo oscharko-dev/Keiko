@@ -2087,6 +2087,14 @@ two counts, the Markdown export and the Jira comment text carry this, and the di
 summary list cut at 15 entries (or 60 statuses) now names its `section` and `nextStartAt`, the
 offset `jiraReportSectionPage` continues from, instead of leaving a weaker model to guess (lab S11:
 an answer after 40 of 46 deviating issues). Lists shown whole carry neither; caps are unchanged.
+One table is never handed over twice (#4356, 2026-11-14; contract change to the summary shape): where
+`figures` states a table in full (type and status rows, epic and container rows, the uncovered
+requirements and the uncovered derived units), the summary lists it only when the whole table fits
+under its cap (15 entries, 60 statuses); a larger one is `{ total, section, nextStartAt }` with no
+`items`, the pointer where the section pages it. A cut copy beside the complete lines read as "the
+list": in the lab a model quoted 15 of 37 epics from it and went on as if that were all. Lists that
+`figures` does not state (deviations, orphans, epics without members, covered requirements) stay
+cut windows with their pointers, and the section views page exactly as before.
 A complete summary also carries `comment: { section: "comment", use }`, the one sentence that says
 the text to post as a Jira comment is that section's, verbatim, and not the figures (lab S13: asked
 for the comment text the report computed, Gemma posted `report.figures`, which names no digest). The

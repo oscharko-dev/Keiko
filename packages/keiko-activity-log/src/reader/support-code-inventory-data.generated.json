@@ -142,6 +142,7 @@
     "keiko-connectors/jira-comment-binding",
     "keiko-connectors/jira-comment-visibility",
     "keiko-connectors/jira-configuration-values",
+    "keiko-connectors/jira-connection-instance",
     "keiko-connectors/jira-connection-verification",
     "keiko-connectors/jira-core-metadata-values",
     "keiko-connectors/jira-create-preparation",

@@ -404,6 +404,23 @@ describe("the figures of the completed report", () => {
     expect(graded.problems.join(" ")).toContain(expected);
   });
 
+  it("read the type and status rows of the figures when the summary lists no table beside them", async () => {
+    const jira = await jiraOf();
+    const pointer = (summary) => ({
+      ...summary,
+      progress: {
+        ...summary.progress,
+        byStatus: { total: summary.progress.byStatus.total, section: "statuses", nextStartAt: 0 },
+      },
+      epics: { total: summary.epics.total, section: "epics", nextStartAt: 0 },
+    });
+    expect(gradeReportFigures([summaryExchange(report, pointer)], jira).problems).toEqual([]);
+    const bare = (summary) => ({ ...pointer(summary), figures: "" });
+    expect(
+      gradeReportFigures([summaryExchange(report, bare)], jira).problems.length,
+    ).toBeGreaterThan(0);
+  });
+
   it("do not count an epic the report leaves out of every list", async () => {
     const summary = jiraReportSummary(report);
     const bare = { ...summary, figures: "", epics: { ...summary.epics, items: [] } };
