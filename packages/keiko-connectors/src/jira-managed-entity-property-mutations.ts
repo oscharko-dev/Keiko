@@ -91,7 +91,7 @@ function invalid(
 const NOTHING_CHANGED = "Nothing was changed.";
 const KEY_RULE = invalid(
   [
-    `propertyKey must be the exact property key: at most ${String(JIRA_PROPERTY_KEY_MAX_BYTES)} bytes, no / \\ or %, no line breaks or tabs, and not . or .. ${NOTHING_CHANGED}`,
+    String.raw`propertyKey must be the exact property key: at most ${String(JIRA_PROPERTY_KEY_MAX_BYTES)} bytes, no / \ or %, no line breaks or tabs, and not . or .. ${NOTHING_CHANGED}`,
   ],
   "propertyKey",
 );
