@@ -490,7 +490,7 @@ export const JIRA_OPERATION_SUMMARIES: Readonly<Record<string, string>> = {
   "jira.replace-role": "Fully update the reviewed global role using native PUT.",
   "jira.replace-sprint": "Fully replace a sprint with native PUT.",
   "jira.report":
-    "Deterministic Jira report computed by Keiko over a project's issues: progress, estimates, template compliance (which issues deviate).",
+    "Deterministic Jira report computed by Keiko over the issues of a project or JQL scope: progress, estimates, template compliance.",
   "jira.request-cluster-index-snapshot":
     "Request the current index only from an independently observed ACTIVE node with alive:true using the native asynchronous.",
   "jira.rerun-user-anonymization":
@@ -749,7 +749,7 @@ export const JIRA_OPERATION_SUMMARIES: Readonly<Record<string, string>> = {
   "jira.votes":
     "Read the issue's native vote count, the connected user's observed vote state and a local page of visible voter identities.",
   "jira.watch":
-    "Start watching the issue as the connected Jira user only; confirms isWatching=true and writes nothing when already watching.",
+    "Start watching the issue as the connected Jira user; confirms isWatching=true and writes nothing when already watching.",
   "jira.watchers":
     "Read the issue's native watcher count, the connected user's observed watching state and a local page of visible watcher identities.",
   "jira.workflow-scheme":

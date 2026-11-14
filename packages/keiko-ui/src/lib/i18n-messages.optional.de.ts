@@ -2830,6 +2830,22 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.propose": "Aus Projekt vorschlagen",
   "chat.skills.jira.proposeTitle": "Vorlage aus einem Jira-Projekt erstellen",
   "chat.skills.jira.proposing": "Projekt wird gelesen…",
+  "chat.skills.jira.proposalCount":
+    "{types} Vorgangstypen: {proposals} mit Vorschlag, {without} ohne.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn":
+    "Von diesem Typ gibt es noch keine Vorgänge, aus denen sich etwas ableiten lässt.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "Die abgeleitete Vorlage war nicht gültig, deshalb gibt es keinen Vorschlag.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira hat für diesen Typ nicht geantwortet. Versuch es noch einmal.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Nicht geprüft: Das Projekt hat mehr Vorgangstypen, als ein Vorschlagslauf abdeckt.",
+  "chat.skills.jira.withoutProposalMore": "und {count} weitere ohne Vorschlag.",
+  "chat.skills.jira.partial.required-fields-unavailable":
+    "Jira hat für die Pflichtfelder dieses Typs nicht geantwortet; prüf sie, bevor du speicherst.",
+  "chat.skills.jira.partial.samples-unavailable":
+    "Jira hat für die Beispielvorgänge dieses Typs nicht geantwortet; prüf die Abschnitte, bevor du speicherst.",
   "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
   "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
   "chat.skills.jira.error":
