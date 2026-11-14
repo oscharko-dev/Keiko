@@ -1,3 +1,4 @@
+import { isMarkdownSkillRefusalReason } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -39,6 +40,28 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
       values: ["started", "completed", "rejected", "failed"],
     },
     httpStatus: { type: "integer", dataClass: "count", required: true },
+    // Why a rejected save was refused: the closed reason the browser also receives, never text.
+    // Kept equal to MARKDOWN_SKILL_REFUSAL_REASONS by a route test (a registration must be literal).
+    refusalReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "template-marker-misplaced",
+        "template-not-a-template",
+        "template-front-matter-unterminated",
+        "template-malformed-line",
+        "template-unknown-key",
+        "template-duplicate-key",
+        "template-missing-key",
+        "template-invalid-value",
+        "template-limit-exceeded",
+        "template-unsafe-pattern",
+        "template-no-rules",
+        "text-empty",
+        "text-control-characters",
+      ],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -69,12 +92,20 @@ export function logMarkdownSkillOperation(
   action: MarkdownSkillAction,
   phase: "started" | "completed" | "rejected" | "failed",
   status: number,
+  refusalReason?: string,
 ): void {
   processServerLogSink().write(
     activityLogEvent(
       MARKDOWN_SKILL_OPERATION,
       { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID },
-      { action, phase, httpStatus: status, completeness: "complete", loss: "none" },
+      {
+        action,
+        phase,
+        httpStatus: status,
+        ...(isMarkdownSkillRefusalReason(refusalReason) ? { refusalReason } : {}),
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
 }

@@ -2691,6 +2691,33 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.requestError": "Skills could not be updated. Reload the selection and try again.",
   "chat.skills.upload": "Upload Markdown (.md, up to 128 KiB)",
   "chat.skills.retry": "Reload",
+  "chat.skills.refusal.template-marker-misplaced":
+    "The template header is not at the very top of the file. Start the file with a line that contains only --- and put the template settings directly below it.",
+  "chat.skills.refusal.template-not-a-template":
+    "This file is not a valid Jira template. Put the template settings at the top, between two lines that contain only ---.",
+  "chat.skills.refusal.template-front-matter-unterminated":
+    "The template header is not closed. Add a line that contains only --- after the template settings.",
+  "chat.skills.refusal.template-malformed-line":
+    "A line in the template header is not written as key: value. Fix that line.",
+  "chat.skills.refusal.template-unknown-key":
+    "The template header uses a setting Keiko does not know. Remove it or correct its name.",
+  "chat.skills.refusal.template-duplicate-key":
+    "A setting appears twice in the template header. Keep only one of them.",
+  "chat.skills.refusal.template-missing-key":
+    "The template header lacks a required setting, such as the project or the issue type. Add it.",
+  "chat.skills.refusal.template-invalid-value":
+    "A setting in the template header has a value Keiko cannot use. Check how it is written.",
+  "chat.skills.refusal.template-limit-exceeded":
+    "The template has more entries or longer text than allowed. Shorten it.",
+  "chat.skills.refusal.template-unsafe-pattern":
+    "A pattern in the template is too complex to check safely. Use a simpler one.",
+  "chat.skills.refusal.template-no-rules":
+    "The template does not require anything yet. Add at least one rule, such as a required section.",
+  "chat.skills.refusal.text-empty": "The file has no text yet. Write something, then save again.",
+  "chat.skills.refusal.text-control-characters":
+    "The text contains characters Keiko cannot store. Remove them, then save again.",
+  "chat.skills.refusal.line": "Look at line {line}.",
+  "chat.skills.refusal.kept": "Your text is still in the editor.",
   "chat.skills.loading": "Loading skills…",
   "chat.skills.empty": "No chat skills yet.",
   "chat.skills.fileError": "Choose a non-empty .md file up to 128 KiB.",

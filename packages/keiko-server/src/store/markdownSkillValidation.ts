@@ -75,14 +75,20 @@ function assertValidJiraTemplate(body: string): void {
     if (mentionsJiraIssueTemplateMarker(body)) {
       throw invalidRequest(
         "Jira issue template marker without a valid front matter: start the file with ---.",
+        { reason: "template-marker-misplaced" },
       );
     }
     return;
   }
   const parsed = parseJiraIssueTemplate(body);
   if (!parsed.ok) {
+    const first = parsed.errors[0];
     throw invalidRequest(
       `Jira issue template is invalid: ${describeJiraTemplateParseErrors(parsed.errors)}.`,
+      {
+        reason: first === undefined ? "template-not-a-template" : `template-${first.code}`,
+        ...(first?.line === undefined ? {} : { line: first.line }),
+      },
     );
   }
 }
@@ -93,8 +99,15 @@ export function validateMarkdownSkillUpload(input: MarkdownSkillUpload): Validat
     throw new UiStoreError("INVALID_REQUEST", "Skill file exceeds the upload limit.", 413);
   }
   const body = decodeUpload(input.contentBase64);
-  if (body.trim().length === 0 || /\p{Cc}/u.test(body.replace(/[\n\t]/gu, ""))) {
-    throw invalidRequest("Skill file must contain nonempty Markdown text.");
+  if (body.trim().length === 0) {
+    throw invalidRequest("Skill file must contain nonempty Markdown text.", {
+      reason: "text-empty",
+    });
+  }
+  if (/\p{Cc}/u.test(body.replace(/[\n\t]/gu, ""))) {
+    throw invalidRequest("Skill file must contain nonempty Markdown text.", {
+      reason: "text-control-characters",
+    });
   }
   assertValidJiraTemplate(body);
   const heading = firstHeading(body);

@@ -14,18 +14,26 @@ import {
   readMarkdownSkill,
   saveMarkdownSkill,
 } from "@/lib/markdown-skills-api";
+import { markdownSkillRefusalOf, type MarkdownSkillRefusal } from "@/lib/markdown-skill-refusal";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
 import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 
+/**
+ * What the library last failed with: a generic request failure (reload is the advice), a refused
+ * file size or name, or a save the server refused for a reason the person can fix in the text.
+ */
+export type MarkdownSkillLibraryError =
+  "request" | "file" | ({ readonly kind: "refused" } & MarkdownSkillRefusal);
+
 export interface MarkdownSkillLibrary {
   readonly skills: readonly MarkdownSkillMetadata[];
   readonly preview: MarkdownSkillDocument | undefined;
   readonly busy: boolean;
   readonly available: boolean;
-  readonly error: "request" | "file" | undefined;
+  readonly error: MarkdownSkillLibraryError | undefined;
   readonly refresh: () => Promise<void>;
   readonly inspect: (skill: MarkdownSkillMetadata) => Promise<void>;
   readonly upload: (file: File, previous?: MarkdownSkillMetadata) => Promise<void>;
@@ -40,6 +48,20 @@ export function downloadSkillMarkdown(content: string, name: string): void {
   anchor.download = name;
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** A refused save keeps its closed reason; any other failure is the generic request failure. */
+function libraryErrorOf(error: unknown): MarkdownSkillLibraryError {
+  const refusal = markdownSkillRefusalOf(error);
+  return refusal === undefined ? "request" : { kind: "refused", ...refusal };
+}
+
+function reportLibraryFailure(error: unknown): void {
+  reportClientDiagnostic("Private skill library request failed.", {
+    correlationId: correlationIdOf(error),
+    errorKind: bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+  });
 }
 
 function useLibraryRequest(): {
@@ -75,12 +97,8 @@ function useLibraryRequest(): {
       await operation();
       if (active.current) setError(undefined);
     } catch (error_) {
-      if (active.current) setError("request");
-      reportClientDiagnostic("Private skill library request failed.", {
-        correlationId: correlationIdOf(error_),
-        errorKind: bffRequestErrorKind(error_),
-        errorEvidence: clientErrorEvidence(error_),
-      });
+      if (active.current) setError(libraryErrorOf(error_));
+      reportLibraryFailure(error_);
     } finally {
       locked.current = false;
       const next = trailingRead.current;

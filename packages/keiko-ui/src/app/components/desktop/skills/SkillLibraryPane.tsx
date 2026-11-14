@@ -6,7 +6,7 @@ import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { Icons } from "../Icons";
 import { JiraTemplateList, PodSelect, type JiraTemplates } from "./JiraTemplateTools";
 import { SkillChatToggle } from "./SkillChatToggle";
-import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
+import type { MarkdownSkillLibrary, MarkdownSkillLibraryError } from "./useMarkdownSkillLibrary";
 import type { SkillWorkspace } from "./useSkillWorkspace";
 import styles from "./MarkdownSkillControl.module.css";
 
@@ -195,6 +195,7 @@ function LibraryStatus({
   readonly skill: ChatMarkdownSkill;
 }): ReactNode {
   const t = useTranslate();
+  if (typeof library.error === "object") return <RefusalNotice error={library.error} />;
   if (library.error !== undefined || skill.failed)
     return (
       <div role="alert" className={styles.cmpAlert}>
@@ -214,6 +215,29 @@ function LibraryStatus({
   if (library.busy && !library.available)
     return <output className={styles.cmpEmpty}>{t("chat.skills.loading")}</output>;
   return null;
+}
+
+/**
+ * A save the server refused for what the text says: the one thing to change, in plain words. The
+ * text stays in the editor and reloading would not help, so there is no Reload here.
+ */
+function RefusalNotice({
+  error,
+}: {
+  readonly error: Extract<MarkdownSkillLibraryError, { readonly kind: "refused" }>;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <div role="alert" className={styles.cmpAlert}>
+      <span>
+        {t(`chat.skills.refusal.${error.reason}`)}
+        {error.line === undefined
+          ? ""
+          : ` ${t("chat.skills.refusal.line", { line: error.line })}`}{" "}
+        {t("chat.skills.refusal.kept")}
+      </span>
+    </div>
+  );
 }
 
 function skillLibraryErrorKey(

@@ -2849,6 +2849,34 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Skills konnten nicht aktualisiert werden. Auswahl neu laden und erneut versuchen.",
   "chat.skills.upload": "Markdown hochladen (.md, bis 128 KiB)",
   "chat.skills.retry": "Neu laden",
+  "chat.skills.refusal.template-marker-misplaced":
+    "Der Vorlagen-Kopf steht nicht ganz oben in der Datei. Beginne die Datei mit einer Zeile, die nur --- enthält, und setze die Einstellungen der Vorlage direkt darunter.",
+  "chat.skills.refusal.template-not-a-template":
+    "Das ist keine gültige Jira-Vorlage. Setze die Einstellungen der Vorlage nach oben, zwischen zwei Zeilen, die nur --- enthalten.",
+  "chat.skills.refusal.template-front-matter-unterminated":
+    "Der Vorlagen-Kopf ist nicht abgeschlossen. Füge nach den Einstellungen der Vorlage eine Zeile ein, die nur --- enthält.",
+  "chat.skills.refusal.template-malformed-line":
+    "Eine Zeile im Vorlagen-Kopf ist nicht als Schlüssel: Wert geschrieben. Korrigiere diese Zeile.",
+  "chat.skills.refusal.template-unknown-key":
+    "Der Vorlagen-Kopf enthält eine Einstellung, die Keiko nicht kennt. Entferne sie oder korrigiere ihren Namen.",
+  "chat.skills.refusal.template-duplicate-key":
+    "Eine Einstellung steht zweimal im Vorlagen-Kopf. Behalte nur eine davon.",
+  "chat.skills.refusal.template-missing-key":
+    "Im Vorlagen-Kopf fehlt eine Pflichteinstellung, zum Beispiel das Projekt oder der Vorgangstyp. Ergänze sie.",
+  "chat.skills.refusal.template-invalid-value":
+    "Eine Einstellung im Vorlagen-Kopf hat einen Wert, den Keiko nicht verwenden kann. Prüfe die Schreibweise.",
+  "chat.skills.refusal.template-limit-exceeded":
+    "Die Vorlage hat mehr Einträge oder längere Texte als erlaubt. Kürze sie.",
+  "chat.skills.refusal.template-unsafe-pattern":
+    "Ein Muster in der Vorlage ist zu komplex, um es sicher zu prüfen. Nimm ein einfacheres.",
+  "chat.skills.refusal.template-no-rules":
+    "Die Vorlage verlangt noch nichts. Ergänze mindestens eine Regel, zum Beispiel einen Pflichtabschnitt.",
+  "chat.skills.refusal.text-empty":
+    "Die Datei enthält noch keinen Text. Schreibe etwas und speichere erneut.",
+  "chat.skills.refusal.text-control-characters":
+    "Der Text enthält Zeichen, die Keiko nicht speichern kann. Entferne sie und speichere erneut.",
+  "chat.skills.refusal.line": "Schau dir Zeile {line} an.",
+  "chat.skills.refusal.kept": "Dein Text bleibt im Editor erhalten.",
   "chat.skills.loading": "Skills werden geladen…",
   "chat.skills.empty": "Noch keine Chat-Skills.",
   "chat.skills.fileError": "Wähle eine nicht leere .md-Datei mit maximal 128 KiB.",

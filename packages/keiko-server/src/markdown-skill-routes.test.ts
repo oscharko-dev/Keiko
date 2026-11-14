@@ -26,6 +26,8 @@ import {
   resetServerLogger,
   resetServerLogFailureNotices,
 } from "../../../tests/support/activity-log-test-support.js";
+import { MARKDOWN_SKILL_REFUSAL_REASONS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { logMarkdownSkillOperation } from "./markdown-skill-log.js";
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
@@ -246,6 +248,96 @@ describe("private Markdown skill routes (#4023)", () => {
     expect(serialized).not.toContain(BODY);
     expect(serialized).not.toContain(UPLOAD.contentBase64);
     expect(serialized).not.toContain(UPLOAD.fileName);
+  });
+
+  // F31: a refused template save named only "INVALID_REQUEST" plus English text, so the browser
+  // could offer nothing but "reload". The body now carries a closed reason (and the line), and the
+  // Activity Log the same closed reason, never the text.
+  describe("a refused save names a closed reason", () => {
+    const TEMPLATE = [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Story",
+      "activateOn: [create]",
+      "---",
+      "# Story",
+      "## Acceptance criteria",
+    ];
+    const upload = (lines: readonly string[]): typeof UPLOAD => ({
+      fileName: "template.md",
+      contentBase64: Buffer.from(lines.join("\n")).toString("base64"),
+    });
+
+    it.each([
+      ["front matter not at the top", ["", ...TEMPLATE], "template-marker-misplaced", undefined],
+      [
+        "an unknown key",
+        [...TEMPLATE.slice(0, 6), "colour: red", ...TEMPLATE.slice(6)],
+        "template-unknown-key",
+        7,
+      ],
+      [
+        "an unclosed front matter",
+        TEMPLATE.slice(0, 6),
+        "template-front-matter-unterminated",
+        undefined,
+      ],
+      ["only whitespace", ["  ", ""], "text-empty", undefined],
+    ] as const)("for %s", async (_name, lines, reason, line) => {
+      const { deps, cookie } = fixture();
+      const result = await handleImportMarkdownSkill(context(cookie, upload(lines)), deps);
+      expect(result.status).toBe(400);
+      expect(result.body).toMatchObject({
+        error: {
+          code: "INVALID_REQUEST",
+          reason,
+          ...(line === undefined ? {} : { line }),
+        },
+      });
+      expect(deps.store.markdownSkills.list()).toEqual([]);
+    });
+
+    it("answers a stale revision as a plain conflict, without a reason", async () => {
+      const { deps, cookie } = fixture();
+      const skill = deps.store.markdownSkills.import(UPLOAD);
+      const stale = { ...UPLOAD, expectedRevision: 7 };
+      const result = await handleReplaceMarkdownSkill(context(cookie, stale, skill.id), deps);
+      expect(result.status).toBe(409);
+      expect(JSON.stringify(result.body)).not.toContain("reason");
+    });
+
+    // The registered operation lists the reasons literally; one the contract adds without being
+    // added there would be refused by the writer and lose the evidence line.
+    it.each(MARKDOWN_SKILL_REFUSAL_REASONS)(
+      "logs the reason %s through the registered operation",
+      (reason) => {
+        const sink = createBufferedServerLogSink();
+        setServerLogger(createServerLogger({ sink, level: "debug" }));
+        logMarkdownSkillOperation("skills-test", "import", "rejected", 400, reason);
+        const line = sink.events.find((entry) => entry.op === "skills.library.operation");
+        expect(line?.extra).toMatchObject({ refusalReason: reason });
+      },
+    );
+
+    it("records the closed reason, and no template text, on the rejected lifecycle line", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const { deps, cookie } = fixture();
+      await handleImportMarkdownSkill(context(cookie, upload(["", ...TEMPLATE])), deps);
+      const events = sink.events.filter((entry) => entry.op === "skills.library.operation");
+      expect(events.map((entry) => entry.extra?.phase)).toEqual(["started", "rejected"]);
+      const rejected = events.find((entry) => entry.extra?.phase === "rejected");
+      if (rejected === undefined) throw new Error("expected a rejected lifecycle line");
+      expect(rejected.extra).toMatchObject({ refusalReason: "template-marker-misplaced" });
+      const persisted = expectActivityLogProof(
+        "skills.library.operation.lifecycle",
+        formatActivityLogProofLine(rejected),
+      );
+      expect(persisted.correlationId).toBe("skills-test");
+      expect(JSON.stringify(events)).not.toContain("Acceptance criteria");
+    });
   });
 
   it("propagates unexpected storage faults for the server's correlated diagnostic boundary", async () => {
