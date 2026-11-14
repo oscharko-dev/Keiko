@@ -26,7 +26,7 @@ export function useClaimNoticeText(notice: ChatClaimNotice | undefined): string 
 export function ClaimNoticeLine({ text }: { readonly text: string | undefined }): ReactNode {
   if (text === undefined) return null;
   return (
-    <p className={styles.claimNotice} data-claim-notice>
+    <p className={styles.cmpClaimNotice} data-claim-notice>
       {text}
     </p>
   );
