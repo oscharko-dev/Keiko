@@ -749,7 +749,7 @@ export const JIRA_OPERATION_SUMMARIES: Readonly<Record<string, string>> = {
   "jira.votes":
     "Read the issue's native vote count, the connected user's observed vote state and a local page of visible voter identities.",
   "jira.watch":
-    "Start watching the issue as the connected Jira user; confirms isWatching=true and writes nothing when already watching.",
+    "Start watching the issue as the connected Jira user only; confirms isWatching=true and writes nothing when already watching.",
   "jira.watchers":
     "Read the issue's native watcher count, the connected user's observed watching state and a local page of visible watcher identities.",
   "jira.workflow-scheme":

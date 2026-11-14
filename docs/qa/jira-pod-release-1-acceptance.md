@@ -316,20 +316,24 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Proves:** epic AC1, AC4; #4354 template rule 3 ("Only a template's explicit rules for entering a
   status apply") and rule 2 for the carried field.
 
-### W13 Comment, watcher, link, assignee, and the switched-off attachment
+### W13 Comment, watcher, link, assignee, and what this release does not offer
 
-- **Do:** ask Keiko to add a comment, edit that comment, add a watcher, link two issues, and assign an
-  issue to a person found by name. Then ask it to attach a file to an issue.
-- **Expect:** the comment, its edit and the watcher are done without any template rule. Assigning
-  and linking follow the issue's template like any other change: they work unless they would break a
-  saved rule (link behaviour is to be confirmed at the first rehearsal of the walk). The card shows
-  **Jira change confirmed** for each. Keiko does not offer attachments: asked anyway, it says in its
-  own words what the product tells it: "Attachments are not part of this release, so nothing was
-  changed in Jira. Describe the file in a comment instead, or add it in Jira itself."
-- **Jira:** the comment (in its edited form), watcher, link and assignee are there; no attachment was
-  added.
+- **Do:** ask Keiko to add a comment, edit that comment, watch an issue, link two issues, and assign an
+  issue to a person found by name. Then ask it to add another user as a watcher, and ask it to attach a
+  file to an issue.
+- **Expect:** the comment, its edit and watching the issue (as the connected user) are done without
+  any template rule. Assigning and linking follow the issue's template like any other change: they
+  work unless they would break a saved rule (link behaviour is to be confirmed at the first rehearsal
+  of the walk). The card shows **Jira change confirmed** for each. Adding **another** person as a
+  watcher and attaching a file are **not offered** in this release: asked anyway, Keiko answers in
+  one plain sentence, with what it can do instead, **without a failed tool call**, for example "Adding
+  another person as a watcher is not available yet. I can watch the issue for you instead." and
+  "Attachments are not part of this release, so nothing was changed in Jira. Describe the file in a
+  comment instead, or add it in Jira itself."
+- **Jira:** the comment (in its edited form), the connected user as watcher, link and assignee are
+  there; no other watcher and no attachment was added.
 - **Proves:** epic AC4; #4354 template rule 4 (comments and watchers never template-checked) and
-  rule 5 (attachments are blocked and left out in Release 1); #4359 step 5.
+  rule 5 (attachments are blocked and left out in Release 1); #4357 (the two answers); #4359 step 5.
 
 ### W14 The progress and compliance report
 
