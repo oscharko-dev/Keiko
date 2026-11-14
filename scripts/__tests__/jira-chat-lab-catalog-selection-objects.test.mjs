@@ -40,12 +40,14 @@ vi.mock("../testing/jira-chat-lab/lab-client.mjs", () => ({
 const {
   createSelectionObjects,
   orphanedIssues,
+  ownedSubtask,
   removeNative,
   scopeSnapshot,
   selectionNames,
   strayWrites,
 } = await import("../testing/jira-chat-lab/catalog-selection-objects.mjs");
-const { SELECTION_CASES } = await import("../testing/jira-chat-lab/catalog-selection-cases.mjs");
+const { LANGUAGE_SELECTION_CASES, SELECTION_CASES } =
+  await import("../testing/jira-chat-lab/catalog-selection-cases.mjs");
 
 describe("removeNative", () => {
   beforeEach(() => {
@@ -420,5 +422,63 @@ describe("owned read truths", () => {
     const values = Array.from({ length: 26 }, (_, index) => ({ name: `Board ${index}` }));
     reads.set(path, { values: [...values, { name: selection.boardName }] });
     await expect(truth("boards")).rejects.toThrow("exceeds one tool page");
+  });
+});
+
+describe("ownedSubtask (#4369: a second issue type for the restricted search)", () => {
+  beforeEach(() => {
+    requests.length = 0;
+    reads.clear();
+    creations.clear();
+  });
+
+  it("creates a Sub-task of the project's own Sub-task type under the named parent", async () => {
+    reads.set("/rest/api/2/project/KEIKO", {
+      issueTypes: [
+        { id: "10002", name: "Task", subtask: false },
+        { id: "10003", name: "Sub-task", subtask: true },
+      ],
+    });
+    creations.set("/rest/api/2/issue", { key: "KEIKO-90" });
+    const key = await ownedSubtask(
+      {},
+      { project: "KEIKO", requiredFieldId: "customfield_1" },
+      "S",
+      "KEIKO-5",
+    );
+    expect(key).toBe("KEIKO-90");
+    const sent = requests.find(
+      (entry) => entry.method === "POST" && entry.path === "/rest/api/2/issue",
+    );
+    expect(sent.body.fields).toMatchObject({
+      project: { key: "KEIKO" },
+      issuetype: { id: "10003" },
+      parent: { key: "KEIKO-5" },
+      summary: "S",
+      customfield_1: "Synthetic required value",
+    });
+  });
+
+  it("refuses a project without a Sub-task type and an identity that is no issue key", async () => {
+    reads.set("/rest/api/2/project/KEIKO", {
+      issueTypes: [{ id: "10002", name: "Task", subtask: false }],
+    });
+    await expect(ownedSubtask({}, { project: "KEIKO" }, "S", "KEIKO-5")).rejects.toThrow(
+      "no Sub-task type",
+    );
+    reads.set("/rest/api/2/project/KEIKO", { issueTypes: [{ id: "10003", subtask: true }] });
+    creations.set("/rest/api/2/issue", { key: "not a key" });
+    await expect(ownedSubtask({}, { project: "KEIKO" }, "S", "KEIKO-5")).rejects.toThrow(
+      "Invalid owned selection sub-task",
+    );
+  });
+
+  it("the search-by-type case prepares one and owns it for the cleanup", async () => {
+    reads.set("/rest/api/2/project/KEIKO", { issueTypes: [{ id: "10003", subtask: true }] });
+    creations.set("/rest/api/2/issue", { key: "KEIKO-91" });
+    const entry = LANGUAGE_SELECTION_CASES.find((candidate) => candidate.id === "search-by-type");
+    const fixture = { project: "KEIKO", selection: { issueKey: "KEIKO-5", extraIssueKeys: [] } };
+    expect(await entry.prepare({}, fixture, "tag")).toEqual({ key: "KEIKO-91" });
+    expect(fixture.selection.extraIssueKeys).toEqual(["KEIKO-91"]);
   });
 });

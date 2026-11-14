@@ -4,7 +4,7 @@
 // independent native Jira read with the lab actor's credentials, never Keiko's own answer; a read
 // that cannot see an owned object, or a list beyond the tools' first page, makes the attempt invalid.
 import { URL } from "node:url";
-import { ownedIssue, voteKey } from "./catalog-selection-objects.mjs";
+import { ownedIssue, ownedSubtask, voteKey } from "./catalog-selection-objects.mjs";
 import {
   actorDetails,
   basicAuth,
@@ -216,6 +216,9 @@ const DISCOVERY_READS = [
     // The lab's own custom field: its name is the same in every Jira language, unlike a built-in.
     id: "fields",
     tool: "jira.fields",
+    // The create and edit field lists of the project carry the lab's custom field with its id too, so an
+    // answer read from them is correct (reviewed 2026-11-14: Gemma answered correctly 3 of 3 that way).
+    alternatives: ["jira.create-fields", "jira.edit-fields"],
     prompt: () => 'Welche Feld-ID hat das Jira-Feld "Keiko required text"?',
     truth: async (s) => {
       const rows = (await native(s, "/rest/api/2/field")).filter(
@@ -531,8 +534,15 @@ export const LANGUAGE_SELECTION_CASES = Object.freeze([
         ? page.issues.map((issue) => issue.key)
         : [f.selection.issueKey, f.selection.linkTargetKey];
     },
+    // The fixture project holds only Tasks, so the case creates one owned Sub-task: without a second
+    // type nothing could tell a search restricted to Tasks from an unrestricted one.
+    prepare: async (s, f, tag) => {
+      const key = await ownedSubtask(s, f, `Auswahl Teilaufgabe ${tag}`, f.selection.issueKey);
+      f.selection.extraIssueKeys.push(key);
+      return { key };
+    },
     // "Welche Aufgaben ...?" asks for Tasks only: a search that names no type and returns the other
-    // issues of the project too has not answered it (#4369: gpt-5.4 listed all 36 issues of KEIKO).
+    // issues of the project too has not answered it (the oracle checks both the JQL and the result).
     restriction: async (s, f) => {
       const jql = encodeURIComponent(
         `project = ${f.project} AND issuetype != Task ORDER BY key ASC`,
@@ -547,6 +557,9 @@ export const LANGUAGE_SELECTION_CASES = Object.freeze([
       const task = adminTypes.find((type) => type.name === "Task");
       const apiTypes = await native(s, "/rest/api/2/issuetype", "api");
       const seen = apiTypes.find((type) => type.id === task?.id);
+      // Fail closed: no issue of another type means the restriction cannot be told apart (the attempt is invalid).
+      if (others.total === 0)
+        throw new TypeError("The fixture project holds no issue of another type than Task");
       return {
         forbidden: bounded(others.issues.map((issue) => issue.key)),
         typeWords: [

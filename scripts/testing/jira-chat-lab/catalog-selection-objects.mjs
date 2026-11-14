@@ -48,6 +48,38 @@ export async function ownedIssue(session, fixture, summary) {
   return String(issue.key);
 }
 
+/**
+ * An owned Sub-task of the project (an issue of a type other than Task), created under `parentKey`; the
+ * restricted reads of the lane need one so that a search which names no type is told apart from one that
+ * does (#4369: all 34 issues of the fixture project were Tasks, so the case could not discriminate).
+ */
+export async function ownedSubtask(session, fixture, summary, parentKey) {
+  const project = await checked(
+    session,
+    "catalog-selection-fixture",
+    "GET",
+    `/rest/api/2/project/${encodeURIComponent(fixture.project)}`,
+    basicAuth(session, "admin"),
+  );
+  const subtask = (project.issueTypes ?? []).find((type) => type.subtask === true);
+  if (subtask === undefined) throw new TypeError("The fixture project has no Sub-task type");
+  const issue = await write(session, "admin", "POST", "/rest/api/2/issue", {
+    fields: {
+      project: { key: fixture.project },
+      issuetype: { id: String(subtask.id) },
+      parent: { key: parentKey },
+      summary,
+      description: "Synthetic Keiko laboratory data. No customer content.",
+      ...(fixture.requiredFieldId === undefined
+        ? {}
+        : { [fixture.requiredFieldId]: "Synthetic required value" }),
+    },
+  });
+  if (!/^[A-Z][A-Z0-9]+-\d+$/u.test(String(issue.key)))
+    throw new TypeError("Invalid owned selection sub-task identity");
+  return String(issue.key);
+}
+
 async function issueObjects(session, created, tag) {
   const issue = `/rest/api/2/issue/${encodeURIComponent(created.issueKey)}`;
   const link = await write(session, "admin", "POST", `${issue}/remotelink`, {

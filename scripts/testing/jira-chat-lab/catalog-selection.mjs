@@ -202,6 +202,17 @@ async function writeAttempt(context, run, entry, turnFor) {
 
 /** A failed native truth read is a lab error of this attempt; it never stops the other cases. */
 async function readAttempt(context, run, entry, turnFor) {
+  // A read may own an object it needs (the Sub-task that makes a restricted search tell apart); it is
+  // created before the turn and removed with the run's other owned issues.
+  try {
+    turnFor.subject = await entry.prepare?.(context.session, run.fixture, turnFor.tag);
+  } catch (error) {
+    stage("prepare-unavailable", { id: entry.id, errorType: errorName(error) });
+    return {
+      turn: { exchanges: [], gateway: { unrecovered: 0, circuit: 0 } },
+      proof: { truthUnavailable: true },
+    };
+  }
   const turn = await withGateway(context.session, await turnFor.send());
   try {
     const tokens = await selectionTruth(context.session, run.fixture, entry);
