@@ -7,6 +7,8 @@ import type { ServerResponse } from "node:http";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import type { ReviewPairQualificationEvent } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
@@ -49,7 +51,22 @@ afterEach(async () => {
   current = undefined;
 });
 
-function setUp(review: unknown): RouteFixture {
+/** A pair's model whose tool-call proof was verified and is older than its lifetime. */
+function lapsed(id: string): ReturnType<typeof capability> {
+  const fresh = capability(id);
+  const verification = fresh.toolCallingVerification;
+  if (verification === undefined) throw new TypeError("expected a verified fixture capability");
+  const checkedAt = new Date(Date.now() - TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 60_000);
+  return {
+    ...fresh,
+    toolCallingVerification: { ...verification, checkedAt: checkedAt.toISOString() },
+  };
+}
+
+function setUp(
+  review: unknown,
+  models: readonly ReturnType<typeof capability>[] = MODELS,
+): RouteFixture {
   const h = createReviewRunHarness({ runtime: reviewerFiling([]) });
   const pairStatus = new ReviewPairStatusRegistry();
   const service = createPairQualificationService({
@@ -62,7 +79,7 @@ function setUp(review: unknown): RouteFixture {
   });
   const deps: UiHandlerDeps = {
     ...h.deps(),
-    config: reviewGatewayConfig(MODELS, review),
+    config: reviewGatewayConfig(models, review),
     activityLog: h.log.sink,
     reviewPolicy: { settings: undefined, pairStatus, qualifications: service },
   };
@@ -74,6 +91,56 @@ function idOf(result: RouteResult): string {
   return (result.body as { readonly qualification: { readonly qualificationId: string } })
     .qualification.qualificationId;
 }
+
+// R4130-058: each run of a qualification renews a lapsed tool-call proof at its launch, but the
+// start route judged the stored proof and refused the pair, so a pair could not be qualified on a
+// server that had run for more than 24 hours.
+describe("POST /api/git-review/pair-qualifications with a lapsed tool-call proof", () => {
+  const AGED = [lapsed("reviewer-model"), capability("checker-model")];
+
+  /** A renewal that answers like the gateway: the asked model's proof is current afterwards. */
+  function renewing(f: RouteFixture, review: unknown): string[] {
+    const asked: string[] = [];
+    Object.assign(f.deps, {
+      reviewPolicy: {
+        ...f.deps.reviewPolicy,
+        renewToolProof: (modelId: string): Promise<void> => {
+          asked.push(modelId);
+          Object.assign(f.deps, { config: reviewGatewayConfig(MODELS, review) });
+          return Promise.resolve();
+        },
+      },
+    });
+    return asked;
+  }
+
+  it("renews the proof of an admitted pair and then starts the qualification", async () => {
+    const review = { enabled: true };
+    const f = setUp(review, AGED);
+    const asked = renewing(f, review);
+    const started = await handlePairQualificationStart(f.h.ctx(BASE, { body: PAIR }), f.deps);
+    expect(asked).toEqual(["reviewer-model"]);
+    expect(started.status).toBe(202);
+    await f.service.whenSettled(idOf(started));
+  });
+
+  it("refused the same pair while nothing renewed the proof", async () => {
+    const f = setUp({ enabled: true }, AGED);
+    const result = await handlePairQualificationStart(f.h.ctx(BASE, { body: PAIR }), f.deps);
+    expect(result.body).toMatchObject({ reason: "tool-verification-stale", role: "reviewer" });
+    expect(f.h.runtimeRequests).toEqual([]);
+  });
+
+  // R4130-003: a pair the policy refuses receives no traffic, not even a probe.
+  it("asks nothing for a pair the policy refuses", async () => {
+    const review = { enabled: true, allowedReviewModelIds: ["checker-model"] };
+    const f = setUp(review, AGED);
+    const asked = renewing(f, review);
+    const result = await handlePairQualificationStart(f.h.ctx(BASE, { body: PAIR }), f.deps);
+    expect(result.body).toMatchObject({ reason: "outside-allowlist", role: "reviewer" });
+    expect(asked).toEqual([]);
+  });
+});
 
 describe("POST /api/git-review/pair-qualifications", () => {
   it("refuses a pair outside the allowlist before anything runs", async () => {

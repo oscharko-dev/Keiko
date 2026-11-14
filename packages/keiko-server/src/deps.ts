@@ -5394,7 +5394,11 @@ function attachPairQualificationService(
     pairStatus: reviewPolicy.pairStatus,
     activityLog,
   });
-  Object.assign(deps, { reviewPolicy: { ...reviewPolicy, qualifications } });
+  // R4130-058: the entry points that judge a role model without starting a run renew its lapsed
+  // tool-call proof through the same check a run's launch uses.
+  const renewToolProof = (modelId: string, correlationId: string | undefined): Promise<void> =>
+    ensureReviewModelReady(deps, modelId, correlationId);
+  Object.assign(deps, { reviewPolicy: { ...reviewPolicy, qualifications, renewToolProof } });
   reportReviewOperatorConfig(reviewPolicyDeps(args), activityLog, args.bootstrapCorrelationId);
   void qualifications.sweep().catch((error: unknown) => {
     emitServerDiagnostic(

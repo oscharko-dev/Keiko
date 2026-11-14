@@ -269,10 +269,10 @@ class ReviewRunServiceImpl implements ReviewRunService {
   }
 
   private async dryRun(input: ReviewRunStartInput): Promise<ReviewRunStartOutcome> {
-    const models = validateReviewRoleModels(
+    const models = await validateReviewRoleModels(
       this.deps.models,
       input.request,
-      this.now(),
+      this.now,
       input.correlationId,
     );
     if (!models.ok) return this.refuse(models.reason, input);
@@ -370,22 +370,27 @@ class ReviewRunServiceImpl implements ReviewRunService {
     await this.settle(ctx, state, live, excluded);
   }
 
+  /** Whether the fingerprint is dismissed on this run's pull request right now (Issue #4141). */
+  private excludedNow(ctx: ReviewRunContext, fingerprint: string): boolean {
+    const configured = this.deps.excludedFingerprint;
+    if (configured === undefined) return false;
+    const row = this.deps.store.get(ctx.runId);
+    return row !== undefined && configured(row, fingerprint);
+  }
+
   /**
-   * The run's exclusion of dismissed fingerprints (Issue #4141), one answer per fingerprint for
-   * the whole run. The counter-check phase stops once the presentation is full (#4130), and the
-   * settlement then presents on the same answers, so a dismissal that arrives between the two
-   * cannot leave a place empty that an unchecked candidate could have taken.
+   * The exclusion the counter-check phase decides on: one answer per fingerprint for the whole
+   * phase, so a fingerprint counted as presentable when the phase stopped (#4130) is not judged
+   * differently by a later check of the same phase. The settlement adds what is dismissed by then
+   * (`settleRecord`), so a dismissal that arrives during the run is never presented; at worst it
+   * leaves a place empty that a surplus candidate could have taken (R4130-058 review).
    */
   private exclusionFor(ctx: ReviewRunContext): (fingerprint: string) => boolean {
     const answers = new Map<string, boolean>();
     return (fingerprint): boolean => {
       const known = answers.get(fingerprint);
       if (known !== undefined) return known;
-      // The run's row is read when a fingerprint is first asked for: a failed read surfaces in the
-      // phase that asked, where the run's failure handling is.
-      const row = this.deps.store.get(ctx.runId);
-      const answer =
-        row !== undefined && this.deps.excludedFingerprint?.(row, fingerprint) === true;
+      const answer = this.excludedNow(ctx, fingerprint);
       answers.set(fingerprint, answer);
       return answer;
     };
@@ -433,7 +438,8 @@ class ReviewRunServiceImpl implements ReviewRunService {
         activityLog: this.deps.activityLog,
         stale: this.stale,
         now: this.now,
-        excluded,
+        // What the phase excluded stays excluded, and so does what was dismissed since.
+        excluded: (fingerprint) => excluded(fingerprint) || this.excludedNow(ctx, fingerprint),
       },
       ctx,
       state,

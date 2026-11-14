@@ -178,11 +178,13 @@ Reading of the runs so far:
   duplicates and 17 unmatched. It is the first development run with more than four decided
   findings. Its gated rate of 45.5 % is below the 50 % threshold, and its interval of 26.9 to
   65.3 % includes it.
-- 17 of 30 reviews did not settle `complete` (56.7 %, limit 20 %). Three causes overlap:
-  - Counter-checks out of time. Of 202 checks, 51 confirmed, 125 refuted and 26 ended undecided,
+- 17 of 30 reviews did not settle `complete` (56.7 %, limit 20 %). The figures below are those of
+  the 30 settled reviews; the interrupted 25th review, which was reviewed again, is left out. Three
+  causes overlap:
+  - Counter-checks out of time. Of 198 checks, 48 confirmed, 124 refuted and 26 ended undecided,
     25 of them on the 600-second limit. 15 of the 17 incomplete reviews have an undecided check,
     and 6 are incomplete for that reason alone. The decided checks took 210 seconds at the median
-    and 571 at most, at about 12.7 completion tokens per second.
+    and 571 at most, at about 12 completion tokens per second.
   - Files that no part holds. 6 reviews left 21 files unprocessed, all for the part budget. In 5
     of them one file's first hunk alone is larger than a part (13,832 tokens), typically a large
     new file. One review of 198 changed files needed more than the 12 parts a review may have.
@@ -192,12 +194,12 @@ Reading of the runs so far:
     read allowance stopped before any report.
 - The read allowance of 24 does not keep a session inside its prompt budget. 52 of the 100 sessions
   used all 24 reads, at 444,000 to 1,562,000 prompt tokens (median 885,000), and they filed 158 of
-  the 198 candidates of all sessions. The 9 sessions that stopped after 9 to 16 reads used 472,000
-  at the median. 26 sessions made no read call at all and ended within seconds (median 17,000
+  the 198 candidates of all sessions. The 9 sessions that made 9 to 16 reads used 472,000
+  at the median. 26 sessions made no read call at all and ended within seconds (median about 16,500
   prompt tokens); the log does not show whether their parts held anything to find.
 - The Reviewer used 59.1 million prompt tokens, 1.97 million per review at the mean. The reviews
-  took 26.4 hours in all: 10.3 hours of Reviewer sessions and 16.1 hours of counter-checks.
-- 5.30 of the 16.24 hours of counter-checks were spent on candidates that could no longer be
+  took 26.4 hours in all: 10.3 hours of Reviewer sessions and 16.06 hours of counter-checks.
+- 5.30 of those 16.06 hours of counter-checks were spent on candidates that could no longer be
   presented, because three candidates checked before them were already presentable. Stopping
   there would have changed one review from `incomplete` to `complete`.
 

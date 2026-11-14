@@ -761,7 +761,7 @@ export const REVIEW_RUN_DEFAULT_DURATION_MINUTES = 20;
  * per review. Development iteration 7 measured it with one session per diff part. Of its 100
  * sessions, 52 used all 24 reads. Those used 444,000 to 1,562,000 prompt tokens, 885,000 at the
  * median, and four of them ran out of the prompt budget of 1,500,000; a fifth session did after
- * 23 reads. The 9 sessions that stopped on their own after 9 to 16 reads used 472,000 at the
+ * 23 reads. The 9 sessions that made 9 to 16 reads used 472,000 at the
  * median and 1,011,000 at most. Half of all sessions read up to whatever the allowance is, so the
  * allowance decides what they cost.
  *
@@ -888,9 +888,9 @@ export const REVIEW_RUN_DIFF_CONTEXT_MAX = 64;
 /** Counter-check bounds per candidate finding (ADR-0182 D5); operators may configure them. */
 export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS = 32;
 // #4138, #4130: 900 s, tuned on the development set. A local Gemma 4 31B 4-bit counter-checker
-// generates about 10 to 12 tokens per second: at 120 s it ended candidates undecided after 1 to 5
+// generates about 12 tokens per second: at 120 s it ended candidates undecided after 1 to 5
 // tool calls, and at 300 s 20 of 48 checks still ended undecided while the decided ones took up to
-// 285 s. At 600 s (development iteration 7) 25 of 202 checks ended undecided on the limit. The 176
+// 285 s. At 600 s (development iteration 7) 25 of 198 checks ended undecided on the limit. The 172
 // decided ones took 210 s at the median, 485 s at the ninth decile and 571 s at most, and 18 of
 // them finished in the last 120 s before the limit, so the limit cut the slow end of one spread.
 // The longer limit goes together with the phase's stop once the presentation is full (ADR-0182

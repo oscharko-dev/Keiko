@@ -29,6 +29,7 @@ import { logReviewModelPolicyResolved, logReviewModelPolicyUpdated } from "./act
 import {
   effectiveRulesFilePath,
   recordReviewPolicyRefusal,
+  renewLapsedReviewToolProofs,
   reviewPolicyContext,
 } from "./policy.js";
 import {
@@ -195,6 +196,13 @@ export function handleReviewModelPolicy(ctx: RouteContext, deps: UiHandlerDeps):
         : readSettings(store, repositoryId, correlationId);
     const response = policyResponse(deps, policyCtx, repositoryId ?? null, settings);
     logResolved(deps, correlationId, response);
+    // R4130-058: the view shows a role whose tool-call proof lapsed as refused. Asking for the
+    // proof here, without waiting, lets the next read show the model as it will run.
+    void renewLapsedReviewToolProofs(
+      deps,
+      [response.reviewer.modelId, response.counterChecker.modelId],
+      correlationId,
+    );
     return { status: 200, body: deps.redactor(response) };
   } catch (error) {
     return reportSettingsStorageFailure(ctx, "review.settings.read", error);
@@ -246,6 +254,13 @@ export function handleReviewSettingsGet(ctx: RouteContext, deps: UiHandlerDeps):
   }
 }
 
+/** The role models a settings write names, whatever else the body holds. */
+function requestedRoleModels(body: unknown): readonly unknown[] {
+  if (typeof body !== "object" || body === null) return [];
+  const { reviewerModelId, counterCheckerModelId } = body as Record<string, unknown>;
+  return [reviewerModelId, counterCheckerModelId];
+}
+
 /** `PUT /api/git-review/settings?repositoryId=…`. */
 export async function handleReviewSettingsPut(
   ctx: RouteContext,
@@ -256,6 +271,11 @@ export async function handleReviewSettingsPut(
   const correlationId = correlationIdOrUnknown(ctx.correlationId);
   const body = await readJsonRequestBodyOutcome(ctx.req, SETTINGS_BODY_MAX_BYTES, correlationId);
   if (body.kind === "rejected") return { status: body.response.status, body: body.response.body };
+  // R4130-058: a role model whose tool-call proof lapsed is renewed before the write judges it. A
+  // locked policy refuses every model change, so nothing is asked then.
+  if (!reviewPolicyContext(deps).operator.lockModelPolicy) {
+    await renewLapsedReviewToolProofs(deps, requestedRoleModels(body.value), correlationId);
+  }
   const policyCtx = reviewPolicyContext(deps);
   try {
     const outcome = await updateReviewSettings({

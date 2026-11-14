@@ -223,6 +223,8 @@ export interface HarnessOptions {
   readonly admit?: ReviewRunServiceDeps["models"]["admit"];
   /** Issue #4138: the readiness re-check before admission (default: none). */
   readonly ensureReady?: ReviewRunServiceDeps["models"]["ensureReady"];
+  /** Issue #4141: the exclusion of dismissed fingerprints (default: none configured). */
+  readonly excludedFingerprint?: ReviewRunServiceDeps["excludedFingerprint"];
   /** Issue #4130: further files the topic branch adds before its head commit (a larger change). */
   readonly topicFiles?: readonly { readonly path: string; readonly content: string }[] | undefined;
   /** Issue #4130: the counter-check phase's wall-time limit for each part (default: the product's). */
@@ -314,6 +316,9 @@ function serviceDeps(
       ...(options.ensureReady === undefined ? {} : { ensureReady: options.ensureReady }),
     },
     activityLog: harness.log.sink,
+    ...(options.excludedFingerprint === undefined
+      ? {}
+      : { excludedFingerprint: options.excludedFingerprint }),
     ...(options.counterCheckPhaseWallTimeMs === undefined
       ? {}
       : { counterCheckPhaseWallTimeMs: options.counterCheckPhaseWallTimeMs }),

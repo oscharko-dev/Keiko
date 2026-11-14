@@ -267,8 +267,8 @@ describe("the Reviewer session's read calls on the part line (Issue #4130)", () 
 });
 
 // #4130: one malformed tool call or one empty answer of a local model ended the session, and the
-// review lost the whole part (`incomplete/model-failed`): 2 of 54 sessions in development
-// iteration 7, and 6 of 187 seed reviews before it.
+// review lost the whole part (`incomplete/model-failed`): 5 of 100 sessions in development
+// iteration 7 (2 of them before any report), and 6 of 187 seed reviews before it.
 describe("a Reviewer session that fails before any report (Issue #4130)", () => {
   it("starts the part's session once more after a model failure without a candidate", async () => {
     const { order, partLines, state } = await runPhase({
@@ -305,6 +305,30 @@ describe("a Reviewer session that fails before any report (Issue #4130)", () => 
       { partNumber: 1, outcome: "failed", reason: "model-failed" },
       { partNumber: 1, outcome: "failed", reason: "model-failed", attempt: 2 },
     ]);
+  });
+
+  // R4130-059: the worst case of a review is two sessions for every part, never more.
+  it("starts at most two sessions for each part when every session fails", async () => {
+    const failing: readonly SessionEnd[] = [
+      { failureCode: "empty-answer" },
+      { failureCode: "empty-answer" },
+      "completed",
+    ];
+    const { order, partLines, state } = await runPhase({
+      partCount: 3,
+      sessions: [failing, failing, failing],
+    });
+
+    expect(order.filter((entry) => entry.startsWith("launch:"))).toEqual([
+      "launch:0",
+      "launch:0",
+      "launch:1",
+      "launch:1",
+      "launch:2",
+      "launch:2",
+    ]);
+    expect(partLines).toHaveLength(6);
+    expect(state.reviewer).toEqual({ outcome: "failed", reason: "model-failed" });
   });
 
   it("does not start a session again that already filed a candidate", async () => {

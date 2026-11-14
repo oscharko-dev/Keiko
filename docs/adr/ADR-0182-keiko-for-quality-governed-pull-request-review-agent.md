@@ -65,8 +65,9 @@ the diff package as nonce-bound, labelled untrusted data within the runtime's 64
 bound; a larger task is refused, never truncated. A diff package larger than one task is split into
 at most `REVIEW_RUN_MAX_DIFF_PARTS` (12) parts, each within that bound (Issue #4130). Every part is
 its own Reviewer run in its own session: the run budgets (`KEIKO_REVIEW_RUN_MAX_*`, by default
-1,500,000 prompt tokens and 20 minutes) bound each part's run, so a review in 12 parts may take up to
-12 times those budgets. The task of a part names it ("Diff package part 3 of 5") and asks for
+1,500,000 prompt tokens and 20 minutes) bound each session, and a part has one session, or two
+after a model failure without a report (below). A review in 12 parts may therefore start up to 24
+sessions and take up to 24 times those budgets; nothing caps the Reviewer total across parts. The task of a part names it ("Diff package part 3 of 5") and asks for
 findings about the changed code in that part; a single-part task has no such line. The 2026-11-06
 holdout motivated the split: 158 of 226 measured reviews left diff files unprocessed because the
 whole package had to fit one task.
@@ -99,7 +100,7 @@ which leaves room for its reports within the default prompt budget. That gave th
 24. Development iteration 7 then measured the allowance with one session per diff part, and 24
 proved too many: of its 100 sessions, 52 used all 24 reads, and those used 444,000 to 1,562,000
 prompt tokens (885,000 at the median). Four of them ran out of the prompt budget, and a fifth
-session did after 23 reads. The 9 sessions that stopped on their own after 9 to 16 reads used
+session did after 23 reads. The 9 sessions that made 9 to 16 reads used
 472,000 at the median and 1,011,000 at most. Half of all sessions read up to whatever the
 allowance is, so the allowance decides what they cost, and 16 keeps such a session inside the
 prompt budget with room for its reports. The figures above about the 418 stored reviews describe
@@ -108,17 +109,21 @@ allowance and still plans for about 15 calls. The counter and its predicate live
 guard (`reviewRuntimeGuard.ts`); the review runtime creates one per session and returns its counts
 with the session's result.
 
-A part's Reviewer session that ends on a model failure before one report was accepted is started
-once more (Issue #4130). A local model sometimes ends a session with a tool call the gateway's
+A part's Reviewer session that fails for a reason other than budget or time before one report was
+accepted is started once more (Issue #4130). That is every failure the settlement calls
+`model-failed`: a model failure, and a runtime-side ending such as a stopped or unrecovered run. A local model sometimes ends a session with a tool call the gateway's
 corrections do not repair, or with an empty answer, and the review then lost the whole part and
 settled `incomplete/model-failed`. In development iteration 7 that happened in 5 of 100 sessions,
 spread over 4 of the 30 reviews (3 invalid tool calls after two corrections each, 2 empty answers);
-the gateway had corrected 62 of 65 rejected tool calls before that. Only a session without an
-accepted report is started again: nothing of it is kept, so the part is reviewed from the start.
+the gateway had corrected 62 of 65 rejected tool calls in the run's log before that. Only a session
+without an accepted report is started again: it filed nothing, so the part is reviewed from the
+start. Its tokens and time stay in the Reviewer totals, and the second session has the run budgets
+of its own.
 That covers 2 of those 5 sessions. A session that already filed a candidate is not started again:
 its candidates are kept, and a second session over the same hunks would file most of them again. A
-finding on the same defect lines keeps its fingerprint (D7) and would merge, but one reported on
-other lines would not, and a duplicate counts against the gated rate (D9). Whether a second session
+finding with the same file, category and defect excerpt keeps its fingerprint (D7) and would merge,
+but one filed under another category or with a wider or narrower excerpt would not, and a duplicate
+counts against the gated rate (D9). Whether a second session
 is worth that for the other 3 sessions is not measured. A session out of budget or time is not
 started again either. Each session
 writes its own `review.run.part` line, the second with `attempt: 2`, and the part's outcome is the
@@ -294,8 +299,8 @@ other candidate. The verdict tool records the first valid `CounterCheckVerdict` 
 the fingerprint) and ends the session; free text is ignored and a missing or invalid verdict is
 `undecided/insufficient-context`. Defaults per candidate: 32 tool calls, 900 seconds (raised from
 120, 300 and then 600 seconds on the offline gate's development set, Issues #4138 and #4130; at
-600 seconds, 25 of the 202 checks of development iteration 7 ended undecided on the limit, while
-the 176 decided ones took 210 seconds at the median, 485 at the ninth decile and 571 at most, and
+600 seconds, 25 of the 198 checks of development iteration 7 ended undecided on the limit, while
+the 172 decided ones took 210 seconds at the median, 485 at the ninth decile and 571 at most, and
 18 of them finished in the last 120 seconds before the limit), 200,000 prompt
 tokens, and 1,200,000 prompt tokens for all counter-checks of a run for each part of its diff
 package (Issue #4130: each part's Reviewer session may file up to eight candidates, so a fixed run
@@ -314,10 +319,12 @@ presented. Its verdict would change nothing a person sees. Such candidates are s
 counter-check runs for them, they stay in the run record without a verdict, the settled line counts
 them as `surplusCandidateCount`, and they do not make the run incomplete. "Presentable" is the
 presentation rule itself (`presentationIsFull` calls `presentReviewFindings`), with the run's
-exclusion of dismissed fingerprints; the service asks that exclusion once per fingerprint for the
-whole run, so the phase and the settlement decide on the same answers. A check before the stop that
+exclusion of dismissed fingerprints. The phase asks that exclusion once per fingerprint, so it
+decides on one set of answers; the settlement keeps those and adds what was dismissed since, so a
+finding dismissed during the run is never presented. At worst that leaves a place empty that a
+surplus candidate could have taken. A check before the stop that
 could not finish still makes the run incomplete, because that candidate could have ranked among the
-presented ones. In development iteration 7, 5.30 of the 16.24 hours of counter-checks were spent
+presented ones. In development iteration 7, 5.30 of the 16.06 hours of counter-checks were spent
 after the third presentable candidate, and in one review a check after it ran into its limit and
 alone made the review incomplete.
 
@@ -558,7 +565,18 @@ seconds after the same model had finished the previous part. `ensureReviewModelR
 probe queue, with the trigger `review-launch` on `gateway.readiness.automatic.started`, and then
 for its chat readiness. Only the named model is probed, and only when it needs a probe: a current
 proof costs no request, and a refuted proof is a verdict that is not probed again. A probe the
-gateway never answered runs again, because the review is asking. A check that fails is reported as a `review.run.model-readiness`
+gateway never answered runs again, because the review is asking. The entry points that judge a
+role model without starting a run renew a lapsed proof first as well (R4130-058), so they agree with
+the start they stand for: the dry run checks readiness between admission and eligibility like a
+start, and the pair qualification start, the settings write and the model-policy view ask through
+`renewLapsedReviewToolProofs` (`review/policy/policy.ts`). That helper asks only for a model the
+operator policy allows and whose proof was verified and has lapsed, so a refused model receives no
+traffic (R4130-003) and a never-proven or refuted model keeps its verdict; the view asks without
+waiting, and a locked policy asks nothing at a settings write. A renewed proof is stored like one
+the Workbench renewed and can advance the configuration generation. A conversation turn in flight
+elsewhere then fails its next call with `generation-changed`, and a pair qualification that
+recorded its generation at its start reads as `unmeasured` afterwards. The Workbench's profile read
+already has both effects; a review launch now has them too. A check that fails is reported as a `review.run.model-readiness`
 diagnostic and leaves the decision to the self-check. A run cancelled during the check does not
 wait for it and starts no Reviewer session.
 Operators may set defaults and restrict the choice; invalid explicit configuration fails closed.

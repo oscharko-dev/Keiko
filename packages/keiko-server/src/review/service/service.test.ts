@@ -6,6 +6,7 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
 import type {
   ReviewRunSettlement,
@@ -745,6 +746,44 @@ describe("review run service: reads, dry run and evaluation switches", () => {
     });
   });
 
+  // R4130-058: a dry run judged the stored tool-call proof while the start it stands for renews a
+  // lapsed one first, so the two disagreed on a server older than a day. The dry run now checks
+  // readiness between admission and eligibility, like the start.
+  it("checks a dry run's models for readiness before it judges them, like a start", async () => {
+    const capabilities: Record<string, ModelCapability | undefined> = {
+      "reviewer-model": capability("reviewer-model", { toolCalling: false }),
+    };
+    const asked: string[] = [];
+    const h = setUp({
+      capabilities,
+      ensureReady: (modelId) => {
+        asked.push(modelId);
+        capabilities[modelId] = capability(modelId);
+        return Promise.resolve();
+      },
+    });
+    const dry = await start(h, startBody({ dryRun: true }));
+    expect(asked).toEqual(["reviewer-model", "checker-model"]);
+    expect(dry.status).toBe(200);
+    expect(dry.body).toMatchObject({ kind: "dry-run" });
+    expect(h.runtimeRequests).toEqual([]);
+  });
+
+  // R4130-003: a pair the policy refuses receives no traffic, not even a readiness check.
+  it("checks no model of a dry run the policy refuses", async () => {
+    const asked: string[] = [];
+    const h = setUp({
+      admit: () => false,
+      ensureReady: (modelId) => {
+        asked.push(modelId);
+        return Promise.resolve();
+      },
+    });
+    const dry = await start(h, startBody({ dryRun: true }));
+    expect(dry.status).toBe(422);
+    expect(asked).toEqual([]);
+  });
+
   it("refuses evaluation switches and malformed requests on the product route", async () => {
     const h = setUp();
     for (const body of [
@@ -906,12 +945,12 @@ describe("review run service: fault injection", () => {
   it("announces abandoned/interrupted when a store read fails during settling", async () => {
     const record = vi.spyOn(defaultServerDiagnosticSink, "record");
     const reads = { fail: false };
-    // #4130: the settling phase's store read is the run row behind the exclusion of dismissed
-    // fingerprints, read when a candidate is first asked about. Without counter-checks that is
-    // during settling, as before; with them the counter-check phase has already asked.
+    // The settling phase's store read is the run row behind the exclusion of dismissed
+    // fingerprints (#4141), read for each candidate when an exclusion is configured.
     const h = setUp({
-      evaluation: { counterCheck: "off" },
+      excludedFingerprint: () => false,
       runtime: reviewerFiling([reportAt(3, "high")]),
+      counterCheck: counterCheckBy({ 3: "confirmed" }),
       store: (db) => {
         const store = new ReviewRunStore(db);
         const get = store.get.bind(store);
@@ -952,6 +991,72 @@ describe("review run service: fault injection", () => {
     const next = await start(h, startBody({ clientRequestId: "client-request-2" }));
     expect(next.status).toBe(202);
     record.mockRestore();
+  });
+
+  // #4130: with an exclusion configured, the counter-check phase reads the run row too. A read that
+  // fails there interrupts the run through the phase's own handling; the run still settles once.
+  it("announces abandoned/interrupted when a store read fails during the counter-checks", async () => {
+    const record = vi.spyOn(defaultServerDiagnosticSink, "record");
+    const reads = { fail: false };
+    const h = setUp({
+      excludedFingerprint: () => false,
+      runtime: reviewerFiling([reportAt(3, "high")]),
+      counterCheck: counterCheckBy({ 3: "confirmed" }),
+      store: (db) => {
+        const store = new ReviewRunStore(db);
+        const get = store.get.bind(store);
+        const setPhase = store.setPhase.bind(store);
+        store.setPhase = (runId, phase, at): void => {
+          setPhase(runId, phase, at);
+          if (phase === "counter-checking") reads.fail = true;
+        };
+        store.get = (runId): ReturnType<ReviewRunStore["get"]> => {
+          if (reads.fail) throw new Error("database is locked");
+          return get(runId);
+        };
+        return store;
+      },
+    });
+    const run = runOf(await start(h));
+    const frames: unknown[] = [];
+    h.service.subscribe(run.runId, {
+      onEvent: (frame) => frames.push(frame),
+      onClose: () => undefined,
+    });
+    await expect(h.service.whenSettled(run.runId)).resolves.toBeUndefined();
+    noWorktreeLeft(h, run.runId);
+    expect(frames).toContainEqual(
+      expect.objectContaining({
+        kind: "settled",
+        settlement: { kind: "abandoned", reason: "interrupted" },
+      }),
+    );
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "review.run.execute",
+        correlationId: "corr-review-run",
+      }),
+    );
+    record.mockRestore();
+  });
+
+  // #4130: the counter-check phase decides on one answer per fingerprint, and the settlement adds
+  // what was dismissed since. A finding the person dismissed during the run is never presented.
+  it("does not present a finding that was dismissed while its run was counter-checking", async () => {
+    let dismissed = false;
+    const h = setUp({
+      excludedFingerprint: (_run, fingerprint) => dismissed && fingerprint.length > 0,
+      runtime: reviewerFiling([reportAt(3, "high"), reportAt(7, "low")]),
+      counterCheck: (input) => {
+        // The dismissal arrives after the phase has asked about every candidate once.
+        if (input.candidate.report.startLine === 7) dismissed = true;
+        return counterCheckBy({ 3: "confirmed", 7: "confirmed" })(input);
+      },
+    });
+    const view = await settled(h, await start(h));
+    expect(h.counterInputs).toHaveLength(2);
+    expect(view.presentedFindings).toEqual([]);
+    expect(view.settlement).toEqual({ kind: "complete" });
   });
 
   it("interrupts a run whose phase record cannot be written", async () => {
