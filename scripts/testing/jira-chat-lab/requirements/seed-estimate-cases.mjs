@@ -129,7 +129,7 @@ async function seedCase(context, jira, key, spec) {
   };
 }
 
-export async function seedEstimateCases(context, jira, save) {
+async function seedEstimateCases(context, jira, save) {
   const cases = {};
   for (const [key, spec] of Object.entries(ESTIMATE_CASE_PROJECTS))
     cases[key] = await seedCase(context, jira, key, spec);
@@ -140,7 +140,7 @@ export async function seedEstimateCases(context, jira, save) {
   };
 }
 
-export function main(args) {
+function main(args) {
   return runFixtureSeed({
     args,
     name: "seed-estimate-cases.mjs",

@@ -42,7 +42,7 @@ export const storedMessageOf = (messages, answer) =>
     .at(-1);
 
 /** The kinds of uncertainty element that mark an answer as partly unsupported or unjudged. */
-export const FLAG_KINDS = Object.freeze(["unsupported-claim", "entailment-unavailable"]);
+const FLAG_KINDS = Object.freeze(["unsupported-claim", "entailment-unavailable"]);
 
 /** The flags a stored assistant message carries: `groundedAnswer.uncertainty[]` elements of those kinds. */
 export const storedFlags = (message) =>

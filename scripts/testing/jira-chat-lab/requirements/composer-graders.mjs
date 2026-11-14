@@ -523,5 +523,3 @@ export function gradeAttachmentWording(answer) {
       : "the answer does not say that attachments are not part of this release",
   );
 }
-
-export { wroteIssue };

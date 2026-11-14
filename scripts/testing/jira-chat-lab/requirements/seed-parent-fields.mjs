@@ -12,8 +12,8 @@ import { runFixtureSeed } from "./fixture-seed-cli.mjs";
 import { bulkCreate, ensureProject, fieldIds } from "./seed-projects.mjs";
 import { ensureOnProjectScreen } from "./seed-estimate-mix.mjs";
 
-export const PARENT_FIELDS_PROJECT = "PAR";
-export const PARENT_LINK_SCHEMA = "com.atlassian.jpo:jpo-custom-field-parent";
+const PARENT_FIELDS_PROJECT = "PAR";
+const PARENT_LINK_SCHEMA = "com.atlassian.jpo:jpo-custom-field-parent";
 const asList = (value) => (Array.isArray(value) ? value : (value?.values ?? []));
 
 /** The unique Parent Link field of the instance, found by its schema type. */
@@ -74,7 +74,7 @@ async function seedPopulation(context, ids) {
   return [{ key: epic, type: "Epic" }, ...tasks.map((key) => ({ key, type: "Task", epic }))];
 }
 
-export async function seedParentFields(context, jira, save) {
+async function seedParentFields(context, jira, save) {
   await ensureProject(context, PARENT_FIELDS_PROJECT, "Eltern-Felder");
   const parentLink = await findParentLink(jira);
   await ensureOnProjectScreen(jira, PARENT_FIELDS_PROJECT, "Default Issue", parentLink);

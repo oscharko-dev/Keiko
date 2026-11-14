@@ -29,7 +29,7 @@ export function selectedScenarios(catalog, only, setName) {
 }
 
 /** The reports C07 runs: S10 (progress) and S11 (compliance); `--parts s10` runs one of them. */
-export const REPORT_PARTS = Object.freeze(["s10", "s11"]);
+const REPORT_PARTS = Object.freeze(["s10", "s11"]);
 
 /** The types and modes the run selected, validated against the closed vocabularies. */
 export function composerSelectionOf({ types, modes, parts }) {

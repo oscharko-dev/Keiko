@@ -10,7 +10,7 @@ import { STORY_STRUCTURE_RULE, templateMarkdown } from "./templates.mjs";
 
 export const COMPOSER_TYPES = Object.freeze(["Epic", "Story", "Task", "Sub-task", "Bug"]);
 /** The Epic a lead asks for without any requirement: a goal and how it is accepted. */
-export const COMPOSER_EPIC_RULE = Object.freeze({ sections: ["Ziel", "Abnahmekriterien"] });
+const COMPOSER_EPIC_RULE = Object.freeze({ sections: ["Ziel", "Abnahmekriterien"] });
 
 const RULES = Object.freeze({
   Epic: COMPOSER_EPIC_RULE,
