@@ -21,7 +21,11 @@
 # Junio C. Hamano's release key (fingerprint 96E0 7AF2 5771 9559 80DA D100 20D0 4E5A 7136 60A7).
 # Raising the pin is a deliberate edit of these two arguments. NO_RUST=1 builds without the optional
 # Rust subsystems of git 2.5x, which would need a Rust toolchain this image does not carry.
-FROM node:24.18.0-bookworm AS git-build
+# The Node version is a build argument: the default lane is Node 24.18.0 and the optional Node 26
+# lane (compose service `gates-node26`) builds the same image with the version CI's "Node 26
+# compatibility" job runs. Both pins are the governed pair of scripts/check-runtime-toolchain.mjs.
+ARG NODE_VERSION=24.18.0
+FROM node:${NODE_VERSION}-bookworm AS git-build
 ARG GIT_VERSION=2.56.1
 ARG GIT_SHA256=f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34a607f
 RUN apt-get update \
@@ -48,7 +52,7 @@ RUN apt-get update \
         prefix=/usr/local NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_RUST=1 \
         DESTDIR=/stage install
 
-FROM node:24.18.0-bookworm
+FROM node:${NODE_VERSION}-bookworm
 
 # Bubblewrap backs the mandatory network:none sandbox the egress proof and the #2215 verification
 # E2E exercise. Without it those suites assert their fallback instead of the real boundary.
