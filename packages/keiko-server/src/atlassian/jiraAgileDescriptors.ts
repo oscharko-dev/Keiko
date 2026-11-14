@@ -1,6 +1,7 @@
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   JIRA_FIELD_VALIDATION_FAILURES,
+  JIRA_RESULT_GUIDANCE_MAX_CHARS,
   JIRA_MUTATION_RESULT_STATES,
   JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_TEMPLATE_RULE_IDS,
@@ -393,7 +394,7 @@ function writeResult(definition: WriteDefinition): CatalogJsonObject {
       reason: { type: "string", enum: ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS },
       replayed: { type: "boolean" },
       unchanged: { type: "boolean" },
-      guidance: text(512),
+      guidance: text(JIRA_RESULT_GUIDANCE_MAX_CHARS),
       fieldId: text(64),
       validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
       fieldErrors: FAILURE_FIELD_ERRORS,

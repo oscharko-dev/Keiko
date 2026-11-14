@@ -389,7 +389,13 @@ const refusal = (type, extra = {}, data = {}) =>
     "failed",
     extra,
   );
-const success = (key) => createExchange({ outcome: "succeeded", issueKey: key }, "completed");
+/** The product binds a write to its native method; the stored shape of the live run is POST /issue. */
+const binding = (identity) => ({ operationBinding: { contractDigest: "d", identity } });
+const success = (key) =>
+  createExchange(
+    { outcome: "succeeded", issueKey: key, ...binding("POST /rest/api/2/issue") },
+    "completed",
+  );
 /** A create that failed for another reason: the product's closed refusal is not a gate refusal. */
 const failedElsewhere = () =>
   createExchange({ outcome: "failed", reason: "unavailable" }, "failed");
@@ -405,7 +411,11 @@ const refusedEdit = (ruleId) =>
   });
 const succeededEdit = (notices) =>
   editResult(
-    { outcome: "succeeded", ...(notices ? { templateNotices: notices } : {}) },
+    {
+      outcome: "succeeded",
+      ...binding("PUT /rest/api/2/issue/{issueIdOrKey}"),
+      ...(notices ? { templateNotices: notices } : {}),
+    },
     "completed",
   );
 
@@ -775,6 +785,77 @@ describe("obligation c) no template: hard from Jira and the stored refusal, soft
       "green",
       "unverified",
     ]);
+  });
+});
+
+/**
+ * The refusal of the staging step of a draft, in the shape the product stored in the Gemma run of
+ * 2026-11-14 (`keiko.jira.draft.stage`, outcome rejected, the violations on the result itself, a
+ * `ref` of the staged item, the product's own guidance): the lab once recognised only `jira.create`
+ * and `jira.draft` and graded such a turn unverified.
+ */
+const stageRefusalOf = (ruleId, { subject = "parent: Task", guidance, extra = {} } = {}) => {
+  const violations = [{ ruleId, subject, template: "REQ/Sub-task" }];
+  return {
+    call: { id: "s", name: "jira_draft_stage", arguments: { items: [] } },
+    result: {
+      toolRef: { canonicalId: "keiko.jira.draft.stage", contractVersion: 1 },
+      status: "failed",
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        ref: "subtask-1",
+        violations,
+        guidance: guidance ?? guidanceOf(violations),
+      },
+    },
+    ...extra,
+  };
+};
+
+describe("a refusal that arrives on the staging step of a draft", () => {
+  it("is a stored refusal: the unrepairable gate and the hint are verified from it", () => {
+    const exchanges = [stageRefusalOf("parent-type-mismatch")];
+    const grade = gradeUnrepairable({
+      created: [],
+      exchanges,
+      answer: "Eine Teilaufgabe braucht eine Aufgabe als Eltern.",
+      turn: { answer: "x", toolExchanges: exchanges },
+      ports: PORTS,
+    });
+    expect([grade.refused.status, grade.gate.status, grade.plain.status]).toEqual([
+      "green",
+      "green",
+      "green",
+    ]);
+    const hint = gradeHintDelivered({
+      exchanges: [stageRefusalOf("template-missing", { subject: "REQ/Epic" })],
+      ports: PORTS,
+    });
+    expect(hint.status).toBe("green");
+  });
+
+  it("stays red when the stored guidance is not the producer's, and a staging step never counts as a card", () => {
+    const other = stageRefusalOf("parent-type-mismatch", { guidance: "Etwas anderes" });
+    expect(gradeParentRefusal({ exchanges: [other], ports: PORTS }).status).toBe("red");
+    const card = stageRefusalOf("template-missing", {
+      subject: "REQ/Epic",
+      extra: { approval: { state: "pending", approvalId: "a" } },
+    });
+    expect(gradeHintDelivered({ exchanges: [card], ports: PORTS }).status).toBe("green");
+  });
+
+  it("is an attempted write for nothing-created, and not a created issue", () => {
+    const exchanges = [stageRefusalOf("template-missing", { subject: "REQ/Epic" })];
+    const grade = gradeNoTemplate({
+      created: [],
+      exchanges,
+      answer: "",
+      turn: { answer: "x", toolExchanges: exchanges },
+      ports: PORTS,
+    });
+    expect(grade.refused.status).toBe("green");
+    expect(grade.refused.detail).toContain("a write was attempted");
   });
 });
 
@@ -1186,6 +1267,26 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
     expect(attachment({ turn: { ...RAN_ATTACH, answer: "Erledigt." } }).status).toBe("green");
   });
 
+  it("attachment, hard: a read, a discovery and a description that succeeded are no write (the stored shape of the live Gemma run)", () => {
+    const read = (canonicalId, identity) => ({
+      call: { id: "r", name: "x", arguments: {} },
+      result: {
+        toolRef: { canonicalId, contractVersion: 1 },
+        status: "completed",
+        data: { outcome: "succeeded", ...(identity ? binding(identity) : {}) },
+      },
+    });
+    const exchanges = [
+      read("keiko.jira.discover"),
+      read("keiko.jira.describe"),
+      read("keiko.jira.issue", "GET /rest/api/2/issue/{issueIdOrKey}"),
+      read("keiko.jira.report", "composite:jira.report"),
+    ];
+    expect(attachment({ exchanges }).status).toBe("green");
+    // The same turn with a write that succeeded is red.
+    expect(attachment({ exchanges: [...exchanges, success("REQ-9")] }).status).toBe("red");
+  });
+
   it("attachment, hard: a draft that created an issue is a write that succeeded, red", () => {
     const draft = {
       call: { id: "d", name: "jira_draft", arguments: {} },
@@ -1233,9 +1334,14 @@ describe("obligations e) to h): re-run, watcher, comment, attachment", () => {
 
   it("attachment: a jira.attach call that succeeded, or was offered to a human, is red before #4354 switches it off", () => {
     const grade = (exchanges) => attachment({ exchanges });
-    expect(grade([attachExchange({ outcome: "succeeded" })]).detail).toContain(
-      "jira.attach calls succeeded",
-    );
+    expect(
+      grade([
+        attachExchange({
+          outcome: "succeeded",
+          ...binding("POST /rest/api/2/issue/{issueIdOrKey}/attachments"),
+        }),
+      ]).detail,
+    ).toContain("jira.attach calls succeeded");
     const offered = grade([
       attachExchange({ outcome: "rejected" }, { approval: { state: "pending", approvalId: "a1" } }),
     ]);
