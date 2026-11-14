@@ -22,6 +22,7 @@ function template(issueType: string, ...lines: readonly string[]): JiraIssueTemp
       "project: SYN",
       `issueType: ${issueType}`,
       "activateOn: [create, edit]",
+      "summaryMinLength: 4",
       ...lines,
       "---",
       `# ${issueType}`,
@@ -83,7 +84,7 @@ describe("a bound parent rule compares parent types by id", () => {
     operation: "create",
     projectKey: "SYN",
     issueType: { id: "10001", name: "Story" },
-    fields: { customfield_10014: "SYN-5" },
+    fields: { customfield_10014: "SYN-5", summary: "A summary that is long enough" },
     parentIssueTypes: { customfield_10014: { id: parentId, name: parentName } },
   });
 

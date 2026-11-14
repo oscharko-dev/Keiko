@@ -1380,6 +1380,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      templateBindingUnresolvedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       settledCount: {
         type: "integer",
         dataClass: "count",
@@ -1628,6 +1633,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       templateNotActivatedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      templateBindingUnresolvedCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -34934,6 +34944,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "template-unreadable",
           "template-missing",
           "template-not-activated",
+          "template-binding-unresolved",
         ],
         maxItems: 25,
       },
@@ -43966,6 +43977,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "jira-template-list",
           "jira-template-validate",
           "jira-template-propose",
+          "jira-template-bind",
         ],
       },
       phase: {

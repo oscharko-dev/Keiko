@@ -324,7 +324,9 @@ function projectBody(remote: Remote): Record<string, unknown> {
     key: "SYN",
     issueTypes: remote.projectTypes ?? [
       { id: "10001", name: remote.issueTypeName ?? "Story" },
-      { id: "7", name: "Task" },
+      ...["Task", "Bug", "Epic", "Sub-task", "Improvement", "New Feature"]
+        .filter((name) => name !== (remote.issueTypeName ?? "Story"))
+        .map((name, index) => ({ id: String(7 + index * 100), name })),
     ],
   };
 }

@@ -411,31 +411,54 @@ export function resolveJiraTemplateBinding(
 ): JiraTemplateBindingResolution {
   const types = instance.project?.issueTypes;
   if (types === undefined) return { state: "unresolved", subject: template.project };
-  const bound = template.binding;
-  if (bound !== undefined) {
-    const type = types.find((candidate) => candidate.id === bound.issueTypeId);
-    const parents = instance.parentIssueTypes ?? [];
-    const parentsKnown = (bound.parentIssueTypeIds ?? []).every((id) =>
-      parents.some((parent) => parent.id === id),
-    );
-    if (type !== undefined && parentsKnown) return { state: "bound", issueType: type.name };
-  }
+  const current = currentBinding(template, types, instance.parentIssueTypes ?? []);
+  if (current !== undefined) return { state: "bound", issueType: current };
   // A binding that no longer finds its ids is resolved again from the typed names.
   const own = exactlyOne(types, template.issueType);
   if (!("found" in own)) return own;
-  const parentIssueTypeIds: string[] = [];
-  for (const typed of template.parent.issueTypes ?? []) {
-    const parent = exactlyOne(instance.parentIssueTypes ?? [], typed);
-    if (!("found" in parent)) return parent;
-    parentIssueTypeIds.push(parent.found.id);
-  }
+  const parents = parentTypeIds(template, instance.parentIssueTypes ?? []);
+  if ("state" in parents) return parents;
   return {
     state: "bindable",
     issueType: own.found.name,
     binding: {
       instance: instanceId,
       issueTypeId: own.found.id,
-      ...(template.parent.issueTypes === undefined ? {} : { parentIssueTypeIds }),
+      ...(template.parent.issueTypes === undefined ? {} : { parentIssueTypeIds: parents }),
     },
   };
+}
+
+interface TypeRef {
+  readonly id: string;
+  readonly name: string;
+}
+/** The name of the issue type a binding still finds, when every id it carries still exists. */
+function currentBinding(
+  template: JiraIssueTemplate,
+  types: readonly TypeRef[],
+  parents: readonly TypeRef[],
+): string | undefined {
+  const bound = template.binding;
+  if (bound === undefined) return undefined;
+  const type = types.find((candidate) => candidate.id === bound.issueTypeId);
+  const known = (bound.parentIssueTypeIds ?? []).every((id) =>
+    parents.some((parent) => parent.id === id),
+  );
+  return known ? type?.name : undefined;
+}
+/** The ids of the typed parent types, or the first name that is not exactly one type. */
+function parentTypeIds(
+  template: JiraIssueTemplate,
+  parents: readonly TypeRef[],
+):
+  | readonly string[]
+  | Extract<JiraTemplateBindingResolution, { state: "unresolved" | "ambiguous" }> {
+  const ids: string[] = [];
+  for (const typed of template.parent.issueTypes ?? []) {
+    const parent = exactlyOne(parents, typed);
+    if (!("found" in parent)) return parent;
+    ids.push(parent.found.id);
+  }
+  return ids;
 }

@@ -520,6 +520,26 @@ function readHeader(reader: Reader): { project: string; issueType: string } | un
   return { project: project.toUpperCase(), issueType };
 }
 
+function matches(pattern: RegExp, value: string | undefined): boolean {
+  return value !== undefined && pattern.test(value);
+}
+
+/** The binding keys a template wrote wrongly: one binding or none, since ids mean nothing without their Jira. */
+function invalidBindingKeys(found: {
+  readonly issueTypeId: string | undefined;
+  readonly instance: string | undefined;
+  readonly parentIds: readonly string[];
+  readonly namesParentIds: boolean;
+  readonly namesParentTypes: boolean;
+}): readonly TemplateKey[] {
+  const wrong: TemplateKey[] = [];
+  if (!matches(NATIVE_TYPE_ID, found.issueTypeId)) wrong.push("issueTypeId");
+  if (!matches(BINDING_INSTANCE, found.instance)) wrong.push("jiraInstance");
+  const badId = found.parentIds.some((id) => !NATIVE_TYPE_ID.test(id));
+  if (badId || (found.namesParentIds && !found.namesParentTypes)) wrong.push("parentIssueTypeIds");
+  return wrong;
+}
+
 function readBinding(
   reader: Reader,
   entries: readonly RawEntry[],
@@ -528,16 +548,16 @@ function readBinding(
   const instance = reader.scalar("jiraInstance", 32);
   const parentIds = reader.list("parentIssueTypeIds", JIRA_ISSUE_TEMPLATE_LIMITS.listItems, 16);
   const named = entryOf(entries, "parentIssueTypeIds");
-  const bad = (key: TemplateKey): void => {
-    reader.errors.push({ code: "invalid-value", key, line: entryOf(entries, key)?.line ?? 0 });
-  };
   if (issueTypeId === undefined && instance === undefined && named === undefined) return undefined;
-  // One binding or none: the ids mean nothing without the Jira they belong to, and the other way round.
-  if (issueTypeId === undefined || !NATIVE_TYPE_ID.test(issueTypeId)) bad("issueTypeId");
-  if (instance === undefined || !BINDING_INSTANCE.test(instance)) bad("jiraInstance");
-  if (parentIds.some((id) => !NATIVE_TYPE_ID.test(id))) bad("parentIssueTypeIds");
-  if (named !== undefined && entryOf(entries, "parentIssueTypes") === undefined)
-    bad("parentIssueTypeIds");
+  const wrong = invalidBindingKeys({
+    issueTypeId,
+    instance,
+    parentIds,
+    namesParentIds: named !== undefined,
+    namesParentTypes: entryOf(entries, "parentIssueTypes") !== undefined,
+  });
+  for (const key of wrong)
+    reader.errors.push({ code: "invalid-value", key, line: entryOf(entries, key)?.line ?? 0 });
   if (issueTypeId === undefined || instance === undefined) return undefined;
   return {
     instance,

@@ -541,3 +541,49 @@ describe("a cut summary list says how to read on (#4181)", () => {
     expect(epics).not.toHaveProperty("section");
   });
 });
+
+// #4354 (first customer's Jira, live evidence): a template bound by the typed type NAME judged no issue
+// at all for a user whose profile shows another name, so 111 issues were reported "without template" and
+// their deviations were missing from the report. The report asks the same matcher as the write gate: a
+// template the product bound to the issue type's id judges every issue of that type, under any name.
+describe("the report under a localized issue type name", () => {
+  const INSTANCE = "0123456789abcdef0123456789abcdef";
+  const SEEN = { Story: "Geschichte" } as const;
+  const bound = (): JiraIssueTemplate => ({
+    ...template(),
+    binding: { instance: INSTANCE, issueTypeId: "11" },
+  });
+  const stories = (): readonly FixtureIssue[] =>
+    project().issues.filter((issue) => issue.type === "Story");
+
+  it("checks every story of the type and names the deviations the native data holds", async () => {
+    const report = await reportOf(() => SET(bound()), { typeNames: SEEN });
+    const typeNames = report.compliance.withoutTemplateByType.map((item) => item.typeName);
+    expect(typeNames).not.toContain("Geschichte");
+    expect(typeNames).not.toContain("Story");
+    // The native truth: the stories whose description lacks the required section.
+    const truth = stories()
+      .filter((issue) => issue.description === BAD)
+      .map((issue) => issue.key);
+    expect(truth.length).toBeGreaterThan(0);
+    expect(deviationKeys(report, "section-missing")).toEqual(truth);
+    expect(report.compliance).toMatchObject({ checker: "applied" });
+  });
+
+  it("is the same report as under the name the template was written in", async () => {
+    const named = await reportOf(() => SET(bound()), {});
+    const localized = await reportOf(() => SET(bound()), { typeNames: SEEN });
+    expect(localized.compliance.issuesWithDeviations).toBe(named.compliance.issuesWithDeviations);
+    expect(localized.compliance.issuesWithoutTemplate).toBe(named.compliance.issuesWithoutTemplate);
+    expect(deviationKeys(localized, "section-missing")).toEqual(
+      deviationKeys(named, "section-missing"),
+    );
+  });
+
+  it("still lists the stories as judged by no template while the template is not bound", async () => {
+    const report = await reportOf(() => SET(template()), { typeNames: SEEN });
+    expect(report.compliance.withoutTemplateByType.map((item) => item.typeName)).toContain(
+      "Geschichte",
+    );
+  });
+});

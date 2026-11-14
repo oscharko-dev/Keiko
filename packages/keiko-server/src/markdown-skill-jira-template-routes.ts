@@ -6,13 +6,17 @@ import {
   resolveJiraTemplateBinding,
   validateJiraIssueTemplateAgainstInstance,
 } from "@oscharko-dev/keiko-connectors";
-import { MARKDOWN_SKILL_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  MARKDOWN_SKILL_LIMITS,
+  type MarkdownSkillDocument,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   bindJiraIssueTemplateText,
   jiraTemplateForInstance,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
   type JiraTemplateActivation,
+  type JiraTemplateBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -201,6 +205,41 @@ function refusedBinding(
   );
 }
 
+/** The stored template the caller named, at the revision it named; a stale revision changes nothing. */
+function bindTarget(
+  deps: TemplateRouteDeps,
+  skillId: unknown,
+  revision: unknown,
+): { readonly skill: MarkdownSkillDocument; readonly template: JiraIssueTemplate } {
+  if (typeof skillId !== "string" || typeof revision !== "number")
+    throw invalidRequest("Provide the template and its revision.");
+  const skill = deps.store.markdownSkills.get(skillId);
+  if (skill === undefined) throw notFound("Skill");
+  if (skill.revision !== revision)
+    throw new UiStoreError(
+      "INVALID_REQUEST",
+      "Skill revision is stale. Reload before changing it.",
+      409,
+    );
+  const parsed = parseJiraIssueTemplate(skill.body);
+  if (!parsed.ok) throw invalidRequest("This skill is not a valid Jira issue template.");
+  return { skill, template: parsed.template };
+}
+
+/** The new skill revision that carries the binding, written through the skill store's own replace. */
+function saveBinding(
+  deps: TemplateRouteDeps,
+  skill: MarkdownSkillDocument,
+  binding: JiraTemplateBinding,
+): MarkdownSkillDocument {
+  const bound = bindJiraIssueTemplateText(skill.body, binding);
+  if (bound === undefined) throw invalidRequest("This template cannot be bound.");
+  return deps.store.markdownSkills.replace(skill.id, skill.revision, {
+    fileName: skillFileName(skill.name),
+    contentBase64: Buffer.from(bound, "utf8").toString("base64"),
+  });
+}
+
 /**
  * Binds a stored template to the issue types of the Jira the caller chose (#4354): the typed names are
  * resolved in the caller's own view and the ids are written into the template's front matter as a new
@@ -213,34 +252,17 @@ export function handleBindJiraTemplate(
   return withSkillAccess(ctx, deps, "jira-template-bind", async () => {
     const body = await readMutation(ctx, deps, BIND_BODY_BYTES);
     if (body.kind === "rejected") return body.response;
-    const { skillId, revision, podId } = body.value;
-    if (typeof skillId !== "string" || typeof revision !== "number")
-      throw invalidRequest("Provide the template and its revision.");
-    const skill = deps.store.markdownSkills.get(skillId);
-    if (skill === undefined) throw notFound("Skill");
-    if (skill.revision !== revision)
-      throw new UiStoreError(
-        "INVALID_REQUEST",
-        "Skill revision is stale. Reload before changing it.",
-        409,
-      );
-    const parsed = parseJiraIssueTemplate(skill.body);
-    if (!parsed.ok) throw invalidRequest("This skill is not a valid Jira issue template.");
-    const pod = readyPod(deps, podId);
+    const { skill, template: stored } = bindTarget(deps, body.value.skillId, body.value.revision);
+    const pod = readyPod(deps, body.value.podId);
     const instanceId = jiraInstanceIdentity(pod.baseUrl);
-    const template = jiraTemplateForInstance(parsed.template, instanceId);
+    const template = jiraTemplateForInstance(stored, instanceId);
     const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
     if (!read.ok) throw jiraReadFailure(read.reason);
     const resolution = resolveJiraTemplateBinding(template, read.instance, instanceId);
     if (resolution.state === "bound")
       return { status: 200, body: { changed: false, issueType: resolution.issueType } };
     if (resolution.state !== "bindable") throw refusedBinding(resolution);
-    const bound = bindJiraIssueTemplateText(skill.body, resolution.binding);
-    if (bound === undefined) throw invalidRequest("This template cannot be bound.");
-    const saved = deps.store.markdownSkills.replace(skillId, revision, {
-      fileName: skillFileName(skill.name),
-      contentBase64: Buffer.from(bound, "utf8").toString("base64"),
-    });
+    const saved = saveBinding(deps, skill, resolution.binding);
     return {
       status: 200,
       body: {

@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import * as templates from "@/lib/jira-templates-api";
 import * as skills from "@/lib/markdown-skills-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { ApiError } from "@/lib/http";
+import { ApiError } from "@/lib/api";
 import type { JiraTemplateValidation } from "@/lib/jira-templates-api";
 import {
   JiraTemplateList,

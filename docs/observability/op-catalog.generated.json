@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9cd32fbd139fa741cbe781fc849fb767cc6238bd71b41cda4ff2805a33c682ff",
+    "catalogDigest": "d6c962d9e743ce8c3e5dc985451cde4e040c59f5c523305c8960f364571303af",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1441,6 +1441,11 @@
             "dataClass": "count",
             "required": false
           },
+          "templateBindingUnresolvedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "settledCount": {
             "type": "integer",
             "dataClass": "count",
@@ -1691,6 +1696,11 @@
             "required": false
           },
           "templateNotActivatedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "templateBindingUnresolvedCount": {
             "type": "integer",
             "dataClass": "count",
             "required": false
@@ -34603,8 +34613,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["jira.field.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:244",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:440"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:254",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:450"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36373,7 +36383,8 @@
               "parent-type-mismatch",
               "template-unreadable",
               "template-missing",
-              "template-not-activated"
+              "template-not-activated",
+              "template-binding-unresolved"
             ],
             "maxItems": 25
           }
@@ -36384,8 +36395,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:147",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:374"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:156",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:384"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36432,8 +36443,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.metadata.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:107",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:137"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:116",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:146"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45736,7 +45747,8 @@
               "selection-change",
               "jira-template-list",
               "jira-template-validate",
-              "jira-template-propose"
+              "jira-template-propose",
+              "jira-template-bind"
             ]
           },
           "phase": {
@@ -45758,7 +45770,7 @@
         "proofIds": ["skills.library.operation.lifecycle"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:8",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:74"]
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:76"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45825,8 +45837,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["skills.workflow.attached.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:82",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:137"]
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:84",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:139"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -64490,6 +64502,12 @@
                   "required": false
                 },
                 {
+                  "name": "templateBindingUnresolvedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "templateMissingCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -64755,6 +64773,12 @@
                 },
                 {
                   "name": "summaryTooShortCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "templateBindingUnresolvedCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -122567,7 +122591,7 @@
     {
       "op": "jira.field.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:247",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:257",
       "package": "keiko-server"
     },
     {
@@ -122672,13 +122696,13 @@
     {
       "op": "jira.template.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:150",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:159",
       "package": "keiko-server"
     },
     {
       "op": "jira.template.metadata",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:110",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:119",
       "package": "keiko-server"
     },
     {
@@ -123409,7 +123433,7 @@
     {
       "op": "skills.workflow.attached",
       "category": "gateway",
-      "site": "packages/keiko-server/src/markdown-skill-log.ts:85",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:87",
       "package": "keiko-server"
     },
     {

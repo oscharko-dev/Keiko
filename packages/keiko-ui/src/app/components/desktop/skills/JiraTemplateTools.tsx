@@ -3,7 +3,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { listAtlassianConnectors } from "@/lib/atlassian-connectors-api";
 import {
-  bindJiraTemplate,
   fetchJiraTemplates,
   proposeJiraTemplates,
   type JiraTemplateEntry,
@@ -14,7 +13,7 @@ import {
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
-import { ApiError, bffRequestErrorKind } from "@/lib/http";
+import { bffRequestErrorKind } from "@/lib/http";
 import { usePodChoices } from "../useJiraPodChoices";
 import {
   templateKey,
@@ -25,6 +24,7 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 import type { MarkdownSkillMetadata } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { SkillChatToggle } from "./SkillChatToggle";
+import { useJiraTemplateBinding, type BindOutcome } from "./useJiraTemplateBinding";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 import styles from "./MarkdownSkillControl.module.css";
 
@@ -245,13 +245,6 @@ export function PodSelect({ jira }: { readonly jira: JiraTemplates }): ReactNode
   );
 }
 
-/** The outcome of one bind request, shown on the template's row until the library reloads. */
-type BindOutcome =
-  | "working"
-  | "failed"
-  | "refused"
-  | { readonly issueType: string; readonly parentTypeCount: number };
-
 function bindable(check: AutomaticTemplateCheck | undefined): boolean {
   return (
     check !== undefined && check !== "failed" && check.valid && check.binding?.state === "bindable"
@@ -358,27 +351,7 @@ export function JiraTemplateList({
 }): ReactNode {
   const t = useTranslate();
   const { tools } = jira;
-  const [outcomes, setOutcomes] = useState<ReadonlyMap<string, BindOutcome>>(new Map());
-  const bindEntry = async (entry: JiraTemplateEntry): Promise<void> => {
-    if (jira.podId === undefined) return;
-    const correlationId = newClientCorrelationId();
-    const settle = (outcome: BindOutcome): void =>
-      setOutcomes((current) => new Map(current).set(entry.id, outcome));
-    settle("working");
-    try {
-      const bound = await bindJiraTemplate(jira.podId, entry.id, entry.revision, correlationId);
-      settle({ issueType: bound.issueType, parentTypeCount: bound.parentTypeCount ?? 0 });
-      await library.refresh();
-    } catch (error) {
-      // 422: the typed name is not exactly one issue type of this Jira; anything else is a failure.
-      settle(error instanceof ApiError && error.status === 422 ? "refused" : "failed");
-      reportClientDiagnostic("Jira template binding failed.", {
-        correlationId,
-        errorKind: bffRequestErrorKind(error),
-        errorEvidence: clientErrorEvidence(error),
-      });
-    }
-  };
+  const binding = useJiraTemplateBinding(jira.podId, library);
   if (tools.failed)
     return (
       <p role="alert" className={styles.cmpEmpty}>
@@ -402,9 +375,9 @@ export function JiraTemplateList({
           onOpen={onOpen}
           chat={chat}
           bind={{
-            outcome: outcomes.get(entry.id),
+            outcome: binding.outcomes.get(entry.id),
             onBind: () => {
-              void bindEntry(entry);
+              void binding.bind(entry);
             },
           }}
         />

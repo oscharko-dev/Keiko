@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
+import ts from "typescript";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -267,7 +268,19 @@ describe("every shape the write producers build is a valid result of every write
   const shapes = producedShapes();
 
   it("walks a real set of shapes", () => {
-    expect(shapes.length).toBeGreaterThan(500);
+    // The exact count, from the closed vocabularies the shapes are built over: a replayed shape per
+    // state (but succeeded) x reason x reach, an attempt per state (but succeeded and pending) x
+    // reason x validation x reach, the success with notices, and one refusal per rule id and the all.
+    const states = JIRA_MUTATION_RESULT_STATES.length;
+    const reasons = ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS.length;
+    const validations = JIRA_FIELD_VALIDATION_FAILURES.length;
+    expect(shapes).toHaveLength(
+      (states - 1) * reasons * 3 +
+        (states - 2) * reasons * validations * 3 +
+        1 +
+        JIRA_TEMPLATE_RULE_IDS.length +
+        1,
+    );
     // Each kind of shape reaches at least one tool: nothing is walked through no one.
     for (const reach of ["any", "gated", "linked"] as const)
       expect(WRITE_TOOLS.filter(SHAPE_BEARERS[reach]).length, reach).toBeGreaterThan(0);
@@ -460,7 +473,8 @@ describe("the worst-case mix of one refusal", () => {
     (ruleId) =>
       ruleId !== "template-missing" &&
       ruleId !== "template-not-activated" &&
-      ruleId !== "template-unreadable",
+      ruleId !== "template-unreadable" &&
+      ruleId !== "template-binding-unresolved",
   );
   const violations: readonly JiraTemplateViolation[] = Array.from(
     { length: JIRA_TEMPLATE_VIOLATIONS_MAX },
@@ -515,18 +529,43 @@ describe("the no-governing-template guidance takes no caller sentence in product
       .map((entry) => join(entry.parentPath, entry.name));
   }
 
-  it("calls it with the violation alone", () => {
-    const calls: string[] = [];
+  /** The arguments of every call of `name`, parsed with the TypeScript parser: strings and nesting included. */
+  function callsOf(text: string, name: string): readonly (readonly string[])[] {
+    const source = ts.createSourceFile("source.ts", text, ts.ScriptTarget.Latest, true);
+    const calls: string[][] = [];
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === name
+      )
+        calls.push(node.arguments.map((argument) => argument.getText(source)));
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return calls;
+  }
+
+  it("reads the arguments of a call, however it is written", () => {
+    expect(callsOf("f(violation, observed)", "f")).toEqual([["violation", "observed"]]);
+    expect(callsOf("f(a(b, c), [d, e], { g: 1 })", "f")).toEqual([
+      ["a(b, c)", "[d, e]", "{ g: 1 }"],
+    ]);
+    expect(callsOf('f("a, b)", `c, ${d(e, f)}`,)', "f")).toEqual([['"a, b)"', "`c, ${d(e, f)}`"]]);
+    expect(callsOf("export function f(violation, observed) {} f(missing)", "f")).toEqual([
+      ["missing"],
+    ]);
+  });
+
+  it("calls it with the violation alone, as exactly one argument", () => {
+    const calls: (readonly string[])[] = [];
     for (const root of [
       new URL("../../../keiko-connectors/src/", import.meta.url),
       new URL("../../", import.meta.url),
     ])
-      for (const file of sources(root)) {
-        const text = readFileSync(file, "utf8");
-        for (const match of text.matchAll(/jiraNoGoverningTemplateGuidance\(([^)]*)\)/gu))
-          if (!/^\s*(?:violation|[A-Za-z]+:\s*Pick)/u.test(match[1] ?? "")) calls.push(match[0]);
-      }
-    expect(calls).toEqual(["jiraNoGoverningTemplateGuidance(missing)"]);
+      for (const file of sources(root))
+        calls.push(...callsOf(readFileSync(file, "utf8"), "jiraNoGoverningTemplateGuidance"));
+    expect(calls).toEqual([["missing"]]);
   });
 });
 

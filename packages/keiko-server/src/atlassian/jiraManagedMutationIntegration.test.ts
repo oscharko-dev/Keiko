@@ -205,7 +205,8 @@ type RemoteMode =
   | "transition-moved-html"
   | "transition-moved-truncated"
   | "parent-offered"
-  | "epic-link-unknown";
+  | "epic-link-unknown"
+  | "unresolved-binding";
 /** The value this synthetic Jira refuses, as Data Center does for a bad option. */
 const REJECTED_VALUE = "Rot";
 const JIRA_FIELD_ERROR = "Option 'Rot' is not valid.";
@@ -338,6 +339,15 @@ function parentOfferedRead(
   state: MutationRemoteState,
 ): ReturnType<typeof fixtureRead> | undefined {
   if (mode === "epic-link-unknown") return epicLinkUnknownRead(path, state);
+  if (mode === "unresolved-binding" && /\/project\/(?:SYN|10000)$/u.test(path))
+    return response({
+      id: "10000",
+      key: "SYN",
+      issueTypes: [
+        { id: "3", name: "Task" },
+        { id: "10001", name: "Story" },
+      ],
+    });
   if (mode !== "parent-offered") return undefined;
   if (path.includes("createmeta")) {
     const values = [...FIELDS, field("parent", "issuelink")];
@@ -1996,3 +2006,49 @@ it.each([
   expect(f.writes()).toBe(0);
   expect(JSON.stringify(refused)).toContain("SYN-9 is not an Epic");
 });
+
+// #4354: a template whose typed issue type this Jira does not offer the acting user (written in another
+// profile language and never bound) may govern any write of its project, so the write is refused and the
+// model is told in plain words. The gate is shared by the write families, and a refusal by a template
+// was an invalid result for about 28 of them: a remote-link write and a worklog write are the
+// regression pin of that defect, through the real executor and the catalog.
+it.each(["jira.create-worklog", "jira.upsert-remote-link"] as const)(
+  "settles %s refused by a template of an issue type this Jira does not offer as a valid, explained result",
+  async (operation) => {
+    const parsed = parseJiraIssueTemplate(
+      [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: SYN",
+        "issueType: Aufgabe",
+        "activateOn: [create, edit]",
+        "summaryMinLength: 4",
+        "---",
+        "# Aufgabe",
+      ].join("\n"),
+    );
+    if (!parsed.ok) throw new TypeError("Expected a parseable template");
+    const f = await fixture("unresolved-binding", undefined, operation, {}, () => ({
+      templates: [parsed.template],
+      unreadable: 0,
+    }));
+    const refused = await f.invoke(operation);
+    const violations = [
+      { ruleId: "template-binding-unresolved", subject: "Aufgabe", template: "SYN/Aufgabe" },
+    ] as const;
+    expect(refused).toMatchObject({
+      kind: "settled",
+      result: {
+        status: "failed",
+        data: { outcome: "rejected", reason: "field-validation", violations },
+      },
+    });
+    if (refused.kind !== "settled") throw new TypeError("Expected a settled outcome");
+    const { data } = refused.result;
+    if (typeof data !== "object" || data === null || Array.isArray(data))
+      throw new TypeError("Expected a result object");
+    expect(Reflect.get(data, "guidance")).toBe(jiraTemplateViolationGuidance(violations));
+    expect(f.writes()).toBe(0);
+  },
+);

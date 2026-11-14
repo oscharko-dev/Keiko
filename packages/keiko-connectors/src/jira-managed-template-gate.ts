@@ -851,11 +851,19 @@ export async function gateJiraMutationByTemplates(
       : await issueIdentity(input.request, input.target.issueKey);
   if ("ok" in first)
     return identityRefusal(first, input.operation === "create" ? "project-and-type" : "issue");
-  const unresolved = await unresolvedBindingRefusal(input, candidates, first);
-  if (unresolved !== undefined) return unresolved;
+  return judgeWithIdentity(input, set, candidates, first);
+}
+/** The identity is known: an unresolvable template, a creation no template governs, then the rules. */
+async function judgeWithIdentity(
+  input: JiraTemplateGateInput,
+  set: JiraIssueTemplateSet,
+  candidates: readonly JiraIssueTemplate[],
+  identity: Identity,
+): Promise<JiraTemplateGateResult> {
   return (
-    (input.operation === "create" ? createWithoutTemplate(set, candidates, first) : undefined) ??
-    checkCandidates(input, candidates, first)
+    (await unresolvedBindingRefusal(input, candidates, identity)) ??
+    (input.operation === "create" ? createWithoutTemplate(set, candidates, identity) : undefined) ??
+    checkCandidates(input, candidates, identity)
   );
 }
 /** What is decided before any identity is read: an unreadable library, or nothing that governs. */
