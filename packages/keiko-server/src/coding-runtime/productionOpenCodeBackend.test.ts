@@ -401,7 +401,8 @@ describe("production OpenCode backend composition", () => {
       );
 
       recordContextTelemetry(run, event);
-      expect(contextUsage.read("run-windows")?.compaction).toBeUndefined();
+      const usage = contextUsage.read("run-windows");
+      expect(usage?.state === "available" ? usage.compaction : undefined).toBeUndefined();
       recordContextTelemetry(run, {
         ...event,
         compaction: { event: "completed", compactionIdSha256: "c".repeat(64) },

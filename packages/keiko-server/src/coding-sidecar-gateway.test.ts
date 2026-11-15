@@ -7210,7 +7210,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
     registry.recordCompaction("run-gateway-test", "compaction-1", "2026-11-14T14:40:00.000Z");
     await turn(12_005, "build agent", "summary of the earlier work", true);
     expect(fits()).toBe(true);
-    expect(registry.read("run-gateway-test")?.usedInputTokens).toBe(12_005);
+    expect(registry.read("run-gateway-test")).toMatchObject({ usedInputTokens: 12_005 });
   });
 
   it("settles conservatively (the full reserved estimate) when the provider call fails before usage is observed", async () => {

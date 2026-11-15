@@ -47,7 +47,7 @@ describe("gateway prompt observation", () => {
       errorKind: "conflict",
       extra: { state: "rejected" },
     });
-    expect(registry.read("run-context-1")?.usedInputTokens).toBe(7_303);
+    expect(registry.read("run-context-1")).toMatchObject({ usedInputTokens: 7_303 });
     expect(
       expectActivityLogProof(
         "coding-runtime.context-usage.observed.emitted-line",
