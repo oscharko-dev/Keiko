@@ -8,6 +8,7 @@
 // identify the failure (same pattern as local-knowledge/format-error and
 // memoriaviva/components/format-error).
 
+import type { ChatPathErrorCode } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError } from "@/lib/api";
 import { readStoredLocale, translate, type I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
@@ -151,7 +152,7 @@ interface GatewayErrorKeys {
   readonly remediation: MessageKey;
 }
 
-const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
+export const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
   JIRA_AUTHENTICATION_FAILED: {
     title: "chat.error.jiraAuthentication.title",
     message: "chat.error.jiraAuthentication.message",
@@ -231,6 +232,166 @@ const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
   },
 };
 
+// What a person can do about a failure decides its text (#4355), not the code's spelling. Every
+// code reachable on the Chat path maps in this ONE table to a group (one notice per group, in both
+// languages), to its own notice above (`own`), or to an explicit "never shown" reason. The table's
+// type is the closed vocabulary in keiko-contracts, so a code added there without a row here fails
+// the build, and a test walks the table against both catalogs. A group exists only where its advice
+// is true for every code in it: a code whose remedy differs gets its own group.
+export type ErrorGroup =
+  | "retry"
+  | "stopped"
+  | "inProgress"
+  | "modelDeclined"
+  | "gatewaySignIn"
+  | "proxyUnreachable"
+  | "proxySignIn"
+  | "proxyFailed"
+  | "proxyBlocked"
+  | "gatewayCertificate"
+  | "configChanged"
+  | "configInvalid"
+  | "modelUnavailable"
+  | "noModel"
+  | "tooLarge"
+  | "unsupported"
+  | "invalidPath"
+  | "reload"
+  | "chatClosed"
+  | "regenerateRefused"
+  | "other";
+export type ErrorCodeEntry =
+  { readonly group: ErrorGroup } | { readonly own: true } | { readonly neverShown: string };
+
+/**
+ * Groups whose message stays the server's own sentence (or the caller's fallback): it carries the
+ * fact the group cannot, such as which limit was exceeded or which kind of path was refused. Only
+ * the title and the remedy are worded from the catalog.
+ */
+export const GROUPS_KEEPING_SERVER_MESSAGE: ReadonlySet<ErrorGroup> = new Set([
+  "other",
+  "tooLarge",
+  "unsupported",
+  "invalidPath",
+]);
+
+const RETRY = { group: "retry" } as const;
+const STOPPED = { group: "stopped" } as const;
+const RELOAD = { group: "reload" } as const;
+const OTHER = { group: "other" } as const;
+const OWN = { own: true } as const;
+export const CHAT_ERROR_CODE_TABLE: Readonly<Record<ChatPathErrorCode, ErrorCodeEntry>> = {
+  // Try again: transient, and a repeat can succeed.
+  GATEWAY_TRANSPORT: RETRY,
+  GATEWAY_RATE_LIMIT: RETRY,
+  GATEWAY_CIRCUIT_OPEN: RETRY,
+  GATEWAY_PROVIDER_ERROR: RETRY,
+  GATEWAY_MALFORMED_TOOL_CALL: RETRY,
+  CHAT_TOOL_TIMEOUT: RETRY,
+  CHAT_TOOL_UNAVAILABLE: RETRY,
+  TOO_MANY_STREAMS: RETRY,
+  UNAVAILABLE: RETRY,
+  STARTUP_RECOVERY_PENDING: RETRY,
+  // The person's own Stop is not a failure: a neutral notice if one ever reaches the screen.
+  REQUEST_CANCELLED: STOPPED,
+  CANCELLED: STOPPED,
+  GATEWAY_CANCELLED: STOPPED,
+  // One kind each: what to do differs.
+  CHAT_TURN_IN_PROGRESS: { group: "inProgress" },
+  GATEWAY_MODEL_REFUSAL: { group: "modelDeclined" },
+  // The model gateway needs its operator; the notice names the kind in plain words.
+  GATEWAY_AUTHENTICATION: { group: "gatewaySignIn" },
+  GATEWAY_PROXY_UNREACHABLE: { group: "proxyUnreachable" },
+  GATEWAY_PROXY_AUTH_REQUIRED: { group: "proxySignIn" },
+  GATEWAY_PROXY_EGRESS_FAILED: { group: "proxyFailed" },
+  GATEWAY_PROXY_BLOCKED_BY_POLICY: { group: "proxyBlocked" },
+  GATEWAY_TLS_CA_FAILURE: { group: "gatewayCertificate" },
+  GATEWAY_CONFIG_CHANGED: { group: "configChanged" },
+  GATEWAY_CONFIG_INVALID: { group: "configInvalid" },
+  GATEWAY_UNKNOWN_MODEL: { group: "modelUnavailable" },
+  NO_MODEL: { group: "noModel" },
+  // The request cannot be sent as it is.
+  PAYLOAD_TOO_LARGE: { group: "tooLarge" },
+  CONVERSATION_UNSUPPORTED_MODALITY: { group: "unsupported" },
+  CONVERSATION_UNSUPPORTED_FILE_TYPE: { group: "unsupported" },
+  SKILL_SURFACE_UNSUPPORTED: { group: "unsupported" },
+  INVALID_PATH: { group: "invalidPath" },
+  PATH_NOT_FOUND: { group: "invalidPath" },
+  PATH_NOT_DIRECTORY: { group: "invalidPath" },
+  // The selection changed under the person: reloading shows the current one.
+  SKILL_SELECTION_CHANGED: RELOAD,
+  PROJECT_IDENTITY_CHANGED: RELOAD,
+  CHAT_TURN_IDEMPOTENCY_CONFLICT: RELOAD,
+  CHAT_CLOSED: { group: "chatClosed" },
+  NOT_APPLIABLE: { group: "regenerateRefused" },
+  // Everything else: the generic title and remedy, with the server's own sentence and the support ID.
+  INTERNAL: OTHER,
+  BAD_REQUEST: OTHER,
+  INVALID_REQUEST: OTHER,
+  NOT_FOUND: OTHER,
+  FORBIDDEN: OTHER,
+  CONFLICT: OTHER,
+  GATEWAY_ERROR: OTHER,
+  FORBIDDEN_HOST: OTHER,
+  FORBIDDEN_CSRF: OTHER,
+  UNSUPPORTED_MEDIA_TYPE: OTHER,
+  METHOD_NOT_ALLOWED: OTHER,
+  GIT_CHANGE_APPLY_READER_UNAUTHORIZED: OTHER,
+  GIT_CHANGE_APPLY_REMOTE_UNRESOLVED: OTHER,
+  GIT_CHANGE_APPLY_REPOSITORY_UNAVAILABLE: OTHER,
+  GIT_CHANGE_APPLY_UNAVAILABLE: OTHER,
+  GIT_CHANGE_APPLY_UNKNOWN_PROPOSAL: OTHER,
+  GIT_CHANGE_APPROVE_UNKNOWN_PROPOSAL: OTHER,
+  GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED: OTHER,
+  GIT_CHANGE_DESCRIPTION_UNAVAILABLE: OTHER,
+  GIT_CHANGE_REVIEW_UNKNOWN_PROPOSAL: OTHER,
+  GIT_CHANGE_SCOPE_NOT_FOUND: OTHER,
+  // The Jira cards word these through their own surface until each gets its own text.
+  CHAT_WRITE_APPROVAL_UNAVAILABLE: OTHER,
+  VALIDATION_FAILED: OTHER,
+  JIRA_DRAFT_UNAVAILABLE: OTHER,
+  JIRA_HUMAN_INPUT_UNAVAILABLE: OTHER,
+  APPROVAL_NOT_FOUND: OTHER,
+  CREDENTIAL_NOT_FOUND: OTHER,
+  ATLASSIAN_CONNECTORS_UNAVAILABLE: OTHER,
+  // A notice of its own (GATEWAY_ERROR_KEYS above, CODE_MESSAGE_KEYS, or the clarification title).
+  GATEWAY_CONTEXT_OVERFLOW: OWN,
+  GATEWAY_ATTEMPT_ADMISSION_DENIED: OWN,
+  GATEWAY_TIMEOUT: OWN,
+  GATEWAY_OUTPUT_EXHAUSTED: OWN,
+  DESKTOP_CHAT_STREAM_STALLED: OWN,
+  CONVERSATION_OVERSIZED_CONTEXT: OWN,
+  CONVERSATION_UNAVAILABLE_MODEL: OWN,
+  CONVERSATION_MODEL_NOT_READY: OWN,
+  JIRA_AUTHENTICATION_FAILED: OWN,
+  JIRA_POD_UNAVAILABLE: OWN,
+  JIRA_POD_VERIFICATION_REQUIRED: OWN,
+  JIRA_POD_CONNECTION_CHANGED: OWN,
+  KNOWLEDGE_POD_UNAVAILABLE: OWN,
+  KNOWLEDGE_STORE_UNAVAILABLE: OWN,
+  GROUNDING_SCOPE_CHANGED: OWN,
+  CLARIFICATION_NEEDED: OWN,
+  // Never shown to a person: the client falls back before any notice (the buffered request, pinned by
+  // the StreamingUnavailableError fallback tests in lib/api.test.ts).
+  STREAMING_UNSUPPORTED: { neverShown: "the client falls back to the buffered request" },
+};
+
+function groupKeyOf(group: ErrorGroup, part: keyof GatewayErrorKeys): MessageKey | undefined {
+  if (part === "message" && GROUPS_KEEPING_SERVER_MESSAGE.has(group)) return undefined;
+  return `chat.error.group.${group}.${part}` as MessageKey;
+}
+
+function groupKeysForCode(
+  code: string | undefined,
+  part: keyof GatewayErrorKeys,
+): MessageKey | undefined {
+  if (code === undefined) return undefined;
+  const entry = (CHAT_ERROR_CODE_TABLE as Readonly<Record<string, ErrorCodeEntry | undefined>>)[
+    code
+  ];
+  return entry !== undefined && "group" in entry ? groupKeyOf(entry.group, part) : undefined;
+}
+
 // This module is not a component, so it cannot take the translate hook; it resolves the selected
 // locale itself and translates through the same pure entry point the provider uses.
 const translateForSelectedLocale: I18nTranslate = (key, values) =>
@@ -238,7 +399,7 @@ const translateForSelectedLocale: I18nTranslate = (key, values) =>
 
 // Codes whose server text is English-only but whose notice needs no separate title or remediation:
 // the localized message already names the remedy.
-const CODE_MESSAGE_KEYS: Readonly<Record<string, MessageKey>> = {
+export const CODE_MESSAGE_KEYS: Readonly<Record<string, MessageKey>> = {
   CONVERSATION_OVERSIZED_CONTEXT: "chat.error.attachmentOversized.message",
 };
 
@@ -246,8 +407,9 @@ function gatewayErrorText(
   code: string | undefined,
   part: keyof GatewayErrorKeys,
 ): string | undefined {
-  const keys = code === undefined ? undefined : GATEWAY_ERROR_KEYS[code];
-  if (keys !== undefined) return translateForSelectedLocale(keys[part]);
+  const own = code === undefined ? undefined : GATEWAY_ERROR_KEYS[code]?.[part];
+  const key = own ?? groupKeysForCode(code, part);
+  if (key !== undefined) return translateForSelectedLocale(key);
   const messageKey = part === "message" && code !== undefined ? CODE_MESSAGE_KEYS[code] : undefined;
   return messageKey === undefined ? undefined : translateForSelectedLocale(messageKey);
 }
@@ -271,8 +433,6 @@ function titleForError(message: string, code: string | undefined): string {
   }
   const gateway = gatewayErrorText(code, "title");
   if (gateway !== undefined) return gateway;
-  if (code === "PAYLOAD_TOO_LARGE") return "Request is too large";
-  if (code === "NO_MODEL") return "No model is available";
   if (code !== undefined) return "Request failed";
   return "Something went wrong";
 }
@@ -286,9 +446,6 @@ function remediationForError(message: string, code: string | undefined): string 
   }
   const gateway = gatewayErrorText(code, "remediation");
   if (gateway !== undefined) return gateway;
-  if (code === "PAYLOAD_TOO_LARGE") {
-    return "Reduce the selected scope or remove large attachments before retrying.";
-  }
   return undefined;
 }
 

@@ -2372,6 +2372,108 @@ export interface BffError {
 }
 
 /**
+ * Every error code a person can reach on the Chat path (send, stream, approve, regenerate, cancel,
+ * bind or unbind a Pod, change the scope; #4355). It is a closed list on purpose: the Chat's code
+ * table maps each member to the text a person reads or to an explicit "never shown" reason, and the
+ * type of that table fails the build when a member has neither. The gateway members are pinned to
+ * the gateway's own `ERROR_CODES` by a server test, so a new gateway code cannot reach a person
+ * without text. The server codes are traced from the handlers on the path.
+ */
+export const CHAT_PATH_ERROR_CODES = [
+  // The model gateway (`ERROR_CODES` in keiko-security).
+  "GATEWAY_AUTHENTICATION",
+  "GATEWAY_TRANSPORT",
+  "GATEWAY_MODEL_REFUSAL",
+  "GATEWAY_MALFORMED_TOOL_CALL",
+  "GATEWAY_CONTEXT_OVERFLOW",
+  "GATEWAY_ATTEMPT_ADMISSION_DENIED",
+  "GATEWAY_RATE_LIMIT",
+  "GATEWAY_TIMEOUT",
+  "GATEWAY_CANCELLED",
+  "GATEWAY_CIRCUIT_OPEN",
+  "GATEWAY_PROVIDER_ERROR",
+  "GATEWAY_CONFIG_INVALID",
+  "GATEWAY_UNKNOWN_MODEL",
+  "GATEWAY_PROXY_UNREACHABLE",
+  "GATEWAY_PROXY_AUTH_REQUIRED",
+  "GATEWAY_PROXY_EGRESS_FAILED",
+  "GATEWAY_PROXY_BLOCKED_BY_POLICY",
+  "GATEWAY_TLS_CA_FAILURE",
+  "GATEWAY_OUTPUT_EXHAUSTED",
+  // The chat handlers and the stream.
+  "PAYLOAD_TOO_LARGE",
+  "BAD_REQUEST",
+  "INVALID_REQUEST",
+  "NOT_FOUND",
+  "NOT_APPLIABLE",
+  "FORBIDDEN",
+  "CONFLICT",
+  "INTERNAL",
+  "UNAVAILABLE",
+  "CANCELLED",
+  "REQUEST_CANCELLED",
+  "CLARIFICATION_NEEDED",
+  "NO_MODEL",
+  "INVALID_PATH",
+  "PATH_NOT_FOUND",
+  "PATH_NOT_DIRECTORY",
+  "PROJECT_IDENTITY_CHANGED",
+  "CHAT_CLOSED",
+  "CHAT_TURN_IN_PROGRESS",
+  "CHAT_TURN_IDEMPOTENCY_CONFLICT",
+  "SKILL_SELECTION_CHANGED",
+  "GATEWAY_CONFIG_CHANGED",
+  "GROUNDING_SCOPE_CHANGED",
+  "STREAMING_UNSUPPORTED",
+  "TOO_MANY_STREAMS",
+  "DESKTOP_CHAT_STREAM_STALLED",
+  "CHAT_TOOL_TIMEOUT",
+  "CHAT_TOOL_UNAVAILABLE",
+  "CONVERSATION_UNSUPPORTED_MODALITY",
+  "CONVERSATION_UNSUPPORTED_FILE_TYPE",
+  "CONVERSATION_OVERSIZED_CONTEXT",
+  "CONVERSATION_UNAVAILABLE_MODEL",
+  "CONVERSATION_MODEL_NOT_READY",
+  // Pods and the Jira connection.
+  "JIRA_AUTHENTICATION_FAILED",
+  "JIRA_POD_UNAVAILABLE",
+  "JIRA_POD_VERIFICATION_REQUIRED",
+  "JIRA_POD_CONNECTION_CHANGED",
+  "KNOWLEDGE_POD_UNAVAILABLE",
+  "KNOWLEDGE_STORE_UNAVAILABLE",
+  // Approving, rejecting and answering a Jira action.
+  "CHAT_WRITE_APPROVAL_UNAVAILABLE",
+  "VALIDATION_FAILED",
+  "JIRA_DRAFT_UNAVAILABLE",
+  "JIRA_HUMAN_INPUT_UNAVAILABLE",
+  "APPROVAL_NOT_FOUND",
+  "CREDENTIAL_NOT_FOUND",
+  "ATLASSIAN_CONNECTORS_UNAVAILABLE",
+  // Every route.
+  "FORBIDDEN_HOST",
+  "FORBIDDEN_CSRF",
+  "UNSUPPORTED_MEDIA_TYPE",
+  "STARTUP_RECOVERY_PENDING",
+  "METHOD_NOT_ALLOWED",
+  // The stream's fallback when a failure body carries no code of its own.
+  "GATEWAY_ERROR",
+  // The Chat's skill selection.
+  "SKILL_SURFACE_UNSUPPORTED",
+  // The Git-change description and apply routes of a Chat's Git-change scope.
+  "GIT_CHANGE_APPLY_READER_UNAUTHORIZED",
+  "GIT_CHANGE_APPLY_REMOTE_UNRESOLVED",
+  "GIT_CHANGE_APPLY_REPOSITORY_UNAVAILABLE",
+  "GIT_CHANGE_APPLY_UNAVAILABLE",
+  "GIT_CHANGE_APPLY_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_APPROVE_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED",
+  "GIT_CHANGE_DESCRIPTION_UNAVAILABLE",
+  "GIT_CHANGE_REVIEW_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_SCOPE_NOT_FOUND",
+] as const;
+export type ChatPathErrorCode = (typeof CHAT_PATH_ERROR_CODES)[number];
+
+/**
  * The one definition of the `UNKNOWN_REPOSITORY` code for its producers (the issue preview and the
  * GitHub issue reader authorization routes) and its consumers (the Coding Workbench intake and the
  * issue reader authorization hook), so a rename can never map the refusal to a generic failure on

@@ -603,6 +603,95 @@ export const DE_MESSAGES = {
     "Prüfe das Modell-Gateway, bevor du eine neue Anfrage sendest.",
   "chat.error.attachmentOversized.message":
     "Angehängte Inhalte sind zu groß. Kürze oder entferne sie.",
+  "chat.error.group.retry.title": "Bitte versuche es noch einmal",
+  "chat.error.group.retry.message":
+    "Das hat gerade nicht geklappt. Das ist meistens nur vorübergehend.",
+  "chat.error.group.retry.remediation":
+    "Sende deine Nachricht gleich noch einmal. Tritt es wiederholt auf, gib die Support-ID an die Person weiter, die Keiko betreibt.",
+  "chat.error.group.stopped.title": "Angehalten",
+  "chat.error.group.stopped.message": "Diese Antwort wurde angehalten.",
+  "chat.error.group.stopped.remediation":
+    "Sende deine Nachricht noch einmal, wenn du doch eine Antwort möchtest.",
+  "chat.error.group.inProgress.title": "Eine Antwort wird noch geschrieben",
+  "chat.error.group.inProgress.message": "Dieser Chat arbeitet noch an der vorherigen Nachricht.",
+  "chat.error.group.inProgress.remediation":
+    "Warte, bis die Antwort fertig ist, oder halte sie an, und sende deine Nachricht dann.",
+  "chat.error.group.modelDeclined.title": "Das Modell hat diese Anfrage abgelehnt",
+  "chat.error.group.modelDeclined.message":
+    "Das Modell hat sich entschieden, diese Anfrage nicht zu beantworten. Dieselbe Anfrage noch einmal zu senden führt zum selben Ergebnis.",
+  "chat.error.group.modelDeclined.remediation": "Formuliere die Anfrage um oder frage anders.",
+  "chat.error.group.gatewaySignIn.title": "Das Modell-Gateway hat die Anmeldung abgelehnt",
+  "chat.error.group.gatewaySignIn.message":
+    "Der Zugangsschlüssel, mit dem sich Keiko beim Modell-Gateway anmeldet, wurde nicht akzeptiert.",
+  "chat.error.group.gatewaySignIn.remediation":
+    "Das kann nur die Person beheben, die das Modell-Gateway betreibt: Die Anmeldung (API-Schlüssel) muss in den Einstellungen erneuert werden.",
+  "chat.error.group.proxyUnreachable.title": "Der Proxy ist nicht erreichbar",
+  "chat.error.group.proxyUnreachable.message":
+    "Keiko erreicht den Proxy nicht, der zum Modell-Gateway führt.",
+  "chat.error.group.proxyUnreachable.remediation":
+    "Bitte die Person, die das Netzwerk betreibt, die Proxy-Adresse zu prüfen und ob der Proxy läuft.",
+  "chat.error.group.proxySignIn.title": "Der Proxy verlangt eine Anmeldung",
+  "chat.error.group.proxySignIn.message":
+    "Der Proxy vor dem Modell-Gateway hat Keikos Anmeldung abgelehnt oder verlangt eine.",
+  "chat.error.group.proxySignIn.remediation":
+    "Bitte die Person, die das Netzwerk betreibt, um die Proxy-Zugangsdaten und trage sie in den Einstellungen ein.",
+  "chat.error.group.proxyFailed.title": "Die Verbindung über den Proxy ist gescheitert",
+  "chat.error.group.proxyFailed.message":
+    "Der Proxy konnte die Verbindung zum Modell-Gateway nicht aufbauen.",
+  "chat.error.group.proxyFailed.remediation":
+    "Versuche es noch einmal. Tritt es wiederholt auf, bitte die Person, die das Netzwerk betreibt, Proxy und Gateway-Adresse zu prüfen.",
+  "chat.error.group.proxyBlocked.title": "Der Proxy blockiert das Modell-Gateway",
+  "chat.error.group.proxyBlocked.message":
+    "Eine Regel des Proxys blockiert die Verbindung zum Modell-Gateway.",
+  "chat.error.group.proxyBlocked.remediation":
+    "Das Netzwerkteam muss diese Verbindung freigeben; Änderungen in Keiko helfen nicht.",
+  "chat.error.group.gatewayCertificate.title": "Dem Zertifikat des Gateways wird nicht vertraut",
+  "chat.error.group.gatewayCertificate.message":
+    "Die gesicherte Verbindung zum Modell-Gateway ist gescheitert, weil sein Zertifikat nicht akzeptiert wird.",
+  "chat.error.group.gatewayCertificate.remediation":
+    "Bitte die Person, die das Modell-Gateway betreibt, die passende Zertifizierungsstelle in den Gateway-Einstellungen zu hinterlegen.",
+  "chat.error.group.configChanged.title": "Die Modelleinstellungen haben sich geändert",
+  "chat.error.group.configChanged.message":
+    "Die Einstellungen des Modell-Gateways haben sich geändert, während deine Nachricht gesendet wurde.",
+  "chat.error.group.configChanged.remediation": "Sende deine Nachricht noch einmal.",
+  "chat.error.group.configInvalid.title": "Die Konfiguration des Modell-Gateways ist ungültig",
+  "chat.error.group.configInvalid.message":
+    "Keiko kann die eingestellten Gateway-Einstellungen nicht verwenden.",
+  "chat.error.group.configInvalid.remediation":
+    "Bitte die Person, die das Modell-Gateway betreibt, die Konfiguration unter Einstellungen > Modelle zu korrigieren.",
+  "chat.error.group.modelUnavailable.title": "Dieses Modell ist nicht verfügbar",
+  "chat.error.group.modelUnavailable.message":
+    "Das Modell-Gateway kennt das gewählte Modell nicht.",
+  "chat.error.group.modelUnavailable.remediation": "Wähle im Modellwähler ein anderes Modell.",
+  "chat.error.group.noModel.title": "Es ist kein Modell eingerichtet",
+  "chat.error.group.noModel.message": "Keiko hat kein Modell, mit dem es antworten kann.",
+  "chat.error.group.noModel.remediation": "Richte unter Einstellungen > Modelle eines ein.",
+  "chat.error.group.tooLarge.title": "Die Anfrage ist zu groß",
+  "chat.error.group.tooLarge.remediation":
+    "Verkleinere den gewählten Bereich oder entferne große Anhänge und sende sie dann erneut.",
+  "chat.error.group.unsupported.title": "Das lässt sich hier nicht verwenden",
+  "chat.error.group.unsupported.remediation":
+    "Entferne den Anhang oder wähle ein anderes Modell oder eine andere Option.",
+  "chat.error.group.invalidPath.title": "Der Ordner oder die Datei lässt sich nicht verwenden",
+  "chat.error.group.invalidPath.remediation":
+    "Wähle in Dateien einen anderen Ordner oder eine andere Datei.",
+  "chat.error.group.reload.title": "Etwas hat sich geändert – lade neu",
+  "chat.error.group.reload.message":
+    "Der Chat, das Projekt oder eine Auswahl hat sich geändert, während du gearbeitet hast.",
+  "chat.error.group.reload.remediation":
+    "Lade die Chat-Ansicht neu und sende deine Nachricht dann erneut.",
+  "chat.error.group.chatClosed.title": "Dieser Chat liegt im Papierkorb",
+  "chat.error.group.chatClosed.message":
+    "In einen Chat im Papierkorb lassen sich keine Nachrichten senden.",
+  "chat.error.group.chatClosed.remediation": "Stelle den Chat wieder her oder öffne einen anderen.",
+  "chat.error.group.regenerateRefused.title": "Diese Antwort lässt sich nicht neu erzeugen",
+  "chat.error.group.regenerateRefused.message":
+    "Neu erzeugen ist nicht möglich, solange ein Ordner, ein Knowledge Pod, Jira oder Git-Änderungen verbunden sind.",
+  "chat.error.group.regenerateRefused.remediation":
+    "Sende die Frage noch einmal als neue Nachricht.",
+  "chat.error.group.other.title": "Das hat nicht geklappt",
+  "chat.error.group.other.remediation":
+    "Versuche es noch einmal. Tritt es wiederholt auf, gib die Support-ID an die Person weiter, die Keiko betreibt.",
 
   // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
   // workspace shell does not preload editor-only translations. Issue #2120 added the localized

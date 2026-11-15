@@ -489,24 +489,21 @@ export const EMPTY_MODEL_RESPONSE_USER_MESSAGE =
 // its own localized notice (format-error), which tells the user to shorten the attachment instead
 // of resending a request that fails the same way (PR #3678 review).
 const CONTEXT_OVERSIZED_API_CODES = new Set(["GATEWAY_CONTEXT_OVERFLOW"]);
-const CONTEXT_OVERSIZED_PHRASES = [
-  "context length",
-  "context_length_exceeded",
-  "max_tokens",
-  "too many tokens",
-] as const;
 const EMPTY_MODEL_RESPONSE_PHRASES = [
   "empty assistant response",
   "empty grounded answer",
   "without assistant content",
 ] as const;
 
+// The code decides, never the text (#4355): the gateway classifies a provider's context-window
+// refusal into GATEWAY_CONTEXT_OVERFLOW on the server (openai-adapter), and every error that reaches
+// this hook as an ApiError carries its code, so no real provider path arrives without one. A message
+// that merely mentions "max_tokens" or "context length" under another code (a caller's own attempt
+// grant, a provider error that names a parameter) is that code's error and takes its notice.
+// Residual gap: a provider that signals a context overflow with a status the adapter does not read
+// (it classifies HTTP 400, 413 and 422, streamed frames included) gets the generic text.
 function isContextOversizedError(error: unknown): boolean {
-  if (error instanceof ApiError && error.code === "GATEWAY_ATTEMPT_ADMISSION_DENIED") return false;
-  if (error instanceof ApiError && CONTEXT_OVERSIZED_API_CODES.has(error.code)) return true;
-  const text = error instanceof Error ? error.message.toLowerCase() : "";
-  if (text.length === 0) return false;
-  return CONTEXT_OVERSIZED_PHRASES.some((phrase) => text.includes(phrase));
+  return error instanceof ApiError && CONTEXT_OVERSIZED_API_CODES.has(error.code);
 }
 
 function isEmptyModelResponseError(error: unknown): boolean {
