@@ -5297,6 +5297,7 @@ function assembleUiHandlerRuntimeServices(
     codingRuntimeEvidenceAggregator,
     codingRuntimeHost,
     peripherals.memoryVault,
+    runtimeComposition.runtimeVersion,
   );
   const gitChangeSnapshotService = createGitChangeSnapshotService({
     logSink: processServerLogSink(),
@@ -5371,6 +5372,7 @@ function buildUiCodingRuntimeControlPlane(
   codingRuntimeEvidenceAggregator: ReturnType<typeof createCodingRuntimeEvidenceAggregator>,
   codingRuntimeHost: NonNullable<BuildHandlerDepsOptions["codingRuntimeHost"]> | undefined,
   memoryVault: MemoryVaultStore | undefined,
+  runtimeVersion?: CodingWorkbenchRuntimeVersion,
 ): ReturnType<typeof createCodingRuntimeControlPlane> | undefined {
   if (!args.bundle.codingRuntimeSnapshotStore || !args.bundle.workspaceLifecycle) return undefined;
   const projectMemory =
@@ -5389,6 +5391,7 @@ function buildUiCodingRuntimeControlPlane(
       activityLog: processServerLogSink(),
     }),
     deploymentCeiling: resolveCodingRuntimeDeploymentCeiling(args.options),
+    ...(runtimeVersion === undefined ? {} : { runtimeVersion }),
     snapshots: args.bundle.codingRuntimeSnapshotStore,
     evidence: codingRuntimeEvidenceAggregator,
     workspaceLifecycle: args.bundle.workspaceLifecycle,

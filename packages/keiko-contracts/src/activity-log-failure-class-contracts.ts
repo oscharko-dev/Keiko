@@ -3481,6 +3481,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "digest",
       "loss-state",
       "opaque-id",
+      "safe-version",
     ],
     requiredFrameOperations: [],
     requiredCauseOperations: [],

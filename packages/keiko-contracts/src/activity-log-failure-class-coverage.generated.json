@@ -17433,6 +17433,12 @@
               "required": true
             },
             {
+              "name": "opencodeVersion",
+              "type": "string",
+              "dataClass": "safe-version",
+              "required": false
+            },
+            {
               "name": "predecessorRunId",
               "type": "string",
               "dataClass": "opaque-id",
@@ -17469,6 +17475,12 @@
               "required": true
             },
             {
+              "name": "runtimeOrigin",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "runtimeSource",
               "type": "string",
               "dataClass": "closed-enum",
@@ -17493,7 +17505,8 @@
             "count",
             "digest",
             "loss-state",
-            "opaque-id"
+            "opaque-id",
+            "safe-version"
           ],
           "frameCauseEvidence": {
             "frames": false,

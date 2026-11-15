@@ -93,6 +93,7 @@ import type {
   MemoryId,
   SkillDiscoveryResultV1,
   WorkspaceInstance,
+  CodingWorkbenchRuntimeVersion,
 } from "@oscharko-dev/keiko-contracts";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -105,6 +106,11 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import {
+  ACTIVITY_LOG_OPERATION_REGISTRY,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { CODING_WORKBENCH_RUNTIME_ORIGINS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 type OptionalOrchestratorDeps = Pick<
   Parameters<typeof createCodingRuntimeOrchestrator>[0],
@@ -115,6 +121,7 @@ type OptionalOrchestratorDeps = Pick<
   | "repositoryInstructions"
   | "terminalFacts"
   | "runEffort"
+  | "runtimeVersion"
 >;
 type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
 type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
@@ -179,6 +186,7 @@ function optionalOrchestratorDeps(input: {
     Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun"> | undefined;
   readonly terminalFacts?: CodingRuntimeTerminalFacts | undefined;
   readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
 }): Partial<OptionalOrchestratorDeps> {
   return {
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
@@ -190,6 +198,7 @@ function optionalOrchestratorDeps(input: {
       : {}),
     ...(input.terminalFacts ? { terminalFacts: input.terminalFacts } : {}),
     ...(input.runEffort ? { runEffort: input.runEffort } : {}),
+    ...(input.runtimeVersion ? { runtimeVersion: input.runtimeVersion } : {}),
   };
 }
 
@@ -262,6 +271,40 @@ const APPROVED_SKILLS: SkillDiscoveryResultV1 = (() => {
   return validated.value;
 })();
 
+/** The named inputs of the orchestrator fixture; every one is optional (#4359 audit: no padding). */
+interface FixtureOptions {
+  readonly activityProjection?: CodingSafeActivityProjection | undefined;
+  readonly clock?: (() => Date) | undefined;
+  readonly seededRows?: readonly CodingRuntimeSnapshot[] | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
+  readonly descriptionSupport?: CodingRuntimeDescriptionSupport | undefined;
+  readonly verifiedCommits?: ReadonlyMap<string, VerifiedCommitResult> | undefined;
+  // #3384 B3-22: overridable so the automatic-description-dispatch suite (the one path here that
+  // reaches the real codingRuntimeDescriptionJobStore, which now enforces correlation.ts's
+  // 8-character floor) can mint ids that satisfy it, without changing every other describe block's
+  // established "run-1"/"run-2" convention.
+  readonly newRunId?: (() => string) | undefined;
+  readonly snapshotStore?: CodingRuntimeSnapshotStore | undefined;
+  readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
+  readonly history?: CodingRuntimeHistory | undefined;
+  readonly repositoryInstructions?:
+    Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun"> | undefined;
+  readonly terminalFacts?: CodingRuntimeTerminalFacts | undefined;
+  readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
+  // #3873 review: the workspace the global active pointer resolves to, overridable so a test can
+  // switch it while a run starts.
+  readonly activeRoot?: (() => string) | undefined;
+  // S02/S03 (#3904): the native session continuity the orchestrator declares to and reads from.
+  readonly sessionContinuity?: CodingSessionContinuity | undefined;
+  // #3903 AC4: the persisted task workspaces, the inventory a fork's provisioning source is read from.
+  readonly workspaceInventory?: readonly WorkspaceInstance[] | undefined;
+  // #4359: the activated runtime's version facts, named on the run's start line.
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+}
+
+/** The positional form every older suite uses; new inputs are named through `fixtureFrom`. */
 function fixture(
   activityProjection?: CodingSafeActivityProjection,
   clock?: () => Date,
@@ -271,10 +314,6 @@ function fixture(
   issueIntake?: CodingRuntimeIssueIntake,
   descriptionSupport?: CodingRuntimeDescriptionSupport,
   verifiedCommits?: ReadonlyMap<string, VerifiedCommitResult>,
-  // #3384 B3-22: overridable so the automatic-description-dispatch suite (the one path here that
-  // reaches the real codingRuntimeDescriptionJobStore, which now enforces correlation.ts's
-  // 8-character floor) can mint ids that satisfy it, without changing every other describe block's
-  // established "run-1"/"run-2" convention.
   newRunId?: () => string,
   snapshotStore?: CodingRuntimeSnapshotStore,
   projectMemory?: CodingRuntimeProjectMemoryPort,
@@ -282,14 +321,53 @@ function fixture(
   repositoryInstructions?: Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun">,
   terminalFacts?: CodingRuntimeTerminalFacts,
   runEffort?: (runId: string) => CodingRuntimeHostRunEffort | undefined,
-  // #3873 review: the workspace the global active pointer resolves to, overridable so a test can
-  // switch it while a run starts.
-  activeRoot: () => string = (): string => "/workspace",
-  // S02/S03 (#3904): the native session continuity the orchestrator declares to and reads from.
+  activeRoot?: () => string,
   sessionContinuity?: CodingSessionContinuity,
-  // #3903 AC4: the persisted task workspaces, the inventory a fork's provisioning source is read from.
   workspaceInventory?: readonly WorkspaceInstance[],
 ) {
+  return fixtureFrom({
+    activityProjection,
+    clock,
+    seededRows,
+    diagnostics,
+    activityLog,
+    issueIntake,
+    descriptionSupport,
+    verifiedCommits,
+    newRunId,
+    snapshotStore,
+    projectMemory,
+    history,
+    repositoryInstructions,
+    terminalFacts,
+    runEffort,
+    activeRoot,
+    sessionContinuity,
+    workspaceInventory,
+  });
+}
+
+function fixtureFrom({
+  activityProjection,
+  clock,
+  seededRows = [],
+  diagnostics,
+  activityLog,
+  issueIntake,
+  descriptionSupport,
+  verifiedCommits,
+  newRunId,
+  snapshotStore,
+  projectMemory,
+  history,
+  repositoryInstructions,
+  terminalFacts,
+  runEffort,
+  activeRoot = (): string => "/workspace",
+  sessionContinuity,
+  workspaceInventory,
+  runtimeVersion,
+}: FixtureOptions) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
   const deletePruned = vi.fn();
@@ -525,6 +603,7 @@ function fixture(
         repositoryInstructions,
         terminalFacts,
         runEffort,
+        runtimeVersion,
       }),
       ...(history === undefined ? {} : { history }),
       ...(sessionContinuity === undefined ? {} : { sessionContinuity }),
@@ -1029,6 +1108,85 @@ describe("CodingRuntimeOrchestrator", () => {
       formatActivityLogProofLine(event),
     );
     expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
+  });
+  // #4359: a support export must say which runtime ran; the start line names the version the
+  // verified runtime metadata reports and its origin, and nothing when the server cannot name them.
+  it("registers the runtime origins the readiness knows, no more and no fewer", () => {
+    const registry: readonly ActivityLogOperationRegistration[] = ACTIVITY_LOG_OPERATION_REGISTRY;
+    const registered = registry.find((entry) => entry.op === "coding-runtime.run.started");
+    expect(registered?.fields.runtimeOrigin?.values).toEqual([...CODING_WORKBENCH_RUNTIME_ORIGINS]);
+  });
+  it("names the activated runtime's version and origin on the start line, never a guess", async () => {
+    const withVersion = captureActivityLog();
+    const f = fixtureFrom({
+      activityLog: withVersion.activityLog,
+      runtimeVersion: { opencode: "2.1.4", pinned: "2.2.5", origin: "npm-runtime-package" },
+    });
+    await f.orchestrator.start(start);
+    const event = requireLoggedEvent(
+      withVersion.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.started.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ opencodeVersion: "2.1.4", runtimeOrigin: "npm-runtime-package" });
+
+    const without = captureActivityLog();
+    const g = fixture(undefined, undefined, [], undefined, without.activityLog);
+    await g.orchestrator.start(start);
+    const bare = requireLoggedEvent(
+      without.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(bare.extra).not.toHaveProperty("opencodeVersion");
+    expect(bare.extra).not.toHaveProperty("runtimeOrigin");
+  });
+  // Audit of #4359: a version the metadata reports is a string, not a promise of a version. A value
+  // the registry refuses (a space, a URL, over-long) would throw while the start line is built, on
+  // the run's start path; it is omitted instead and the run still starts.
+  it.each([
+    ["a value with a space", "2.1.4 beta"],
+    ["a URL", "https://host.example/x"],
+    ["a path", "../2.1.4"],
+    ["an over-long value", `2.1.4-${"a".repeat(80)}`],
+    ["an empty value", ""],
+  ])("starts the run and omits the runtime version fields for %s", async (_name, reported) => {
+    const captured = captureActivityLog();
+    const f = fixtureFrom({
+      activityLog: captured.activityLog,
+      runtimeVersion: { opencode: reported, pinned: "2.2.5", origin: "npm-runtime-package" },
+    });
+    await expect(f.orchestrator.start(start)).resolves.toBeDefined();
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra).not.toHaveProperty("opencodeVersion");
+    expect(event.extra).not.toHaveProperty("runtimeOrigin");
+    expect(JSON.stringify(captured.records)).not.toContain("host.example");
+  });
+  it("keeps a pre-release or build suffix of a version", async () => {
+    const captured = captureActivityLog();
+    const f = fixtureFrom({
+      activityLog: captured.activityLog,
+      runtimeVersion: {
+        opencode: "2.2.5-rc.1+build.7",
+        pinned: "2.2.5",
+        origin: "portable-release",
+      },
+    });
+    await f.orchestrator.start(start);
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra).toMatchObject({
+      opencodeVersion: "2.2.5-rc.1+build.7",
+      runtimeOrigin: "portable-release",
+    });
   });
   it("records the started run's agent kind and a model digest, never their names (#4068 W12)", async () => {
     const captured = captureActivityLog();
