@@ -993,7 +993,7 @@ const SESSION_TITLE_MAX_CHARS = 200;
 
 function hasControlCharacter(text: string): boolean {
   for (let index = 0; index < text.length; index += 1) {
-    const code = text.charCodeAt(index);
+    const code = text.codePointAt(index) ?? 0;
     // C0 and C1 controls (U+0085 NEXT LINE among them) and the Unicode line and paragraph breaks.
     if (code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029)
       return true;

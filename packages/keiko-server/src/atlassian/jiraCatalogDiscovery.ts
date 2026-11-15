@@ -43,17 +43,25 @@ interface DiscoveryOptions {
 }
 type Context = JiraCatalogDiscoveryContext;
 const IDENTITY = text(512);
-const ITEM = object(
-  {
-    identity: IDENTITY,
-    tool: text(128),
-    description: text(4096),
-    kind: { type: "string", enum: ["native", "composite"] },
-    effects: { type: "array", maxItems: 16, items: text(64) },
-    callAs: text(192),
-  },
-  ["identity", "tool"],
-);
+/**
+ * Coding's catalog also names how each tool is called (`callAs`) and what a merge kept or dropped;
+ * Chat's catalog carries neither, so its descriptors, and with them the compound byte ceiling its
+ * tool selection has to fit, stay exactly what they were (#4359: the extra fields grew every Chat
+ * catalog by their schema bytes and pushed a bounded selection past the ceiling).
+ */
+function item(coding: boolean): ReturnType<typeof object> {
+  return object(
+    {
+      identity: IDENTITY,
+      tool: text(128),
+      description: text(4096),
+      kind: { type: "string", enum: ["native", "composite"] },
+      effects: { type: "array", maxItems: 16, items: text(64) },
+      ...(coding ? { callAs: text(192) } : {}),
+    },
+    ["identity", "tool"],
+  );
+}
 
 /** The exact expression that calls a tool in a Code Mode program, when the catalog is Coding's. */
 function callAsField(
@@ -504,56 +512,62 @@ function replacedItems(
 const DESELECTED_GUIDANCE =
   "This selection replaced the previous one. The operations under deselected are no longer offered in the next round; select them again together with the others if they are still needed.";
 
-const RESULT_SCHEMA = object(
-  {
-    reason: {
-      type: "string",
-      enum: [
-        "budget-exhausted",
-        "selection-unavailable",
-        "selection-too-large",
-        "invalid-arguments",
-      ],
+function resultSchema(coding: boolean): ReturnType<typeof object> {
+  const ITEM = item(coding);
+  return object(
+    {
+      reason: {
+        type: "string",
+        enum: [
+          "budget-exhausted",
+          "selection-unavailable",
+          "selection-too-large",
+          "invalid-arguments",
+        ],
+      },
+      guidance: text(512),
+      outcome: { type: "string", enum: ["succeeded", "failed"] },
+      items: {
+        type: "array",
+        maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+        items: ITEM,
+      },
+      startAt: { type: "integer", minimum: 0 },
+      total: { type: "integer", minimum: 0 },
+      nextStartAt: { type: "integer", minimum: 0 },
+      selectedFor: { type: "string", enum: ["next-round"] },
+      ...(coding
+        ? {
+            retained: {
+              type: "array",
+              maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+              items: ITEM,
+            },
+            dropped: {
+              type: "array",
+              maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+              items: ITEM,
+            },
+          }
+        : {}),
+      deselected: {
+        type: "array",
+        maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+        items: ITEM,
+      },
     },
-    guidance: text(512),
-    outcome: { type: "string", enum: ["succeeded", "failed"] },
-    items: {
-      type: "array",
-      maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
-      items: ITEM,
-    },
-    startAt: { type: "integer", minimum: 0 },
-    total: { type: "integer", minimum: 0 },
-    nextStartAt: { type: "integer", minimum: 0 },
-    selectedFor: { type: "string", enum: ["next-round"] },
-    retained: {
-      type: "array",
-      maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
-      items: ITEM,
-    },
-    dropped: {
-      type: "array",
-      maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
-      items: ITEM,
-    },
-    deselected: {
-      type: "array",
-      maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
-      items: ITEM,
-    },
-  },
-  ["outcome", "items"],
-);
+    ["outcome", "items"],
+  );
+}
 
 // A pure constant: built once per process, not again for every catalog a Chat turn composes.
-const DISCOVERY_DESCRIPTORS = new Map<
-  JiraCatalogDiscoveryToolName,
-  ReturnType<typeof createToolDescriptor>
->();
+const DISCOVERY_DESCRIPTORS = new Map<string, ReturnType<typeof createToolDescriptor>>();
 function discoveryDescriptor(
   name: JiraCatalogDiscoveryToolName,
+  coding: boolean,
 ): ReturnType<typeof createToolDescriptor> {
-  const known = DISCOVERY_DESCRIPTORS.get(name);
+  const key = `${name}:${coding ? "coding" : "chat"}`;
+  const known = DISCOVERY_DESCRIPTORS.get(key);
   if (known !== undefined) return known;
   const discovery = name === "jira.discover";
   const descriptor = createToolDescriptor({
@@ -577,7 +591,7 @@ function discoveryDescriptor(
           },
           ["identities"],
         ),
-    resultSchema: RESULT_SCHEMA,
+    resultSchema: resultSchema(coding),
     effects: ["connector-access"],
     actionMapping: [{ action: name, effects: ["connector-access"] }],
     policyReferences: ["adr-0128.d4"],
@@ -591,7 +605,7 @@ function discoveryDescriptor(
     idempotency: "server-key-required",
     cancellation: "before-effect",
   });
-  DISCOVERY_DESCRIPTORS.set(name, descriptor);
+  DISCOVERY_DESCRIPTORS.set(key, descriptor);
   return descriptor;
 }
 
@@ -603,7 +617,7 @@ function tool(
   return {
     name,
     risk: "read",
-    descriptor: discoveryDescriptor(name),
+    descriptor: discoveryDescriptor(name, options.callNamespace !== undefined),
     execute: (args, context) =>
       discovery ? discover(args, context, options) : describe(args, context, options),
   };

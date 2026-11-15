@@ -51,7 +51,8 @@ export function observeGatewayPromptTokens(
   log: ServerLogSink = processServerLogSink(),
 ): void {
   const now = new Date();
-  const sampleId = `gateway-call:${String(modelCallId ?? `${String(providerPromptTokens)}@${String(now.getTime())}`)}`;
+  const fallbackId = `${String(providerPromptTokens)}@${String(now.getTime())}`;
+  const sampleId = `gateway-call:${String(modelCallId ?? fallbackId)}`;
   const outcome = contextUsage.recordGatewayPrompt(
     runId,
     conversation,

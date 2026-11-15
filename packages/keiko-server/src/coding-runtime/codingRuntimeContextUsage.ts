@@ -207,7 +207,8 @@ function evictable(record: RunUsage): string | undefined {
   const candidates = [...record.sessions].filter(
     ([head, held]) => head !== fullest && held.agentKey !== record.primaryAgent,
   );
-  return candidates.sort((a, b) => a[1].seq - b[1].seq)[0]?.[0];
+  candidates.sort((a, b) => a[1].seq - b[1].seq);
+  return candidates[0]?.[0];
 }
 
 function rememberSession(
