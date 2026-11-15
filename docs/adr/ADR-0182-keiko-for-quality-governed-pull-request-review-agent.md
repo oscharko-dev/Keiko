@@ -510,7 +510,29 @@ every part is open, the single-part rules apply to the last one. Each part is ve
 and a file keeps only the hunks that follow each other without a gap from its first hunk, so a hunk
 a part's verification drops ends that file. Whatever does not fit the last part is `unprocessed`
 (`budget`) and settles the run `incomplete/files-unprocessed` exactly as before; `usedTokens` is the
-sum of the parts' counts. PR-Agent applies its extra lines (five before, one after) on top of the
+sum of the parts' counts. A hunk that no part can hold beside its file header is shown as
+consecutive windows (Issue #4130, `splitReviewHunk`): every body line of the hunk is in exactly one
+window, in order, and each window is a hunk of its own with the base and head line numbers of its
+first line, so the Reviewer's cited lines stay those of the head commit. A window takes at most 45 %
+of a part's budget, so two share a part. The rule "whole hunks only" therefore holds for every hunk
+that fits a part; for a larger one the rule is about lines: none is dropped, repeated or reordered.
+Before, such a hunk could not be shown at all and its file stayed `unprocessed`. A large new file is
+one hunk, and in development iteration 7 five of 30 reviews left seven such files unprocessed (13,500
+to 19,500 tokens each as a plain Git diff), which alone makes a review incomplete. A sixth needed
+more than 12 parts, which this does not change. Two rules bound what a split may cost (R4130-063,
+R4130-064). A file with such a hunk is placed after every file that fits, in the same order
+(language rank, larger change first, path bytes), so it takes no part from a file that fits. And it
+is shown in windows only when its whole diff fits the windows the parts not yet opened can hold,
+two per part; a larger file is left out whole (`unprocessed`, `budget`) as before the split
+existed, and nothing of it is split. A package of one part therefore never splits a hunk, and the
+rule of #4134 holds there unchanged. A file that the unopened parts can no longer show beside the
+files already held back is not held: it counts as a budget miss when it is read, so the stop of the
+reads after 32 misses in a row bounds oversized files too (R4130-065). Without these rules one file larger than all 12 parts took
+every part, showed about a tenth of itself and left small files unreviewed, and splitting four
+files of 3.8 MB each held the server's one thread for 37 seconds. The search for a window's end
+grows from the window's start, so its cost follows the window and not the hunk. `hunkCount` and
+`includedHunkCount` of an included file count package hunks, one for each window. The `reviewing`
+line of `review.run.phase` counts the Git hunks shown in windows as `windowedHunks`. PR-Agent applies its extra lines (five before, one after) on top of the
 provider's three default context lines; Keiko applies its own counts exactly. Child 8 measurement
 changed the lines after a change from one to three (Issue #4130): with one line, a guard two lines
 below a changed condition lay outside the hunk, and the Reviewer reported the value that guard

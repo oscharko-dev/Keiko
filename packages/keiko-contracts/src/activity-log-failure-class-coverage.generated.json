@@ -41689,6 +41689,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": false
+            },
+            {
+              "name": "windowedHunks",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": [

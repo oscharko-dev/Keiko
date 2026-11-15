@@ -239,6 +239,7 @@ async function buildPackage(
       text: packed.text,
       parts: packed.parts,
       files: packed.files,
+      windowedHunks: packed.windowedHunks,
       coverage: result,
     },
   };

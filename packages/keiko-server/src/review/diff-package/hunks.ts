@@ -132,6 +132,69 @@ export function shapeReviewHunks(
   return shaped;
 }
 
+/** How a caller measures a hunk when it splits one (Issue #4130). */
+export interface ReviewHunkSplitFit {
+  /** Whether the hunk can be used as it is. */
+  readonly whole: (hunk: PatchHunk) => boolean;
+  /** Whether a window of a split hunk is small enough. */
+  readonly window: (hunk: PatchHunk) => boolean;
+}
+
+/**
+ * The last line a window starting at `start` may end on: the longest that fits, at least one line.
+ *
+ * The search grows the window by doubling while it fits and then halves inside the last step, so
+ * no probe measures much more than twice a window (R4130-063). A search over the whole rest of the
+ * hunk measured half of it on its first probes, for every window: one hunk of 4 MiB took 9.5 s.
+ */
+function windowEnd(
+  lines: readonly BodyLine[],
+  start: number,
+  fits: ReviewHunkSplitFit["window"],
+): number {
+  const last = lines.length - 1;
+  let low = start;
+  let high = last;
+  let step = 1;
+  while (low < last) {
+    const probe = Math.min(last, low + step);
+    if (!fits(emitHunk(lines, start, probe))) {
+      high = probe - 1;
+      break;
+    }
+    low = probe;
+    step *= 2;
+  }
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (fits(emitHunk(lines, start, middle))) low = middle;
+    else high = middle - 1;
+  }
+  return low;
+}
+
+/**
+ * A hunk the caller cannot use whole, as consecutive windows (Issue #4130): every body line of the
+ * hunk is in exactly one window, in order, and each window is a hunk of its own with the base and
+ * head line numbers of its first line. A hunk that fits whole is returned unchanged. A single line
+ * that fits no window is a window of its own; the caller decides what to do with it.
+ *
+ * A large new file is one hunk, and a change larger than one diff package part could not be shown
+ * at all, so its file stayed unprocessed and the review incomplete: 5 of the 30 reviews of
+ * development iteration 7.
+ */
+export function splitReviewHunk(hunk: PatchHunk, fits: ReviewHunkSplitFit): PatchHunk[] {
+  if (fits.whole(hunk)) return [hunk];
+  const lines = bodyLines(hunk);
+  const windows: PatchHunk[] = [];
+  for (let start = 0; start < lines.length;) {
+    const end = windowEnd(lines, start, fits.window);
+    windows.push(emitHunk(lines, start, end));
+    start = end + 1;
+  }
+  return windows;
+}
+
 /** The single hunk of an added file: every line of the head blob, numbered from 1. */
 export function addedFileHunk(content: string): PatchHunk | undefined {
   if (content.length === 0) return undefined;

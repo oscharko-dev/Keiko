@@ -100,6 +100,7 @@ describe("review run Activity Log proofs", () => {
           budgetTokens: 13_000,
           usedTokens: 900,
           partCount: 2,
+          windowedHunks: 1,
         },
       });
     });
@@ -108,6 +109,7 @@ describe("review run Activity Log proofs", () => {
       changedFiles: 4,
       unprocessedFiles: 1,
       partCount: 2,
+      windowedHunks: 1,
     });
   });
 

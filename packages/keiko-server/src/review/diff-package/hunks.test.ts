@@ -2,7 +2,8 @@
 
 import { describe, expect, it } from "vitest";
 import type { PatchHunk } from "@oscharko-dev/keiko-contracts";
-import { addedFileHunk, shapeReviewHunks } from "./hunks.js";
+import { numberedBody } from "./diffPackageAssertions.test-support.js";
+import { addedFileHunk, shapeReviewHunks, splitReviewHunk } from "./hunks.js";
 
 const OPTIONS = { before: 5, after: 1, dynamicMax: 10, language: "typescript" } as const;
 
@@ -84,5 +85,126 @@ describe("addedFileHunk", () => {
     });
     expect(addedFileHunk("a\n")?.lines).toEqual(["+a"]);
     expect(addedFileHunk("")).toBeUndefined();
+  });
+});
+
+// #4130: a hunk that no diff package part can hold is shown as consecutive windows.
+describe("splitReviewHunk", () => {
+  /** A hunk fits when it has at most `max` body lines. */
+  const atMost =
+    (max: number) =>
+    (hunk: PatchHunk): boolean =>
+      hunk.lines.filter((line) => !line.startsWith("\\")).length <= max;
+
+  const replaced: PatchHunk = {
+    oldStart: 10,
+    oldLines: 4,
+    newStart: 10,
+    newLines: 6,
+    lines: [
+      " keep 10",
+      "-old 11",
+      "-old 12",
+      "+new 11",
+      "+new 12",
+      "+new 13",
+      "+new 14",
+      " keep 13",
+    ],
+  };
+
+  it("returns a hunk that fits whole unchanged, as the same object", () => {
+    const [only, ...rest] = splitReviewHunk(replaced, { whole: atMost(8), window: atMost(1) });
+    expect(only).toBe(replaced);
+    expect(rest).toEqual([]);
+  });
+
+  it("cuts a hunk into the longest windows that fit, every line once and on its own numbers", () => {
+    const windows = splitReviewHunk(replaced, { whole: atMost(7), window: atMost(3) });
+
+    expect(windows.map((window) => window.lines.length)).toEqual([3, 3, 2]);
+    expect(numberedBody(windows)).toEqual(numberedBody([replaced]));
+    expect(windows).toEqual([
+      {
+        oldStart: 10,
+        oldLines: 3,
+        newStart: 10,
+        newLines: 1,
+        lines: [" keep 10", "-old 11", "-old 12"],
+      },
+      {
+        oldStart: 12,
+        oldLines: 0,
+        newStart: 11,
+        newLines: 3,
+        lines: ["+new 11", "+new 12", "+new 13"],
+      },
+      { oldStart: 13, oldLines: 1, newStart: 14, newLines: 2, lines: ["+new 14", " keep 13"] },
+    ]);
+  });
+
+  it("numbers the windows of an added file from its first line on", () => {
+    const added = addedFileHunk("a\nb\nc\nd\ne");
+    if (added === undefined) throw new TypeError("expected a hunk");
+
+    const windows = splitReviewHunk(added, { whole: () => false, window: atMost(2) });
+
+    expect(windows.map((window) => [window.oldStart, window.oldLines])).toEqual([
+      [0, 0],
+      [0, 0],
+      [0, 0],
+    ]);
+    expect(windows.map((window) => [window.newStart, window.newLines])).toEqual([
+      [1, 2],
+      [3, 2],
+      [5, 1],
+    ]);
+    // The missing final newline stays with the last line.
+    expect(windows.at(-1)?.lines).toEqual(["+e", String.raw`\ No newline at end of file`]);
+    expect(numberedBody(windows)).toEqual(numberedBody([added]));
+  });
+
+  it("gives a line that fits no window a window of its own", () => {
+    const windows = splitReviewHunk(replaced, { whole: () => false, window: () => false });
+    expect(windows).toHaveLength(8);
+    expect(numberedBody(windows)).toEqual(numberedBody([replaced]));
+  });
+
+  // R4130-063: a search over the whole rest of the hunk measured half of it on its first probes,
+  // for every window, so the work grew with the square of the hunk. The search now grows from the
+  // window's start, and what it measures depends on the window, not on the hunk.
+  it("measures no candidate larger than twice a window, whatever the size of the hunk", () => {
+    const WINDOW = 100;
+    const LINES = 20_000;
+    const large: PatchHunk = {
+      oldStart: 0,
+      oldLines: 0,
+      newStart: 1,
+      newLines: LINES,
+      lines: Array.from({ length: LINES }, (_, index) => `+line ${String(index + 1)}`),
+    };
+    let probes = 0;
+    let largest = 0;
+    const windows = splitReviewHunk(large, {
+      whole: () => false,
+      window: (hunk) => {
+        probes += 1;
+        largest = Math.max(largest, hunk.lines.length);
+        return hunk.lines.length <= WINDOW;
+      },
+    });
+
+    expect(windows).toHaveLength(LINES / WINDOW);
+    expect(windows.every((window) => window.lines.length === WINDOW)).toBe(true);
+    expect(largest).toBeLessThanOrEqual(2 * WINDOW);
+    // Doubling to the window and halving back: about 2 x log2(100) probes for each window.
+    expect(probes).toBeLessThanOrEqual(windows.length * 16);
+    expect(numberedBody(windows)).toEqual(numberedBody([large]));
+  });
+
+  it("returns the longest window when the rest of the hunk is shorter than a doubling step", () => {
+    const windows = splitReviewHunk(replaced, { whole: () => false, window: atMost(5) });
+    expect(windows.map((window) => window.lines.length)).toEqual([5, 3]);
+    expect(numberedBody(windows)).toEqual(numberedBody([replaced]));
   });
 });

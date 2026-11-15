@@ -34676,6 +34676,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      windowedHunks: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       candidateCount: {
         type: "integer",
         dataClass: "count",

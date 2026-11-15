@@ -273,6 +273,7 @@ function packageCounts(built: ReviewDiffPackage): ReviewRunPackageCounts {
     budgetTokens: coverage.summary.budgetTokens,
     usedTokens: coverage.summary.usedTokens,
     partCount: built.parts.length,
+    windowedHunks: built.windowedHunks,
   };
 }
 

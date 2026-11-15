@@ -6,7 +6,7 @@ import { countContextTokens } from "@oscharko-dev/keiko-contracts/runtime/contex
 import { REVIEW_RUN_MAX_DIFF_PARTS } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { reviewDiffCoverageSettlement } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-rules";
 import { DiffFixtureRepository } from "./diffFixtures.test-support.js";
-import { build, numbered, packaged } from "./diffPackageAssertions.test-support.js";
+import { build, numbered, numberedBody, packaged } from "./diffPackageAssertions.test-support.js";
 import { renderReviewHunk } from "./render.js";
 
 let fixture: DiffFixtureRepository;
@@ -60,9 +60,18 @@ describe("diff package parts (Issue #4130)", () => {
         const used = result.parts.reduce((sum, part) => sum + part.usedTokens, 0);
         expect(result.coverage.summary.usedTokens, label).toBe(used);
         for (const file of result.files) {
-          const all = fullHunks.get(file.coverage.path) ?? [];
-          expect(file.hunks, label).toEqual(all.slice(0, file.hunks.length));
-          expect(file.coverage.partial, label).toBe(file.hunks.length < all.length);
+          // Every line once, in order and on its own line numbers, however the hunks are cut
+          // (#4130: a hunk that no part can hold is shown as consecutive windows).
+          const all = numberedBody(fullHunks.get(file.coverage.path) ?? []);
+          const shown = numberedBody(file.hunks);
+          expect(shown, label).toEqual(all.slice(0, shown.length));
+          expect(file.coverage.partial, label).toBe(shown.length < all.length);
+          // Without a split hunk the #4134 rule holds as it was: whole hunks only, the same hunks
+          // the unbounded package has.
+          if (result.windowedHunks === 0) {
+            const whole = fullHunks.get(file.coverage.path) ?? [];
+            expect(file.hunks, label).toEqual(whole.slice(0, file.hunks.length));
+          }
           // Each included hunk is in exactly one part, and in order across the parts.
           const where = file.hunks.map((hunk) =>
             result.parts.findIndex((part) => part.text.includes(renderReviewHunk(hunk))),

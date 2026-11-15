@@ -84,6 +84,11 @@ export interface ReviewDiffPackage {
   readonly parts: readonly ReviewDiffPackagePart[];
   /** Included files in package order (the order of `text`). */
   readonly files: readonly ReviewDiffPackageFile[];
+  /**
+   * The Git hunks larger than one part that the package shows as consecutive windows, counted over
+   * the hunks it holds (Issue #4130). 0 when every shown hunk is whole.
+   */
+  readonly windowedHunks: number;
   readonly coverage: ReviewDiffCoverage;
 }
 
