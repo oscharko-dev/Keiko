@@ -6,7 +6,11 @@ import { REVIEW_COUNTER_CHECK_TOOL_ALIASES } from "@oscharko-dev/keiko-tool-cata
 
 import type { ReviewFindingReport } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
-import { COUNTER_CHECK_INSTRUCTION, renderCounterCheckTask } from "./prompt.js";
+import {
+  COUNTER_CHECK_INSTRUCTION,
+  counterCheckInstruction,
+  renderCounterCheckTask,
+} from "./prompt.js";
 
 describe("COUNTER_CHECK_INSTRUCTION", () => {
   it("names the four counter-check tools and the verdict as the only output", () => {
@@ -18,7 +22,10 @@ describe("COUNTER_CHECK_INSTRUCTION", () => {
 
   it("asks for a short check because a check out of time counts as undecided", () => {
     expect(COUNTER_CHECK_INSTRUCTION).toContain("counts as undecided");
-    expect(COUNTER_CHECK_INSTRUCTION).toContain("at most four read or search calls");
+    // #4130: the allowance is a number the tools enforce, no longer a request the model ignored.
+    expect(COUNTER_CHECK_INSTRUCTION).toContain("You have 8 read, list and search calls in all.");
+    expect(COUNTER_CHECK_INSTRUCTION).toContain("most candidates are settled by four calls");
+    expect(counterCheckInstruction(3)).toContain("You have 3 read, list and search calls in all.");
   });
 
   it("refutes a candidate without wrong behaviour only when no review rule demands it", () => {

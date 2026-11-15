@@ -91,6 +91,9 @@ const REVIEW_COUNTER_CHECK_COMPLETED = defineActivityLogOperation({
     evidenceInHead: { type: "boolean", dataClass: "closed-enum", required: true },
     promptTokens: { type: "integer", dataClass: "count", required: true },
     completionTokens: { type: "integer", dataClass: "count", required: true },
+    // #4130: the read, list and search calls the session's read allowance answered and refused.
+    admittedReadCallCount: { type: "integer", dataClass: "count", required: true },
+    refusedReadCallCount: { type: "integer", dataClass: "count", required: true },
   },
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -159,6 +162,7 @@ export function logCounterCheckCompleted(
     readonly evidenceInHead: boolean;
     readonly promptTokens: number;
     readonly completionTokens: number;
+    readonly readCalls: { readonly admitted: number; readonly refused: number };
   },
 ): void {
   log.write(
@@ -177,6 +181,8 @@ export function logCounterCheckCompleted(
         evidenceInHead: outcome.evidenceInHead,
         promptTokens: outcome.promptTokens,
         completionTokens: outcome.completionTokens,
+        admittedReadCallCount: outcome.readCalls.admitted,
+        refusedReadCallCount: outcome.readCalls.refused,
       },
     ),
   );

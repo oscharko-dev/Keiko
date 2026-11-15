@@ -11,6 +11,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS,
   REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS,
   REVIEW_COUNTER_CHECK_DEFAULT_PROMPT_TOKENS,
   REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS,
@@ -35,6 +36,11 @@ import {
   type ReadOnlyHarnessSessionOutcome,
   type ReadOnlyHarnessToolset,
 } from "../../coding-runtime/productionReadOnlyChildRunner.js";
+import {
+  createReviewReadAllowance,
+  type ReviewReadAllowance,
+  type ReviewReadCallCounts,
+} from "../../coding-runtime/reviewRuntimeGuard.js";
 import type { ServerLogSink } from "../../observability/index.js";
 import type { ReviewCandidateFinding, ReviewHeadFileReader } from "../runtime/findingIntake.js";
 import {
@@ -62,12 +68,15 @@ const ATTESTATIONS = (["read", "discover", "search", "verdict"] as const).map((t
 /** Per-candidate bounds; operators may configure them (ADR-0182 D5). */
 export interface CounterCheckLimits {
   readonly maxToolCalls: number;
+  /** Read, list and search calls the session's tools answer; the verdict tool is not counted. */
+  readonly maxReadCalls: number;
   readonly wallTimeMs: number;
   readonly promptTokens: number;
 }
 
 export const DEFAULT_COUNTER_CHECK_LIMITS: CounterCheckLimits = {
   maxToolCalls: REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS,
+  maxReadCalls: REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS,
   wallTimeMs: REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS,
   promptTokens: REVIEW_COUNTER_CHECK_DEFAULT_PROMPT_TOKENS,
 };
@@ -107,6 +116,8 @@ export interface CounterCheckOutcome {
   /** What the session's ending means for the run's settlement. */
   readonly effect: CounterCheckEffect;
   readonly toolCallCount: number;
+  /** The read, list and search calls the session's read allowance answered and refused (#4130). */
+  readonly readCalls: ReviewReadCallCounts;
   readonly durationMs: number;
   readonly promptTokens: number;
   readonly completionTokens: number;
@@ -207,6 +218,7 @@ interface CounterCheckSession {
   readonly now: () => number;
   readonly limits: CounterCheckLimits;
   readonly state: CounterCheckToolsetState;
+  readonly readAllowance: ReviewReadAllowance;
   readonly meter: SessionMeter;
 }
 
@@ -240,6 +252,7 @@ function counterCheckToolset(
         headSha: input.headSha,
         fingerprint: input.candidate.fingerprint,
         reader: input.reader,
+        readAllowance: session.readAllowance,
         ...governance,
       },
       session.state,
@@ -274,7 +287,10 @@ function runSession(
         model,
         reservePromptTokens: reserver(limits, input.budget, meter),
         sessionId: session.correlationId,
-        objective: renderCounterCheckTask(input.candidate.report, { rulesText: input.rulesText }),
+        objective: renderCounterCheckTask(input.candidate.report, {
+          rulesText: input.rulesText,
+          maxReadCalls: limits.maxReadCalls,
+        }),
         modelId: input.modelId,
         workspaceRoot: input.worktreeRoot,
         maxToolCalls: limits.maxToolCalls,
@@ -296,12 +312,14 @@ export async function counterCheckCandidate(
   input: CounterCheckInput,
 ): Promise<CounterCheckOutcome> {
   const now = deps.now ?? Date.now;
+  const limits = { ...DEFAULT_COUNTER_CHECK_LIMITS, ...deps.limits };
   const session: CounterCheckSession = {
     correlationId: `review-counter-check-${randomUUID()}`,
     startedAt: now(),
     now,
-    limits: { ...DEFAULT_COUNTER_CHECK_LIMITS, ...deps.limits },
+    limits,
     state: { verdict: undefined, invalidVerdicts: 0, toolCalls: 0 },
+    readAllowance: createReviewReadAllowance(limits.maxReadCalls),
     meter: { promptTokens: 0, completionTokens: 0, reserved: 0, budgetRefused: false },
   };
   const fingerprint = input.candidate.fingerprint;
@@ -356,6 +374,7 @@ async function finish(
     evidenceInHead,
     effect,
     toolCallCount: facts.toolCallCount,
+    readCalls: session.readAllowance.counts(),
     durationMs: facts.durationMs,
     promptTokens: Math.max(meter.promptTokens, meter.reserved),
     completionTokens: meter.completionTokens,

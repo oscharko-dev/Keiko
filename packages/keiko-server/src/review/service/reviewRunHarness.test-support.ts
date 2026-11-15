@@ -202,6 +202,7 @@ export function counterCheckBy(
       evidenceInHead: value === "confirmed",
       effect,
       toolCallCount: 3,
+      readCalls: { admitted: 2, refused: 0 },
       durationMs: 10,
       promptTokens: 500,
       completionTokens: 20,

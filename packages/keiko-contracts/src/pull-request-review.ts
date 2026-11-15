@@ -892,6 +892,16 @@ export const REVIEW_RUN_DIFF_CONTEXT_MAX = 64;
 
 /** Counter-check bounds per candidate finding (ADR-0182 D5); operators may configure them. */
 export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS = 32;
+/**
+ * Read, list and search calls one counter-check may make before only its verdict tool answers
+ * (#4130). In development iteration 7 the number of tool calls a check made predicted how it
+ * ended. Of 104 checks with at most 4 tool calls 1 ran out of time or tokens, of 72 with 5 to 8
+ * calls 12 did, and of 22 with 9 or more 13 did. Each call resends the session's conversation, so
+ * a check that keeps reading uses up its time or its prompt tokens before it decides. The task
+ * already asked for at most four calls, and the model did not keep to it. The verdict call counts
+ * as a tool call, so 8 read calls cover every check that decided with up to 9 tool calls.
+ */
+export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS = 8;
 // #4138, #4130: 900 s, tuned on the development set. A local Gemma 4 31B 4-bit counter-checker
 // generates about 12 tokens per second: at 120 s it ended candidates undecided after 1 to 5
 // tool calls, and at 300 s 20 of 48 checks still ended undecided while the decided ones took up to

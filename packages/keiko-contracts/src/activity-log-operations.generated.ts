@@ -33551,6 +33551,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      admittedReadCallCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      refusedReadCallCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
     },
     causal: "parent-correlation",
     lifecycle: "end",
@@ -35183,6 +35193,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       counterCheckMaxToolCalls: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      counterCheckMaxReadCalls: {
         type: "integer",
         dataClass: "count",
         required: true,

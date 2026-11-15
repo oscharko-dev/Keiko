@@ -104,6 +104,8 @@ const REVIEW_RUN_STARTED = defineActivityLogOperation({
     // `review.run.phase` records the run's allowance and phase limit once the part count is known.
     counterCheckRunPromptBudget: COUNT,
     counterCheckMaxToolCalls: COUNT,
+    // #4130: the read, list and search calls one counter-check's tools answer.
+    counterCheckMaxReadCalls: COUNT,
     counterCheckWallTimeMs: DURATION,
     counterCheckEnabled: { type: "boolean", dataClass: "closed-enum", required: true },
   },
@@ -276,6 +278,7 @@ export interface ReviewRunStartedLine {
   readonly reviewerPromptBudget: number;
   readonly counterCheckRunPromptBudget: number;
   readonly counterCheckMaxToolCalls: number;
+  readonly counterCheckMaxReadCalls: number;
   readonly counterCheckWallTimeMs: number;
   readonly counterCheckEnabled: boolean;
 }
@@ -297,6 +300,7 @@ export function logReviewRunStarted(
         reviewerPromptBudget: line.reviewerPromptBudget,
         counterCheckRunPromptBudget: line.counterCheckRunPromptBudget,
         counterCheckMaxToolCalls: line.counterCheckMaxToolCalls,
+        counterCheckMaxReadCalls: line.counterCheckMaxReadCalls,
         counterCheckWallTimeMs: line.counterCheckWallTimeMs,
         counterCheckEnabled: line.counterCheckEnabled,
       },
