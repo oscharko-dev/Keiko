@@ -271,5 +271,495 @@
     "reviewedDraftSha256": "996ffe06d7858729c23df01006bea591ef03d140fbe7a0c12abb5b8d47ef0b08",
     "reviewRoles": ["evidence", "product"],
     "scope": "Recorded AC1 and AC3 measurements, provenance and classification; not general release readiness."
+  },
+  "checkpointFollowup": {
+    "status": "affected_browser_and_AC1_supplement_verified",
+    "sourceCommit": "860edf47877a205feab6aa18e0db4154d60b885a",
+    "baseCommit": "e4a63bff170a27a89fd9dda6688e322e9437a8a4",
+    "scope": "Targeted runtime fixes, affected browser suites and read-only AC1 observation after the historical measurements. This append is not a final release-quality, packaging, platform or integration approval.",
+    "implementedChanges": [
+      {
+        "area": "startup",
+        "behavior": "A shared static boot placeholder remains available before hydration, so the existing recovery watchdog can observe startup failure. Workspace-store ownership still gates rendering of the desktop."
+      },
+      {
+        "area": "modal-focus",
+        "behavior": "Bounded modal-trigger focus restoration waits while the trigger is disabled or inert, stops when the person moves focus elsewhere, and emits body-free lifecycle outcomes through the existing diagnostic route."
+      },
+      {
+        "area": "workbench",
+        "behavior": "The welcome graphic is contained in its grid row so it cannot cover the Readiness disclosure in a constrained window. Human disclosure activation uses the existing interaction diagnostic owner."
+      },
+      {
+        "area": "browser-fixtures",
+        "behavior": "Model mocks recognize the supported refresh and settleStartup query. Research checks use the exact Workbench announcement. Commit drift changes the staged candidate working copy; Intake explicitly uses Supervised mode and verifies the real script-trust pause and resume. Existing pointer, layout, refusal, reload and cancellation assertions remain. Publish now changes the tracked committed candidate and asserts the exact Git diff; Full access legitimately permits unrelated untracked files, while the existing remote-drift refusal and reload assertions remain."
+      },
+      {
+        "area": "test-dependency-ownership",
+        "behavior": "The root declares @testing-library/dom 10.4.2 for its existing direct test consumer; the already-locked package version and resolved package records are retained."
+      }
+    ],
+    "historicalMeasurementBoundary": {
+      "AC1MeasuredCreatesCommit": "ca24069373abaa97c2d593404b46b4c4fb4f4061",
+      "AC3MeasuredSourceCommit": "d1b58dc49fe0450e3b9d807ec3421409996218e9",
+      "historicallyAuditedHead": "ca24069373abaa97c2d593404b46b4c4fb4f4061",
+      "historicalAC1AndAC3RecordsRetained": true,
+      "originalAskFailedAttemptRetained": true,
+      "historicalReportProcessExitCode": 1,
+      "S11HistoricalStatuses": ["red", "red", "green"],
+      "interpretation": "Existing AC1 and AC3 statuses apply to their recorded measurement sources and receipts. They are not a claim that this complete later commit was rerun."
+    },
+    "AC3SourceAssessment": {
+      "status": "recorded_source_inventory_unchanged",
+      "comparedSourceCommit": "860edf47877a205feab6aa18e0db4154d60b885a",
+      "recordedReportSourceBlobCount": 38,
+      "matchingRecordedReportSourceBlobCount": 38,
+      "changedRecordedReportSourceBlobCount": 0,
+      "newReportModelRunsExecuted": false,
+      "basis": "All 38 source Git blobs in the retained report provenance match this checkpoint. The later diagnostic changes add closed modal-focus and Readiness values; the other production changes concern startup, focus and Workbench presentation. The later 860edf commit changes only the Publish test fixture; all 38 recorded report blobs were compared again and match.",
+      "limit": "The recorded 38-file inventory is not a complete transitive product proof. The original model-answer omissions remain red, and the original measurement and observed-interval provenance are unchanged."
+    },
+    "AC1FinalBuildSupplement": {
+      "status": "verified",
+      "comparisonBaseCommit": "e4a63bff170a27a89fd9dda6688e322e9437a8a4",
+      "purpose": "Observe the same two completed Chats and their six existing Jira issues on a fresh build after the startup and focus changes.",
+      "requiredObservations": [
+        "Both existing Chats retain their original selected mode and canonical completed turn.",
+        "All three exact existing Jira links are simultaneously visible before and after reload in each mode.",
+        "The complete under-limit history matches its historical receipt and is unchanged across reload.",
+        "The complete native inventory matches the prior visual receipt and remains identical after the existing allowlisted Java-identity normalization.",
+        "No new user turn, approval decision, Chat mutation, Jira mutation or laboratory lifecycle maintenance occurs.",
+        "New private screenshots, manifests and actual build/observer outcomes receive independent review."
+      ],
+      "limits": [
+        "This observes reopening and reload; it does not rerun or relabel the original Jira creates.",
+        "The existing live harness performs its ordinary gateway startup capability probe, with no new Chat/model task.",
+        "Normal local product configuration, session and Activity Log bookkeeping still occurs. Direct native write attempts and laboratory start/stop maintenance are blocked.",
+        "A prerequisite needing separate laboratory maintenance withholds the observation rather than producing a pass.",
+        "The saved native receipts retain complete per-field digests and whole-inventory digests, not raw Jira bodies. The audited executed driver produced the normalized comparison. All observed raw digest differences are confined to the already reviewed development-summary identity field."
+      ],
+      "sourceCommit": "860edf47877a205feab6aa18e0db4154d60b885a",
+      "startedAt": "2026-11-15T18:00:02.761Z",
+      "finishedAt": "2026-11-15T18:00:23.062Z",
+      "evidenceSha256": "44e6de5a15331c8e11345351867b2b84968e2cee1b10e2da9cd700e22f21e90b",
+      "driverSha256": "b4d94e47cc58fd499eee89d086713098373c731c5291f79505cbb4f231c8db7b",
+      "oracleSha256": "0d01faaa6062e93799b16fa8190476ccaa2de4595d79103f3bbcb6b0e350a5ba",
+      "runnerLogSha256": "1f8ffcc4191a1c4b3ef7d5aaaa43a500dce5cc48877ac4cb1c891dca19e3e1d6",
+      "processExitCode": 0,
+      "processExitEvidence": "Root observed completed exec session 11951; the retained runner log ends with verified and the receipt has no failure or pending file.",
+      "originalMeasuredCreatesCommit": "ca24069373abaa97c2d593404b46b4c4fb4f4061",
+      "originalBuildProofSha256": "4850473fcfd383dcbb85df5ff592ce956d1ac8ce8e8cda3e9a51bea5c636fc2f",
+      "priorVisualReceiptSha256": "70c45695e8b5cc029027d812c95e6f732b510110cf3081cacc0d6befcbbe5b77",
+      "reportMeasurementReexecuted": false,
+      "originalRedResultsPreserved": true,
+      "freshBuild": {
+        "sourceCommit": "860edf47877a205feab6aa18e0db4154d60b885a",
+        "sourceTree": "33971d0fc8e3bf2f044099c41931cdf4574535e1",
+        "baseCommit": "e4a63bff170a27a89fd9dda6688e322e9437a8a4",
+        "productVersion": "1.5.0",
+        "nodeVersion": "v26.13.1",
+        "npmVersion": "11.20.0",
+        "proofSha256": "abcbd0f22d87351a8db700da75a86643353c93eb94aebe667af0bc31c79814e3",
+        "producerSha256": "b3b84a702be098d08be2b887964f296e51a291d609902584774af69dd31b1c29",
+        "runnerLogSha256": "b249e891013c51e899386c3db18048e1205845f7c6275074bf659596baa6dc85",
+        "builtFileCount": 9066,
+        "harnessFileCount": 205,
+        "processExitCode": 0,
+        "processExitEvidence": "Root observed completed exec session 97676; all three retained command records have exit 0 and matching logs.",
+        "commands": [
+          {
+            "command": ["npm", "run", "check:runtime-toolchain", "--", "--exact"],
+            "exitCode": 0,
+            "logSha256": "c219f8fafdf03635b3b82d5f1998883da65c8d8185eb54bf728ff8e24bf71a31"
+          },
+          {
+            "command": ["npm", "run", "build:packages"],
+            "exitCode": 0,
+            "logSha256": "4808c9914cf69528e2373e672f2030525cf7e4be2780ed8d4e4cd0fd2935f3c7"
+          },
+          {
+            "command": ["npm", "run", "build:ui"],
+            "exitCode": 0,
+            "logSha256": "af6086ec85dae02e349beff40b9c118b1d0ce0a83f69914622ceb2c5964041cb"
+          }
+        ]
+      },
+      "modes": [
+        {
+          "mode": "governed-assist",
+          "status": "verified",
+          "beforeImages": {
+            "individuallyVisible": 3,
+            "allTogetherVisible": true
+          },
+          "afterImages": {
+            "individuallyVisible": 3,
+            "allTogetherVisible": true
+          },
+          "existingCreatedCount": 3,
+          "keysSha256": "94cb04e945cc8f89fdd8b2f680b0ee19ca0a675892ad9da719a846099b3b847f",
+          "newUserTurns": 0,
+          "newApprovals": 0,
+          "blockedChatMutatingRequests": 0,
+          "nativeInventoryCount": 31,
+          "normalizedNativeUnchangedFromPriorVisualReceipt": true,
+          "originalApprovals": 1,
+          "chatMutatingRequests": 0,
+          "nativeWrites": 0,
+          "nativeBeforeSha256": "52fa2383bc003811eab3003761f02380ff964ce208cd4ecde80647a7ec2640cf",
+          "nativeAfterSha256": "52fa2383bc003811eab3003761f02380ff964ce208cd4ecde80647a7ec2640cf",
+          "historyBeforeSha256": "a82224e9d324937f33980badd521c0f9d9f15022edeb1e504b74a71b18bd10f9",
+          "historyAfterSha256": "a82224e9d324937f33980badd521c0f9d9f15022edeb1e504b74a71b18bd10f9"
+        },
+        {
+          "mode": "autonomous-delivery",
+          "status": "verified",
+          "beforeImages": {
+            "individuallyVisible": 3,
+            "allTogetherVisible": true
+          },
+          "afterImages": {
+            "individuallyVisible": 3,
+            "allTogetherVisible": true
+          },
+          "existingCreatedCount": 3,
+          "keysSha256": "0c917f8c0fdc85342c349e682b3a5f4cf24d9e9f4459445cbe8035d02544f9f2",
+          "newUserTurns": 0,
+          "newApprovals": 0,
+          "blockedChatMutatingRequests": 0,
+          "nativeInventoryCount": 31,
+          "normalizedNativeUnchangedFromPriorVisualReceipt": true,
+          "originalApprovals": 0,
+          "chatMutatingRequests": 0,
+          "nativeWrites": 0,
+          "nativeBeforeSha256": "52fa2383bc003811eab3003761f02380ff964ce208cd4ecde80647a7ec2640cf",
+          "nativeAfterSha256": "52fa2383bc003811eab3003761f02380ff964ce208cd4ecde80647a7ec2640cf",
+          "historyBeforeSha256": "951962542c19b42d65af23edd3a3982d65e1486c55d396e223c4c385aab5023b",
+          "historyAfterSha256": "951962542c19b42d65af23edd3a3982d65e1486c55d396e223c4c385aab5023b"
+        }
+      ],
+      "blockedDirectNativeWrites": 0,
+      "blockedLabMaintenanceCommands": 0,
+      "screenshotCount": 16,
+      "allScreenshotHashesIndependentlyMatched": true,
+      "screenshots": [
+        {
+          "file": "ask-before-reload-link-1.png",
+          "sha256": "646a3f48aac36d77435b9acbf7d78ff5182c2d227d2dcc134f3c1443b6f05e47",
+          "mode": "governed-assist",
+          "phase": "before-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "ask-before-reload-link-2.png",
+          "sha256": "f6f23ac2c34d1e1bece3221258f67d718f54e722e4c24de4ab984f087e2f20e7",
+          "mode": "governed-assist",
+          "phase": "before-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "ask-before-reload-link-3.png",
+          "sha256": "4e29154558853d3db6559d3574b0b822c4f88f9289792020fcf4700c5072e5dd",
+          "mode": "governed-assist",
+          "phase": "before-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "ask-before-reload-all-links.png",
+          "sha256": "4e29154558853d3db6559d3574b0b822c4f88f9289792020fcf4700c5072e5dd",
+          "mode": "governed-assist",
+          "phase": "before-reload",
+          "visibleLinkCount": 3
+        },
+        {
+          "file": "ask-after-reload-link-1.png",
+          "sha256": "7c018de1bfe06f3f0162806dcf9cce60e29f048aaca0b7ee3157e7c25dd05853",
+          "mode": "governed-assist",
+          "phase": "after-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "ask-after-reload-link-2.png",
+          "sha256": "4e29154558853d3db6559d3574b0b822c4f88f9289792020fcf4700c5072e5dd",
+          "mode": "governed-assist",
+          "phase": "after-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "ask-after-reload-link-3.png",
+          "sha256": "4e29154558853d3db6559d3574b0b822c4f88f9289792020fcf4700c5072e5dd",
+          "mode": "governed-assist",
+          "phase": "after-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "ask-after-reload-all-links.png",
+          "sha256": "4e29154558853d3db6559d3574b0b822c4f88f9289792020fcf4700c5072e5dd",
+          "mode": "governed-assist",
+          "phase": "after-reload",
+          "visibleLinkCount": 3
+        },
+        {
+          "file": "full-before-reload-link-1.png",
+          "sha256": "9133e5d8b65e75237da2b00525212cb53683083726c57c1fc330ae52d2190465",
+          "mode": "autonomous-delivery",
+          "phase": "before-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "full-before-reload-link-2.png",
+          "sha256": "cfcc568412fbaeb6ccec193882150438275f6239ea37e3c28798a98942484044",
+          "mode": "autonomous-delivery",
+          "phase": "before-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "full-before-reload-link-3.png",
+          "sha256": "cfcc568412fbaeb6ccec193882150438275f6239ea37e3c28798a98942484044",
+          "mode": "autonomous-delivery",
+          "phase": "before-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "full-before-reload-all-links.png",
+          "sha256": "cfcc568412fbaeb6ccec193882150438275f6239ea37e3c28798a98942484044",
+          "mode": "autonomous-delivery",
+          "phase": "before-reload",
+          "visibleLinkCount": 3
+        },
+        {
+          "file": "full-after-reload-link-1.png",
+          "sha256": "0f8c279a4ac58ddd58672610231c95f7a5db301db97a80aa675d4b5e0809c762",
+          "mode": "autonomous-delivery",
+          "phase": "after-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "full-after-reload-link-2.png",
+          "sha256": "472b4fb2be70ee559b152d3ab6f786ecebb8ed91c28f7b546f0758dfe3d4a635",
+          "mode": "autonomous-delivery",
+          "phase": "after-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "full-after-reload-link-3.png",
+          "sha256": "472b4fb2be70ee559b152d3ab6f786ecebb8ed91c28f7b546f0758dfe3d4a635",
+          "mode": "autonomous-delivery",
+          "phase": "after-reload",
+          "visibleLinkCount": 1
+        },
+        {
+          "file": "full-after-reload-all-links.png",
+          "sha256": "472b4fb2be70ee559b152d3ab6f786ecebb8ed91c28f7b546f0758dfe3d4a635",
+          "mode": "autonomous-delivery",
+          "phase": "after-reload",
+          "visibleLinkCount": 3
+        }
+      ],
+      "nativeFieldDigestReceipts": [
+        {
+          "file": "ask-native-before.json",
+          "sha256": "32c3287e67ce3acfd9ccf8263dd5b1d3dab1a5744f90e4e8162d0020db814d41",
+          "issueCount": 31,
+          "rawSha256": "f79c4f35cf2b2dabfb4ac2eb3bf1582dee171e757d88fc854e40a793a2b98d6c",
+          "normalizedSha256": "52fa2383bc003811eab3003761f02380ff964ce208cd4ecde80647a7ec2640cf"
+        },
+        {
+          "file": "ask-native-after.json",
+          "sha256": "5d1c4a64956351e6963a932d6b92dd68686073654884c58a008e7813fdf8ff28",
+          "issueCount": 31,
+          "rawSha256": "8d2bd6dc06cfac4ef12679090a5c080a3f81c835865fa65499099820ef6d11a5",
+          "normalizedSha256": "52fa2383bc003811eab3003761f02380ff964ce208cd4ecde80647a7ec2640cf"
+        },
+        {
+          "file": "full-native-before.json",
+          "sha256": "03a51a5b0250eb2432a5ec0d67a85249b935852b9eccfcc5d4bc2e2e4668470c",
+          "issueCount": 31,
+          "rawSha256": "199157a51e4bef890609c2d10188406e6b11a79fcc840eae0c0f98b337557221",
+          "normalizedSha256": "52fa2383bc003811eab3003761f02380ff964ce208cd4ecde80647a7ec2640cf"
+        },
+        {
+          "file": "full-native-after.json",
+          "sha256": "96325f827c211fa21b0ccd8e4ce68be750c1ed1c3d5d4355a56d2c0e4f1fb54a",
+          "issueCount": 31,
+          "rawSha256": "79ff7cf6791784eb2f7f0a484c780cc7efb2cd066bc6543ae2bfbd0c7a9d7cc2",
+          "normalizedSha256": "52fa2383bc003811eab3003761f02380ff964ce208cd4ecde80647a7ec2640cf"
+        }
+      ],
+      "independentAudit": {
+        "status": "verified",
+        "builtArtifactHashesMatched": 9066,
+        "harnessHashesMatched": 205,
+        "buildCommandLogsMatched": 3,
+        "nativeInventoryIssueCountPerObservation": 31,
+        "normalizedNativeFieldDigestsIdentical": true,
+        "rawFieldDifferencesConfinedToExistingDevelopmentIdentityNormalization": true,
+        "jointAfterReloadImagesVisuallyInspected": 2,
+        "allThreeLinksSimultaneouslyVisiblePerMode": true,
+        "screenshotPermissionMode": "0600",
+        "normalGatewayStartupProbes": 2,
+        "noNewChatModelTask": true,
+        "noNewUserTurns": true,
+        "noNewApprovals": true,
+        "noChatOrNativeMutations": true,
+        "noBlockedMutationOrMaintenanceAttempts": true
+      }
+    },
+    "pendingQualification": [
+      {
+        "area": "design_system_1300_original_producers_and_screenshots",
+        "status": "separate_obligation_not_proven_by_this_append"
+      },
+      {
+        "area": "final_local_quality_coverage_and_browser_gates",
+        "status": "separate_obligation_not_proven_by_this_append"
+      },
+      {
+        "area": "canonical_local_Sonar",
+        "status": "separate_obligation_not_proven_by_this_append"
+      },
+      {
+        "area": "isolated_install_optional_and_memory_smokes",
+        "status": "separate_obligation_not_proven_by_this_append"
+      },
+      {
+        "area": "exact_current_head_required_CI_and_review_resolution",
+        "status": "separate_obligation_not_proven_by_this_append"
+      }
+    ],
+    "unresolvedObservations": [
+      {
+        "area": "issue_publish_nightly",
+        "status": "cause_not_established",
+        "basis": "The original scheduled stale-snapshot failure is retained and its precise cause is not established. The fresh-state narrow pass and later complete 12-test Publish pass do not determine that historical cause. The separate obsolete dirty-worktree fixture failure was reproduced, corrected and verified."
+      }
+    ],
+    "deferredWork": [
+      {
+        "issue": 4397,
+        "url": "https://github.com/oscharko-dev/Keiko/issues/4397",
+        "status": "owner_deferred",
+        "scope": "Scheduled secret-scanning-queue authentication follow-up. The App/authentication draft is excluded from this release implementation; no App was created or configured. A current owner-session queue read is not a successful scheduled workflow run."
+      }
+    ],
+    "releaseReadinessAssessed": false,
+    "implementationCheckpoint": "ec43bcaa86306e0329ba1810d42a9eef1b82c8e1",
+    "affectedBrowserQualification": {
+      "status": "verified_with_explicit_source_carry_forward",
+      "comparisonBaseCommit": "e4a63bff170a27a89fd9dda6688e322e9437a8a4",
+      "linuxImage": "sha256:bb2c591f6c2a0bd3b783de7ba7767b9918f862a640ae23b6c3e629652a41b2ab",
+      "originalBatch": {
+        "sourceCommit": "ec43bcaa86306e0329ba1810d42a9eef1b82c8e1",
+        "receiptSha256": "5e8a1916c96eff7df659ab948ba9962bb0537edc9029b701149e5c3adb03961b",
+        "originalStatus": "unverified",
+        "successfulStageCount": 11,
+        "successfulSetupStageCount": 6,
+        "successfulBrowserStageCount": 5,
+        "successfulStagesCarriedForward": [
+          {
+            "label": "runtime",
+            "exitCode": 0,
+            "logSha256": "fef8ffba0a64daad16b57addcb08c4869226056a63021dd1bd3be307428afdc8"
+          },
+          {
+            "label": "install",
+            "exitCode": 0,
+            "logSha256": "15e1c3de75b77f5480181d42eb66728f600f2a8a4a17e060cd63b584efe7601c"
+          },
+          {
+            "label": "usearch",
+            "exitCode": 0,
+            "logSha256": "2a9c836c1e5b1cd1dac63ee399345713f23e969922470c3dfcc0209ed4aa1644"
+          },
+          {
+            "label": "ripgrep",
+            "exitCode": 0,
+            "logSha256": "31111d48d2ab78429913b0d30fabafbb0b2904215eaeae0bfe0f5b125905dae4"
+          },
+          {
+            "label": "build-packages",
+            "exitCode": 0,
+            "logSha256": "4808c9914cf69528e2373e672f2030525cf7e4be2780ed8d4e4cd0fd2935f3c7"
+          },
+          {
+            "label": "op-catalog",
+            "exitCode": 0,
+            "logSha256": "852b5b3dc368b95e030575530e82bc9defa1adbddaae33758f6e70787d30669b"
+          },
+          {
+            "label": "boot-dropdown",
+            "exitCode": 0,
+            "logSha256": "065c5837c3295bc9d483fc3c91400309bab5ddf260fed8767343c89023c1966f",
+            "passedTests": 3
+          },
+          {
+            "label": "workbench",
+            "exitCode": 0,
+            "logSha256": "0bd5f062f658e5c57a849a2b78dd663cd83412ec480a4f5bfbac7dd7694e005d",
+            "passedTests": 3
+          },
+          {
+            "label": "research",
+            "exitCode": 0,
+            "logSha256": "f999be6dd4073833b67f1e470484080b6c996b5b1ff63ddda325d97de065ff1b",
+            "passedTests": 2
+          },
+          {
+            "label": "issue-commit",
+            "exitCode": 0,
+            "logSha256": "bdc2174b4faafe4178696100e84fa7a402d2875c51dca3bbd0f4248d280a23d5",
+            "passedTests": 6
+          },
+          {
+            "label": "issue-intake",
+            "exitCode": 0,
+            "logSha256": "7a5518f624885da1afccd9663d86d6c98f6f91e8bca2ac8708190fc1f94dbcfd",
+            "passedTests": 1
+          }
+        ],
+        "retainedFailure": {
+          "label": "issue-publish",
+          "exitCode": 1,
+          "logSha256": "d62110e1553fe878183f88f69ec18e813be802cf5083a2d07b7f803a461ae8ad",
+          "passedTests": 6,
+          "failedTests": 1,
+          "didNotRun": 5,
+          "classification": "obsolete_fixture_precondition",
+          "basis": "The negative Full-access test introduced only an unrelated untracked file. That is permitted; the corrected fixture now changes the tracked candidate and asserts the exact Git diff. The original failure and all its logs remain unchanged."
+        }
+      },
+      "followup": {
+        "sourceCommit": "860edf47877a205feab6aa18e0db4154d60b885a",
+        "parentCommit": "ec43bcaa86306e0329ba1810d42a9eef1b82c8e1",
+        "receiptSha256": "1ee2b02bafbd37bc0646fde0d1c24b5e317ef75838593e468c285a956dbf8782",
+        "status": "verified",
+        "finishedAt": "2026-11-15T17:54:17.797716+00:00",
+        "changedPathsFromParent": ["tests/e2e/coding-issue-delivery.spec.ts"],
+        "priorSuccessfulLanesReexecuted": false,
+        "stages": [
+          {
+            "label": "issue-publish-targeted",
+            "exitCode": 0,
+            "logSha256": "a65594189946d791e95150370c4c293bbc6ae1daf7d626191f90606d9b4b6152",
+            "passedTests": 1
+          },
+          {
+            "label": "issue-publish",
+            "exitCode": 0,
+            "logSha256": "842e504262bb558cf7715ef208a57b7006242bf2e046cee70f2efd80fe401e87",
+            "passedTests": 12
+          },
+          {
+            "label": "git-closeout",
+            "exitCode": 0,
+            "logSha256": "dea3d14d81c0723a6c32456a2ef8ac4050118e97ea7e3dfbe49c17107bb8587c",
+            "passedTests": 1
+          }
+        ]
+      },
+      "carryForwardBasis": "The exact one-commit parent delta changes only the reviewed Publish fixture; product, setup, lockfile and producer inputs are identical. The eleven earlier stages remain measurements of ec43. Only the targeted Publish regression, complete 12-test Publish suite and complete Git-closeout suite were newly executed at 860edf.",
+      "limit": "This is not a new 13-stage run at 860edf and does not establish the cause of the separate historical scheduled stale-snapshot failure."
+    },
+    "qualificationBoundary": "The four #1300 design-system producers and their screenshots remain a separate evidence set. D12 wall-clock performance qualification is a different requirement; neither it nor the final release gates is established by this AC1/browser append."
   }
 }
