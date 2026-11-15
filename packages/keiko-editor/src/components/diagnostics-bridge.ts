@@ -98,8 +98,12 @@ export interface MonacoDiagnosticsEditor {
   onDidChangeModel(listener: () => void): MonacoDisposable;
 }
 
-/** An opaque debounce timer handle (a `setTimeout` return value by default). */
-export type DiagnosticsTimerHandle = unknown;
+/**
+ * A debounce timer id. The default scheduler returns the numeric id of its `setTimeout` timer: a
+ * browser returns that number directly, and Node.js converts its timer object to the same id and
+ * accepts it in `clearTimeout`.
+ */
+export type DiagnosticsTimerHandle = number;
 
 /** Injectable debounce scheduler so the lifecycle is deterministic under test. */
 export interface DiagnosticsScheduler {
@@ -109,9 +113,9 @@ export interface DiagnosticsScheduler {
 
 /** The default scheduler: `setTimeout`/`clearTimeout`. */
 export const defaultDiagnosticsScheduler: DiagnosticsScheduler = {
-  schedule: (callback, delayMs): DiagnosticsTimerHandle => setTimeout(callback, delayMs),
+  schedule: (callback, delayMs): DiagnosticsTimerHandle => Number(setTimeout(callback, delayMs)),
   cancel: (handle): void => {
-    clearTimeout(handle as ReturnType<typeof setTimeout>);
+    clearTimeout(handle);
   },
 };
 
@@ -245,8 +249,8 @@ export interface RegisterKeikoDiagnosticsArgs {
 interface DiagnosticsState {
   model: MonacoDiagnosticsModel | null;
   contentSub: MonacoDisposable | null;
-  // `null` means "no timer scheduled"; `null` is a valid `DiagnosticsTimerHandle` value.
-  timer: DiagnosticsTimerHandle;
+  // `null` means "no timer scheduled".
+  timer: DiagnosticsTimerHandle | null;
   controller: AbortController | null;
   latestSeq: number;
 }

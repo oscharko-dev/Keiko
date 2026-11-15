@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIAGNOSTICS_DEBOUNCE_MS,
   DEFAULT_DIAGNOSTICS_OWNER,
+  defaultDiagnosticsScheduler,
   DIAGNOSTICS_ELIGIBLE_LANGUAGES,
   diagnosticsToMarkers,
   editorDiagnosticToMarker,
@@ -146,10 +147,10 @@ function buildScheduler(): ManualScheduler {
   let scheduled = 0;
   let cancelled = 0;
   const scheduler: DiagnosticsScheduler = {
-    schedule: (callback): { id: number } => {
+    schedule: (callback): number => {
       pending = callback;
       scheduled += 1;
-      return { id: scheduled };
+      return scheduled;
     },
     cancel: (): void => {
       if (pending !== null) {
@@ -647,5 +648,21 @@ describe("defaults", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("defaultDiagnosticsScheduler", () => {
+  it("returns a numeric timer id that cancels its callback", async () => {
+    const ran: string[] = [];
+    const cancelled = defaultDiagnosticsScheduler.schedule(() => ran.push("cancelled"), 0);
+    defaultDiagnosticsScheduler.cancel(cancelled);
+    await new Promise<void>((resolve) => {
+      defaultDiagnosticsScheduler.schedule(() => {
+        ran.push("ran");
+        resolve();
+      }, 0);
+    });
+    expect(Number.isInteger(cancelled)).toBe(true);
+    expect(ran).toEqual(["ran"]);
   });
 });

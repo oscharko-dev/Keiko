@@ -7757,10 +7757,10 @@ function prioritizedExcerptWindows(
   ordered: readonly LineWindow[],
   explicit: readonly LineWindow[],
 ): readonly LineWindow[] {
-  let windows = [...explicit];
+  const windows = [...explicit];
   for (const window of ordered) {
     const covered = [...windows].sort((a, b) => a.startLine - b.startLine);
-    windows = [...windows, ...uncoveredExcerptSegments(window, covered, 0)];
+    windows.push(...uncoveredExcerptSegments(window, covered, 0));
   }
   return windows;
 }

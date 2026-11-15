@@ -381,19 +381,20 @@ function appendPdfTextItems(
   items: readonly PdfTextItem[],
   state: PageTextReadState,
 ): { readonly state: PageTextReadState; readonly diagnostic?: ParserDiagnostic } {
-  let next = state;
+  let scannedObjects = state.scannedObjects;
   for (const item of items) {
-    const stopped = pageTextStopDiagnostic(next);
+    const current = { ...state, scannedObjects };
+    const stopped = pageTextStopDiagnostic(current);
     if (stopped !== undefined) {
-      return { state: next, diagnostic: stopped };
+      return { state: current, diagnostic: stopped };
     }
-    next = { ...next, scannedObjects: next.scannedObjects + 1 };
+    scannedObjects += 1;
     const value = normalizePdfText(item.str ?? "").trim();
     if (value.length > 0) {
       itemsOut.push({ ...item, str: value });
     }
   }
-  return { state: next };
+  return { state: { ...state, scannedObjects } };
 }
 
 function normalizePdfText(value: string): string {
