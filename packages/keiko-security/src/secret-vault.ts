@@ -274,7 +274,12 @@ const SECURITY_VAULT_ENTRIES_DELETED_OPERATION = defineActivityLogOperation({
   category: "security",
   owner: "keiko-security",
   emitter: "secret-vault.emitEntriesDeleted",
-  fields: { count: { type: "integer", dataClass: "count", required: true } },
+  fields: {
+    count: { type: "integer", dataClass: "count", required: true },
+    // Entries of other owners the caller left untouched on purpose (a seal prunes only what its own
+    // previous version named); present only when the caller reports it. Count only.
+    foreignRetainedCount: { type: "integer", dataClass: "count", required: false },
+  },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -429,10 +434,16 @@ export interface LocalSecretVault {
   readonly delete: (reference: string) => void;
   // Removes every named reference in one read-merge-write (single-file) or after preflighting
   // every shard path (sharded). Empty lists are a no-op.
-  readonly deleteMany: (references: readonly string[]) => void;
+  readonly deleteMany: (references: readonly string[], options?: VaultDeleteOptions) => void;
   readonly has: (reference: string) => boolean;
   // Lists the stored references (NON-SECRET identifiers only; never decrypts).
   readonly list: () => readonly string[];
+}
+
+/** What a caller that prunes by ownership can report on the one deletion line. */
+export interface VaultDeleteOptions {
+  /** Stored entries the caller does not own and therefore left in place; a count, never a name. */
+  readonly foreignRetainedCount?: number;
 }
 
 export interface LocalSecretVaultDeps {
@@ -967,13 +978,19 @@ function emitEntriesDeleted(
   sink: SecurityLogSink | undefined,
   count: number,
   elapsedMs: () => number,
+  options: VaultDeleteOptions | undefined,
 ): void {
   emitSecurityLogEvent(
     sink,
     activityLogEvent(
       SECURITY_VAULT_ENTRIES_DELETED_OPERATION,
       { durationMs: elapsedMs() },
-      { count },
+      {
+        count,
+        ...(options?.foreignRetainedCount === undefined
+          ? {}
+          : { foreignRetainedCount: options.foreignRetainedCount }),
+      },
     ),
   );
 }
@@ -982,11 +999,13 @@ function deleteManyWithLog(
   sink: SecurityLogSink | undefined,
   references: readonly string[],
   run: () => void,
+  options?: VaultDeleteOptions,
 ): void {
-  if (references.length === 0) return;
+  // Nothing to delete is no storage work, but a caller that left foreign entries alone says so.
+  if (references.length === 0 && (options?.foreignRetainedCount ?? 0) === 0) return;
   const elapsedMs = startSecurityLogTimer();
   try {
-    run();
+    if (references.length > 0) run();
   } catch (error) {
     emitSecurityLogEvent(
       sink,
@@ -1002,7 +1021,7 @@ function deleteManyWithLog(
     );
     throw error;
   }
-  emitEntriesDeleted(sink, references.length, elapsedMs);
+  emitEntriesDeleted(sink, references.length, elapsedMs, options);
 }
 
 function setManyWithLog(
@@ -1316,10 +1335,16 @@ function guardedDeleteMany(
   sink: SecurityLogSink | undefined,
   references: readonly string[],
   remove: () => void,
+  options?: VaultDeleteOptions,
 ): void {
-  deleteManyWithLog(sink, references, () => {
-    guarded(remove);
-  });
+  deleteManyWithLog(
+    sink,
+    references,
+    () => {
+      guarded(remove);
+    },
+    options,
+  );
 }
 
 export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps): LocalSecretVault {
@@ -1354,10 +1379,16 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
     delete: (reference): void => {
       removeShard(storeDir, reference);
     },
-    deleteMany: (references): void => {
-      guardedDeleteMany(guarded, sink, references, () => {
-        deleteShardEntries(storeDir, references);
-      });
+    deleteMany: (references, options): void => {
+      guardedDeleteMany(
+        guarded,
+        sink,
+        references,
+        () => {
+          deleteShardEntries(storeDir, references);
+        },
+        options,
+      );
     },
     has: (reference): boolean => envelopeFor(reference) !== undefined,
     list: (): readonly string[] => listShardReferences(storeDir),
@@ -1388,10 +1419,16 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
     delete: (reference): void => {
       deleteStoreEntry(resolvedStorePath, reference, sink);
     },
-    deleteMany: (references): void => {
-      guardedDeleteMany(guarded, sink, references, () => {
-        deleteStoreEntries(resolvedStorePath, references, sink);
-      });
+    deleteMany: (references, options): void => {
+      guardedDeleteMany(
+        guarded,
+        sink,
+        references,
+        () => {
+          deleteStoreEntries(resolvedStorePath, references, sink);
+        },
+        options,
+      );
     },
     has: (reference): boolean => reference in readStore(resolvedStorePath),
     list: (): readonly string[] => Object.keys(readStore(resolvedStorePath)),

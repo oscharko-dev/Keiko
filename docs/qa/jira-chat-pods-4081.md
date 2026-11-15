@@ -2466,7 +2466,8 @@ Four normal Chat tests also reproduced an approval transcript remaining `approve
 
 The final bound-Jira source-label correction has two meaningful failing-before/passing-after
 locale cases. A Live-only Chat now labels the existing picker **Data sources / No Data sources**
-(with German equivalents); a mixed Chat retains its selected Data grounding, and clearing that
+(with German equivalents; since #4371 the ordinary label **Sources** with the entry **Jira Pod only**,
+and no empty-catalog sentence while a Jira Pod is on); a mixed Chat retains its selected Data grounding, and clearing that
 selection does not disconnect Jira. The unchanged unbound labels remain covered. The three owning
 suites (`ChatWindow.test.tsx`, `ChatWindow.a11y.test.tsx`, `JiraChatConnection.test.tsx`) pass
 **177/177**; the UI typecheck, scoped normal ESLint, Prettier and whitespace checks pass. This last

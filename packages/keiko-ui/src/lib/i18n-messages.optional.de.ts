@@ -2636,10 +2636,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.tool": "Jira-Aktion",
   "chat.jira.catalog.discover": "Jira-Aktionen finden",
   "chat.jira.catalog.describe": "Jira-Aktionen auswählen",
-  "chat.jira.catalog.actions": "Jira-Aktionen",
-  "chat.jira.catalog.read": "Liest Jira",
-  "chat.jira.catalog.write": "Ändert Jira",
-  "chat.jira.catalog.local": "Lokale Vorbereitung",
+  "chat.jira.catalog.found": "Keiko hat nachgesehen, welche Jira-Aktionen passen.",
   "chat.jira.catalog.selected": "Aktionsauswahl aktualisiert",
   "chat.jira.catalog.invalidArguments":
     "Die Jira-Aktionsauswahl war ungültig. Suche verfügbare Aktionen und wähle sie erneut aus.",
@@ -2834,6 +2831,22 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.propose": "Aus Projekt vorschlagen",
   "chat.skills.jira.proposeTitle": "Vorlage aus einem Jira-Projekt erstellen",
   "chat.skills.jira.proposing": "Projekt wird gelesen…",
+  "chat.skills.jira.proposalCount":
+    "{types} Vorgangstypen: {proposals} mit Vorschlag, {without} ohne.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn":
+    "Von diesem Typ gibt es noch keine Vorgänge, aus denen sich etwas ableiten lässt.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "Die abgeleitete Vorlage war nicht gültig, deshalb gibt es keinen Vorschlag.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira hat für diesen Typ nicht geantwortet. Versuch es noch einmal.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Nicht geprüft: Das Projekt hat mehr Vorgangstypen, als ein Vorschlagslauf abdeckt.",
+  "chat.skills.jira.withoutProposalMore": "und {count} weitere ohne Vorschlag.",
+  "chat.skills.jira.partial.required-fields-unavailable":
+    "Jira hat für die Pflichtfelder dieses Typs nicht geantwortet; prüf sie, bevor du speicherst.",
+  "chat.skills.jira.partial.samples-unavailable":
+    "Jira hat für die Beispielvorgänge dieses Typs nicht geantwortet; prüf die Abschnitte, bevor du speicherst.",
   "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
   "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
   "chat.skills.jira.error":
@@ -4719,12 +4732,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
   "chat.error.memoryUpdate": "Speicher konnte nicht aktualisiert werden.",
-  "chat.grounding.dataLabel": "Datenquellen",
-  "chat.grounding.noDataSources": "Keine Datenquellen",
-  "chat.grounding.dataCatalogEmpty": "Keine einsatzbereiten Daten-Pods oder Pod-Sets verfügbar.",
   "chat.grounding.label": "Wissensquellen",
   "chat.grounding.mode": "Grounding-Modus",
   "chat.grounding.strategy": "Strategie",
+  "chat.grounding.jiraOnly": "Nur Jira Pod",
   "chat.grounding.modelOnly": "Nur Modell",
   "chat.grounding.liveFiles": "Live-Dateikontext",
   "chat.grounding.liveFilesUnavailableHint":

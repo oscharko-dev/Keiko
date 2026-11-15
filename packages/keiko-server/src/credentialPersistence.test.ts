@@ -4,11 +4,24 @@
 // could remain in use indefinitely and nobody would ever see why. This proves the redacted,
 // correlation-keyed diagnostic is emitted instead of the failure staying silent.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
+import {
+  migrateLocalConfigCredentials,
+  persistSealedGatewayConfig,
+} from "./credentialPersistence.js";
+import { openProviderCredentialVault } from "./credentialVault.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
 const dirs: string[] = [];
@@ -82,5 +95,172 @@ describe("migrateLocalConfigCredentials", () => {
     // Redacted: never the config path or the malformed file content.
     expect(JSON.stringify(record)).not.toContain(configPath);
     expect(JSON.stringify(record)).not.toContain("not valid json");
+  });
+});
+
+// One vault serves every config file of a directory (credentialVaultDir), so a seal may only give
+// up what its own config named: a second config beside the first, and a credential stored by hand,
+// must survive every seal. Both writers (the startup migration and Gateway Setup) go through
+// persistSealedGatewayConfig, the one owner of the rule.
+describe("sealing a config never deletes another config's credentials", () => {
+  const KEY = Buffer.alloc(32, 0x33).toString("base64");
+  const env = { KEIKO_PROVIDER_CREDENTIALS_KEY: KEY };
+  function folder(): string {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "credential-shared-vault-")));
+    dirs.push(dir);
+    return dir;
+  }
+  function seal(
+    path: string,
+    models: readonly string[],
+    sink?: SecurityLogEvent[],
+    diagnostics?: ServerDiagnosticSink,
+  ): void {
+    persistSealedGatewayConfig(
+      {
+        providers: models.map((modelId) => ({
+          modelId,
+          baseUrl: "https://gateway.example.invalid",
+          apiKey: `secret-of-${modelId}`,
+        })),
+      },
+      {
+        env,
+        storagePath: path,
+        evidenceDir: join(dirname(path), "evidence"),
+        ...(sink === undefined
+          ? {}
+          : {
+              securityLogSink: {
+                write: (event: SecurityLogEvent): void => {
+                  sink.push(event);
+                },
+              },
+            }),
+        ...(diagnostics === undefined ? {} : { diagnostics }),
+      },
+    );
+  }
+  const stored = (path: string): readonly string[] =>
+    [...openProviderCredentialVault({ configPath: path, env }).list()].sort(compareStrings);
+
+  it("keeps the other config's credentials when one config is sealed (the defect)", () => {
+    const dir = folder();
+    const first = join(dir, "keiko.config.json");
+    const second = join(dir, "keiko.local.config.json");
+    seal(first, ["gemma", "qwen", "whisper"]);
+    expect(stored(first)).toEqual(["cred:gemma", "cred:qwen", "cred:whisper"]);
+    // A narrower config beside it is sealed: it names only one model.
+    seal(second, ["gpt"]);
+    expect(stored(first)).toEqual(["cred:gemma", "cred:gpt", "cred:qwen", "cred:whisper"]);
+    expect(openProviderCredentialVault({ configPath: first, env }).get("cred:gemma")).toBe(
+      "secret-of-gemma",
+    );
+  });
+
+  it("still prunes a reference removed from the config being sealed, and reports counts only", () => {
+    const dir = folder();
+    const first = join(dir, "keiko.config.json");
+    const second = join(dir, "keiko.local.config.json");
+    seal(first, ["gemma", "qwen"]);
+    seal(second, ["gpt"]);
+    const events: SecurityLogEvent[] = [];
+    // The first config gives up qwen: only its own reference goes, the second config's stays.
+    seal(first, ["gemma"], events);
+    expect(stored(first)).toEqual(["cred:gemma", "cred:gpt"]);
+    const deleted = events.filter((event) => event.op === "security.vault.entries-deleted");
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]).toMatchObject({ extra: { count: 1, foreignRetainedCount: 1 } });
+    expect(JSON.stringify(events)).not.toMatch(/secret-of|cred:/u);
+  });
+
+  it("prunes nothing on the first seal of a config, and says it left a foreign entry", () => {
+    const dir = folder();
+    const first = join(dir, "keiko.config.json");
+    seal(first, ["gemma"]);
+    const events: SecurityLogEvent[] = [];
+    expect(existsSync(join(dir, "keiko.local.config.json"))).toBe(false);
+    seal(join(dir, "keiko.local.config.json"), ["gpt"], events);
+    expect(stored(first)).toEqual(["cred:gemma", "cred:gpt"]);
+    const deleted = events.filter((event) => event.op === "security.vault.entries-deleted");
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]).toMatchObject({ extra: { count: 0, foreignRetainedCount: 1 } });
+  });
+
+  it("prunes nothing when the previous config cannot be read, and says so once without a path", () => {
+    const dir = folder();
+    const first = join(dir, "keiko.config.json");
+    const second = join(dir, "keiko.local.config.json");
+    seal(first, ["gemma"]);
+    writeFileSync(second, "{ not valid json", "utf8");
+    const { sink, records } = recordingDiagnosticSink();
+    seal(second, ["gpt"], undefined, sink);
+    expect(stored(first)).toEqual(["cred:gemma", "cred:gpt"]);
+    expect(readFileSync(second, "utf8")).toContain("cred:gpt");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      operation: "credential.previous-config-unreadable",
+      source: "credentialPersistence.prunableSecretRefs",
+      errorClass: "SyntaxError",
+      message:
+        "The gateway configs in this folder could not all be read; no stored credential is pruned.",
+    });
+    expect(JSON.stringify(records)).not.toContain(dir);
+    expect(JSON.stringify(records)).not.toContain("keiko.local.config");
+  });
+
+  // Two configs in one folder that name the same model share ONE vault entry (`cred:<modelId>`).
+  it("keeps an entry another config in the folder still names, and prunes it once none does", () => {
+    const dir = folder();
+    const first = join(dir, "keiko.config.json");
+    const second = join(dir, "keiko.local.config.json");
+    seal(first, ["shared", "only-first"]);
+    seal(second, ["shared"]);
+    const events: SecurityLogEvent[] = [];
+    // The second config drops the shared model: the first still names it, so it stays.
+    seal(second, ["other"], events);
+    expect(stored(first)).toEqual(["cred:only-first", "cred:other", "cred:shared"]);
+    const deleted = events.filter((event) => event.op === "security.vault.entries-deleted");
+    expect(deleted[0]).toMatchObject({ extra: { count: 0 } });
+    // Once the first config gives it up too, nothing names it and it is pruned.
+    seal(first, ["only-first"]);
+    expect(stored(first)).toEqual(["cred:only-first", "cred:other"]);
+  });
+
+  it("prunes nothing when a neighbouring config cannot be read, and says so once without a path", () => {
+    const dir = folder();
+    const first = join(dir, "keiko.config.json");
+    seal(first, ["gemma", "qwen"]);
+    writeFileSync(join(dir, "notes.json"), "{ not valid json", "utf8");
+    const { sink, records } = recordingDiagnosticSink();
+    seal(first, ["gemma"], undefined, sink);
+    expect(stored(first)).toEqual(["cred:gemma", "cred:qwen"]);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      operation: "credential.previous-config-unreadable",
+      errorClass: "SyntaxError",
+    });
+    expect(JSON.stringify(records)).not.toContain("notes.json");
+    expect(JSON.stringify(records)).not.toContain(dir);
+  });
+
+  it("the startup migration leaves the credentials of the config beside it", () => {
+    const dir = folder();
+    const first = join(dir, "keiko.config.json");
+    seal(first, ["gemma", "qwen"]);
+    const second = join(dir, "keiko.local.config.json");
+    writeFileSync(
+      second,
+      JSON.stringify({
+        providers: [
+          { modelId: "gpt", baseUrl: "https://gateway.example.invalid", apiKey: "plain" },
+        ],
+      }),
+      "utf8",
+    );
+    expect(migrateLocalConfigCredentials({ configPath: second, env, evidenceDir: dir })).toEqual({
+      migrated: true,
+    });
+    expect(stored(first)).toEqual(["cred:gemma", "cred:gpt", "cred:qwen"]);
   });
 });

@@ -349,6 +349,8 @@ function jiraReadPartialNotice(
     jiraLookupNotice(exchange.call.name, data) ??
     jiraAdminMetadataNotice(exchange.call.name, data);
   if (directory !== undefined) return directory;
+  // A page of the action catalog is not a partial Jira result: nothing of Jira was left out.
+  if (JIRA_CATALOG_TOOLS.has(exchange.call.name)) return undefined;
   return result.page.truncated || projectMetadataPageCut(exchange)
     ? "chat.jira.partial"
     : undefined;

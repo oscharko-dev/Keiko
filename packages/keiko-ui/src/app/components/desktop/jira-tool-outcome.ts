@@ -45,10 +45,8 @@ import {
 } from "./jira-administration-presentation";
 import {
   isCanonicalKnowledgeExchange,
-  isKnownJiraToolAlias,
   JIRA_CATALOG_TOOLS,
   jiraBatchRefusalKey,
-  jiraToolLabel,
   jiraLocalReadFailureNotice,
   jiraMutationUnchanged,
   jiraToolOnlyReads,
@@ -177,7 +175,6 @@ import {
   jiraIssuePickerGroups,
   jiraPinnedCommentDetails,
 } from "./jira-issue-context-presentation";
-import { jiraPresentationNativeText } from "./jira-presentation-values";
 import { jiraReadableText } from "./jira-readable-text";
 
 /** One Jira issue a tool call created, changed or read, as a person recognises it. */
@@ -548,40 +545,6 @@ function refusedRow(source: UnknownRecord): boolean {
       problemsOf(source).length > 0)
   );
 }
-const CATALOG_EFFECT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
-  "remote-read": "chat.jira.catalog.read",
-  "remote-write": "chat.jira.catalog.write",
-  "local-read": "chat.jira.catalog.local",
-  "local-write": "chat.jira.catalog.local",
-};
-function catalogOutcomeItem(source: UnknownRecord): JiraOutcomeItem | undefined {
-  const alias = jiraPresentationNativeText(source.tool, 128)
-    ? source.tool.replace(/[.-]/gu, "_")
-    : undefined;
-  if (
-    alias === undefined ||
-    JIRA_CATALOG_TOOLS.has(alias) ||
-    !isKnownJiraToolAlias(alias) ||
-    !jiraPresentationNativeText(source.identity, 512)
-  )
-    return undefined;
-  const effects: readonly unknown[] = Array.isArray(source.effects)
-    ? source.effects.slice(0, 16)
-    : [];
-  const labels = Object.entries(CATALOG_EFFECT_LABELS)
-    .filter(([effect]) => effects.includes(effect))
-    .map(([, label]) => label);
-  return {
-    nameLabel: jiraToolLabel({ call: { name: alias, arguments: {} } }),
-    ...textMembers({
-      body: jiraPresentationNativeText(source.description, 4096, { multiline: true })
-        ? source.description
-        : undefined,
-    }),
-    labels: [...new Set(labels)],
-    facts: [],
-  };
-}
 /** A draft row that carries only its state (excluded, skipped) still reads as that state. */
 function presentable(entries: readonly unknown[], source: UnknownRecord): boolean {
   return (
@@ -618,7 +581,8 @@ function itemBody(
 function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined {
   const source = record(value);
   if (source === undefined || refusedRow(source)) return undefined;
-  if (JIRA_CATALOG_TOOLS.has(tool)) return catalogOutcomeItem(source);
+  // A lookup of Jira actions lists nothing: the model works with the actions, the person with the answer (#4371).
+  if (JIRA_CATALOG_TOOLS.has(tool)) return undefined;
   if (JIRA_PROJECT_METADATA_TOOLS.has(tool)) return metadataOutcomeItem(source, tool);
   const metadata = metadataDetails(tool, source);
   if (metadata !== undefined) return metadataDetailsItem(metadata);
@@ -1617,6 +1581,32 @@ function resultItemsView(
     unlistedItemCount: issueList ? listed.count : 0,
   };
 }
+/**
+ * A lookup of Jira actions (jira_discover, jira_describe) is the model's own step: the person sees
+ * one calm line, never the catalog's tools, their effects or a "partial result" count for a page of
+ * the catalog (#4371). A failed lookup keeps the ordinary failure presentation.
+ */
+function catalogLookupView(
+  tool: string,
+  data: UnknownRecord,
+):
+  | Pick<JiraToolOutcomeView, "items" | "labels" | "returnedCount" | "total" | "unreadableCount">
+  | undefined {
+  if (!JIRA_CATALOG_TOOLS.has(tool) || data.outcome !== "succeeded") return undefined;
+  const labels = catalogLookupLabels(tool, data);
+  return { items: [], labels, returnedCount: undefined, total: undefined, unreadableCount: 0 };
+}
+
+function catalogLookupLabels(
+  tool: string,
+  data: UnknownRecord,
+): readonly ("chat.jira.catalog.found" | "chat.jira.catalog.selected")[] {
+  if (tool === "jira_discover") return ["chat.jira.catalog.found"];
+  if (tool === "jira_describe" && data.selectedFor === "next-round") {
+    return ["chat.jira.catalog.selected"];
+  }
+  return [];
+}
 /** A display projection of the immutable receipt, shared by the live turn and restored history. */
 export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView {
   const knowledge = knowledgeToolOutcomeView(exchange);
@@ -1625,11 +1615,7 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   return {
     ...resultItemsView(exchange, data),
     ...pageCounts(data, exchange.call.name, reviewedItems(exchange)),
-    ...(exchange.call.name === "jira_describe" &&
-    data.outcome === "succeeded" &&
-    data.selectedFor === "next-round"
-      ? { labels: ["chat.jira.catalog.selected" as const] }
-      : {}),
+    ...catalogLookupView(exchange.call.name, data),
     stagedCount: count(data.itemCount),
     unresolvedCount: count(data.unresolvedRefCount),
     ...problemViews(exchange, data),
@@ -1667,6 +1653,5 @@ function resultsLabelOf(
   tool: string,
   issueList: boolean,
 ): { readonly resultsLabel: WidgetMessageKey } | Record<string, never> {
-  if (JIRA_CATALOG_TOOLS.has(tool)) return { resultsLabel: "chat.jira.catalog.actions" };
   return issueList ? { resultsLabel: "chat.jira.outcome.issues" } : {};
 }

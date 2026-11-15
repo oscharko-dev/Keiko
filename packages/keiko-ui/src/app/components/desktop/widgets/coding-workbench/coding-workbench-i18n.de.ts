@@ -533,6 +533,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.noBranch": "Kein Branch",
   "codingWorkbench.repository.loading": "Repositories werden geladen…",
   "codingWorkbench.repository.none": "Repository auswählen",
+  "codingWorkbench.repository.noProject": "Noch kein Projekt gewählt: Wähle einen Ordner.",
+  "codingWorkbench.repository.chooseFolder": "Ordner wählen",
   "codingWorkbench.repository.unavailable": "nicht verfügbar",
   "codingWorkbench.repository.unavailableHelp":
     "Dieses Repository ist in Git nicht mehr verfügbar. Wähle ein anderes Repository oder verbinde es in Git erneut.",
@@ -544,6 +546,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Auf dieser Installation führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree eines Git-Repositorys aus und kann daher nicht in diesem Ordner arbeiten. Wähle ein Git-Repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
+  "codingWorkbench.repository.deniedBlocker":
+    "Keiko darf diesen Ordner nicht lesen. Wähle ein Repository an einem anderen Ort.",
   "codingWorkbench.repository.loadError":
     "Repositories konnten nicht geladen werden. Aktualisiere die Liste und versuche es erneut.",
   "codingWorkbench.repository.retryLoad": "Erneut versuchen",
@@ -1195,9 +1199,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Wiederherstellung erforderlich",
   "codingWorkbench.recovery.title": "Vor erneutem Versuch abgleichen",
   "codingWorkbench.recovery.summary":
-    "Eine vorherige Aktion kann bereits Dateien verändert haben. Prüfe ihr Ergebnis vor einem neuen Versuch; Keiko wiederholt sie nicht.",
+    "Keiko weiß nicht, ob die letzte Aktion durchgegangen ist, zum Beispiel eine Änderung in Jira oder eine Dateiänderung. Prüfe zuerst dort das Ergebnis. Keiko sendet sie nie von selbst erneut.",
   "codingWorkbench.recovery.retry": "Als neuen Lauf wiederholen",
   "codingWorkbench.recovery.acknowledge": "Wiederherstellung bestätigen",
+  "codingWorkbench.recovery.newTask": "Neue Aufgabe starten",
+  "codingWorkbench.recovery.retryHint":
+    "Um die Aufgabe als neuen Lauf zu wiederholen, beschreibe sie im Feld darunter. Oder starte eine neue Aufgabe.",
   "codingWorkbench.header.notReady": "Nicht startbereit",
   "codingWorkbench.header.readyEvaluation": "Start — ungeprüfte Evaluations-Runtime",
   "codingWorkbench.runState.idle": "Bereit zum Starten",

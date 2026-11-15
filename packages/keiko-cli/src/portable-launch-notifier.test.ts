@@ -1,32 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
-import { createCliSecurityLogSink } from "./security-log.js";
-import {
-  type DetachedWindowsBoxOptions,
-  notifyPortableLaunchFailure,
-  notifyPortableSetupStarted,
-  PORTABLE_SETUP_NOTICE,
-  PORTABLE_SETUP_NOTICE_DE,
-  runDetachedAlert,
-  runDetachedWindowsAlert,
-  runDetachedWindowsBox,
-} from "./portable-launch-notifier.js";
+import { notifyPortableLaunchFailure, runDetachedAlert } from "./portable-launch-notifier.js";
 
 const UI_LAUNCH = { KEIKO_PORTABLE_UI_LAUNCH: "1" };
-
-function recordingSecuritySink(): {
-  readonly sink: NonNullable<ReturnType<typeof createCliSecurityLogSink>>;
-  readonly events: SecurityLogEvent[];
-} {
-  const events: SecurityLogEvent[] = [];
-  const sink = createCliSecurityLogSink("/state", () => ({
-    write: (event): void => {
-      events.push(event);
-    },
-  }));
-  if (sink === undefined) throw new Error("test security log sink was not created");
-  return { sink, events };
-}
 
 describe("notifyPortableLaunchFailure", () => {
   it("shows the recorded failure in a quoted alert for a double-click launch", () => {
@@ -95,73 +70,23 @@ describe("notifyPortableLaunchFailure", () => {
     expect(scripts[0]).toContain("The portable launch failed without a reason.");
   });
 
-  it("shows the recorded failure in a Windows alert for a double-click launch", () => {
-    const messages: string[] = [];
-    const env = { KEIKO_PORTABLE_UI_LAUNCH: "1", SystemRoot: String.raw`D:\Windows` };
+  // #4358: the Windows alert tests that were here (a PowerShell MessageBox, its two-stage start, the
+  // refusal of a hostile system root or a missing PowerShell) pinned a mechanism that is gone: the
+  // native launcher shows the failure box from the reason note the CLI leaves. What replaces them:
+  // launch-failure-note.test.ts (the note), portable.test.ts (every exit leaves a reason and a log
+  // line, and no process is started on Windows), and portable-launcher-feedback.test.ts (the box).
+  it("stays silent on Windows: the native launcher shows its own failure box", () => {
+    let shown = false;
 
-    notifyPortableLaunchFailure("keiko portable launch: failed\n", env, {
+    notifyPortableLaunchFailure("reason", UI_LAUNCH, {
       platform: () => "win32",
-      runWindowsAlert: (message) => {
-        messages.push(message);
+      runAlert: () => {
+        shown = true;
       },
     });
 
-    expect(messages).toEqual(["keiko portable launch: failed\n"]);
+    expect(shown).toBe(false);
   });
-
-  it.each([
-    [
-      "hostile root",
-      String.raw`\\attacker\share`,
-      undefined,
-      "security",
-      "security.windows-portable-alert.system-root-refused",
-      "WindowsSystemDirectoryError",
-    ],
-    [
-      "missing PowerShell",
-      String.raw`D:\Windows`,
-      (): boolean => false,
-      "diagnostic",
-      "security.windows-portable-alert.system-binary-missing",
-      "WINDOWS_SYSTEM_BINARY_MISSING",
-    ],
-  ] as const)(
-    "keeps the notifier best-effort and logs a body-free Windows %s refusal",
-    (_label, systemRoot, windowsBinaryExists, category, op, errorKind) => {
-      const { sink, events } = recordingSecuritySink();
-      const reported: string[] = [];
-
-      expect(() => {
-        notifyPortableLaunchFailure(
-          "reason",
-          { ...UI_LAUNCH, SystemRoot: systemRoot },
-          {
-            platform: () => "win32",
-            securityLogSink: sink,
-            ...(windowsBinaryExists === undefined ? {} : { windowsBinaryExists }),
-            ...(windowsBinaryExists === undefined
-              ? {}
-              : { windowsSystemDirectoryIdentity: (): boolean => true }),
-            reportAlertFailure: (line) => {
-              reported.push(line);
-            },
-          },
-        );
-      }).not.toThrow();
-
-      expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
-        category,
-        op,
-        errorKind: errorKind === "WindowsSystemDirectoryError" ? "unsafe-target" : "unavailable",
-        extra: { failureKind: errorKind },
-      });
-      expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
-      expect(JSON.stringify(events)).not.toContain(systemRoot);
-    },
-  );
 
   it.each([[{}], [{ KEIKO_PORTABLE_UI_LAUNCH: "true" }]])(
     "stays silent without the exact double-click marker",
@@ -214,20 +139,17 @@ describe("notifyPortableLaunchFailure", () => {
   });
 
   it("reads the host platform when no platform seam is injected", () => {
-    // Deterministic per host: the alert seam fires exactly when the real platform supports a
-    // native dialog. Both alert seams keep the test dialog-free either way.
+    // Deterministic per host: the alert seam fires exactly on macOS. The seam keeps the test
+    // dialog-free either way.
     let shown = false;
 
     notifyPortableLaunchFailure("reason", UI_LAUNCH, {
       runAlert: () => {
         shown = true;
       },
-      runWindowsAlert: () => {
-        shown = true;
-      },
     });
 
-    expect(shown).toBe(process.platform === "darwin" || process.platform === "win32");
+    expect(shown).toBe(process.platform === "darwin");
   });
 });
 
@@ -271,258 +193,5 @@ describe("runDetachedAlert", () => {
       errorHandler?.(new Error("spawn ENOENT"));
     }).not.toThrow();
     expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
-  });
-});
-
-describe("runDetachedWindowsAlert", () => {
-  it("spawns the bounded detached PowerShell MessageBox contract and detaches from it", () => {
-    const calls: unknown[][] = [];
-    const reported: string[] = [];
-    const { sink, events } = recordingSecuritySink();
-    let errorHandler: ((error: Error) => void) | undefined;
-    let unreferenced = false;
-
-    runDetachedWindowsAlert(
-      "can't start\r\nbecause",
-      { SystemRoot: String.raw`D:\Windows` },
-      (command, args, options) => {
-        calls.push([command, args, options]);
-        return {
-          on: (_event, listener): void => {
-            errorHandler = listener;
-          },
-          unref: (): void => {
-            unreferenced = true;
-          },
-        };
-      },
-      (line) => {
-        reported.push(line);
-      },
-      () => true,
-      sink,
-    );
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.[0]).toBe(
-      String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
-    );
-    expect(calls[0]?.[1]).toEqual([
-      "-NoLogo",
-      "-NoProfile",
-      "-Sta",
-      "-WindowStyle",
-      "Hidden",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      "Add-Type -AssemblyName PresentationFramework; " +
-        "[System.Windows.MessageBox]::Show('can''t startbecause', " +
-        "'Keiko could not start', 'OK', 'Error') | Out-Null",
-    ]);
-    // PowerShell/WPF need the core system variables to initialize; everything else stays
-    // withheld from the detached child (no TEMP/TMP here because the caller env carries none).
-    expect(calls[0]?.[2]).toEqual({
-      detached: true,
-      env: { SystemRoot: String.raw`D:\Windows`, WINDIR: String.raw`D:\Windows` },
-      shell: false,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    expect(unreferenced).toBe(true);
-    expect(errorHandler).toBeDefined();
-    expect(() => {
-      errorHandler?.(new Error("spawn ENOENT"));
-    }).not.toThrow();
-    expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      category: "diagnostic",
-      op: "portable.windows-alert.spawn-failed",
-      errorKind: "unavailable",
-      extra: { surface: "portable-failure-alert", failureKind: "Error" },
-    });
-    expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
-  });
-
-  it("forwards supplied TEMP and TMP into the detached child environment", () => {
-    const calls: unknown[][] = [];
-    runDetachedWindowsAlert(
-      "boom",
-      {
-        SystemRoot: String.raw`D:\Windows`,
-        TEMP: String.raw`D:\Scratch\Temp`,
-        TMP: String.raw`D:\Scratch\Tmp`,
-      },
-      (command, args, options) => {
-        calls.push([command, args, options]);
-        return { on: (): void => undefined, unref: (): void => undefined };
-      },
-      () => undefined,
-      () => true,
-    );
-    // WPF initialization needs a writable temp location when the profile provides one; both
-    // variables must reach the child exactly as supplied, and nothing else may leak in.
-    expect((calls[0]?.[2] as { env: unknown }).env).toEqual({
-      SystemRoot: String.raw`D:\Windows`,
-      WINDIR: String.raw`D:\Windows`,
-      TEMP: String.raw`D:\Scratch\Temp`,
-      TMP: String.raw`D:\Scratch\Tmp`,
-    });
-  });
-});
-
-describe("notifyPortableSetupStarted", () => {
-  const env = { KEIKO_PORTABLE_UI_LAUNCH: "1", SystemRoot: String.raw`D:\Windows` };
-
-  it("shows the fixed setup notice for a Windows double-click and records that it was requested", () => {
-    const shown: [string, unknown][] = [];
-    const { sink, events } = recordingSecuritySink();
-
-    notifyPortableSetupStarted(env, {
-      platform: () => "win32",
-      securityLogSink: sink,
-      runWindowsAlert: (message, alertEnv) => {
-        shown.push([message, alertEnv]);
-      },
-    });
-
-    expect(shown).toEqual([[PORTABLE_SETUP_NOTICE, env]]);
-    expect(PORTABLE_SETUP_NOTICE).toBe(
-      "Keiko is being set up. The first start can take several minutes. Your browser opens when Keiko is ready.",
-    );
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      op: "portable.setup-notice.requested",
-      level: "info",
-      extra: { surface: "portable-setup-notice" },
-    });
-    // neither a text nor the language enters the line
-    expect(JSON.stringify(events[0])).not.toMatch(/being set up|eingerichtet|"de"|"en"/u);
-  });
-
-  it.each([
-    ["no double-click marker", {}, "win32"],
-    ["macOS", env, "darwin"],
-    ["Linux", env, "linux"],
-  ] as const)("stays silent with %s", (_name, launchEnv, platform) => {
-    let shown = false;
-    const { sink, events } = recordingSecuritySink();
-
-    notifyPortableSetupStarted(launchEnv, {
-      platform: () => platform,
-      securityLogSink: sink,
-      runWindowsAlert: () => {
-        shown = true;
-      },
-    });
-
-    expect(shown).toBe(false);
-    expect(events).toEqual([]);
-  });
-
-  it("never fails the launch when the notice cannot be shown, and does not claim it was requested", () => {
-    const reported: string[] = [];
-    const { sink, events } = recordingSecuritySink();
-
-    expect(() => {
-      notifyPortableSetupStarted(env, {
-        platform: () => "win32",
-        securityLogSink: sink,
-        reportAlertFailure: (line) => {
-          reported.push(line);
-        },
-        runWindowsAlert: () => {
-          throw new Error("no PowerShell");
-        },
-      });
-    }).not.toThrow();
-
-    expect(reported).toEqual(["keiko portable launch: the setup notice could not be shown\n"]);
-    expect(events).toEqual([]);
-  });
-
-  it("logs a body-free refusal under the notice's own surface when Windows cannot be resolved", () => {
-    const reported: string[] = [];
-    const { sink, events } = recordingSecuritySink();
-
-    notifyPortableSetupStarted(
-      { KEIKO_PORTABLE_UI_LAUNCH: "1", SystemRoot: String.raw`\\attacker\share` },
-      {
-        platform: () => "win32",
-        securityLogSink: sink,
-        reportAlertFailure: (line) => {
-          reported.push(line);
-        },
-      },
-    );
-
-    expect(reported).toEqual(["keiko portable launch: the setup notice could not be shown\n"]);
-    // the shared alert path keeps its security refusal line; the second line names the notice
-    expect(events.map((event) => [event.op, event.extra?.surface])).toEqual([
-      ["security.windows-portable-alert.system-root-refused", "portable-failure-alert"],
-      ["portable.windows-alert.spawn-failed", "portable-setup-notice"],
-    ]);
-    expect(events[1]?.extra?.failureKind).toBe("WindowsSystemDirectoryError");
-  });
-});
-
-describe("runDetachedWindowsBox as a setup notice", () => {
-  const spawned = (): {
-    readonly args: (readonly string[])[];
-    readonly options: DetachedWindowsBoxOptions;
-  } => {
-    const args: (readonly string[])[] = [];
-    const options: DetachedWindowsBoxOptions = {
-      spawnFn: (_command, argv) => {
-        args.push(argv);
-        return { on: (): void => undefined, unref: (): void => undefined };
-      },
-      identityCheck: () => true,
-      existsAsFile: () => true,
-    };
-    return { args, options };
-  };
-
-  it("shows an information box titled Keiko whose text follows the Windows display language", () => {
-    const { args, options } = spawned();
-
-    runDetachedWindowsBox(
-      { kind: "setup-notice" },
-      { SystemRoot: String.raw`D:\Windows` },
-      options,
-    );
-
-    expect(PORTABLE_SETUP_NOTICE_DE).toBe(
-      "Keiko wird eingerichtet. Der erste Start kann einige Minuten dauern. Dein Browser öffnet sich, sobald Keiko bereit ist.",
-    );
-    // The command reaches PowerShell as one plain argument after -Command: Node hands Windows a
-    // UTF-16 command line, so the umlaut arrives intact. No -EncodedCommand is involved.
-    expect(args).toHaveLength(1);
-    expect(args[0]?.at(-2)).toBe("-Command");
-    expect(args[0]).not.toContain("-EncodedCommand");
-    expect(args[0]?.at(-1)).toBe(
-      "Add-Type -AssemblyName PresentationFramework; " +
-        "$keikoText = if ((Get-UICulture).TwoLetterISOLanguageName -eq 'de') " +
-        `{ '${PORTABLE_SETUP_NOTICE_DE}' } else { '${PORTABLE_SETUP_NOTICE}' }; ` +
-        "[System.Windows.MessageBox]::Show($keikoText, 'Keiko', 'OK', 'Information') | Out-Null",
-    );
-  });
-
-  it("leaves the failure alert's command exactly as it was", () => {
-    const { args, options } = spawned();
-
-    runDetachedWindowsBox(
-      { kind: "failure", message: "can't start\r\nbecause" },
-      { SystemRoot: String.raw`D:\Windows` },
-      options,
-    );
-
-    expect(args[0]?.at(-1)).toBe(
-      "Add-Type -AssemblyName PresentationFramework; " +
-        "[System.Windows.MessageBox]::Show('can''t startbecause', " +
-        "'Keiko could not start', 'OK', 'Error') | Out-Null",
-    );
   });
 });

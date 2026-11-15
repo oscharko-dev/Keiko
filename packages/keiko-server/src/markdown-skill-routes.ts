@@ -8,7 +8,11 @@ import {
 import { readJsonRequestBodyOutcome, type JsonRequestBodyOutcome } from "./bounded-request-body.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { logMarkdownSkillOperation, type MarkdownSkillAction } from "./markdown-skill-log.js";
+import {
+  logMarkdownSkillOperation,
+  type MarkdownSkillAction,
+  type MarkdownSkillProposalAccounting,
+} from "./markdown-skill-log.js";
 import { errorBody } from "./route-error.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { invalidRequest, notFound, UiStoreError } from "./store/errors.js";
@@ -37,6 +41,8 @@ export async function withSkillAccess(
   deps: SkillRouteDeps,
   action: MarkdownSkillAction,
   operation: () => RouteResult | Promise<RouteResult>,
+  /** Counts the operation wants on its closing line; read after it ran, never a body. */
+  accounting?: () => MarkdownSkillProposalAccounting | undefined,
 ): Promise<RouteResult> {
   logMarkdownSkillOperation(ctx.correlationId, action, "started", 0);
   let result: RouteResult;
@@ -53,7 +59,13 @@ export async function withSkillAccess(
       body: errorBody(error.code, error.message, ctx.correlationId),
     };
   }
-  logMarkdownSkillOperation(ctx.correlationId, action, outcomePhase(result.status), result.status);
+  logMarkdownSkillOperation(
+    ctx.correlationId,
+    action,
+    outcomePhase(result.status),
+    result.status,
+    result.status === 200 ? accounting?.() : undefined,
+  );
   return { ...result, headers: { "Cache-Control": "no-store" } };
 }
 

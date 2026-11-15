@@ -2492,10 +2492,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.tool": "Jira action",
   "chat.jira.catalog.discover": "Find Jira actions",
   "chat.jira.catalog.describe": "Select Jira actions",
-  "chat.jira.catalog.actions": "Jira actions",
-  "chat.jira.catalog.read": "Reads Jira",
-  "chat.jira.catalog.write": "Changes Jira",
-  "chat.jira.catalog.local": "Local preparation",
+  "chat.jira.catalog.found": "Keiko looked up which Jira actions fit.",
   "chat.jira.catalog.selected": "Action selection updated",
   "chat.jira.catalog.invalidArguments":
     "The Jira action selection was invalid. Find available actions and select them again.",
@@ -2678,6 +2675,21 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.propose": "Propose from project",
   "chat.skills.jira.proposeTitle": "Create a template from a Jira project",
   "chat.skills.jira.proposing": "Reading project…",
+  "chat.skills.jira.proposalCount":
+    "{types} issue types: {proposals} with a proposal, {without} without.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn": "No issues of this type to learn from yet.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "The derived template was not valid, so none is proposed.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira did not answer for this type. Try again.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Not examined: the project has more issue types than one proposal run covers.",
+  "chat.skills.jira.withoutProposalMore": "and {count} more without a proposal.",
+  "chat.skills.jira.partial.required-fields-unavailable":
+    "Jira did not answer for the required fields of this type; check them before saving.",
+  "chat.skills.jira.partial.samples-unavailable":
+    "Jira did not answer for the sample issues of this type; check the sections before saving.",
   "chat.skills.jira.proposalNone": "No template could be derived from this project.",
   "chat.skills.jira.proposalTitle": "Proposed for {issueType} ({count} issues sampled)",
   "chat.skills.jira.error":
@@ -4494,12 +4506,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The selected model did not answer its check, so nothing was sent. Pick another model, or check it in Settings > Models and try again.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "chat.error.memoryUpdate": "Unable to update memory.",
-  "chat.grounding.dataLabel": "Data sources",
-  "chat.grounding.noDataSources": "No Data sources",
-  "chat.grounding.dataCatalogEmpty": "No ready Data Pods or Pod Sets are available.",
   "chat.grounding.label": "Sources",
   "chat.grounding.mode": "Grounding mode",
   "chat.grounding.strategy": "Strategy",
+  "chat.grounding.jiraOnly": "Jira Pod only",
   "chat.grounding.modelOnly": "Model only",
   "chat.grounding.liveFiles": "Live Files context",
   "chat.grounding.liveFilesUnavailableHint":

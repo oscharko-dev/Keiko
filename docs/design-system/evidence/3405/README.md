@@ -693,14 +693,23 @@ once more. The complete original nine-case producer ran in the Linux arm64 gates
 discarded and the 14 committed captures are unchanged. No updater behavior, fixture, assertion or
 numerical ceiling changed. This remains updater fixture evidence.
 
-## Jira approval names for status changes, issue types and fields — 2026-11-15 (#4355)
+## Jira template proposal accounting — 2026-11-14 (#4354)
 
-The Jira write approval card now names the transition and the status it leads to, the issue type and
-the carried custom fields as Jira names them for the acting person, and says in words when Jira gave
-no name, so the optional English and German message catalogs changed and the freshness gate rejected
-their digests. The complete original nine-case producer ran in the Linux arm64 gates container
-(Node 24.18.0, `--init`, `KEIKO_WRITE_TRACKED_EVIDENCE=1`): all nine passed, and
+A template proposal now answers for every issue type of the project (a proposal, or one plain line
+with its reason, and the count), so the optional English and German message catalogs changed and the
+freshness gate rejected their digests. The complete original nine-case producer ran in the Linux
+arm64 gates container (Node 24.18.0, `KEIKO_WRITE_TRACKED_EVIDENCE=1`): all nine passed, and
 `npm run check:update-ui-evidence` passes. Only the source digests and `generatedAt` in the three
 records were taken from this run; its fallback-font captures were discarded and the 14 committed
 captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling changed. This
 remains updater fixture evidence.
+
+## Jira discovery card and Chat picker wording — 2026-11-14 (#4371)
+
+The Jira discovery card and the Chat source picker changed their wording, so the optional English
+and German message catalogs changed and the freshness gate rejected the two catalog digests again.
+The complete original nine-case producer ran in the Linux arm64 gates container (Node 24.18.0,
+`KEIKO_WRITE_TRACKED_EVIDENCE=1`): all nine passed. Only the source digests and `generatedAt` in
+the three records were taken from this run; its fallback-font captures were discarded and the 14
+committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
+changed. This remains updater fixture evidence.

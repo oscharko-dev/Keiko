@@ -12,6 +12,37 @@ describe("portable managed-root policy", () => {
     }).toThrow("user-local or the canonical Keiko macOS app");
   });
 
+  // #4358 audit: the uninstall's helper rejects a bare share root through its own check; the policy
+  // rejects it at the door as well, so no install root can be the root of a volume or share.
+  it.each([
+    ["windows-x64", "C:\\"],
+    ["windows-x64", "D:/"],
+    ["windows-x64", "\\\\server\\share"],
+    ["windows-x64", "\\\\server\\share\\"],
+    ["windows-x64", "/"],
+    ["linux-x64", "/"],
+    ["macos-arm64", "/"],
+  ] as const)("rejects the root of a volume or share: %s %s", (target, root) => {
+    expect(() => {
+      assertManagedRootAllowed(root, "/Users/keiko/.keiko", target);
+    }).toThrow("below a drive or share root");
+  });
+
+  it("does not take a directory below a drive or share root for a root", () => {
+    for (const [target, root] of [
+      ["windows-x64", String.raw`C:\Keiko`],
+      ["windows-x64", String.raw`\\server\share\Keiko`],
+    ] as const) {
+      let message = "";
+      try {
+        assertManagedRootAllowed(root, "/Users/keiko/.keiko", target);
+      } catch (error) {
+        message = error instanceof Error ? error.message : "";
+      }
+      expect(message).not.toContain("below a drive or share root");
+    }
+  });
+
   it("rejects managed roots inside Keiko runtime state", () => {
     expect(() => {
       assertManagedRootAllowed("/Users/keiko/.keiko/managed", "/Users/keiko/.keiko", "windows-x64");
