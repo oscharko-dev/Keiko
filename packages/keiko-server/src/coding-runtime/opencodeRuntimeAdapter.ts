@@ -778,7 +778,7 @@ export function createOpenCodeRuntimeAdapter(
       while (turnCurrent(generation, signal)) {
         const outcome = await pollTurnOnce(generation, signal, sessionId);
         if (outcome !== undefined) return outcome;
-        await waitForTurnChange(signal, generation);
+        await waitForTurnChange(signal, generation); // NOSONAR typescript:S9382 -- one poll per turn change, in order
       }
       return turnSettled(generation) ? (turnSettledOutcome ?? false) : false;
     } finally {
@@ -1189,7 +1189,7 @@ async function applyHistoryPlan(
   const activity = takeSafeActivity(ports, planned.events);
   for (const event of prepared.projections) {
     const identity = eventIdentity(event);
-    const receipt: unknown = await ports.governedSink.execute(identity, event);
+    const receipt: unknown = await ports.governedSink.execute(identity, event); // NOSONAR typescript:S9382 -- receipts settle in projection order
     if (receipt !== "applied" && receipt !== "duplicate") throw new Error("sink-receipt-invalid");
   }
   if (!prepared.commit()) throw new Error("reconciler-commit-conflict");

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3da4031186dad8abb53c2fc92f3874b42c976357df633c252be1a9ac89f078b6",
+    "catalogDigest": "f7f2a52478f3acf12093229a74426dbda492f657d01cbac6993946ecae56f114",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13357,8 +13357,8 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-policy.decided.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1706",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1936"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1718",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1948"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -120956,7 +120956,7 @@
     {
       "op": "coding-runtime.native-policy.decided",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1709",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1721",
       "package": "keiko-server"
     },
     {

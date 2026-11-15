@@ -10,6 +10,7 @@ import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
 import { OPENCODE_NATIVE_TOOL_DEFINITIONS } from "./opencodeNativeTools.js";
 import {
   decideOpenCodeNativePolicy,
+  type OpenCodeNativeMcpGrants,
   type OpenCodeNativePolicyDecision,
   type OpenCodeNativePolicyRequest,
 } from "./opencodeNativePolicy.js";
@@ -21,6 +22,7 @@ import {
   createGeneratedOpenCodeNativePolicyPlugin,
 } from "./opencodeNativePolicyPlugin.js";
 import { OPENCODE_PINNED_VERSION, openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
+import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 
 // #4359: a Code Mode program asserts no permission and can only call its nested tools. On a runtime
 // whose pin says every nested effect reaches the policy as its own decision, the program itself
@@ -131,6 +133,12 @@ describe("the Code Mode program itself", () => {
     expect(decided).toContain("managementResources(event.tool, event.input)");
   });
 
+  it("builds the adapter's native plugin from the pin: no program text is sent for review", () => {
+    expect(createGeneratedOpenCodeV2Plugins("native").keiko_native_policy).toContain(
+      "const PROGRAM_REVIEWED = false;",
+    );
+  });
+
   it("keeps sending the program for review by default, and for a pin that does not vouch", () => {
     expect(createGeneratedOpenCodeNativePolicyPlugin()).toContain("const PROGRAM_REVIEWED = true;");
     expect(createGeneratedOpenCodeNativePolicyPlugin({ programReviewed: true })).toContain(
@@ -222,23 +230,80 @@ describe("every nested effect keeps its own decision when the program passes wit
       ]);
     });
 
-    it("lists and reads the resources of the run's own managed server without a card", () => {
-      for (const tool of ["opencode_list_mcp_resources", "opencode_read_mcp_resource"]) {
-        expect(decisions(tool, ["jira"], true, {}, grants), tool).toEqual([
+    // The resource tools are reads of each server they name, so they need the same grant as that
+    // server's read tools (#4359 audit): the human's choice of the Pod for this run.
+    const GRANTED: OpenCodeNativeMcpGrants = {
+      actions: new Map(),
+      servers: new Map([
+        ["jira", { remote: true, managed: true, runGrantedRead: true }],
+        ["ungranted", { remote: true, managed: true }],
+        ["fs", { remote: false }],
+      ]),
+    };
+
+    it.each(["opencode_list_mcp_resources", "opencode_read_mcp_resource"])(
+      "%s of a granted managed server asks nothing in any mode",
+      (tool) => {
+        expect(decisions(tool, ["jira"], true, {}, GRANTED)).toEqual(["allow", "allow", "allow"]);
+        expect(decisions(tool, ["jira:jira://issue/SYN-1"], true, {}, GRANTED)).toEqual([
           "allow",
           "allow",
           "allow",
         ]);
+      },
+    );
+
+    it("decides a hostile resource URI as a read of the granted server only", () => {
+      // Only the part before the first colon names the server; the rest is data the policy never
+      // opens, joins to a path or resolves, and the plugin's own bounds cap its length.
+      for (const resource of [
+        "jira:file:///etc/passwd",
+        "jira:../../../../etc/passwd",
+        "jira:http://127.0.0.1:9/admin",
+        `jira:${"a".repeat(2_000)}`,
+        "jira:\u0000\n../other",
+      ]) {
+        expect(
+          decisions("opencode_read_mcp_resource", [resource], true, {}, GRANTED),
+          resource,
+        ).toEqual(["allow", "allow", "allow"]);
       }
     });
 
-    it("never admits the resources of a server the run does not have", () => {
-      expect(
-        decisions("opencode_list_mcp_resources", ["somewhere-else"], true, {}, grants),
-      ).toEqual(["deny:unsupported-action", "deny:unsupported-action", "deny:unsupported-action"]);
-      expect(decisions("opencode_list_mcp_resources", ["jira", "other"], true, {}, grants)).toEqual(
-        ["deny:unsupported-action", "deny:unsupported-action", "deny:unsupported-action"],
+    it("gives no free read to a managed server nobody granted or to a registered foreign one", () => {
+      const [ungrantedAsk] = decisions(
+        "opencode_list_mcp_resources",
+        ["ungranted"],
+        true,
+        {},
+        GRANTED,
       );
+      expect(ungrantedAsk).not.toBe("allow");
+      const [foreignAsk] = decisions("opencode_list_mcp_resources", ["fs"], true, {}, GRANTED);
+      expect(foreignAsk).not.toBe("allow");
+    });
+
+    it("never admits the resources of a server the run does not have, or a mixed list", () => {
+      for (const resources of [
+        ["somewhere-else"],
+        ["jira-evil:x"],
+        [":jira"],
+        ["other:jira"],
+        ["jira", "somewhere-else"],
+      ]) {
+        expect(
+          decisions("opencode_list_mcp_resources", resources, true, {}, GRANTED),
+          resources.join(","),
+        ).toEqual([
+          "deny:unsupported-action",
+          "deny:unsupported-action",
+          "deny:unsupported-action",
+        ]);
+      }
+      // A granted and an ungranted server in one request is not free either.
+      expect(
+        decisions("opencode_list_mcp_resources", ["jira", "ungranted"], true, {}, GRANTED)[0],
+      ).not.toBe("allow");
     });
   });
 

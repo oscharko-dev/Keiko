@@ -109,6 +109,13 @@ const OVERSIZED_MESSAGE =
  * would still execute the complete original action (#3897 review). The shell hook strips Keiko's
  * bindings and the server password from every shell the agent starts, so no tool output can
  * carry them.
+ *
+ * `programReviewed` (#4359) is chosen once per profile from the CURRENT pin (adapter), while the
+ * policy decides from the run's own verified version. With one approved version they always agree.
+ * If two versions were ever approved together, a plugin built for a pin that vouches for nested
+ * effects would send no program text to a run whose version does not, and the policy would then
+ * refuse that program as having nothing to review (a deny, never a free pass). A second approved
+ * version needs this generator keyed by version first.
  */
 export function createGeneratedOpenCodeNativePolicyPlugin(
   options: { readonly programReviewed?: boolean } = {},

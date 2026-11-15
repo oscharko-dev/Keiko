@@ -198,6 +198,21 @@ import {
 import { openCodePlanDirectory } from "./opencodeLaunchProfile.js";
 
 const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
+// #4359: a test can take the nested-effects fact off the pin the run is verified against.
+const pinFlag = vi.hoisted(() => ({ stripNestedEffects: false }));
+
+vi.mock("./opencodeRuntimeVersions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./opencodeRuntimeVersions.js")>();
+  return {
+    ...actual,
+    openCodeRuntimeVersionPin: (version: unknown): unknown => {
+      const pin = actual.openCodeRuntimeVersionPin(version);
+      return pin !== undefined && pinFlag.stripNestedEffects
+        ? { ...pin, decidesNestedEffects: false }
+        : pin;
+    },
+  };
+});
 
 // Observe the real source producer without replacing its generated tools or source definitions.
 vi.mock("./opencodeToolSchemas.js", async (importOriginal) => {
@@ -12301,4 +12316,75 @@ describe("the plain approval of a managed Jira write", () => {
     expect(withJiraWriteReview(ask, run("other"), request, deps)).toBe(ask);
     expect(withJiraWriteReview(ask, run("jira"), request, {} as typeof deps)).toBe(ask);
   });
+});
+
+// #4359: whether a Code Mode program asks is decided by the pin of the version the run was verified
+// against, through the real composition (the policy and the generator are pinned in
+// opencodeCodeModeProgram.test.ts).
+describe("the program card follows the verified runtime's pin (#4359)", () => {
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const completed = { status: "completed" as const, evidence: [] };
+  const programAsk = JSON.stringify({
+    action: "native-policy",
+    runId: FIXTURE_RUN_ID,
+    sessionID: "ses_tool",
+    permission: "execute",
+    resources: ["const r = await fetch('https://example.com'); return r.status;"],
+    configured: "ask",
+    source: { type: "tool", messageID: "msg_program", id: "call_program" },
+  });
+
+  async function runProgram(
+    mode: "governed-assist" | "supervised-coding",
+    stripNestedEffects: boolean,
+  ): Promise<{ readonly answered: boolean; readonly asked: boolean }> {
+    pinFlag.stripNestedEffects = stripNestedEffects;
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+      },
+      undefined,
+      { mode, runtimeEvents, activityLog },
+    );
+    try {
+      const state = { answered: false };
+      const pending = fixture.runtime.toolBridge
+        .handle({ method: "POST", headers: new Headers(authorized), body: programAsk })
+        .then((response) => {
+          state.answered = true;
+          return response;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const asked = runtimeEvents.some((event) => event.kind === "permission-requested");
+      if (state.answered) {
+        const response = await pending;
+        expect(response.body).toBe('{"effect":"allow"}');
+        const decided = activityLog.events.find(
+          (event) => event.op === "coding-runtime.native-policy.decided",
+        )?.extra;
+        expect(decided).toMatchObject({ permission: "execute", effect: "allow", risk: "low" });
+      }
+      return { answered: state.answered, asked };
+    } finally {
+      pinFlag.stripNestedEffects = false;
+      await fixture.stop();
+    }
+  }
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "lets a program of a verified 2.2.5 run pass without a card in %s",
+    async (mode) => {
+      await expect(runProgram(mode, false)).resolves.toEqual({ answered: true, asked: false });
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "keeps the card in %s when the verified version's pin does not say nested effects are decided",
+    async (mode) => {
+      await expect(runProgram(mode, true)).resolves.toEqual({ answered: false, asked: true });
+    },
+  );
 });

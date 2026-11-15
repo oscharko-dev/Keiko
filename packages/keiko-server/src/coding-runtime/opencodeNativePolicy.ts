@@ -745,7 +745,15 @@ export interface OpenCodeNativeMcpGrants {
       readonly mutation?: import("./opencodeNativeMcpMutationJournal.js").NativeMcpMutationSource;
     }
   >;
-  readonly servers: ReadonlyMap<string, { readonly remote: boolean; readonly managed?: boolean }>;
+  readonly servers: ReadonlyMap<
+    string,
+    {
+      readonly remote: boolean;
+      readonly managed?: boolean;
+      /** The human chose this managed server for the run: the same grant as its read tools. */
+      readonly runGrantedRead?: boolean;
+    }
+  >;
 }
 
 export function decideOpenCodeNativePolicy(
@@ -833,8 +841,7 @@ function classifiedOrUnresolvable(input: OpenCodeNativePolicyInput): Classified 
 
 /**
  * A read tool of a managed server the human chose for this run, or the resource listing and reading
- * of such servers (#4359: a managed server exists only because the human chose it, so reading what
- * it offers is no new decision); a write never qualifies.
+ * of such servers (#4359); a write never qualifies.
  */
 function runGrantedRead(
   request: OpenCodeNativePolicyRequest,
@@ -844,10 +851,15 @@ function runGrantedRead(
   if (grant !== undefined) {
     return grant.runGrantedRead === true && grant.managed === true && grant.risk === "read";
   }
+  // Listing and reading resources is a read of each named server, so it needs the same grant as
+  // that server's read tools; a registered or managed server nobody granted gets no free read.
   return (
     MCP_RESOURCE_ACTIONS.has(request.permission) &&
     request.resources.length > 0 &&
-    managedMcpRequest(request, mcp)
+    request.resources.every((resource) => {
+      const server = mcp?.servers.get(resource.split(":")[0] ?? "");
+      return server?.managed === true && server.runGrantedRead === true;
+    })
   );
 }
 
