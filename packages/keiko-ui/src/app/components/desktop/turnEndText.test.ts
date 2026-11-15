@@ -28,6 +28,10 @@ const CATALOGS = {
 const placeholders = (text: string): string[] => text.match(/\{\w+\}/gu)?.sort() ?? [];
 
 describe("the turn ending texts (#4355)", () => {
+  beforeAll(async () => {
+    await loadOptionalWidgetMessages("en");
+  });
+
   // A reason the server can state without a sentence in both languages fails here, so a tenth
   // reason cannot reach a person as a missing key.
   it.each(["en", "de"] as const)(
@@ -65,10 +69,6 @@ describe("the turn ending texts (#4355)", () => {
         .filter((key) => key.startsWith("chat.turnEnd."))
         .sort(),
     ).toEqual(keys.sort());
-  });
-
-  beforeAll(async () => {
-    await loadOptionalWidgetMessages("en");
   });
 
   const en: OptionalWidgetTranslate = (key, values) => translateOptionalWidget("en", key, values);

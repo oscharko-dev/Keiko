@@ -102,7 +102,6 @@ export function useTurnEndText(
   storedAnswer: string,
 ): string | undefined {
   const translate = useOptionalWidgetTranslate();
-  if (end === undefined || end.answer !== chatTurnEndAnswerFingerprint(storedAnswer))
-    return undefined;
-  return turnEndText(end, translate);
+  const bound = end?.answer === chatTurnEndAnswerFingerprint(storedAnswer) ? end : undefined;
+  return bound === undefined ? undefined : turnEndText(bound, translate);
 }
