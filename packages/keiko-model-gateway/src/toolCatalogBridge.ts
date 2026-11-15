@@ -22,6 +22,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   captureCatalogJson,
+  captureCatalogBinding,
   captureCatalogEnvelope,
   createToolInvocationNormalizer,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
@@ -327,16 +328,22 @@ function frozenBoundAdvertisement(input: unknown): GatewayToolCatalogAdvertiseme
   }) as unknown as GatewayToolCatalogAdvertisement;
 }
 
+/**
+ * A native advertisement carries the runtime's whole tool set under its own byte contract; a bound
+ * catalog is captured with the one binding capture the tool selection is admitted with, each part
+ * under its own per-call budget (#3897 review).
+ */
+function captureAdvertisementValue(input: unknown): unknown {
+  const kind = typeof input === "object" && input !== null ? dataField(input, "kind") : undefined;
+  if (kind === "native")
+    return captureCatalogJson(input, GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES);
+  return kind === "bound" ? captureCatalogBinding(input) : captureCatalogEnvelope(input);
+}
+
 function capturedAdvertisement(input: unknown): GatewayToolAdvertisement {
   const frozen = frozenBoundAdvertisement(input);
   if (frozen !== undefined) return frozen;
-  // A native advertisement carries the runtime's whole tool set under its own byte contract; a
-  // bound catalog keeps the per-call budget (#3897 review).
-  const native =
-    typeof input === "object" && input !== null && dataField(input, "kind") === "native";
-  const value = native
-    ? captureCatalogJson(input, GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES)
-    : captureCatalogEnvelope(input);
+  const value = captureAdvertisementValue(input);
   requireBridge(
     typeof value === "object" && value !== null && !Array.isArray(value),
     "projection-mismatch",

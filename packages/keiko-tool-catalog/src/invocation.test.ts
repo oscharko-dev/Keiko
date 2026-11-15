@@ -3,6 +3,8 @@ import type { ToolInvocationBinding } from "@oscharko-dev/keiko-contracts/runtim
 import { createInitialToolCatalog } from "./legacy.js";
 import { compileToolProjection } from "./projection.js";
 import { createToolInvocationNormalizer } from "./invocation.js";
+import { catalogBytes, copyCatalogBinding } from "./json.js";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { createToolDescriptor, createToolCatalog, captureCatalogJson } from "./index.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { fixture, declaration, profile } from "./__fixtures__/catalog.js";
@@ -249,5 +251,61 @@ describe("repeated bindings over one frozen catalog (#4173)", () => {
     const mismatched = { ...legacy, projection: other.projection };
     for (let attempt = 0; attempt < 2; attempt++)
       expect(() => createToolInvocationNormalizer(mismatched)).toThrow();
+  });
+});
+
+// The gateway binds a round and the tool selection is admitted with the one capture, so a selection
+// the gateway could not bind is refused before it is accepted. Each part keeps the envelope bound for
+// itself; the total is bounded by their sum, not by one bound across all three.
+describe("binding capture: one function for the bind and the admission", () => {
+  const BOUND = TOOL_CATALOG_LIMITS.maxArgumentBytes;
+  const PARTS = ["catalog", "projection", "offered"] as const;
+
+  /** A JSON array whose serialization is exactly `total` bytes. */
+  function partOfBytes(total: number): string[] {
+    const chunk = 20_000;
+    const count = Math.ceil(total / (chunk + 3));
+    const spare = total - 1 - 3 * count;
+    const lengths = Array.from(
+      { length: count },
+      (_, index) => Math.floor(spare / count) + (index < spare % count ? 1 : 0),
+    );
+    const part = lengths.map((length) => "x".repeat(length));
+    expect(catalogBytes(part)).toBe(total);
+    return part;
+  }
+  function triple(part: (typeof PARTS)[number], bytes: number): Record<string, unknown> {
+    return { ...binding(), [part]: partOfBytes(bytes) };
+  }
+
+  it.each(PARTS)("agrees at the bound of the %s: accepted at it, refused one byte over", (part) => {
+    expect(() => copyCatalogBinding(triple(part, BOUND))).not.toThrow();
+    expect(() =>
+      createToolInvocationNormalizer(triple(part, BOUND) as unknown as ToolInvocationBinding),
+    ).not.toThrow("input-bound");
+    expect(() => copyCatalogBinding(triple(part, BOUND + 1))).toThrow("input-bound");
+    expect(() =>
+      createToolInvocationNormalizer(triple(part, BOUND + 1) as unknown as ToolInvocationBinding),
+    ).toThrow("input-bound");
+  });
+
+  it("accepts three parts that are each at the bound, a total above one bound", () => {
+    const copied = copyCatalogBinding({
+      catalog: partOfBytes(BOUND),
+      projection: partOfBytes(BOUND),
+      offered: partOfBytes(BOUND),
+    }) as Record<string, unknown[]>;
+    expect(Object.keys(copied)).toEqual(["catalog", "offered", "projection"]);
+    expect(catalogBytes(copied as never)).toBeGreaterThan(BOUND * 2);
+  });
+
+  it("refuses a part that is not one of the binding's own", () => {
+    expect(() => copyCatalogBinding({ ...binding(), extra: "x" })).toThrow("invalid-shape");
+    expect(() => copyCatalogBinding("x")).toThrow("invalid-shape");
+  });
+
+  it("captures a real binding like the envelope copy did", () => {
+    const input = binding();
+    expect(copyCatalogBinding(input)).toEqual(JSON.parse(JSON.stringify(input)));
   });
 });
