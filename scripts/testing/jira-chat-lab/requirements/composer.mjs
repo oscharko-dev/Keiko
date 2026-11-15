@@ -36,6 +36,7 @@ import {
   ofType,
   checkedOrRed,
   gradeCheckedTransition,
+  gradeAskedBack,
   gradeKeysAfterReread,
   severalPath,
 } from "./composer-graders.mjs";
@@ -257,13 +258,25 @@ async function unrepairableRequest(ctx, fixture) {
   ];
 }
 
-/** The two ways a person asks for several Tasks: the lab's own wording and a plain one they would type. */
+/**
+ * The three ways a person asks for several Tasks: the lab's complete wording, the plain wording of tasks
+ * that each name what they are (the model writes the sections from them) and a bare wording that names
+ * nothing the sections could be written from (asking back is the right answer, then the content follows).
+ */
 const SEVERAL_PHRASINGS = Object.freeze([
   { key: "lab", label: "lab wording" },
-  { key: "plain", label: "plain wording" },
+  { key: "real", label: "plain wording, real tasks" },
+  { key: "bare", label: "plain wording, no content" },
+]);
+const REAL_TITLES = Object.freeze([
+  "Das Login-Formular sperrt nach drei Fehlversuchen die Anmeldung für fünf Minuten",
+  "Auf der Berichtsseite gibt es eine Schaltfläche zum Export als CSV-Datei",
+  "Die Fehlermeldung bei einer ungültigen IBAN nennt den erwarteten Aufbau der Nummer",
 ]);
 const severalTitles = (mode, phrasing) =>
-  ["A", "B", "C"].map((letter) => `Composer Teil ${letter} ${mode.key} ${phrasing.key}`);
+  phrasing.key === "real"
+    ? REAL_TITLES.map((title) => `${title} (${mode.key})`)
+    : ["A", "B", "C"].map((letter) => `Composer Teil ${letter} ${mode.key} ${phrasing.key}`);
 const quoted = (titles) => titles.map((title) => `„${title}“`).join(", ");
 
 function severalPrompt(phrasing, titles, fixture) {
@@ -272,10 +285,15 @@ function severalPrompt(phrasing, titles, fixture) {
     : `Lege in REQ drei Aufgaben an: ${quoted(titles)}. Sie gehören ins Epic ${fixture.epic}.`;
 }
 
+/** The message that follows a question for the missing content: the content of every section, for all three. */
+const contentFollowUp = () =>
+  `Hier sind die Inhalte für alle drei Aufgaben. ${contentRequest("Task", "jede")} Lege sie jetzt an und melde alle Vorgangsschlüssel.`;
+
 /**
  * The hard created-part of one run: the native verdict, the path the model took and the review cards
- * the person got. A stage that was never committed is red with its own reason; with the plain wording a
- * model that asked the person for the section content creates nothing at all, which is its observation.
+ * the person got. A stage that was never committed is red with its own reason; with the plain wording of
+ * real tasks a model that asked the person for the section content creates nothing at all, which is its
+ * observation.
  */
 function severalCreated({ grade, exchanges, phrasing, cards }) {
   const path = severalPath(exchanges);
@@ -283,22 +301,18 @@ function severalCreated({ grade, exchanges, phrasing, cards }) {
   if (grade.created.status === "green") return { ...grade.created, detail };
   if (path === "staged, not committed")
     return { status: "red", detail: `staged, not committed: ${detail}` };
-  if (path === "no write" && phrasing.key === "plain")
+  if (path === "no write" && phrasing.key === "real")
     return {
       status: "unverified",
       observation: true,
-      detail: `model observation: nothing was staged or created for the plain request (${detail})`,
+      detail: `model observation: nothing was staged or created although the tasks name what they are (${detail})`,
     };
   return { ...grade.created, detail };
 }
 
-/** One request, three Tasks under the named Epic, in one mode and one wording: created, listed, listed after a re-read. */
-async function createSeveralIn(ctx, fixture, mode, phrasing) {
-  const titles = severalTitles(mode, phrasing);
-  const { turn, issues, chat } = await composerTurn(ctx, fixture, {
-    mode: mode.mode,
-    prompt: severalPrompt(phrasing, titles, fixture),
-  });
+/** The four parts of one order that created issues: created, keys in the result, after a re-read, in the answer. */
+async function createdParts({ ctx, fixture, mode, phrasing, titles, run }) {
+  const { turn, issues, chat } = run;
   const grade = gradeMultiCreate({
     type: "Task",
     titles,
@@ -336,6 +350,36 @@ async function createSeveralIn(ctx, fixture, mode, phrasing) {
       part: part(`${where}: keys in the answer`, [id("answer-keys")], grade.answered),
     },
   ];
+}
+
+/**
+ * One request, three Tasks under the named Epic, in one mode and one wording. With the bare wording the
+ * first turn must ask for the content (nothing created) and the follow-up that supplies it must create all
+ * three: no dead end remains.
+ */
+async function createSeveralIn(ctx, fixture, mode, phrasing) {
+  const titles = severalTitles(mode, phrasing);
+  const ask = (extra) => composerTurn(ctx, fixture, { mode: mode.mode, ...extra });
+  const first = await ask({ prompt: severalPrompt(phrasing, titles, fixture) });
+  if (phrasing.key !== "bare")
+    return createdParts({ ctx, fixture, mode, phrasing, titles, run: first });
+  const asked = gradeAskedBack({
+    made: ofType(first.issues, "Task").created,
+    exchanges: first.turn.toolExchanges,
+    answer: first.turn.answer,
+    sections: requiredSections("Task"),
+  });
+  const askedPart = {
+    turn: first.turn,
+    part: part(
+      `several Tasks, ${mode.label}, ${phrasing.label}: asked for the content`,
+      [`multi-create-asked-back-${mode.key}-${phrasing.key}`],
+      asked,
+    ),
+  };
+  const wrote = ofType(first.issues, "Task").created.length > 0;
+  const run = wrote ? first : await ask({ chat: first.chat, prompt: contentFollowUp() });
+  return [askedPart, ...(await createdParts({ ctx, fixture, mode, phrasing, titles, run }))];
 }
 
 /** C01: several Tasks from one request in every selected mode, each in both wordings. */

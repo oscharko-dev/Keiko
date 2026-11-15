@@ -1689,14 +1689,38 @@ const draftCard = (keys) => ({
   },
 });
 
+/** The section names the Task template requires, as the lab's own template writes them. */
+const taskSections = () =>
+  [
+    ...composerTemplates("REQ", LINK)
+      .find((entry) => entry.issueType === "Task")
+      .markdown.matchAll(/^## (.+)$/gmu),
+  ].map((match) => match[1].trim());
+
+/**
+ * The model of a person's several-Tasks order: it creates the quoted titles when the request gives the
+ * content, asks back naming the sections when it does not, and creates them on the follow-up.
+ */
+const severalAct = () => {
+  let titles = [];
+  return ({ content, add }) => {
+    const quotedTitles = [...content.matchAll(/„([^“]+)“/gu)].map((match) => match[1]);
+    if (quotedTitles.length > 0) titles = quotedTitles;
+    if (quotedTitles.length > 0 && / bare$/u.test(titles[0] ?? ""))
+      return {
+        answer: `Mir fehlt der Inhalt der Abschnitte ${taskSections().join(", ")}. Was soll hinein?`,
+      };
+    const keys = titles.map((title) => add("Task", {}, title).key);
+    return { answer: `Angelegt: ${keys.join(", ")}`, toolExchanges: [draftCard(keys)] };
+  };
+};
+
 describe("C01 creates every type, also several at once", () => {
   it("is green when every instruction creates a conformant issue and the several are listed", async () => {
+    const several = severalAct();
     const good = lane({
       act: ({ content, add }) => {
-        if (/drei Aufgaben/u.test(content)) {
-          const keys = severalFrom(content, add);
-          return { answer: `Angelegt: ${keys.join(", ")}`, toolExchanges: [draftCard(keys)] };
-        }
+        if (/drei Aufgaben/u.test(content)) return several({ content, add });
         if (/unter Story/u.test(content)) {
           const violations = [
             { ruleId: "parent-type-mismatch", subject: "parent: Task", template: "REQ/Sub-task" },
@@ -1726,9 +1750,11 @@ describe("C01 creates every type, also several at once", () => {
       expect.arrayContaining([
         "create-conformant-bug",
         "multi-create-all-created-ask-lab",
-        "multi-create-keys-listed-supervised-plain",
+        "multi-create-keys-listed-supervised-real",
+        "multi-create-asked-back-ask-bare",
+        "multi-create-all-created-full-access-bare",
         "multi-create-keys-after-reread-full-access-lab",
-        "multi-create-answer-keys-ask-plain",
+        "multi-create-answer-keys-ask-real",
         "unrepairable-refused-natively",
         "unrepairable-refused-by-gate",
         "unrepairable-answer-plain",
@@ -1785,28 +1811,32 @@ describe("C01 creates every type, also several at once", () => {
     });
   const severalDetail = (check) => check.detail;
 
-  it("asks for several Tasks in every mode, each in both wordings, each in a fresh Chat of its mode", async () => {
-    const ctx = onlyTasks(({ content, add }) => {
-      const keys = severalFrom(content, add);
-      return { answer: keys.join(" "), toolExchanges: [draftCard(keys)] };
-    });
+  it("asks for several Tasks in every mode, each in all three wordings, each in a fresh Chat of its mode", async () => {
+    const ctx = onlyTasks(severalAct());
     const check = await COMPOSER_JOURNEYS.C01(ctx, undefined);
-    // The single Task of the journey first (Full access), then both wordings in each mode in turn.
+    // The single Task of the journey first (Full access), then the three wordings in each mode in turn;
+    // the follow-up of the bare wording goes to the Chat that was asked.
     expect(ctx.calls.fresh).toEqual([
       "autonomous-delivery",
       ...["governed-assist", "supervised-coding", "autonomous-delivery"].flatMap((mode) => [
         mode,
         mode,
+        mode,
       ]),
     ]);
-    expect(check.covers.filter((id) => id.startsWith("multi-create-"))).toHaveLength(24);
-    // The lab's wording names the template content; the plain wording is what a person types.
-    const [lab, plain] = ctx.calls.turns
+    expect(check.covers.filter((id) => id.startsWith("multi-create-"))).toHaveLength(39);
+    // The lab's wording names the template content; the plain wordings are what a person types.
+    const orders = ctx.calls.turns
       .map((turn) => turn.content)
       .filter((content) => content.includes("drei Aufgaben"));
+    const [lab, real, bare, followUp] = orders;
     expect(lab).toContain("Synthetischer Inhalt");
-    expect(plain).toMatch(/^Lege in REQ drei Aufgaben an: „/u);
-    expect(plain).not.toContain("Synthetischer Inhalt");
+    expect(real).toMatch(/^Lege in REQ drei Aufgaben an: „Das Login-Formular/u);
+    expect(real).not.toContain("Synthetischer Inhalt");
+    expect(bare).toMatch(/^Lege in REQ drei Aufgaben an: „Composer Teil A ask bare/u);
+    expect(bare).not.toContain("Synthetischer Inhalt");
+    expect(followUp).toMatch(/^Hier sind die Inhalte für alle drei Aufgaben/u);
+    expect(followUp).toContain("Synthetischer Inhalt");
   });
 
   it("records the path the model took and how many review cards the person got", async () => {
@@ -1849,8 +1879,62 @@ describe("C01 creates every type, also several at once", () => {
         : { answer: "Welchen Inhalt sollen die Abschnitte haben?" },
     );
     const check = await COMPOSER_JOURNEYS.C01(asked, undefined);
-    expect(severalDetail(check)).toContain("Ask for approval, plain wording: created: unverified");
+    expect(severalDetail(check)).toContain(
+      "Ask for approval, plain wording, real tasks: created: unverified",
+    );
     expect(severalDetail(check)).toContain("Ask for approval, lab wording: created: red");
+    // The bare wording asked, but its follow-up (which names the content) created nothing: a dead end.
+    expect(severalDetail(check)).toContain(
+      "Ask for approval, plain wording, no content: created: red",
+    );
+  });
+
+  describe("the bare wording names no content the sections could be written from", () => {
+    const bareAct = (answerOf, creates = true) => {
+      const several = severalAct();
+      return onlyTasks((call) => {
+        const asking = / bare$/u.test(/„([^“]+)“/u.exec(call.content)?.[1] ?? "");
+        if (asking && answerOf !== undefined) return { answer: answerOf() };
+        return creates ? several(call) : undefined;
+      });
+    };
+    const detailOf = async (ctx) => (await COMPOSER_JOURNEYS.C01(ctx, undefined)).detail;
+
+    it("is green when it asks naming every section and the follow-up then creates all three", async () => {
+      const ctx = onlyTasks(severalAct());
+      const check = await COMPOSER_JOURNEYS.C01(ctx, undefined);
+      const detail = severalDetail(check);
+      expect(detail).toContain("no content: asked for the content: green");
+      expect(detail).toContain("no content: created: green");
+      expect(detail).toContain(
+        "no content: keys after the stored conversation was read again: green",
+      );
+    });
+
+    it("reads an answer that names no section as the model's observation, not red", async () => {
+      const detail = await detailOf(bareAct(() => "Gib mir mehr Informationen."));
+      expect(detail).toContain("no content: asked for the content: unverified");
+      expect(detail).toContain("does not name 3 of 3 sections");
+    });
+
+    it("reads a model that wrote the sections without any source as the model's observation", async () => {
+      const ctx = onlyTasks(({ content, add }) => {
+        const titles = [...content.matchAll(/„([^“]+)“/gu)].map((match) => match[1]);
+        const keys = titles.map((title) => add("Task", {}, title).key);
+        return { answer: keys.join(" "), toolExchanges: [draftCard(keys)] };
+      });
+      const detail = await detailOf(ctx);
+      expect(detail).toContain("no content: asked for the content: unverified");
+      expect(detail).toContain("wrote the sections without any source");
+    });
+
+    it("is red when the follow-up that gives the content still creates nothing", async () => {
+      const detail = await detailOf(
+        bareAct(() => `Mir fehlen ${taskSections().join(", ")}.`, false),
+      );
+      expect(detail).toContain("no content: asked for the content: green");
+      expect(detail).toContain("no content: created: red");
+    });
   });
 
   it("runs only the selected types", async () => {

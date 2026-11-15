@@ -166,6 +166,40 @@ export function gradeMultiCreate({
   };
 }
 
+const plainText = (text) =>
+  String(text ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replaceAll(/\p{Diacritic}/gu, "");
+
+/**
+ * The first turn of an order whose request names no content for the sections a template requires
+ * (#4355, #4369): asking for it is the right outcome, so nothing may be created natively and no write may
+ * have succeeded (hard), and the answer names every missing section (soft: a model observation when it
+ * does not). A model that wrote the sections without any source is an observation too, never a red.
+ */
+export function gradeAskedBack({ made, exchanges, answer, sections }) {
+  const wrote = made.length > 0 || storedCreatedKeys(exchanges).length > 0;
+  if (wrote)
+    return {
+      status: "unverified",
+      observation: true,
+      detail: `model observation: the model wrote the sections without any source (${String(made.length)} created natively)`,
+    };
+  const text = plainText(answer);
+  const missing = sections.filter((name) => !text.includes(plainText(name)));
+  if (missing.length > 0)
+    return {
+      status: "unverified",
+      observation: true,
+      detail: `model observation: nothing was created, but the answer does not name ${String(missing.length)} of ${String(sections.length)} sections`,
+    };
+  return {
+    status: "green",
+    detail: `nothing was created natively and no write succeeded; the answer names all ${String(sections.length)} sections`,
+  };
+}
+
 /** Hard: every natively created key stands in a stored write result of the turn (the product's card). */
 function gradeKeysInCards(made, exchanges) {
   if (made.length === 0)
