@@ -124,6 +124,14 @@ serious/critical violations and zero unresolved incomplete findings, and all 108
 captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
 unavailable workspace-trust states. No gate, fixture or rule was changed.
 
+## Coding runtime pin 1.1.5 — 2026-11-15
+
+The pin of the optional coding-runtime packages to 1.1.5 (OpenCode 2.2.5, #4359) changes
+`package.json` and `package-lock.json`, whose digests these four proofs bind. Only those two input
+digests were updated in the proofs; the producers were not rerun, because no stylesheet, fixture,
+token or component changed and the captures bind nothing but those source bytes. No gate, fixture or
+rule was changed.
+
 ## Release 1.3.0 — 2026-10-26
 
 The 1.3.0 version bump changes `package.json`, `package-lock.json` and
