@@ -21,6 +21,7 @@ import {
   codingWorkbenchProbesSettledForTests,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   ensureCodingWorkbenchContextWindows,
+  ensureReviewModelReady,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
@@ -433,6 +434,91 @@ describe("a file-configured chat model whose tool-calling proof aged out", () =>
     expect(gateway.toolCalls()).toBe(1);
     expect(profile.body).toMatchObject({ status: "available", modelAlias: CHAT });
     expect(codingWorkbenchModelEligibility(storedChat(deps))).toBe("eligible");
+  });
+});
+
+// #4130: the launch of a Reviewer session needs the same proof as a coding run, and only the
+// Workbench's profile read renewed it. A review has no profile read, so a server that had run for
+// more than 24 hours refused every Reviewer session as `model-unavailable` although the model had
+// just answered (development iteration 7, 24 hours and 8 minutes after the server's start).
+describe("a review asking for its role model", () => {
+  const OTHER = "other-chat";
+  const AGE_MS = 25 * 60 * 60 * 1_000;
+
+  function agedPair(): ReturnType<typeof parseGatewayConfig> {
+    const providers = [provider(CHAT), provider(OTHER)];
+    const loaded = parseGatewayConfig({ providers, capabilities: [] }).providers;
+    return parseGatewayConfig({
+      providers,
+      capabilities: [CHAT, OTHER].map((id, index) => {
+        const loadedProvider = loaded[index];
+        if (loadedProvider === undefined) throw new TypeError("Expected the configured provider.");
+        return {
+          ...neverProvenChat(),
+          id,
+          toolCalling: true,
+          toolCallingVerification: {
+            status: "verified",
+            checkedAt: new Date(Date.now() - AGE_MS).toISOString(),
+            probe: "gateway-tool-calling-v1",
+            configurationFingerprint: toolCallingConfigurationFingerprint(loadedProvider),
+          },
+        };
+      }),
+    });
+  }
+
+  it("renews the model's aged tool-call proof, and only that model's", async () => {
+    const gateway = stubGateway("calls");
+    const { deps, events } = await observedDeps(agedPair());
+    expect(codingWorkbenchModelEligibility(storedChat(deps))).toBe("tool-calling-unverified");
+    expect(gateway.toolCalls()).toBe(0);
+
+    await ensureReviewModelReady(deps, CHAT, "review-launch-4130");
+
+    expect(gateway.calls.filter((call) => call.tools).map((call) => call.model)).toEqual([CHAT]);
+    expect(codingWorkbenchModelEligibility(storedChat(deps))).toBe("eligible");
+    // The renewed proof changed the configuration generation; the chat check ran after it.
+    expect(deps.gatewayConfig?.verifiedCapability(CHAT)?.fields.conversationReady).toBe(true);
+    expect(deps.gatewayConfig?.verifiedCapability(CHAT)?.generation).toBe(
+      deps.gatewayConfig?.generation(),
+    );
+    const started = events.filter(
+      (event) =>
+        event.op === "gateway.readiness.automatic.started" &&
+        event.extra?.probeTrigger === "review-launch",
+    );
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatchObject({
+      correlationId: "review-launch-4130",
+      extra: { probeBasis: "proof-renewal" },
+    });
+  });
+
+  it("asks the gateway nothing for a model whose proof is current", async () => {
+    const gateway = stubGateway("calls");
+    const { deps } = await observedDeps(agedPair());
+    await ensureReviewModelReady(deps, CHAT, "review-launch-4130");
+    const toolCalls = gateway.toolCalls();
+    const calls = gateway.calls.length;
+
+    await ensureReviewModelReady(deps, CHAT, "review-launch-4130-next");
+
+    expect(gateway.toolCalls()).toBe(toolCalls);
+    expect(gateway.calls).toHaveLength(calls);
+  });
+
+  it("leaves a refuted proof alone: the launch then refuses the model as before", async () => {
+    const gateway = stubGateway("refuses");
+    const { deps } = await observedDeps(agedPair());
+
+    await ensureReviewModelReady(deps, CHAT, "review-launch-4130");
+    const toolCalls = gateway.toolCalls();
+    expect(toolCalls).toBeGreaterThan(0);
+    expect(codingWorkbenchModelEligibility(storedChat(deps))).not.toBe("eligible");
+
+    await ensureReviewModelReady(deps, CHAT, "review-launch-4130-next");
+    expect(gateway.toolCalls()).toBe(toolCalls);
   });
 });
 

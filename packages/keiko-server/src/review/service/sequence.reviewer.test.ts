@@ -37,8 +37,20 @@ function candidateOf(index: number): ReviewCandidateFinding {
   return { fingerprint: String(index).padStart(64, "0") } as ReviewCandidateFinding;
 }
 
-/** A completed session's result for one part, with the read calls and report the options name. */
-function sessionResult(options: PhaseOptions, index: number): ReviewRuntimeRunResult {
+/**
+ * One session's result for a part: the scripted end of this launch when the options name one,
+ * otherwise completed with the read calls and report the options name.
+ */
+function sessionResult(
+  options: PhaseOptions,
+  index: number,
+  launch: number,
+): ReviewRuntimeRunResult {
+  const end = options.sessions?.[index]?.[launch];
+  if (end !== undefined && end !== "completed") {
+    const candidates = end.candidate === true ? [candidateOf(index)] : [];
+    return { ...COMPLETED, outcome: "failed" as const, failureCode: end.failureCode, candidates };
+  }
   const readCalls = options.readCalls?.[index];
   const candidates = options.reportingParts?.includes(index) === true ? [candidateOf(index)] : [];
   return { ...COMPLETED, candidates, ...(readCalls === undefined ? {} : { readCalls }) };
@@ -70,7 +82,12 @@ interface PhaseOptions {
   readonly readCalls?: readonly ReviewRuntimeReadCalls[];
   /** The part indexes whose session filed one accepted report. */
   readonly reportingParts?: readonly number[];
+  /** How each part's sessions end, in order, by part index; a missing entry completes. */
+  readonly sessions?: readonly (readonly SessionEnd[])[];
 }
+
+/** A scripted session end: completed, or failed with the runtime's failure code. */
+type SessionEnd = "completed" | { readonly failureCode: string; readonly candidate?: boolean };
 
 type ReviewRuntimeReadCalls = NonNullable<
   Extract<ReviewRuntimeRunResult, { readonly ok: true }>["readCalls"]
@@ -83,6 +100,7 @@ type ReviewRuntimeReadCalls = NonNullable<
  */
 function runPhase(options: PhaseOptions): Promise<Phase> {
   const order: string[] = [];
+  const launches = new Map<number, number>();
   const capture = captureActivityLog();
   const clock = { now: 1_000_000 };
   let observedAt = clock.now - (options.observationAgeMs ?? 0);
@@ -95,7 +113,10 @@ function runPhase(options: PhaseOptions): Promise<Phase> {
       return { ok: false, reason: "runtime-unavailable" };
     }
     clock.now += options.sessionMs ?? 1_000;
-    return sessionResult(options, request.diffPart?.index ?? 0);
+    const index = request.diffPart?.index ?? 0;
+    const launch = launches.get(index) ?? 0;
+    launches.set(index, launch + 1);
+    return sessionResult(options, index, launch);
   };
   const ensureReady = (modelId: string, correlationId: string | undefined): Promise<void> => {
     order.push(`ready:${modelId}:${String(correlationId)}`);
@@ -242,5 +263,105 @@ describe("the Reviewer session's read calls on the part line (Issue #4130)", () 
     expect(partLines).toHaveLength(1);
     expect(partLines[0]).not.toHaveProperty("readCallCount");
     expect(partLines[0]).not.toHaveProperty("refusedReadCallCount");
+  });
+});
+
+// #4130: one malformed tool call or one empty answer of a local model ended the session, and the
+// review lost the whole part (`incomplete/model-failed`): 5 of 100 sessions in development
+// iteration 7 (2 of them before any report), and 6 of 187 seed reviews before it.
+describe("a Reviewer session that fails before any report (Issue #4130)", () => {
+  it("starts the part's session once more after a model failure without a candidate", async () => {
+    const { order, partLines, state } = await runPhase({
+      partCount: 2,
+      sessions: [[{ failureCode: "invalid-tool-call" }, "completed"]],
+    });
+
+    expect(order.filter((entry) => entry.startsWith("launch:"))).toEqual([
+      "launch:0",
+      "launch:0",
+      "launch:1",
+    ]);
+    expect(state.reviewer).toEqual({ outcome: "completed" });
+    expect(partLines).toMatchObject([
+      { partNumber: 1, outcome: "failed", reason: "model-failed" },
+      { partNumber: 1, outcome: "completed", attempt: 2 },
+      { partNumber: 2, outcome: "completed" },
+    ]);
+    expect(partLines[0]).not.toHaveProperty("attempt");
+    expect(partLines[2]).not.toHaveProperty("attempt");
+  });
+
+  it("keeps the failure when the second session fails as well, and starts no third", async () => {
+    const { order, partLines, state } = await runPhase({
+      partCount: 1,
+      sessions: [
+        [{ failureCode: "empty-answer" }, { failureCode: "invalid-tool-call" }, "completed"],
+      ],
+    });
+
+    expect(order.filter((entry) => entry.startsWith("launch:"))).toEqual(["launch:0", "launch:0"]);
+    expect(state.reviewer).toEqual({ outcome: "failed", reason: "model-failed" });
+    expect(partLines).toMatchObject([
+      { partNumber: 1, outcome: "failed", reason: "model-failed" },
+      { partNumber: 1, outcome: "failed", reason: "model-failed", attempt: 2 },
+    ]);
+  });
+
+  // R4130-059: the worst case of a review is two sessions for every part, never more.
+  it("starts at most two sessions for each part when every session fails", async () => {
+    const failing: readonly SessionEnd[] = [
+      { failureCode: "empty-answer" },
+      { failureCode: "empty-answer" },
+      "completed",
+    ];
+    const { order, partLines, state } = await runPhase({
+      partCount: 3,
+      sessions: [failing, failing, failing],
+    });
+
+    expect(order.filter((entry) => entry.startsWith("launch:"))).toEqual([
+      "launch:0",
+      "launch:0",
+      "launch:1",
+      "launch:1",
+      "launch:2",
+      "launch:2",
+    ]);
+    expect(partLines).toHaveLength(6);
+    expect(state.reviewer).toEqual({ outcome: "failed", reason: "model-failed" });
+  });
+
+  it("does not start a session again that already filed a candidate", async () => {
+    const { order, state } = await runPhase({
+      partCount: 1,
+      sessions: [[{ failureCode: "invalid-tool-call", candidate: true }, "completed"]],
+    });
+
+    expect(order.filter((entry) => entry.startsWith("launch:"))).toEqual(["launch:0"]);
+    expect(state.reviewer).toEqual({ outcome: "failed", reason: "model-failed" });
+    expect(state.candidates).toHaveLength(1);
+  });
+
+  it("does not start a session again that ran out of budget or time", async () => {
+    for (const failureCode of ["prompt-allowance-exhausted", "envelope-duration-exhausted"]) {
+      const { order } = await runPhase({
+        partCount: 1,
+        sessions: [[{ failureCode }, "completed"]],
+      });
+      expect(
+        order.filter((entry) => entry.startsWith("launch:")),
+        failureCode,
+      ).toEqual(["launch:0"]);
+    }
+  });
+
+  it("adds both sessions' tokens and time to the Reviewer totals", async () => {
+    const { state } = await runPhase({
+      partCount: 1,
+      sessionMs: 1_000,
+      sessions: [[{ failureCode: "invalid-tool-call" }, "completed"]],
+    });
+
+    expect(state.reviewerTotals.durationMs).toBe(2 * (38_000 + 1_000));
   });
 });

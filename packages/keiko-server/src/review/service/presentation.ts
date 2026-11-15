@@ -89,6 +89,48 @@ export function presentReviewFindings(
   });
 }
 
+/** A Reviewer candidate and the verdict a counter-check gave it, when one ran. */
+interface CheckedCandidate {
+  readonly verdict: CounterCheckVerdict;
+  readonly evidenceInHead: boolean;
+}
+
+/**
+ * The presentation candidates of a run: every Reviewer candidate in the order it was filed, with
+ * the verdict it has so far. A candidate no counter-check has settled carries no verdict.
+ */
+export function presentationCandidatesOf(
+  candidates: readonly Pick<PresentationCandidate, "fingerprint" | "report">[],
+  outcomes: ReadonlyMap<string, CheckedCandidate>,
+): PresentationCandidate[] {
+  return candidates.map((candidate, index) => {
+    const outcome = outcomes.get(candidate.fingerprint);
+    return {
+      fingerprint: candidate.fingerprint,
+      report: candidate.report,
+      reviewerRank: index + 1,
+      verdict: outcome?.verdict,
+      evidenceInHead: outcome?.evidenceInHead ?? false,
+    };
+  });
+}
+
+/**
+ * Whether the run already presents as many findings as it may (Issue #4130). Counter-checks run in
+ * `counterCheckOrder`, which is the order `presentReviewFindings` ranks by, so once this holds no
+ * candidate that is still unchecked can be presented: each of them ranks after the presented ones.
+ * Its verdict would change nothing a person sees.
+ */
+export function presentationIsFull(
+  candidates: readonly PresentationCandidate[],
+  options: PresentationOptions,
+): boolean {
+  const presented = presentReviewFindings(candidates, options).filter(
+    (decision) => decision.presented,
+  );
+  return presented.length >= REVIEW_PRESENTED_FINDINGS_MAX;
+}
+
 /** Severity order, then the Reviewer's order: the order counter-checks spend their budget in. */
 export function counterCheckOrder<T extends Pick<PresentationCandidate, "report" | "reviewerRank">>(
   candidates: readonly T[],

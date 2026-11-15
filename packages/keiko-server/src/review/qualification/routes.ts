@@ -18,8 +18,13 @@ import { processServerLogSink } from "../../process-log-sink.js";
 import { errorBody } from "../../route-error.js";
 import type { HandlerOutcome, RouteContext, RouteResult } from "../../routes.js";
 import { reviewCancelResult, serveReviewEventStream } from "../eventStream.js";
-import { recordReviewPolicyRefusal, reviewPolicyContext } from "../policy/policy.js";
-import { checkReviewRoleModels } from "../policy/resolution.js";
+import {
+  recordReviewPolicyRefusal,
+  renewLapsedReviewToolProofs,
+  REVIEW_TOOL_PROOF_RENEWAL_WAIT_MS,
+  reviewPolicyContext,
+} from "../policy/policy.js";
+import { admitReviewRoleModels, checkReviewRoleModels } from "../policy/resolution.js";
 import { reviewPolicyRefusalResult } from "../policy/routes.js";
 import { logPairQualificationFailed } from "./activity-log.js";
 import type { PairQualificationService } from "./service.js";
@@ -93,7 +98,30 @@ export async function handlePairQualificationStart(
   if (service === undefined) return unavailable(ctx);
   const body = await readJsonRequestBodyOutcome(ctx.req, START_BODY_MAX_BYTES, ctx.correlationId);
   if (body.kind === "rejected") return { status: body.response.status, body: body.response.body };
+  await renewAdmittedPairProofs(ctx, deps, body.value);
   return startRefusal(ctx, deps, service, body.value);
+}
+
+/**
+ * A pair the policy admits gets its lapsed tool-call proofs renewed before the eligibility check
+ * (R4130-058): each run of the qualification would renew them at its launch, so refusing the pair
+ * for the same lapsed proof made a pair impossible to qualify on a server older than a day.
+ */
+async function renewAdmittedPairProofs(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  body: unknown,
+): Promise<void> {
+  const validated = validateReviewPairQualificationStartRequest(body);
+  if (!validated.ok || !admitReviewRoleModels(reviewPolicyContext(deps), validated.value).ok)
+    return;
+  const { reviewerModelId, counterCheckerModelId } = validated.value;
+  await renewLapsedReviewToolProofs(
+    deps,
+    [reviewerModelId, counterCheckerModelId],
+    ctx.correlationId,
+    REVIEW_TOOL_PROOF_RENEWAL_WAIT_MS,
+  );
 }
 
 /** `GET /api/git-review/pair-qualifications/{id}`. */

@@ -41485,6 +41485,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "attempt",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "candidateCount",
               "type": "integer",
               "dataClass": "count",
@@ -41852,6 +41858,12 @@
               "type": "boolean",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "surplusCandidateCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "undecidedCount",

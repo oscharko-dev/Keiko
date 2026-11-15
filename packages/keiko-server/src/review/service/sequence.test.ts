@@ -42,13 +42,19 @@ interface PhaseOptions {
   /** What one counter-check does besides answering: advance the clock, reserve prompt tokens. */
   readonly onCheck?: (input: CounterCheckInput, clock: { now: number }) => void;
   readonly effect?: CounterCheckOutcome["effect"];
+  /** A check's effect by the candidate's start line, where it differs from `effect`. */
+  readonly effectByLine?: Readonly<Record<number, CounterCheckOutcome["effect"]>>;
+  /** The verdict by a candidate's start line; a line not named stays undecided. */
+  readonly verdicts?: Readonly<Record<number, "confirmed" | "refuted" | "undecided">>;
+  /** The run's exclusion of dismissed fingerprints; by default nothing is excluded. */
+  readonly excluded?: (fingerprint: string) => boolean;
 }
 
 function sequenceDeps(
   options: PhaseOptions,
   phase: Pick<Phase, "log" | "checked" | "clock">,
 ): ReviewSequenceDeps {
-  const answer = counterCheckBy({}, options.effect ?? "none");
+  const answer = counterCheckBy(options.verdicts ?? {}, options.effect ?? "none");
   const now = (): number => phase.clock.now;
   // Of the store and the review services the phase calls one method each, and the scripted
   // counter-check never reads through the runner, so only these two ports are cast. The object
@@ -62,7 +68,10 @@ function sequenceDeps(
     counterCheck: (input: CounterCheckInput): Promise<CounterCheckOutcome> => {
       phase.checked.push(input.candidate.report.startLine);
       options.onCheck?.(input, phase.clock);
-      return answer(input);
+      const effect = options.effectByLine?.[input.candidate.report.startLine];
+      return effect === undefined
+        ? answer(input)
+        : answer(input).then((outcome) => ({ ...outcome, effect }));
     },
     models: { capability: (): undefined => undefined },
     activityLog: phase.log.sink,
@@ -103,7 +112,12 @@ async function runPhase(options: PhaseOptions): Promise<Phase> {
     signal: new AbortController().signal,
     startedAt: START,
   };
-  await counterCheckCandidates(sequenceDeps(options, phase), ctx, phase.state);
+  await counterCheckCandidates(
+    sequenceDeps(options, phase),
+    ctx,
+    phase.state,
+    options.excluded ?? ((): boolean => false),
+  );
   return phase;
 }
 
@@ -202,5 +216,106 @@ describe("the counter-check phase's wall-time limit (Issue #4130)", () => {
     });
     expect(state.uncheckedCandidates).toBe(2);
     expect(state.uncheckedReason).toBe("budget-exhausted");
+  });
+});
+
+// #4130: counter-checks run in presentation order and a run presents at most three findings, so a
+// candidate checked after the third presentable one can never be presented. In development
+// iteration 7 the checks after that point took 3.76 of 9.05 hours in the first 13 reviews, and one
+// of them ran into its time limit and alone made its review incomplete.
+describe("the counter-check phase stops when the presentation is full (Issue #4130)", () => {
+  const SIX = [
+    reportAt(3, "high"),
+    reportAt(7, "high"),
+    reportAt(10, "medium"),
+    reportAt(12, "medium"),
+    reportAt(15, "low"),
+    reportAt(18, "low"),
+  ];
+
+  it("checks no candidate after the third one that will be presented", async () => {
+    const { state, checked } = await runPhase({
+      reports: SIX,
+      verdicts: { 3: "confirmed", 7: "confirmed", 10: "confirmed", 12: "confirmed" },
+    });
+
+    expect(checked).toEqual([3, 7, 10]);
+    expect(state.surplusCandidates).toBe(3);
+    expect(state.uncheckedCandidates).toBe(0);
+    expect(state.uncheckedReason).toBeUndefined();
+    expect(state.outcomes.size).toBe(3);
+    expect(settlementOf(state)).toEqual({ kind: "complete" });
+  });
+
+  it("goes on past refuted candidates until three are presentable", async () => {
+    const { state, checked } = await runPhase({
+      reports: SIX,
+      verdicts: { 3: "confirmed", 7: "refuted", 10: "confirmed", 12: "refuted", 15: "confirmed" },
+    });
+
+    expect(checked).toEqual([3, 7, 10, 12, 15]);
+    expect(state.surplusCandidates).toBe(1);
+    expect(settlementOf(state)).toEqual({ kind: "complete" });
+  });
+
+  it("checks every candidate when fewer than three are presentable", async () => {
+    const { state, checked } = await runPhase({
+      reports: SIX,
+      verdicts: { 3: "confirmed", 7: "refuted", 10: "confirmed", 12: "refuted", 15: "refuted" },
+    });
+
+    expect(checked).toEqual([3, 7, 10, 12, 15, 18]);
+    expect(state.surplusCandidates).toBe(0);
+  });
+
+  it("reports no surplus when the third presentable candidate is the last one", async () => {
+    const { state, checked } = await runPhase({
+      reports: THREE,
+      verdicts: { 3: "confirmed", 7: "confirmed", 10: "confirmed" },
+    });
+
+    expect(checked).toEqual([3, 7, 10]);
+    expect(state.surplusCandidates).toBe(0);
+  });
+
+  // The stop must not hide an earlier check that could not finish: had it been decided, it could
+  // have been presented in place of a later one.
+  it("keeps the run incomplete when a check before the stop ended undecided on its limit", async () => {
+    const effects: Readonly<Record<number, CounterCheckOutcome["effect"]>> = {
+      7: "deadline-exceeded",
+    };
+    const { state, checked } = await runPhase({
+      reports: SIX,
+      verdicts: { 3: "confirmed", 10: "confirmed", 12: "confirmed" },
+      effectByLine: effects,
+    });
+
+    expect(checked).toEqual([3, 7, 10, 12]);
+    expect(state.surplusCandidates).toBe(2);
+    expect(settlementOf(state)).toEqual({ kind: "incomplete", reason: "deadline-exceeded" });
+  });
+
+  it("does not count a confirmed candidate whose fingerprint is excluded", async () => {
+    const { state, checked } = await runPhase({
+      reports: SIX,
+      verdicts: { 3: "confirmed", 7: "confirmed", 10: "confirmed", 12: "confirmed" },
+      excluded: (fingerprint) => fingerprint === "fingerprint-7",
+    });
+
+    expect(checked).toEqual([3, 7, 10, 12]);
+    expect(state.surplusCandidates).toBe(2);
+  });
+
+  it("leaves the phase's own limits in place: a passed deadline still leaves candidates unchecked", async () => {
+    const { state, checked } = await runPhase({
+      reports: SIX,
+      verdicts: { 3: "confirmed", 7: "confirmed" },
+      onCheck: taking(30_000),
+    });
+
+    expect(checked).toEqual([3, 7]);
+    expect(state.surplusCandidates).toBe(0);
+    expect(state.uncheckedCandidates).toBe(4);
+    expect(settlementOf(state)).toEqual({ kind: "incomplete", reason: "deadline-exceeded" });
   });
 });

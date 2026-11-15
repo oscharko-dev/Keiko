@@ -146,9 +146,10 @@ export interface ProbeTimeoutEvidence {
 // conversation probe carries neither. `never-proven` is a chat model nobody has concluded tool
 // calling for, `proof-renewal` a model whose forced tool-call proof lapsed or was withdrawn, and
 // `context-window` a model that needs only its window proven. `profile-read` is the Workbench
-// opening its gateway profile; `startup` is the recognised-LiteLLM readiness at process start.
+// opening its gateway profile; `startup` is the recognised-LiteLLM readiness at process start;
+// `review-launch` is a review asking for its role model before a session (#4130).
 const WORKBENCH_PROBE_BASES = ["never-proven", "proof-renewal", "context-window"] as const;
-const WORKBENCH_PROBE_TRIGGERS = ["profile-read", "startup"] as const;
+const WORKBENCH_PROBE_TRIGGERS = ["profile-read", "startup", "review-launch"] as const;
 type WorkbenchProbeBasis = (typeof WORKBENCH_PROBE_BASES)[number];
 type WorkbenchProbeTrigger = (typeof WORKBENCH_PROBE_TRIGGERS)[number];
 
@@ -2717,6 +2718,42 @@ export async function ensureCodingWorkbenchContextWindows(
   // A named model waits for ITS proof only — never for another model's. Without a name (the
   // Workbench could elect none yet) the first queued model is the one it would elect next.
   await (electedModelId === undefined ? queued.values().next().value : queued.get(electedModelId));
+}
+
+/**
+ * A review asks for its role model before a session (#4130): the model's coding proof first, then
+ * its chat readiness.
+ *
+ * The launch of a Reviewer session is admitted like a coding run (`admitCodingRunModel`), which
+ * needs the model's forced tool-call proof, and that proof expires after
+ * `TOOL_CALLING_VERIFICATION_MAX_AGE_MS` (24 hours). Only the Workbench renewed it, when its
+ * profile was read. A review has no profile read, so a server that had run for more than a day
+ * refused every Reviewer session as `model-unavailable` although the model had just answered. In
+ * development iteration 7 that happened 24 hours and 8 minutes after the server's start.
+ *
+ * Only the named model is probed, and only when it needs a probe: a current proof costs nothing. A
+ * probe the gateway never answered runs again, because the review is asking. A renewed proof
+ * changes the configuration generation, which drops the chat observation, so the chat check runs
+ * after it.
+ */
+export async function ensureReviewModelReady(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId?: string,
+): Promise<void> {
+  const config = deps.gatewayConfig?.current();
+  const target =
+    config === undefined
+      ? undefined
+      : workbenchProbeTargets(config).find((candidate) => candidate.modelId === modelId);
+  if (config !== undefined && target !== undefined) {
+    const id = correlationId ?? newCorrelationId();
+    await enqueueWorkbenchProbe(deps, config, target, id, "review-launch", {
+      prioritized: true,
+      retryUnanswered: true,
+    });
+  }
+  await awaitInitializedConversationReadiness(deps, modelId, correlationId);
 }
 
 // Fresh-install gap (customer field incident, 0.3.10): a configured gateway carries NO

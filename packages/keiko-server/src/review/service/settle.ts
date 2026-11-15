@@ -13,7 +13,11 @@ import type { ServerLogSink } from "../../observability/index.js";
 import { reportReviewFailure } from "../diagnostics.js";
 import type { ReviewServices } from "../services.js";
 import { logReviewRunSettled } from "./activity-log.js";
-import { presentReviewFindings, type PresentationCandidate } from "./presentation.js";
+import {
+  presentationCandidatesOf,
+  presentReviewFindings,
+  type PresentationCandidate,
+} from "./presentation.js";
 import type { ReviewRunContext, ReviewRunState } from "./sequence.js";
 import { settleReviewRun } from "./settlement.js";
 import type { ReviewStaleHeads } from "./stale.js";
@@ -31,19 +35,6 @@ export interface ReviewSettleDeps {
 export interface ReviewSettledRun {
   readonly settlement: ReviewRunSettlement;
   readonly presentedCount: number;
-}
-
-function presentationCandidates(state: ReviewRunState): PresentationCandidate[] {
-  return state.candidates.map((candidate, index) => {
-    const outcome = state.outcomes.get(candidate.fingerprint);
-    return {
-      fingerprint: candidate.fingerprint,
-      report: candidate.report,
-      reviewerRank: index + 1,
-      verdict: outcome?.verdict,
-      evidenceInHead: outcome?.evidenceInHead ?? false,
-    };
-  });
 }
 
 /**
@@ -192,7 +183,12 @@ export async function settleRunRecord(
     uncheckedCandidates: state.uncheckedCandidates,
     uncheckedReason: state.uncheckedReason,
   });
-  const rows = findingRows(presentationCandidates(state), ctx, deps.excluded, computed);
+  const rows = findingRows(
+    presentationCandidatesOf(state.candidates, state.outcomes),
+    ctx,
+    deps.excluded,
+    computed,
+  );
   const persisted = persist(deps, ctx, state, rows, computed);
   const recorded = persisted === "full";
   const settlement = recorded ? computed : INTERRUPTED;
@@ -220,7 +216,7 @@ function logSettled(
     runId: ctx.runId,
     settlement,
     coverage: state.coverageSummary,
-    verdicts: verdictCounts(rows, presentedCount),
+    verdicts: { ...verdictCounts(rows, presentedCount), surplus: state.surplusCandidates },
     reviewer: state.reviewerTotals,
     counterChecker: state.counterCheckerTotals,
     durationMs: deps.now() - ctx.startedAt,

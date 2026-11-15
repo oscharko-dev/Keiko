@@ -58,7 +58,7 @@ import {
   evaluateReviewRoleModels,
   type ReviewModelPort,
 } from "./models.js";
-import { counterCheckOrder } from "./presentation.js";
+import { counterCheckOrder, presentationCandidatesOf, presentationIsFull } from "./presentation.js";
 import {
   combineReviewerFacts,
   type ReviewerSettlementFact,
@@ -111,6 +111,11 @@ export interface ReviewRunState {
   /** What left them unchecked: the run's prompt allowance or the phase's wall-time limit (#4130). */
   uncheckedReason: UncheckedCandidatesReason | undefined;
   /**
+   * Candidates no counter-check ran for because the run already presents as many findings as it
+   * may (#4130). None of them could be presented, so they do not make the run incomplete.
+   */
+  surplusCandidates: number;
+  /**
    * The diff package's part count; the counter-check run allowance and the phase's wall-time limit
    * hold once per part (#4130).
    */
@@ -144,6 +149,7 @@ export function newReviewRunState(): ReviewRunState {
     counterCheckEffects: [],
     uncheckedCandidates: 0,
     uncheckedReason: undefined,
+    surplusCandidates: 0,
     partCount: 0,
     target: undefined,
     worktreeRoot: undefined,
@@ -398,9 +404,12 @@ type ReviewerPartStep =
 
 type RuntimeResult = Awaited<ReturnType<ReviewRuntimeService["run"]>>;
 
+/** The sessions one part can get: the first, and one more after a model failure (#4130). */
+type ReviewerSessionAttempt = 1 | 2;
+
 function partLine(
   ctx: ReviewRunContext,
-  input: ReviewerPart,
+  input: ReviewerPart & { readonly attempt: ReviewerSessionAttempt },
   result: RuntimeResult,
   step: ReviewerPartStep,
   totals: ReviewRoleTotals,
@@ -417,6 +426,7 @@ function partLine(
       ? { runtimeRunId: result.runtimeRunId }
       : {}),
     ...(result.ok && result.readCalls !== undefined ? { readCalls: result.readCalls } : {}),
+    ...(input.attempt > 1 ? { attempt: input.attempt } : {}),
   };
   if (step.kind === "stop") return { ...base, outcome: "refused", reason: step.settlement.reason };
   const fact = step.fact;
@@ -426,7 +436,23 @@ function partLine(
 }
 
 /**
- * One part's Reviewer session: totals, rules digest, cleanup and candidates go into the state.
+ * A session that ended on a model failure before one report was accepted: an invalid tool call the
+ * gateway's corrections did not repair, an empty answer, a failed provider call. Nothing of it is
+ * kept, so the part can be reviewed again from the start. A session out of budget or time is not
+ * started again, and neither is one that already filed a candidate.
+ */
+function failedWithoutCandidate(result: RuntimeResult, step: ReviewerPartStep): boolean {
+  return (
+    result.ok &&
+    result.candidates.length === 0 &&
+    step.kind === "fact" &&
+    step.fact.outcome === "failed" &&
+    step.fact.reason === "model-failed"
+  );
+}
+
+/**
+ * One Reviewer session of a part: totals, rules digest, cleanup and candidates go into the state.
  *
  * The launch gets the Reviewer model's readiness check (#4130). The run's start verified the model,
  * but the launch mints its authority only for a readiness observation younger than five minutes,
@@ -435,13 +461,13 @@ function partLine(
  * `skipped/model-unavailable`. The review runtime calls the check right before it reads that
  * authority; a fresh observation makes it a no-op.
  */
-async function runReviewerPart(
+async function runReviewerSession(
   deps: ReviewSequenceDeps,
   runtime: Pick<ReviewRuntimeService, "run">,
   ctx: ReviewRunContext,
   state: ReviewRunState,
-  input: ReviewerPart,
-): Promise<ReviewerPartStep> {
+  input: ReviewerPart & { readonly attempt: ReviewerSessionAttempt },
+): Promise<{ readonly step: ReviewerPartStep; readonly failedWithoutCandidate: boolean }> {
   const startedAt = deps.now();
   const result = await runtime.run({
     reviewRunId: ctx.runId,
@@ -462,7 +488,26 @@ async function runReviewerPart(
   state.reviewerTotals = addRoleTotals(state.reviewerTotals, totals);
   const step = partStep(deps, ctx, state, result);
   logReviewRunPart(deps.activityLog, ctx.correlationId, partLine(ctx, input, result, step, totals));
-  return step;
+  return { step, failedWithoutCandidate: failedWithoutCandidate(result, step) };
+}
+
+/**
+ * One part's review: its session, and one more session when the first ended on a model failure
+ * before any report was accepted (#4130). One malformed tool call or one empty answer of a local
+ * model otherwise costs the review the whole part. Each session writes its own `review.run.part`
+ * line; the second carries `attempt`. The part's fact is the last session's.
+ */
+async function runReviewerPart(
+  deps: ReviewSequenceDeps,
+  runtime: Pick<ReviewRuntimeService, "run">,
+  ctx: ReviewRunContext,
+  state: ReviewRunState,
+  input: ReviewerPart,
+): Promise<ReviewerPartStep> {
+  const first = await runReviewerSession(deps, runtime, ctx, state, { ...input, attempt: 1 });
+  if (!first.failedWithoutCandidate || ctx.signal.aborted) return first.step;
+  const second = await runReviewerSession(deps, runtime, ctx, state, { ...input, attempt: 2 });
+  return second.step;
 }
 
 function partStep(
@@ -601,15 +646,82 @@ function counterCheckStop(
   return now >= deadline ? "deadline-exceeded" : undefined;
 }
 
+/** What every counter-check of one phase shares. */
+interface CounterCheckPhase {
+  readonly worktreeRoot: string;
+  readonly headSha: string;
+  readonly reader: ReviewHeadFileReader;
+  readonly budget: RunCounterCheckBudget;
+  readonly deadline: number;
+}
+
+/** One candidate's counter-check; its verdict, effect and totals go into the state. */
+async function counterCheckCandidate(
+  deps: ReviewSequenceDeps,
+  ctx: ReviewRunContext,
+  state: ReviewRunState,
+  phase: CounterCheckPhase,
+  candidate: CounterCheckInput["candidate"],
+): Promise<void> {
+  const outcome = await deps.counterCheck({
+    candidate,
+    modelId: ctx.counterCheckerModelId,
+    worktreeRoot: phase.worktreeRoot,
+    headSha: phase.headSha,
+    reader: phase.reader,
+    budget: phase.budget,
+    signal: ctx.signal,
+    runCorrelationId: ctx.correlationId,
+    rulesText: state.rulesText,
+  });
+  state.outcomes.set(candidate.fingerprint, outcome);
+  state.counterCheckEffects.push(outcome.effect);
+  state.counterCheckerTotals = addRoleTotals(state.counterCheckerTotals, outcome);
+  deps.events.update(ctx.runId, { counts: { counterChecked: state.outcomes.size } });
+}
+
+/** The candidates in counter-check order, checked until one of the phase's three stops applies. */
+async function counterCheckInOrder(
+  deps: ReviewSequenceDeps,
+  ctx: ReviewRunContext,
+  state: ReviewRunState,
+  phase: CounterCheckPhase,
+  excluded: (fingerprint: string) => boolean,
+): Promise<void> {
+  const ranked = counterCheckOrder(
+    state.candidates.map((candidate, index) => ({ ...candidate, reviewerRank: index + 1 })),
+  );
+  for (const [index, candidate] of ranked.entries()) {
+    const stop = counterCheckStop(phase.budget, deps.now(), phase.deadline);
+    if (ctx.signal.aborted || stop !== undefined) {
+      state.uncheckedCandidates = ranked.length - index;
+      state.uncheckedReason = stop;
+      return;
+    }
+    await counterCheckCandidate(deps, ctx, state, phase, candidate);
+    const presentation = presentationCandidatesOf(state.candidates, state.outcomes);
+    if (presentationIsFull(presentation, { counterCheck: ctx.counterCheck, excluded })) {
+      state.surplusCandidates = ranked.length - index - 1;
+      return;
+    }
+  }
+}
+
 /**
  * The `counter-checking` phase: each candidate in severity order, then Reviewer order, in its own
- * fresh session. Once the run's allowance is exhausted or the phase's wall-time limit has passed,
- * the remaining candidates stay unchecked. A check in flight is not cut: it ends at its own limit.
+ * fresh session. Three things end it before every candidate is checked:
+ * - The run's allowance is exhausted or the phase's wall-time limit has passed. The remaining
+ *   candidates stay unchecked and make the run incomplete. A check in flight is not cut: it ends
+ *   at its own limit.
+ * - The run already presents as many findings as it may (#4130). The remaining candidates are
+ *   surplus: they rank after the presented ones, so none of them could be presented, and the run
+ *   stays complete. `excluded` must be the settlement's exclusion, so both decide alike.
  */
 export async function counterCheckCandidates(
   deps: ReviewSequenceDeps,
   ctx: ReviewRunContext,
   state: ReviewRunState,
+  excluded: (fingerprint: string) => boolean,
 ): Promise<void> {
   const target = state.target;
   const worktreeRoot = state.worktreeRoot;
@@ -628,33 +740,8 @@ export async function counterCheckCandidates(
     headSha: target.headSha,
     runner: deps.reviewServices.reviewRunner(ctx.correlationId),
   });
-  const budget = runBudget(allowance);
-  const ranked = counterCheckOrder(
-    state.candidates.map((candidate, index) => ({ ...candidate, reviewerRank: index + 1 })),
-  );
-  for (const [index, candidate] of ranked.entries()) {
-    const stop = counterCheckStop(budget, deps.now(), deadline);
-    if (ctx.signal.aborted || stop !== undefined) {
-      state.uncheckedCandidates = ranked.length - index;
-      state.uncheckedReason = stop;
-      return;
-    }
-    const outcome = await deps.counterCheck({
-      candidate,
-      modelId: ctx.counterCheckerModelId,
-      worktreeRoot,
-      headSha: target.headSha,
-      reader,
-      budget,
-      signal: ctx.signal,
-      runCorrelationId: ctx.correlationId,
-      rulesText: state.rulesText,
-    });
-    state.outcomes.set(candidate.fingerprint, outcome);
-    state.counterCheckEffects.push(outcome.effect);
-    state.counterCheckerTotals = addRoleTotals(state.counterCheckerTotals, outcome);
-    deps.events.update(ctx.runId, { counts: { counterChecked: state.outcomes.size } });
-  }
+  const phase = { worktreeRoot, headSha: target.headSha, reader, budget: runBudget(allowance) };
+  await counterCheckInOrder(deps, ctx, state, { ...phase, deadline }, excluded);
 }
 
 export { enterPhase as enterReviewRunPhase };

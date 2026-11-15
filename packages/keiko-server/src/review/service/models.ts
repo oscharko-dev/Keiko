@@ -95,15 +95,21 @@ export function evaluateReviewRoleModels(
   return { ok: true };
 }
 
-/** Admission, then eligibility, of both role models (the dry run's check). */
-export function validateReviewRoleModels(
+/**
+ * Admission, then readiness, then eligibility of both role models: the dry run's check, in the
+ * order a run start uses (`checkRoleModels`). The readiness check renews what has lapsed, so a dry
+ * run and the start it stands for judge the same proof (R4130-058). A pair the policy refuses is
+ * never checked for readiness, so its models receive no traffic (R4130-003).
+ */
+export async function validateReviewRoleModels(
   port: ReviewModelPort,
   models: ReviewRoleModels,
-  nowMs: number,
+  now: () => number,
   correlationId?: string,
-): ReviewModelValidation {
+): Promise<ReviewModelValidation> {
   if (!admitReviewRoleModels(port, models, correlationId)) {
     return { ok: false, reason: "policy-invalid" };
   }
-  return evaluateReviewRoleModels(port, models, nowMs);
+  await ensureReviewRoleModelsReady(port, models, correlationId);
+  return evaluateReviewRoleModels(port, models, now());
 }

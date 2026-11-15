@@ -269,10 +269,10 @@ class ReviewRunServiceImpl implements ReviewRunService {
   }
 
   private async dryRun(input: ReviewRunStartInput): Promise<ReviewRunStartOutcome> {
-    const models = validateReviewRoleModels(
+    const models = await validateReviewRoleModels(
       this.deps.models,
       input.request,
-      this.now(),
+      this.now,
       input.correlationId,
     );
     if (!models.ok) return this.refuse(models.reason, input);
@@ -355,10 +355,11 @@ class ReviewRunServiceImpl implements ReviewRunService {
   private async execute(ctx: ReviewRunContext, live: LiveRun): Promise<void> {
     const state = newReviewRunState();
     const deps = this.sequenceDeps();
+    const excluded = this.exclusionFor(ctx);
     try {
       const diffPackage = await prepareReviewRun(deps, ctx, state);
       if (diffPackage !== undefined && (await runReviewer(deps, ctx, state, diffPackage))) {
-        await counterCheckCandidates(deps, ctx, state);
+        await counterCheckCandidates(deps, ctx, state, excluded);
       }
     } catch (error) {
       // A failure no building block turned into a closed outcome (a store write, a thrown port)
@@ -366,7 +367,33 @@ class ReviewRunServiceImpl implements ReviewRunService {
       state.preparation ??= { kind: "abandoned", reason: "interrupted" };
       reportReviewFailure("review.run.execute", ctx.correlationId, error);
     }
-    await this.settle(ctx, state, live);
+    await this.settle(ctx, state, live, excluded);
+  }
+
+  /** Whether the fingerprint is dismissed on this run's pull request right now (Issue #4141). */
+  private excludedNow(ctx: ReviewRunContext, fingerprint: string): boolean {
+    const configured = this.deps.excludedFingerprint;
+    if (configured === undefined) return false;
+    const row = this.deps.store.get(ctx.runId);
+    return row !== undefined && configured(row, fingerprint);
+  }
+
+  /**
+   * The exclusion the counter-check phase decides on: one answer per fingerprint for the whole
+   * phase, so a fingerprint counted as presentable when the phase stopped (#4130) is not judged
+   * differently by a later check of the same phase. The settlement adds what is dismissed by then
+   * (`settleRecord`), so a dismissal that arrives during the run is never presented; at worst it
+   * leaves a place empty that a surplus candidate could have taken (R4130-058 review).
+   */
+  private exclusionFor(ctx: ReviewRunContext): (fingerprint: string) => boolean {
+    const answers = new Map<string, boolean>();
+    return (fingerprint): boolean => {
+      const known = answers.get(fingerprint);
+      if (known !== undefined) return known;
+      const answer = this.excludedNow(ctx, fingerprint);
+      answers.set(fingerprint, answer);
+      return answer;
+    };
   }
 
   /**
@@ -375,10 +402,15 @@ class ReviewRunServiceImpl implements ReviewRunService {
    * of rejecting the run's unawaited `done` promise (R4130-020); the row then settles at the next
    * start or cancel, which writes the run's one `review.run.settled` line.
    */
-  private async settle(ctx: ReviewRunContext, state: ReviewRunState, live: LiveRun): Promise<void> {
+  private async settle(
+    ctx: ReviewRunContext,
+    state: ReviewRunState,
+    live: LiveRun,
+    excluded: (fingerprint: string) => boolean,
+  ): Promise<void> {
     let settled: ReviewSettledRun = { settlement: INTERRUPTED, presentedCount: 0 };
     try {
-      settled = await this.settleRecord(ctx, state, live);
+      settled = await this.settleRecord(ctx, state, live, excluded);
     } catch (error) {
       reportReviewFailure("review.run.persist", ctx.correlationId, error);
       await removeReviewWorktree(this.deps, ctx, state, INTERRUPTED);
@@ -392,13 +424,13 @@ class ReviewRunServiceImpl implements ReviewRunService {
     ctx: ReviewRunContext,
     state: ReviewRunState,
     live: LiveRun,
+    excluded: (fingerprint: string) => boolean,
   ): Promise<ReviewSettledRun> {
     try {
       enterReviewRunPhase(this.sequenceDeps(), ctx, "settling");
     } catch (error) {
       reportReviewFailure("review.run.persist", ctx.correlationId, error);
     }
-    const row = this.deps.store.get(ctx.runId);
     return settleRunRecord(
       {
         store: this.deps.store,
@@ -406,8 +438,8 @@ class ReviewRunServiceImpl implements ReviewRunService {
         activityLog: this.deps.activityLog,
         stale: this.stale,
         now: this.now,
-        excluded: (fingerprint) =>
-          row !== undefined && this.deps.excludedFingerprint?.(row, fingerprint) === true,
+        // What the phase excluded stays excluded, and so does what was dismissed since.
+        excluded: (fingerprint) => excluded(fingerprint) || this.excludedNow(ctx, fingerprint),
       },
       ctx,
       state,
