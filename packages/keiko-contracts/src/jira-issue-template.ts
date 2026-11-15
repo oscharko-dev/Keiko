@@ -8,12 +8,12 @@
  * Parsing is deterministic and fails closed: any unknown key, malformed line or unsafe pattern
  * rejects the whole document. Errors carry closed codes, key names and line numbers, never text.
  */
-import { createHash } from "node:crypto";
 import { readJiraDescriptionSections } from "./jira-description-sections.js";
 import {
   JIRA_TEMPLATE_PATTERN_CHARS_MAX,
   jiraTemplatePatternIssue,
 } from "./jira-template-pattern.js";
+import { portableSha256Hex } from "./sha256-portable.js";
 
 export {
   compileJiraTemplatePattern,
@@ -913,7 +913,7 @@ export function jiraTemplateBindingDigest(
     ids.parentFieldId ?? null,
     ids.transitionStatusIds ?? null,
   ]);
-  return createHash("sha256").update(source, "utf8").digest("hex").slice(0, 32);
+  return portableSha256Hex(source).slice(0, 32);
 }
 
 /**

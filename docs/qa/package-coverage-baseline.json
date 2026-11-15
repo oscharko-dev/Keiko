@@ -42,7 +42,7 @@
       }
     },
     "keiko-contracts": {
-      "files": 274,
+      "files": 275,
       "uncoveredFiles": 5,
       "uncoveredLines": 1100,
       "totalLines": 15445,
