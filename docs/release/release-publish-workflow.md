@@ -411,8 +411,13 @@ at 64 KiB and has left the approvals with the OpenCode 2.2.5 bump (#4271): an in
 holds it reports `payload-unapproved` until it updates. The 1.1.4 packages are retired the same way
 (#4359): the change that selects the runtime packages built from the current pin also removes the
 previous pin and approval, and an installation still holding 1.1.4 is refused with `runtime-outdated`
-and told to update Keiko (never run silently). The final fresh npm/Yarn installation validation against the next
-product release remains pending (#3898 AC9). The existing Yarn qualification uses the `node-modules`
+and told to update Keiko (never run silently). The "Coding Workbench customer-shape qualification" workflow passed on the root pin to 1.1.5
+(run 43665484824, ref `child/4359-one-opencode-2-2-5` at 50b3dce, job "Qualify staged Coding Workbench
+on macOS 15"): a staged Yarn install (node-modules linker) on macOS arm64 against a local model twin
+installed the 1.1.5 package from the registry and completed a governed tool round trip. It does not
+cover the published-install matrix (Windows x64, Intel macOS, npm and npx), which runs only for a
+published product and remains open (#3898 AC9); the x64 package was verified by digest and by the
+publisher, never executed on Intel hardware or under Rosetta. The existing Yarn qualification uses the `node-modules`
 linker and does not prove Plug'n'Play support. Linux npm runtime availability is unchanged; its
 coding engine remains on the packaged lane described by ADR-0140. The Windows package is built and
 smoke-tested locally (#4068) but not qualified (see
