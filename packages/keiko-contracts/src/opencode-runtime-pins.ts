@@ -14,6 +14,13 @@ export interface OpenCodeRuntimeVersionPin {
   readonly rawSchemaSha256: string;
   /** `keiko-opencode-protocol-surface-v2` digest of the admitted endpoints of that schema. */
   readonly protocolSurfaceSha256: string;
+  /**
+   * Every effect a Code Mode program can cause reaches the native policy as its own decision on
+   * this runtime (#4359: observed per effect kind and mode, pinned in
+   * `opencodeCodeModeEffects.test.ts`). Only then may the program itself pass without a card.
+   * Absent or false: the program keeps asking, so an unknown runtime never loses it.
+   */
+  readonly decidesNestedEffects?: boolean;
 }
 
 const [CURRENT_PIN] = pinData.pins;

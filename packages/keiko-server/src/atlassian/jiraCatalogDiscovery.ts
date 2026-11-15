@@ -13,6 +13,7 @@ import {
   createToolRef,
   ToolCatalogError,
 } from "@oscharko-dev/keiko-tool-catalog";
+import { mcpToolKey } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import { jiraOperationInReleaseScope } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
@@ -33,19 +34,44 @@ interface DiscoveryOptions {
   /** Server-owned admitted subset; absent retains Chat's ordinary catalog admission. */
   readonly tools?: ReadonlySet<string>;
   readonly nativeToolNames?: true;
+  /**
+   * The Code Mode namespace the tools are called under. Present, every hit and every described
+   * operation names the exact expression that calls it (`callAs`), so a model never probes
+   * spellings: the sandbox resolves one key per tool and a wrong one fails there (#4359).
+   */
+  readonly callNamespace?: string;
 }
 type Context = JiraCatalogDiscoveryContext;
 const IDENTITY = text(512);
-const ITEM = object(
-  {
-    identity: IDENTITY,
-    tool: text(128),
-    description: text(4096),
-    kind: { type: "string", enum: ["native", "composite"] },
-    effects: { type: "array", maxItems: 16, items: text(64) },
-  },
-  ["identity", "tool"],
-);
+/**
+ * Coding's catalog also names how each tool is called (`callAs`) and what a merge kept or dropped;
+ * Chat's catalog carries neither, so its descriptors, and with them the compound byte ceiling its
+ * tool selection has to fit, stay exactly what they were (#4359: the extra fields grew every Chat
+ * catalog by their schema bytes and pushed a bounded selection past the ceiling).
+ */
+function item(coding: boolean): ReturnType<typeof object> {
+  return object(
+    {
+      identity: IDENTITY,
+      tool: text(128),
+      description: text(4096),
+      kind: { type: "string", enum: ["native", "composite"] },
+      effects: { type: "array", maxItems: 16, items: text(64) },
+      ...(coding ? { callAs: text(192) } : {}),
+    },
+    ["identity", "tool"],
+  );
+}
+
+/** The exact expression that calls a tool in a Code Mode program, when the catalog is Coding's. */
+function callAsField(
+  options: DiscoveryOptions,
+  tool: string,
+): { readonly callAs: string } | Record<string, never> {
+  return options.callNamespace === undefined
+    ? {}
+    : { callAs: `tools.${options.callNamespace}["${mcpToolKey(tool)}"]` };
+}
 
 interface Summary extends CatalogJsonObject {
   readonly identity: string;
@@ -63,6 +89,7 @@ function summaries(options: DiscoveryOptions): readonly Summary[] {
       identity: definition.identity,
       tool:
         options.nativeToolNames === true ? definition.tool : definition.tool.replace(/[.-]/gu, "_"),
+      ...callAsField(options, definition.tool),
       description: JIRA_OPERATION_SUMMARIES[definition.tool] ?? definition.tool,
       kind: definition.kind,
       effects: definition.effects,
@@ -310,22 +337,34 @@ function canonicalIdentities(
   );
   const resolved: string[] = [];
   for (const entry of requested) {
-    const identity = known.has(entry) ? entry : namedOperation(listed, entry, options)?.identity;
+    const identity = known.has(entry) ? entry : resolveNamedOperation(listed, entry)?.identity;
     if (identity === undefined) return undefined;
     resolved.push(identity);
   }
   return new Set(resolved).size === resolved.length ? resolved : undefined;
 }
-function namedOperation(
-  listed: readonly { readonly identity: string; readonly tool: string }[],
-  entry: string,
-  options: DiscoveryOptions,
-): { readonly identity: string } | undefined {
-  return listed.find(
-    (definition) =>
-      definition.tool === entry ||
-      (options.nativeToolNames !== true && definition.tool.replace(/[.-]/gu, "_") === entry),
-  );
+/**
+ * The form two names of one operation share: the dotted registry name and its underscore form
+ * (`jira.issue-types`, `jira_issue_types`) name the same operation.
+ */
+export function jiraOperationNameKey(tool: string): string {
+  return tool.replace(/[.-]/gu, "_");
+}
+
+/**
+ * One matcher for Chat and Coding: the dotted registry name and its underscore form name the same
+ * operation. `nativeToolNames` only chooses which of the two jira.discover shows; the description
+ * promises both, so both must resolve (#4359: a Coding model copying `jira_issue` was refused). An
+ * exact tool name wins; any other spelling must name exactly one operation, and a name two
+ * operations share after normalisation is refused, never resolved to the first (#4359 audit).
+ */
+export function resolveNamedOperation<
+  T extends { readonly identity: string; readonly tool: string },
+>(listed: readonly T[], entry: string): T | undefined {
+  const exact = listed.filter((definition) => definition.tool === entry);
+  if (exact.length > 0) return exact.length === 1 ? exact[0] : undefined;
+  const named = listed.filter((definition) => jiraOperationNameKey(definition.tool) === entry);
+  return named.length === 1 ? named[0] : undefined;
 }
 
 function discover(
@@ -381,7 +420,7 @@ const INVALID_DESCRIPTION = {
   outcome: "failed",
   reason: "invalid-arguments",
   guidance:
-    "Pass only the identity or the tool name that jira.discover returned for an operation, each operation at most once; a name jira.discover did not list is refused. The current tool selection was not changed.",
+    'Pass only the identity or the tool name that jira.discover returned for an operation, each operation at most once; a name jira.discover did not list is refused. Copy a hit\'s "tool" (for example jira.priorities) or its "identity" exactly, or call jira.discover first. The current tool selection was not changed.',
 } as const;
 
 /** More operations than one tool host or catalog can carry; nothing was selected. */
@@ -439,64 +478,96 @@ async function describe(
   const selected = new Set(identities);
   const previous = new Set(context.selectedJiraOperations?.() ?? []);
   const known = summaries(options);
-  const deselected = known
-    .filter((item) => previous.has(item.identity) && !selected.has(item.identity))
-    .map((item) => ({ identity: item.identity, tool: item.tool }));
+  const deselected = replacedItems(options, known, previous, selected);
   const data: CatalogJsonObject = {
     outcome: "succeeded",
     items: known
       .filter((item) => selected.has(item.identity))
-      .map((item) => ({ identity: item.identity, tool: item.tool })),
+      .map((item) => ({
+        identity: item.identity,
+        tool: item.tool,
+        ...callAsField(options, item.tool),
+      })),
     selectedFor: "next-round",
     ...(deselected.length === 0 ? {} : { deselected, guidance: DESELECTED_GUIDANCE }),
   };
   return selectedDescription(context.selectJiraOperations.bind(context), identities, data);
 }
 
+/** A catalog that merges (Coding's) reports what left itself; only a replacing one lists it here. */
+function replacedItems(
+  options: DiscoveryOptions,
+  known: readonly Summary[],
+  previous: ReadonlySet<string>,
+  selected: ReadonlySet<string>,
+): readonly CatalogJsonObject[] {
+  return options.callNamespace !== undefined
+    ? []
+    : known
+        .filter((item) => previous.has(item.identity) && !selected.has(item.identity))
+        .map((item) => ({ identity: item.identity, tool: item.tool }));
+}
+
 /** A replacing selection names what it dropped, so a model never calls a tool it lost unknowingly. */
 const DESELECTED_GUIDANCE =
   "This selection replaced the previous one. The operations under deselected are no longer offered in the next round; select them again together with the others if they are still needed.";
 
-const RESULT_SCHEMA = object(
-  {
-    reason: {
-      type: "string",
-      enum: [
-        "budget-exhausted",
-        "selection-unavailable",
-        "selection-too-large",
-        "invalid-arguments",
-      ],
+function resultSchema(coding: boolean): ReturnType<typeof object> {
+  const ITEM = item(coding);
+  return object(
+    {
+      reason: {
+        type: "string",
+        enum: [
+          "budget-exhausted",
+          "selection-unavailable",
+          "selection-too-large",
+          "invalid-arguments",
+        ],
+      },
+      guidance: text(512),
+      outcome: { type: "string", enum: ["succeeded", "failed"] },
+      items: {
+        type: "array",
+        maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+        items: ITEM,
+      },
+      startAt: { type: "integer", minimum: 0 },
+      total: { type: "integer", minimum: 0 },
+      nextStartAt: { type: "integer", minimum: 0 },
+      selectedFor: { type: "string", enum: ["next-round"] },
+      ...(coding
+        ? {
+            retained: {
+              type: "array",
+              maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+              items: ITEM,
+            },
+            dropped: {
+              type: "array",
+              maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+              items: ITEM,
+            },
+          }
+        : {}),
+      deselected: {
+        type: "array",
+        maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+        items: ITEM,
+      },
     },
-    guidance: text(512),
-    outcome: { type: "string", enum: ["succeeded", "failed"] },
-    items: {
-      type: "array",
-      maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
-      items: ITEM,
-    },
-    startAt: { type: "integer", minimum: 0 },
-    total: { type: "integer", minimum: 0 },
-    nextStartAt: { type: "integer", minimum: 0 },
-    selectedFor: { type: "string", enum: ["next-round"] },
-    deselected: {
-      type: "array",
-      maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
-      items: ITEM,
-    },
-  },
-  ["outcome", "items"],
-);
+    ["outcome", "items"],
+  );
+}
 
 // A pure constant: built once per process, not again for every catalog a Chat turn composes.
-const DISCOVERY_DESCRIPTORS = new Map<
-  JiraCatalogDiscoveryToolName,
-  ReturnType<typeof createToolDescriptor>
->();
+const DISCOVERY_DESCRIPTORS = new Map<string, ReturnType<typeof createToolDescriptor>>();
 function discoveryDescriptor(
   name: JiraCatalogDiscoveryToolName,
+  coding: boolean,
 ): ReturnType<typeof createToolDescriptor> {
-  const known = DISCOVERY_DESCRIPTORS.get(name);
+  const key = `${name}:${coding ? "coding" : "chat"}`;
+  const known = DISCOVERY_DESCRIPTORS.get(key);
   if (known !== undefined) return known;
   const discovery = name === "jira.discover";
   const descriptor = createToolDescriptor({
@@ -520,7 +591,7 @@ function discoveryDescriptor(
           },
           ["identities"],
         ),
-    resultSchema: RESULT_SCHEMA,
+    resultSchema: resultSchema(coding),
     effects: ["connector-access"],
     actionMapping: [{ action: name, effects: ["connector-access"] }],
     policyReferences: ["adr-0128.d4"],
@@ -534,7 +605,7 @@ function discoveryDescriptor(
     idempotency: "server-key-required",
     cancellation: "before-effect",
   });
-  DISCOVERY_DESCRIPTORS.set(name, descriptor);
+  DISCOVERY_DESCRIPTORS.set(key, descriptor);
   return descriptor;
 }
 
@@ -546,7 +617,7 @@ function tool(
   return {
     name,
     risk: "read",
-    descriptor: discoveryDescriptor(name),
+    descriptor: discoveryDescriptor(name, options.callNamespace !== undefined),
     execute: (args, context) =>
       discovery ? discover(args, context, options) : describe(args, context, options),
   };

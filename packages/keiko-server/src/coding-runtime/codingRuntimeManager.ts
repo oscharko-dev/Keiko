@@ -3347,7 +3347,11 @@ function nativeActionReviewFacts(
       : [];
   const pending: CodingWorkbenchRuntimePendingApprovalReview = {
     requestId: event.requestId,
-    nativeAction: { permission: action.permission, resources: action.resources },
+    nativeAction: {
+      permission: action.permission,
+      resources: action.resources,
+      ...(action.jira === undefined ? {} : { jira: action.jira }),
+    },
     paths,
     pathsTruncated: false,
     fileCount: paths.length,

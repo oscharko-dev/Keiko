@@ -415,4 +415,52 @@ describe("native action review boundaries (#3897)", () => {
       errorsFor(nativeReview(shellAction(), { paths: tooMany, fileCount: tooMany.length })),
     ).toContain("pendingApprovalReview.paths exceeds the reviewable path cap");
   });
+
+  // #4359: a Jira write of the run's Pod rides the native review as the call and the names Jira
+  // gave its ids, bounded; anything else on the review stays refused.
+  describe("a Jira write on the native action review", () => {
+    const jira = {
+      tool: "jira.create",
+      input: { projectId: "10002", fields: { summary: "A" } },
+      names: { projects: [["10002", "Anforderungen (REQ)"]], issueTypes: [], fields: [] },
+    };
+    const pending = (nativeAction: unknown): Record<string, unknown> => ({
+      session: "active",
+      pending: {
+        requestId: "permission-42",
+        paths: [],
+        pathsTruncated: false,
+        fileCount: 0,
+        addedLines: 0,
+        deletedLines: 0,
+        nativeAction,
+      },
+    });
+    const action = (extra: unknown): unknown => ({
+      permission: mcpToolAction("jira", "jira.create"),
+      resources: ["*"],
+      jira: extra,
+    });
+
+    it("accepts the call with its names", () => {
+      expect(errorsFor(pending(action(jira)))).toEqual([]);
+    });
+
+    it.each([
+      ["an unknown key", { ...jira, extra: true }],
+      ["an input that is not an object", { ...jira, input: "x" }],
+      ["an input beyond its bound", { ...jira, input: { text: "x".repeat(20_000) } }],
+      ["names that are not pairs", { ...jira, names: { ...jira.names, projects: [["only-id"]] } }],
+      [
+        "too many names",
+        {
+          ...jira,
+          names: { ...jira.names, projects: Array.from({ length: 65 }, () => ["i", "n"]) },
+        },
+      ],
+      ["a missing names object", { tool: "jira.create", input: {} }],
+    ])("refuses %s", (_label, bad) => {
+      expect(errorsFor(pending(action(bad)))).not.toEqual([]);
+    });
+  });
 });

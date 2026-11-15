@@ -435,74 +435,12 @@ describe("retaining a settled run's session state", () => {
     expect(entryNames(f)).toEqual([]);
   });
 
-  it("retains and restores the still-admitted previous producer's database", () => {
-    const f = fixture({
-      session: { version: "2.1.4" },
-      schema: "2.1.4",
-    });
-    const before = sha256(f.source);
+  // #4359: Keiko admits exactly one OpenCode. A database of an earlier producer has no persistence
+  // contract any more, so it is refused whatever it holds; a session of such a run is not resumed.
+  it.each(["2.1.4", "2.0.10"])("refuses a database of the retired producer %s", (version) => {
+    const f = fixture({ session: { version } });
 
-    expect(retain(f, { runtimeVersion: "2.1.4" })).toMatchObject({ ok: true });
-    const restored = checkout(f, { runtimeVersion: "2.1.4" });
-    expect(restored.result).toMatchObject({ ok: true, sessionId: SESSION_ID });
-    expect(sha256(restored.destination)).toBe(sha256(join(entryDirectory(f), "opencode.db")));
-    expect(sha256(f.source)).toBe(before);
-  });
-
-  it.each([
-    ["permission", "grant-present"],
-    ["credential", "credential-present"],
-  ] as const)("refuses persisted %s in the previous producer's schema", (table, reason) => {
-    const f = fixture({
-      session: { version: "2.1.4" },
-      schema: "2.1.4",
-      rows: { [table]: 1 },
-    });
-
-    expect(retain(f, { runtimeVersion: "2.1.4" })).toMatchObject({ ok: false, reason });
-    expect(entryNames(f)).toEqual([]);
-  });
-
-  it("refuses a queued input in the 2.1.4 schema, which still has the table", () => {
-    const f = fixture({
-      session: { version: "2.1.4" },
-      schema: "2.1.4",
-      rows: { session_pending: 1 },
-    });
-
-    expect(retain(f, { runtimeVersion: "2.1.4" })).toMatchObject({
-      ok: false,
-      reason: "pending-input",
-    });
-    expect(entryNames(f)).toEqual([]);
-  });
-
-  it("refuses a 2.2.5 schema claiming to be a 2.1.4 session, which lacks the queued-input table", () => {
-    const f = fixture({ session: { version: "2.1.4" }, schema: "2.2.5" });
-
-    expect(retain(f, { runtimeVersion: "2.1.4" })).toEqual({
-      ok: false,
-      reason: "schema-unknown",
-      check: "audit-unreadable",
-    });
-    expect(entryNames(f)).toEqual([]);
-  });
-
-  it("refuses a 2.1.4 schema claiming to be a 2.2.5 session, which lacks a table the audit reads", () => {
-    const f = fixture({ session: { version: "2.2.5" }, schema: "2.1.4" });
-
-    expect(retain(f, { runtimeVersion: "2.2.5" })).toEqual({
-      ok: false,
-      reason: "schema-unknown",
-      check: "audit-unreadable",
-    });
-    expect(entryNames(f)).toEqual([]);
-  });
-
-  it("refuses a database of a retired producer", () => {
-    const f = fixture({ session: { version: "2.0.10" }, schema: "2.1.4" });
-
-    expect(retain(f, { runtimeVersion: "2.0.10" })).toMatchObject({
+    expect(retain(f, { runtimeVersion: version })).toMatchObject({
       ok: false,
       reason: "schema-unknown",
     });

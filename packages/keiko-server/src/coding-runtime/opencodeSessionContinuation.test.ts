@@ -13,6 +13,7 @@ import {
 } from "./codingSessionContinuity.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
 import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
   bindContinuedSession,
   retainSettledRun,
@@ -141,7 +142,7 @@ function harness(
     context: {
       service,
       workspaceId: options.workspaceId ?? "workspace-1",
-      runtimeVersion: "2.1.4",
+      runtimeVersion: OPENCODE_PINNED_VERSION,
       maxInputTokens: 24_000,
       activityLog: log,
       ...(options.forkSource === undefined ? {} : { forkSource: options.forkSource }),
@@ -195,7 +196,7 @@ describe("seeding a run's database from a task's retained entry", () => {
         binding: {
           taskId: TASK,
           workspaceKey: expect.stringMatching(/^[a-f0-9]{64}$/u) as string,
-          runtimeVersion: "2.1.4",
+          runtimeVersion: OPENCODE_PINNED_VERSION,
           maxInputTokens: 24_000,
         },
         directory: WORKSPACE,
@@ -431,12 +432,18 @@ it.each(["workspace-changed", "version-changed"] as const)(
 function realisticDatabase(path: string): void {
   const database = new DatabaseSync(path);
   try {
-    for (const [table, columns] of Object.entries(OPENCODE_PERSISTENCE_SCHEMAS["2.1.4"] ?? {})) {
+    for (const [table, columns] of Object.entries(
+      OPENCODE_PERSISTENCE_SCHEMAS[OPENCODE_PINNED_VERSION] ?? {},
+    )) {
       database.exec(`CREATE TABLE "${table}" (${columns.map((name) => `"${name}"`).join(", ")})`);
     }
+    // The runtime's own kv table is keyed: Keiko's scheduler lease upserts into it (2.2.5 schedules).
+    database.exec(
+      'DROP TABLE kv; CREATE TABLE kv ("key" TEXT PRIMARY KEY, "value", "time_created", "time_updated")',
+    );
     database
       .prepare("INSERT INTO session_v2 (id, directory, version) VALUES (?, ?, ?)")
-      .run(SESSION, WORKSPACE, "2.1.4");
+      .run(SESSION, WORKSPACE, OPENCODE_PINNED_VERSION);
     database
       .prepare("INSERT INTO session_message (id, session_id, data) VALUES ('msg_1', ?, 'x')")
       .run(SESSION);
@@ -982,7 +989,7 @@ describe("retaining a settled run", () => {
           binding: {
             taskId: TASK,
             workspaceKey: expect.stringMatching(/^[a-f0-9]{64}$/u) as string,
-            runtimeVersion: "2.1.4",
+            runtimeVersion: OPENCODE_PINNED_VERSION,
             maxInputTokens: 24_000,
           },
           sessionId: SESSION,

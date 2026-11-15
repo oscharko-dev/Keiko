@@ -617,6 +617,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Coding-Läufe können nicht starten, weil Keiko in einem Netzwerkordner oder einem umgeleiteten Ordner installiert ist. Installiere Keiko auf einem lokalen Laufwerk dieses Computers.",
   "codingWorkbench.installVolume.unverified":
     "Keiko konnte seinen Installationsordner gerade nicht prüfen, weil Windows zu langsam geantwortet hat. Versuch es gleich noch einmal; wenn es so bleibt, starte Keiko neu.",
+  "codingWorkbench.runtime.outdated":
+    "Coding-Läufe können nicht starten, weil die mit diesem Keiko installierte Coding-Engine eine ältere Version ist, die Keiko nicht mehr freigibt. Aktualisiere Keiko auf die neueste Version.",
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":
@@ -1153,6 +1155,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Führt dieses Code-Mode-Programm einmal in der Skript-Sandbox von OpenCode aus.",
   "codingWorkbench.approval.native.help.worktree":
     "Legt einen neuen Aufgaben-Workspace auf eigenem Branch an; dieser Lauf bleibt hier.",
+  "codingWorkbench.approval.native.help.jira": "Nimmt genau diese Änderung in Jira vor, einmalig.",
   "codingWorkbench.approval.native.help.schedule":
     "Ändert, wann Keiko diese Aufgabe selbst fortsetzt, im Modus, den Sie dafür gewählt haben.",
   "codingWorkbench.approval.native.resources": "Angeforderter Befehl, Pfade oder Adressen",
@@ -1172,6 +1175,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.native.permission.websearch": "Websuche",
   "codingWorkbench.approval.native.permission.execute": "Code-Mode-Skript",
   "codingWorkbench.approval.native.permission.worktree": "Neuer Task-Workspace",
+  "codingWorkbench.approval.native.permission.jira": "Jira-Änderung",
   "codingWorkbench.approval.native.permission.schedule": "Geplante Fortsetzung",
   "codingWorkbench.approval.native.permission.other": "Native Aktion",
   "codingWorkbench.approval.native.label.native-shell": "Nativer Shell-Befehl",

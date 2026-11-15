@@ -196,6 +196,27 @@ async function chooseOptionOnce(page, comboName, optionLabel, settle) {
   await options.nth(index).click();
 }
 
+// The Connectors menu replaced the "Jira Pod for this run" select (owner decision 2026-11-02): one
+// switch per Pod. The run is bound to the Pod whose switch is on, so a Pod that is not listed, or a
+// switch that does not turn on, stops the lab before the run starts instead of running without Jira.
+export async function switchJiraPodOn(page, podName) {
+  await page.locator('button[aria-label^="Connectors"]').last().click();
+  const panel = page.locator("section[aria-label=Connectors]");
+  const toggle = panel
+    .locator(
+      `xpath=.//*[normalize-space(text())=${JSON.stringify(podName)}]/ancestor::*[.//*[@role="switch"]][1]//*[@role="switch"]`,
+    )
+    .first();
+  if ((await toggle.count()) === 0) {
+    throw new Error(`Connectors: no Jira Pod is named "${podName}"`);
+  }
+  if ((await toggle.getAttribute("aria-checked")) !== "true") await toggle.click();
+  if ((await toggle.getAttribute("aria-checked")) !== "true") {
+    throw new Error(`Connectors: the Jira Pod "${podName}" did not switch on`);
+  }
+  await page.keyboard.press("Escape");
+}
+
 export async function startRun(page, workbench, { model, mode, text, jiraPod }) {
   const newTask = page.getByRole("button", { name: "New task", exact: true });
   if (await newTask.isVisible().catch(() => false)) {
@@ -204,7 +225,7 @@ export async function startRun(page, workbench, { model, mode, text, jiraPod }) 
   }
   await chooseOption(page, "Coding model", model, { waitMs: MODEL_READINESS_WAIT_MS });
   await chooseOption(page, "Run authority", mode.label);
-  if (jiraPod !== undefined) await chooseOption(page, "Jira Pod for this run", `Jira: ${jiraPod}`);
+  if (jiraPod !== undefined) await switchJiraPodOn(page, jiraPod);
   const composer = workbench.locator("textarea").first();
   await composer.fill(text);
   if ((await composer.inputValue()) !== text) {

@@ -18,6 +18,10 @@ import {
   npmLanePackageRoot,
   type DevLaneOpenCodeDiscovery,
 } from "./devLanePortableCodingRuntime.js";
+import {
+  OPENCODE_PINNED_VERSION,
+  OPENCODE_RUNTIME_VERSION_PINS,
+} from "./opencodeRuntimeVersions.js";
 import { resolveOpenCodeRipgrep } from "./opencodeRipgrepLaunch.js";
 import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -63,13 +67,13 @@ const HELPER = "helper-binary";
 function approvalFor(): NpmLaneRuntimeApproval {
   return {
     packageName: PACKAGE_NAME,
-    upstreamVersion: "2.1.4",
+    upstreamVersion: OPENCODE_PINNED_VERSION,
     adapterName: "keiko-coding-sidecar",
     adapterVersion: "2",
     executableTreeSha256: sha256(`bin/opencode\0${sha256(EXECUTABLE)}\0`),
     licenseSha256: sha256(LICENSE),
     // The approved version's own producer-derived schema digest (opencodeRuntimeVersions.ts).
-    protocolSchemaSha256: "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9",
+    protocolSchemaSha256: OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "",
     sbomSha256: sha256(SBOM),
     helperSha256: sha256(HELPER),
     helperSizeBytes: HELPER.length,
@@ -122,36 +126,33 @@ afterEach(() => {
 });
 
 describe("npm-lane OpenCode discovery", () => {
-  it("keeps a previously approved helper usable with its narrower wire capability", () => {
+  // #4359: Keiko admits exactly one OpenCode. The retired 1.1.4 packages carry 2.1.4; an
+  // installation that still holds one is told to update (its own refusal), never silently run.
+  it("refuses a retired runtime package as outdated, not as tampered", () => {
     const install = globalInstall();
-    const previous = { ...install.approval, helperMaxBytes: 65_536 };
-    const current = { ...install.approval, helperSha256: sha256("new-helper-binary") };
-    const discovery = discoverNpmLaneOpenCode({
-      env: install.env,
-      platform: "darwin",
-      arch: "arm64",
-      npmLaneApprovals: { "macos-arm64": current },
-      npmLanePreviousApprovals: { "macos-arm64": previous },
-    });
-    expect(discovery.outcome).toBe("activated");
-    if (discovery.outcome !== "activated") return;
-    expect(discovery.runtime.secureRead.artifact).toMatchObject({
-      sha256: previous.helperSha256,
-      sourceTreeSha256: previous.helperSourceTreeSha256,
-      byteCap: 65_536,
-    });
-    write(
-      join(install.runtimeRoot, "native", "keiko-secure-workspace-read"),
-      "unknown-helper",
-      0o755,
-    );
     expect(
       discoverNpmLaneOpenCode({
         env: install.env,
         platform: "darwin",
         arch: "arm64",
-        npmLaneApprovals: { "macos-arm64": current },
-        npmLanePreviousApprovals: { "macos-arm64": previous },
+        npmLaneApprovals: {
+          "macos-arm64": { ...install.approval, executableTreeSha256: "d".repeat(64) },
+        },
+        npmLaneRetiredTrees: new Set([install.approval.executableTreeSha256]),
+      }),
+    ).toEqual({ outcome: "refused", reason: "payload-outdated" });
+  });
+
+  it("refuses a package whose helper is not the approved one, as stale", () => {
+    const install = globalInstall();
+    expect(
+      discoverNpmLaneOpenCode({
+        env: install.env,
+        platform: "darwin",
+        arch: "arm64",
+        npmLaneApprovals: {
+          "macos-arm64": { ...install.approval, helperSha256: sha256("new-helper-binary") },
+        },
       }),
     ).toEqual({ outcome: "refused", reason: "secure-read-helper-stale" });
   });

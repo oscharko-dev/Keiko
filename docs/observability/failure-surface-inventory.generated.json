@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "35ee0bd91e3c8f5fbf23ace07441756f024af230bcf1be7efa7770f9b6a5f813"
+    "catalogDigest": "e8d04b7e33e682ee9621e58cf75baf4c354bac5dc3a767ad363ce645f9c7ace2"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 705,
-    "proofCount": 728,
-    "resolvedProofCount": 728,
+    "operationCount": 703,
+    "proofCount": 726,
+    "resolvedProofCount": 726,
     "failureClassCount": 403,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -139,7 +139,6 @@
         "chat.send.rejected",
         "chat.tool-mutation",
         "chat.tool-mutation.projected",
-        "chat.tool-transcript.marker-omitted",
         "chat.tool-transcript.updated",
         "chat.tool-turn.batch-draft-offer",
         "chat.tool-turn.context-fitted",
@@ -153,7 +152,6 @@
         "http.request.body.failed",
         "http.request.body.received",
         "http.request.body.rejected",
-        "jira.approval.names",
         "jira.approval.project",
         "jira.attachment.source",
         "jira.catalog.selection",
@@ -1497,9 +1495,6 @@
     "chat.tool-mutation.projected.line": [
       "packages/keiko-server/src/store/chatToolTranscript.test.ts"
     ],
-    "chat.tool-transcript.marker-omitted.line": [
-      "packages/keiko-server/src/store/chatToolTranscript.test.ts"
-    ],
     "chat.tool-transcript.updated.line": [
       "packages/keiko-server/src/store/chatToolTranscript.test.ts"
     ],
@@ -1782,7 +1777,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"
     ],
     "coding-runtime.context-usage.observed.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.test.ts"
+      "packages/keiko-server/src/coding-runtime/codingRuntimeContextUsageObservation.test.ts"
     ],
     "coding-runtime.descendants.swept.emitted-line": [
       "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.test.ts"
@@ -1891,6 +1886,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
     "coding-runtime.native-policy.decided.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeCodeModeEffects.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeNativePolicyLinks.test.ts"
     ],
@@ -2741,9 +2737,6 @@
     ],
     "indexing.start.refused.line": [
       "packages/keiko-server/src/local-knowledge-handlers.logging.test.ts"
-    ],
-    "jira.approval.names.line": [
-      "packages/keiko-server/src/atlassian/jiraChatApprovalNames.test.ts"
     ],
     "jira.approval.project.line": [
       "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.test.ts"

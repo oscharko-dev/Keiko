@@ -114,6 +114,7 @@ import {
   withholdRunningWorkbenchProbesForLiveRun,
 } from "./gateway-readiness.js";
 import { getServerLogger } from "./observability/index.js";
+import type { CodingRuntimeConversation } from "./coding-runtime/codingRuntimeContextUsage.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import {
   sseBackpressureReporter,
@@ -184,6 +185,12 @@ interface PromptTokenReservation {
    * of the same size. Absent when the authenticator answered none.
    */
   readonly modelCallId?: number | undefined;
+  /**
+   * The conversation this call belongs to, as digests. The route sees one run, but a run can hold
+   * several conversations (subagents, forks) whose prompts differ in size; the context usage of a
+   * call is attributed by this (#4359).
+   */
+  readonly conversation: CodingRuntimeConversation;
   settled: boolean;
   settlement?: PromptTokenSettlement;
 }
@@ -220,6 +227,15 @@ function settlePromptTokenReservation(
   discardedPromptTokens = 0,
 ): PromptTokenSettlement {
   const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
+  // The run's context usage reads the prompt size the provider reported for this call: the one
+  // fact every native run sends through this gateway, whatever events its runtime emits (#4359).
+  if (providerReported && !reservation.settled)
+    runtimeCapabilityAuthenticator(deps)?.observeProviderPromptTokens?.(
+      reservation.capability,
+      actualPromptTokens,
+      reservation.conversation,
+      reservation.modelCallId,
+    );
   return applyPromptTokenSettlement(deps, reservation, {
     promptTokens:
       (providerReported ? actualPromptTokens : reservation.reservedPromptTokens) +
@@ -2995,6 +3011,15 @@ interface RuntimeCapabilityAuthenticator {
         modelCallId?: number,
       ) => unknown)
     | undefined;
+  /** A prompt size the provider reported for an admitted call, never an estimate (#4359). */
+  readonly observeProviderPromptTokens?:
+    | ((
+        capability: string,
+        providerPromptTokens: number,
+        conversation: CodingRuntimeConversation,
+        modelCallId?: number,
+      ) => unknown)
+    | undefined;
   // #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): the real per-run fact behind the
   // outgoing tool-catalog advertisement's readiness (#3413-AC1/#3414-AC4/AC9). `undefined` for a
   // runId this capability has no record of (or an authenticator that predates this wiring)
@@ -3341,11 +3366,37 @@ function isRuntimeTransportProfileId(modelProfileId: string | undefined): boolea
   );
 }
 
+/**
+ * The conversation a request continues, as digests of its head and never any of its text: the
+ * system prompt names the agent, the system prompt with the first user message names the head
+ * (a subagent starts from its own, a compaction continues the same agent under a new one), and
+ * only a request that offers tools belongs to a conversation of the run.
+ */
+function conversationOf(
+  request: Pick<CodingSidecarGatewayChatCompletionRequest, "messages" | "tools">,
+): CodingRuntimeConversation {
+  const digestOf = (roles: readonly ("system" | "user")[]): string => {
+    const hash = createHash("sha256");
+    hash.update("keiko.coding-sidecar.conversation.v2\0");
+    for (const role of roles) {
+      const content = request.messages.find((message) => message.role === role)?.content ?? "";
+      hash.update(`${role}:${String(content.length)}:${content}\0`);
+    }
+    return hash.digest("hex");
+  };
+  return {
+    agentKey: digestOf(["system"]),
+    headKey: digestOf(["system", "user"]),
+    toolBearing: (request.tools?.length ?? 0) > 0,
+  };
+}
+
 function admitGatewayModelCall(
   deps: UiHandlerDeps,
   capability: string,
   runId: string,
   reservedPromptTokens: number,
+  conversation: CodingRuntimeConversation,
 ): PromptTokenReservation | undefined {
   const reserved = runtimeCapabilityAuthenticator(deps)?.admitModelCall?.(
     capability,
@@ -3356,6 +3407,7 @@ function admitGatewayModelCall(
   return {
     capability,
     reservedPromptTokens,
+    conversation,
     ...(modelCallId === undefined ? {} : { modelCallId }),
     settled: false,
   };
@@ -5942,6 +5994,7 @@ function executeBudgetedGatewayChat(
     authentication.capability,
     authentication.runId,
     estimatedPromptTokens,
+    conversationOf(parsed),
   );
   if (promptTokenReservation === undefined) {
     const answer = forbiddenGatewayRequest();

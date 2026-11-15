@@ -105,6 +105,7 @@ import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
+import { withJiraWriteReview } from "./opencodeRuntimeComposition.js";
 import type {
   McpOAuthIssuerPort,
   OpenCodeRuntimeCompositionInput,
@@ -197,6 +198,21 @@ import {
 import { openCodePlanDirectory } from "./opencodeLaunchProfile.js";
 
 const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
+// #4359: a test can take the nested-effects fact off the pin the run is verified against.
+const pinFlag = vi.hoisted(() => ({ stripNestedEffects: false }));
+
+vi.mock("./opencodeRuntimeVersions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./opencodeRuntimeVersions.js")>();
+  return {
+    ...actual,
+    openCodeRuntimeVersionPin: (version: unknown): unknown => {
+      const pin = actual.openCodeRuntimeVersionPin(version);
+      return pin !== undefined && pinFlag.stripNestedEffects
+        ? { ...pin, decidesNestedEffects: false }
+        : pin;
+    },
+  };
+});
 
 // Observe the real source producer without replacing its generated tools or source definitions.
 vi.mock("./opencodeToolSchemas.js", async (importOriginal) => {
@@ -12244,4 +12260,131 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
       { binding: { taskId: TASK }, sessionId: "ses_tool" },
     ]);
   });
+});
+
+// #4359 F27: the ask of a managed Jira write carries the call and the names its ids were given, so
+// the card reads like Chat's approval of the same write; every other ask stays as it is.
+describe("the plain approval of a managed Jira write", () => {
+  const ask = {
+    effect: "ask",
+    event: {
+      type: "permission-request",
+      requestId: "per_1",
+      nativeAction: { permission: "jira_jira_create", resources: ["*"] },
+    },
+  } as unknown as Parameters<typeof withJiraWriteReview>[0];
+  const request = {
+    permission: "jira_jira_create",
+    mcpInput: { projectId: "10002", issueTypeId: "10003", fields: { summary: "Probe" } },
+  } as unknown as Parameters<typeof withJiraWriteReview>[2];
+  const run = (serverName: string): Parameters<typeof withJiraWriteReview>[1] =>
+    ({
+      mcp: {
+        actions: new Map([
+          [
+            "jira_jira_create",
+            { risk: "write", remote: true, mutation: { serverName, toolName: "jira.create" } },
+          ],
+        ]),
+      },
+    }) as unknown as Parameters<typeof withJiraWriteReview>[1];
+  const review = vi.fn((call: { readonly tool: string }) => ({
+    tool: call.tool,
+    input: {},
+    names: { projects: [], issueTypes: [], fields: [] },
+  }));
+  const deps = { jiraWriteReview: review } as unknown as Parameters<typeof withJiraWriteReview>[3];
+
+  it("adds the call and the names to the Pod's write", () => {
+    const decided = withJiraWriteReview(ask, run("jira"), request, deps);
+    expect(review).toHaveBeenCalledWith({
+      tool: "jira.create",
+      arguments: { projectId: "10002", issueTypeId: "10003", fields: { summary: "Probe" } },
+    });
+    expect(decided.event.nativeAction).toMatchObject({
+      permission: "jira_jira_create",
+      resources: ["*"],
+      jira: { tool: "jira.create" },
+    });
+    // What the card shows is the very input the approval is prepared for and dispatched with.
+    expect(review.mock.calls.at(-1)?.[0]).toMatchObject({
+      arguments: request.mcpInput,
+    });
+  });
+
+  it("leaves a write of any other server, and a run without a review, as asked", () => {
+    expect(withJiraWriteReview(ask, run("other"), request, deps)).toBe(ask);
+    expect(withJiraWriteReview(ask, run("jira"), request, {} as typeof deps)).toBe(ask);
+  });
+});
+
+// #4359: whether a Code Mode program asks is decided by the pin of the version the run was verified
+// against, through the real composition (the policy and the generator are pinned in
+// opencodeCodeModeProgram.test.ts).
+describe("the program card follows the verified runtime's pin (#4359)", () => {
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const completed = { status: "completed" as const, evidence: [] };
+  const programAsk = JSON.stringify({
+    action: "native-policy",
+    runId: FIXTURE_RUN_ID,
+    sessionID: "ses_tool",
+    permission: "execute",
+    resources: ["const r = await fetch('https://example.com'); return r.status;"],
+    configured: "ask",
+    source: { type: "tool", messageID: "msg_program", id: "call_program" },
+  });
+
+  async function runProgram(
+    mode: "governed-assist" | "supervised-coding",
+    stripNestedEffects: boolean,
+  ): Promise<{ readonly answered: boolean; readonly asked: boolean }> {
+    pinFlag.stripNestedEffects = stripNestedEffects;
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+      },
+      undefined,
+      { mode, runtimeEvents, activityLog },
+    );
+    try {
+      const state = { answered: false };
+      const pending = fixture.runtime.toolBridge
+        .handle({ method: "POST", headers: new Headers(authorized), body: programAsk })
+        .then((response) => {
+          state.answered = true;
+          return response;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const asked = runtimeEvents.some((event) => event.kind === "permission-requested");
+      if (state.answered) {
+        const response = await pending;
+        expect(response.body).toBe('{"effect":"allow"}');
+        const decided = activityLog.events.find(
+          (event) => event.op === "coding-runtime.native-policy.decided",
+        )?.extra;
+        expect(decided).toMatchObject({ permission: "execute", effect: "allow", risk: "low" });
+      }
+      return { answered: state.answered, asked };
+    } finally {
+      pinFlag.stripNestedEffects = false;
+      await fixture.stop();
+    }
+  }
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "lets a program of a verified 2.2.5 run pass without a card in %s",
+    async (mode) => {
+      await expect(runProgram(mode, false)).resolves.toEqual({ answered: true, asked: false });
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "keeps the card in %s when the verified version's pin does not say nested effects are decided",
+    async (mode) => {
+      await expect(runProgram(mode, true)).resolves.toEqual({ answered: false, asked: true });
+    },
+  );
 });

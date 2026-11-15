@@ -1313,7 +1313,55 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   breaks into the bounded review resources (64 × 2,048 characters; a longer line is refused as too
   large to review), is the ask's resource and is never logged. A `fetch` inside an admitted program
   asserts the `webfetch` permission since OpenCode 2.2, so the policy decides it like the ordinary
-  tool; the kernel egress rule stays underneath (loopback below Full access).
+  tool; the kernel egress rule stays underneath (loopback below Full access). The `opencode_session_rename` tool, which asserted no permission and was decided by nothing, is now
+  governed like a move: it sets only the title of the run's own session, so it is allowed in every
+  mode for that session and refused for another, one line of at most 200 characters. The worktree
+  listing and the model search change nothing and stay reads.
+  **History (#4359, 2026-11-14):** the retired OpenCode 2.1.4 did not decide a nested `fetch`
+  (it produced no `webfetch` decision line; only the kernel egress rule stopped it below Full access
+  and Full access reached the open internet), so the program card had to stay while that runtime was
+  approved. OpenCode 2.2.5, the one runtime Keiko approves, decides it (the next bullet).
+- **The Code Mode program passes without a card on a runtime that decides every nested effect
+  (#4359, owner decision of 2026-11-14 with its three conditions).** The program asserts no
+  permission and can only call its nested tools, so the card for the program itself reviewed
+  nothing the nested decisions do not already decide. The condition is a fact about the runtime, not
+  a setting: the runtime's pin in `opencode-runtime-pins.json` carries `decidesNestedEffects`, set
+  only after every effect kind was observed live in Ask for approval and Full access
+  (`coding-runtime.native-policy.decided`, counts and closed values) on that exact version. On
+  2.2.5: session move and rename (own session, inside the workspace), worktree creation (ask in
+  every mode), worktree removal (`edit`), MCP resources and every MCP tool including a Jira write
+  through the relay (`mcp`), and `fetch` (`webfetch`: refused below Full access, allowed in Full
+  access) each reach their own decision; only the worktree listing and the model search, which
+  change nothing, decide nothing; edit, write and shell are not callable inside a program and its
+  interpreter has no process, module or environment access. For such a runtime the program is a
+  plain computation: allowed in every mode and no longer sent for review, so the 64 × 2,048
+  character review bounds no longer refuse a long program. A runtime whose pin does not say so
+  (absent, false, an unknown version) keeps the card exactly as before and refuses a program that
+  offers no text to review: the decision fails closed. Hard denials are unchanged
+  (`opencodeCodeModeProgram.test.ts`, one pin per effect kind). Measured 2026-11-14 on OpenCode 2.2.5 from the 1.1.5 npm runtime package (`coding-runtime.native-policy.decided`, closed values only; one program per row and mode, each with the program's own line first).
+  `fetch` is refused rather than asked below Full access because the run has no route outside the
+  machine in those modes: the capability-availability rule of this section's web paragraph and
+  ADR-0138 D4 (parity Q5), not a defect. A Jira write is exactly one card: the `mcp` ask is the plain
+  Jira write card, bound to the digest of the dispatched arguments (`nativeMcpInvocationId`), so
+  changed arguments are never approved by it; a write the template gate refuses is refused before
+  any card. Listing and reading the resources of the run's own managed server is the human's own
+  grant (the Pod was chosen for the run) and asks nothing.
+
+| Effect a program can cause                      | Permission the policy decides | Ask for approval                 | Full access             |
+| ----------------------------------------------- | ----------------------------- | -------------------------------- | ----------------------- |
+| Session rename (own session)                    | `opencode_session_rename`     | allow, low                       | allow, low              |
+| Session move inside the workspace               | `opencode_session_move`       | allow, low                       | allow, low              |
+| Session move outside the workspace              | `opencode_session_move`       | deny (`workspace-escape`)        | deny (`workspace-escape`) |
+| Worktree creation                               | `opencode_worktree_create`    | ask, high                        | ask, high               |
+| Worktree removal                                | `edit` (the directory)        | ask, medium                      | allow, medium           |
+| MCP resource listing and reading (managed Pod)  | `mcp`                         | ask, medium (now allow, see ADR) | allow, medium           |
+| MCP tool call, Jira read                        | `mcp`                         | allow                            | allow                   |
+| MCP tool call, Jira write                       | `mcp`                         | ask (the one write card)         | allow                   |
+| Web fetch                                       | `webfetch`                    | deny (`mode-denied`)             | allow, medium           |
+| Worktree listing, model search                  | none (pure reads)             | none                             | none                    |
+| File write, edit, patch, shell, sub-agent start | not callable from a program   | not reachable                    | not reachable           |
+
+
 - **A Code Mode session move stays inside the task workspace (#3903 AC4).** The policy plugin sends
   `opencode_session_move`'s `directory` and the session it names to the policy. The run's own
   session may move to an existing directory inside the task workspace, named by its absolute,
@@ -2780,7 +2828,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     and so keeps a denied native tool advertised. `/goal` starts model turns on its own and stays out
     by owner decision (2026-11-06).
   - **Changed producer contracts.** The producer repairs a model's `bash` call into `shell`, which
-    the policy decides as `shell`. A Code Mode `fetch` asserts `webfetch`. `GET /api/agent` waits for
+    the policy decides as `shell`. `GET /api/agent` waits for
     plugins and answers 503 after five seconds: Keiko reads it again within the existing location
     bound, and `coding-runtime.location.activation-wait` records the outcome and the number of those
     answers, never a name.

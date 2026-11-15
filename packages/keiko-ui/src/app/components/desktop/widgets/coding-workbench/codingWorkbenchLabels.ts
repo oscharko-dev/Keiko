@@ -740,6 +740,8 @@ export function gatewayServiceMessageKey(
 const INSTALL_VOLUME_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
   ["install-volume-not-local", "codingWorkbench.installVolume.notLocal"],
   ["install-volume-unverified", "codingWorkbench.installVolume.unverified"],
+  // #4359: the installed runtime is an earlier OpenCode that Keiko no longer approves.
+  ["runtime-outdated", "codingWorkbench.runtime.outdated"],
 ]);
 
 /** The sentence for a runtime that is unavailable for a reason the human can act on. */

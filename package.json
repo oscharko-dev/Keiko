@@ -367,8 +367,8 @@
     "yauzl": "^3.4.0"
   },
   "optionalDependencies": {
-    "@oscharko-dev/keiko-coding-runtime-darwin-arm64": "1.1.4",
-    "@oscharko-dev/keiko-coding-runtime-darwin-x64": "1.1.4"
+    "@oscharko-dev/keiko-coding-runtime-darwin-arm64": "1.1.5",
+    "@oscharko-dev/keiko-coding-runtime-darwin-x64": "1.1.5"
   },
   "bundleDependencies": [
     "@oscharko-dev/keiko-activity-log",

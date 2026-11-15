@@ -37,10 +37,7 @@ import {
   OPENCODE_V2_APPROVED_ENDPOINTS,
   projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
-import {
-  OPENCODE_PINNED_VERSION,
-  OPENCODE_RUNTIME_VERSION_PINS,
-} from "./opencodeRuntimeVersions.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 
 /** Set to `1` to rewrite the generated inventory block of the parity document, then run prettier. */
 const WRITE_DOCUMENT = process.env.KEIKO_WRITE_OPENCODE_SERVICE_INVENTORY_DOC === "1";
@@ -68,8 +65,11 @@ function inventory(version: string): ReturnType<typeof parseOpenCodeServiceInven
 }
 
 const CURRENT = inventory(OPENCODE_PINNED_VERSION);
-/** The pin this one replaced, so an upgrade's additions are checked without naming a version. */
-const PREVIOUS_PIN_VERSION = OPENCODE_RUNTIME_VERSION_PINS[1]?.version ?? "";
+/**
+ * The producer the current pin replaced (#4359): kept as a committed inventory record so the
+ * upgrade's additions stay checked. It is no longer an approved runtime and has no pin.
+ */
+const PREVIOUS_PIN_VERSION = "2.1.4";
 const CLI_COMMANDS = CURRENT.cliCommands ?? [];
 const CONFIGURATION_PATHS = CURRENT.configurationPaths ?? [];
 const PLUGINS = CURRENT.plugins ?? [];

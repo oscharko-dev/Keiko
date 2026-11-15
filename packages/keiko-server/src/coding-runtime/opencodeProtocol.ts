@@ -18,7 +18,6 @@ import {
 } from "./codingSidecarEventParser.js";
 import type {
   OpenCodeCompactionActivity,
-  OpenCodeProviderTokenUsage,
   OpenCodeReconciliationEvent,
 } from "./opencodeReconciler.js";
 import { isAdmissibleOpenCodeToolName, openCodeToolLogLabel } from "./opencodeNativeTools.js";
@@ -769,29 +768,9 @@ export function parseOpenCodeHistory(
       kind,
       digest: historyDigest(id, aggregateId, sequence, type, data),
       ...compactionProjection(type, data),
-      ...providerTokenUsageProjection(type, data),
     });
   }
   return { ok: true, value: result };
-}
-
-function providerTokenUsageProjection(
-  type: string,
-  data: Record<string, unknown>,
-): { readonly providerTokenUsage: OpenCodeProviderTokenUsage } | Record<string, never> {
-  if (type !== "message.updated.1" || !isRecord(data.info)) return {};
-  const { info } = data;
-  if (
-    info.role !== "assistant" ||
-    !isRecord(info.time) ||
-    !nonNegativeNumber(info.time.completed) ||
-    !isRecord(info.tokens) ||
-    !Number.isSafeInteger(info.tokens.input) ||
-    Number(info.tokens.input) < 0
-  ) {
-    return {};
-  }
-  return { providerTokenUsage: { inputTokens: Number(info.tokens.input) } };
 }
 
 function compactionProjection(

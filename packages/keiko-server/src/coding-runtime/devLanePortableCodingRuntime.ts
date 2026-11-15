@@ -23,8 +23,8 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import { openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
+  NPM_LANE_RETIRED_EXECUTABLE_TREES,
   NPM_LANE_RUNTIME_APPROVALS,
-  NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
   type NpmLaneRuntimeApproval,
 } from "./npmLaneRuntimeApprovals.js";
 import { ripgrepBinaryName, ripgrepTargetKeyForPortableTarget } from "./ripgrepRuntime.js";
@@ -58,6 +58,8 @@ export type DevLaneOpenCodeRefusalReason =
   | "payload-missing"
   | "payload-unapproved"
   | "payload-tampered"
+  // A payload of a retired OpenCode (#4359): Keiko runs exactly one, so the person updates Keiko.
+  | "payload-outdated"
   | "native-helper-directory-untrusted"
   | "secure-read-helper-missing"
   | "secure-read-helper-stale";
@@ -106,8 +108,8 @@ export interface DevLaneOpenCodeDiscoveryInput {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   /** Hermetic test seam; production callers never supply the npm lane's trust anchor. */
   readonly npmLaneApprovals?: Readonly<Partial<Record<string, NpmLaneRuntimeApproval>>> | undefined;
-  readonly npmLanePreviousApprovals?:
-    Readonly<Partial<Record<string, NpmLaneRuntimeApproval>>> | undefined;
+  /** Hermetic test seam for the retired executable trees a refusal names as outdated. */
+  readonly npmLaneRetiredTrees?: ReadonlySet<string> | undefined;
 }
 
 export function devLaneEnvEnabled(value: string | undefined): boolean {
@@ -192,15 +194,11 @@ export function discoverNpmLaneOpenCode(
   try {
     const packageRoot = npmLaneRuntimePackageRoot(input.env, approval.packageName);
     if (packageRoot === undefined) return { outcome: "inactive" };
-    const previous =
-      input.npmLaneApprovals === undefined
-        ? NPM_LANE_PREVIOUS_RUNTIME_APPROVALS[target]
-        : input.npmLanePreviousApprovals?.[target];
     return discoverNpmLanePackage(
       join(packageRoot, NPM_LANE_RUNTIME_DIR),
       target,
       approval,
-      previous,
+      input.npmLaneRetiredTrees,
     );
   } catch (error) {
     // A verification that cannot be completed (an unreadable file, a directory that changed under
@@ -241,9 +239,9 @@ function discoverNpmLanePackage(
   runtimeRoot: string,
   target: DevLaneOpenCodeTarget,
   approval: NpmLaneRuntimeApproval,
-  previous: NpmLaneRuntimeApproval | undefined,
+  retiredTrees?: ReadonlySet<string>,
 ): DevLaneOpenCodeDiscovery {
-  const selected = selectNpmLanePackage(runtimeRoot, target, approval, previous);
+  const selected = selectNpmLanePackage(runtimeRoot, target, approval, retiredTrees);
   if (!selected.ok) return refused(selected.refusal);
   const { helper, helperPath, payload } = selected;
   // The supervisor belongs to the same coherent approval as the payload and helper it launches.
@@ -315,48 +313,25 @@ type SelectedNpmLanePackage =
   | { readonly ok: false; readonly refusal: DevLaneOpenCodeRefusalReason };
 
 /**
- * An installed package is accepted only as one coherent approved identity: the current pin, or
- * the previously published one, each with its own payload AND helper digests. Mixing a current
- * payload with a previous helper, or the reverse, is not an approved package.
+ * An installed package is accepted only as the one approved identity: the current pin's payload AND
+ * its helper digests (#4359: Keiko runs exactly one OpenCode, so no earlier package is admitted).
  */
 function selectNpmLanePackage(
   runtimeRoot: string,
   target: DevLaneOpenCodeTarget,
   approval: NpmLaneRuntimeApproval,
-  previous: NpmLaneRuntimeApproval | undefined,
+  retiredTrees?: ReadonlySet<string>,
 ): SelectedNpmLanePackage {
-  const candidates = previous === undefined ? [approval] : [approval, previous];
   const helperPath = join(runtimeRoot, helperRelativePath(target));
-  const payloads = candidates.map((candidate) => ({
-    candidate,
-    payload: verifiedPayload(join(runtimeRoot, SIDECAR_NAME), target, candidate),
-  }));
-  const verified = payloads.flatMap((entry) =>
-    entry.payload.ok ? [{ candidate: entry.candidate, payload: entry.payload }] : [],
-  );
-  if (verified.length === 0) {
-    const first = payloads[0]?.payload;
-    return { ok: false, refusal: first?.ok === false ? first.refusal : "payload-tampered" };
-  }
+  const payload = verifiedPayload(join(runtimeRoot, SIDECAR_NAME), target, approval, retiredTrees);
+  if (!payload.ok) return { ok: false, refusal: payload.refusal };
   if (!isRegularFile(helperPath)) return { ok: false, refusal: "secure-read-helper-missing" };
-  for (const entry of verified) {
-    const helper = matchingNpmHelperApproval(helperPath, entry.candidate, undefined);
-    if (helper !== undefined) return { ok: true, payload: entry.payload, helper, helperPath };
-  }
-  return { ok: false, refusal: "secure-read-helper-stale" };
-}
-
-function matchingNpmHelperApproval(
-  helperPath: string,
-  approval: NpmLaneRuntimeApproval,
-  previous: NpmLaneRuntimeApproval | undefined,
-): NpmLaneRuntimeApproval | undefined {
-  const sha256 = sha256File(helperPath);
-  const size = statSync(helperPath).size;
-  const candidates = previous === undefined ? [approval] : [approval, previous];
-  return candidates.find(
-    (candidate) => candidate.helperSha256 === sha256 && candidate.helperSizeBytes === size,
-  );
+  const helperMatches =
+    sha256File(helperPath) === approval.helperSha256 &&
+    statSync(helperPath).size === approval.helperSizeBytes;
+  return helperMatches
+    ? { ok: true, payload, helper: approval, helperPath }
+    : { ok: false, refusal: "secure-read-helper-stale" };
 }
 
 function targetFromDiscoveryInput(
@@ -601,10 +576,29 @@ type VerifiedDevLanePayload =
   | { readonly ok: true; readonly sidecar: PortableSidecarRuntimeVerification }
   | { readonly ok: false; readonly refusal: DevLaneOpenCodeRefusalReason };
 
+/**
+ * What a payload whose digests are not the approved ones is called: a retired runtime package
+ * (#4359) the person updates, or tampered bytes.
+ */
+function payloadDigestRefusal(
+  approved: ApprovedDevLaneSidecar,
+  evidence: DiscoveryEvidence,
+  executableTreeSha256: string,
+  retiredTrees: ReadonlySet<string>,
+): DevLaneOpenCodeRefusalReason | undefined {
+  const matches =
+    executableTreeSha256 === approved.executableTreeSha256 &&
+    evidence.licenseEvidenceSha256 === approved.licenseSha256 &&
+    evidence.sbomEvidenceSha256 === approved.sbomSha256;
+  if (matches) return undefined;
+  return retiredTrees.has(executableTreeSha256) ? "payload-outdated" : "payload-tampered";
+}
+
 function verifiedPayload(
   installRoot: string,
   target: DevLaneOpenCodeTarget,
   approved: ApprovedDevLaneSidecar,
+  retiredTrees: ReadonlySet<string> = NPM_LANE_RETIRED_EXECUTABLE_TREES,
 ): VerifiedDevLanePayload {
   const executablePath = `payload/bin/${target === "windows-x64" ? "opencode.exe" : "opencode"}`;
   const licensePath = "payload/evidence/LICENSE";
@@ -624,13 +618,8 @@ function verifiedPayload(
   const executableTreeSha256 = computePortableSidecarPayloadTreeDigest([
     { relativePath: selectedRelativePath, sha256: executableSha256 },
   ]);
-  if (
-    executableTreeSha256 !== approved.executableTreeSha256 ||
-    licenseEvidenceSha256 !== approved.licenseSha256 ||
-    sbomEvidenceSha256 !== approved.sbomSha256
-  ) {
-    return { ok: false, refusal: "payload-tampered" };
-  }
+  const mismatch = payloadDigestRefusal(approved, evidence, executableTreeSha256, retiredTrees);
+  if (mismatch !== undefined) return { ok: false, refusal: mismatch };
   // The approved version selects its own producer-derived handshake identity (#3908); the raw
   // schema digest stays the catalog's, which the approvals validator pins to the same version.
   const pin = openCodeRuntimeVersionPin(approved.upstreamVersion);
