@@ -5002,7 +5002,9 @@ it("walks the selection to the catalog's ceiling: the last fitting size works, t
 
 // The byte bound of the gateway's binding is a safety ceiling; the limit that governs what a model can
 // take is its context window. A selection that binds is refused in a small window by the existing
-// context admission, with its own closed reason and not the byte one, and taken in a large one.
+// context admission, with its own closed reason and not the byte one, and taken in a large one. No
+// window is written here: the smallest window that takes the selection is found by bisecting the
+// real turn, and the window one token below it must refuse with `budget-exhausted`.
 it("refuses a selection that fits the bytes but not the context window, with its own closed reason", async () => {
   const curated = fixtureOperationTools();
   const natives = jiraOperationDefinitions()
@@ -5018,32 +5020,33 @@ it("refuses a selection that fits the bytes but not the context window, with its
   const probe = fixture(false, undefined, true, false, false, undefined, true);
   if (probe.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
   const project = ["GET /rest/api/2/project"];
-  const count = Math.min(
-    30,
-    await largestBindingSelection(
-      probe.deps.jiraChatCatalog,
-      natives,
-      { knowledgeScoped: false },
-      project,
-    ),
+  const count = await largestBindingSelection(
+    probe.deps.jiraChatCatalog,
+    natives,
+    { knowledgeScoped: false },
+    project,
   );
   expect(count, "the selection must bind").toBeGreaterThan(8);
-  const outcomes: string[] = [];
-  for (const window of [8192, 20480, 131072]) {
+  const describeAt = async (window: number): Promise<string> => {
     const f = fixture(false, undefined, true, false, false, undefined, true);
     configure(f.deps, true, window);
     demandSelectedModel(f, false, undefined, natives.slice(0, count));
     await handleSendDesktopChat(sendContext(f, `window-${String(window)}`), f.deps);
     const describe = demandExchanges(f).find((entry) => entry.call.name === "jira_describe");
     const data = describe?.result?.data as { readonly reason?: string } | undefined;
-    outcomes.push(`${String(window)}:${String(describe?.result?.status)}:${data?.reason ?? "-"}`);
+    return `${String(describe?.result?.status)}:${data?.reason ?? "-"}`;
+  };
+  let refusedBelow = 1024;
+  let takenAt = 4 * 1024 * 1024;
+  expect(await describeAt(takenAt), "a very large window takes the selection").toBe("completed:-");
+  while (takenAt - refusedBelow > 1) {
+    const middle = Math.floor((refusedBelow + takenAt) / 2);
+    if ((await describeAt(middle)) === "completed:-") takenAt = middle;
+    else refusedBelow = middle;
   }
-  expect(outcomes).toEqual([
-    "8192:failed:budget-exhausted",
-    "20480:failed:budget-exhausted",
-    "131072:completed:-",
-  ]);
-}, 180_000);
+  expect(await describeAt(takenAt)).toBe("completed:-");
+  expect(await describeAt(takenAt - 1)).toBe("failed:budget-exhausted");
+}, 600_000);
 
 it("extends the curated Jira base after a settled describe round and preserves every original binding", async () => {
   const f = fixture(false, undefined, true, false, false, undefined, true);

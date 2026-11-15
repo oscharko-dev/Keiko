@@ -839,6 +839,22 @@ describe("frozen bound advertisements (#4173)", () => {
     expect(() => second.bind(read)).toThrow(GatewayToolCatalogError);
   });
 
+  it("checks a frozen catalog that was never captured at its first bind, against the same per-part bound", () => {
+    // Deeply frozen and never bound before: freezing proves it cannot change, not that it fits.
+    const chunk = "x".repeat(20_000);
+    const oversized = Object.freeze(
+      Array.from(
+        { length: Math.ceil(TOOL_CATALOG_LIMITS.maxArgumentBytes / chunk.length) + 1 },
+        () => chunk,
+      ),
+    );
+    expect(Object.isFrozen(oversized)).toBe(true);
+    const input = Object.freeze({ ...advertisement(), catalog: oversized });
+    expect(() =>
+      createGatewayToolCatalogBridge({ ...request(), toolCatalog: input }, (): number => NOW),
+    ).toThrow(GatewayToolCatalogError);
+  });
+
   it("still refuses a frozen advertisement with an extra field", () => {
     const input = Object.freeze({ ...advertisement(), extra: "field" });
     expect(() =>

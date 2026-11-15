@@ -4,6 +4,8 @@ import { createInitialToolCatalog } from "./legacy.js";
 import { compileToolProjection } from "./projection.js";
 import { createToolInvocationNormalizer } from "./invocation.js";
 import { catalogBytes, copyCatalogBinding } from "./json.js";
+import { ToolCatalogError } from "./errors.js";
+import { deepFreeze, isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { createToolDescriptor, createToolCatalog, captureCatalogJson } from "./index.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -278,15 +280,41 @@ describe("binding capture: one function for the bind and the admission", () => {
     return { ...binding(), [part]: partOfBytes(bytes) };
   }
 
+  /** The closed reason a capture refuses with, or undefined when it does not refuse. */
+  function refusalOf(capture: () => unknown): string | undefined {
+    try {
+      capture();
+      return undefined;
+    } catch (error) {
+      if (error instanceof ToolCatalogError) return error.reason;
+      throw error;
+    }
+  }
+
   it.each(PARTS)("agrees at the bound of the %s: accepted at it, refused one byte over", (part) => {
-    expect(() => copyCatalogBinding(triple(part, BOUND))).not.toThrow();
-    expect(() =>
-      createToolInvocationNormalizer(triple(part, BOUND) as unknown as ToolInvocationBinding),
-    ).not.toThrow("input-bound");
-    expect(() => copyCatalogBinding(triple(part, BOUND + 1))).toThrow("input-bound");
-    expect(() =>
-      createToolInvocationNormalizer(triple(part, BOUND + 1) as unknown as ToolInvocationBinding),
-    ).toThrow("input-bound");
+    const atBound = triple(part, BOUND);
+    const overBound = triple(part, BOUND + 1);
+    // At the bound neither refuses for its size. The synthetic part is not a valid binding, so the
+    // normalizer goes on to refuse it for another closed reason; what is asserted is that it is not
+    // the byte bound, and that the capture accepts the very same triple.
+    expect(refusalOf(() => copyCatalogBinding(atBound))).toBeUndefined();
+    expect(
+      refusalOf(() => createToolInvocationNormalizer(atBound as unknown as ToolInvocationBinding)),
+    ).not.toBe("input-bound");
+    expect(refusalOf(() => copyCatalogBinding(overBound))).toBe("input-bound");
+    expect(
+      refusalOf(() =>
+        createToolInvocationNormalizer(overBound as unknown as ToolInvocationBinding),
+      ),
+    ).toBe("input-bound");
+  });
+
+  it("checks a deeply frozen triple that was never captured at its first bind", () => {
+    const frozen = deepFreeze(triple("catalog", BOUND + 1)) as unknown as ToolInvocationBinding;
+    expect(isDeepFrozen(frozen)).toBe(true);
+    expect(refusalOf(() => createToolInvocationNormalizer(frozen))).toBe("input-bound");
+    // A refused pair is never remembered: the same frozen object is refused again.
+    expect(refusalOf(() => createToolInvocationNormalizer(frozen))).toBe("input-bound");
   });
 
   it("accepts three parts that are each at the bound, a total above one bound", () => {
