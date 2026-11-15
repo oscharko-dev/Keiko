@@ -79,9 +79,17 @@ describe("portable tool-catalog reference", () => {
   it("refuses a toolchain migration when the baseline ruler rejects the historical evidence", async () => {
     const scratch = realpathSync(mkdtempSync(join(tmpdir(), "keiko-historical-catalog-")));
     mkdirSync(join(scratch, "scripts"));
+    writeFileSync(join(scratch, "historical-checkout.txt"), "historical");
     writeFileSync(
       join(scratch, "scripts/check-tool-catalog-performance.mjs"),
-      'export function evaluateToolCatalogPerformanceEvidence() { return { defects: ["historical-evidence-invalid"], verdicts: [] }; }\n',
+      `import { readFileSync } from "node:fs";
+       if (readFileSync("historical-checkout.txt", "utf8") !== "historical")
+         throw new TypeError("wrong historical working directory");
+       export function evaluateToolCatalogPerformanceEvidence(measurement, calibration, budget) {
+         if (calibration.environment.nodeVersion !== "v24.18.0" || !measurement.cases || !budget.maximumP95Ms)
+           throw new TypeError("historical documents were substituted");
+         return { defects: ["historical-evidence-invalid"], verdicts: [] };
+       }\n`,
     );
     const deps = pairDependencies({
       read: (_root, path) => {

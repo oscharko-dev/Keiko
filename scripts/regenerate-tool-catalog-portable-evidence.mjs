@@ -56,27 +56,50 @@ function requireSame(actual, expected, label) {
   if (!isDeepStrictEqual(actual, expected)) throw new TypeError(label);
 }
 
-async function preparePair(context, deps) {
+const HISTORICAL_EVALUATION_SOURCE = `
+  import { readFileSync } from "node:fs";
+  const { evaluateToolCatalogPerformanceEvidence } = await import(process.argv[2]);
+  const { measurement, calibration, budget } = JSON.parse(readFileSync(0, "utf8"));
+  process.stdout.write(JSON.stringify(
+    evaluateToolCatalogPerformanceEvidence(measurement, calibration, budget),
+  ));
+`;
+
+function evaluateHistoricalEvidence(baselineRoot, documents) {
+  const moduleUrl = pathToFileURL(
+    join(baselineRoot, "scripts/check-tool-catalog-performance.mjs"),
+  ).href;
+  return JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        HISTORICAL_EVALUATION_SOURCE,
+        "historical-catalog",
+        moduleUrl,
+      ],
+      { cwd: baselineRoot, encoding: "utf8", input: JSON.stringify(documents) },
+    ),
+  );
+}
+
+function preparePair(context, deps) {
   const { root, baselineRoot, baselineCommit, candidateCommit } = context;
   const previous = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
   const previousBudget = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.budget);
   // A runtime migration validates the frozen old documents with their reviewed baseline ruler.
   // Only that historical validation uses the ancestor's checker; both new measurements and the
   // final gate use this candidate's Node 26 contract and preserve every previous ceiling.
-  const evaluatePrevious =
-    previous.environment.nodeVersion === `v${EXPECTED_NODE_BASELINE}`
-      ? evaluateToolCatalogPerformanceEvidence
-      : (
-          await import(
-            pathToFileURL(join(baselineRoot, "scripts/check-tool-catalog-performance.mjs")).href
-          )
-        ).evaluateToolCatalogPerformanceEvidence;
+  const measurement = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.measurement);
   requirePassing(
-    evaluatePrevious(
-      deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.measurement),
-      previous,
-      previousBudget,
-    ),
+    previous.environment.nodeVersion === `v${EXPECTED_NODE_BASELINE}`
+      ? evaluateToolCatalogPerformanceEvidence(measurement, previous, previousBudget)
+      : evaluateHistoricalEvidence(baselineRoot, {
+          measurement,
+          calibration: previous,
+          budget: previousBudget,
+        }),
   );
   const environment = deps.environment();
   const measurementHarnessSha256 = deps.ruler(root);
@@ -107,7 +130,7 @@ export async function measurePortableToolCatalogPair(context, overrides = {}) {
     now: () => new Date().toISOString(),
     ...overrides,
   };
-  const state = await preparePair(context, deps);
+  const state = preparePair(context, deps);
   const { input, childEnvironment, baselineSubject, candidateSubject, previousBudget } = state;
   const baselineRaw = await deps.measure(baselineRoot, root);
   requireSame(
