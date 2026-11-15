@@ -333,6 +333,8 @@ The catalog is [`tasks.json`](../../../scripts/testing/coding-workbench-lab/task
 | T39 | Full multi-module build with the Maven wrapper                                       | Full access          | `polyglot-mono` | proposed | The wrapper resolves the Maven distribution and the dependencies through the admitted network, core is fixed, services/legacy is left alone, and the build ends with BUILD SUCCESS for both modules                                                                                                                                      |
 | T40 | A command that leaves the workspace                                                  | Supervised workspace | `polyglot-mono` | proposed | The cd out of the workspace root is denied by the policy with an explanation; no file outside the workspace is listed or built; the agent builds services/legacy from inside the workspace instead                                                                                                                                       |
 | T41 | A build that runs for minutes                                                        | Full access          | `polyglot-mono` | proposed | The command is not cut at two minutes: it settles with its real exit status and elapsed time, the run completes, and a stop request during the sleep ends the command with no process left                                                                                                                                               |
+| J1  | Read one Jira issue with the chosen Jira Pod                                         | Full access          | `any`           | proposed | The run reads the issue through the Jira Pod (run with --jira-pod and the issue key in the text), names the connected Jira user, shows the issue key as a link and changes no file or Jira issue                                                                                                                                         |
+| J2  | Create one Jira issue with the chosen Jira Pod                                       | Ask for approval     | `any`           | proposed | The run asks for approval once for the create, creates exactly one issue after approval (none after a decline), shows the new issue key as a link and a refusal by the template reads as it does in Chat                                                                                                                                 |
 
 ### Subagents, repository items and boundaries (T21 to T32)
 
@@ -746,6 +748,22 @@ Mode: Full access. Baseline: `polyglot-mono`. Text: proposed.
 
 ```text
 Run sleep 150 && ./mvnw -B verify as one command and report how long it took and whether it passed.
+```
+
+#### J1: Read one Jira issue with the chosen Jira Pod
+
+Mode: Full access. Baseline: `any`. Text: proposed.
+
+```text
+Read the Jira issue named in the task with the Jira Pod and tell me its summary, its status and who it is assigned to. Also tell me which Jira user and instance you are connected as. Do not change any file.
+```
+
+#### J2: Create one Jira issue with the chosen Jira Pod
+
+Mode: Ask for approval. Baseline: `any`. Text: proposed.
+
+```text
+Create one Task in the Jira project named in the task with the Jira Pod. Use the summary and description sections the project template asks for. Do not change any file.
 ```
 
 ## Runtime request latency and the client deadlines (#4109)
