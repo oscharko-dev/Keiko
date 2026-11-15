@@ -3351,6 +3351,7 @@
     "keiko-ui/lib/local-knowledge-api",
     "keiko-ui/lib/local-knowledge-limits",
     "keiko-ui/lib/managed-lsp-response-validators",
+    "keiko-ui/lib/markdown-skill-refusal",
     "keiko-ui/lib/markdown-skills-api",
     "keiko-ui/lib/memory-api",
     "keiko-ui/lib/memory-session-api",

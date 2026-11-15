@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b2a92f2ad3dbc95d2c8b241a1f475bd34f460759fab0be694f6638abc531c529",
+    "catalogDigest": "35ee0bd91e3c8f5fbf23ace07441756f024af230bcf1be7efa7770f9b6a5f813",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -46177,6 +46177,26 @@
             "dataClass": "count",
             "required": true
           },
+          "refusalReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "template-marker-misplaced",
+              "template-not-a-template",
+              "template-front-matter-unterminated",
+              "template-malformed-line",
+              "template-unknown-key",
+              "template-duplicate-key",
+              "template-missing-key",
+              "template-invalid-value",
+              "template-limit-exceeded",
+              "template-unsafe-pattern",
+              "template-no-rules",
+              "text-empty",
+              "text-control-characters"
+            ]
+          },
           "typeCount": {
             "type": "integer",
             "dataClass": "count",
@@ -46219,8 +46239,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["skills.library.operation.lifecycle"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:9",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:97"]
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:10",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:121"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -46287,8 +46307,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["skills.workflow.attached.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:112",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:167"]
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:137",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:192"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -103699,6 +103719,12 @@
                   "required": false
                 },
                 {
+                  "name": "refusalReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "templateInvalidCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -124323,13 +124349,13 @@
     {
       "op": "skills.library.operation",
       "category": "setup",
-      "site": "packages/keiko-server/src/markdown-skill-log.ts:12",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:13",
       "package": "keiko-server"
     },
     {
       "op": "skills.workflow.attached",
       "category": "gateway",
-      "site": "packages/keiko-server/src/markdown-skill-log.ts:115",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:140",
       "package": "keiko-server"
     },
     {
