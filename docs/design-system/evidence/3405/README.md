@@ -713,3 +713,14 @@ The complete original nine-case producer ran in the Linux arm64 gates container 
 the three records were taken from this run; its fallback-font captures were discarded and the 14
 committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
 changed. This remains updater fixture evidence.
+
+## Chat error texts, browser-open notice and approval-card names — 2026-11-15 (#4355, #4370)
+
+The core and optional English and German message catalogs changed (every Chat-path error code now
+has text by what the person can do, the browser-open notice says what happened, the write-approval
+card names what the person approves), so the freshness gate rejected the catalog digests again. The
+complete original nine-case producer ran in the Linux arm64 gates container (Node 24.18.0,
+`KEIKO_WRITE_TRACKED_EVIDENCE=1`): all nine passed. Only the source digests and `generatedAt` in
+the three records were taken from this run; its fallback-font captures were discarded and the 14
+committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
+changed. This remains updater fixture evidence.
