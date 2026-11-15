@@ -71,6 +71,13 @@ describe("Jira catalog approval contract binding", () => {
         }),
       ),
     );
+    // Names read for the card (F09) are added after the identity exists and never enter it.
+    expect(identity).not.toHaveProperty("projects");
+    expect(Object.keys(identity ?? {}).sort()).toEqual([
+      "actionDigest",
+      "invocationId",
+      "operation",
+    ]);
     expect(jiraChatCatalogConsumerPort.captureApprovedAction({ ...action })).toEqual(action);
   });
 

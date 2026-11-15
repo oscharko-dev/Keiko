@@ -1539,6 +1539,7 @@
           "atlassian.jira-draft",
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
+          "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
           "jira.citation.markers",
@@ -1576,6 +1577,10 @@
         },
         {
           "op": "atlassian.jira-report",
+          "mode": "correlation"
+        },
+        {
+          "op": "jira.approval.project",
           "mode": "correlation"
         },
         {
@@ -1653,6 +1658,7 @@
         "atlassian.jira-draft",
         "atlassian.jira-draft-batch",
         "atlassian.jira-report",
+        "jira.approval.project",
         "jira.attachment.source",
         "jira.catalog.selection",
         "jira.citation.markers",
@@ -2394,6 +2400,60 @@
             "causeChain": false
           },
           "proofIds": ["atlassian.jira-report.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "jira.approval.project",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "failure",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "projectCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "resolvedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "unresolvedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["jira.approval.project.line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -4994,6 +5054,7 @@
         "start": [],
         "state": [
           "chat.tool-mutation.projected",
+          "chat.tool-transcript.marker-omitted",
           "chat.tool-transcript.updated",
           "chat.tool-turn.batch-draft-offer",
           "chat.tool-turn.context-fitted",
@@ -5008,6 +5069,10 @@
       "causalEdges": [
         {
           "op": "chat.tool-mutation.projected",
+          "mode": "correlation"
+        },
+        {
+          "op": "chat.tool-transcript.marker-omitted",
           "mode": "correlation"
         },
         {
@@ -5038,6 +5103,7 @@
       "lossSignals": [],
       "resourceSignals": [
         "chat.tool-mutation.projected",
+        "chat.tool-transcript.marker-omitted",
         "chat.tool-transcript.updated",
         "chat.tool-turn.batch-draft-offer",
         "chat.tool-turn.context-fitted",
@@ -5074,6 +5140,30 @@
             "causeChain": false
           },
           "proofIds": ["chat.tool-mutation.projected.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.tool-transcript.marker-omitted",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "marker",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.tool-transcript.marker-omitted.line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -39905,16 +39995,58 @@
               "required": true
             },
             {
+              "name": "beyondLimitCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "httpStatus",
               "type": "integer",
               "dataClass": "count",
               "required": true
             },
             {
+              "name": "jiraUnavailableCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "nothingToLearnCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "partialProposalCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "phase",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "proposalCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "templateInvalidCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "typeCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],

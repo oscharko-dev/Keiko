@@ -1143,7 +1143,7 @@ and a changeset received for review (`fileCount`). It also records a history tas
 repository or workspace that was not activated (`history-repository-switched`,
 `history-workspace-switched`; #4118), a window that kept the task picked from Coding History or
 a new task instead of following a settled run of another task (`history-run-held`, once per pick;
-#4271), the starting repository of a window without a stored one, decided only after the
+#4271), a run that needed recovery left with New task (`recovery-left`, once per departure; F30), the starting repository of a window without a stored one, decided only after the
 task-workspace state answered (`repository-seeded` from the shell's project or
 `repository-seed-skipped` for an active task binding, once per window; #4271) and a refused editor
 bridge registration

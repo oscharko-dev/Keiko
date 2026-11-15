@@ -15,9 +15,10 @@ interface FakeTurn {
 }
 
 /** A turn whose own signal fires at its deadline, as the authority factories compose it. */
-function fakeTurn(settled: boolean): FakeTurn {
+function fakeTurn(settled: boolean, clockLagMs = 0): FakeTurn {
   const controller = new AbortController();
-  const deadlineAtMs = Date.now() + DEADLINE_MS;
+  // The turn's own timer fires at DEADLINE_MS; the wall clock reaches `deadlineAtMs` only `clockLagMs` later.
+  const deadlineAtMs = Date.now() + DEADLINE_MS + clockLagMs;
   setTimeout(() => {
     controller.abort(new DOMException("Deadline reached", "TimeoutError"));
   }, DEADLINE_MS);
@@ -39,7 +40,22 @@ function fakeTurn(settled: boolean): FakeTurn {
   return turn;
 }
 
-function install(settled: boolean): {
+/** The port with a recording hook; the readouts stay live getters, as a spread would freeze them. */
+function recordingPort(
+  port: FakeTurn["port"],
+  recordEnding: (reason: string) => void,
+): FakeTurn["port"] {
+  return Object.defineProperties(
+    { recordEnding },
+    Object.getOwnPropertyDescriptors(port),
+  ) as FakeTurn["port"];
+}
+
+function install(
+  settled: boolean,
+  clockLagMs = 0,
+  endings: string[] = [],
+): {
   readonly turn: FakeTurn;
   readonly human: AbortController;
   readonly signal: AbortSignal;
@@ -52,9 +68,19 @@ function install(settled: boolean): {
     }, milliseconds);
     return controller.signal;
   });
-  const turn = fakeTurn(settled);
+  const turn = fakeTurn(settled, clockLagMs);
   const human = new AbortController();
-  return { turn, human, signal: chatToolTurnCancellationSignal(human.signal, turn.port, "c-1") };
+  return {
+    turn,
+    human,
+    signal: chatToolTurnCancellationSignal(
+      human.signal,
+      recordingPort(turn.port, (reason): void => {
+        endings.push(reason);
+      }),
+      "c-1",
+    ),
+  };
 }
 
 describe("chatToolTurnCancellationSignal", () => {
@@ -130,5 +156,169 @@ describe("chatToolTurnCancellationSignal", () => {
     const human = new AbortController();
     human.abort();
     expect(chatToolTurnCancellationSignal(human.signal, turn.port, "c-1").aborted).toBe(true);
+  });
+});
+
+// #4355: the deadline is the signal that fired, not a comparison of the wall clock with the deadline
+// inside the timer's own callback. CI run 43596154016 ended an accepted write as "CANCELLED".
+describe("which signal fired decides, never the wall clock (#4355)", () => {
+  it("answers at the deadline when the turn's signal fires before the wall clock reaches it", async () => {
+    const { signal } = install(true, 1);
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS);
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("still cancels at an early deadline when no exchange settled", async () => {
+    const { signal } = install(false, 1);
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS);
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("treats an authority revocation as a revocation even after the wall clock passed the deadline", async () => {
+    const { signal, turn } = install(true, -5);
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS - 5);
+    expect(signal.aborted).toBe(false);
+    turn.controller.abort(new DOMException("Authority revoked", "AbortError"));
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("the first cause wins: a stop that fired before the deadline in the same tick cancels with its own reason", () => {
+    const { signal, turn, human } = install(true);
+    const reasons: unknown[] = [];
+    signal.addEventListener("abort", () => reasons.push(signal.reason), { once: true });
+    human.abort(new Error("person stopped"));
+    turn.controller.abort(new DOMException("Deadline reached", "TimeoutError"));
+    expect(signal.aborted).toBe(true);
+    expect(String(reasons[0])).toContain("person stopped");
+  });
+
+  it("the first cause wins: a deadline that fired before the stop in the same tick answers, and the stop then cancels only the delivery", () => {
+    const { signal, turn, human } = install(true);
+    turn.controller.abort(new DOMException("Deadline reached", "TimeoutError"));
+    expect(signal.aborted).toBe(false);
+    human.abort(new Error("person stopped"));
+    expect(signal.aborted).toBe(true);
+    expect(String(signal.reason)).toContain("person stopped");
+  });
+});
+
+describe("the turn records why it ended without an answer (#4355)", () => {
+  it("records deadline-cancelled once when the deadline fires and nothing settled", async () => {
+    const endings: string[] = [];
+    install(false, 0, endings);
+    // The timers are driven by the fake clock: nothing is recorded before the deadline, so the line
+    // below cannot be an artefact of a real timer.
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS - 1);
+    expect(endings).toEqual([]);
+    await vi.advanceTimersByTimeAsync(3);
+    expect(endings).toEqual(["deadline-cancelled"]);
+  });
+  it("records nothing when the deadline answers from the transcript", async () => {
+    const endings: string[] = [];
+    install(true, 0, endings);
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS + 2);
+    expect(endings).toEqual([]);
+  });
+  it("records request-aborted when the request signal aborts, a stop and a dropped connection alike", () => {
+    const endings: string[] = [];
+    const { human } = install(true, 0, endings);
+    human.abort();
+    expect(endings).toEqual(["request-aborted"]);
+  });
+  it("records request-aborted once for a stop that follows a deadline answer, and nothing for the deadline", async () => {
+    const endings: string[] = [];
+    const { human } = install(true, 0, endings);
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS + 1);
+    human.abort();
+    expect(endings).toEqual(["request-aborted"]);
+  });
+  it("records request-aborted for a request that was already aborted", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const endings: string[] = [];
+    const human = new AbortController();
+    human.abort();
+    chatToolTurnCancellationSignal(
+      human.signal,
+      recordingPort(fakeTurn(true).port, (reason): void => {
+        endings.push(reason);
+      }),
+      "c-1",
+    );
+    expect(endings).toEqual(["request-aborted"]);
+  });
+  it("keeps a recording failure out of the abort listener", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const human = new AbortController();
+    chatToolTurnCancellationSignal(
+      human.signal,
+      recordingPort(fakeTurn(true).port, (): void => {
+        throw new Error("sink closed");
+      }),
+      "c-1",
+    );
+    expect(() => {
+      human.abort();
+    }).not.toThrow();
+  });
+  it("does not take a timeout that is not the turn's deadline for it (identity, not class)", () => {
+    const endings: string[] = [];
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const turn = fakeTurn(true);
+    const own = new DOMException("Deadline reached", "TimeoutError");
+    const human = new AbortController();
+    const signal = chatToolTurnCancellationSignal(
+      human.signal,
+      Object.defineProperties(
+        {
+          isDeadlineReason: (reason: unknown): boolean => reason === own,
+          recordEnding: (reason: string): void => {
+            endings.push(reason);
+          },
+        },
+        Object.getOwnPropertyDescriptors(turn.port),
+      ) as FakeTurn["port"],
+      "c-1",
+    );
+    // A provider's own timeout surfaced on the turn's signal: a cancellation, with no ending line.
+    turn.controller.abort(new DOMException("Provider timed out", "TimeoutError"));
+    expect(signal.aborted).toBe(true);
+    expect(endings).toEqual([]);
+  });
+
+  it("detaches from the request signal once the turn finished: a later abort is nobody's ending", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const endings: string[] = [];
+    const turn = fakeTurn(true);
+    const finished: (() => void)[] = [];
+    const human = new AbortController();
+    const signal = chatToolTurnCancellationSignal(
+      human.signal,
+      Object.defineProperties(
+        {
+          onFinished: (listener: () => void): void => {
+            finished.push(listener);
+          },
+          recordEnding: (reason: string): void => {
+            endings.push(reason);
+          },
+        },
+        Object.getOwnPropertyDescriptors(turn.port),
+      ) as FakeTurn["port"],
+      "c-1",
+    );
+    for (const listener of finished) listener();
+    human.abort();
+    expect(endings).toEqual([]);
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("records one ending when a deadline cancellation is followed by a stop", async () => {
+    const endings: string[] = [];
+    const { human } = install(false, 0, endings);
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS + 1);
+    human.abort();
+    expect(endings).toEqual(["deadline-cancelled"]);
   });
 });

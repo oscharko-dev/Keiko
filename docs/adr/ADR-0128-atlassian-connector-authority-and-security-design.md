@@ -693,7 +693,17 @@ per window; a rejected or inconclusive result is never cached and a new generati
 inherits a window. `atlassian.connection.checked` carries the closed `decision`
 (`identity-route`, `probe`, `probe-window`) and `routeClass` (`identity`, `other`) so a discard
 decided by the probe is distinguishable from the identity route's own 401, and the closed outcome
-`probe-inconclusive` records an unsettled probe.
+`probe-inconclusive` records an unsettled probe. A token replacement invalidates the Pod's verification at the one custody point and the same
+`PATCH` request then runs the existing verification (same probe, bounds, policies and
+credential-epoch check as an explicit verification), so no client needs a second call and a closed
+tab cannot leave the Pod silently unverified (#4353). The answer is the Pod's metadata with the
+state the probe left: verified, a closed failure status such as `auth-failed`, `timeout` or
+`unreachable`, or `unverified` when a newer change superseded the token before the probe ended
+(that change owns the Pod's verification). The token stays stored whatever the probe finds; no retry
+loop. The same operation records the check as `atlassian.connection.checked` with
+`action=verify-after-replace` under the replacement's correlation id; a result for an older token
+never marks a newer one verified. A rename invalidates nothing and verifies nothing; the URL and
+the certificate authority are not editable on an existing Pod, so no other edit needs this rule.
 
 Only a 401 that Jira itself authored can show a rejected token. Jira behind a corporate single
 sign-on proxy answers 401 for every request, `myself` included, once the proxy session ends, and a
@@ -1417,6 +1427,19 @@ no issue keys or provider bodies. This additive transcript field is readable by 
 older builds with exact-key transcript validation cannot read affected rows without an explicit
 compatible migration, so rollback compatibility is not implied.
 
+*Project names.* An approval names the projects its action targets by key and name on every
+card, the first of a Chat included. A card used to learn a name only from a `jira_projects` read of
+the same Chat, so a first create in a fresh Chat showed the bare numeric id. The server now reads
+each project once, when it builds the approval, through the same `project/{idOrKey}` read the write
+performs (bounded: at most eight projects, one five-second window, admitted as a GET only while the
+authority and the turn's read admission still hold), and stores the result as `projects` on the
+approval view, a list of `{ ref, key, name }`. A project Jira did not answer is listed as `{ ref }`
+and the card shows that reference marked as an id, never a name that was not read; the closed
+failure class is recorded body-free, with counts only, on `jira.approval.project`. The field is
+display data: it is never part of the action digest, so a name Jira later changes cannot invalidate
+an approval, and the UI only shows it
+(the card prefers it over names the Chat read earlier).
+
 *Deselection.* The approving human may deselect items; the deselection is bound into the approval
 proof and extends to every item that depends on a deselected one. The stored approval view carries
 it as `excludedItemRefs` (a subset of the draft, so no count of its own), and the transcript store admits exactly one
@@ -1626,6 +1649,15 @@ and any other final answer clears an earlier leg's record. Compatibility: a buil
 transcript with exact keys cannot read a row that carries `claimNotice` or `turnEnd`; this is the
 same one-way rule as for the marker, and the field is optional, so a row without it is read
 unchanged by every build.
+
+Three rules keep that rendering honest (2026-11-15, #4355). A person never reads an internal tool id:
+each receipt names its action with the label the Jira cards already use, and a tool without one reads
+as the neutral "Jira action". The record carries `answer`, a fingerprint of the English ending it was
+built with, and the Chat words the ending only for an answer whose stored text still matches it, so
+a record that outlived its answer (the clearing write failed) can never hide a model's real answer.
+And a stored `turnEnd` or `claimNotice` that is not valid is dropped when the transcript is read,
+with one body-free `chat.tool-transcript.marker-omitted` line per stored text: a presentation record
+must never cost the conversation its tool history, and the stored English answer is the fallback.
 
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically
@@ -2432,6 +2464,18 @@ the same server-established read grant as any other read. Mixed Data-Pod/Jira tu
 existing grounding citations and attribute Jira results separately; their orchestration phases share
 the accepted turn's Authority Envelope, while the grounded answer keeps its own synthesis grant
 (ADR-0181, amended for #4175).
+A turn's deadline answers from its transcript or cancels by WHICH signal fired, never by re-reading the
+wall clock inside the timer's callback (#4355, CI run 43596154016: a person was told "Request failed ...
+CANCELLED" for a turn whose write Jira had accepted). The deadline signal carries a `TimeoutError`
+reason; a person's stop, a dropped request and an authority revocation carry their own, and the first
+cause to fire is the one a signal carries. A deadline that fires first answers when the turn settled an
+exchange (known in memory, never through a store read inside the abort listener; an unreadable store
+answers "unknown" under the closed `chat.tool-turn.state-unreadable` diagnostic and the settled exchanges
+are still the receipt); a deadline with no settled exchange stays a cancellation; a stop or drop that
+fires first cancels with its own reason, and one that follows a deadline answer cancels only the delivery
+to that request. The catalog settlement names a call that reached the same signal `timeout`, not
+`cancelled`. `chat.tool-turn.ended` records `deadline-cancelled` and `request-aborted` (a person's Stop
+and a dropped connection are one signal to the server) beside the existing reasons.
 
 ### D5 — Sync bounds and lifecycle
 

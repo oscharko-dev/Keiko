@@ -35,6 +35,7 @@ import {
   composerRelation,
   ofType,
   gradeKeysAfterReread,
+  severalPath,
 } from "./composer-graders.mjs";
 import {
   SUBTASK_PARENT_TYPES,
@@ -254,45 +255,95 @@ async function unrepairableRequest(ctx, fixture) {
   ];
 }
 
-const SEVERAL_TITLES = ["Composer Teil A", "Composer Teil B", "Composer Teil C"];
+/** The two ways a person asks for several Tasks: the lab's own wording and a plain one they would type. */
+const SEVERAL_PHRASINGS = Object.freeze([
+  { key: "lab", label: "lab wording" },
+  { key: "plain", label: "plain wording" },
+]);
+const severalTitles = (mode, phrasing) =>
+  ["A", "B", "C"].map((letter) => `Composer Teil ${letter} ${mode.key} ${phrasing.key}`);
+const quoted = (titles) => titles.map((title) => `„${title}“`).join(", ");
 
-/** One request, three Tasks under the named Epic: all created natively, every key listed. */
-async function createSeveralTasks(ctx, fixture) {
+function severalPrompt(phrasing, titles, fixture) {
+  return phrasing.key === "lab"
+    ? `Lege im Jira-Projekt REQ drei Aufgaben (Vorgangstyp Task) mit den Titeln ${quoted(titles)} im Epic ${fixture.epic} an. ${contentRequest("Task", "jede")} Melde alle Vorgangsschlüssel.`
+    : `Lege in REQ drei Aufgaben an: ${quoted(titles)}. Sie gehören ins Epic ${fixture.epic}.`;
+}
+
+/**
+ * The hard created-part of one run: the native verdict, the path the model took and the review cards
+ * the person got. A stage that was never committed is red with its own reason; with the plain wording a
+ * model that asked the person for the section content creates nothing at all, which is its observation.
+ */
+function severalCreated({ grade, exchanges, phrasing, cards }) {
+  const path = severalPath(exchanges);
+  const detail = `${grade.created.detail}; path: ${path}; review cards: ${String(cards)}`;
+  if (grade.created.status === "green") return { ...grade.created, detail };
+  if (path === "staged, not committed")
+    return { status: "red", detail: `staged, not committed: ${detail}` };
+  if (path === "no write" && phrasing.key === "plain")
+    return {
+      status: "unverified",
+      observation: true,
+      detail: `model observation: nothing was staged or created for the plain request (${detail})`,
+    };
+  return { ...grade.created, detail };
+}
+
+/** One request, three Tasks under the named Epic, in one mode and one wording: created, listed, listed after a re-read. */
+async function createSeveralIn(ctx, fixture, mode, phrasing) {
+  const titles = severalTitles(mode, phrasing);
   const { turn, issues, chat } = await composerTurn(ctx, fixture, {
-    prompt: `Lege im Jira-Projekt REQ drei Aufgaben (Vorgangstyp Task) mit den Titeln ${SEVERAL_TITLES.map((title) => `„${title}“`).join(", ")} im Epic ${fixture.epic} an. ${contentRequest("Task", "jede")} Melde alle Vorgangsschlüssel.`,
+    mode: mode.mode,
+    prompt: severalPrompt(phrasing, titles, fixture),
   });
   const grade = gradeMultiCreate({
     type: "Task",
-    titles: SEVERAL_TITLES,
+    titles,
     issues,
     conforms: composerConformity("Task", fixture),
     related: composerRelation("Task", fixture),
     answer: turn.answer,
     exchanges: turn.toolExchanges,
   });
-  // Hard from Jira and the stored result card, soft from the answer; one turn serves all three.
+  const made = ofType(issues, "Task").created;
+  const where = `several Tasks, ${mode.label}, ${phrasing.label}`;
+  const id = (name) => `multi-create-${name}-${mode.key}-${phrasing.key}`;
+  const created = severalCreated({
+    grade,
+    exchanges: turn.toolExchanges,
+    phrasing,
+    cards: turn.approvals?.writes ?? 0,
+  });
   return [
-    {
-      turn,
-      part: part("create several Tasks", ["multi-create-all-created"], grade.created),
-    },
+    { turn, part: part(`${where}: created`, [id("all-created")], created) },
     {
       turn: NO_TURN,
-      part: part("several Tasks: keys in the result", ["multi-create-keys-listed"], grade.listed),
+      part: part(`${where}: keys in the result`, [id("keys-listed")], grade.listed),
     },
     {
       turn: NO_TURN,
       part: part(
-        "several Tasks: keys after the stored conversation was read again",
-        ["multi-create-keys-after-reread"],
-        gradeKeysAfterReread(ofType(issues, "Task").created, await ctx.readStoredMessages(chat)),
+        `${where}: keys after the stored conversation was read again`,
+        [id("keys-after-reread")],
+        gradeKeysAfterReread(made, await ctx.readStoredMessages(chat)),
       ),
     },
     {
       turn: NO_TURN,
-      part: part("several Tasks: keys in the answer", ["multi-create-answer-keys"], grade.answered),
+      part: part(`${where}: keys in the answer`, [id("answer-keys")], grade.answered),
     },
   ];
+}
+
+/** C01: several Tasks from one request in every selected mode, each in both wordings. */
+async function createSeveralTasks(ctx, fixture) {
+  const { modes } = composerSelection(ctx);
+  const runs = modes.flatMap((mode) => SEVERAL_PHRASINGS.map((phrasing) => ({ mode, phrasing })));
+  const results = await sequentially(runs, ({ mode, phrasing }) =>
+    createSeveralIn(ctx, fixture, mode, phrasing),
+  );
+  return results.flat();
 }
 
 /** C02: a violating request is refused before any card or effect, per type and per mode. */

@@ -1,13 +1,15 @@
-import type {
-  ChatToolTurnEnd,
-  ChatToolTurnEndReason,
-  ChatTurnEndItemState,
-  ChatTurnEndReceipt,
+import {
+  chatTurnEndAnswerFingerprint,
+  type ChatToolTurnEnd,
+  type ChatToolTurnEndReason,
+  type ChatTurnEndItemState,
+  type ChatTurnEndReceipt,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
 } from "@/lib/optional-widget-i18n";
+import { jiraToolLabel } from "./jira-tool-presentation";
 
 /** One catalog sentence per closed reason the server states (#4355); a test walks the vocabulary. */
 const REASON_KEYS = {
@@ -34,13 +36,22 @@ const STATE_KEYS = {
 } as const satisfies Record<ChatTurnEndItemState, string>;
 export const TURN_END_STATE_KEYS = STATE_KEYS;
 
+/**
+ * What the person reads for a tool: the label the Jira cards already use for it, in the person's
+ * language; a tool without one reads as one neutral word, never as its internal id.
+ */
+export function receiptToolLabel(tool: string, translate: OptionalWidgetTranslate): string {
+  return translate(jiraToolLabel({ call: { name: tool, arguments: {} } }));
+}
+
 function receiptLine(entry: ChatTurnEndReceipt, translate: OptionalWidgetTranslate): string {
+  const label = receiptToolLabel(entry.tool, translate);
   const subject =
     entry.key ??
     (entry.item === undefined
       ? ""
       : translate("chat.turnEnd.itemWithoutKey", { item: String(entry.item) }));
-  const named = subject === "" ? entry.tool : `${entry.tool} ${subject}`;
+  const named = subject === "" ? label : `${label} ${subject}`;
   return entry.state === undefined ? named : `${named} (${translate(STATE_KEYS[entry.state])})`;
 }
 
@@ -65,7 +76,7 @@ export function turnEndText(end: ChatToolTurnEnd, translate: OptionalWidgetTrans
       ? []
       : [translate("chat.turnEnd.more", { count: String(end.moreCount) }), ""];
   return [
-    translate("chat.turnEnd.lead", { reason: translate(REASON_KEYS[end.reason]) }),
+    `${translate("chat.turnEnd.lead")} ${translate(REASON_KEYS[end.reason])}`,
     "",
     ...list(translate("chat.turnEnd.completed"), end.completed, translate),
     ...list(translate("chat.turnEnd.unconfirmed"), end.unconfirmed, translate),
@@ -81,8 +92,17 @@ export function turnEndText(end: ChatToolTurnEnd, translate: OptionalWidgetTrans
   ].join("\n");
 }
 
-/** The ending as one plain string, or undefined for a turn that did not end early. */
-export function useTurnEndText(end: ChatToolTurnEnd | undefined): string | undefined {
+/**
+ * The ending as one plain string, or undefined when the turn did not end early OR the stored answer
+ * is no longer the ending the record was built with: a record that outlived its answer (a failed
+ * clearing write) never hides a model's real answer behind an ending it did not give.
+ */
+export function useTurnEndText(
+  end: ChatToolTurnEnd | undefined,
+  storedAnswer: string,
+): string | undefined {
   const translate = useOptionalWidgetTranslate();
-  return end === undefined ? undefined : turnEndText(end, translate);
+  if (end === undefined || end.answer !== chatTurnEndAnswerFingerprint(storedAnswer))
+    return undefined;
+  return turnEndText(end, translate);
 }

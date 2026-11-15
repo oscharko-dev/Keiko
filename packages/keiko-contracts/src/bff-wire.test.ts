@@ -25,6 +25,7 @@ import {
   isGroundedRerankerFailureKind,
   isChatToolBatchProgress,
   isChatToolTurnEnd,
+  chatTurnEndAnswerFingerprint,
   CHAT_TOOL_TURN_END_REASONS,
   CHAT_TURN_END_RECEIPTS_MAX,
   MAX_ATTACHMENT_BYTES,
@@ -1748,6 +1749,7 @@ it("admits counted batch progress on the draft batch exchange only, and nothing 
 describe("the turn ending record (#4355)", () => {
   const end = {
     reason: "deadline",
+    answer: chatTurnEndAnswerFingerprint("This request was not finished."),
     completed: [{ tool: "jira_create", key: "REQ-1" }],
     unconfirmed: [{ tool: "jira_draft", item: 2, state: "uncertain" }],
     unsettled: [{ tool: "jira_transition" }],
@@ -1784,9 +1786,21 @@ describe("the turn ending record (#4355)", () => {
         completed: Array.from({ length: CHAT_TURN_END_RECEIPTS_MAX + 1 }, () => ({ tool: "t" })),
       },
     ],
+    ["a missing answer fingerprint", { ...end, answer: undefined }],
+    ["an answer fingerprint of another shape", { ...end, answer: "not a fingerprint" }],
     ["an array", [end]],
     ["null", null],
   ])("refuses %s", (_name, value) => {
     expect(isChatToolTurnEnd(value)).toBe(false);
+  });
+});
+
+describe("the answer fingerprint of a turn ending (#4355)", () => {
+  it("binds a record to the exact text it was built with", () => {
+    const text = "This request was not finished: this turn reached its time limit.";
+    expect(chatTurnEndAnswerFingerprint(text)).toBe(chatTurnEndAnswerFingerprint(text));
+    expect(chatTurnEndAnswerFingerprint(text)).toMatch(/^\d+:[0-9a-f]{8}$/u);
+    for (const other of [`${text} `, text.replace("time", "tame"), "", "Here is the real answer."])
+      expect(chatTurnEndAnswerFingerprint(other)).not.toBe(chatTurnEndAnswerFingerprint(text));
   });
 });

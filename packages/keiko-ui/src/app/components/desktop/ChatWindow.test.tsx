@@ -54,6 +54,7 @@ import type { ChatSessionApi } from "./hooks/useChatSession";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 import {
   buildGroundedAnswerContextPackSummary,
+  chatTurnEndAnswerFingerprint,
   type ChatToolTurnEnd,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -6129,6 +6130,7 @@ describe("The answer of a turn that ended early, worded in the person's language
   const STORED = "This request was not finished: this turn reached its time limit.";
   const END: ChatToolTurnEnd = {
     reason: "deadline",
+    answer: chatTurnEndAnswerFingerprint(STORED),
     completed: [{ tool: "jira_create", key: "REQ-1" }],
     unconfirmed: [{ tool: "jira_draft", item: 2, state: "uncertain" }],
     unsettled: [{ tool: "jira_transition" }],
@@ -6174,16 +6176,23 @@ describe("The answer of a turn that ended early, worded in the person's language
     const text = (await screen.findByText(/Diese Anfrage wurde nicht abgeschlossen/u)).closest(
       ".chat-msg-bubble",
     )?.textContent;
-    expect(text).toContain("die Zeit für diesen Durchgang ist abgelaufen");
+    expect(text).toContain(
+      "Diese Anfrage wurde nicht abgeschlossen. Die Zeit für diesen Durchgang ist abgelaufen.",
+    );
     expect(text).toContain("In diesem Durchgang erledigt:");
-    expect(text).toContain("jira_create REQ-1");
+    expect(text).toContain("Jira-Vorgang erstellen REQ-1");
     expect(text).toContain(
       "Gesendet, aber nicht bestätigt — prüfe das in Jira, bevor du es erneut versuchst:",
     );
-    expect(text).toContain("jira_draft (Eintrag 2, ohne Schlüssel) (unsicher)");
+    expect(text).toContain("Jira-Vorgänge anlegen (Eintrag 2, ohne Schlüssel) (unsicher)");
     expect(text).toContain("Gestartet, aber nicht abgeschlossen");
-    expect(text).toContain("jira_draft (Eintrag 3, ohne Schlüssel) (übersprungen)");
-    expect(text).toContain("Lesezugriffe abgeschlossen: 3. Abgelehnte oder fehlgeschlagene");
+    expect(text).toContain("Jira-Vorgänge anlegen (Eintrag 3, ohne Schlüssel) (übersprungen)");
+    expect(text).toContain(
+      "Lesezugriffe abgeschlossen: 3. Abgelehnte oder fehlgeschlagene Aktionen: 1.",
+    );
+    // A person never reads an internal tool id where a human label exists.
+    expect(text).not.toMatch(/jira_[a-z_]+/u);
+    expect(text).not.toContain("Tool");
     expect(text).toContain("Schick eine weitere Nachricht");
     expect(text).not.toContain("This request was not finished");
     expect(text).not.toContain("Sent but not confirmed");
@@ -6191,10 +6200,17 @@ describe("The answer of a turn that ended early, worded in the person's language
 
   it("shows the authentication failure in German with what to do", async () => {
     await renderIn("de", turn({ ...END, reason: "authentication-failed" }));
-    expect(
-      await screen.findByText(/Die Anmeldung bei Jira ist fehlgeschlagen/u, { exact: false }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/ersetze das Token und prüfe die Verbindung/u)).toBeInTheDocument();
+    const text = (await screen.findByText(/Die Anmeldung bei Jira ist fehlgeschlagen/u)).closest(
+      ".chat-msg-bubble",
+    )?.textContent;
+    // The lead is its own sentence and the reason follows as sentences: no capital after a colon.
+    expect(text).toContain(
+      "Diese Anfrage wurde nicht abgeschlossen. Die Anmeldung bei Jira ist fehlgeschlagen.",
+    );
+    expect(text).toContain("Das Zugangs-Token ist möglicherweise abgelaufen");
+    expect(text).toContain("Öffne das Fenster Lokales Wissen");
+    expect(text).not.toContain("Knowledge-Pods-Hub");
+    expect(text).not.toContain(": Die");
   });
 
   it("words the same facts in English from the catalog, with the same receipts", async () => {
@@ -6202,14 +6218,22 @@ describe("The answer of a turn that ended early, worded in the person's language
     const text = (await screen.findByText(/This request was not finished/u)).closest(
       ".chat-msg-bubble",
     )?.textContent;
-    expect(text).toContain("this turn reached its time limit");
-    expect(text).toContain("jira_draft (item 2, no key) (uncertain)");
-    expect(text).toContain("Reads completed: 3. Refused or failed tool calls: 1.");
+    expect(text).toContain("This request was not finished. This turn reached its time limit.");
+    expect(text).toContain("Create Jira issues (item 2, no key) (uncertain)");
+    expect(text).toContain("Reads completed: 3. Refused or failed actions: 1.");
+    expect(text).not.toMatch(/jira_[a-z_]+/u);
   });
 
   it("renders the stored answer as before when the turn carries no ending", async () => {
     await renderIn("de", turn(undefined));
     expect(await screen.findByText(STORED)).toBeInTheDocument();
+    expect(screen.queryByText(/Diese Anfrage wurde nicht abgeschlossen/u)).toBeNull();
+  });
+
+  // The clearing write may fail; a record that outlived its ending must never hide the real answer.
+  it("shows the model's real answer when a stale ending record outlived its ending", async () => {
+    await renderIn("de", turn(END, { content: "Hier ist die echte Antwort des Modells." }));
+    expect(await screen.findByText("Hier ist die echte Antwort des Modells.")).toBeInTheDocument();
     expect(screen.queryByText(/Diese Anfrage wurde nicht abgeschlossen/u)).toBeNull();
   });
 

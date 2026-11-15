@@ -52,6 +52,7 @@ import { createHarnessCatalogBudget, type ModelPort } from "@oscharko-dev/keiko-
 import type { HarnessLimits } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { chatToolTurnLimits } from "./chat-tool-turn-budget.js";
+import { chatTurnDeadlineSignal, isChatTurnDeadlineReason } from "./chat-tool-turn-deadline.js";
 import {
   chatToolTurnEnd,
   chatToolTurnEndReason,
@@ -62,6 +63,7 @@ import {
   recordChatToolTurnCorrected,
   recordChatToolBatchDraftOffer,
   recordChatToolTurnEnded,
+  type ChatToolTurnCancelReason,
   type ChatToolTurnEndReason,
 } from "./chat-tool-turn-ending.js";
 import {
@@ -248,7 +250,7 @@ export function mintAndBoundChatTurn<
   requireDispatch(authority.ok, "denied", "authority-invalid");
   const remaining = Date.parse(authority.envelope.expiresAt) - Date.now();
   requireDispatch(remaining > 0, "denied", "authority-expired");
-  return { authority, signal: AbortSignal.any([...signals, AbortSignal.timeout(remaining)]) };
+  return { authority, signal: AbortSignal.any([...signals, chatTurnDeadlineSignal(remaining)]) };
 }
 /**
  * Whether a turn's answer reports a change tool's outcome (#4292). A change Keiko did not send
@@ -419,6 +421,7 @@ function reportTurnFailure(
     | "chat.tool-turn.selection-release"
     | "chat.tool-turn.claim-notice"
     | "chat.tool-turn.turn-end"
+    | "chat.tool-turn.state-unreadable"
     | "chat.tool-turn.finalize" = "chat.tool-turn.batch-progress",
 ): void {
   const { deps, correlationId } = options;
@@ -495,6 +498,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private scopeChangeEnded = false;
   private scopeInterruption: ChatGenerationInterruption | undefined;
   private readonly abortController = new AbortController();
+  /** The turn ended: nothing it logs or answers afterwards may describe it again. */
+  private finished = false;
+  private endingRecorded = false;
+  private readonly finishedListeners: (() => void)[] = [];
   private promptTokens = 0;
   private completionTokens = 0;
   private activeModelId: string | undefined;
@@ -708,6 +715,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     await Promise.all([pending?.close(), selected?.close(), prepared?.close()]);
   }
   private async finalizeTurn(): Promise<void> {
+    this.finished = true;
+    for (const listener of this.finishedListeners.splice(0)) listener();
     try {
       await this.releaseToolSelection();
     } catch (error) {
@@ -1296,7 +1305,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     // The answer no longer describes the turn once the correction round dispatched another call.
     if (answer === undefined || this.transcriptExchangeCount() !== this.uncorrectedExchangeCount)
       return undefined;
-    const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
+    const expired = this.endedByDeadline(signal);
     if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
     // The correction round failed: the original answer is published unchanged, and a false claim
     // in it is marked in the stored turn.
@@ -1370,21 +1379,26 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     modelId: string,
     signal: AbortSignal,
   ): NormalizedResponse | undefined {
-    const { deps, message, correlationId, budget } = this.options;
-    const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
+    const { message, correlationId, budget } = this.options;
+    const expired = this.endedByDeadline(signal);
     if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
     const reason = this.endReason(error, expired);
-    // Unsettled calls stay in the answer: one may have reached Jira before bookkeeping failed.
-    const exchanges = deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
+    // Unsettled calls stay in the answer: one may have reached Jira before bookkeeping failed. When
+    // the store cannot be read, the exchanges this turn settled still are the receipt (#4355).
+    const stored = this.storedExchanges();
+    const exchanges = stored.length > 0 ? stored : this.settledExchanges;
     if (reason === undefined || !exchanges.some((exchange) => exchange.result !== undefined))
       return undefined;
-    recordChatToolTurnEnded(processServerLogSink(), {
-      correlationId,
-      messageId: message.id,
-      reason,
-      exchanges,
-      budget,
-    });
+    if (!this.endingRecorded) {
+      this.endingRecorded = true;
+      recordChatToolTurnEnded(processServerLogSink(), {
+        correlationId,
+        messageId: message.id,
+        reason,
+        exchanges,
+        budget,
+      });
+    }
     logKnowledgeCoverage(
       correlationId,
       knowledgeTurnCoverage(exchanges, {
@@ -1430,12 +1444,69 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
    * with no settled exchange stays a cancellation.
    */
   public get answersAtDeadline(): boolean {
+    // What the turn itself settled is known in memory; the stored transcript is read only for
+    // exchanges an earlier leg of the same message settled, and a failed read answers "unknown",
+    // never a throw inside an abort listener (#4355).
+    if (this.settledExchanges.length > 0) return true;
+    return this.storedExchanges().some((exchange) => exchange.result !== undefined);
+  }
+
+  /**
+   * The Activity Log line of a turn that ended without an answer of its own: the closed reason and the
+   * counts of what this turn settled in memory. Exactly one line per turn: a finished turn, or one whose
+   * ending is already recorded (by the cancellation or by the deadline answer, whichever came first),
+   * adds none. Runs inside an abort listener, so it reads no store and never throws.
+   */
+  public recordEnding(reason: ChatToolTurnCancelReason): void {
+    const { message, correlationId, budget } = this.options;
+    if (this.finished || this.endingRecorded) return;
+    this.endingRecorded = true;
+    try {
+      recordChatToolTurnEnded(processServerLogSink(), {
+        correlationId,
+        messageId: message.id,
+        reason,
+        exchanges: this.settledExchanges,
+        budget,
+      });
+    } catch (error: unknown) {
+      reportTurnFailure(this.options, error, "chat.tool-turn.state-unreadable");
+    }
+  }
+
+  /** Runs `listener` once when the turn finishes; a finished turn runs it at once. */
+  public onFinished(listener: () => void): void {
+    if (this.finished) listener();
+    else this.finishedListeners.push(listener);
+  }
+
+  /** Whether this abort reason is this turn's own deadline: identity, never the error's class. */
+  public isDeadlineReason(reason: unknown): boolean {
+    return isChatTurnDeadlineReason(reason);
+  }
+
+  /** The stored transcript's exchanges; unreadable is empty and recorded under the closed diagnostic. */
+  private storedExchanges(): readonly ChatToolExchange[] {
     const { deps, message } = this.options;
-    return (
-      deps.store
-        .findMessageById(message.id)
-        ?.toolTranscript?.exchanges.some((exchange) => exchange.result !== undefined) ?? false
-    );
+    try {
+      return deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
+    } catch (error: unknown) {
+      reportTurnFailure(this.options, error, "chat.tool-turn.state-unreadable");
+      return [];
+    }
+  }
+
+  /**
+   * Whether the deadline is what ended this turn. Every signal that aborted names its cause: the
+   * deadline's reason makes it a deadline, any other reason (a stop, a dropped request, a revocation)
+   * is that cause, and the first cause to fire is the one the signal carries. Only when nothing was
+   * aborted, as when the turn's own budget accounting refused further work, does the clock state
+   * whether the deadline passed.
+   */
+  private endedByDeadline(signal: AbortSignal): boolean {
+    const aborted = [signal, this.options.context.signal].filter((candidate) => candidate.aborted);
+    if (aborted.length === 0) return Date.now() >= Date.parse(this.context.authorityExpiresAt);
+    return aborted.every((candidate) => isChatTurnDeadlineReason(candidate.reason));
   }
 
   /**

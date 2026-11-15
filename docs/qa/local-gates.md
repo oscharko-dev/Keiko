@@ -56,6 +56,33 @@ yet `debug-launch-policy.test.ts` asserts the exact pair: outside CI it skips it
 and names the reason, and with `CI=true` it never skips, so run `node scripts/check-runtime-toolchain.mjs --exact`
 to see whether your host qualifies (#4111).
 
+## Optional Node 26 lane
+
+The default lane is Node.js 24.18.0. The customer runs Node 26, and CI's "Node 26 compatibility"
+job (`node-version: "26.8.1"` in `.github/workflows/ci.yml`, with npm 11.19.0, the second governed
+pair of `scripts/check-runtime-toolchain.mjs`) can fail where Node 24 passes. To reproduce such a
+failure without leaving the container rule, the compose file carries a second service,
+`gates-node26`: the same Dockerfile built with `NODE_VERSION=26.8.1`, so it has the same pinned git
+and iproute2, the same unprivileged `node` user, the same security options and the same checkout
+bind mount. Its `node_modules` and npm cache are volumes of their own
+(`gates-node26-node-modules`, `gates-node26-npm-cache`), so the installs of the two Node versions
+never mix; the Playwright browsers do not depend on Node and stay shared.
+
+The one command that runs a narrow vitest file on Node 26 (it installs and builds first when the
+lane's volumes are empty, which takes a few minutes once):
+
+```bash
+docker compose -f docker/gates/docker-compose.yml run --rm gates-node26 \
+  ./docker/gates/run-vitest.sh packages/keiko-activity-log/src/log-level.test.ts
+```
+
+Any vitest file or filter may follow `run-vitest.sh`. The lane is for reproducing a Node 26-only
+failure and for narrow runs; the aggregate `gates:local*` scripts stay on the default Node 24 lane.
+When CI's Node 26 pin moves, change `NODE_VERSION` of the service in `docker/gates/docker-compose.yml`
+(and keep it equal to the workflow's `node-version`). The Dockerfile is scanned by SonarCloud's
+Docker rules, which no local gate sees: keep downloads HTTPS-only and long commands broken across
+lines.
+
 ## Test worker count
 
 Vitest is capped (GEN-TEST-FLAKE-001/002): the integration tests start servers, parse PDFs and build
@@ -79,6 +106,23 @@ while they pass on a GitHub runner, which is not a container. The compose file t
 local gate container with `systempaths=unconfined`, which unmasks `/proc` so the sandbox runs as it
 does on a runner; like the seccomp and apparmor settings beside it, it applies to this local container
 only. GitHub CI does not use this compose file and is untouched.
+
+## What the image carries that the distribution does not
+
+Git is built from the upstream release (2.56.1, kernel.org, pinned by SHA-256 in
+`docker/gates/Dockerfile`) because the product's lazy-fetch guard needs git 2.45 or newer and
+Debian bookworm ships 2.39; CI's runners carry a current git. `iproute2` is installed because the
+sandbox's unshare fallback needs the `ip` tool to bring loopback up in its namespace. A host without
+either keeps the product's closed refusal for the case; the image simply matches what CI has.
+
+## Measured option, not built: externalising the server package under vitest
+
+A test that lazily imports `@oscharko-dev/keiko-server` makes vitest transform about 2,590 built
+workspace files one by one (26 to 29 s in this container against 3.5 s for a plain Node import)
+because workspace packages resolve outside `node_modules` and are inlined. Externalising only that
+package for the test projects that do not mock its internals should bring the load to roughly 4 s.
+It is not done: it needs a run of the keiko-cli and keiko-server suites to prove no test relies on
+mocking modules inside the server graph.
 
 ## Git worktrees
 

@@ -3,10 +3,12 @@ import { createKnowledgeChatToolTurn } from "./knowledge-chat-turn.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
+import type { ChatToolTurnCancelReason } from "./chat-tool-turn-ending.js";
 import { createJiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
 import { createMcpChatToolTurn } from "./mcp/mcpChatToolTurn.js";
 import { createChatSourcesToolTurn } from "./chat-tool-sources-turn.js";
 import { correlationIdOrUnknown } from "./correlation.js";
+import { chatTurnDeadlineSignal } from "./chat-tool-turn-deadline.js";
 import { openTraceSession } from "./requirement-trace.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 export type { ChatToolTurnPort } from "./chat-tool-turn.js";
@@ -72,30 +74,50 @@ export function scopeChatToolTurn(
 type CancellableTurn = Pick<
   ChatToolTurnPort,
   "signal" | "deadlineAtMs" | "answersAtDeadline" | "answersAfterScopeChange"
->;
+> & {
+  /** Records why the turn ended without an answer of its own; runs in an abort listener, never throws. */
+  readonly recordEnding?: (reason: ChatToolTurnCancelReason) => void;
+  /** Whether a reason is the turn's own deadline, by identity; a port without it is told by class. */
+  readonly isDeadlineReason?: (reason: unknown) => boolean;
+  /** Runs once when the turn has finished: the listeners on the request signal are then removed. */
+  readonly onFinished?: (listener: () => void) => void;
+};
+
+/** A turn that cannot tell its deadline by identity is told by the class of the timeout reason. */
+function deadlineReason(turn: CancellableTurn, reason: unknown): boolean {
+  if (turn.isDeadlineReason !== undefined) return turn.isDeadlineReason(reason);
+  return reason instanceof DOMException && reason.name === "TimeoutError";
+}
+/** The closed body-free diagnostic for a turn state an abort listener could not read or record. */
+function reportStateUnreadable(error: unknown, correlationId: string | undefined): void {
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(correlationId),
+      operation: "chat.tool-turn.state-unreadable",
+      source: "chat-tool-runtime",
+      error,
+      redact: () => "server-operation-failed",
+    }),
+  );
+}
+
 /**
  * Runs inside an abort listener, where a throw is uncaught and ends the process, and possibly long
- * after the request settled: a turn whose state cannot be read has no answer to give.
+ * after the request settled: a turn whose state cannot be read has no answer to give. `cause` is the
+ * reason of the signal that fired first for this decision.
  */
 function turnAnswers(
   signal: AbortSignal,
   turn: CancellableTurn,
+  cause: unknown,
   correlationId: string | undefined,
 ): boolean {
   try {
-    const deadlineOnly = !signal.aborted && Date.now() >= turn.deadlineAtMs;
+    const deadlineOnly = !signal.aborted && deadlineReason(turn, cause);
     return turn.answersAfterScopeChange || (deadlineOnly && turn.answersAtDeadline);
   } catch (error) {
-    emitServerDiagnostic(
-      undefined,
-      serverDiagnosticFromError({
-        correlationId: correlationIdOrUnknown(correlationId),
-        operation: "chat.tool-turn.state-unreadable",
-        source: "chat-tool-runtime",
-        error,
-        redact: () => "server-operation-failed",
-      }),
-    );
+    reportStateUnreadable(error, correlationId);
     return false;
   }
 }
@@ -114,23 +136,47 @@ export function chatToolTurnCancellationSignal(
   correlationId: string | undefined,
 ): AbortSignal {
   const controller = new AbortController();
-  const cancel = (reason: unknown): void => {
-    if (!controller.signal.aborted) controller.abort(reason);
+  // One closed line says why the turn ended without an answer of its own, once, with the abort; a
+  // recording never throws inside an abort listener.
+  const cancel = (reason: unknown, ending?: ChatToolTurnCancelReason): void => {
+    if (controller.signal.aborted) return;
+    try {
+      if (ending !== undefined) turn.recordEnding?.(ending);
+    } catch (error) {
+      // A recording that fails must not stop the cancellation, nor throw inside an abort listener.
+      reportStateUnreadable(error, correlationId);
+    }
+    controller.abort(reason);
   };
-  const onTurnAbort = (): void => {
-    if (!turnAnswers(signal, turn, correlationId)) cancel(turn.signal.reason);
+  // The first cause to fire decides: a person's stop that fired first cancels with its own reason; a
+  // deadline that fired first answers from the transcript, and a stop that follows it cancels only
+  // the delivery to that request, never the receipt the transcript already holds.
+  const onTurnAbort = (source: AbortSignal): void => {
+    if (turnAnswers(signal, turn, source.reason, correlationId)) return;
+    cancel(source.reason, deadlineReason(turn, source.reason) ? "deadline-cancelled" : undefined);
   };
-  const deadline = AbortSignal.timeout(Math.max(0, turn.deadlineAtMs - Date.now()));
-  signal.addEventListener(
-    "abort",
-    () => {
-      cancel(signal.reason);
-    },
-    { once: true },
-  );
-  turn.signal.addEventListener("abort", onTurnAbort, { once: true });
-  deadline.addEventListener("abort", onTurnAbort, { once: true });
-  if (signal.aborted) cancel(signal.reason);
-  else if (turn.signal.aborted) onTurnAbort();
+  const deadline = chatTurnDeadlineSignal(Math.max(0, turn.deadlineAtMs - Date.now()));
+  const onRequestAbort = (): void => {
+    cancel(signal.reason, "request-aborted");
+  };
+  const onTurnSignalAbort = (): void => {
+    onTurnAbort(turn.signal);
+  };
+  const onDeadlineAbort = (): void => {
+    onTurnAbort(deadline);
+  };
+  // Once the turn has finished, or the delivery is cancelled, nothing may react to a later abort.
+  const detach = (): void => {
+    signal.removeEventListener("abort", onRequestAbort);
+    turn.signal.removeEventListener("abort", onTurnSignalAbort);
+    deadline.removeEventListener("abort", onDeadlineAbort);
+  };
+  signal.addEventListener("abort", onRequestAbort, { once: true });
+  turn.signal.addEventListener("abort", onTurnSignalAbort, { once: true });
+  deadline.addEventListener("abort", onDeadlineAbort, { once: true });
+  turn.onFinished?.(detach);
+  controller.signal.addEventListener("abort", detach, { once: true });
+  if (signal.aborted) onRequestAbort();
+  else if (turn.signal.aborted) onTurnAbort(turn.signal);
   return controller.signal;
 }

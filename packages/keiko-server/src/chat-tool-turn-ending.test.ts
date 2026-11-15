@@ -3,6 +3,7 @@ import {
   CHAT_TOOL_TURN_END_REASONS,
   CHAT_TURN_END_RECEIPTS_MAX,
   isChatToolTurnEnd,
+  chatTurnEndAnswerFingerprint,
   type ChatToolExchange,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -242,14 +243,19 @@ describe("chatToolTurnPartialAnswer", () => {
 
 describe("chatToolTurnEnd (#4355)", () => {
   // The registry needs a closed literal, so the two registrations repeat the vocabulary; this pin
-  // keeps them equal to the one list the Chat's catalog walk and the server share.
+  // keeps them equal to the one list the Chat's catalog walk and the server share (the log also
+  // records the two closed words of a turn that gave no answer, which the Chat never words).
   it.each(["chat.tool-turn.ended", "chat.tool-transcript.updated"])(
     "keeps the %s registration equal to the shared reason vocabulary",
     (op) => {
       const fields = activityLogOperationSchema(op)?.fields as
         Record<string, { readonly values?: readonly string[] }> | undefined;
       const values = fields?.[op === "chat.tool-turn.ended" ? "reason" : "turnEndReason"]?.values;
-      expect([...(values ?? [])].sort()).toEqual([...CHAT_TOOL_TURN_END_REASONS].sort());
+      const logOnly =
+        op === "chat.tool-turn.ended" ? ["deadline-cancelled", "request-aborted"] : [];
+      expect([...(values ?? [])].sort()).toEqual(
+        [...CHAT_TOOL_TURN_END_REASONS, ...logOnly].sort(),
+      );
     },
   );
 
@@ -257,6 +263,8 @@ describe("chatToolTurnEnd (#4355)", () => {
     const end = chatToolTurnEnd(TRANSCRIPT, "deadline");
     expect(end).toEqual({
       reason: "deadline",
+      // Bound to the English ending the same tally and reason produce.
+      answer: chatTurnEndAnswerFingerprint(chatToolTurnPartialAnswer(TRANSCRIPT, "deadline")),
       completed: [
         { tool: "jira_create", key: "REQ-12" },
         { tool: "jira_create", key: "REQ-13" },
@@ -302,6 +310,9 @@ describe("chatToolTurnEnd (#4355)", () => {
       const end = chatToolTurnEnd(TRANSCRIPT, reason);
       const answer = chatToolTurnPartialAnswer(TRANSCRIPT, reason);
       expect(end.reason).toBe(reason);
+      expect(end.answer).toBe(
+        chatTurnEndAnswerFingerprint(chatToolTurnPartialAnswer(TRANSCRIPT, reason)),
+      );
       const listed = answer.split("\n").filter((line) => line.startsWith("- "));
       expect(listed).toHaveLength(
         end.completed.length + end.unconfirmed.length + end.unsettled.length + end.notDone.length,
@@ -323,6 +334,31 @@ describe("chatToolTurnEnd (#4355)", () => {
     expect(end.moreCount).toBe(5);
     expect(isChatToolTurnEnd(end)).toBe(true);
   });
+});
+
+describe("the ending of a turn that gave no answer of its own is told by closed words (#4355)", () => {
+  const budget = { maxToolCalls: 250, maxRuntimeMs: 3_600_000 };
+  it.each([
+    ["request-aborted", "info"],
+    ["deadline-cancelled", "warn"],
+    ["deadline", "warn"],
+  ] as const)(
+    "records %s at level %s: a person's stop is routine, a deadline is not",
+    (reason, level) => {
+      const logs = createBufferedServerLogSink();
+      recordChatToolTurnEnded(logs, {
+        correlationId: "turn-ended-reason",
+        messageId: "message-private-id",
+        reason,
+        exchanges: TRANSCRIPT,
+        budget,
+      });
+      const event = logs.events.find((entry) => entry.op === "chat.tool-turn.ended");
+      expect(event?.level).toBe(level);
+      expect(event?.extra).toMatchObject({ reason });
+      expectActivityLogProof("chat.tool-turn.ended.line", formatActivityLogProofLine(event ?? {}));
+    },
+  );
 });
 
 describe("recordChatToolTurnEnded", () => {

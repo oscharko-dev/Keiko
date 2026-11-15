@@ -16,6 +16,7 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   JIRA_MANAGED_ACTION_TYPES,
+  type JiraApprovalProject,
   type JiraAttachmentPreview,
   type JiraManagedReadToolName,
   type JiraMutationOperation,
@@ -326,6 +327,13 @@ export interface JiraChatAdmissionOptions {
   readonly attachmentPreview?: (
     action: JiraChatCatalogAction,
   ) => Promise<JiraAttachmentPreview | undefined>;
+  /**
+   * The projects this write targets, by key and name as Jira answers now, so every approval card
+   * names them. Absent or undefined when the action names no project.
+   */
+  readonly projectPreview?: (
+    action: JiraChatCatalogAction,
+  ) => Promise<readonly JiraApprovalProject[] | undefined>;
 }
 type AdmissionPorts = Pick<
   CatalogToolBinderInput<JiraChatCatalogConsumer>,
