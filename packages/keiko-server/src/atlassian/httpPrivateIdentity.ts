@@ -41,6 +41,8 @@ export interface JiraPrivatePortOptions {
   /** Entire held turn/run, never an individual tool's HTTP deadline. */
   readonly lifetimeSignal?: AbortSignal;
   readonly onCleanupFailure?: (error: unknown) => void;
+  /** The one observed-credential wrapper for the PAT port; session ports never use it. */
+  readonly observePatPort?: (port: AtlassianHttpBodyPort) => AtlassianHttpBodyPort;
   /** Server-owned observation of the existing bounded port, after private response projection. */
   readonly decorateHttpBodyPort?: (
     port: AtlassianHttpBodyPort,
@@ -148,7 +150,7 @@ class JiraPrivateHttpOwner {
       {
         deployment: "data-center",
         baseUrl: this.base,
-        http: this.http(patOptions),
+        http: options.observePatPort?.(this.http(patOptions)) ?? this.http(patOptions),
       },
       context,
     );

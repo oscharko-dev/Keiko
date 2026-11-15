@@ -1,6 +1,7 @@
 // Issue #2246 Scope 6 — route-level policy regression across the WHOLE D4 table.
 //
-// The per-child suites verify the D4 matrix per family (writeActionRoutes.test.ts for the 7 writes,
+// The per-child suites verify the D4 matrix per family (writeActionRoutes.test.ts for the 3 governed
+// Confluence writes and the refusal of the 4 retired legacy Jira writes (#4354),
 // syncRoutes.policy.test.ts for the 2 syncs, writeActionRoutes.liveSearch.test.ts for live search).
 // This suite consolidates legacy routes and managed-tool admission into one grid against
 // the real authority registry and a LITERAL copy of the ADR-0128 D4 dispositions (never re-derived through the
@@ -2627,6 +2628,7 @@ function guard(): AtlassianConnectorCredentialDeps {
     },
     beginVerification: (): undefined => undefined,
     finishVerification: (): boolean => false,
+    releaseVerification: (): boolean => false,
     observeAuthenticationFailure: (): boolean => false,
     create: (): never => {
       throw new Error("create is not exercised");
@@ -2722,12 +2724,26 @@ async function admitAction(
   return { disposition: "denied", reasonCode: body.reasonCode };
 }
 
+// The four legacy Jira write actions are retired (#4354): the action route denies them before any
+// policy decision, so their D4 rows are proven at the policy layer (like the managed writes) and the
+// route's own refusal is pinned in the dedicated describe below.
+const RETIRED_JIRA_WRITE_ACTIONS: readonly AtlassianConnectorActionType[] = [
+  "create-issue",
+  "update-issue-fields",
+  "transition-issue",
+  "add-issue-comment",
+];
+
 function admit(
   actionType: AtlassianConnectorActionType,
   authority: { runId: string; envelopeDigest: string; workspaceRoot: string },
   deps: UiHandlerDeps,
 ): Promise<Admission> {
-  if (actionType.startsWith("jira.") || MANAGED_WRITES.has(actionType)) {
+  if (
+    actionType.startsWith("jira.") ||
+    MANAGED_WRITES.has(actionType) ||
+    RETIRED_JIRA_WRITE_ACTIONS.includes(actionType)
+  ) {
     const outcome = decideGovernedAtlassianAction(actionType, authority, deps);
     if (outcome.kind === "allowed" || outcome.kind === "review-required")
       return Promise.resolve({ disposition: outcome.kind });
@@ -2804,6 +2820,23 @@ describe("legacy routes and managed admission — D4 matrix, scope present (Scop
     );
     expect(ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK).toEqual(EXPECTED_RISK);
   });
+});
+
+describe("route-level policy regression — retired legacy Jira write actions (#4354)", () => {
+  it.each(
+    MODES.flatMap((mode) =>
+      RETIRED_JIRA_WRITE_ACTIONS.flatMap((actionType) =>
+        [ALL_SCOPES, []].map((scopes) => ({ mode, actionType, scopes })),
+      ),
+    ),
+  )(
+    "$mode / $actionType with scopes $scopes is refused by the route with connector-write-denied",
+    async ({ mode, actionType, scopes }) => {
+      const authority = registerConnectorEnvelope(mode, scopes);
+      const admission = await admitAction(actionType, authority, withMode(harness.deps, mode));
+      expect(admission).toEqual({ disposition: "denied", reasonCode: "connector-write-denied" });
+    },
+  );
 });
 
 describe("route-level policy regression — missing scope denies in every mode (Scope 6)", () => {
@@ -2990,7 +3023,7 @@ interface AuthorityFailureCase {
 const REPRESENTATIVES: readonly AtlassianConnectorActionType[] = [
   "sync-space",
   "search-issues-live",
-  "create-issue",
+  "create-page",
 ];
 
 const AUTHORITY_FAILURES: readonly AuthorityFailureCase[] = [

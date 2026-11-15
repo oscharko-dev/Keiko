@@ -11,7 +11,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   atomicPublishRename,
   WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
@@ -119,6 +119,39 @@ export function portableInstallRootIdentitySha256(path: string): string {
   return sha256Text(realpathSync(path));
 }
 
+// The real path of a root that may no longer exist: its nearest existing ancestor's real path with
+// the missing tail appended.
+function resolvedRootForRemoval(path: string): string {
+  let cursor = resolve(path);
+  const missing: string[] = [];
+  while (!existsSync(cursor)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    missing.unshift(basename(cursor));
+    cursor = parent;
+  }
+  const existing = existsSync(cursor) ? realpathSync(cursor) : cursor;
+  return join(existing, ...missing);
+}
+
+/**
+ * The same identity for a root that may no longer exist. A root the managed-root policy admitted has
+ * no symbolic link in its path, so this equals the identity recorded while it existed, as long as
+ * the path is spelled the way it was recorded.
+ */
+export function portableInstallRootIdentityForRemoval(path: string): string {
+  return sha256Text(resolvedRootForRemoval(path));
+}
+
+/**
+ * The identity with letter case folded: Windows paths differ only in case across the places a root
+ * is recorded (a Start-menu target, the default root), and a different spelling of the same folder
+ * must not make a resume fail closed. Written to the uninstall journal while the root exists.
+ */
+export function portableInstallRootFoldedSha256(path: string): string {
+  return sha256Text(resolvedRootForRemoval(path).toLowerCase());
+}
+
 // #KEIKO-0333: fail closed to `undefined` on a truncated / non-JSON registration file
 // so a crash mid-write leaves callers with "no registration recorded" instead of a
 // thrown SyntaxError. Matches launcher-state.ts loadState's behavior for the sibling
@@ -129,7 +162,7 @@ export function portableInstallRootIdentitySha256(path: string): string {
 // registration may still exist and be authoritative. Callers must see those failures
 // so they do not skip managed-update / cleanup behaviour or overwrite retained
 // installation attestation while the actual storage failure stays hidden.
-function readJson(path: string): unknown {
+export function readJson(path: string): unknown {
   const raw = readFileSync(path, "utf8");
   try {
     return JSON.parse(raw) as unknown;
@@ -618,6 +651,31 @@ export function registrationMatches(
 ): boolean {
   return (
     registrationIdentityMatches(registration, layout, manifest) &&
+    registrationGenerationMatches(registration, layout, manifest)
+  );
+}
+
+/**
+ * Whether a registration still describes a partly removed installation: the same checks as
+ * `registrationMatches` for the setup manifest, the root identity and the Windows generation, but a
+ * launcher that a first removal run already deleted is not a mismatch (a present one must match).
+ */
+export function registrationResumeMatches(
+  registration: ManagedSetupRegistration,
+  layout: PortableLayout,
+  manifest: SetupManifest,
+): boolean {
+  const launcherMatches =
+    !existsSync(layout.primaryLauncherPath) ||
+    registration.launcherIdentitySha256 === sha256File(layout.primaryLauncherPath);
+  return (
+    registration.platformTarget === manifest.platformTarget &&
+    registration.packageVersion === manifest.packageVersion &&
+    registration.stable === manifest.stable &&
+    registration.setupManifestSha256 === sha256File(layout.setupManifestPath) &&
+    registration.installRootIdentitySha256 ===
+      portableInstallRootIdentitySha256(layout.installRoot) &&
+    launcherMatches &&
     registrationGenerationMatches(registration, layout, manifest)
   );
 }

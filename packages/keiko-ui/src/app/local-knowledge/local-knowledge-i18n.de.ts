@@ -274,9 +274,9 @@ export const DE_LOCAL_KNOWLEDGE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.detail.loading": "Knowledge Pod wird geladen…",
   "localKnowledge.detail.pageLabel": "Knowledge Pod-Detailansicht",
   "localKnowledge.detail.noSelection":
-    "Kein Knowledge Pod ausgewählt. Öffne einen Knowledge Pod aus der Übersicht für lokales Wissen.",
+    "Kein Knowledge Pod ausgewählt. Öffne einen im Fenster Lokales Wissen.",
   "localKnowledge.detail.notFound":
-    "Dieser Knowledge Pod existiert nicht mehr. Kehre zur Übersicht für lokales Wissen zurück.",
+    "Dieser Knowledge Pod existiert nicht mehr. Wähle „Zurück zu Knowledge Pods“.",
   "localKnowledge.detail.loadFailed": "Knowledge Pod konnte nicht geladen werden.",
   "localKnowledge.detail.retryLoad": "Knowledge Pod erneut laden",
   "localKnowledge.detail.routeError.title":

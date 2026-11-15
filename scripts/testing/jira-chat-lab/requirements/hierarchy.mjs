@@ -26,7 +26,7 @@ async function epicsAndTasks(ctx, requirementId) {
 // ---------- S08: bug with epic relation and issue link ----------
 
 /** The issue on the other end of a link of the type "Relates", in either direction. */
-function relatedKeys(issue) {
+export function relatedKeys(issue) {
   const links = Array.isArray(issue.fields.issuelinks) ? issue.fields.issuelinks : [];
   return links
     .filter((entry) => /^relates/i.test(entry.type?.name ?? ""))

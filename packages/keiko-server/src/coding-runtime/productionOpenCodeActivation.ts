@@ -73,7 +73,7 @@ import type {
 import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorkspaceTextRead.js";
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
 import {
-  discoverQualifiedPortableOpenCode,
+  discoverPortableOpenCode,
   readWindowsGatewayServiceStatus,
 } from "./productionPortableCodingRuntime.js";
 import {
@@ -159,6 +159,7 @@ const CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION = defineActivityLogOperation({
         "payload-missing",
         "payload-unapproved",
         "payload-tampered",
+        "payload-outdated",
         "native-helper-directory-untrusted",
         "secure-read-helper-missing",
         "secure-read-helper-stale",
@@ -512,8 +513,14 @@ function resolveRuntime(
     arch: input.arch,
     diagnostics: input.diagnostics,
   };
-  const packaged = discoverQualifiedPortableOpenCode(host);
-  if (packaged !== undefined) return { portable: packaged };
+  const packaged = discoverPortableOpenCode(host);
+  if (packaged !== undefined) {
+    // A portable install whose folder the volume check refuses is still a portable install: it
+    // reports that reason instead of falling through to the checkout and npm lanes.
+    return "runtime" in packaged
+      ? { portable: packaged.runtime }
+      : { unavailableReason: packaged.unavailableReason };
+  }
   const activityLog = input.activityLog ?? processServerLogSink();
   // The trusted dev launcher explicitly selected current checkout artifacts. Honor that selection
   // (including its refusal) before an optional npm dependency left from a released installation.
@@ -586,24 +593,26 @@ function devLaneRuntime(discovery: DevLaneOpenCodeDiscovery): ResolvedRuntime {
   return { unavailableReason: devLaneRefusalReason(discovery.reason) };
 }
 
+const DEV_LANE_REFUSAL_REASONS: Readonly<
+  Record<DevLaneOpenCodeRefusalReason, CodingWorkbenchRuntimeUnavailableReason>
+> = Object.freeze({
+  "platform-unsupported": "dev-lane-refused",
+  "packaged-install-present": "dev-lane-refused",
+  "not-a-dev-checkout": "dev-lane-refused",
+  "secure-read-helper-missing": "secure-read-unavailable",
+  "secure-read-helper-stale": "secure-read-unavailable",
+  "payload-missing": "payload-missing",
+  "payload-unapproved": "payload-unapproved",
+  "payload-tampered": "payload-tampered",
+  // #4359: an earlier OpenCode's package is refused, and the person is told to update Keiko.
+  "payload-outdated": "runtime-outdated",
+  "native-helper-directory-untrusted": "payload-tampered",
+});
+
 function devLaneRefusalReason(
   reason: DevLaneOpenCodeRefusalReason,
 ): CodingWorkbenchRuntimeUnavailableReason {
-  switch (reason) {
-    case "platform-unsupported":
-    case "packaged-install-present":
-    case "not-a-dev-checkout":
-      return "dev-lane-refused";
-    case "secure-read-helper-missing":
-    case "secure-read-helper-stale":
-      return "secure-read-unavailable";
-    case "payload-missing":
-    case "payload-unapproved":
-    case "payload-tampered":
-      return reason;
-    case "native-helper-directory-untrusted":
-      return "payload-tampered";
-  }
+  return DEV_LANE_REFUSAL_REASONS[reason];
 }
 
 function resolveSecureRead(

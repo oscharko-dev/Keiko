@@ -6,7 +6,6 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
-import { jiraActionLogFields } from "./jiraOperationLogFields.js";
 // Issue #2244 — route-level governance tests for the Confluence/Jira write actions. Hermetic: no
 // network (the transport port is a counting fixture), no wall-clock races (envelopes register
 // far-future or with pinned past instants), singleton registries reset around every test.
@@ -130,6 +129,7 @@ function guardWith(
     },
     beginVerification: (): undefined => undefined,
     finishVerification: (): boolean => false,
+    releaseVerification: (): boolean => false,
     observeAuthenticationFailure: (): boolean => false,
     create: (): never => {
       throw new Error("create not exercised");
@@ -249,16 +249,15 @@ function ctx(body: Record<string, unknown>, params: Record<string, string>): Rou
   } as unknown as RouteContext;
 }
 
-type WriteActionType =
-  | "create-issue"
-  | "update-issue-fields"
-  | "transition-issue"
-  | "add-issue-comment"
-  | "create-page"
-  | "update-page"
-  | "add-page-comment";
+// The governed write actions that still execute (the Confluence write actions). The four legacy
+// Jira write actions are retired (#4354) and only appear as RetiredJiraActionType in the denial pins.
+type WriteActionType = "create-page" | "update-page" | "add-page-comment";
+type RetiredJiraActionType =
+  "create-issue" | "update-issue-fields" | "transition-issue" | "add-issue-comment";
 
-const ACTION_REQUESTS: Readonly<Record<WriteActionType, Record<string, unknown>>> = {
+const ACTION_REQUESTS: Readonly<
+  Record<WriteActionType | RetiredJiraActionType, Record<string, unknown>>
+> = {
   "create-issue": {
     type: "create-issue",
     projectKey: "PROJ",
@@ -284,14 +283,14 @@ const ACTION_REQUESTS: Readonly<Record<WriteActionType, Record<string, unknown>>
   "add-page-comment": { type: "add-page-comment", pageId: "123", commentText: "Looks right" },
 };
 
-function authRefFor(action: WriteActionType): string {
+function authRefFor(action: WriteActionType | RetiredJiraActionType): string {
   return action === "create-page" || action === "update-page" || action === "add-page-comment"
     ? CONFLUENCE_AUTH_REF
     : JIRA_AUTH_REF;
 }
 
 async function postAction(
-  action: WriteActionType,
+  action: WriteActionType | RetiredJiraActionType,
   authority: AuthorityContext,
   mode: CodingWorkbenchMode,
   guard: AtlassianConnectorCredentialDeps,
@@ -317,42 +316,28 @@ afterEach(() => {
 
 // ─── AC1: the D4 matrix at route level (LITERAL table, not re-derived) ─────────
 const WRITE_ACTIONS: readonly WriteActionType[] = [
-  "create-issue",
-  "update-issue-fields",
-  "transition-issue",
-  "add-issue-comment",
   "create-page",
   "update-page",
   "add-page-comment",
 ];
 
-// ADR-0128 D4 disposition columns for the seven write rows, copied verbatim.
+// ADR-0128 D4 disposition columns for the three governed write rows, copied verbatim. The four
+// legacy Jira write rows stay pinned at the policy layer (actionPolicy tests, the integration
+// policy-regression matrix); the route no longer reaches them (retired, #4354).
 const D4_WRITE_DISPOSITIONS: Readonly<
   Record<CodingWorkbenchMode, Readonly<Record<WriteActionType, "allowed" | "review-required">>>
 > = {
   "governed-assist": {
-    "create-issue": "review-required",
-    "update-issue-fields": "review-required",
-    "transition-issue": "review-required",
-    "add-issue-comment": "review-required",
     "create-page": "review-required",
     "update-page": "review-required",
     "add-page-comment": "review-required",
   },
   "supervised-coding": {
-    "create-issue": "review-required",
-    "update-issue-fields": "review-required",
-    "transition-issue": "review-required",
-    "add-issue-comment": "review-required",
     "create-page": "review-required",
     "update-page": "review-required",
     "add-page-comment": "review-required",
   },
   "autonomous-delivery": {
-    "create-issue": "allowed",
-    "update-issue-fields": "allowed",
-    "transition-issue": "allowed",
-    "add-issue-comment": "allowed",
     "create-page": "allowed",
     "update-page": "allowed",
     "add-page-comment": "allowed",
@@ -422,12 +407,12 @@ describe("write-action route — pending approvals (AC2)", () => {
     const counter: FetchCounter = { count: 0, requests: [] };
     const guard = guardWith(counter);
     const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
-    const { status, body } = await postAction("create-issue", authority, "governed-assist", guard);
+    const { status, body } = await postAction("create-page", authority, "governed-assist", guard);
     expect(status).toBe(202);
     expect(counter.count).toBe(0);
     const approval = body.approval as AtlassianConnectorPendingApproval;
     expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
-    expect(approval.actionType).toBe("create-issue");
+    expect(approval.actionType).toBe("create-page");
     expect(approval.reviewReason).toBe("deterministic-risk-approval-required");
     // The projection lists through the read endpoints for the #2245 UI.
     const listed = (await handleListAtlassianConnectorActionApprovals(
@@ -497,7 +482,7 @@ describe("write-action route — pending approvals (AC2)", () => {
     const counter: FetchCounter = { count: 0, requests: [] };
     const availableGuard = guardWith(counter);
     const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
-    const { body } = await postAction("create-issue", authority, "governed-assist", availableGuard);
+    const { body } = await postAction("create-page", authority, "governed-assist", availableGuard);
     const approval = body.approval as AtlassianConnectorPendingApproval;
 
     // Simulates the credential being revoked/expired/deleted while the approval sat pending: the
@@ -526,7 +511,9 @@ describe("write-action route — pending approvals (AC2)", () => {
 
     // The actual fix: the terminal outcome is finalized, not silently dropped, and carries the
     // approval's own correlationId (not a fresh/unrelated one).
-    const records = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(JIRA_AUTH_REF));
+    const records = atlassianSyncJobRegistry.listActivity(
+      connectorIdForAuthRef(CONFLUENCE_AUTH_REF),
+    );
     expect(records.map((record) => record.outcome)).toEqual(["pending-review", "failed"]);
     const terminal = records[1];
     if (terminal === undefined) throw new Error("expected a terminal activity record");
@@ -543,15 +530,10 @@ describe("write-action route — pending approvals (AC2)", () => {
 // approval for each write action with known text, read back the AtlassianConnectorPendingApproval
 // the approve endpoint would return, and assert it contains that text (bounded) — while the SAME
 // action's permanent activity record stays exactly as content-free as before (ADR-0128 D6).
-// transition-issue is deliberately absent from EXPECTED_PREVIEW_SUBSTRINGS: it carries no text
-// field, so it must have no preview.
-const EXPECTED_PREVIEW_SUBSTRINGS: Readonly<
-  Record<WriteActionType, readonly string[] | undefined>
-> = {
-  "create-issue": ["Fix the flaky gate", "Fails on"],
-  "update-issue-fields": ["Sharper"],
-  "transition-issue": undefined,
-  "add-issue-comment": ["Verified on staging"],
+// The legacy transition-issue row (no text field, so no preview) has no Confluence twin: its
+// "no text field, no preview" property stays pinned at the pure function, contentPreviewFor, in
+// actionApprovals.test.ts; the route no longer reaches it (retired, #4354).
+const EXPECTED_PREVIEW_SUBSTRINGS: Readonly<Record<WriteActionType, readonly string[]>> = {
   "create-page": ["Runbook", "Steps here"],
   "update-page": ["Runbook", "New body"],
   "add-page-comment": ["Looks right"],
@@ -571,14 +553,10 @@ describe("write-action route — content preview on pending approvals (KEIKO-018
       expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
 
       const expectedSubstrings = EXPECTED_PREVIEW_SUBSTRINGS[action];
-      if (expectedSubstrings === undefined) {
-        expect(approval.contentPreview, `${action} should have no content preview`).toBeUndefined();
-      } else {
-        for (const substring of expectedSubstrings) {
-          expect(approval.contentPreview, `${action} should preview its own text`).toContain(
-            substring,
-          );
-        }
+      for (const substring of expectedSubstrings) {
+        expect(approval.contentPreview, `${action} should preview its own text`).toContain(
+          substring,
+        );
       }
 
       // Redaction-boundary pin: the SAME action's activity record must stay exactly as
@@ -593,10 +571,8 @@ describe("write-action route — content preview on pending approvals (KEIKO-018
       expect(validateAtlassianConnectorActivityRecord(pendingRecord).ok).toBe(true);
       const serializedRecord = JSON.stringify(pendingRecord);
       expect(serializedRecord).not.toContain("contentPreview");
-      if (expectedSubstrings !== undefined) {
-        for (const substring of expectedSubstrings) {
-          expect(serializedRecord).not.toContain(substring);
-        }
+      for (const substring of expectedSubstrings) {
+        expect(serializedRecord).not.toContain(substring);
       }
     }
   });
@@ -608,25 +584,15 @@ describe("write-action route — content preview on pending approvals (KEIKO-018
 // invisible content is actually written: the exact failure this class of finding is about. Every
 // case below must produce contentPreviewUnavailable === true and contentPreview === undefined,
 // through the SAME route as the test above, with the SAME activity-record redaction pin.
-// transition-issue is excluded: it has no text field, so hostile-text substitution does not apply.
-type TextBearingWriteActionType = Exclude<WriteActionType, "transition-issue">;
+// Every remaining governed write action carries text (the legacy transition-issue, the one action
+// without a text field, is retired, #4354).
+type TextBearingWriteActionType = WriteActionType;
 
 function hostileActionRequest(
   action: TextBearingWriteActionType,
   hostileText: string,
 ): Record<string, unknown> {
   switch (action) {
-    case "create-issue":
-      return {
-        type: "create-issue",
-        projectKey: "PROJ",
-        issueTypeId: "10004",
-        summary: hostileText,
-      };
-    case "update-issue-fields":
-      return { type: "update-issue-fields", issueKey: "PROJ-9", summary: hostileText };
-    case "add-issue-comment":
-      return { type: "add-issue-comment", issueKey: "PROJ-9", commentText: hostileText };
     case "create-page":
       return { type: "create-page", spaceId: "777", title: hostileText, bodyText: "" };
     case "update-page":
@@ -658,11 +624,8 @@ async function postHostileAction(
   return result as { status: number; body: Record<string, unknown> };
 }
 
-// Every write action with a text field (all but transition-issue).
+// Every governed write action carries a text field.
 const TEXT_BEARING_WRITE_ACTIONS: readonly TextBearingWriteActionType[] = [
-  "create-issue",
-  "update-issue-fields",
-  "add-issue-comment",
   "create-page",
   "update-page",
   "add-page-comment",
@@ -709,7 +672,7 @@ describe("write-action route — unpresentable content preview after sanitizatio
 
   it("an all-bidi-override payload is reported unavailable, not an empty preview", async () => {
     const allBidi = String.fromCharCode(0x202e).repeat(12);
-    await expectUnavailablePreview("create-issue", allBidi);
+    await expectUnavailablePreview("create-page", allBidi);
   });
 
   it("a mixed bidi+zero-width payload that sanitizes to empty is reported unavailable, not an empty preview", async () => {
@@ -737,16 +700,16 @@ describe("write-action route — unpresentable content preview after sanitizatio
   it("TAB, LF, and mixed-whitespace payloads are reported unavailable via the comment fields (summary/title reject multi-line text on the wire, so a single space is the only whitespace value the loop above can share across every action)", async () => {
     const tab = String.fromCharCode(9);
     const lf = String.fromCharCode(10);
-    await expectUnavailablePreview("add-issue-comment", tab);
+    await expectUnavailablePreview("add-page-comment", tab);
     await expectUnavailablePreview("add-page-comment", lf);
-    await expectUnavailablePreview("add-issue-comment", " " + tab + lf + " ");
+    await expectUnavailablePreview("add-page-comment", " " + tab + lf + " ");
   });
 
   it("whitespace next to a combining mark, in either order, is reported unavailable", async () => {
     const spaceThenMark = " " + String.fromCharCode(0x301);
     const markThenSpace = String.fromCharCode(0x301) + " ";
-    await expectUnavailablePreview("create-issue", spaceThenMark);
-    await expectUnavailablePreview("create-issue", markThenSpace);
+    await expectUnavailablePreview("create-page", spaceThenMark);
+    await expectUnavailablePreview("create-page", markThenSpace);
   });
 
   it("whitespace next to a zero-width character sanitizes to whitespace-only and is reported unavailable", async () => {
@@ -755,13 +718,13 @@ describe("write-action route — unpresentable content preview after sanitizatio
   });
 
   it("truncation can produce a whitespace-only tail through the real route, even when the untruncated text has a base character past the bound", async () => {
-    // create-issue's summary/create-page's title are capped at 255 chars on the wire (well under
-    // MAX+1) -- commentText has no such ceiling (bounded at 100,000 chars), so it is the field
+    // create-page's title is capped at 255 chars on the wire (well under MAX+1) -- commentText
+    // has no such ceiling (bounded at 100,000 chars), so it is the field
     // that can actually carry a payload long enough to exercise truncation through the real route.
     const spacePrefix = " ".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
     const commentText = spacePrefix + "X";
     expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
-    await expectUnavailablePreview("add-issue-comment", commentText);
+    await expectUnavailablePreview("add-page-comment", commentText);
   });
 
   it("truncation can produce a whitespace-plus-combining-mark tail through the real route, even when the untruncated text has a base character past the bound", async () => {
@@ -773,7 +736,7 @@ describe("write-action route — unpresentable content preview after sanitizatio
     );
     const commentText = pairs.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS) + "X";
     expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
-    await expectUnavailablePreview("add-issue-comment", commentText);
+    await expectUnavailablePreview("add-page-comment", commentText);
   });
 
   // KEIKO-0186 P3 (Codex): U+3164 HANGUL FILLER renders as nothing but belongs to Unicode general
@@ -801,7 +764,7 @@ describe("write-action route — unpresentable content preview after sanitizatio
     );
     const commentText = fillerPrefix + "X";
     expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
-    await expectUnavailablePreview("add-issue-comment", commentText);
+    await expectUnavailablePreview("add-page-comment", commentText);
   });
 
   // KEIKO-0186 P4 (Codex): U+2800 BRAILLE PATTERN BLANK is deliberately blank by design, yet
@@ -822,7 +785,7 @@ describe("write-action route — unpresentable content preview after sanitizatio
     );
     const commentText = braillePrefix + "X";
     expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
-    await expectUnavailablePreview("add-issue-comment", commentText);
+    await expectUnavailablePreview("add-page-comment", commentText);
   });
 
   // P4's allowlist excludes \p{S} (Symbol, including emoji) entirely -- a deliberate, documented
@@ -840,7 +803,7 @@ describe("write-action route — unpresentable content preview after sanitizatio
     const counter: FetchCounter = { count: 0, requests: [] };
     const guard = guardWith(counter);
     const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
-    const { body } = await postHostileAction("add-issue-comment", done, authority, guard);
+    const { body } = await postHostileAction("add-page-comment", done, authority, guard);
     const approval = body.approval as AtlassianConnectorPendingApproval;
     expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
     expect(approval.contentPreviewUnavailable).toBeUndefined();
@@ -866,14 +829,14 @@ describe("write-action route — envelope authority (AC3)", () => {
     const guard = guardWith(counter);
     const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
     const { status, body } = await postAction(
-      "create-issue",
+      "create-page",
       authority,
       "autonomous-delivery",
       guard,
     );
     expect(status).toBe(200);
     expect(body.disposition).toBe("allowed");
-    expect((body.result as { targetRef?: string }).targetRef).toBe("PROJ-9");
+    expect((body.result as { targetRef?: string }).targetRef).toBe("123");
     expect(atlassianActionApprovalRegistry.listPending()).toEqual([]);
   });
 
@@ -888,7 +851,7 @@ describe("write-action route — envelope authority (AC3)", () => {
       { expiresAt: "2020-01-02T00:00:00.000Z" },
       "2020-01-01T00:00:00.000Z",
     );
-    const { body } = await postAction("create-issue", authority, "autonomous-delivery", guard);
+    const { body } = await postAction("create-page", authority, "autonomous-delivery", guard);
     expect(body.disposition).toBe("denied");
     expect(body.reasonCode).toBe("authority-expired");
     expect(counter.count).toBe(0);
@@ -899,7 +862,7 @@ describe("write-action route — envelope authority (AC3)", () => {
     const guard = guardWith(counter);
     const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
     const { body } = await postAction(
-      "create-issue",
+      "create-page",
       { ...authority, envelopeDigest: "f".repeat(64) },
       "autonomous-delivery",
       guard,
@@ -926,7 +889,7 @@ describe("write-action route — envelope authority (AC3)", () => {
       },
       "2020-01-01T00:00:00.000Z",
     );
-    const { body } = await postAction("create-issue", authority, "autonomous-delivery", guard);
+    const { body } = await postAction("create-page", authority, "autonomous-delivery", guard);
     expect(body.disposition).toBe("denied");
     expect(body.reasonCode).toBe("authority-budget-exceeded");
     expect(counter.count).toBe(0);
@@ -938,9 +901,9 @@ describe("write-action route — envelope authority (AC3)", () => {
     const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES, {
       budget: { maxRuntimeMs: 3_600_000, maxToolCalls: 1, maxPatchBytes: 1 },
     });
-    const first = await postAction("add-issue-comment", authority, "autonomous-delivery", guard);
+    const first = await postAction("add-page-comment", authority, "autonomous-delivery", guard);
     expect(first.body.disposition).toBe("allowed");
-    const second = await postAction("add-issue-comment", authority, "autonomous-delivery", guard);
+    const second = await postAction("add-page-comment", authority, "autonomous-delivery", guard);
     expect(second.body.disposition).toBe("denied");
     expect(second.body.reasonCode).toBe("authority-budget-exceeded");
   });
@@ -948,7 +911,7 @@ describe("write-action route — envelope authority (AC3)", () => {
   it("400s a request without the authority context — no ungoverned bypass exists", async () => {
     const guard = guardWith({ count: 0, requests: [] });
     const result = (await handleExecuteAtlassianConnectorAction(
-      ctx({ action: ACTION_REQUESTS["add-issue-comment"] }, { authRef: JIRA_AUTH_REF }),
+      ctx({ action: ACTION_REQUESTS["add-page-comment"] }, { authRef: CONFLUENCE_AUTH_REF }),
       deps(guard, "autonomous-delivery"),
     )) as { status: number };
     expect(result.status).toBe(400);
@@ -966,23 +929,20 @@ describe("write-action route — audit completeness (AC4)", () => {
     );
     // allowed + succeeded (Full access comment).
     const allowedAuthority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
-    await postAction("add-issue-comment", allowedAuthority, "autonomous-delivery", guard);
+    await postAction("add-page-comment", allowedAuthority, "autonomous-delivery", guard);
     // provider-failure: allowed update-page hits the scripted 409 → typed conflict.
     await postAction("update-page", allowedAuthority, "autonomous-delivery", guard);
     // review-required (pending) under Ask for approval.
     editorAgentAuthorityRegistry.reset();
     const reviewAuthority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
-    await postAction("create-issue", reviewAuthority, "governed-assist", guard);
+    await postAction("create-page", reviewAuthority, "governed-assist", guard);
     // denied: write scope absent.
     editorAgentAuthorityRegistry.reset();
     const deniedAuthority = registerEnvelope("autonomous-delivery", []);
-    await postAction("transition-issue", deniedAuthority, "autonomous-delivery", guard);
+    await postAction("add-page-comment", deniedAuthority, "autonomous-delivery", guard);
 
-    const jira = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(JIRA_AUTH_REF));
-    const confluence = atlassianSyncJobRegistry.listActivity(
-      connectorIdForAuthRef(CONFLUENCE_AUTH_REF),
-    );
-    const records: readonly AtlassianConnectorActivityRecord[] = [...jira, ...confluence];
+    const records: readonly AtlassianConnectorActivityRecord[] =
+      atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(CONFLUENCE_AUTH_REF));
     expect(records).toHaveLength(4);
     expect(
       records.map((record) => ({
@@ -993,28 +953,28 @@ describe("write-action route — audit completeness (AC4)", () => {
       })),
     ).toEqual([
       {
-        actionType: "add-issue-comment",
+        actionType: "add-page-comment",
         disposition: "allowed",
         outcome: "succeeded",
         reasonCode: undefined,
-      },
-      {
-        actionType: "create-issue",
-        disposition: "review-required",
-        outcome: "pending-review",
-        reasonCode: "deterministic-risk-approval-required",
-      },
-      {
-        actionType: "transition-issue",
-        disposition: "denied",
-        outcome: "denied",
-        reasonCode: "connector-write-denied",
       },
       {
         actionType: "update-page",
         disposition: "allowed",
         outcome: "failed",
         reasonCode: "conflict",
+      },
+      {
+        actionType: "create-page",
+        disposition: "review-required",
+        outcome: "pending-review",
+        reasonCode: "deterministic-risk-approval-required",
+      },
+      {
+        actionType: "add-page-comment",
+        disposition: "denied",
+        outcome: "denied",
+        reasonCode: "connector-write-denied",
       },
     ]);
     // Every record passes the contract validator (shape, D4 pinning, reason pairing).
@@ -1024,6 +984,8 @@ describe("write-action route — audit completeness (AC4)", () => {
     // Scanning assertion: no body text, no field values, no token-shaped content anywhere.
     const serialized = JSON.stringify(records);
     for (const leaked of [
+      "Looks right",
+      "Steps here",
       "Verified on staging",
       "Fix the flaky gate",
       "Fails on",
@@ -1055,11 +1017,11 @@ describe("write-action route — audit completeness (AC4)", () => {
         approval: {
           schemaVersion: "1",
           approvalId: `apr_filler-${String(index).padStart(4, "0")}`,
-          connectorId: connectorIdForAuthRef(JIRA_AUTH_REF),
-          provider: "jira",
-          actionType: "add-issue-comment",
+          connectorId: connectorIdForAuthRef(CONFLUENCE_AUTH_REF),
+          provider: "confluence",
+          actionType: "add-page-comment",
           actionClass: "connector-write",
-          requiredScope: "issue-tracker.write",
+          requiredScope: "knowledge-base.write",
           risk: "low",
           reviewReason: "deterministic-risk-approval-required",
           correlationId: `req_filler-${String(index).padStart(4, "0")}`,
@@ -1071,12 +1033,12 @@ describe("write-action route — audit completeness (AC4)", () => {
           envelopeDigest: authority.envelopeDigest,
           workspaceRoot: authority.workspaceRoot,
         },
-        authRef: JIRA_AUTH_REF,
+        authRef: CONFLUENCE_AUTH_REF,
         payload: {
           kind: "write-action",
           action: {
-            type: "add-issue-comment",
-            issueKey: `PROJ-${String(index + 100)}`,
+            type: "add-page-comment",
+            pageId: String(index + 100),
             commentText: "filler",
           },
         },
@@ -1084,12 +1046,14 @@ describe("write-action route — audit completeness (AC4)", () => {
       expect(filler.ok).toBe(true);
     }
     const guard = guardWith({ count: 0, requests: [] });
-    const { status, body } = await postAction("create-issue", authority, "governed-assist", guard);
+    const { status, body } = await postAction("create-page", authority, "governed-assist", guard);
     expect(status).toBe(429);
     expect((body.error as { code: string }).code).toBe("APPROVALS_EXHAUSTED");
-    const records = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(JIRA_AUTH_REF));
+    const records = atlassianSyncJobRegistry.listActivity(
+      connectorIdForAuthRef(CONFLUENCE_AUTH_REF),
+    );
     const rejected = records.filter(
-      (record) => record.actionType === "create-issue" && record.disposition === "denied",
+      (record) => record.actionType === "create-page" && record.disposition === "denied",
     );
     expect(rejected).toHaveLength(1);
     const only = rejected[0];
@@ -1114,19 +1078,6 @@ describe("write-action route — typed provider failures (AC5)", () => {
     expect(body.result).toEqual({ status: "failed", reason: "conflict", httpStatus: 409 });
   });
 
-  it("answers the Jira invalid transition as a typed result without a mutating call", async () => {
-    const counter: FetchCounter = { count: 0, requests: [] };
-    const guard = guardWith(counter, (request) =>
-      request.url.endsWith("/transitions") && request.method === "GET"
-        ? response(200, '{"transitions":[{"id":"11"}]}')
-        : undefined,
-    );
-    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
-    const { body } = await postAction("transition-issue", authority, "autonomous-delivery", guard);
-    expect(body.result).toEqual({ status: "failed", reason: "invalid-transition" });
-    expect(counter.requests.filter((request) => request.method === "POST")).toHaveLength(0);
-  });
-
   it("rejects a provider/action mismatch and hostile action payloads with 400", async () => {
     const guard = guardWith({ count: 0, requests: [] });
     const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
@@ -1138,10 +1089,10 @@ describe("write-action route — typed provider failures (AC5)", () => {
     const unexpectedField = (await handleExecuteAtlassianConnectorAction(
       ctx(
         {
-          action: { ...ACTION_REQUESTS["add-issue-comment"], secretToken: "x" },
+          action: { ...ACTION_REQUESTS["add-page-comment"], secretToken: "x" },
           authority,
         },
-        { authRef: JIRA_AUTH_REF },
+        { authRef: CONFLUENCE_AUTH_REF },
       ),
       deps(guard, "autonomous-delivery"),
     )) as { status: number };
@@ -1160,42 +1111,6 @@ describe("write-action route — reuses connector-package text bounds (KEIKO-048
 
 // ─── KEIKO-0319: allow explicit "clear this field" for labels and composable body
 describe("write-action route — clear-field validation (KEIKO-0319)", () => {
-  it("accepts labels: [] on update-issue-fields as an explicit clear-all", async () => {
-    const counter: FetchCounter = { count: 0, requests: [] };
-    const guard = guardWith(counter);
-    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
-    const result = (await handleExecuteAtlassianConnectorAction(
-      ctx(
-        {
-          action: { type: "update-issue-fields", issueKey: "PROJ-9", labels: [] },
-          authority,
-        },
-        { authRef: JIRA_AUTH_REF },
-      ),
-      deps(guard, "autonomous-delivery"),
-    )) as { status: number; body: Record<string, unknown> };
-    expect(result.status).toBe(200);
-    expect(result.body.disposition).toBe("allowed");
-  });
-
-  it("accepts descriptionText: '' on update-issue-fields as an explicit clear", async () => {
-    const counter: FetchCounter = { count: 0, requests: [] };
-    const guard = guardWith(counter);
-    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
-    const result = (await handleExecuteAtlassianConnectorAction(
-      ctx(
-        {
-          action: { type: "update-issue-fields", issueKey: "PROJ-9", descriptionText: "" },
-          authority,
-        },
-        { authRef: JIRA_AUTH_REF },
-      ),
-      deps(guard, "autonomous-delivery"),
-    )) as { status: number; body: Record<string, unknown> };
-    expect(result.status).toBe(200);
-    expect(result.body.disposition).toBe("allowed");
-  });
-
   it("accepts bodyText: '' on update-page as an explicit clear", async () => {
     const counter: FetchCounter = { count: 0, requests: [] };
     const guard = guardWith(counter);
@@ -1264,8 +1179,8 @@ describe("write-action route — governed action correlation", () => {
     const result = (await handleExecuteAtlassianConnectorAction(
       {
         ...ctx(
-          { action: ACTION_REQUESTS["transition-issue"], authority: deniedAuthority },
-          { authRef: JIRA_AUTH_REF },
+          { action: ACTION_REQUESTS["add-page-comment"], authority: deniedAuthority },
+          { authRef: CONFLUENCE_AUTH_REF },
         ),
         correlationId: "req-write-thread-01",
       },
@@ -1304,10 +1219,10 @@ it("records one failed write attempt without resending a possibly committed PUT 
   const logs = createBufferedServerLogSink();
   const guard = { ...guardWith(counter, () => response(503)), activityLog: logs };
   const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
-  const result = await postAction("update-issue-fields", authority, "autonomous-delivery", guard);
+  const result = await postAction("update-page", authority, "autonomous-delivery", guard);
   expect(counter.count).toBe(1);
   expect(result.body.result).toMatchObject({ status: "failed", reason: "unavailable" });
-  const records = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(JIRA_AUTH_REF));
+  const records = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(CONFLUENCE_AUTH_REF));
   expect(records).toHaveLength(1);
   expect(records[0]).toMatchObject({ outcome: "failed", reasonCode: "unavailable" });
   const event = logs.events.find((item) => item.op === "atlassian.action.outcome");
@@ -1317,19 +1232,16 @@ it("records one failed write attempt without resending a possibly committed PUT 
     outcome: "failed",
     failureReason: "unavailable",
     deploymentCeiling: "autonomous-delivery",
-    actionType: "update-issue-fields",
-    actionTypeDigest: sha256Hex("update-issue-fields"),
-    provider: "jira",
+    actionType: "update-page",
+    actionTypeDigest: sha256Hex("update-page"),
+    provider: "confluence",
   });
   const timeline = analyzeLogText(line).timelines.find(
     (item) => item.correlationId === records[0]?.correlationId,
   );
   expect(timeline?.lines.some((item) => item.op === "atlassian.action.outcome")).toBe(true);
-  expect(line).not.toContain(JIRA_AUTH_REF);
-  expect(JSON.stringify(jiraActionLogFields("update-issue-fields"))).not.toContain(
-    "update-issue-fields",
-  );
-  expect(line).not.toContain("Sharper");
+  expect(line).not.toContain(CONFLUENCE_AUTH_REF);
+  expect(line).not.toContain("New body");
   expect(line).not.toContain("example.atlassian.net");
 });
 
@@ -1345,38 +1257,187 @@ it("preserves the observed write result and records loss if the terminal log sin
     },
   };
   const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
-  const result = await postAction("update-issue-fields", authority, "autonomous-delivery", guard);
+  const result = await postAction("update-page", authority, "autonomous-delivery", guard);
   expect(counter.count).toBe(1);
   expect(result.body.result).toMatchObject({ status: "succeeded" });
   expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
 });
 
-it.each(["{", "[]"])(
-  "records malformed provider metadata before any transition mutation",
-  async (bodyText) => {
+// ─── #4354: the four legacy Jira write actions are retired ─────────────────────
+// They wrote around the saved issue templates, so the route answers them for every caller and
+// every autonomy mode with the same closed denial: before an approval exists, before a budget is
+// reserved and before any HTTP effect. Before the retirement these were `review-required` (202,
+// a pending approval) in Ask for approval / Supervised workspace and executed in Full access, so
+// every assertion below is red against that behaviour. The D4 policy rows of these four actions
+// stay pinned at the policy layer; this block pins that the route no longer reaches them.
+const RETIRED_JIRA_ACTIONS: readonly RetiredJiraActionType[] = [
+  "create-issue",
+  "update-issue-fields",
+  "transition-issue",
+  "add-issue-comment",
+];
+
+// Every distinctive text the retired action requests carry: none may reach the permanent record.
+const RETIRED_ACTION_TEXTS: readonly string[] = [
+  "Fix the flaky gate",
+  "Fails on",
+  "retries",
+  "Sharper",
+  "Verified on staging",
+];
+
+interface RetiredActionOutcome {
+  readonly status: number;
+  readonly body: Record<string, unknown>;
+  readonly counter: FetchCounter;
+  readonly records: readonly AtlassianConnectorActivityRecord[];
+}
+
+async function postRetiredAction(
+  action: RetiredJiraActionType,
+  mode: CodingWorkbenchMode,
+  over: {
+    readonly scopes?: readonly CodingWorkbenchConnectorScope[];
+    readonly digest?: string;
+    readonly correlationId?: string;
+  } = {},
+): Promise<RetiredActionOutcome> {
+  const counter: FetchCounter = { count: 0, requests: [] };
+  const guard = guardWith(counter);
+  const authority = registerEnvelope(mode, over.scopes ?? BOTH_WRITE_SCOPES);
+  const base = ctx(
+    {
+      action: ACTION_REQUESTS[action],
+      authority: {
+        ...authority,
+        ...(over.digest === undefined ? {} : { envelopeDigest: over.digest }),
+      },
+    },
+    { authRef: authRefFor(action) },
+  );
+  const result = (await handleExecuteAtlassianConnectorAction(
+    over.correlationId === undefined ? base : { ...base, correlationId: over.correlationId },
+    deps(guard, mode),
+  )) as { status: number; body: Record<string, unknown> };
+  return {
+    status: result.status,
+    body: result.body,
+    counter,
+    records: atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(authRefFor(action))),
+  };
+}
+
+describe("write-action route — retired legacy Jira write actions (#4354)", () => {
+  for (const mode of MODES) {
+    for (const action of RETIRED_JIRA_ACTIONS) {
+      it(`${mode} / ${action}: denied with connector-write-denied, no approval, no HTTP effect, one body-free record`, async () => {
+        const { status, body, counter, records } = await postRetiredAction(action, mode);
+        expect(status).toBe(200);
+        expect(body.disposition).toBe("denied");
+        expect(body.reasonCode).toBe("connector-write-denied");
+        expect(body.approval).toBeUndefined();
+        expect(body.result).toBeUndefined();
+        expect(atlassianActionApprovalRegistry.listPending()).toEqual([]);
+        expect(counter.count).toBe(0);
+        expect(records).toHaveLength(1);
+        const [record] = records;
+        expect(record).toMatchObject({
+          actionType: action,
+          disposition: "denied",
+          outcome: "denied",
+          reasonCode: "connector-write-denied",
+        });
+        // The reason is a policy denial, so the contract's own record validator accepts the record.
+        expect(validateAtlassianConnectorActivityRecord(record).ok).toBe(true);
+        const serialized = JSON.stringify(record);
+        for (const text of RETIRED_ACTION_TEXTS) expect(serialized).not.toContain(text);
+      });
+    }
+  }
+
+  it("does not reserve any authority budget for the refusal", async () => {
     const counter: FetchCounter = { count: 0, requests: [] };
-    const logs = createBufferedServerLogSink();
-    const guard = { ...guardWith(counter, () => response(200, bodyText)), activityLog: logs };
-    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
-    const result = await postAction("transition-issue", authority, "autonomous-delivery", guard);
-    expect(result.body.result).toMatchObject({ status: "failed", reason: "malformed-payload" });
-    expect(counter.requests.map((request) => request.method)).toEqual(["GET"]);
-    const events = logs.events.filter((event) => event.op === "atlassian.action.outcome");
-    expect(events).toHaveLength(1);
-    const event = events[0];
-    if (event === undefined) throw new Error("Missing metadata failure event");
-    const line = formatActivityLogProofLine(event);
-    expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
-      outcome: "failed",
-      failureReason: "malformed-payload",
-      actionType: "transition-issue",
-      actionTypeDigest: sha256Hex("transition-issue"),
-      provider: "jira",
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES, {
+      budget: { maxRuntimeMs: 3_600_000, maxToolCalls: 1, maxPatchBytes: 1 },
     });
-    expect(analyzeLogText(line).timelines).toHaveLength(1);
-    expect(line).not.toContain(JIRA_AUTH_REF);
-    expect(JSON.stringify(jiraActionLogFields("transition-issue"))).not.toContain(
-      "transition-issue",
-    );
-  },
-);
+    for (const action of RETIRED_JIRA_ACTIONS) {
+      const result = await postAction(action, authority, "autonomous-delivery", guard);
+      expect(result.body.reasonCode, action).toBe("connector-write-denied");
+    }
+    // The single tool call of the envelope is still available to a governed Confluence write.
+    const governed = await postAction("add-page-comment", authority, "autonomous-delivery", guard);
+    expect(governed.body.disposition).toBe("allowed");
+  });
+
+  it("answers the same denial for a caller whose envelope holds no write scope or is not valid", async () => {
+    const noWrite = await postRetiredAction("create-issue", "autonomous-delivery", {
+      scopes: ["issue-tracker.read"],
+    });
+    expect(noWrite.body).toMatchObject({
+      disposition: "denied",
+      reasonCode: "connector-write-denied",
+    });
+    expect(noWrite.counter.count).toBe(0);
+    const badDigest = await postRetiredAction("add-issue-comment", "autonomous-delivery", {
+      digest: "f".repeat(64),
+    });
+    expect(badDigest.body).toMatchObject({
+      disposition: "denied",
+      reasonCode: "connector-write-denied",
+    });
+    expect(badDigest.counter.count).toBe(0);
+    expect(atlassianActionApprovalRegistry.listPending()).toEqual([]);
+  });
+
+  it("threads the request's own correlation id into the denial", async () => {
+    const { body, records } = await postRetiredAction("transition-issue", "governed-assist", {
+      correlationId: "req-retired-thread-01",
+    });
+    expect(body).toMatchObject({ disposition: "denied", correlationId: "req-retired-thread-01" });
+    expect(records[0]?.correlationId).toBe("req-retired-thread-01");
+  });
+
+  it("denies a well-formed clear-field body instead of executing it (labels: [] and descriptionText: '')", async () => {
+    for (const action of [
+      { type: "update-issue-fields", issueKey: "PROJ-9", labels: [] },
+      { type: "update-issue-fields", issueKey: "PROJ-9", descriptionText: "" },
+    ]) {
+      const counter: FetchCounter = { count: 0, requests: [] };
+      const guard = guardWith(counter);
+      const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+      const result = (await handleExecuteAtlassianConnectorAction(
+        ctx({ action, authority }, { authRef: JIRA_AUTH_REF }),
+        deps(guard, "autonomous-delivery"),
+      )) as { status: number; body: Record<string, unknown> };
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({
+        disposition: "denied",
+        reasonCode: "connector-write-denied",
+      });
+      expect(counter.count).toBe(0);
+    }
+  });
+
+  it("still validates the body first: a malformed retired action is a 400 with no record and no approval", async () => {
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const malformedActions: readonly Record<string, unknown>[] = [
+      { ...ACTION_REQUESTS["add-issue-comment"], secretToken: "x" },
+      { type: "add-issue-comment", issueKey: "PROJ-9", commentText: "" },
+      { type: "transition-issue", issueKey: "not a key", transitionId: "31" },
+      { type: "create-issue", projectKey: "PROJ" },
+    ];
+    for (const action of malformedActions) {
+      const result = (await handleExecuteAtlassianConnectorAction(
+        ctx({ action, authority }, { authRef: JIRA_AUTH_REF }),
+        deps(guard, "autonomous-delivery"),
+      )) as { status: number };
+      expect(result.status, JSON.stringify(action)).toBe(400);
+    }
+    expect(atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(JIRA_AUTH_REF))).toEqual([]);
+    expect(atlassianActionApprovalRegistry.listPending()).toEqual([]);
+    expect(counter.count).toBe(0);
+  });
+});

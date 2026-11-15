@@ -131,6 +131,7 @@ import {
 } from "./editor/inlineCompletionRateLimiter.js";
 import { logClientJiraResult } from "./client-jira-result-log.js";
 import { logClientJiraFields } from "./client-jira-fields-log.js";
+import { knowledgeCatalogRefreshEvent } from "./client-diagnostics-catalog-refresh.js";
 import { getServerLogger } from "./observability/index.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 
@@ -2466,6 +2467,17 @@ function logClientEditorLineEnding(
   return true;
 }
 
+function logClientKnowledgeCatalogRefresh(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const report = request.knowledgeCatalogRefresh;
+  if (report === undefined) return false;
+  const envelope = clientDiagnosticCorrelation(request, correlationId);
+  getServerLogger().info(knowledgeCatalogRefreshEvent(report, envelope));
+  return true;
+}
+
 // The closed presentation reports: an update notice, or an Editor line-ending adoption.
 function logPresentationClientReport(
   request: ClientDiagnosticIngestRequest,
@@ -2481,7 +2493,8 @@ function logPresentationClientReport(
       request.jiraResultPresentation,
       clientDiagnosticCorrelation(request, correlationId),
     ) ||
-    logClientEditorLineEnding(request, correlationId)
+    logClientEditorLineEnding(request, correlationId) ||
+    logClientKnowledgeCatalogRefresh(request, correlationId)
   );
 }
 
@@ -3318,6 +3331,11 @@ function isRoutineVoiceReport(report: ClientDiagnosticIngestRequest): boolean {
 
 // The closed support, scope, citation, restored-run and Coding Workbench interaction reports:
 // routine evidence, never a failure.
+// The Editor's line-ending adoption and a Knowledge Pod catalog refresh: closed, routine evidence.
+function isRoutineClientSurfaceReport(report: ClientDiagnosticIngestRequest): boolean {
+  return report.editorLineEnding !== undefined || report.knowledgeCatalogRefresh !== undefined;
+}
+
 function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
   return (
     report.codingWorkbenchInteraction !== undefined ||
@@ -3325,7 +3343,7 @@ function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
     report.supportReportPreparation !== undefined ||
     report.filesScopeDecision !== undefined ||
     report.updateNotice !== undefined ||
-    report.editorLineEnding !== undefined ||
+    isRoutineClientSurfaceReport(report) ||
     report.codingRunRestore !== undefined ||
     report.scopeNotice !== undefined ||
     report.citationActivation !== undefined ||

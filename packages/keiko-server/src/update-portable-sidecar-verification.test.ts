@@ -17,8 +17,9 @@ import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
 } from "./coding-runtime/opencodeProtocolSurface.js";
+import { OPENCODE_RUNTIME_VERSION_PINS } from "./coding-runtime/opencodeRuntimeVersions.js";
 
-const OPENCODE_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
+const OPENCODE_SCHEMA_SHA256 = OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "";
 
 function verifiedSidecar(): PortableSidecarRuntimeVerification {
   return {
@@ -37,7 +38,7 @@ function verifiedSidecar(): PortableSidecarRuntimeVerification {
       name: "opencode-compatible",
       kind: "coding-runtime",
       upstreamName: "opencode",
-      upstreamVersion: "2.1.4",
+      upstreamVersion: "2.2.5",
       adapterName: "keiko-coding-sidecar",
       adapterVersion: "2",
       protocolVersion: "http-sse",
@@ -165,9 +166,9 @@ function sidecarRuntime(signing: Record<string, unknown>): Record<string, unknow
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "2.1.4",
-      tag: "v2.1.4",
-      commit: "68bc26b7da1990ce10ffecfbc1e09eb13aa5d824",
+      version: "2.2.5",
+      tag: "v2.2.5",
+      commit: "9bbb8ce18c80f099e0e448775f59d965ead40a21",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",

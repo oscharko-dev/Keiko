@@ -1,20 +1,30 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { join } from "node:path";
 import { labSessionConnection } from "./lab-client.mjs";
+import { readLabPrivateAddress } from "./tls-front.mjs";
 
 const execute = promisify(execFile);
 
-function publishedPort(container, inside, outside) {
+/** The loopback binding, plus the one recorded private address when the session has one (#4369). */
+function publishedPort(container, inside, outside, privateAddress) {
   const published = Object.fromEntries(
     Object.entries(container.NetworkSettings.Ports).filter(([, bindings]) => bindings !== null),
   );
-  assert.deepEqual(published, {
-    [`${inside}/tcp`]: [{ HostIp: "127.0.0.1", HostPort: String(outside) }],
-  });
+  const byAddress = (left, right) => left.HostIp.localeCompare(right.HostIp);
+  const expected = ["127.0.0.1", ...(privateAddress === undefined ? [] : [privateAddress])]
+    .map((HostIp) => ({ HostIp, HostPort: String(outside) }))
+    .sort(byAddress);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(published).map(([key, list]) => [key, [...list].sort(byAddress)]),
+    ),
+    { [`${inside}/tcp`]: expected },
+  );
 }
 
-export function validateServices(session, containers) {
+export function validateServices(session, containers, privateAddress = undefined) {
   assert.match(session.project, /^keiko-jira-4081-[a-z0-9-]{1,32}$/u);
   const selected = labSessionConnection(session);
   const services = {};
@@ -30,7 +40,7 @@ export function validateServices(session, containers) {
   assert.equal(Object.keys(services).length, 3);
   assert.equal(services.jira.Config.Image, selected.jiraImage);
   publishedPort(services.jira, 8080, selected.httpPort);
-  publishedPort(services.tls, selected.httpsPort, selected.httpsPort);
+  publishedPort(services.tls, selected.httpsPort, selected.httpsPort, privateAddress);
   assert.deepEqual(services.tls.Config.Cmd, [
     "node",
     "/opt/tls-front.mjs",
@@ -38,6 +48,7 @@ export function validateServices(session, containers) {
     String(selected.httpsPort),
     "8080",
     "compose",
+    ...(privateAddress === undefined ? [] : [privateAddress]),
   ]);
   return services;
 }
@@ -77,13 +88,59 @@ export async function requireExclusiveLab(session) {
     throw new TypeError("Another Jira laboratory is running; wait for an exclusive window");
 }
 
+/**
+ * Containers of this session whose network no longer exists (Docker removes unused networks, also
+ * those of stopped lab stacks). Such a stack cannot start: its containers still name the removed
+ * network. Returns the container names with the missing network's name, or an empty list.
+ */
+export async function containersOfMissingNetwork(session, docker = labDocker) {
+  const ids = (
+    await docker([
+      "ps",
+      "-a",
+      "-q",
+      "--filter",
+      `label=com.docker.compose.project=${session.project}`,
+    ])
+  )
+    .split("\n")
+    .filter((id) => id.length > 0);
+  if (ids.length === 0) return [];
+  const existing = new Set(
+    (await docker(["network", "ls", "-q", "--no-trunc"])).split("\n").filter((id) => id.length > 0),
+  );
+  // A reading Docker does not answer in JSON is no diagnosis: `compose up` then reports its own error.
+  let inspected;
+  try {
+    inspected = JSON.parse(await docker(["inspect", ...ids]));
+  } catch (error) {
+    if (error instanceof SyntaxError) return [];
+    throw error;
+  }
+  return inspected.flatMap((container) =>
+    Object.entries(container.NetworkSettings?.Networks ?? {})
+      .filter(([, network]) => !existing.has(network.NetworkID))
+      .map(([network]) => ({ container: String(container.Name).replace(/^\//u, ""), network })),
+  );
+}
+
+/** What to do about a stopped stack whose network was removed: nothing is lost, the volumes hold the state. */
+export const MISSING_NETWORK_REMEDY =
+  "Docker removed the network of this stopped laboratory (an unused-network prune). Its data is in the named volumes. " +
+  "Save `docker inspect` of exactly the containers listed, `docker rm` exactly those containers (never with -v, never a volume, never a prune), " +
+  "then run the session start again: it recreates them on a new network.";
+
 export async function inspectServices(session) {
   await requireExclusiveLab(session);
   const ids = (
     await labDocker(["ps", "-q", "--filter", `label=com.docker.compose.project=${session.project}`])
   ).split("\n");
   assert.equal(ids.length, 3);
-  const services = validateServices(session, JSON.parse(await labDocker(["inspect", ...ids])));
+  const services = validateServices(
+    session,
+    JSON.parse(await labDocker(["inspect", ...ids])),
+    readLabPrivateAddress(join(session.directory, "secrets", "tls")),
+  );
   const images = JSON.parse(
     await labDocker(["image", "inspect", labSessionConnection(session).jiraImage]),
   );

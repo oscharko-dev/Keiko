@@ -931,7 +931,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.saveToken": "Save token",
   "atlassianConnectors.live.saving": "Saving changes…",
   "atlassianConnectors.live.rotateHint":
-    "The Pod and its Chat connections stay. Replacing the token stops current access and pending actions; verify the connection again afterwards.",
+    "The Pod and its Chat connections stay. Replacing the token stops current access and pending actions; Keiko verifies the new token right away.",
   "atlassianConnectors.live.operationFailed":
     "The operation could not be confirmed. Refresh the Pod status before making another change.",
   "atlassianConnectors.live.refresh": "Refresh status",
@@ -940,6 +940,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.state.ready": "Ready",
   "atlassianConnectors.live.refreshRequired": "Refresh the status before using this Pod.",
   "atlassianConnectors.live.verifyRequired": "Verify the connection before using this Pod.",
+  "atlassianConnectors.live.tlsFailed.wayOut":
+    "Until it verifies, this Pod stays saved but cannot be used; you can also remove it.",
   "atlassianConnectors.live.remove": "Remove Pod",
   "atlassianConnectors.live.keep": "Keep Pod",
   "atlassianConnectors.live.removeConfirm":
@@ -957,6 +959,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.writeApproval.rejected": "Action declined",
   "chat.jira.writeApproval.expired": "Action approval expired",
   "chat.jira.writeApproval.revoked": "Action approval revoked",
+  "chat.jira.writeApproval.expiredHint":
+    "The approval expired before anyone decided, so nothing was changed in Jira. Ask again and approve while the card is open.",
+  "chat.jira.writeApproval.revokedHint":
+    "The approval was revoked, so nothing was changed in Jira. Ask again if you still want the change, then approve it.",
+  "chat.jira.writeApproval.outcomeUnknownHint":
+    "This card cannot show whether the action ran. Its result shows the outcome; if there is none, check the issue in Jira.",
   "chat.jira.writeApproval.preview": "Proposed action details",
   "chat.jira.writeApproval.working": "Checking this action…",
   "chat.jira.writeApproval.failed":
@@ -1067,6 +1075,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.fact.projectAssignee": "Default assignee",
   "chat.jira.fact.issueType": "Issue type",
   "chat.jira.fact.transition": "Transition",
+  "chat.jira.fact.idUnnamed": "{id} (Jira gave no name for it)",
+  "chat.jira.fact.fieldUnnamed": "Field {id} (Jira gave no name for it)",
+  "chat.jira.fact.transitionUnread":
+    "Keiko could not read this status change from Jira, so where it leads is not named here (transition ID {id}).",
+  "chat.jira.fact.transitionUnavailable":
+    "Jira does not offer this status change for the issue right now, so approving it will fail (transition ID {id}).",
   "chat.jira.fact.comment": "Comment",
   "chat.jira.fact.commentId": "Comment ID",
   "chat.jira.access.schemeId": "Scheme ID",
@@ -2180,6 +2194,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.permissionGranted": "Permission granted",
   "chat.jira.outcome.permissionDenied": "Permission not granted",
   "chat.jira.outcome.moreResults": "Show {count} more results",
+  "chat.jira.outcome.moreResultsOne": "Show 1 more result",
   "chat.jira.outcome.openBoard": "Open board",
   "chat.jira.outcome.returned": "Returned results: {count}.",
   "chat.jira.outcome.returnedTotal": "{count} of {total} results returned.",
@@ -2199,8 +2214,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.state.excluded": "Excluded",
   "chat.jira.outcome.rule.parent-type-mismatch":
     "The parent must have an allowed issue type ({subject}).",
+  "chat.jira.outcome.failure.authUnverified":
+    "Jira could not be verified right now, so this request was not sent on. The connection is unchanged. Try again in a moment.",
   "chat.jira.outcome.failure.auth":
-    "Verify the Jira Pod connection and its credentials before trying again.",
+    "Jira rejected the token. It may have expired or been revoked. Replace it on the Jira Pod, verify the connection and try again.",
   "chat.jira.outcome.failure.requirementUntraced":
     "The draft does not name the requirement it implements. Reference its requirement ID from the Knowledge Pod. Nothing was created in Jira.",
   "chat.jira.outcome.failure.requirementCriteria":
@@ -2369,7 +2386,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.workspaceHint":
     "Drag this Jira Pod onto the workspace, or add it with this button. Connect its port to a Chat.",
   "chat.jira.liveReady": "Verified Jira Pod",
-  "chat.jira.liveUnavailable": "Jira Pod unavailable; open Knowledge Pods to verify or reconnect.",
+  "chat.jira.liveUnavailable":
+    "Jira Pod unavailable; open the Local Knowledge window to verify or reconnect.",
   "chat.connectors.title": "Connectors",
   "chat.connectors.active": "Connectors: {count} active",
   "chat.connectors.mcp": "MCP servers",
@@ -2401,15 +2419,64 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The action has started. Wait for its outcome before starting another write.",
   "chat.jira.outcome.issues": "Jira issues",
   "chat.jira.outcome.problems": "What Jira said",
+  "chat.jira.outcome.itemOrdinal": "Item {position}",
+  "chat.jira.outcome.notCreated": "Not created: {count}",
+  "chat.jira.outcome.draftProblem.draft-shape":
+    "The draft is not in a readable form. Ask Keiko to draft the issues again.",
+  "chat.jira.outcome.draftProblem.items-missing":
+    "The draft contains no issues. Ask Keiko to name the issues to create.",
+  "chat.jira.outcome.draftProblem.item-shape":
+    "contains an entry Keiko cannot read. Ask Keiko to rewrite this issue.",
+  "chat.jira.outcome.draftProblem.item-ref":
+    "has no usable name. Ask Keiko to give every issue its own short name.",
+  "chat.jira.outcome.draftProblem.item-ids":
+    "has no valid project or issue type. Choose the project and the issue type again.",
+  "chat.jira.outcome.draftProblem.item-fields":
+    "needs a summary and must not name another project or issue type. Ask Keiko to complete its fields.",
+  "chat.jira.outcome.draftProblem.item-parent":
+    "has a parent Keiko cannot read. Ask Keiko to name the parent issue again.",
+  "chat.jira.outcome.draftProblem.item-links":
+    "has a link Keiko cannot read. Ask Keiko to name the link type, its direction and its target again.",
+  "chat.jira.outcome.draftProblem.item-requirements":
+    "has requirement references Keiko cannot read. Ask Keiko to list them again.",
+  "chat.jira.outcome.draftProblem.ref-duplicate":
+    "Two issues share one name. Ask Keiko to give every issue its own name.",
+  "chat.jira.outcome.draftProblem.ref-self":
+    "names itself as its parent or link target. Ask Keiko to point it at another issue.",
+  "chat.jira.outcome.draftProblem.ref-unknown":
+    "points to an issue that is not in this draft. Add that issue to the draft or name an existing issue key.",
+  "chat.jira.outcome.draftProblem.ref-cycle":
+    "The parent and link relations form a cycle. Ask Keiko to make each parent an issue that does not depend on its child.",
+  "chat.jira.outcome.draftItem": "Item {position}",
+  "chat.jira.outcome.draftItemUnknown": "An item",
+  "chat.jira.outcome.draftRefusal.draft-not-found":
+    "The draft is no longer available, so nothing was changed. Ask Keiko to draft the issues again.",
+  "chat.jira.outcome.draftRefusal.draft-changed":
+    "The draft changed after you reviewed it, so nothing was changed. Review the current draft and approve it again.",
+  "chat.jira.outcome.draftRefusal.connection-changed":
+    "The Jira connection changed since this draft was made, so nothing was changed. Create the draft again for the current Jira.",
+  "chat.jira.outcome.itemUnlisted": "Item not in your request",
   "chat.jira.outcome.more": "and {count} more",
   "chat.jira.outcome.newTab": "(opens Jira in a new tab)",
   "chat.jira.outcome.validation.required-field": "A required Jira field was missing.",
   "chat.jira.outcome.validation.unsupported-field":
     "A required Jira field cannot be filled from Keiko.",
   "chat.jira.outcome.validation.invalid-field": "A Jira field had a value Jira does not accept.",
+  "chat.jira.outcome.validation.invalid-epic-link":
+    "The Epic Link points to an issue that is not an Epic, or that this account cannot see.",
   "chat.jira.outcome.validation.invalid-operation":
     "The requested field change is not possible in Jira.",
   "chat.jira.outcome.validation.bounds-exceeded": "The change was too large to send in one step.",
+  "chat.jira.outcome.validation.named.required-field":
+    "The Jira field “{field}” is required, but no value was given for it.",
+  "chat.jira.outcome.validation.named.unsupported-field":
+    "The Jira field “{field}” cannot be filled from Keiko.",
+  "chat.jira.outcome.validation.named.invalid-field":
+    "The value for the Jira field “{field}” is not one Jira accepts.",
+  "chat.jira.outcome.validation.named.invalid-operation":
+    "This change is not possible for the Jira field “{field}”.",
+  "chat.jira.outcome.linksMissing":
+    "This issue was already created, but not every requested link is on it. Nothing was sent again. Add the missing links in Jira or ask Keiko to add them.",
   "chat.jira.outcome.nothingSent": "Nothing was sent to Jira.",
   "chat.jira.outcome.rules": "Template rules not met",
   "chat.jira.outcome.rule.summary-too-short": "The summary is too short.",
@@ -2426,13 +2493,20 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.outcome.rule.label-count": "The issue has too few labels.",
   "chat.jira.outcome.rule.parent-missing": "The issue needs a parent ({subject}).",
   "chat.jira.outcome.rule.template-unreadable": "The template “{subject}” could not be read.",
+  "chat.jira.outcome.rule.template-missing":
+    "No template exists for the issue type “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save the template, then ask again.",
+  "chat.jira.outcome.rule.template-not-activated":
+    "Only rules for entering a status exist for “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save a template for creating, then ask again.",
+  "chat.jira.outcome.rule.template-binding-unresolved":
+    "The template “{subject}” names an issue type or a status that this Jira does not show you, so nothing was changed. Either open the template in Skills, write it as this Jira shows it to you and save it, or ask its author to check it against Jira. Then ask again.",
+  "chat.jira.outcome.templateNotices":
+    "The change was made. The issue already breaks these template rules in fields this change did not touch. Ask Keiko to repair them, or fix them in Jira.",
+  "chat.jira.outcome.failure.releaseScope":
+    "Attachments are not part of this release, so nothing was changed in Jira. Describe the file in a comment instead, or add it in Jira itself.",
   "chat.jira.tool": "Jira action",
   "chat.jira.catalog.discover": "Find Jira actions",
   "chat.jira.catalog.describe": "Select Jira actions",
-  "chat.jira.catalog.actions": "Jira actions",
-  "chat.jira.catalog.read": "Reads Jira",
-  "chat.jira.catalog.write": "Changes Jira",
-  "chat.jira.catalog.local": "Local preparation",
+  "chat.jira.catalog.found": "Keiko looked up which Jira actions fit.",
   "chat.jira.catalog.selected": "Action selection updated",
   "chat.jira.catalog.invalidArguments":
     "The Jira action selection was invalid. Find available actions and select them again.",
@@ -2474,8 +2548,14 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "browserApproval.notice":
     "Connect this browser to save private drafts and use protected features.",
   "browserApproval.launchNotice": "Keiko opens a connected window in this browser.",
+  "browserApproval.restarted":
+    "Keiko was restarted, so this browser has to be connected again. One click on Connect browser does it. Your open chat and its draft are kept. A browser you remembered under Settings → Security → Browser approvals reconnects on its own.",
+  "browserApproval.restartedCompact":
+    "Keiko was restarted. Connect again; your chat and draft are kept.",
   "browserApproval.launchFailed":
     "Keiko could not connect this browser. Try again or reopen Keiko from its launcher.",
+  "browserApproval.launchOpenedElsewhere":
+    "Keiko opened the connection in a new browser window or tab. If it opened in another browser or profile, continue there.",
   "browserApproval.open": "Connect browser",
   "browserApproval.description":
     "Approve this browser from a browser already connected to this Keiko installation.",
@@ -2604,11 +2684,28 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Several fields are named {subject}. Use the field id to be exact.",
   "chat.skills.jira.finding.unknown-link-type": "Link type {subject} does not exist.",
   "chat.skills.jira.finding.unknown-transition-target":
-    "{subject} is not a status of the project. A transition name or id cannot be checked here.",
+    "{subject} is not a status of the project. A transition name cannot be bound across languages: name the target status as this Jira shows it, and the rule then holds for everyone.",
+  "chat.skills.jira.finding.wrong-parent-field":
+    "The parent field does not link this issue type to its parent here: {subject}. Writes it governs cannot satisfy it.",
   "chat.skills.jira.projectKey": "Project key",
   "chat.skills.jira.propose": "Propose from project",
   "chat.skills.jira.proposeTitle": "Create a template from a Jira project",
   "chat.skills.jira.proposing": "Reading project…",
+  "chat.skills.jira.proposalCount":
+    "{types} issue types: {proposals} with a proposal, {without} without.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn": "No issues of this type to learn from yet.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "The derived template was not valid, so none is proposed.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira did not answer for this type. Try again.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Not examined: the project has more issue types than one proposal run covers.",
+  "chat.skills.jira.withoutProposalMore": "and {count} more without a proposal.",
+  "chat.skills.jira.partial.required-fields-unavailable":
+    "Jira did not answer for the required fields of this type; check them before saving.",
+  "chat.skills.jira.partial.samples-unavailable":
+    "Jira did not answer for the sample issues of this type; check the sections before saving.",
   "chat.skills.jira.proposalNone": "No template could be derived from this project.",
   "chat.skills.jira.proposalTitle": "Proposed for {issueType} ({count} issues sampled)",
   "chat.skills.jira.error":
@@ -2626,6 +2723,33 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.requestError": "Skills could not be updated. Reload the selection and try again.",
   "chat.skills.upload": "Upload Markdown (.md, up to 128 KiB)",
   "chat.skills.retry": "Reload",
+  "chat.skills.refusal.template-marker-misplaced":
+    "The template settings are not at the very top of the file. Start the file with a line that contains only --- and put the settings directly below it.",
+  "chat.skills.refusal.template-not-a-template":
+    "This is not a valid Jira template. Put its settings at the top of the file, between two lines that contain only ---.",
+  "chat.skills.refusal.template-front-matter-unterminated":
+    "The settings at the top of the file are not closed. Add a line that contains only --- after the last setting.",
+  "chat.skills.refusal.template-malformed-line":
+    "A line in the settings at the top of the file is not written as name: value, for example project: REQ. Fix that line.",
+  "chat.skills.refusal.template-unknown-key":
+    "The settings at the top of the file contain a name Keiko does not know. Remove that line or correct the name.",
+  "chat.skills.refusal.template-duplicate-key":
+    "The same setting appears twice at the top of the file. Keep only one of the two lines.",
+  "chat.skills.refusal.template-missing-key":
+    "A required setting is missing at the top of the file, for example project or issueType. Add it.",
+  "chat.skills.refusal.template-invalid-value":
+    "A setting at the top of the file has a value Keiko cannot use, for example a wrong number or a misspelled option. Check how it is written.",
+  "chat.skills.refusal.template-limit-exceeded":
+    "The template has too many entries. A list may hold at most {listItems} entries ({activations} for activateOn), and the template at most {sections} required sections. Remove some.",
+  "chat.skills.refusal.template-unsafe-pattern":
+    "A check pattern (the search expression a rule matches a text against) is too complicated or uses something Keiko does not support. Use a shorter, simpler pattern, or plain text without a pattern.",
+  "chat.skills.refusal.template-no-rules":
+    "The template does not require anything yet. Add at least one rule, such as a required section.",
+  "chat.skills.refusal.text-empty": "The file has no text yet. Write something, then save again.",
+  "chat.skills.refusal.text-control-characters":
+    "The text contains characters Keiko cannot store. Remove them, then save again.",
+  "chat.skills.refusal.line": "Look at line {line}.",
+  "chat.skills.refusal.kept": "Your text is still in the editor.",
   "chat.skills.loading": "Loading skills…",
   "chat.skills.empty": "No chat skills yet.",
   "chat.skills.fileError": "Choose a non-empty .md file up to 128 KiB.",
@@ -2655,6 +2779,21 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.useInChat": "Use in this chat",
   "chat.skills.jira.proposeDescription":
     "Keiko reads recent issues of a project and proposes one template per issue type. Each opens in the editor for review before you save it.",
+  "chat.skills.jira.bind": "Bind to this Jira",
+  "chat.skills.jira.binding": "Binding…",
+  "chat.skills.jira.bound": "Bound to the issue type “{issueType}” of this Jira.",
+  "chat.skills.jira.boundParents":
+    "Bound to the issue type “{issueType}” and {count} allowed parent types of this Jira.",
+  "chat.skills.jira.validBound": "Matches Jira and is bound to its issue types.",
+  "chat.skills.jira.bindOffer":
+    "Matches Jira by name only. Bind it so it also applies for colleagues who use Jira in another language.",
+  "chat.skills.jira.bindAmbiguous":
+    "More than one issue type is called “{subject}” in this Jira, so the template cannot be bound.",
+  "chat.skills.jira.bindFailed": "The template could not be bound right now. Try again.",
+  "chat.skills.jira.sharedType":
+    "Another template governs this issue type too: every write must meet both.",
+  "chat.skills.jira.bindDead":
+    "This template is bound to an issue type that no longer exists in this project (“{subject}”), so it governs nothing and blocks nothing. Change the issue type or delete the template.",
   "chat.skills.jira.openProposal": "Open in editor",
 
   "agentLauncher.agent": "Agent",
@@ -2950,6 +3089,40 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Pull completed, but editor buffers need recovery. Review open files before continuing.",
   "chat.turn.failed": "Turn failed",
   "chat.turn.cancelled": "Turn cancelled",
+  "chat.claimNotice.label": "Note from Keiko",
+  "chat.claimNotice.noJiraCreate": "No Jira issue was created in this turn.",
+  "chat.claimNotice.toolCallNotExecuted":
+    "A tool call written as text in this answer was not executed.",
+  "chat.turnEnd.lead": "This request was not finished.",
+  "chat.turnEnd.reason.budgetExhausted": "This turn used up its tool-call budget.",
+  "chat.turnEnd.reason.deadline": "This turn reached its time limit.",
+  "chat.turnEnd.reason.authorityInvalid": "The Chat's mode, sources or connection changed.",
+  "chat.turnEnd.reason.authenticationFailed":
+    "Jira authentication failed. The access token may have expired or been revoked. Open the Local Knowledge window, replace the token on the Jira Pod and verify the connection.",
+  "chat.turnEnd.reason.toolFailure": "An action could not be settled.",
+  "chat.turnEnd.reason.outputExhausted": "The model ran out of output budget.",
+  "chat.turnEnd.reason.contextOverflow":
+    "The conversation no longer fits the model's context window.",
+  "chat.turnEnd.reason.toolNotOffered":
+    "The model asked for an action that is not available in this chat. Ask again, or name the action you want.",
+  "chat.turnEnd.reason.modelFailure": "The model request failed.",
+  "chat.turnEnd.completed": "Completed in this turn:",
+  "chat.turnEnd.unconfirmed": "Sent but not confirmed — check these in Jira before retrying:",
+  "chat.turnEnd.unsettled": "Started but not settled — check these in Jira before retrying:",
+  "chat.turnEnd.notDone":
+    "Not done — refused by Jira, blocked by an earlier item, or not started in time:",
+  "chat.turnEnd.itemWithoutKey": "(item {item}, no key)",
+  "chat.turnEnd.state.created": "created",
+  "chat.turnEnd.state.existing": "existing",
+  "chat.turnEnd.state.failed": "failed",
+  "chat.turnEnd.state.uncertain": "uncertain",
+  "chat.turnEnd.state.skipped": "skipped",
+  "chat.turnEnd.state.excluded": "excluded",
+  "chat.turnEnd.state.pending": "pending",
+  "chat.turnEnd.more": "…and {count} more.",
+  "chat.turnEnd.counts": "Reads completed: {reads}. Refused or failed actions: {refused}.",
+  "chat.turnEnd.footer":
+    "The rest of the request was not done. Send a follow-up message to continue from here; completed writes are not repeated unless you ask for them again.",
   "chat.contextWindow.label": "Context window notice",
   "chat.contextWindow.notice":
     "This transcript shows {count} turns. Context beyond the 48-turn boundary may be compacted.",
@@ -4385,6 +4558,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.model.unavailable": "Model list unavailable",
   "chat.model.noEligible": "No conversation-eligible model",
   "chat.model.change": "Change model",
+  "chat.model.checking": "Checking {model}…",
+  "chat.model.notReady":
+    "{model} is not ready. Pick another model or check it in Settings > Models.",
   "chat.noModelAlert":
     "No conversation model is currently available. Check gateway and model status in Settings.",
   "chat.loadingGateway": "Connecting to your gateway...",
@@ -4393,6 +4569,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.send.noModel": "No model available",
   "chat.send.connecting": "Connecting to gateway",
   "chat.send.cancel": "Cancel response",
+  "chat.send.running": "Send is unavailable while a response is running",
+  "chat.send.runningHint":
+    "Your next message can be sent when this response is complete, or cancel the response first.",
   "chat.send.statusQueued": "Submitting your message…",
   "chat.send.statusContacting": "Preparing response…",
   "chat.send.statusAwaitingDecision": "Waiting for your decision",
@@ -4407,14 +4586,18 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.voice.batchFinish": "Finish speaking",
   "chat.voice.batchMode": "Digital Twin: Speak to interrupt Keiko, or use the Interrupt button.",
   "chat.error.send": "Could not send message.",
+  "chat.error.modelCheckCooldown":
+    "The selected model did not answer a moment ago. Wait a little and try again, or pick another model.",
+  "chat.error.modelChecking":
+    "The selected model is still being checked. Wait until it answers, then send again.",
+  "chat.error.modelNotReady":
+    "The selected model did not answer its check, so nothing was sent. Pick another model, or check it in Settings > Models and try again.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "chat.error.memoryUpdate": "Unable to update memory.",
-  "chat.grounding.dataLabel": "Data sources",
-  "chat.grounding.noDataSources": "No Data sources",
-  "chat.grounding.dataCatalogEmpty": "No ready Data Pods or Pod Sets are available.",
   "chat.grounding.label": "Sources",
   "chat.grounding.mode": "Grounding mode",
   "chat.grounding.strategy": "Strategy",
+  "chat.grounding.jiraOnly": "Jira Pod only",
   "chat.grounding.modelOnly": "Model only",
   "chat.grounding.liveFiles": "Live Files context",
   "chat.grounding.liveFilesUnavailableHint":
@@ -4879,6 +5062,22 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Checked just now. Keiko still cannot verify update download information.",
   "updates.check.portableSetupRequired":
     "Checked just now. Portable setup is still required before in-app updates can run.",
+  "updates.status.portableVolume.notLocal": "Not on a local disk",
+  "updates.status.portableVolume.unverified": "Installation folder not checked",
+  "updates.check.portableVolume.notLocal":
+    "Checked just now. Keiko is not installed on a local disk, so it cannot update itself.",
+  "updates.check.portableVolume.unverified":
+    "Checked just now. Keiko could not check its installation folder; try again in a moment.",
+  "updates.portableVolume.notLocal.title": "Keiko is not installed on a local disk",
+  "updates.portableVolume.notLocal.body":
+    "Keiko is installed in a network or redirected folder. In-app updates work only from this computer's own disk.",
+  "updates.portableVolume.notLocal.action":
+    "Install Keiko on a local drive of this computer, then check again.",
+  "updates.portableVolume.unverified.title": "Keiko could not check its installation folder",
+  "updates.portableVolume.unverified.body":
+    "Windows answered too slowly just now. In-app updates are paused until the check succeeds.",
+  "updates.portableVolume.unverified.action":
+    "Try again in a moment. If it keeps happening, restart Keiko.",
   "updates.check.portableExternallyManaged":
     "Checked just now. This install is still managed outside Keiko, so in-app updates are not available.",
   "updates.check.policyDisabled":
@@ -5228,7 +5427,11 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.verify.ok.label": "Connection verified",
   "atlassianConnectors.verify.ok.copy": "The credential authenticated successfully.",
   "atlassianConnectors.verify.auth-failed.label": "Authentication failed",
-  "atlassianConnectors.verify.auth-failed.copy": "Check the account and token, then verify again.",
+  "atlassianConnectors.verify.auth-failed.copy":
+    "The token was rejected. It may have expired or been revoked. Create a new token in Jira, replace it here, then verify again.",
+  "atlassianConnectors.verify.auth-unverified.label": "Could not confirm",
+  "atlassianConnectors.verify.auth-unverified.copy":
+    "The answer did not come from Jira itself, for example because a sign-in proxy or a security check answered. The token was not rejected and nothing was changed. Sign in again or try again later; you can replace the token at any time.",
   "atlassianConnectors.verify.forbidden.label": "Access forbidden",
   "atlassianConnectors.verify.forbidden.copy":
     "Atlassian denied access. Check the account permissions and any site or license restrictions, then verify again.",
@@ -5246,10 +5449,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The address returned no valid Atlassian JSON response. Check the address and login gateway.",
   "atlassianConnectors.verify.unsupported-version.label": "Unsupported Jira version",
   "atlassianConnectors.verify.unsupported-version.copy":
-    "Jira reported an unsupported deployment or release, or inconsistent version details. Check the address and REST v2 access to Jira Server or Data Center 10.3 or later, then verify again.",
+    "Keiko requires Jira Data Center 10.3.0 or later. Jira reported an older or unsupported release, or inconsistent version details. Upgrade Jira to 10.3.0 or later, or enter the address of a supported instance, then verify again.",
   "atlassianConnectors.verify.tls-failed.label": "Certificate verification failed",
   "atlassianConnectors.verify.tls-failed.copy":
-    "Check the certificate validity, hostname and trusted certificate authority.",
+    "Keiko does not trust this certificate. Check its validity and hostname. For a private certificate authority, set KEIKO_CA_BUNDLE_PATH to its PEM file and restart Keiko, then verify again. Never turn certificate verification off.",
   "atlassianConnectors.scope.confluenceLabel": "Confluence space keys",
   "atlassianConnectors.scope.confluencePlaceholder": "e.g. ENG",
   "atlassianConnectors.scope.jiraLabel": "Jira project keys",
@@ -5291,6 +5494,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.sync.change.failedItems": "Failed",
   "atlassianConnectors.sync.change.deniedItems": "Denied",
   "atlassianConnectors.sync.degradedTitle": "Some items could not be synced",
+  "atlassianConnectors.sync.reason.auth-unverified":
+    "Jira could not be verified right now. The connection is unchanged. Try again in a moment.",
   "atlassianConnectors.sync.reason.auth-failed":
     "Authentication failed. Re-verify the connector credential.",
   "atlassianConnectors.sync.reason.permission-denied":
@@ -5380,7 +5585,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.report": "Compute Jira progress, compliance and coverage report",
   "atlassianConnectors.action.jira.draft-stage": "Stage part of a Jira backlog draft",
   "atlassianConnectors.action.jira.draft-batch": "Draft Jira issues from requirements",
-  "chat.jira.report.estimateField": "Estimate field: {name} ({id})",
+  "chat.jira.report.estimateField": "Estimate field: {name}",
   "chat.jira.report.estimateUnavailable": "Estimate unavailable: {reason}",
   "chat.jira.report.estimateReason.project-not-specified": "no project was specified",
   "chat.jira.report.estimateReason.field-not-found":
@@ -5409,6 +5614,17 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.report.done": "Done",
   "chat.jira.report.donePercent": "{percent}% done",
   "chat.jira.report.compliance": "{issues} of {checked} issues deviate ({count} deviations)",
+  "chat.jira.report.templateNone":
+    "No issue was checked against a template: no template exists for {types}.",
+  "chat.jira.report.templatePartial":
+    "{checked} of {total} issues were checked against a template; {without} were not: no template for {types}.",
+  "chat.jira.report.templateNoneUnnamed": "No issue was checked against a template.",
+  "chat.jira.report.templatePartialUnnamed":
+    "{checked} of {total} issues were checked against a template; {without} were not.",
+  "chat.jira.report.requiredFieldsPartial":
+    "Required fields were checked for some issue types only.",
+  "chat.jira.report.requiredFieldsUnavailable": "Required fields could not be checked.",
+  "chat.jira.report.requiredFieldsClean": "Required fields: {judged} issues checked, no deviation.",
   "chat.jira.report.coverage":
     "{epics} epics without members, {orphans} issues without an epic or parent",
   "chat.jira.report.coverageUnobserved":
@@ -5444,6 +5660,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.result.succeededTarget": "Result: {target}",
   "atlassianConnectors.result.failedTitle": "Action failed",
   "atlassianConnectors.result.reason.auth-failed": "Authentication failed.",
+  "atlassianConnectors.result.reason.auth-unverified":
+    "Jira could not be verified right now. The connection is unchanged. Try again in a moment.",
+  "atlassianConnectors.live.compatibilityMissing":
+    "This Jira Pod has no retained compatibility details yet. Verify the connection again to obtain them; no permission is added.",
   "atlassianConnectors.result.reason.permission-denied": "Permission denied.",
   "atlassianConnectors.result.reason.not-found": "The target no longer exists.",
   "atlassianConnectors.result.reason.rate-limited": "Atlassian rate-limited the request.",

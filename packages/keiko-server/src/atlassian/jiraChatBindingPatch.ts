@@ -91,6 +91,18 @@ export function jiraChatPatchFields(
   }
 }
 
+/** Names the remedy for the two closed verification outcomes a person can act on. */
+function unavailablePodMessage(credential: ReturnType<typeof findOwnedJiraPod>): string {
+  switch (credential?.livePod.verificationStatus) {
+    case "unsupported-version":
+      return "This Jira Pod's release is not supported. Keiko requires Jira Data Center 10.3.0 or later: upgrade Jira or select another Pod.";
+    case "auth-failed":
+      return "Jira rejected this Pod's token. It may have expired or been revoked: replace the token in the Knowledge Pods hub and verify the connection.";
+    default:
+      return "The Jira Pod is unavailable or requires verification.";
+  }
+}
+
 export function jiraChatUpdateOptions(
   deps: JiraPodAccessDeps,
   patch: UpdateChatPatch,
@@ -110,7 +122,7 @@ export function jiraChatUpdateOptions(
   const credential = findOwnedJiraPod(deps, podId);
   if (credential === undefined || !isReadyJiraPod(credential)) {
     logChatScopeUpdate("denied", chat, chat, patch, correlationId);
-    throw invalidRequest("The Jira Pod is unavailable or requires verification.");
+    throw invalidRequest(unavailablePodMessage(credential));
   }
   return {
     verifiedJiraPod: { podId, authenticationGeneration: credential.generation },

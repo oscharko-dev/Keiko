@@ -8,6 +8,7 @@ import { join } from "node:path";
 /** The closed reasons a check is invalid, or red because the product route failed. */
 const INVALID_REASONS = Object.freeze([
   "lab-error",
+  "lab-outage",
   "model-unavailable",
   "gateway-failure",
   "insufficient-valid-runs",
@@ -234,8 +235,25 @@ const failedWithoutEvidence = (check, evidenceTrusted) =>
  *    (`evidenceTrusted` false) and that carries a failure is invalid: no evidence is not evidence of no outage.
  *  - A failed call that was not retried (a limit such as context overflow) stays as graded.
  */
-export function classifyJourney(check, failures, evidenceTrusted = true) {
+/** The lab's own Jira was down while the journey ran: no verdict about the product (#4369). */
+function labOutageVerdict(check, labState) {
+  if (labState === undefined || labState === "licensed") return undefined;
+  return invalidCheck(
+    "lab-outage",
+    `${check.detail ?? ""}; the laboratory Jira was ${labState}`,
+    check,
+  );
+}
+
+export function classifyJourney(check, failures, evidenceTrusted = true, labState = undefined) {
   if (check.status === "green" || check.status === "invalid") return check;
+  return (
+    labOutageVerdict(check, labState) ?? gatewayVerdict(check, failures, evidenceTrusted) ?? check
+  );
+}
+
+/** An infrastructure outage, or evidence the lab cannot read, makes a failed journey invalid. */
+function gatewayVerdict(check, failures, evidenceTrusted) {
   const counts = `${failures.outages} infrastructure failures, ${failures.circuit} circuit events`;
   if (showsOutage(failures) || isTransportFailure(check.turnFailure ?? check.failure)) {
     return invalidCheck("gateway-failure", `${check.detail ?? ""}; ${counts}`, check);
@@ -244,5 +262,5 @@ export function classifyJourney(check, failures, evidenceTrusted = true) {
   // model-call evidence the laboratory cannot read is untrusted, never a product failure.
   if (failedWithoutEvidence(check, evidenceTrusted))
     return invalidCheck("lab-error", `${check.detail ?? ""}; gateway evidence unavailable`, check);
-  return check;
+  return undefined;
 }

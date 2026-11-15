@@ -13,6 +13,8 @@ import { workspaceRootTargets } from "../workspaceRootTargets";
 import type { BoundRootSurfaceType } from "./BoundRootTarget";
 import { ManagedTaskWorkspaceGate } from "./ManagedTaskWorkspaceGate";
 import { createWindowChunkFallback } from "./WindowChunkFallback";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 
 const windowChunkFallback = createWindowChunkFallback("window chunk"); // i18n-exempt: diagnostic stage id, never rendered
 const BoundRootTarget = dynamic(
@@ -327,6 +329,11 @@ function completeRepositoryConnection(
 ): void {
   const returnWindow = str(cfg, "repositoryReturnWindow");
   if (!returnWindow) return;
+  // Only the window that asked for the folder takes it; the line records that, body-free (#4371).
+  reportCodingWorkbenchInteraction(
+    { interaction: "repository-returned" },
+    newClientCorrelationId(),
+  );
   ctx.updateWindow(returnWindow, { cfg: { repositoryPath: root } });
   ctx.focusWindow(returnWindow);
   ctx.updateCfg({ repositoryReturnWindow: "" });

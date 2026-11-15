@@ -2,6 +2,8 @@ import {
   executeJiraAnonymizationUnlock,
   isJiraAnonymizationUnlock,
 } from "./jira-managed-anonymization-unlock.js";
+import { epicLinkTargetRefusal, withJiraEpicLinkTargetCheck } from "./jira-epic-link-target.js";
+import { withJiraTemplateNotices } from "./jira-template-notices.js";
 import {
   executeJiraAvatarMutation,
   isJiraAvatarMutation,
@@ -159,7 +161,11 @@ import {
 } from "./jira-managed-attachment-mutations.js";
 import { executeJiraWorklogDelete, isJiraWorklogDelete } from "./jira-managed-worklog-delete.js";
 import {
+  JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
+  JIRA_EXISTING_LINKS_MISSING_MESSAGE,
   isSafeAtlassianIdentifier,
+  jiraOperationInReleaseScope,
+  sanitizeJiraMutationFailureDetail,
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldValidationFailure,
   type JiraMutationAttempt,
@@ -184,6 +190,7 @@ import {
 import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
 import {
   validateJiraFieldChanges,
+  withJiraFieldName,
   prepareJiraDescriptionFields,
   type JiraFieldValidationResult,
 } from "./jira-field-metadata.js";
@@ -203,7 +210,7 @@ import {
   type JiraIssueLinkPlan,
   type JiraIssueLinkRequest,
 } from "./jira-issue-links.js";
-import { dispatchFailure } from "./jira-mutation-failure.js";
+import { dispatchFailure, type JiraHttpFailure } from "./jira-mutation-failure.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { executeJiraProjectMutation, isJiraProjectMutation } from "./jira-managed-projects.js";
 import {
@@ -218,6 +225,7 @@ import {
   gateJiraMutationByTemplates,
   type JiraIssueTemplateSource,
   type JiraTemplateGateResult,
+  type JiraTemplateGateTransition,
 } from "./jira-managed-template-gate.js";
 import {
   jiraDraftDependencies,
@@ -287,20 +295,45 @@ const UNTRACED_REFERENCES: Extract<JiraMutationAttempt, { ok: false }> = {
 const REFERENCES_PLACE = "requirementIds goes beside fields, not inside them.";
 // eslint-disable-next-line no-control-regex -- HTTP reference values must not contain control characters.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
+/**
+ * What a model reads when the metadata check refused a field without a sentence of its own (#4357
+ * AC3): the closed reason says it, the field is named in `fieldId`, and the field list says what to
+ * send. One sentence per reason, within the 200-byte bound of a detail message.
+ */
+const FIELD_VALIDATION_MESSAGES: Readonly<Record<JiraFieldValidationFailure, string>> = {
+  "required-field":
+    "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+  "unsupported-field":
+    "The field named in fieldId cannot be set through Keiko: leave it out if it is optional. If it is required, tell the user the issue has to be created in Jira. This write was not made.",
+  "invalid-operation":
+    "The operation sent for the field named in fieldId is not offered for it: use one the field list shows. This write was not made.",
+  "invalid-field":
+    "The value sent for the field named in fieldId does not fit its type: send it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+  "bounds-exceeded":
+    "The fields sent are more or larger than one call takes: send fewer or shorter values. This write was not made.",
+  "invalid-epic-link":
+    "The Epic Link must be the key of an existing Epic of this project that you can see. This write was not made.",
+};
 /** Keiko's own pre-dispatch refusal names the field and the closed reason. */
 function validationFailure(
   result: Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: false }>,
 ): Extract<JiraMutationAttempt, { ok: false }> {
   const message =
-    result.message ?? (result.fieldId === "requirementIds" ? REFERENCES_PLACE : undefined);
-  return {
-    ...INVALID,
-    detail: {
-      validation: result.reason,
-      ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
-      ...(message === undefined ? {} : { messages: [message] }),
-    },
+    result.message ??
+    (result.fieldId === "requirementIds"
+      ? REFERENCES_PLACE
+      : FIELD_VALIDATION_MESSAGES[result.reason]);
+  const detail: JiraMutationFailureDetail = {
+    validation: result.reason,
+    ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
+    // The name Jira shows lets a person read which field is meant; the sentence below stays for the
+    // model (#4357). It comes from the instance's metadata, so it is bounded like every detail text.
+    ...(result.fieldId === undefined || result.fieldName === undefined
+      ? {}
+      : { fieldName: result.fieldName }),
+    messages: [message],
   };
+  return { ...INVALID, detail: sanitizeJiraMutationFailureDetail(detail) ?? detail };
 }
 type Validated = Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: true }>;
 function withDescriptionFormatting(
@@ -413,15 +446,35 @@ export function requestFor(
       ...(upload === undefined ? {} : { upload }),
     });
 }
+/**
+ * KEIKO-0814: a transition Jira listed a moment ago and now refuses has moved with the workflow
+ * between the listing and the write. Jira answers 404, or 400 with only a general message (a 400
+ * that names fields is a refused field value and stays one).
+ */
+function transitionMovedAway(response: JiraHttpFailure): boolean {
+  return (
+    response.httpStatus === 404 ||
+    (response.httpStatus === 400 && response.remote?.fieldErrors === undefined)
+  );
+}
 async function statusMutation(
   request: JiraMutationRequest,
   path: string,
   method: "POST" | "PUT",
   body: Readonly<Record<string, unknown>>,
   metadata: readonly JiraFieldMetadata[] = [],
+  transition = false,
 ): Promise<MutationValidation> {
   const response = await request(path, method, body, "none");
-  if (!response.ok) return dispatchFailure(response, metadata);
+  if (!response.ok) {
+    const failure = dispatchFailure(response, metadata);
+    // Jira's own error document stays on the failure: the Chat journal settles a dispatched 4xx as
+    // "rejected without effect" only when it holds that document, and an uncertain settlement
+    // would tell the model a write may have happened and block the turn's later writes.
+    return transition && transitionMovedAway(response)
+      ? { ...failure, reason: "invalid-transition" }
+      : failure;
+  }
   return response.status === 204 ? { ok: true } : MALFORMED;
 }
 function isCreateRoutingField(id: string): boolean {
@@ -483,7 +536,7 @@ function createArgumentsRefusal(
         numericId(args.issueTypeId),
         "issueTypeId",
         "required-field",
-        "issueTypeId must be the numeric issue-type ID jira.issue_types returns.",
+        "issueTypeId must be the numeric issue-type ID jira.issue-types returns.",
       ],
       [
         fields !== undefined && !Object.keys(fields).some(isCreateRoutingField),
@@ -698,13 +751,21 @@ function createFieldState(
   create: CreateRequest,
   requireAll: boolean,
 ): ReturnType<typeof validateJiraFieldChanges> {
-  return validateJiraFieldChanges(
-    createContextFields(metadata),
-    { ...create.fields, project: { id: create.projectId }, issuetype: { id: create.issueTypeId } },
-    "create",
-    "data-center",
-    [],
-    requireAll,
+  const fields = createContextFields(metadata);
+  return withJiraFieldName(
+    fields,
+    validateJiraFieldChanges(
+      fields,
+      {
+        ...create.fields,
+        project: { id: create.projectId },
+        issuetype: { id: create.issueTypeId },
+      },
+      "create",
+      "data-center",
+      [],
+      requireAll,
+    ),
   );
 }
 function createTemplateGate(
@@ -753,6 +814,8 @@ async function prepareCreateWithMetadata(
 ): Promise<JiraCreatePreparation> {
   const validated = createFieldState(metadata, create, true);
   if (!validated.ok) return createRefusal(request, create, metadata, templates, validated);
+  const notAnEpic = await epicLinkTargetRefusal(request, validated.fields);
+  if (notAnEpic !== undefined) return notAnEpic;
   const gate = await createTemplateGate(request, create, metadata, templates, validated);
   if (!gate.ok) return gate;
   // The link a template requires rides on the create itself where the screen offers it.
@@ -852,12 +915,9 @@ function linkedFieldChanges(
   args: CatalogJsonObject,
   purpose: "edit" | "transition",
 ): LinkedFieldChanges {
-  const validated = validateJiraFieldChanges(
+  const validated = withJiraFieldName(
     fields,
-    args.fields ?? {},
-    purpose,
-    "data-center",
-    args.updates ?? [],
+    validateJiraFieldChanges(fields, args.fields ?? {}, purpose, "data-center", args.updates ?? []),
   );
   if (!validated.ok) return validationFailure(validated);
   return { ok: true, validated, links: parseJiraIssueLinks(args.links) ?? [] };
@@ -866,11 +926,7 @@ interface FieldTarget {
   readonly purpose: "edit" | "transition";
   readonly issueKey: string;
   readonly targetStatusId?: string;
-  readonly transition?: {
-    readonly id: string;
-    readonly name?: string;
-    readonly targetStatusName?: string;
-  };
+  readonly transition?: JiraTemplateGateTransition;
 }
 /** The template gate in front of an edit or transition: the attempt that stops it, or the links to send. */
 type FieldAdmission =
@@ -882,6 +938,15 @@ async function admitFieldMutation(
   { purpose, issueKey, transition }: FieldTarget,
   policy: MutationPolicy,
 ): Promise<FieldAdmission> {
+  const notAnEpic = await epicLinkTargetRefusal(request, linked.validated.fields);
+  if (notAnEpic !== undefined) return { stop: notAnEpic };
+  // The status change itself is free (only explicit transition rules govern it); the fields a
+  // transition carries are an edit of exactly those fields and are judged as one (#4354).
+  const carried =
+    purpose === "transition"
+      ? await carriedFieldsGate(request, metadata, linked, issueKey, policy)
+      : undefined;
+  if (carried !== undefined && !carried.ok) return { stop: carried };
   const gate = await gateJiraMutationByTemplates({
     request,
     source: policy.templates,
@@ -894,6 +959,25 @@ async function admitFieldMutation(
   });
   if (!gate.ok) return { stop: gate };
   return policy.check ? { stop: CHECKED } : { links: gate.links ?? linked.links };
+}
+/** The edit rule over the fields a transition carries, or undefined when it carries none. */
+function carriedFieldsGate(
+  request: JiraMutationRequest,
+  metadata: readonly JiraFieldMetadata[],
+  linked: Extract<LinkedFieldChanges, { ok: true }>,
+  issueKey: string,
+  policy: MutationPolicy,
+): ReturnType<typeof gateJiraMutationByTemplates> | undefined {
+  const { fields, update } = linked.validated;
+  if (Object.keys(fields).length === 0 && update.labels === undefined) return undefined;
+  return gateJiraMutationByTemplates({
+    request,
+    source: policy.templates,
+    operation: "edit",
+    metadata,
+    validated: linked.validated,
+    target: { issueKey },
+  });
 }
 /** Only links that take their own call change nothing on the issue request: none is sent. */
 function changesOnlyThroughLinkCalls(
@@ -930,6 +1014,23 @@ async function readChangingIssue(
     ? jiraAlreadyHeldRefusal(issueKey)
     : prior;
 }
+/** The one write of a field change; a transition's refusal is told apart from an edit's (KEIKO-0814). */
+function sendFieldChange(
+  request: JiraMutationRequest,
+  target: ReturnType<typeof fieldMutationTarget>,
+  body: Readonly<Record<string, unknown>>,
+  metadata: readonly JiraFieldMetadata[],
+  purpose: FieldTarget["purpose"],
+): Promise<MutationValidation> {
+  return statusMutation(
+    request,
+    target.path,
+    target.method,
+    body,
+    metadata,
+    purpose === "transition",
+  );
+}
 async function fieldMutation(
   request: JiraMutationRequest,
   metadata: JiraMutationMetadata,
@@ -961,7 +1062,7 @@ async function fieldMutation(
   const formatting = { ...descriptionMetric(policy), ...descriptionMetric(validated) };
   if (!onlyLinkCalls) {
     const body = { fields: validated.fields, update, ...target.body };
-    const sent = await statusMutation(request, target.path, target.method, body, metadata.fields);
+    const sent = await sendFieldChange(request, target, body, metadata.fields, purpose);
     if (!sent.ok) return withDescriptionFormatting(sent, formatting);
   }
   const attempt = await completeJiraLinkedMutation(
@@ -979,7 +1080,27 @@ async function fieldMutation(
   );
   return withDescriptionFormatting(attempt, formatting);
 }
+/**
+ * An existing issue keeps its project and issue type through every edit and transition (#4354, L6):
+ * the template that governs it is chosen by them, so a change would have to be judged by a template
+ * of the target type. Jira moves an issue through its own Move operation; Keiko does not, and says so.
+ */
+function routingChangeRefusal(args: CatalogJsonObject): Refusal | undefined {
+  const fields = asRecord(args.fields);
+  const named = ["project", "issuetype"].find(
+    (id) => fields !== undefined && Object.hasOwn(fields, id),
+  );
+  return named === undefined
+    ? undefined
+    : refusedArgument(
+        named,
+        "unsupported-field",
+        "An edit does not change the project or the issue type of an issue. Change it in Jira (Move), or create the issue again in the right project and issue type.",
+      );
+}
 function editArgumentsRefusal(args: CatalogJsonObject): Refusal | undefined {
+  const routing = routingChangeRefusal(args);
+  if (routing !== undefined) return routing;
   const fields = fieldsInput(args.fields ?? {});
   const updates = asArray(args.updates ?? []);
   const links = parseJiraIssueLinks(args.links);
@@ -1038,6 +1159,8 @@ async function transitionIssue(
   policy: MutationPolicy,
 ): Promise<JiraMutationAttempt> {
   const transitionId = args.transitionId;
+  const routing = routingChangeRefusal(args);
+  if (routing !== undefined) return routing;
   const refused = argumentRefusal(
     args,
     ["issueKey", "transitionId", "fields", "updates"],
@@ -1070,6 +1193,8 @@ async function transitionIssue(
         ...(metadata.targetStatusName === undefined
           ? {}
           : { targetStatusName: metadata.targetStatusName }),
+        targetStatusId: metadata.targetStatusId,
+        available: metadata.availableTransitions,
       },
     },
     policy,
@@ -1114,7 +1239,7 @@ async function checkAssignee(
     : refusedArgument(
         "assigneeName",
         "invalid-field",
-        "assigneeName must be the exact user name of one active user jira.assignable_users returns.",
+        "assigneeName must be the exact user name of one active user jira.assignable-users returns.",
       );
 }
 function uniqueActiveAssignee(users: readonly unknown[], name: string): boolean {
@@ -1267,8 +1392,6 @@ async function attachFile(
   });
 }
 
-const EXISTING_LINKS_MISSING =
-  "This issue already exists from this draft, but not every requested link is on it. Nothing was sent again; add only the missing links with jira.edit.";
 /**
  * An item reconciled to an issue it already created is complete only when that issue also carries
  * the relations the item asks for: a create followed by a failed further link leaves an issue the
@@ -1289,7 +1412,7 @@ async function existingItemWithLinks(
   return {
     ok: false,
     reason: current.ok ? "conflict" : current.reason,
-    detail: { messages: [EXISTING_LINKS_MISSING] },
+    detail: { messages: [JIRA_EXISTING_LINKS_MISSING_MESSAGE] },
     receipt: existing.receipt,
     links: account,
   };
@@ -1326,7 +1449,18 @@ function draftItemInput(
  * reconciled against the issue its draft identity already names before anything is created.
  * A reconciled item sends no mutation; the server's journal records that nothing was dispatched.
  */
-export async function executeJiraDraftItem(
+export function executeJiraDraftItem(
+  item: JiraDraftItem,
+  keys: ReadonlyMap<string, string>,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> {
+  return withJiraEpicLinkTargetCheck(connection, context, () =>
+    executeJiraDraftItemInner(item, keys, context, connection, trace),
+  );
+}
+async function executeJiraDraftItemInner(
   item: JiraDraftItem,
   keys: ReadonlyMap<string, string>,
   context: ManagedMcpInvocationContext,
@@ -1410,17 +1544,37 @@ function draftItemFieldFailure(
   if (!input.ok) return undefined;
   const prepared = draftItemCreateFields(item, input.fields, metadata, trace);
   if (!prepared.ok) return validationFailure(prepared).detail;
-  const validated = validateJiraFieldChanges(
-    createContextFields(metadata),
-    {
-      ...prepared.fields,
-      project: { id: item.projectId },
-      issuetype: { id: item.issueTypeId },
-    },
-    "create",
-    "data-center",
+  const fields = createContextFields(metadata);
+  const validated = withJiraFieldName(
+    fields,
+    validateJiraFieldChanges(
+      fields,
+      {
+        ...prepared.fields,
+        project: { id: item.projectId },
+        issuetype: { id: item.issueTypeId },
+      },
+      "create",
+      "data-center",
+    ),
   );
   return validated.ok ? undefined : validationFailure(validated).detail;
+}
+/** An Epic Link of a draft item that is not an Epic; a link to another draft item is judged at its run. */
+async function draftItemEpicFailure(
+  request: JiraMutationRequest,
+  item: JiraDraftItem,
+  metadata: readonly JiraFieldMetadata[],
+): Promise<JiraMutationFailureDetail | undefined> {
+  const keys = new Map(jiraDraftDependencies(item).map((ref) => [ref, JIRA_DRAFT_STAND_IN_KEY]));
+  const input = draftItemInput(item, keys, undefined);
+  if (!input.ok) return undefined;
+  const prepared = draftItemCreateFields(item, input.fields, metadata, undefined);
+  // The parent relation of an item that names a ref of this draft holds a stand-in key here.
+  const local = new Set(item.parent?.ref === undefined ? [] : [item.parent.fieldId]);
+  return prepared.ok
+    ? (await epicLinkTargetRefusal(request, prepared.fields, local))?.detail
+    : undefined;
 }
 const draftTypeKey = (item: JiraDraftItem): string => `${item.projectId}/${item.issueTypeId}`;
 /** The create fields of each issue type a draft uses, so its size costs no further read. */
@@ -1478,16 +1632,30 @@ export async function jiraDraftFieldRefusals(
   options: { readonly reconcile: boolean },
 ): Promise<JiraDraftFieldRefusals> {
   if (connection.deployment !== "data-center") return { refusals: [], total: 0 };
-  const request = requestFor(connection, context);
-  const metadata = await draftItemMetadata(request, items);
-  const candidates = items.flatMap((item): readonly DraftFieldCandidate[] => {
-    const fields = metadata.get(draftTypeKey(item));
-    const detail = fields === undefined ? undefined : draftItemFieldFailure(item, fields);
-    return fields === undefined || detail === undefined
-      ? []
-      : [{ ref: item.ref, detail, item, metadata: fields }];
+  return withJiraEpicLinkTargetCheck(connection, context, async () => {
+    const request = requestFor(connection, context);
+    const metadata = await draftItemMetadata(request, items);
+    const candidates = (
+      await Promise.all(
+        items.map(async (item): Promise<readonly DraftFieldCandidate[]> => {
+          const fields = metadata.get(draftTypeKey(item));
+          if (fields === undefined) return [];
+          const detail =
+            draftItemFieldFailure(item, fields) ??
+            (await draftItemEpicFailure(request, item, fields));
+          return detail === undefined ? [] : [{ ref: item.ref, detail, item, metadata: fields }];
+        }),
+      )
+    ).flat();
+    return draftFieldRefusalsOf(request, candidates, options.reconcile);
   });
-  if (!options.reconcile)
+}
+async function draftFieldRefusalsOf(
+  request: JiraMutationRequest,
+  candidates: readonly DraftFieldCandidate[],
+  reconcile: boolean,
+): Promise<JiraDraftFieldRefusals> {
+  if (!reconcile)
     return {
       refusals: candidates
         .slice(0, DRAFT_FIELD_REFUSALS_MAX)
@@ -1939,6 +2107,21 @@ export function executeJiraManagedMutation(
   connection: JiraManagedConnection,
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
+  return withJiraTemplateNotices(() =>
+    withJiraEpicLinkTargetCheck(connection, context, () =>
+      executeJiraManagedMutationInner(operation, source, context, connection, trace),
+    ),
+  );
+}
+/** The executor proper; the exported entry only adds the notices its gate collected. */
+function executeJiraManagedMutationInner(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> {
+  if (!jiraOperationInReleaseScope(operation)) return Promise.resolve(OUT_OF_RELEASE_SCOPE);
   if (connection.deployment !== "data-center")
     return Promise.resolve({ ok: false, reason: "unavailable" });
   if (isJiraAgileMutation(operation))
@@ -1958,6 +2141,15 @@ export function executeJiraManagedMutation(
   );
 }
 
+/**
+ * An operation outside this release's scope (attachments in Release 1) is the closed `unavailable`
+ * disposition with a readable message; it never reaches a request, in the executor or its dry run.
+ */
+const OUT_OF_RELEASE_SCOPE: JiraMutationAttempt = {
+  ok: false,
+  reason: "unavailable",
+  detail: { messages: [JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE] },
+};
 const TEMPLATE_CHECKED: ReadonlySet<JiraMutationOperation> = new Set([
   "jira.create",
   "jira.edit",
@@ -1977,6 +2169,18 @@ function checkedAttempt(
   connection: JiraManagedConnection,
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
+  return withJiraEpicLinkTargetCheck(connection, context, () =>
+    checkedAttemptInner(operation, source, context, connection, trace),
+  );
+}
+function checkedAttemptInner(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> {
+  if (!jiraOperationInReleaseScope(operation)) return Promise.resolve(OUT_OF_RELEASE_SCOPE);
   if (isJiraAgileMutation(operation))
     return checkJiraAgileMutation(operation, structuredClone(source), context, connection);
   if (connection.deployment !== "data-center") return Promise.resolve({ ok: true, receipt: {} });
@@ -2001,9 +2205,20 @@ export async function checkJiraManagedMutationTemplates(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
 ): Promise<JiraTemplateGateResult> {
-  const attempt = await checkedAttempt(operation, source, context, connection);
-  if (attempt.ok || attempt.violations === undefined) return { ok: true };
-  return { ok: false, reason: attempt.reason, violations: attempt.violations };
+  // Template rules only: no Epic Link target check runs here (it needs the invocation's agile
+  // request, which this entry does not install). A draft item's Epic Link is judged by
+  // `jiraDraftFieldRefusals`, which knows which relations are only stand-ins for other items.
+  const attempt = await checkedAttemptInner(operation, source, context, connection);
+  if (attempt.ok) return { ok: true };
+  // A Jira that cannot be read is told apart from a pass, so a caller can stop reading it.
+  if (attempt.violations === undefined)
+    return attempt.reason === "unavailable" ? { ok: false, reason: "unavailable" } : { ok: true };
+  return {
+    ok: false,
+    reason: attempt.reason,
+    violations: attempt.violations,
+    ...(attempt.detail === undefined ? {} : { detail: attempt.detail }),
+  };
 }
 export type JiraMutationCheckResult =
   | { readonly ok: true }
@@ -2088,10 +2303,21 @@ export async function checkJiraManagedMutation(
   connection: JiraManagedConnection,
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationCheckResult> {
+  if (!jiraOperationInReleaseScope(operation))
+    return {
+      ok: false,
+      reason: "unavailable",
+      detail: { messages: [JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE] },
+    };
   const attempt = await checkedAttempt(operation, source, context, connection, trace);
   if (attempt.ok) return { ok: true };
   if (attempt.violations !== undefined)
-    return { ok: false, reason: attempt.reason, violations: attempt.violations };
+    return {
+      ok: false,
+      reason: attempt.reason,
+      violations: attempt.violations,
+      ...(attempt.detail === undefined ? {} : { detail: attempt.detail }),
+    };
   // Dedicated admission already resolved its concrete prerequisites and reviewed state using GETs.
   // A known refusal must not be turned into an approval for a write that cannot proceed.
   if (requiresSuccessfulPreflight(operation))

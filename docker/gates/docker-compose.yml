@@ -20,13 +20,25 @@ services:
     # The sandbox proof and the verification E2E create user namespaces. Docker Desktop blocks that
     # under the default profile; unconfined applies to this local gate container only and never to
     # anything Keiko ships or runs in CI.
+    #
+    # `systempaths=unconfined` unmasks the container's /proc. bubblewrap's strict profile mounts a
+    # fresh procfs in its new root and Docker's default masked/read-only /proc paths refuse that with
+    # "bwrap: Can't mount proc on /newroot/proc: Operation not permitted", which made every verification
+    # run spawned through the sandbox exit 1 in about 13 ms (the keiko-cli verify tests) while GitHub's
+    # runners, which are not containers, pass. Local gate container only, like the two above.
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
+      - systempaths=unconfined
     # Chromium exhausts the 64MB default and crashes mid-suite with no useful diagnostic.
     shm_size: 2gb
     environment:
       CI: "true"
+      # The vitest worker count (scripts/lib/vitest-workers.mjs). This container sets CI=true, which
+      # alone would pin every local gate job to two workers, so a local gate job defaults to four and
+      # the host's KEIKO_VITEST_MAX_WORKERS (1 to 16) overrides it; =2 reproduces CI's count exactly.
+      # Real CI (GitHub) never uses this file. docs/qa/local-gates.md.
+      KEIKO_VITEST_MAX_WORKERS: "${KEIKO_VITEST_MAX_WORKERS:-4}"
       # Marks evidence produced here as local. Nothing downstream may treat it as authoritative:
       # this container is not the reference architecture for wall-clock measurement.
       KEIKO_LOCAL_GATE_CONTAINER: "1"
@@ -36,7 +48,29 @@ services:
       - gates-playwright:/opt/playwright
       - gates-npm-cache:/opt/npm-cache
 
+  # The optional Node 26 lane: the same Dockerfile built with the Node version CI's "Node 26
+  # compatibility" job runs, so a failure that only Node 26 shows can be reproduced here instead of
+  # on the host. Everything else is inherited (the pinned git and iproute2, the unprivileged `node`
+  # user, the security options, the checkout bind mount). The two volumes that hold Node-version
+  # specific content are its own, so the node_modules of the two Node versions never mix; the
+  # Playwright browsers do not depend on Node and stay shared. docs/qa/local-gates.md.
+  gates-node26:
+    extends:
+      service: gates
+    build:
+      context: ../..
+      dockerfile: docker/gates/Dockerfile
+      args:
+        NODE_VERSION: "26.8.1"
+    volumes:
+      - ../..:/repo
+      - gates-node26-node-modules:/repo/node_modules
+      - gates-playwright:/opt/playwright
+      - gates-node26-npm-cache:/opt/npm-cache
+
 volumes:
   gates-node-modules:
   gates-playwright:
   gates-npm-cache:
+  gates-node26-node-modules:
+  gates-node26-npm-cache:

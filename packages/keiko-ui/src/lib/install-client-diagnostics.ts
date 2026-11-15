@@ -366,6 +366,7 @@ function clientMessagePostBody(
     filesScopeDecision: meta.filesScopeDecision,
     updateNotice: meta.updateNotice,
     editorLineEnding: meta.editorLineEnding,
+    knowledgeCatalogRefresh: meta.knowledgeCatalogRefresh,
     ...codingReportFields(meta),
     ...composerReportFields(meta),
     ...jiraPresentationFields(meta),
@@ -444,13 +445,18 @@ function gitClientOperationPostBudget(
 // else is a failure report. The binding, repair and git-client rules are the server's own
 // (keiko-contracts), so the two budgets never drift.
 // The closed report shapes, by the server's own rule (client-diagnostics-routes closedReportBudget).
+// The Editor's line-ending adoption and a Knowledge Pod catalog refresh: closed, routine evidence.
+function routineClientSurfaceEvidence(meta: ClientDiagnosticMeta): boolean {
+  return meta.editorLineEnding !== undefined || meta.knowledgeCatalogRefresh !== undefined;
+}
+
 function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
   return (
     meta.supportReportDelivery !== undefined ||
     meta.supportReportPreparation !== undefined ||
     meta.filesScopeDecision !== undefined ||
     meta.updateNotice !== undefined ||
-    meta.editorLineEnding !== undefined ||
+    routineClientSurfaceEvidence(meta) ||
     meta.codingRunRestore !== undefined ||
     meta.codingWorkbenchInteraction !== undefined ||
     meta.citationActivation !== undefined ||

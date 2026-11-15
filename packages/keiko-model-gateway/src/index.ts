@@ -13,6 +13,7 @@
 
 export { KEIKO_MODEL_GATEWAY_VERSION } from "./version.js";
 export { ReasoningHistoryUnavailableError } from "./reasoning-history.js";
+// The one projection every tool definition passes on its way to an OpenAI-compatible provider.
 
 export type {
   CircuitBreakerConfig,

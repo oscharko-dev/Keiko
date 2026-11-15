@@ -70,6 +70,7 @@ import {
 // #3591: raised from 30s so an unconfigured provider's default already tolerates the field
 // customer's slow LiteLLM/vLLM proxy instead of relying solely on the gateway's own silence/budget
 // floors (resilience.ts) to compensate for a too-short default.
+/** The provider timeout a configuration gets when it names none: the conversational default. */
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
@@ -1901,6 +1902,7 @@ function parseProviderConfig(
     ...deploymentIdentityConfig(raw.deploymentIdentitySha256, path),
     ...catalogOriginConfig(raw.catalogOrigin, path),
     timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
+    ...timeoutNamedMarker(raw),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
     retryBaseDelayMs: requirePositiveInt(
       raw.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
@@ -1909,6 +1911,21 @@ function parseProviderConfig(
     ...(voiceProfiles === undefined ? {} : { voiceProfiles }),
     ...(circuitBreaker === undefined ? {} : { circuitBreaker }),
   };
+}
+
+// Who named the request timeout (#4351): the explicit check lifts only a default. A stored `timeoutNamed:
+// true` is a person's value, whatever it is. Without that marker, a value equal to a default Keiko
+// itself ever stored (Setup's 30 s, the resolver's 120 s) is a default, which is every installation
+// written before the marker existed; any other unmarked value was typed by a person.
+const LEGACY_DEFAULT_TIMEOUTS_MS: ReadonlySet<unknown> = new Set([30_000, DEFAULT_TIMEOUT_MS]);
+
+function timeoutNamedMarker(raw: {
+  readonly timeoutMs?: unknown;
+  readonly timeoutNamed?: unknown;
+}): Pick<ModelProviderConfig, "timeoutConfigured"> {
+  if (raw.timeoutMs === undefined) return {};
+  if (raw.timeoutNamed === true) return { timeoutConfigured: true };
+  return LEGACY_DEFAULT_TIMEOUTS_MS.has(raw.timeoutMs) ? {} : { timeoutConfigured: true };
 }
 
 function reasoningContinuationConfig(

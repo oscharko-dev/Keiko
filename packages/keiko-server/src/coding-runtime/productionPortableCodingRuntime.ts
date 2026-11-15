@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
+import {
+  assertWindowsLocalVolume,
+  windowsLocalVolumeVerdict,
+} from "@oscharko-dev/keiko-security/windows-local-volume";
 import {
   closeSync,
   constants,
@@ -21,7 +24,8 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import { processServerLogSink } from "../process-log-sink.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink, processServerLogSinkFor } from "../process-log-sink.js";
 import type {
   LongLivedRuntimeQualification,
   RuntimeQualificationComponentDigest,
@@ -277,15 +281,36 @@ export function discoverReleasedWindowsGatewayHelper(
     : { helperPath: runtime.nativeHelperPath, helperSha256 };
 }
 
+/** Why a Windows portable install cannot offer its bundled runtime although it is one (#4358). */
+export type PortableInstallVolumeRefusal = "install-volume-not-local" | "install-volume-unverified";
+
+interface PortableVolumeRefused {
+  readonly volumeRefusal: PortableInstallVolumeRefusal;
+}
+
+/** The bundled runtime, the closed reason its install folder forbids it, or nothing to offer. */
+export type PortableOpenCodeDiscovery =
+  | { readonly runtime: QualifiedPortableOpenCodeRuntime }
+  | { readonly unavailableReason: PortableInstallVolumeRefusal }
+  | undefined;
+
 export function discoverQualifiedPortableOpenCode(
   input: PortableOpenCodeDiscoveryInput,
 ): QualifiedPortableOpenCodeRuntime | undefined {
+  const discovery = discoverPortableOpenCode(input);
+  return discovery !== undefined && "runtime" in discovery ? discovery.runtime : undefined;
+}
+
+export function discoverPortableOpenCode(
+  input: PortableOpenCodeDiscoveryInput,
+): PortableOpenCodeDiscovery {
   try {
     const candidate = portableRuntimeCandidate(input);
     if (candidate === undefined) return undefined;
+    if ("volumeRefusal" in candidate) return { unavailableReason: candidate.volumeRefusal };
     const runtime = qualifiedRuntime(candidate, input.attestation);
     if (runtime !== undefined) recordNativeLinuxHelper(input, candidate, runtime);
-    return runtime;
+    return runtime === undefined ? undefined : { runtime };
   } catch (error) {
     emitServerDiagnostic(
       input.diagnostics,
@@ -346,11 +371,11 @@ function recordNativeLinuxHelper(
 
 function portableRuntimeCandidate(
   input: PortableOpenCodeDiscoveryInput,
-): PortableRuntimeCandidate | undefined {
+): PortableRuntimeCandidate | PortableVolumeRefused | undefined {
   const target = runtimeTarget(input.platform ?? process.platform, input.arch ?? process.arch);
   if (target === undefined) return undefined;
   const roots = trustedPortableRoots(input, target);
-  if (roots === undefined) return undefined;
+  if (roots === undefined || "volumeRefusal" in roots) return roots;
   const selectedRoots = setupBoundRoots(roots, target);
   if (selectedRoots === undefined) return undefined;
   const bound = boundActivation(selectedRoots.resourceRoot, target);
@@ -831,7 +856,7 @@ function runPortableRuntimeCommand(
 function trustedPortableRoots(
   input: PortableOpenCodeDiscoveryInput,
   target: UpdatePortableTarget,
-): TrustedPortableRoots | undefined {
+): TrustedPortableRoots | PortableVolumeRefused | undefined {
   const packageLayout =
     input.installRoot === undefined
       ? portablePackageLayout(target, productionUpdateFacts(input.env).packageRoot)
@@ -841,9 +866,19 @@ function trustedPortableRoots(
     if (lexicalInstallRoot === undefined) return undefined;
     try {
       // This must precede realpathSync: a canonical path is evidence, not locality authority.
-      assertWindowsLocalVolume(lexicalInstallRoot);
-    } catch {
-      return undefined;
+      // The runtime is started from these roots, so the check runs fresh every time: a pass that a
+      // passive read remembers is never consulted here.
+      assertWindowsLocalVolume(lexicalInstallRoot, {
+        securityLogSink: processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
+      });
+    } catch (error) {
+      // The check wrote its refusal line; its verdict becomes the reason the Workbench shows.
+      return {
+        volumeRefusal:
+          windowsLocalVolumeVerdict(error) === "not-local"
+            ? "install-volume-not-local"
+            : "install-volume-unverified",
+      };
     }
   }
   return realPortableRoots(input.installRoot, packageLayout);

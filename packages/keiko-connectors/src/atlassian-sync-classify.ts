@@ -106,6 +106,54 @@ export function failureReasonForStatus(status: number): AtlassianSyncFailureReas
   return "unavailable";
 }
 
+/**
+ * The one status-to-reason owner for every read (#4353). A Data Center 401 carries the server's
+ * identity-read decision: `confirmed` means the token is valid, so the 401 was a missing
+ * permission; `unconfirmed` means nothing was settled, so the token is neither blamed nor
+ * discarded. A 401 without a decision (Cloud, or an identity request itself) stays an
+ * authentication failure.
+ */
+export function failureReasonForResponse(
+  result: Pick<Extract<AtlassianHttpBodyResult, { kind: "response" }>, "status" | "authentication">,
+): AtlassianSyncFailureReason {
+  return identityDecisionReason(result) ?? failureReasonForStatus(result.status);
+}
+
+/**
+ * The single three-way mapping of a Data Center 401's identity decision, shared by every read and
+ * the write executor so they cannot drift: `confirmed` is a missing permission, `unconfirmed` is
+ * unproven authentication, no decision means the caller maps the status itself.
+ */
+export function identityDecisionReason(
+  result: Pick<Extract<AtlassianHttpBodyResult, { kind: "response" }>, "status" | "authentication">,
+): "permission-denied" | "auth-unverified" | undefined {
+  if (result.status !== 401) return undefined;
+  if (result.authentication === "confirmed") return "permission-denied";
+  return result.authentication === "unconfirmed" ? "auth-unverified" : undefined;
+}
+
+export type AtlassianItemFailure =
+  | { readonly kind: "missing" }
+  | { readonly kind: "skipped"; readonly reason: AtlassianSyncFailureReason }
+  | { readonly kind: "fatal"; readonly reason: AtlassianSyncFailureReason };
+
+/**
+ * One per-item failure classification for every sync adapter (#4353). A 401 the server's identity
+ * read left unconfirmed is a fatal stop that does not blame the token; a confirmed one is this
+ * item's missing permission. Cloud sync never carries a decision, so its 401 stays an
+ * authentication failure. A 404 is a missing item; everything else is skipped by status.
+ */
+export function classifyItemFailureResponse(
+  result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
+): AtlassianItemFailure {
+  if (result.status === 401 && result.authentication === "unconfirmed")
+    return { kind: "fatal", reason: "auth-unverified" };
+  if (result.status === 401 && result.authentication !== "confirmed")
+    return { kind: "fatal", reason: "auth-failed" };
+  if (result.status === 404) return { kind: "missing" };
+  return { kind: "skipped", reason: failureReasonForResponse(result) };
+}
+
 // Truncation on a JSON/list response is a byte-coverage failure, never parseable content:
 // clamped below the requested cap means the run budget ran out (`bounds-exceeded`); reaching the
 // requested cap means the payload itself overflows the list cap (`malformed-payload`).
@@ -123,7 +171,7 @@ export function classifyListResult(
   if (result.kind === "timeout") return { ok: false, reason: "timeout" };
   if (result.kind === "network-error") return { ok: false, reason: "unavailable" };
   if (result.status < 200 || result.status >= 300) {
-    return { ok: false, reason: failureReasonForStatus(result.status) };
+    return { ok: false, reason: failureReasonForResponse(result) };
   }
   if (result.truncated) {
     return { ok: false, reason: classifyTruncatedList(result, requestedCap) };

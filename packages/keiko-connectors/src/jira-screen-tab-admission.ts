@@ -10,7 +10,7 @@ import {
 import { asArray } from "./atlassian-sync-classify.js";
 import { jiraScreenProjection } from "./jira-configuration-values.js";
 import { executeJiraConfigurationRead } from "./jira-managed-configuration-reads.js";
-import { projectJiraCollection } from "./jira-managed-metadata.js";
+import { jiraReadFailureDetail, projectJiraCollection } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraScreenFieldProjection, jiraScreenTabProjection } from "./jira-managed-screen-reads.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
@@ -42,7 +42,7 @@ async function screenPage(
   const data = result.data;
   if (data.outcome !== "succeeded") {
     if (!isAtlassianConnectorWriteFailureReason(data.reason)) return MALFORMED;
-    const detail = sanitizeJiraMutationFailureDetail(data);
+    const detail = jiraReadFailureDetail(result, sanitizeJiraMutationFailureDetail(data));
     return { ok: false, reason: data.reason, ...(detail === undefined ? {} : { detail }) };
   }
   const values = asArray(data.items);

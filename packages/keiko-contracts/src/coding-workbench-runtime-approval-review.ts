@@ -61,7 +61,31 @@ export type CodingWorkbenchRuntimeApprovalReviewSession =
 export interface CodingWorkbenchNativeActionReview {
   readonly permission: string;
   readonly resources: readonly string[];
+  /**
+   * A write the run's Jira Pod would make, as the exact call the model sent plus the names Jira
+   * gave the ids it uses (#4359). The card then reads like Chat's approval of the same write
+   * instead of naming a native action. MODEL-SELECTED, display only, like `resources`.
+   */
+  readonly jira?: CodingWorkbenchNativeJiraWriteReview;
 }
+
+/** What Jira itself called the ids of a call, from reads this run already made: [id, name]. */
+export type CodingWorkbenchNativeJiraNames = readonly (readonly [string, string])[];
+
+export interface CodingWorkbenchNativeJiraWriteReview {
+  /** The Pod tool the call reaches, such as `jira.create`. */
+  readonly tool: string;
+  /** The call's arguments as plain JSON. */
+  readonly input: Readonly<Record<string, unknown>>;
+  readonly names: {
+    readonly projects: CodingWorkbenchNativeJiraNames;
+    readonly issueTypes: CodingWorkbenchNativeJiraNames;
+    readonly fields: CodingWorkbenchNativeJiraNames;
+  };
+}
+
+export const CODING_WORKBENCH_NATIVE_JIRA_REVIEW_MAX_INPUT_CHARS = 16_384;
+export const CODING_WORKBENCH_NATIVE_JIRA_REVIEW_MAX_NAMES = 64;
 
 export const CODING_WORKBENCH_NATIVE_ACTION_REVIEW_MAX_RESOURCES = 64;
 export const CODING_WORKBENCH_NATIVE_ACTION_REVIEW_RESOURCE_MAX_CHARS = 2_048;
@@ -174,20 +198,11 @@ function validateNativeActionReview(pending: Record<string, unknown>, errors: st
     errors.push("nativeAction must be an object");
     return;
   }
-  errors.push(...exactKeys(value, ["permission", "resources"], "nativeAction"));
+  errors.push(...exactKeys(value, ["permission", "resources", "jira"], "nativeAction"));
+  if (value.jira !== undefined) validateNativeJiraReview(value.jira, errors);
   if (!isMcpToolActionName(value.permission))
     validateSafeId(value.permission, "nativeAction.permission", errors, 64);
-  if (
-    !Array.isArray(value.resources) ||
-    value.resources.length > CODING_WORKBENCH_NATIVE_ACTION_REVIEW_MAX_RESOURCES ||
-    !value.resources.every((resource) =>
-      validateUntrustedDisplayText(
-        resource,
-        CODING_WORKBENCH_NATIVE_ACTION_REVIEW_RESOURCE_MAX_CHARS,
-        { minChars: 0 },
-      ),
-    )
-  )
+  if (!validNativeResources(value.resources))
     errors.push("nativeAction.resources must be a bounded array of display text");
   if (pending.draftDelivery !== undefined || pending.verifiedCommit !== undefined)
     errors.push("a native action review cannot carry delivery or commit authority");
@@ -197,6 +212,59 @@ function validateNativeActionReview(pending: Record<string, unknown>, errors: st
   }
   // Edit asks also carry their contained paths; other native actions carry none.
   if (pending.paths.length > 0) validateReviewPaths(pending.paths, errors);
+}
+
+function validNativeResources(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= CODING_WORKBENCH_NATIVE_ACTION_REVIEW_MAX_RESOURCES &&
+    value.every((resource) =>
+      validateUntrustedDisplayText(
+        resource,
+        CODING_WORKBENCH_NATIVE_ACTION_REVIEW_RESOURCE_MAX_CHARS,
+        { minChars: 0 },
+      ),
+    )
+  );
+}
+
+function validateNativeJiraReview(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("nativeAction.jira must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["tool", "input", "names"], "nativeAction.jira"));
+  if (!validateUntrustedDisplayText(value.tool, 128))
+    errors.push("nativeAction.jira.tool must be display text");
+  if (
+    !isRecord(value.input) ||
+    JSON.stringify(value.input).length > CODING_WORKBENCH_NATIVE_JIRA_REVIEW_MAX_INPUT_CHARS
+  )
+    errors.push("nativeAction.jira.input must be a bounded JSON object");
+  if (!isRecord(value.names)) {
+    errors.push("nativeAction.jira.names must be an object");
+    return;
+  }
+  errors.push(
+    ...exactKeys(value.names, ["projects", "issueTypes", "fields"], "nativeAction.jira.names"),
+  );
+  for (const family of ["projects", "issueTypes", "fields"] as const)
+    if (!validNativeJiraNames(value.names[family]))
+      errors.push(`nativeAction.jira.names.${family} must be bounded [id, name] pairs`);
+}
+
+function validNativeJiraNames(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= CODING_WORKBENCH_NATIVE_JIRA_REVIEW_MAX_NAMES &&
+    value.every(
+      (entry) =>
+        Array.isArray(entry) &&
+        entry.length === 2 &&
+        validateUntrustedDisplayText(entry[0], 128) &&
+        validateUntrustedDisplayText(entry[1], 256),
+    )
+  );
 }
 
 function validateCommitReview(pending: Record<string, unknown>, errors: string[]): void {

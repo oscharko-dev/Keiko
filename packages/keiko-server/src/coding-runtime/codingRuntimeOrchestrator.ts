@@ -11,6 +11,8 @@ import type {
   CodingWorkbenchMcpAuthorizationState,
   CodingWorkbenchMcpServer,
   CodingWorkbenchMode,
+  CodingWorkbenchRuntimeOrigin,
+  CodingWorkbenchRuntimeVersion,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
@@ -35,6 +37,7 @@ import {
 import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import {
+  CODING_WORKBENCH_RUNTIME_ORIGINS,
   DEFAULT_CODING_WORKBENCH_AGENT,
   isCodingWorkbenchBuiltInAgent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -338,6 +341,16 @@ const CODING_RUNTIME_RUN_STARTED_OPERATION = defineActivityLogOperation({
       values: ["build", "plan", "custom"],
     },
     modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // Which runtime ran (#4359): the version the verified runtime metadata names and where it came
+    // from. Absent when the server could not name the runtime; never a guess.
+    opencodeVersion: { type: "string", dataClass: "safe-version", required: false, maxLength: 64 },
+    runtimeOrigin: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      // Literal by the registry's rule; a test pins it to CODING_WORKBENCH_RUNTIME_ORIGINS.
+      values: ["portable-release", "npm-runtime-package", "dev-checkout"],
+    },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -1399,6 +1412,24 @@ function runIdentityLogFields(identity: RuntimeRunIdentity | undefined): {
   };
 }
 
+// #4359: the version the runtime's metadata reports, bounded to a version's own shape (digits and
+// dots, an optional pre-release or build suffix). The start line is built on the run's start path, so
+// a value the registry would refuse (a space, a URL) must never reach it: both fields are omitted.
+const RUNTIME_ORIGINS: ReadonlySet<string> = new Set(CODING_WORKBENCH_RUNTIME_ORIGINS);
+const RUNTIME_VERSION_SHAPE = /^\d{1,9}(?:\.\d{1,9}){1,3}(?:[-+][0-9A-Za-z.+-]{1,32})?$/u;
+
+function runtimeVersionLogFields(runtimeVersion: CodingWorkbenchRuntimeVersion | undefined): {
+  readonly opencodeVersion?: string;
+  readonly runtimeOrigin?: CodingWorkbenchRuntimeOrigin;
+} {
+  if (runtimeVersion === undefined) return {};
+  const { opencode, origin } = runtimeVersion;
+  const shaped = opencode.length <= 64 && RUNTIME_VERSION_SHAPE.test(opencode);
+  return shaped && RUNTIME_ORIGINS.has(origin)
+    ? { opencodeVersion: opencode, runtimeOrigin: origin }
+    : {};
+}
+
 function recordRuntimeRunStarted(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
@@ -1406,6 +1437,7 @@ function recordRuntimeRunStarted(
   predecessorSelectionReason: PredecessorSelectionReason,
   taskIntent: string,
   identity?: RuntimeRunIdentity,
+  runtimeVersion?: CodingWorkbenchRuntimeVersion,
 ): void {
   activityLog?.write(
     activityLogEvent(
@@ -1426,6 +1458,7 @@ function recordRuntimeRunStarted(
           ? {}
           : { predecessorRunId: snapshot.predecessorRunId }),
         ...runIdentityLogFields(identity),
+        ...runtimeVersionLogFields(runtimeVersion),
       },
     ),
   );
@@ -4207,6 +4240,7 @@ export class CodingRuntimeOrchestrator {
       selection.reason,
       taskIntent,
       this.runIdentity,
+      this.deps.runtimeVersion,
     );
   }
 

@@ -1,5 +1,6 @@
 // `node:child_process` is mocked for the whole file, so nothing here can start the real `security`
 // even when the guard under test is broken: the failing state of this proof touches no keychain.
+import { nullSecurityLogSink } from "./log-port.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectActivityLogProof,
@@ -23,7 +24,7 @@ const {
 const { createKeychainCommandRunner, createKeychainVaultKeyAccess } =
   await import("./secret-vault.js");
 
-const DARWIN = { platform: "darwin" as const };
+const DARWIN = { platform: "darwin" as const, sink: nullSecurityLogSink() };
 
 beforeEach(() => {
   spawnMock.mockClear();
@@ -135,7 +136,10 @@ describe("the vault's own keychain runner in a test process", () => {
       });
       expect(access()).toBeUndefined();
       expect(
-        readMacosKeychainSecret("svc", "acct", { ...DARWIN, env: { KEIKO_OS_KEYCHAIN: "off" } }),
+        readMacosKeychainSecret("svc", "acct", {
+          ...DARWIN,
+          env: { KEIKO_OS_KEYCHAIN: "off" },
+        }),
       ).toEqual({ kind: "unavailable" });
     } finally {
       platform.mockRestore();

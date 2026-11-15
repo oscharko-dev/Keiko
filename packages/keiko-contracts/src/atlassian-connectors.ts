@@ -403,6 +403,12 @@ export interface JiraLivePodView {
   readonly verificationRevision: number;
   readonly verificationInProgress: boolean;
   readonly verificationStatus: JiraLivePodMetadata["verificationStatus"];
+  /**
+   * Closed state only, never the facts: present as `missing` when the Pod verified before
+   * compatibility facts were retained. An explicit re-verification obtains them; it grants no
+   * permission.
+   */
+  readonly compatibilityFacts?: "missing";
   readonly capabilities: readonly ("live-read" | "live-write")[];
 }
 
@@ -456,6 +462,9 @@ export const ATLASSIAN_CONNECTOR_AUTH_SCHEMES: readonly AtlassianConnectorAuthSc
 export type AtlassianConnectionVerificationStatus =
   | "ok"
   | "auth-failed"
+  // A 401 that Jira itself did not author (a sign-in proxy, a captcha check): the token is neither
+  // confirmed nor rejected, so nothing is invalidated and the Pod keeps its previous state.
+  | "auth-unverified"
   | "forbidden"
   | "unreachable"
   | "timeout"
@@ -468,6 +477,7 @@ export const ATLASSIAN_CONNECTION_VERIFICATION_STATUSES: readonly AtlassianConne
   Object.freeze([
     "ok",
     "auth-failed",
+    "auth-unverified",
     "forbidden",
     "unreachable",
     "timeout",
@@ -671,6 +681,8 @@ export const ATLASSIAN_SYNC_TERMINAL_STATUSES: readonly AtlassianSyncTerminalSta
 // codes; a raw upstream error message, response body, or URL never enters the contract.
 export type AtlassianSyncFailureReason =
   | "auth-failed"
+  // A 401 whose same-generation identity check could not settle: nothing says the token failed.
+  | "auth-unverified"
   | "permission-denied"
   | "rate-limited"
   | "timeout"
@@ -682,6 +694,7 @@ export type AtlassianSyncFailureReason =
 
 export const ATLASSIAN_SYNC_FAILURE_REASONS: readonly AtlassianSyncFailureReason[] = Object.freeze([
   "auth-failed",
+  "auth-unverified",
   "permission-denied",
   "rate-limited",
   "timeout",
@@ -1345,6 +1358,9 @@ export function decideAtlassianConnectorAction(
 // asserts a Jira permission failure, network outage, or absence of an earlier native effect.
 export type AtlassianConnectorWriteFailureReason =
   | "auth-failed"
+  // A 401 whose same-generation identity check could not settle (timeout, throttling, a server
+  // error, cancellation or a changed credential): the request is refused, the credential is kept.
+  | "auth-unverified"
   | "permission-denied"
   | "effect-denied"
   | "cancelled"
@@ -1361,6 +1377,7 @@ export type AtlassianConnectorWriteFailureReason =
 export const ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS: readonly AtlassianConnectorWriteFailureReason[] =
   Object.freeze([
     "auth-failed",
+    "auth-unverified",
     "permission-denied",
     "effect-denied",
     "cancelled",
@@ -2007,6 +2024,17 @@ export {
   isJiraAttachmentName,
   isJiraAttachmentPreview,
   type JiraAttachmentPreview,
+  JIRA_APPROVAL_PROJECTS_MAX,
+  isJiraApprovalProject,
+  isJiraApprovalProjectName,
+  isJiraApprovalProjects,
+  isJiraApprovalNamedId,
+  isJiraApprovalNamedIds,
+  JIRA_APPROVAL_NAMES_MAX,
+  type JiraApprovalNamedId,
+  isJiraApprovalTransition,
+  type JiraApprovalProject,
+  type JiraApprovalTransition,
   JIRA_DRAFT_RESULT_ROWS_MAX,
   JIRA_DRAFT_STAGE_BYTES_MAX,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
@@ -2014,6 +2042,8 @@ export {
   JIRA_DRAFT_DIGEST_PATTERN,
   JIRA_DRAFT_REFUSALS,
   type JiraDraftRefusalReason,
+  JIRA_DRAFT_PROBLEMS,
+  type JiraDraftProblemCode,
   JIRA_DRAFT_ITEM_STATES,
   JIRA_DRAFT_REF_PATTERN,
   isJiraDraftRef,
@@ -2070,6 +2100,7 @@ export {
   type JiraMutationReceipt,
   type JiraMutationAttempt,
   JIRA_FIELD_VALIDATION_FAILURES,
+  JIRA_RESULT_GUIDANCE_MAX_CHARS,
   JIRA_MUTATION_DETAIL_LIMITS,
   sanitizeJiraMutationFailureDetail,
   JIRA_MUTATION_LINKS_MAX,
@@ -2085,6 +2116,7 @@ export {
   JIRA_ISSUE_TEMPLATE_LIMITS,
   JIRA_ISSUE_TEMPLATE_MARKER,
   JIRA_ISSUE_TEMPLATE_VERSION,
+  JIRA_TEMPLATE_GATE_FACTS,
   JIRA_TEMPLATE_PARSE_ERROR_CODES,
   JIRA_TEMPLATE_RULE_IDS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
@@ -2094,17 +2126,48 @@ export {
   isJiraIssueTemplateDocument,
   mentionsJiraIssueTemplateMarker,
   jiraIssueTemplateLabel,
+  JIRA_BINDING_UNRESOLVED,
+  jiraTemplateBindingDigest,
+  jiraTemplateBoundFieldId,
+  jiraTemplateBoundStatusId,
+  jiraTemplateTransitionTargets,
+  jiraTemplateForInstance,
+  jiraTemplateGovernsWrites,
+  jiraTemplateIssueTypeMatches,
+  jiraTemplatesShareIssueType,
+  jiraTemplateParentEntryMatches,
+  jiraTemplateParentTypeMatches,
+  bindJiraIssueTemplateText,
   jiraTemplatePatternIssue,
   normalizeJiraSectionHeading,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
   type JiraIssueTemplateParseResult,
   type JiraTemplateActivation,
+  type JiraTemplateBinding,
+  type JiraTemplateBindingIds,
+  type JiraTemplateGateFact,
   type JiraTemplateParseError,
   type JiraTemplateParseErrorCode,
   type JiraTemplateRuleId,
   type JiraTemplateViolation,
 } from "./jira-issue-template.js";
+export {
+  JIRA_ATTACHMENTS_AVAILABLE,
+  JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
+  JIRA_ATTACHMENT_OPERATIONS,
+  JIRA_EXISTING_LINKS_MISSING_MESSAGE,
+  jiraOperationInReleaseScope,
+  isJiraReleaseScopeRefusal,
+  type JiraAttachmentOperation,
+} from "./jira-release-scope.js";
+export {
+  JIRA_NOT_GOVERNED_REASONS,
+  JIRA_TEMPLATE_GOVERNANCE,
+  jiraTemplateGovernanceOf,
+  type JiraNotGovernedReason,
+  type JiraTemplateGovernance,
+} from "./jira-template-governance.js";
 export {
   JIRA_HEADING_LINE_CHARS_MAX,
   readJiraDescriptionSections,

@@ -292,3 +292,40 @@ describe("exact Jira operation facts through existing log owners", () => {
     expect(sink.events).toEqual([]);
   });
 });
+
+// #4354: a deletion the read-back confirmed reaches the log through the registered per-operation
+// line. A refused attachment is not attributable there: its action type is shared (see
+// AMBIGUOUS_ACTION_TOOLS), so its evidence is the refusal on the executor path.
+describe("the line of a confirmed issue deletion (#4354)", () => {
+  const settle = (tool: "jira.delete-issue", outcome: "succeeded" | "failed"): ServerLogEvent[] => {
+    const sink = createBufferedServerLogSink();
+    const actionType = JIRA_MANAGED_ACTION_TYPES[tool];
+    recordAtlassianActionOutcome(
+      { activityLog: sink },
+      {
+        schemaVersion: "1",
+        activityId: "private-activity",
+        occurredAt: 0,
+        connectorId: "private-connector",
+        provider: "jira",
+        actionType,
+        actionClass: ATLASSIAN_CONNECTOR_ACTION_CLASS[actionType],
+        disposition: "allowed",
+        outcome,
+        correlationId: "operation-proof",
+        durationMs: 1,
+      },
+      "governed-assist",
+    );
+    return sink.events;
+  };
+
+  it("records an issue deletion the read-back confirmed as a succeeded issues operation", () => {
+    const events = settle("jira.delete-issue", "succeeded");
+    expect(proveFact(events)).toMatchObject({
+      operation: "jira.delete-issue",
+      stage: "action-outcome",
+      outcome: "succeeded",
+    });
+  });
+});

@@ -279,6 +279,164 @@ describe("ordinary Chat structured tool transcript", () => {
     }).toThrow("Invalid tool consent");
   });
 
+  it("stores the closed claim marker once, reads it back and refuses anything else (#4355)", () => {
+    const { store, id, logs } = fixture();
+    expect(store.findMessageById(id)?.toolTranscript?.claimNotice).toBeUndefined();
+    store.updateChatToolTranscript(
+      id,
+      { kind: "claim-notice", notice: "no-jira-create" },
+      "notice",
+    );
+    store.updateChatToolTranscript(
+      id,
+      { kind: "claim-notice", notice: "no-jira-create" },
+      "notice",
+    );
+    expect(store.findMessageById(id)?.toolTranscript?.claimNotice).toBe("no-jira-create");
+    expect(() => {
+      store.updateChatToolTranscript(
+        id,
+        { kind: "claim-notice", notice: "Note from Keiko" as "no-jira-create" },
+        "notice",
+      );
+    }).toThrow("Invalid claim notice");
+    // The closed value, and nothing else, reaches the registered line.
+    const event = logs.events.filter((entry) => entry.op === "chat.tool-transcript.updated").at(-1);
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-transcript.updated.line", line);
+    expect(line).toContain("no-jira-create");
+    expect(line).toContain("claim-notice");
+  });
+
+  it("clears the marker when the final answer no longer claims, and never hands it to another message (#4355)", () => {
+    const { store, id, chatId, logs } = fixture();
+    store.updateChatToolTranscript(id, { kind: "claim-notice", notice: "no-jira-create" }, "n");
+    store.updateChatToolTranscript(id, { kind: "claim-notice", notice: undefined }, "n");
+    expect(store.findMessageById(id)?.toolTranscript?.claimNotice).toBeUndefined();
+    // The cleared state is a line without the closed value: absent means cleared.
+    const cleared = logs.events
+      .filter((entry) => entry.op === "chat.tool-transcript.updated")
+      .at(-1);
+    expect(formatActivityLogProofLine(cleared ?? {})).not.toContain("no-jira-create");
+    store.updateChatToolTranscript(
+      id,
+      { kind: "claim-notice", notice: "tool-call-not-executed" },
+      "n",
+    );
+    const other = store.createMessage({
+      chatId,
+      role: "user",
+      content: "Another turn",
+      timestamp: 2000,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(store.findMessageById(other.id)?.toolTranscript?.claimNotice).toBeUndefined();
+    expect(store.findMessageById(id)?.toolTranscript?.claimNotice).toBe("tool-call-not-executed");
+  });
+
+  const END = {
+    reason: "deadline",
+    answer: "64:0123abcd",
+    completed: [{ tool: "jira_create", key: "REQ-1" }],
+    unconfirmed: [{ tool: "jira_draft", item: 2, state: "uncertain" }],
+    unsettled: [],
+    notDone: [],
+    moreCount: 0,
+    readCount: 3,
+    refusedCount: 1,
+  } as const;
+
+  it("stores the turn ending as closed facts, reads it back and refuses anything else (#4355)", () => {
+    const { store, id, logs } = fixture();
+    expect(store.findMessageById(id)?.toolTranscript?.turnEnd).toBeUndefined();
+    store.updateChatToolTranscript(id, { kind: "turn-end", end: END }, "ending");
+    expect(store.findMessageById(id)?.toolTranscript?.turnEnd).toEqual(END);
+    for (const bad of [
+      { ...END, reason: "Jira is down" },
+      { ...END, extra: 1 },
+      { ...END, completed: [{ tool: "jira_create", body: "text" }] },
+      { ...END, unconfirmed: [{ tool: "jira_draft", state: "Created" }] },
+      { ...END, readCount: -1 },
+      { ...END, moreCount: 1.5 },
+    ]) {
+      expect(() => {
+        store.updateChatToolTranscript(
+          id,
+          { kind: "turn-end", end: bad as unknown as typeof END },
+          "ending",
+        );
+      }).toThrow("Invalid turn ending");
+    }
+    expect(store.findMessageById(id)?.toolTranscript?.turnEnd).toEqual(END);
+    // Only the closed reason reaches the registered line, never a tool name or a key.
+    const event = logs.events.filter((entry) => entry.op === "chat.tool-transcript.updated").at(-1);
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-transcript.updated.line", line);
+    expect(line).toContain("turn-end");
+    expect(line).toContain("deadline");
+    expect(line).not.toContain("REQ-1");
+    expect(line).not.toContain("jira_create");
+  });
+
+  // An invalid optional marker must never cost the conversation its tool history: it is dropped on
+  // read (the stored English answer is what the Chat shows) and recorded once, body-free.
+  it.each([
+    ["turnEnd", { reason: "Jira is down" }, "turn-end"],
+    ["turnEnd", "not an object", "turn-end"],
+    ["claimNotice", "Note from Keiko", "claim-notice"],
+  ] as const)("drops an invalid %s on read and keeps the exchanges (#4355)", (key, bad, name) => {
+    const { store, db, id, logs } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call }, "keep");
+    const row = db.prepare("SELECT tool_transcript_json FROM chat_messages WHERE id = ?").get(id);
+    const stored = JSON.parse(String(row?.tool_transcript_json)) as Record<string, unknown>;
+    stored[key] = bad;
+    db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(
+      JSON.stringify(stored),
+      id,
+    );
+    const read = store.findMessageById(id)?.toolTranscript;
+    expect(read?.exchanges.map((exchange) => exchange.call.id)).toEqual([call.id]);
+    expect(read?.[key]).toBeUndefined();
+    // Every read drops it afresh, and the evidence line is written once per stored text.
+    expect(store.findMessageById(id)?.toolTranscript?.[key]).toBeUndefined();
+    const dropped = logs.events.filter(
+      (entry) => entry.op === "chat.tool-transcript.marker-omitted",
+    );
+    expect(dropped).toHaveLength(1);
+    const line = formatActivityLogProofLine(dropped[0] ?? {});
+    expectActivityLogProof("chat.tool-transcript.marker-omitted.line", line);
+    expect(line).toContain(name);
+    expect(line).not.toContain("Jira is down");
+    // The conversation goes on: a valid ending can be stored over the dropped one.
+    store.updateChatToolTranscript(id, { kind: "turn-end", end: END }, "again");
+    expect(store.findMessageById(id)?.toolTranscript?.turnEnd).toEqual(END);
+  });
+
+  it("clears the ending when a later final answer is not one, and never hands it to another message (#4355)", () => {
+    const { store, id, chatId } = fixture();
+    store.updateChatToolTranscript(id, { kind: "turn-end", end: END }, "n");
+    store.updateChatToolTranscript(id, { kind: "turn-end", end: undefined }, "n");
+    expect(store.findMessageById(id)?.toolTranscript?.turnEnd).toBeUndefined();
+    store.updateChatToolTranscript(id, { kind: "turn-end", end: END }, "n");
+    const other = store.createMessage({
+      chatId,
+      role: "user",
+      content: "Another turn",
+      timestamp: 2000,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(store.findMessageById(other.id)?.toolTranscript?.turnEnd).toBeUndefined();
+    expect(store.findMessageById(id)?.toolTranscript?.turnEnd).toEqual(END);
+  });
+
   it("records only identity digests and counts through the registered activity projection", () => {
     const { store, id, logs } = fixture();
     store.updateChatToolTranscript(id, { kind: "started", call }, "transcript-proof");

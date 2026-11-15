@@ -7,6 +7,7 @@ import {
   compileToolProjection,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
   opencodeRegistrationSet,
+  ToolCatalogError,
 } from "@oscharko-dev/keiko-tool-catalog";
 import {
   CHANGESET_EDIT_ARGUMENT_LIMITS,
@@ -15,6 +16,7 @@ import {
 import {
   gatewayCatalogAdvertisement,
   openCodeGatewayCatalogAdvertisement,
+  realiasedGatewayCatalogAdvertisement,
 } from "./__fixtures__/toolCatalog.js";
 import { describe, expect, it, vi } from "vitest";
 import { createInitialToolCatalog, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
@@ -542,6 +544,29 @@ describe("gateway bridge trust and compatibility boundaries", () => {
     });
   });
 
+  it("records how many rules the correction stated, as a count and a truncation flag, never their text", async () => {
+    const log: ModelGatewayLogEvent[] = [];
+    await expect(
+      adapter(() => Promise.resolve(response({ path: 5 })), log).call(
+        { ...request(), toolCatalog: advertisement() },
+        CONFIG,
+      ),
+    ).rejects.toMatchObject({ status: "invalid" });
+    const rejected = log.filter((event) => event.op === "gateway.tool-catalog.rejected").at(-1);
+    expect(rejected?.extra).toMatchObject({
+      catalogReason: "invalid-shape",
+      invalidPaths: ["path"],
+      statedExpectationCount: 1,
+      expectationsTruncated: false,
+    });
+    const persisted = expectActivityLogProof(
+      "gateway.tool-catalog.rejected.emitted-line",
+      formatActivityLogProofLine(rejected ?? {}),
+    );
+    expect(persisted).toMatchObject({ statedExpectationCount: 1, expectationsTruncated: false });
+    // Counts and a closed flag only: not the rule's words and not the rejected value.
+    expect(JSON.stringify(persisted)).not.toMatch(/must be|string/u);
+  });
   it("retains reported usage when invalid tool arguments reject an HTTP 200 response", async () => {
     const subject = adapter(() =>
       Promise.resolve(
@@ -688,6 +713,131 @@ describe("provider-facing alternatives schema (customer test 2026-11-10)", () =>
     });
     expect(tool?.description).toContain("Provide exactly one of these argument sets: key; or id.");
     expect(descriptor.inputSchema).toHaveProperty("oneOf");
+  });
+});
+
+// The provider sees a plain object schema; what Keiko accepts stays what the catalog's own schema
+// says. Each constraint the advertisement dropped or folded is still enforced on the call.
+describe("provider-neutral projection keeps Keiko's own validation exactly as strict", () => {
+  function bridgeFor(
+    inputSchema: Record<string, unknown>,
+  ): ReturnType<typeof createGatewayToolCatalogBridge> {
+    const initial = createInitialToolCatalog();
+    const original = initial.descriptors[0];
+    if (original === undefined) throw new TypeError("Missing fixture descriptor");
+    const declaration = Object.fromEntries(
+      Object.entries(original).filter(([key]) => key !== "descriptorDigest"),
+    );
+    const descriptor = createToolDescriptor({
+      ...declaration,
+      inputSchema: { $schema: "https://json-schema.org/draft/2020-12/schema", ...inputSchema },
+    });
+    const catalog = createToolCatalog(
+      {
+        descriptors: [descriptor],
+        profiles: [
+          {
+            profile: { id: "projection-fixture", version: 1 },
+            toolRefs: [{ toolRef: descriptor.toolRef, alias: "projected" }],
+            nativeExtensions: [],
+            adapterDialect: { id: "gateway-json-schema", version: 1 },
+            adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
+            compatibility: [],
+          },
+        ],
+        compatibility: [],
+      },
+      { referenceTimeMs: NOW },
+    );
+    const projection = compileToolProjection(catalog, { id: "projection-fixture", version: 1 });
+    const offered = {
+      ...advertisement().offered,
+      binding: {
+        ...advertisement().offered.binding,
+        catalogRevision: catalog.catalogRevision,
+        profile: projection.profile,
+        projectionDigest: projection.projectionDigest,
+      },
+      toolRefs: [descriptor.toolRef],
+    };
+    return createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: { kind: "bound", catalog, projection, offered } },
+      (): number => NOW,
+    );
+  }
+
+  function call(args: Record<string, unknown>): NormalizedToolCall {
+    return { id: "call-1", name: "projected", arguments: args };
+  }
+
+  const ROOT_ALLOF = {
+    type: "object",
+    properties: {
+      key: { type: "string", maxLength: 64 },
+      expectedValueNodes: { type: "array", maxItems: 4, items: { type: "string", maxLength: 8 } },
+      expectAbsent: { type: "boolean" },
+    },
+    required: ["key"],
+    additionalProperties: false,
+    allOf: [{ oneOf: [{ required: ["expectedValueNodes"] }, { required: ["expectAbsent"] }] }],
+  };
+
+  it("still refuses the call an advertised-away root allOf/oneOf excluded", () => {
+    const bridge = bridgeFor(ROOT_ALLOF);
+    const [tool] = bridge.tools;
+    for (const key of ["allOf", "oneOf"]) expect(tool?.parameters).not.toHaveProperty(key);
+    // The model is told the exclusive sets ...
+    expect(tool?.description).toContain("expectedValueNodes; or expectAbsent");
+    // ... and the advertised schema alone would accept all of these, so the catalog must refuse them.
+    expect(bridge.bind(call({ key: "k", expectAbsent: true }))).toMatchObject({
+      invocation: { kind: "bound" },
+    });
+    expect(() => bridge.bind(call({ key: "k" }))).toThrow(GatewayToolCatalogError);
+    expect(() =>
+      bridge.bind(call({ key: "k", expectAbsent: true, expectedValueNodes: ["x"] })),
+    ).toThrow(GatewayToolCatalogError);
+  });
+
+  it("still refuses the combination a dropped root not forbade", () => {
+    const bridge = bridgeFor({
+      type: "object",
+      properties: {
+        key: { type: "string", maxLength: 64 },
+        startAt: { type: "integer", minimum: 0 },
+        maxResults: { type: "integer", minimum: 1 },
+      },
+      additionalProperties: false,
+      not: { anyOf: [{ required: ["key", "startAt"] }, { required: ["key", "maxResults"] }] },
+    });
+    const [tool] = bridge.tools;
+    expect(tool?.parameters).not.toHaveProperty("not");
+    expect(tool?.description).toContain("key + startAt; or key + maxResults");
+    expect(bridge.bind(call({ key: "k" }))).toMatchObject({ invocation: { kind: "bound" } });
+    expect(bridge.bind(call({ startAt: 0, maxResults: 5 }))).toMatchObject({
+      invocation: { kind: "bound" },
+    });
+    expect(() => bridge.bind(call({ key: "k", startAt: 0 }))).toThrow(GatewayToolCatalogError);
+    expect(() => bridge.bind(call({ key: "k", maxResults: 5 }))).toThrow(GatewayToolCatalogError);
+  });
+
+  it("still enforces what a folded allOf member said", () => {
+    const folded = bridgeFor({
+      type: "object",
+      properties: { key: { type: "string", maxLength: 64 } },
+      required: ["key"],
+      allOf: [{ properties: { count: { type: "integer", minimum: 1 } }, required: ["count"] }],
+    });
+    // The member's property and requirement are part of what the model is shown ...
+    expect(folded.tools[0]?.parameters).toMatchObject({
+      properties: { key: { type: "string" }, count: { type: "integer" } },
+      required: ["key", "count"],
+    });
+    // ... and still what Keiko enforces.
+    expect(folded.bind(call({ key: "k", count: 2 }))).toMatchObject({
+      invocation: { kind: "bound" },
+    });
+    expect(() => folded.bind(call({ key: "k", count: "two" }))).toThrow(GatewayToolCatalogError);
+    expect(() => folded.bind(call({ key: "k" }))).toThrow(GatewayToolCatalogError);
   });
 });
 
@@ -1776,6 +1926,165 @@ describe("file content in a model tool call", () => {
         }),
       ]),
     ).toThrow(GatewayToolCatalogError);
+  });
+});
+
+describe("a name the round did not offer (#4357)", () => {
+  const offered = (aliases?: readonly string[]): GatewayToolCatalogAdvertisement =>
+    gatewayCatalogAdvertisement(NOW, aliases);
+  const bridgeFor = (
+    advertised: GatewayToolCatalogAdvertisement,
+    log: ModelGatewayLogEvent[] = [],
+  ): ReturnType<typeof createGatewayToolCatalogBridge> =>
+    createGatewayToolCatalogBridge({ ...request(), toolCatalog: advertised }, (): number => NOW, {
+      write: (event): void => {
+        log.push(event);
+      },
+    });
+  const rejection = (
+    call: { name: string; arguments: Record<string, unknown> },
+    log: ModelGatewayLogEvent[] = [],
+  ): unknown => {
+    try {
+      bridgeFor(offered(), log).bind({ id: "call-1", ...call });
+    } catch (error) {
+      return error;
+    }
+    throw new TypeError("Expected a rejection");
+  };
+
+  it("binds the exact offered alias as before, without a resolution mark", () => {
+    const log: ModelGatewayLogEvent[] = [];
+    const bound = bridgeFor(offered(), log).bind({
+      id: "call-1",
+      name: "read_file",
+      arguments: { path: "src/example.ts" },
+    });
+    expect(bound.name).toBe("read_file");
+    const line = log.find((event) => event.op === "gateway.tool-catalog.call-bound");
+    expect(line?.extra).not.toHaveProperty("nameResolution");
+  });
+
+  it("binds a name that equals exactly one offered alias after the one fold, and records it", () => {
+    for (const spelled of ["read.file", "read-file"]) {
+      const log: ModelGatewayLogEvent[] = [];
+      const bound = bridgeFor(offered(), log).bind({
+        id: "call-1",
+        name: spelled,
+        arguments: { path: "src/example.ts" },
+      });
+      // The same tool under its offered alias; everything after it (schema, authority, budget) is
+      // the call the model would have made with the exact name.
+      expect(bound.name).toBe("read_file");
+      expect(bound.invocation?.arguments).toEqual({ path: "src/example.ts" });
+      const line = log.find((event) => event.op === "gateway.tool-catalog.call-bound");
+      expect(line?.extra).toMatchObject({ toolCount: 1, nameResolution: "folded" });
+      const persisted = expectActivityLogProof(
+        "gateway.tool-catalog.call-bound.emitted-line",
+        formatActivityLogProofLine(line ?? {}),
+      );
+      expect(persisted).toMatchObject({ nameResolution: "folded" });
+    }
+  });
+
+  it("validates a folded call's arguments against the same schema, under the offered tool's identity", () => {
+    const log: ModelGatewayLogEvent[] = [];
+    expect(() =>
+      bridgeFor(offered(), log).bind({ id: "call-1", name: "read.file", arguments: { path: 5 } }),
+    ).toThrow(GatewayToolCatalogError);
+    const rejected = log.find((event) => event.op === "gateway.tool-catalog.rejected");
+    expect(rejected?.extra).toMatchObject({
+      catalogReason: "invalid-shape",
+      canonicalToolId: "keiko.file.read",
+    });
+    expect(rejected?.extra).not.toHaveProperty("unofferedNameClass");
+  });
+
+  it("refuses a name nothing matches: class unknown, attribution without its text, a true sentence", () => {
+    const log: ModelGatewayLogEvent[] = [];
+    const error = rejection({ name: "frobnicate", arguments: { secret: "PRIVATE" } }, log);
+    expect(error).toBeInstanceOf(GatewayToolCatalogError);
+    if (!(error instanceof GatewayToolCatalogError)) throw new TypeError("Expected catalog error");
+    expect(error.unofferedName).toBe("unknown");
+    const rejected = log.find((event) => event.op === "gateway.tool-catalog.rejected");
+    expect(rejected?.extra).toMatchObject({
+      catalogReason: "invalid-identity",
+      unofferedNameClass: "unknown",
+      calledNameLength: 10,
+      calledNameDigest: sha256Hex("frobnicate").slice(0, 16),
+    });
+    expect(rejected?.extra).not.toHaveProperty("canonicalToolId");
+    const persisted = expectActivityLogProof(
+      "gateway.tool-catalog.rejected.emitted-line",
+      formatActivityLogProofLine(rejected ?? {}),
+    );
+    expect(persisted).toMatchObject({ unofferedNameClass: "unknown", calledNameLength: 10 });
+    expect(JSON.stringify(persisted)).not.toMatch(/frobnicate|PRIVATE/u);
+    const correction = error.correction() ?? "";
+    expect(correction).toContain("is not offered, so nothing ran");
+    expect(correction).toContain("if the action you need is not offered, select it first");
+    expect(correction).toContain("read_file");
+    expect(correction).not.toContain("PRIVATE");
+    expect(new TextEncoder().encode(correction).byteLength).toBeLessThanOrEqual(8192);
+  });
+
+  it("refuses the name of a tool the catalog has but this round did not offer: no widening", () => {
+    const projected = compileToolProjection(createInitialToolCatalog(), {
+      id: "legacy-native",
+      version: 1,
+    }).tools.map((tool) => tool.alias);
+    const hidden = projected.find((alias) => alias !== "read_file" && alias.includes("_"));
+    if (hidden === undefined) throw new TypeError("Expected a second tool alias");
+    for (const spelled of [hidden, hidden.replaceAll("_", ".")]) {
+      const log: ModelGatewayLogEvent[] = [];
+      let error: unknown;
+      try {
+        bridgeFor(offered(["read_file"]), log).bind({ id: "call-1", name: spelled, arguments: {} });
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(GatewayToolCatalogError);
+      if (!(error instanceof GatewayToolCatalogError)) throw new TypeError("Expected error");
+      expect(error.unofferedName).toBe("known-not-offered");
+      const rejected = log.find((event) => event.op === "gateway.tool-catalog.rejected");
+      expect(rejected?.extra).toMatchObject({
+        catalogReason: "invalid-identity",
+        unofferedNameClass: "known-not-offered",
+      });
+    }
+  });
+
+  it("cannot be asked to choose between two offered aliases of one spelling family: a catalog offers none with a dot or hyphen", () => {
+    // Aliases are [a-z][a-z0-9_]* (identity.ts catalogAlias), so the fold maps a dotted or hyphenated
+    // spelling onto at most one offered alias, and no mixed family (a dotted alias beside an
+    // underscore one) can be offered: composing such a catalog is refused. The ambiguous branch of
+    // resolveToolName stays as a guard, pinned on its own.
+    expect(() =>
+      realiasedGatewayCatalogAdvertisement(NOW, { read_file: "mix.tool", list_files: "mix_tool" }),
+    ).toThrow(ToolCatalogError);
+    // The offered underscore alias binds exactly, with no resolution mark, and its dotted spelling
+    // is the one bound by the fold: the exact alias and the spelling never compete.
+    const log: ModelGatewayLogEvent[] = [];
+    const bridge = bridgeFor(offered(), log);
+    expect(bridge.bind({ id: "c1", name: "read_file", arguments: { path: "a.ts" } }).name).toBe(
+      "read_file",
+    );
+    expect(bridge.bind({ id: "c2", name: "read.file", arguments: { path: "a.ts" } }).name).toBe(
+      "read_file",
+    );
+    const bound = log.filter((event) => event.op === "gateway.tool-catalog.call-bound");
+    expect(bound).toHaveLength(2);
+    expect(bound[0]?.extra).not.toHaveProperty("nameResolution");
+    expect(bound[1]?.extra).toMatchObject({ nameResolution: "folded" });
+  });
+
+  it("does not mark a refusal that is not about the name", () => {
+    const log: ModelGatewayLogEvent[] = [];
+    expect(() =>
+      bridgeFor(offered(), log).bind({ id: "call-1", name: "read_file", arguments: { path: 5 } }),
+    ).toThrow(GatewayToolCatalogError);
+    const rejected = log.find((event) => event.op === "gateway.tool-catalog.rejected");
+    expect(rejected?.extra).not.toHaveProperty("unofferedNameClass");
   });
 });
 

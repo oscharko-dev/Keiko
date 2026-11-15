@@ -3,14 +3,31 @@
 // jira.discover / jira.describe) and build the arguments from the person's words. Every truth is an
 // independent native Jira read with the lab actor's credentials, never Keiko's own answer; a read
 // that cannot see an owned object, or a list beyond the tools' first page, makes the attempt invalid.
-import { voteKey } from "./catalog-selection-objects.mjs";
-import { actorDetails, basicAuth, checked } from "./lab-client.mjs";
+import { URL } from "node:url";
+import { ownedIssue, ownedSubtask, voteKey } from "./catalog-selection-objects.mjs";
+import { UNAVAILABLE_CASES } from "./catalog-selection-unavailable.mjs";
+import {
+  actorDetails,
+  basicAuth,
+  checked,
+  labRequest,
+  labSessionConnection,
+} from "./lab-client.mjs";
 
 const TRUTH_TOKENS_MAX = 20;
 const native = (session, path, actor = "api") =>
   checked(session, "catalog-selection-truth", "GET", path, basicAuth(session, actor));
 const names = (rows, key = "name") => rows.map((row) => String(row[key]));
-const bounded = (tokens) => [...new Set(tokens)].slice(0, TRUTH_TOKENS_MAX);
+/**
+ * The distinct native tokens a correct result must carry. A truth beyond the bound is refused, never
+ * cut: an answer graded against the first twenty names would pass while omitting the rest.
+ */
+const bounded = (tokens) => {
+  const distinct = [...new Set(tokens)];
+  if (distinct.length > TRUTH_TOKENS_MAX)
+    throw new RangeError(`The native truth holds ${distinct.length} tokens, beyond the bound`);
+  return distinct;
+};
 const projectPath = (f, suffix = "") =>
   `/rest/api/2/project/${encodeURIComponent(f.project)}${suffix}`;
 const issuePath = (f, suffix = "") =>
@@ -34,6 +51,16 @@ function ownedName(rows, name, read = (row) => row.name) {
     throw new TypeError("An owned object is not visible to the api actor");
   return [name];
 }
+
+/** A list the tools return whole: a longer native list could hide a name from a correct call. */
+function wholeNames(rows) {
+  if (rows.length > Math.min(TOOL_PAGE_ROWS, TRUTH_TOKENS_MAX))
+    throw new TypeError("The native list exceeds one tool page or the truth bound");
+  return names(rows);
+}
+
+const apiName = () => actorDetails("api").name;
+const commentPath = (f) => issuePath(f, `/comment/${f.selection.commentId}`);
 
 /** Read cases whose operation is reachable only through the catalog search. */
 const DISCOVERY_READS = [
@@ -85,6 +112,18 @@ const DISCOVERY_READS = [
     prompt: () =>
       "Mit welchem Jira-Benutzerkonto bin ich gerade verbunden? Nenne den Benutzernamen.",
     truth: async (s) => [String((await native(s, "/rest/api/2/myself")).name)],
+  },
+  {
+    id: "whoami-instance",
+    tool: "jira.myself",
+    // The session read names the account and the instance just as well.
+    alternatives: ["jira.current-session"],
+    prompt: () => "Mit welchem Konto und welchem Jira bin ich verbunden?",
+    // The account as Jira reports it and the host (with its port) of the base URL the Pod was bound to.
+    truth: async (s) => [
+      String((await native(s, "/rest/api/2/myself")).name),
+      new URL(labSessionConnection(s).httpsOrigin).host,
+    ],
   },
   {
     id: "project-lead",
@@ -166,6 +205,49 @@ const DISCOVERY_READS = [
           .values ?? [],
         f.selection.sprintName,
       ),
+  },
+  {
+    id: "statuses",
+    tool: "jira.statuses",
+    alternatives: ["jira.status-page"],
+    prompt: () => "Welche Status gibt es in unserem Jira insgesamt? Nenne alle Namen.",
+    truth: async (s) => wholeNames(await native(s, "/rest/api/2/status")),
+  },
+  {
+    // The lab's own custom field: its name is the same in every Jira language, unlike a built-in.
+    id: "fields",
+    tool: "jira.fields",
+    // The create and edit field lists of the project carry the lab's custom field with its id too, so an
+    // answer read from them is correct (reviewed 2026-11-14: Gemma answered correctly 3 of 3 that way).
+    alternatives: ["jira.create-fields", "jira.edit-fields"],
+    prompt: () => 'Welche Feld-ID hat das Jira-Feld "Keiko required text"?',
+    truth: async (s) => {
+      const rows = (await native(s, "/rest/api/2/field")).filter(
+        (row) => row.name === "Keiko required text",
+      );
+      if (rows.length !== 1) throw new TypeError("The lab's custom field is not unique");
+      return [String(rows[0].id)];
+    },
+  },
+  {
+    id: "users",
+    tool: "jira.users",
+    alternatives: ["jira.user", "jira.user-directory", "jira.user-picker"],
+    prompt: () => `Suche in Jira nach dem Benutzer "${apiName()}" und nenne seinen Anzeigenamen.`,
+    truth: async (s) => {
+      const rows = await native(s, `/rest/api/2/user/search?username=${apiName()}`);
+      const row = rows.find((candidate) => candidate.name === apiName());
+      if (row === undefined) throw new TypeError("The api actor is not found by the native search");
+      return [String(row.displayName)];
+    },
+  },
+  {
+    id: "get-comment",
+    tool: "jira.get-comment",
+    alternatives: ["jira.comments"],
+    prompt: (f) =>
+      `Wie lautet der Text des Kommentars ${f.selection.commentId} am Vorgang ${f.selection.issueKey}?`,
+    truth: async (s, f) => [String((await native(s, commentPath(f))).body)],
   },
 ];
 
@@ -317,13 +399,186 @@ const WRITES = [
       return { effects: present, cleanup: present > 0 ? [removal] : [] };
     },
   },
+  {
+    id: "update-comment",
+    tool: "jira.update-comment",
+    prompt: (f, m) =>
+      `Ändere den Kommentar ${f.selection.commentId} am Vorgang ${f.selection.issueKey} so, dass er genau "${m} U" lautet.`,
+    verify: async (s, f, m) => {
+      const body = String((await native(s, commentPath(f))).body);
+      const done = body === `${m} U`;
+      return {
+        effects: done ? 1 : 0,
+        wrongValue: !done && body !== f.selection.commentBody,
+        // The comment is changed in place, which is this case's own effect, not a stray.
+        changed: [commentPath(f)],
+        cleanup: [],
+      };
+    },
+    // Restores the original text, so every round starts from the same comment.
+    restore: async (s, f) => {
+      await checked(s, "catalog-selection-fixture", "PUT", commentPath(f), basicAuth(s, "admin"), {
+        body: f.selection.commentBody,
+      });
+    },
+  },
+  {
+    // The deletion the deployment model denied in the customer test. Each attempt deletes an issue
+    // it owns alone, so the two shared owned issues stay in place for the other cases.
+    id: "delete-issue",
+    tool: "jira.delete-issue",
+    prepare: async (s, f, tag) => {
+      const key = await ownedIssue(s, f, `Auswahl Löschen ${tag}`);
+      f.selection.extraIssueKeys.push(key);
+      return { key };
+    },
+    prompt: (_f, _m, _tag, subject) =>
+      `Lösche den Vorgang ${subject.key} in Jira endgültig. Er wird nicht mehr gebraucht.`,
+    verify: async (s, _f, _m, _tag, subject) => {
+      const path = `/rest/api/2/issue/${encodeURIComponent(subject.key)}`;
+      const gone = (await labRequest(s, "GET", path, basicAuth(s, "admin"))).status === 404;
+      return { effects: gone ? 1 : 0, removed: [path], cleanup: [] };
+    },
+  },
 ];
+
+// ---------- issue creation, one case per issue type (#4369) ----------
+
+const issueRows = async (s, project, type, summary) => {
+  const jql = encodeURIComponent(
+    `project = ${project} AND issuetype = "${type}" AND summary ~ "\\"${summary}\\""`,
+  );
+  const page = await native(
+    s,
+    `/rest/api/2/search?jql=${jql}&fields=summary,parent&maxResults=10`,
+    "admin",
+  );
+  return page.issues.filter((issue) => issue.fields.summary === summary);
+};
+
+/**
+ * One create case for `type` in `project`. The request names the type and the summary, never the
+ * tool; the effect is the new issue Jira holds, removed again afterwards. A Sub-task is created
+ * under the lane's owned issue, and a parent other than that is a wrong value.
+ */
+function createCase(type, { project, id, workProject = false }) {
+  const summaryOf = (m) => `${m} ${type}`;
+  const under = (f) => (type === "Sub-task" ? ` unter dem Vorgang ${f.selection.issueKey}` : "");
+  return {
+    id,
+    tool: "jira.create",
+    alternatives: ["jira.draft"],
+    catalog: "base",
+    // A case that writes the requirements lab's work project holds its lock, so a journey's reset of
+    // that project cannot race with it.
+    workProject,
+    prompt: (f, m) =>
+      `Lege im Jira-Projekt ${project(f)} einen Vorgang vom Typ ${type} mit der Zusammenfassung „${summaryOf(m)}“${under(f)} an.`,
+    verify: async (s, f, m) => {
+      const rows = await issueRows(s, project(f), type, summaryOf(m));
+      const parentOk = (row) =>
+        type !== "Sub-task" || row.fields.parent?.key === f.selection.issueKey;
+      return {
+        effects: countMatching(rows, parentOk),
+        wrongValue: rows.some((row) => !parentOk(row)),
+        // The snapshot of the owned scope keys an issue by its plain path.
+        cleanup: rows.map((row) => `/rest/api/2/issue/${encodeURIComponent(row.key)}`),
+      };
+    },
+  };
+}
+
+/** Task and Sub-task live in the fixture project; Epic, Story and Bug need the Scrum work project. */
+const CREATE_WRITES = [
+  createCase("Task", { id: "create-task", project: (f) => f.project }),
+  createCase("Sub-task", { id: "create-subtask", project: (f) => f.project }),
+  createCase("Epic", { id: "create-epic", project: () => "REQ", workProject: true }),
+  createCase("Story", { id: "create-story", project: () => "REQ", workProject: true }),
+  createCase("Bug", { id: "create-bug", project: () => "REQ", workProject: true }),
+];
+
+/** Whether a selection holds a case that writes the work project, where the lab's required field applies. */
+export const selectionNeedsFieldLift = (cases) => cases.some((entry) => entry.workProject === true);
 
 export const SELECTION_CASES = Object.freeze([
   ...DISCOVERY_READS.map((entry) => ({ ...entry, effect: "read", catalog: "discovery" })),
   ...BASE_READS.map((entry) => ({ ...entry, effect: "read", catalog: "base" })),
-  ...WRITES.map((entry) => ({ ...entry, effect: "write", catalog: "discovery" })),
+  ...[...WRITES, ...CREATE_WRITES].map((entry) => ({
+    ...entry,
+    effect: "write",
+    catalog: entry.catalog ?? "discovery",
+  })),
+  // Requests the product cannot fulfil yet: the model must say so plainly without a failed call.
+  ...UNAVAILABLE_CASES,
 ]);
+
+/**
+ * Cases that exist for a German-language session and are never part of the default 35 (#4369): the
+ * question names an issue TYPE the way a German person says it, and Jira only knows the localized name
+ * (JQL `issuetype = Aufgabe` answers 400 for `Task` to a German user, #4335). Selected with `--only`.
+ */
+export const LANGUAGE_SELECTION_CASES = Object.freeze([
+  {
+    id: "search-by-type",
+    tool: "jira.search",
+    alternatives: ["jira.search-post"],
+    prompt: (f) => `Welche Aufgaben gibt es im Jira-Projekt ${f.project}? Nenne die Schlüssel.`,
+    // The Tasks of the fixture project, as Jira holds them (read as the administrator, English names).
+    truth: async (s, f) => {
+      const jql = encodeURIComponent(
+        `project = ${f.project} AND issuetype = Task ORDER BY key ASC`,
+      );
+      const page = await native(
+        s,
+        `/rest/api/2/search?jql=${jql}&fields=summary&maxResults=20`,
+        "admin",
+      );
+      return page.total <= page.issues.length
+        ? page.issues.map((issue) => issue.key)
+        : [f.selection.issueKey, f.selection.linkTargetKey];
+    },
+    // The fixture project holds only Tasks, so the case creates one owned Sub-task: without a second
+    // type nothing could tell a search restricted to Tasks from an unrestricted one.
+    prepare: async (s, f, tag) => {
+      const key = await ownedSubtask(s, f, `Auswahl Teilaufgabe ${tag}`, f.selection.issueKey);
+      f.selection.extraIssueKeys.push(key);
+      return { key };
+    },
+    // "Welche Aufgaben ...?" asks for Tasks only: a search that names no type and returns the other
+    // issues of the project too has not answered it (the oracle checks both the JQL and the result).
+    restriction: async (s, f) => {
+      const jql = encodeURIComponent(
+        `project = ${f.project} AND issuetype != Task ORDER BY key ASC`,
+      );
+      const others = await native(
+        s,
+        `/rest/api/2/search?jql=${jql}&fields=summary&maxResults=100`,
+        "admin",
+      );
+      // The Task type as the administrator (English) and as the connected user (maybe localized) names it.
+      const adminTypes = await native(s, "/rest/api/2/issuetype", "admin");
+      const task = adminTypes.find((type) => type.name === "Task");
+      const apiTypes = await native(s, "/rest/api/2/issuetype", "api");
+      const seen = apiTypes.find((type) => type.id === task?.id);
+      // Fail closed: no issue of another type means the restriction cannot be told apart (the attempt is invalid).
+      if (others.total === 0)
+        throw new TypeError("The fixture project holds no issue of another type than Task");
+      return {
+        forbidden: bounded(others.issues.map((issue) => issue.key)),
+        typeWords: [
+          ...new Set([task?.id, task?.name, seen?.name].filter((word) => word !== undefined)),
+        ],
+      };
+    },
+    effect: "read",
+    catalog: "base",
+  },
+]);
+
+/** The native keys a restricted read must not return and the words that name its type (see `restriction`). */
+export async function selectionRestriction(session, fixture, entry) {
+  return entry.restriction === undefined ? undefined : entry.restriction(session, fixture);
+}
 
 /** The bounded set of native tokens a correct read result must carry. */
 export async function selectionTruth(session, fixture, entry) {

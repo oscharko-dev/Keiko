@@ -55,6 +55,7 @@ import {
   JIRA_MUTATION_OPERATIONS,
   JIRA_READ_TOOL_FAMILIES,
   isJiraAvatarUploadOperation,
+  jiraOperationInReleaseScope,
   type JiraAvatarUploadMutation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
@@ -110,10 +111,19 @@ const JIRA_CHAT_PROFILE = { id: "jira-chat", version: 1 } as const;
 export interface JiraChatToolScope {
   readonly knowledgeScoped: boolean;
 }
+/**
+ * The batch drafts from the Chat's Knowledge requirements; it is the only tool a Chat without
+ * Knowledge scopes does not offer. The draft run that commits a staged draft (`jira.draft`) is offered
+ * whenever staging is (`jira.draft-stage` is a base read), so no Chat is left with a staged draft it
+ * cannot commit: a person who orders several issues in one message has them created, with one review
+ * for the draft.
+ */
 const JIRA_DRAFT_BATCH_TOOL = "jira.draft-batch";
-/** The draft run Keiko offers after a clean batch; a catalog that offers the batch hosts it too. */
+/** The draft run Keiko offers after a clean batch and for every staged draft. */
 const JIRA_DRAFT_TOOL = "jira.draft";
 const JIRA_BATCH_TOOLS = [JIRA_DRAFT_BATCH_TOOL, JIRA_DRAFT_TOOL] as const;
+/** What a Chat without Knowledge scopes does not offer: only the batch, never the draft run. */
+const JIRA_KNOWLEDGE_ONLY_TOOLS = [JIRA_DRAFT_BATCH_TOOL] as const;
 /** The existing issue-workflow families supply the curated reads; the batch has its own scope. */
 const JIRA_BASE_READS: ReadonlySet<string> = new Set([
   ...JIRA_READ_TOOL_FAMILIES.projectList,
@@ -122,6 +132,13 @@ const JIRA_BASE_READS: ReadonlySet<string> = new Set([
   ...JIRA_READ_TOOL_FAMILIES.issueWorkflow,
   ...JIRA_READ_TOOL_FAMILIES.localCompositions,
 ]);
+/**
+ * What a person's first requests need before any search: who they are (a guarded write's
+ * `expectedActorKey` is the key `jira.myself` returns) and watching or unwatching an issue (#4357).
+ * `jira.watchers` (the read) stays discoverable: with it the catalog leaves too little room for the
+ * operations a turn selects through jira.describe.
+ */
+const JIRA_BASE_EXTRA_TOOLS = ["jira.myself", "jira.watch", "jira.unwatch"] as const;
 /** Curated issue writes and local composition stay available alongside selected native tools. */
 const JIRA_BASE_TOOLS = [
   ...JIRA_MANAGED_READ_TOOLS.filter(
@@ -135,10 +152,11 @@ const JIRA_BASE_TOOLS = [
       (definition?.kind === "native" && /\/issue(?:\/|$)/u.test(definition.pathTemplate))
     );
   }),
-] satisfies typeof JIRA_CHAT_TOOLS;
+  ...JIRA_BASE_EXTRA_TOOLS,
+].filter((tool) => jiraOperationInReleaseScope(tool)) satisfies typeof JIRA_CHAT_TOOLS;
 const toolAlias = (tool: string): string => tool.replace(/[.-]/gu, "_");
-const JIRA_BATCH_ALIASES: ReadonlySet<string> = new Set(
-  JIRA_BATCH_TOOLS.map((tool) => toolAlias(tool)),
+const JIRA_KNOWLEDGE_ONLY_ALIASES: ReadonlySet<string> = new Set(
+  JIRA_KNOWLEDGE_ONLY_TOOLS.map((tool) => toolAlias(tool)),
 );
 const withBatchTools = (tools: typeof JIRA_CHAT_TOOLS): typeof JIRA_CHAT_TOOLS => [
   ...new Set([...tools, ...JIRA_BATCH_TOOLS]),
@@ -146,9 +164,6 @@ const withBatchTools = (tools: typeof JIRA_CHAT_TOOLS): typeof JIRA_CHAT_TOOLS =
 /** The exact tool names the default (unselected) Jira chat catalog offers. */
 export const JIRA_DEFAULT_CATALOG_TOOLS: NonNullable<Parameters<typeof jiraChatCatalogRoutes>[0]> =
   [...withBatchTools(JIRA_BASE_TOOLS), ...JIRA_CATALOG_DISCOVERY_TOOLS, ...KNOWLEDGE_CHAT_TOOLS];
-/** Without the batch, its companion goes too unless the turn selected the draft run itself. */
-const batchOnlyTools = (tools: typeof JIRA_CHAT_TOOLS): readonly string[] =>
-  tools.includes(JIRA_DRAFT_TOOL) ? [JIRA_DRAFT_BATCH_TOOL] : JIRA_BATCH_TOOLS;
 const batchOffered = (scope: JiraChatToolScope | undefined): boolean =>
   scope?.knowledgeScoped ?? true;
 
@@ -471,7 +486,7 @@ export function jiraChatDraftConnection(
   return {
     baseUrl: credential.baseUrl,
     deployment: credential.deployment,
-    issueTemplates: jiraIssueTemplateSource(deps.store),
+    issueTemplates: jiraIssueTemplateSource(deps.store, credential.baseUrl),
   };
 }
 
@@ -581,7 +596,7 @@ function connection(
     http: credentials.httpBodyPortFactory(current.credential, context.correlationId, {
       beforeDispatch: () => context.beforeEffect(),
     }),
-    issueTemplates: jiraIssueTemplateSource(deps.store),
+    issueTemplates: jiraIssueTemplateSource(deps.store, current.credential.baseUrl),
     emailTemplates: jiraChatEmailTemplateComposition(deps, {
       chatId: context.chatId,
       correlationId: context.correlationId,
@@ -778,7 +793,7 @@ async function admitSelectedCatalog(
   try {
     const full = await selected.get();
     const catalog =
-      withBatch || full.omitting === undefined ? full : full.omitting(batchOnlyTools(tools));
+      withBatch || full.omitting === undefined ? full : full.omitting(JIRA_KNOWLEDGE_ONLY_TOOLS);
     return {
       ...catalog,
       close: async (): Promise<void> => {
@@ -817,12 +832,12 @@ export function createJiraChatCatalogRuntime(
     toolDefinitions: (scope): readonly ToolDefinition[] =>
       batchOffered(scope)
         ? initial.toolDefinitions()
-        : initial.toolDefinitions().filter((tool) => !JIRA_BATCH_ALIASES.has(tool.name)),
+        : initial.toolDefinitions().filter((tool) => !JIRA_KNOWLEDGE_ONLY_ALIASES.has(tool.name)),
     get: async (scope): Promise<ChatCatalog> => {
       const full = await initial.get();
       if (batchOffered(scope) || full.omitting === undefined) return full;
       if (withoutBatch?.of !== full)
-        withoutBatch = { of: full, value: full.omitting(JIRA_BATCH_TOOLS) };
+        withoutBatch = { of: full, value: full.omitting(JIRA_KNOWLEDGE_ONLY_TOOLS) };
       return withoutBatch.value;
     },
     select: async (identities, scope): Promise<ChatCatalog> => {

@@ -47,6 +47,39 @@ describe("health diagnostics validation", () => {
       expect(await fetchHealth()).toEqual({ status: "ok", version: "1.2.3" });
     },
   );
+  // #4358: credential custody is kept only as one of its closed states.
+  it.each(["attested", "protected", "exposed", "unattested"] as const)(
+    "retains the closed credential custody state %s",
+    async (credentialCustody) => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ status: "ok", version: "1.2.3", credentialCustody })),
+          ),
+      );
+      expect(await fetchHealth()).toEqual({ status: "ok", version: "1.2.3", credentialCustody });
+    },
+  );
+  it.each(["ATTESTED", "ok", "C:\\Users\\someone\\.keiko", true, 1, { state: "attested" }, null])(
+    "drops a credential custody value outside the closed states and marks it, without its content %#",
+    async (credentialCustody) => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ status: "ok", version: "1.2.3", credentialCustody })),
+          ),
+      );
+      expect(await fetchHealth()).toEqual({
+        status: "ok",
+        version: "1.2.3",
+        credentialCustodyInvalid: true,
+      });
+    },
+  );
   it("sends the caller's health observation correlation on the actual request", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

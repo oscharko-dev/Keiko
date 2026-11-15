@@ -214,6 +214,7 @@ function cardVerification(
     status: ctrl.unconfirmed ? undefined : currentVerifyStatus(connector, ctrl.verifyStatus),
     verifying:
       ctrl.operation === "verify" ||
+      ctrl.operation === "rotate" ||
       (connector.deployment === "data-center" &&
         connector.livePod?.verificationInProgress === true),
   };
@@ -224,6 +225,22 @@ function CardError({ error }: { readonly error: string | undefined }): ReactNode
   return (
     <p className="acx-error" role="alert">
       {error}
+    </p>
+  );
+}
+
+/** An existing Pod obtains the retained compatibility facts only by an explicit verification. */
+function CompatibilityNotice({
+  connector,
+}: {
+  readonly connector: AtlassianConnectorMetadata;
+}): ReactNode {
+  const translate = useTranslate();
+  if (connector.deployment !== "data-center" || connector.livePod?.compatibilityFacts !== "missing")
+    return null;
+  return (
+    <p className="acx-hint" data-testid="acx-compatibility-missing">
+      {translate("atlassianConnectors.live.compatibilityMissing")}
     </p>
   );
 }
@@ -261,6 +278,7 @@ function LiveConnectorCard({
         }
       />
       <CardError error={ctrl.error} />
+      <CompatibilityNotice connector={connector} />
       {managing ? <CardManagement connector={connector} ctrl={ctrl} actions={null} /> : null}
     </li>
   );

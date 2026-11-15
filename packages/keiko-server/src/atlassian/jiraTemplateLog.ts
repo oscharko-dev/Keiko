@@ -1,15 +1,18 @@
-import type {
-  JiraIssueTemplateSource,
-  JiraManagedConnection,
+import {
+  jiraInstanceIdentity,
+  type JiraIssueTemplateSource,
+  type JiraManagedConnection,
 } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_LINK_MUTATIONS,
   JIRA_MUTATION_OPERATIONS,
   JIRA_TEMPLATE_RULE_IDS,
+  jiraTemplateForInstance,
   type JiraFieldValidationFailure,
   type JiraMutationFailureDetail,
   type JiraMutationAttempt,
   type JiraMutationOperation,
+  type JiraTemplateGateFact,
   type JiraTemplateRuleId,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
@@ -38,6 +41,9 @@ const RULE_COUNT_NAMES = {
   "parent-missing": "parentMissingCount",
   "parent-type-mismatch": "parentTypeMismatchCount",
   "template-unreadable": "templateUnreadableCount",
+  "template-missing": "templateMissingCount",
+  "template-not-activated": "templateNotActivatedCount",
+  "template-binding-unresolved": "templateBindingUnresolvedCount",
 } as const satisfies Readonly<Record<JiraTemplateRuleId, string>>;
 type RuleCountField = (typeof RULE_COUNT_NAMES)[JiraTemplateRuleId];
 
@@ -55,6 +61,9 @@ export const JIRA_TEMPLATE_RULE_COUNT_FIELDS = {
   parentMissingCount: RULE_COUNT,
   parentTypeMismatchCount: RULE_COUNT,
   templateUnreadableCount: RULE_COUNT,
+  templateMissingCount: RULE_COUNT,
+  templateNotActivatedCount: RULE_COUNT,
+  templateBindingUnresolvedCount: RULE_COUNT,
 } satisfies Readonly<Record<RuleCountField, typeof RULE_COUNT>>;
 
 export function jiraTemplateRuleCountFields(
@@ -74,13 +83,18 @@ export function jiraTemplateRuleCountFields(
  */
 export function jiraIssueTemplateSource(
   store: Pick<UiHandlerDeps["store"], "markdownSkills">,
+  baseUrl: string,
 ): JiraIssueTemplateSource {
+  const instance = jiraInstanceIdentity(baseUrl);
   return () => {
     const entries = store.markdownSkills.jiraTemplates();
     const broken = entries.filter((entry) => entry.template === undefined);
-    // The parser cache shares equal bodies; each stored revision needs its own source binding.
+    // The parser cache shares equal bodies; each stored revision needs its own source binding. A
+    // binding made for another Jira is dropped here, so every consumer matches by name there.
     const readable = entries.flatMap(({ skill, template }) =>
-      template === undefined ? [] : [{ skill, template: { ...template } }],
+      template === undefined
+        ? []
+        : [{ skill, template: { ...jiraTemplateForInstance(template, instance) } }],
     );
     return {
       templates: readable.map(({ template }) => template),
@@ -199,7 +213,7 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["pre-approval", "dispatch"],
+      values: ["pre-approval", "dispatch", "notice"],
     },
     violationCount: { type: "integer", dataClass: "count", required: true },
     ruleIds: {
@@ -221,8 +235,20 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
         "parent-missing",
         "parent-type-mismatch",
         "template-unreadable",
+        "template-missing",
+        "template-not-activated",
+        "template-binding-unresolved",
       ],
       maxItems: 25,
+    },
+    // Closed facts of a gate decision taken on less than the full picture (#4354); absent when none.
+    gateFacts: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      // Literal on purpose (the registry reads a closed literal); a test pins it to the contract.
+      values: ["type-list-unavailable", "status-list-unavailable"],
+      maxItems: 4,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -297,8 +323,9 @@ const FIELD_ADMISSION = defineActivityLogOperation({
         "invalid-field",
         "invalid-operation",
         "bounds-exceeded",
+        "invalid-epic-link",
       ],
-      maxItems: 5,
+      maxItems: 6,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -357,8 +384,9 @@ export function recordJiraTemplateRefusal(
   correlationId: string | undefined,
   input: {
     readonly operation: string;
-    readonly stage: "pre-approval" | "dispatch";
+    readonly stage: "pre-approval" | "dispatch" | "notice";
     readonly violations: readonly { readonly ruleId: JiraTemplateRuleId }[];
+    readonly gateFacts?: readonly JiraTemplateGateFact[];
   },
 ): void {
   const operation = templateOperation(input.operation);
@@ -366,12 +394,18 @@ export function recordJiraTemplateRefusal(
   processServerLogSink().write(
     activityLogEvent(
       TEMPLATE_ADMISSION,
-      { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID, level: "warn" },
+      {
+        correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+        level: input.stage === "notice" ? "info" : "warn",
+      },
       {
         operation,
         stage: input.stage,
         violationCount: input.violations.length,
         ruleIds: [...new Set(input.violations.map((violation) => violation.ruleId))],
+        ...(input.gateFacts === undefined || input.gateFacts.length === 0
+          ? {}
+          : { gateFacts: [...input.gateFacts] }),
         completeness: "complete",
         loss: "none",
       },
@@ -492,13 +526,35 @@ export function recordJiraTemplateAttempt(
   operation: string,
   attempt: JiraMutationAttempt,
 ): void {
-  if (attempt.ok) return;
+  if (attempt.ok) {
+    const notices = attempt.templateNotices ?? [];
+    const gateFacts = attempt.templateGateFacts ?? [];
+    if (notices.length > 0 || gateFacts.length > 0)
+      recordJiraTemplateRefusal(correlationId, {
+        operation,
+        stage: "notice",
+        violations: notices,
+        gateFacts,
+      });
+    return;
+  }
   if (attempt.reason === "field-validation")
     recordDispatchFieldRefusal(correlationId, operation, attempt);
-  if (attempt.violations === undefined) return;
+  const gateFacts = attempt.templateGateFacts ?? [];
+  if (attempt.violations === undefined) {
+    if (gateFacts.length > 0)
+      recordJiraTemplateRefusal(correlationId, {
+        operation,
+        stage: "notice",
+        violations: [],
+        gateFacts,
+      });
+    return;
+  }
   recordJiraTemplateRefusal(correlationId, {
     operation,
     stage: "dispatch",
     violations: attempt.violations,
+    gateFacts,
   });
 }

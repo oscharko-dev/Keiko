@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  jiraTemplateBindingDigest,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -113,7 +114,11 @@ async function reportOf(
   return (await runOf(source, options, extraArgs)).report;
 }
 
-/** The write gate for an edit of the same issue, with the same template source. */
+/**
+ * The write gate for an edit that sets the issue's own checked fields again, with the same template
+ * source: every rule the report names is then about a field the edit touches (#4354), so the two
+ * judge the same state.
+ */
 function gateOf(
   source: JiraIssueTemplateSource,
   issue: FixtureIssue,
@@ -142,7 +147,10 @@ function gateOf(
     source,
     operation: "edit",
     metadata: [],
-    validated: { fields: {}, update: {} },
+    validated: {
+      fields: { summary: issue.summary, description: issue.description ?? null },
+      update: { labels: [] },
+    },
     target: { issueKey: issue.key },
   });
 }
@@ -203,9 +211,12 @@ describe("the report and the write gate share one template source", () => {
     expect(report.compliance).toMatchObject({ checker: "applied" });
     expect(deviationKeys(report, "section-missing")).toContain(violating.key);
     expect(deviationKeys(report, "section-missing")).not.toContain(conforming.key);
-    // A create-only template does not govern an edit, so the gate stays open: the report names
-    // the existing violation without ever blocking the write the template was not written for.
-    expect(await gateOf(source, violating)).toEqual({ ok: true });
+    // Whatever plain activation a template names, it governs edits too (#4354): the report names
+    // the existing violation, and an edit that sets the description again is judged by it.
+    expect(await gateOf(source, violating)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "section-missing" }],
+    });
   });
 
   it("names what is missing, not only the rule", async () => {
@@ -529,5 +540,86 @@ describe("a cut summary list says how to read on (#4181)", () => {
     expect(epics.total).toBe(epics.items.length);
     expect(epics).not.toHaveProperty("nextStartAt");
     expect(epics).not.toHaveProperty("section");
+  });
+});
+
+// #4354 (first customer's Jira, live evidence): a template bound by the typed type NAME judged no issue
+// at all for a user whose profile shows another name, so 111 issues were reported "without template" and
+// their deviations were missing from the report. The report asks the same matcher as the write gate: a
+// template the product bound to the issue type's id judges every issue of that type, under any name.
+describe("the report under a localized issue type name", () => {
+  const INSTANCE = "0123456789abcdef0123456789abcdef";
+  const SEEN = { Story: "Geschichte" } as const;
+  const bound = (): JiraIssueTemplate => ({
+    ...template(),
+    binding: {
+      digest: jiraTemplateBindingDigest(INSTANCE, template(), { issueTypeId: "11" }),
+      issueTypeId: "11",
+    },
+  });
+  const stories = (): readonly FixtureIssue[] =>
+    project().issues.filter((issue) => issue.type === "Story");
+
+  it("checks every story of the type and names the deviations the native data holds", async () => {
+    const report = await reportOf(() => SET(bound()), { typeNames: SEEN });
+    const typeNames = report.compliance.withoutTemplateByType.map((item) => item.typeName);
+    expect(typeNames).not.toContain("Geschichte");
+    expect(typeNames).not.toContain("Story");
+    // The native truth: the stories whose description lacks the required section.
+    const truth = stories()
+      .filter((issue) => issue.description === BAD)
+      .map((issue) => issue.key);
+    expect(truth.length).toBeGreaterThan(0);
+    expect(deviationKeys(report, "section-missing")).toEqual(truth);
+    expect(report.compliance).toMatchObject({ checker: "applied" });
+  });
+
+  it("is the same report as under the name the template was written in", async () => {
+    const named = await reportOf(() => SET(bound()), {});
+    const localized = await reportOf(() => SET(bound()), { typeNames: SEEN });
+    expect(localized.compliance.issuesWithDeviations).toBe(named.compliance.issuesWithDeviations);
+    expect(localized.compliance.issuesWithoutTemplate).toBe(named.compliance.issuesWithoutTemplate);
+    expect(deviationKeys(localized, "section-missing")).toEqual(
+      deviationKeys(named, "section-missing"),
+    );
+  });
+
+  it("still lists the stories as judged by no template while the template is not bound", async () => {
+    const report = await reportOf(() => SET(template()), { typeNames: SEEN });
+    expect(report.compliance.withoutTemplateByType.map((item) => item.typeName)).toContain(
+      "Geschichte",
+    );
+  });
+});
+
+// Part 2 (#4354): a required field the template typed in another language is judged by its bound id in
+// the report as in the gate; without the binding the name finds no field and the check says so.
+describe("the report for a required field typed in another language", () => {
+  const INSTANCE = "0123456789abcdef0123456789abcdef";
+  const typed = (): JiraIssueTemplate => template("requiredFields: [Geschichtspunkte]");
+  const bound = (): JiraIssueTemplate => ({
+    ...typed(),
+    binding: {
+      digest: jiraTemplateBindingDigest(INSTANCE, typed(), {
+        issueTypeId: "11",
+        requiredFieldIds: [POINTS],
+      }),
+      issueTypeId: "11",
+      requiredFieldIds: [POINTS],
+    },
+  });
+  const ruleIds = (report: JiraReport): readonly string[] => [
+    ...new Set(report.compliance.deviations.flatMap((item) => item.ruleIds)),
+  ];
+
+  it("judges the field by its bound id", async () => {
+    const report = await reportOf(() => SET(bound()), {});
+    expect(ruleIds(report)).toContain("field-missing");
+    expect(ruleIds(report)).not.toContain("field-unavailable");
+  });
+
+  it("finds no field by the typed name when the template is not bound", async () => {
+    const report = await reportOf(() => SET(typed()), {});
+    expect(ruleIds(report)).not.toContain("field-missing");
   });
 });

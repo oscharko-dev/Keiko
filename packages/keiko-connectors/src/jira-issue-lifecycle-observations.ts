@@ -44,6 +44,17 @@ function observedIdentity(
     issueTypeId: type.id,
   };
 }
+/** Whether a fresh read of the issue answers 404, however the transport delivers that status. */
+export async function issueIsGone(
+  request: JiraMutationRequest,
+  issue: IssueLifecycleReview,
+): Promise<boolean> {
+  // The same read the identity check makes, so the transport and the fixtures see one request shape.
+  const response = await request(
+    `issue/${encodeURIComponent(issue.id)}?fields=issuetype%2Cproject%2Csummary`,
+  );
+  return response.ok ? response.status === 404 : response.reason === "not-found";
+}
 export async function bindIssueLifecycleIssue(
   request: JiraMutationRequest,
   expected: IssueLifecycleReview,

@@ -13,6 +13,7 @@ import {
 } from "../testing/jira-chat-lab/browser-limit-run.mjs";
 import { privateJson } from "../testing/jira-chat-lab/private-json.mjs";
 
+const LONG_IMPORT_TIMEOUT_MS = 90_000;
 const directories = [];
 afterEach(() => {
   vi.restoreAllMocks();
@@ -195,53 +196,59 @@ it("refuses to complete an incomplete intent even if a caller falsely labels its
   expect(JSON.parse(readFileSync(f.ctx.intent.path, "utf8")).phase).toBe("incomplete");
 });
 
-it("consumes actual F threshold-missed results as unverified without any fault injection or native read", async () => {
-  const { createFaultPlan } = await import("../testing/jira-chat-lab/browser-bulk-fault.mjs");
-  const f = fixture();
-  f.blocks.createFaultPlan.mockImplementation(createFaultPlan);
-  f.ctx.read = vi.fn(() => {
-    throw new TypeError("No native read is expected at a missed final threshold");
-  });
-  f.ctx.search = vi.fn(() => {
-    throw new TypeError("No native search is expected at a missed final threshold");
-  });
-  f.ctx.page = { route: vi.fn(), unroute: vi.fn() };
-  f.ctx.recovery = { restartServer: vi.fn() };
-  await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).resolves.toMatchObject({
-    status: "unverified",
-    counts: { steps: 28 },
-  });
-  expect(Object.keys(f.ctx.intent.state.faults).sort()).toEqual([
-    "bulk-epics:response-drop",
-    "bulk-epics:server-kill",
-    "hierarchy:response-drop",
-    "hierarchy:server-kill",
-    "progress:response-drop",
-    "progress:server-kill",
-  ]);
-  for (const evidence of Object.values(f.ctx.intent.state.faults))
-    expect(evidence).toEqual({ phase: "skipped", progress01: 1, reason: "threshold-missed" });
-  expect(f.ctx.read).not.toHaveBeenCalled();
-  expect(f.ctx.search).not.toHaveBeenCalled();
-  expect(f.ctx.page.route).not.toHaveBeenCalled();
-  expect(f.ctx.page.unroute).not.toHaveBeenCalled();
-  expect(f.ctx.recovery.restartServer).not.toHaveBeenCalled();
-  const saved = JSON.parse(readFileSync(f.ctx.intent.path, "utf8"));
-  expect(saved.phase).toBe("incomplete");
-  expect(
-    saved.results
-      .filter((entry) => entry.step.startsWith("ac8-"))
-      .map(({ result }) => ({
-        status: result.status,
-        counts: result.counts,
-      })),
-  ).toEqual(
-    Array.from({ length: 3 }, () => ({
+it(
+  "consumes actual F threshold-missed results as unverified without any fault injection or native read",
+  async () => {
+    const { createFaultPlan } = await import("../testing/jira-chat-lab/browser-bulk-fault.mjs");
+    const f = fixture();
+    f.blocks.createFaultPlan.mockImplementation(createFaultPlan);
+    f.ctx.read = vi.fn(() => {
+      throw new TypeError("No native read is expected at a missed final threshold");
+    });
+    f.ctx.search = vi.fn(() => {
+      throw new TypeError("No native search is expected at a missed final threshold");
+    });
+    f.ctx.page = { route: vi.fn(), unroute: vi.fn() };
+    f.ctx.recovery = { restartServer: vi.fn() };
+    await expect(runBrowserLimitRun(f.ctx, {}, f.blocks)).resolves.toMatchObject({
       status: "unverified",
-      counts: { injected: 0, recovered: 0, duplicates: 0, lost: 0 },
-    })),
-  );
-});
+      counts: { steps: 28 },
+    });
+    expect(Object.keys(f.ctx.intent.state.faults).sort()).toEqual([
+      "bulk-epics:response-drop",
+      "bulk-epics:server-kill",
+      "hierarchy:response-drop",
+      "hierarchy:server-kill",
+      "progress:response-drop",
+      "progress:server-kill",
+    ]);
+    for (const evidence of Object.values(f.ctx.intent.state.faults))
+      expect(evidence).toEqual({ phase: "skipped", progress01: 1, reason: "threshold-missed" });
+    expect(f.ctx.read).not.toHaveBeenCalled();
+    expect(f.ctx.search).not.toHaveBeenCalled();
+    expect(f.ctx.page.route).not.toHaveBeenCalled();
+    expect(f.ctx.page.unroute).not.toHaveBeenCalled();
+    expect(f.ctx.recovery.restartServer).not.toHaveBeenCalled();
+    const saved = JSON.parse(readFileSync(f.ctx.intent.path, "utf8"));
+    expect(saved.phase).toBe("incomplete");
+    expect(
+      saved.results
+        .filter((entry) => entry.step.startsWith("ac8-"))
+        .map(({ result }) => ({
+          status: result.status,
+          counts: result.counts,
+        })),
+    ).toEqual(
+      Array.from({ length: 3 }, () => ({
+        status: "unverified",
+        counts: { injected: 0, recovered: 0, duplicates: 0, lost: 0 },
+      })),
+    );
+  },
+  // A long runtime, not a hang (#4369): the dynamic import of the real fault plan transforms the
+  // whole browser-turn module chain, which measured 19.8 s twice on an idle-ish machine.
+  LONG_IMPORT_TIMEOUT_MS,
+);
 
 it("stops the current product block immediately when an intermediate F verdict is red", async () => {
   const f = fixture();
@@ -570,6 +577,107 @@ it("loads exactly the fixed exports and does not silently replace an absent owne
   expect(new Set(importer.mock.calls.map(([path]) => path)).size).toBe(importer.mock.calls.length);
   delete module.runProgressReport;
   await expect(loadLimitRunBlocks(importer)).rejects.toThrow("runProgressReport");
+});
+
+it("runs every step except the sprint package without the sprint package and records one verdict per step", async () => {
+  const f = fixture();
+  const answer = await runBrowserLimitRun(f.ctx, { steps: "without-sprint" }, f.blocks);
+  // A partial set is never a full green (#4369): the status, the flag and the skipped steps say so.
+  expect(answer).toMatchObject({
+    status: "partial",
+    partial: true,
+    skipped: ["ac6-sprint", "ac9-sprint-*"],
+    detail:
+      "All without-sprint limit-run steps independently verified; ac6-sprint, ac9-sprint-* not run",
+    // The sprint step and its five card steps are the Agile child's package.
+    counts: { steps: 22 },
+  });
+  const names = f.calls.map(({ name }) => name);
+  expect(names).not.toContain("runSprintBulk");
+  for (const owner of [
+    "runProjectSetup",
+    "installTemplates",
+    "runRuleProbes",
+    "stageLastenheft",
+    "runBulkEpics",
+    "gradeBulkRefusals",
+    "runHierarchyBulk",
+    "simulateProgress",
+    "runProgressReport",
+  ])
+    expect(names.filter((name) => name === owner)).toHaveLength(1);
+  const state = JSON.parse(readFileSync(f.ctx.intent.path, "utf8"));
+  expect(state.data.orchestrator).toMatchObject({
+    phase: "steps-verified",
+    steps: "without-sprint",
+    partial: true,
+  });
+  const verdicts = state.data.orchestrator.results.map(({ step, status }) => [step, status]);
+  expect(verdicts.every(([, status]) => status === "green")).toBe(true);
+  expect(verdicts.filter(([step]) => /sprint/u.test(step))).toEqual([]);
+  expect(verdicts).toHaveLength(22);
+  expect(
+    f.calls.filter(({ name }) => name === "assertCardsReadable").map(({ locale }) => locale),
+  ).toEqual(["en", "de", "en", "de"]);
+});
+
+it("finalizes a partial set as partial, never as green, and refuses a forged green", async () => {
+  const { finalizeLimitRun, printLimitVerdict } =
+    await import("../testing/jira-chat-lab/browser-limit-run.mjs");
+  const f = fixture();
+  const outcome = await runBrowserLimitRun(f.ctx, { steps: "without-sprint" }, f.blocks);
+  expect(() => finalizeLimitRun(f.ctx.intent, { ...outcome, status: "green" })).toThrow();
+  expect(finalizeLimitRun(f.ctx.intent, outcome)).toBe("partial");
+  expect(JSON.parse(readFileSync(f.ctx.intent.path, "utf8")).phase).toBe("completed");
+  const lines = [];
+  vi.spyOn(console, "log").mockImplementation((line) => lines.push(JSON.parse(line)));
+  printLimitVerdict(f.ctx.intent, "partial");
+  expect(lines[0]).toMatchObject({
+    operation: "jira-browser-limit-run",
+    status: "partial",
+    steps: "without-sprint",
+    partial: true,
+  });
+  expect(lines[0].verdicts).toHaveLength(22);
+});
+
+it("a full run still ends green and not partial", async () => {
+  const { finalizeLimitRun } = await import("../testing/jira-chat-lab/browser-limit-run.mjs");
+  const f = fixture();
+  const outcome = await runBrowserLimitRun(f.ctx, {}, f.blocks);
+  expect(outcome.status).toBe("green");
+  expect(outcome.partial).toBeUndefined();
+  expect(finalizeLimitRun(f.ctx.intent, outcome)).toBe("green");
+});
+
+it("accepts the step set only as an explicit trailing option", () => {
+  const args = [
+    "/private/session",
+    "fixture-chat",
+    "fixture-embedding",
+    "/private/permit",
+    "/private/deny",
+    "LIM7",
+  ];
+  expect(limitRunArguments(args).steps).toBe("all");
+  expect(limitRunArguments([...args, "--steps", "without-sprint"]).steps).toBe("without-sprint");
+  expect(limitRunArguments([...args, "--steps", "all"]).steps).toBe("all");
+  for (const extra of [
+    ["--steps"],
+    ["--steps", "sprint"],
+    // The step set was called release-1 before it was renamed; the old name is refused, not aliased.
+    ["--steps", "release-1"],
+    ["without-sprint"],
+    ["--steps", "all", "x"],
+  ])
+    expect(() => limitRunArguments([...args, ...extra])).toThrow();
+});
+
+it("refuses an unknown step set before any owner runs", async () => {
+  const f = fixture();
+  await expect(runBrowserLimitRun(f.ctx, { steps: "sprint" }, f.blocks)).rejects.toThrow();
+  await expect(runBrowserLimitRun(f.ctx, { steps: "release-1" }, f.blocks)).rejects.toThrow();
+  expect(f.calls).toEqual([]);
 });
 
 it("accepts only the explicit fresh-project runtime CLI inputs", () => {

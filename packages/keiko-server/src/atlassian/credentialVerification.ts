@@ -10,6 +10,9 @@ import type { JiraDataCenterCompatibilityFacts } from "@oscharko-dev/keiko-contr
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import { recordConnectionCheck } from "./credentialActivity.js";
 
+/** What started a check: a person's explicit action, or the check that follows a token replacement. */
+export type VerificationTrigger = "verify" | "verify-after-replace";
+
 type VerificationTicket = NonNullable<ReturnType<AtlassianCredentialCustody["beginVerification"]>>;
 
 interface CredentialProbeResult {
@@ -46,22 +49,34 @@ function completeProbe(
   ticket: VerificationTicket,
   status: AtlassianConnectionVerificationStatus | "unverified",
   correlationId: string,
+  trigger: VerificationTrigger,
   compatibility?: JiraDataCenterCompatibilityFacts,
 ): boolean {
-  const applied = deps.custody.finishVerification(
-    ticket.metadata.authRef,
-    ticket.metadata.generation ?? 1,
-    ticket.revision,
-    status,
-    correlationId,
-    compatibility,
-  );
+  // A 401 Jira did not author neither confirms nor rejects the token: the Pod keeps its previous
+  // state and nothing is invalidated, so a person behind a sign-in proxy can try again or replace
+  // the token at any time.
+  const applied =
+    status === "auth-unverified"
+      ? deps.custody.releaseVerification(
+          ticket.metadata.authRef,
+          ticket.metadata.generation ?? 1,
+          ticket.revision,
+          ticket.previous,
+        )
+      : deps.custody.finishVerification(
+          ticket.metadata.authRef,
+          ticket.metadata.generation ?? 1,
+          ticket.revision,
+          status,
+          correlationId,
+          compatibility,
+        );
   recordConnectionCheck(
     deps,
     correlationId,
     status === "unverified" ? "verification-aborted" : status,
     applied ? "applied" : "stale",
-    "verify",
+    trigger,
     compatibility === undefined ? "unverified" : "verified",
   );
   return applied;
@@ -71,6 +86,7 @@ export async function verifyStoredCredential(
   deps: AtlassianConnectorCredentialDeps,
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
+  trigger: VerificationTrigger = "verify",
 ): Promise<AtlassianConnectionVerificationStatus> {
   const ticket = deps.custody.beginVerification(metadata.authRef, metadata.generation ?? 1);
   if (ticket === undefined) {
@@ -82,7 +98,7 @@ export async function verifyStoredCredential(
       correlationId,
       result.status,
       undefined,
-      "verify",
+      trigger,
       compatibilityOutcome(metadata.deployment, result.compatibility),
     );
     return result.status;
@@ -91,10 +107,10 @@ export async function verifyStoredCredential(
   try {
     result = await probeCredential(deps, ticket.metadata, correlationId);
   } catch (error) {
-    completeProbe(deps, ticket, "unverified", correlationId);
+    completeProbe(deps, ticket, "unverified", correlationId, trigger);
     throw error;
   }
-  if (!completeProbe(deps, ticket, result.status, correlationId, result.compatibility))
+  if (!completeProbe(deps, ticket, result.status, correlationId, trigger, result.compatibility))
     throw new AtlassianCredentialCustodyError("credential-changed");
   return result.status;
 }

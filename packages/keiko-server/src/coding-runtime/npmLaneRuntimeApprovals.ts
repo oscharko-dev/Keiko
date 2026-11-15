@@ -107,38 +107,12 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
 });
 
 /**
- * The immutable, already published 1.1.4 runtime packages remain usable during this upgrade: they
- * carry OpenCode 2.1.4, and ONLY those exact bytes are accepted for them, with their own
- * producer-derived protocol identity (`opencodeRuntimeVersions.ts`). Unknown or modified payloads
- * and helpers still fail closed. The table above describes the packages built from the current pin;
- * this one moves on when those are published and selected. Replacing it retired the 1.1.3 packages
- * and their OpenCode 2.0.10 (#3898, #3908, #4271).
+ * The executable-tree digests of the retired 1.1.4 runtime packages (OpenCode 2.1.4). They approve
+ * nothing: Keiko runs exactly one OpenCode, the current pin, so these packages are refused. The
+ * digests only let discovery tell an installation that still holds one of them ("update Keiko")
+ * from a payload that was tampered with (#4359).
  */
-const PREVIOUS_SHARED = {
-  ...HELPER,
-  upstreamVersion: "2.1.4",
-  adapterName: "keiko-coding-sidecar",
-  adapterVersion: "2",
-  licenseSha256: "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
-  protocolSchemaSha256: "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9",
-} as const;
-
-/** No Windows package was ever published, so Windows has no previous approval (#4068). */
-export const NPM_LANE_PREVIOUS_RUNTIME_APPROVALS: Readonly<
-  Partial<Record<NpmLaneOpenCodeTarget, NpmLaneRuntimeApproval>>
-> = Object.freeze({
-  "macos-arm64": Object.freeze({
-    ...PREVIOUS_SHARED,
-    ...HELPER_MACOS_ARM64,
-    packageName: "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
-    executableTreeSha256: "2ebf820d99c5df9d9097268f763ae406aceff555322dbd1fcb66f1ff2b85cff8",
-    sbomSha256: "46af90a2e624a02324054671423799f4f2764909406072076e6fcada577f07e8",
-  }),
-  "macos-x64": Object.freeze({
-    ...PREVIOUS_SHARED,
-    ...HELPER_MACOS_X64,
-    packageName: "@oscharko-dev/keiko-coding-runtime-darwin-x64",
-    executableTreeSha256: "c29fb7e5a9593e8072f0694ca1156e761386901fb4f53ac527ca863d2d40eba0",
-    sbomSha256: "a7e2315d8267eee066d7a5754d9332f1cd58ac1b9f4851fe29f0cc0116ce4e46",
-  }),
-});
+export const NPM_LANE_RETIRED_EXECUTABLE_TREES: ReadonlySet<string> = new Set([
+  "2ebf820d99c5df9d9097268f763ae406aceff555322dbd1fcb66f1ff2b85cff8",
+  "c29fb7e5a9593e8072f0694ca1156e761386901fb4f53ac527ca863d2d40eba0",
+]);

@@ -383,12 +383,30 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
     expect(harness.requests).toHaveLength(0);
   });
 
+  // #4359: a rename asserted no permission and was decided by nothing; it is now governed like a
+  // move, by the title it sets and the session it renames.
+  it("sends a session rename's title and target session, and blocks it on refusal", async () => {
+    const harness = await pluginHarness("supervised-coding", { effect: "allow" });
+    await harness.toolBefore({ ...nested("opencode_session_rename"), input: { title: "Plan" } });
+    await harness.toolBefore({
+      ...nested("opencode_session_rename"),
+      input: { title: "Other", sessionID: "ses_other" },
+    });
+    expect(harness.requests).toMatchObject([
+      { permission: "opencode_session_rename", resources: ["Plan"], targetSessionID: null },
+      { permission: "opencode_session_rename", resources: ["Other"], targetSessionID: "ses_other" },
+    ]);
+    const refused = await pluginHarness("supervised-coding", { effect: "deny", message: "no" });
+    await expect(
+      refused.toolBefore({ ...nested("opencode_session_rename"), input: { title: "x" } }),
+    ).rejects.toThrow("no");
+  });
+
   it("leaves Code Mode's read-only or self-asserting tools to the runtime", async () => {
     const harness = await pluginHarness("supervised-coding", { effect: "deny" });
     for (const tool of [
       "opencode_models",
       "opencode_worktree_list",
-      "opencode_session_rename",
       "opencode_list_mcp_resources",
       "opencode_read_mcp_resource",
       "opencode_worktree_remove",

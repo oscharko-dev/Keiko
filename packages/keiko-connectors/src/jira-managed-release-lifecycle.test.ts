@@ -683,7 +683,6 @@ describe("formal issue-rule impact is admitted before any native bulk reference 
   });
   it.each([
     formalRules(["requiredFields: [components]"], "OTHER"),
-    formalRules(["requiredFields: [components]"], "SYN", "create"),
     formalRules(["requiredFields: [components]"], "SYN", "transition"),
     formalRules(["requiredFields: [summary, fixVersions]", "parentLink: Blocks"]),
   ])(
@@ -696,6 +695,19 @@ describe("formal issue-rule impact is admitted before any native bulk reference 
       expect(effects(request)).toHaveLength(1);
     },
   );
+  // #4354: any template of the type governs its edits, whichever plain activation it names.
+  it("lets a template that names create govern a bulk reference change of the edited issues", async () => {
+    const request = fixture();
+    expect(
+      await executeJiraComponentDelete(
+        COMPONENT_ARGS,
+        request,
+        false,
+        formalRules(["requiredFields: [components]"], "SYN", "create"),
+      ),
+    ).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(effects(request)).toHaveLength(0);
+  });
   it("never promotes a prose skill into formal enforcement", async () => {
     const prose = parseJiraIssueTemplate(
       "Please keep components and fix versions populated when preparing release work.",

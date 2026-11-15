@@ -189,6 +189,13 @@ it.each([false, true])("dry-run %s sends no POST or DELETE", async (deleting) =>
   expect(await run(request, deleting, INPUT, true)).toEqual({ ok: true, receipt: {} });
   expect(effects(request)).toHaveLength(0);
 });
+it("jira.create-issue-link refuses an unreadable template library before any POST", async () => {
+  const request = fixture();
+  expect(
+    await run(request, false, INPUT, false, () => ({ templates: [], unreadable: 1 })),
+  ).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+  expect(effects(request)).toHaveLength(0);
+});
 it("refuses the last required parent relation using the planned complete post-delete state", async () => {
   const request = fixture({ deleting: true });
   expect(await run(request, true, INPUT, false, requiredLinkTemplate())).toMatchObject({
@@ -309,5 +316,63 @@ it.each([
 ])("refuses widened inputs without any request", async (args) => {
   const request = fixture();
   expect(await run(request, false, args)).toMatchObject({ ok: false, reason: "field-validation" });
+  expect(request).not.toHaveBeenCalled();
+});
+
+// #4357 AC3: one sentence per cause, pinned exactly, within the 200-byte bound of a message and
+// never echoing what the model sent.
+it.each([
+  [
+    "an argument the call does not take",
+    "jira.create-issue-link",
+    { ...INPUT, comment: "x" },
+    "This call takes only inwardIssueIdOrKey, outwardIssueIdOrKey, expectedActorKey, linkType, linkId.",
+  ],
+  [
+    "an actor key that is not text",
+    "jira.create-issue-link",
+    { ...INPUT, expectedActorKey: "" },
+    "expectedActorKey must be the key of the connected Jira user; jira.myself returns it.",
+  ],
+  [
+    "an issue that is not a key or id",
+    "jira.create-issue-link",
+    { ...INPUT, outwardIssueIdOrKey: "../x" },
+    "inwardIssueIdOrKey and outwardIssueIdOrKey must each be the key or id of one issue.",
+  ],
+  [
+    "a link type that is not complete",
+    "jira.create-issue-link",
+    { ...INPUT, linkType: { id: "9" } },
+    "linkType must be exactly { id, name, inward, outward } of one type, as jira.link-types lists it.",
+  ],
+  [
+    "a link type with another field",
+    "jira.create-issue-link",
+    { ...INPUT, linkType: { ...TYPE, self: "x" } },
+    "linkType must be exactly { id, name, inward, outward } of one type, as jira.link-types lists it.",
+  ],
+  [
+    "a delete without a link ID",
+    "jira.delete-issue-link",
+    INPUT,
+    "A delete takes linkId: the numeric ID of the link to delete.",
+  ],
+  [
+    "a create with a link ID",
+    "jira.create-issue-link",
+    { ...INPUT, linkId: ID },
+    "A create takes no linkId: Jira assigns it.",
+  ],
+] as const)("names the issue-link rule for %s", async (_name, operation, args, message) => {
+  const request = vi.fn<JiraMutationRequest>();
+  expect(await executeJiraIssueLinkMutation(operation, args as CatalogJsonObject, request)).toEqual(
+    {
+      ok: false,
+      reason: "field-validation",
+      detail: { validation: "invalid-field", messages: [message] },
+    },
+  );
+  expect(new TextEncoder().encode(message).length).toBeLessThanOrEqual(200);
   expect(request).not.toHaveBeenCalled();
 });

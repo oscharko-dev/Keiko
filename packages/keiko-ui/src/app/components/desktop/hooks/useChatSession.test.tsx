@@ -4291,6 +4291,33 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     expect(sendDesktopChat).toHaveBeenCalledTimes(1);
   });
 
+  // #4355: the code decides, never the words in the message. A provider error that names a token
+  // parameter keeps its own code's notice; only the gateway's overflow code reads as an overflow.
+  it.each([
+    ["GATEWAY_PROVIDER_ERROR", "the provider rejected max_tokens for this deployment"],
+    ["GATEWAY_RATE_LIMIT", "too many tokens per minute for this key"],
+    ["GATEWAY_TRANSPORT", "context length of the connection pool exceeded"],
+  ])("does not read the text of a %s error as a context overflow", async (code, text) => {
+    vi.mocked(sendDesktopChat).mockRejectedValueOnce(new ApiError(code, text, 502));
+    const { result } = await setupUngroundedSession();
+    await act(async () => {
+      await result.current.sendMessage({ text: "summarise the retained conversation" });
+    });
+    const notice = toUserErrorNotice(result.current.error, "fallback");
+    expect(notice.code).toBe(code);
+    expect(notice.title).not.toBe("Request larger than the context window");
+    expect(result.current.error).not.toContain(CONTEXT_OVERSIZED_USER_MESSAGE);
+  });
+
+  it("does not read the words of an error without a code either", async () => {
+    vi.mocked(sendDesktopChat).mockRejectedValueOnce(new Error("maximum context length exceeded"));
+    const { result } = await setupUngroundedSession();
+    await act(async () => {
+      await result.current.sendMessage({ text: "summarise the retained conversation" });
+    });
+    expect(result.current.error).toBe("maximum context length exceeded");
+  });
+
   // PR #3678 review: an oversized attachment is not a context-window overflow. The overflow notice
   // told the user to resend a request that fails the same way.
   it("keeps an oversized-attachment error apart from the context-window notice", async () => {
@@ -7368,6 +7395,22 @@ describe("ungrounded streaming refusal recovery", () => {
     } finally {
       resetClientDiagnosticWriter();
     }
+  });
+
+  it("keeps the Chat and its typed draft after a Jira authentication failure so the person can reconnect", async () => {
+    const { result } = await streamingSession();
+    const refusal = new ApiError("JIRA_AUTHENTICATION_FAILED", "Private provider detail", 409);
+    refusal.correlationId = "jira-auth-draft";
+    vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(refusal);
+    act(() => result.current.setDraft("Private draft canary"));
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(result.current.draft).toBe("Private draft canary");
+    expect(result.current.activeChat?.id).toBe("chat-1");
+    expect(result.current.error).toContain("JIRA_AUTHENTICATION_FAILED");
+    expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+    expect(sendDesktopChat).not.toHaveBeenCalled();
   });
 
   it("keeps an admitted streaming turn in progress without an error banner or replay", async () => {

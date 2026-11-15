@@ -105,6 +105,7 @@ import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
+import { withJiraWriteReview } from "./opencodeRuntimeComposition.js";
 import type {
   McpOAuthIssuerPort,
   OpenCodeRuntimeCompositionInput,
@@ -197,6 +198,21 @@ import {
 import { openCodePlanDirectory } from "./opencodeLaunchProfile.js";
 
 const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
+// #4359: a test can take the nested-effects fact off the pin the run is verified against.
+const pinFlag = vi.hoisted(() => ({ stripNestedEffects: false }));
+
+vi.mock("./opencodeRuntimeVersions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./opencodeRuntimeVersions.js")>();
+  return {
+    ...actual,
+    openCodeRuntimeVersionPin: (version: unknown): unknown => {
+      const pin = actual.openCodeRuntimeVersionPin(version);
+      return pin !== undefined && pinFlag.stripNestedEffects
+        ? { ...pin, decidesNestedEffects: false }
+        : pin;
+    },
+  };
+});
 
 // Observe the real source producer without replacing its generated tools or source definitions.
 vi.mock("./opencodeToolSchemas.js", async (importOriginal) => {
@@ -757,6 +773,8 @@ interface StartBridgeControl {
   /** The managed MCP relay and the servers the human chose for the run (a Jira Pod). */
   readonly mcpRelay?: NonNullable<OpenCodeRuntimeCompositionInput["mcpRelay"]>;
   readonly mcpGrantedServers?: ReadonlySet<string>;
+  /** The dry run of the run's Jira writes before the human is asked (#4354 L4). */
+  readonly jiraWritePreflight?: OpenCodeRuntimeCompositionInput["jiraWritePreflight"];
   readonly mcpPlatform?: NodeJS.Platform;
   /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
   readonly repositoryInstructions?: InstructionsCopyPort;
@@ -1103,6 +1121,14 @@ function optionalRepositoryItems(control: StartBridgeControl | undefined): {
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
 } {
   return control?.repositoryItems === undefined ? {} : { repositoryItems: control.repositoryItems };
+}
+
+function optionalJiraPreflight(control: StartBridgeControl | undefined): {
+  readonly jiraWritePreflight?: OpenCodeRuntimeCompositionInput["jiraWritePreflight"];
+} {
+  return control?.jiraWritePreflight === undefined
+    ? {}
+    : { jiraWritePreflight: control.jiraWritePreflight };
 }
 
 function optionalMcp(control: StartBridgeControl | undefined): {
@@ -1608,6 +1634,7 @@ async function startBridgeFixture(
     ...optionalRepositoryItems(control),
     ...optionalOperatorPlugins(control),
     ...optionalMcp(control),
+    ...optionalJiraPreflight(control),
     ...optionalMcpPlatform(control),
     ...optionalRepositoryInstructions(control),
     ...optionalNativeWorktrees(control),
@@ -3602,6 +3629,47 @@ describe("private OpenCode run control", () => {
   });
 });
 
+/** The Jira Pods service with the custody graph attached for one bound, verified Pod. */
+function attachedJiraPods(binding: {
+  readonly podId: string;
+  readonly authenticationGeneration: number;
+  readonly verificationRevision: number;
+}): ReturnType<typeof createCodingJiraPods> {
+  const pods = createCodingJiraPods(undefined);
+  pods.attach({
+    store: templateFreeStore(),
+    serverPrincipal: () => "operator-principal",
+    atlassianConnectorCredentials: {
+      custody: {
+        list: () => [
+          {
+            schemaVersion: "1",
+            authRef: "synthetic-credential",
+            displayName: "Synthetic Jira",
+            baseUrl: "https://jira.example.invalid",
+            createdAt: 1,
+            generation: binding.authenticationGeneration,
+            provider: "jira",
+            deployment: "data-center",
+            authScheme: "bearer-pat",
+            livePod: {
+              podId: binding.podId,
+              ownerDigest: createHash("sha256").update("operator-principal").digest("hex"),
+              creationRequestId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019",
+              verificationRevision: binding.verificationRevision,
+              verificationInProgress: false,
+              verificationStatus: "ok",
+            },
+          },
+        ],
+      } as unknown as NonNullable<CodingJiraPodDeps["atlassianConnectorCredentials"]>["custody"],
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+        Promise.resolve({ kind: "network-error" }),
+    },
+  });
+  return pods;
+}
+
 describe("native policy asks on the tool bridge (#3897 review)", () => {
   const completed = {
     status: "completed" as const,
@@ -4472,6 +4540,104 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       await pods.close();
     }
   });
+
+  // #4354 L4: a managed Jira write the human would be asked about is dry-run first, so a write that
+  // breaks the customer's templates ends as the model's refusal and no approval card is raised.
+  it.each([
+    {
+      mode: "governed-assist",
+      refusal: "Nothing was changed: this breaks the issue template.",
+      expected: "deny",
+    },
+    { mode: "governed-assist", refusal: undefined, expected: "ask" },
+    {
+      mode: "supervised-coding",
+      refusal: "Nothing was changed: this breaks the issue template.",
+      expected: "deny",
+    },
+    { mode: "supervised-coding", refusal: undefined, expected: "ask" },
+    // Full access never asks, so the executor gate is the authority and the dry run is not run.
+    {
+      mode: "autonomous-delivery",
+      refusal: "Nothing was changed: this breaks the issue template.",
+      expected: "allow",
+    },
+  ] as const)(
+    "dry-runs a managed Jira write before the card: $mode with $refusal is $expected",
+    async ({ mode, refusal, expected }) => {
+      const binding = {
+        podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+        authenticationGeneration: 3,
+        verificationRevision: 1,
+      };
+      const pods = attachedJiraPods(binding);
+      const preflight = vi.fn(() => Promise.resolve(refusal));
+      const policyLog = createBufferedServerLogSink();
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode,
+        readToolProfile: () => "native",
+        mcpServers: () => withCodingJiraServer([], binding),
+        mcpRelay: {
+          relay: createMcpCredentialRelay(),
+          origin: "http://127.0.0.1:1983",
+          secrets: {},
+          managed: pods.connections(undefined, binding, {
+            runId: FIXTURE_RUN_ID,
+            currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+          }),
+        },
+        mcpGrantedServers: new Set(["jira"]),
+        activityLog: policyLog,
+        jiraWritePreflight: preflight,
+      });
+      try {
+        const pending = fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: JSON.stringify({
+            action: "native-policy",
+            runId: FIXTURE_RUN_ID,
+            sessionID: "ses_tool",
+            permission: "jira_jira_edit",
+            resources: ["*"],
+            mcpInput: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+            source: { type: "tool", messageID: "msg_1", id: "call_jira_edit" },
+            configured: "ask",
+          }),
+        });
+        if (expected === "ask") {
+          // The card is raised: the call stays open until a human decides, so it is not awaited.
+          await vi.waitFor(() => {
+            expect(preflight).toHaveBeenCalledOnce();
+          });
+          return;
+        }
+        const answer = await pending;
+        expect(answer.status).toBe(200);
+        if (expected === "allow") {
+          // Full access asks nobody: the dry run is not run, and the executor gate decides.
+          expect(preflight).not.toHaveBeenCalled();
+          return;
+        }
+        // The remaining case: the dry run refused, the runtime is told why and no card was raised.
+        expect(answer.body).toContain('"effect":"deny"');
+        expect(answer.body).toContain("this breaks the issue template");
+        expect(preflight).toHaveBeenCalledOnce();
+        expect(preflight).toHaveBeenCalledWith({
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+        });
+        // The decision is on the log as its own closed outcome, never as an approval or a denial of mode.
+        const decided = policyLog.events.find(
+          (event) => event.op === "coding-runtime.native-policy.decided",
+        );
+        expect(decided?.extra).toMatchObject({ mode, outcome: "template-refused" });
+      } finally {
+        await fixture.stop();
+        await pods.close();
+      }
+    },
+  );
 
   it("leaves the run's Jira tools out entirely when the Pod is no longer the one chosen at launch", async () => {
     const binding = {
@@ -12094,4 +12260,131 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
       { binding: { taskId: TASK }, sessionId: "ses_tool" },
     ]);
   });
+});
+
+// #4359 F27: the ask of a managed Jira write carries the call and the names its ids were given, so
+// the card reads like Chat's approval of the same write; every other ask stays as it is.
+describe("the plain approval of a managed Jira write", () => {
+  const ask = {
+    effect: "ask",
+    event: {
+      type: "permission-request",
+      requestId: "per_1",
+      nativeAction: { permission: "jira_jira_create", resources: ["*"] },
+    },
+  } as unknown as Parameters<typeof withJiraWriteReview>[0];
+  const request = {
+    permission: "jira_jira_create",
+    mcpInput: { projectId: "10002", issueTypeId: "10003", fields: { summary: "Probe" } },
+  } as unknown as Parameters<typeof withJiraWriteReview>[2];
+  const run = (serverName: string): Parameters<typeof withJiraWriteReview>[1] =>
+    ({
+      mcp: {
+        actions: new Map([
+          [
+            "jira_jira_create",
+            { risk: "write", remote: true, mutation: { serverName, toolName: "jira.create" } },
+          ],
+        ]),
+      },
+    }) as unknown as Parameters<typeof withJiraWriteReview>[1];
+  const review = vi.fn((call: { readonly tool: string }) => ({
+    tool: call.tool,
+    input: {},
+    names: { projects: [], issueTypes: [], fields: [] },
+  }));
+  const deps = { jiraWriteReview: review } as unknown as Parameters<typeof withJiraWriteReview>[3];
+
+  it("adds the call and the names to the Pod's write", () => {
+    const decided = withJiraWriteReview(ask, run("jira"), request, deps);
+    expect(review).toHaveBeenCalledWith({
+      tool: "jira.create",
+      arguments: { projectId: "10002", issueTypeId: "10003", fields: { summary: "Probe" } },
+    });
+    expect(decided.event.nativeAction).toMatchObject({
+      permission: "jira_jira_create",
+      resources: ["*"],
+      jira: { tool: "jira.create" },
+    });
+    // What the card shows is the very input the approval is prepared for and dispatched with.
+    expect(review.mock.calls.at(-1)?.[0]).toMatchObject({
+      arguments: request.mcpInput,
+    });
+  });
+
+  it("leaves a write of any other server, and a run without a review, as asked", () => {
+    expect(withJiraWriteReview(ask, run("other"), request, deps)).toBe(ask);
+    expect(withJiraWriteReview(ask, run("jira"), request, {} as typeof deps)).toBe(ask);
+  });
+});
+
+// #4359: whether a Code Mode program asks is decided by the pin of the version the run was verified
+// against, through the real composition (the policy and the generator are pinned in
+// opencodeCodeModeProgram.test.ts).
+describe("the program card follows the verified runtime's pin (#4359)", () => {
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const completed = { status: "completed" as const, evidence: [] };
+  const programAsk = JSON.stringify({
+    action: "native-policy",
+    runId: FIXTURE_RUN_ID,
+    sessionID: "ses_tool",
+    permission: "execute",
+    resources: ["const r = await fetch('https://example.com'); return r.status;"],
+    configured: "ask",
+    source: { type: "tool", messageID: "msg_program", id: "call_program" },
+  });
+
+  async function runProgram(
+    mode: "governed-assist" | "supervised-coding",
+    stripNestedEffects: boolean,
+  ): Promise<{ readonly answered: boolean; readonly asked: boolean }> {
+    pinFlag.stripNestedEffects = stripNestedEffects;
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+      },
+      undefined,
+      { mode, runtimeEvents, activityLog },
+    );
+    try {
+      const state = { answered: false };
+      const pending = fixture.runtime.toolBridge
+        .handle({ method: "POST", headers: new Headers(authorized), body: programAsk })
+        .then((response) => {
+          state.answered = true;
+          return response;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const asked = runtimeEvents.some((event) => event.kind === "permission-requested");
+      if (state.answered) {
+        const response = await pending;
+        expect(response.body).toBe('{"effect":"allow"}');
+        const decided = activityLog.events.find(
+          (event) => event.op === "coding-runtime.native-policy.decided",
+        )?.extra;
+        expect(decided).toMatchObject({ permission: "execute", effect: "allow", risk: "low" });
+      }
+      return { answered: state.answered, asked };
+    } finally {
+      pinFlag.stripNestedEffects = false;
+      await fixture.stop();
+    }
+  }
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "lets a program of a verified 2.2.5 run pass without a card in %s",
+    async (mode) => {
+      await expect(runProgram(mode, false)).resolves.toEqual({ answered: true, asked: false });
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "keeps the card in %s when the verified version's pin does not say nested effects are decided",
+    async (mode) => {
+      await expect(runProgram(mode, true)).resolves.toEqual({ answered: false, asked: true });
+    },
+  );
 });

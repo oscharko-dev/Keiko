@@ -7,8 +7,13 @@ import {
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { field, LINKS_FIELD, response } from "../../../tests/support/jira-managed-remote.js";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+} from "../../../tests/support/jira-test-templates.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { parseJiraDraft } from "./jira-draft.js";
+import { connectionFingerprint } from "./jira-report-tool.js";
 import { createJiraDraftStore, type JiraDraftStoreOptions } from "./jira-draft-store.js";
 import {
   executeJiraDraftStageTool,
@@ -55,12 +60,16 @@ function template(...frontMatter: readonly string[]): JiraIssueTemplate {
   if (!result.ok) throw new Error("fixture template must parse");
   return result.template;
 }
+type ExtraRoute = (path: string) => ReturnType<typeof response> | undefined;
 function connection(
   templates?: JiraIssueTemplateSet,
   fields: readonly unknown[] = CREATE_FIELDS,
+  extraRoute?: ExtraRoute,
 ): Parameters<typeof executeJiraDraftStageTool>[2] {
   const http = vi.fn<AtlassianHttpBodyPort>((request) => {
     const path = new URL(request.url).pathname;
+    const extra = extraRoute?.(path);
+    if (extra !== undefined) return Promise.resolve(extra);
     if (path.endsWith("/project/10000"))
       return Promise.resolve(response({ id: "10000", key: "SYN" }));
     if (path.endsWith("/issuetype/10001"))
@@ -98,7 +107,8 @@ function connection(
     baseUrl: "https://jira.example.invalid/context",
     identity: "credential-1",
     http,
-    ...(templates === undefined ? {} : { issueTemplates: (): JiraIssueTemplateSet => templates }),
+    issueTemplates: (): JiraIssueTemplateSet =>
+      templates ?? permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
   };
 }
 function harness(
@@ -111,9 +121,13 @@ function harness(
     args: CatalogJsonObject,
     owner?: string,
     fields?: readonly unknown[],
+    extraRoute?: ExtraRoute,
   ) => ReturnType<typeof executeJiraDraftStageTool>;
 } {
   const store = createJiraDraftStore(storeOptions);
+  // The harness is on one connection: staged drafts resolve under the fingerprint they are stored with.
+  const current = connectionFingerprint(connection());
+  store.bindConnection(() => current);
   const activity: JiraDraftActivity[] = [];
   const base: JiraDraftToolDeps<ManagedMcpInvocationContext> = {
     store,
@@ -123,8 +137,8 @@ function harness(
   return {
     activity,
     deps: base,
-    stage: (args, owner = "chat-1", fields) =>
-      executeJiraDraftStageTool(args, CONTEXT, connection(templates, fields), {
+    stage: (args, owner = "chat-1", fields, extraRoute) =>
+      executeJiraDraftStageTool(args, CONTEXT, connection(templates, fields, extraRoute), {
         ...base,
         owner: () => owner,
       }),
@@ -255,6 +269,7 @@ describe("jira.draft-stage (#4178)", () => {
           draftDigest: result.data.draftDigest,
         },
         () => held,
+        h.deps.store.connectionOf("chat-1"),
       ),
     ).toEqual({ ok: true, arguments: { items: held?.items } });
     expect(result.data).not.toHaveProperty("sourceBindings");
@@ -359,6 +374,7 @@ describe("jira.draft-stage (#4178)", () => {
                 ...held,
                 sourceBindings: [{ ref: "source", sourceDigest: "b".repeat(64) }],
               },
+        h.deps.store.connectionOf("chat-1"),
       ),
     ).toEqual({ ok: false, reason: "draft-changed" });
   });
@@ -396,6 +412,7 @@ describe("jira.draft-stage (#4178)", () => {
     const resolved = resolveJiraDraftArguments(
       { draftId: text(first.data.draftId), draftDigest: text(second.data.draftDigest) },
       (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
     );
     expect(resolved?.ok === true ? JSON.stringify(resolved.arguments) : "").toContain(
       "projected a",
@@ -457,6 +474,7 @@ describe("jira.draft-stage (#4178)", () => {
     const resolved = resolveJiraDraftArguments(
       { draftId, draftDigest: text(second.data.draftDigest) },
       (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
     );
     expect(resolved?.ok).toBe(true);
     const draft = resolved?.ok === true ? parseJiraDraft(resolved.arguments) : undefined;
@@ -511,6 +529,7 @@ describe("jira.draft-stage (#4178)", () => {
     const resolved = resolveJiraDraftArguments(
       { draftId: text(draftId), draftDigest: staged?.digest ?? "" },
       (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
     );
     const draft = resolved?.ok === true ? parseJiraDraft(resolved.arguments) : undefined;
     expect(draft?.items).toHaveLength(1200);
@@ -570,6 +589,9 @@ describe("jira.draft-stage (#4178)", () => {
         ref: "one",
         fieldId: "customfield_10103",
         validation: "required-field",
+        messages: [
+          "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+        ],
       },
     });
     expect(h.activity.at(-1)).toMatchObject({
@@ -580,6 +602,63 @@ describe("jira.draft-stage (#4178)", () => {
     });
     const staged = await h.stage(pageOf("one"));
     expect(staged.data).toMatchObject({ newDraft: true, itemCount: 1 });
+  });
+
+  // #4354: an Epic Link to an issue that is not an Epic is refused while the item is written, by the
+  // stage tool itself: before any review card, with nothing staged. The template dry run never
+  // decides it (it has no agile request); the field check does, and this pins that they agree.
+  describe("an item whose Epic Link points to a Task (#4354)", () => {
+    const EPIC_LINK_FIELD = {
+      ...field("customfield_10014", "any"),
+      schema: { type: "any", custom: "com.pyxis.greenhopper.jira:gh-epic-link" },
+    };
+    const route: ExtraRoute = (path) => {
+      if (path.endsWith("/rest/api/2/field"))
+        return response([
+          { id: "customfield_10014", name: "Epic Link", schema: EPIC_LINK_FIELD.schema },
+        ]);
+      if (path.endsWith("/rest/agile/1.0/epic/SYN-9")) return response({ key: "SYN-9" });
+      if (path.includes("/rest/agile/1.0/epic/"))
+        return response({ errorMessages: ["Epic does not exist"] }, 404);
+      return undefined;
+    };
+    const withEpic = (key: string): CatalogJsonObject =>
+      ({
+        items: [
+          item("story", {
+            fields: {
+              summary: "A story",
+              description: "h2. Acceptance criteria\n* ok",
+              customfield_10014: key,
+            },
+          }),
+        ],
+      }) as unknown as CatalogJsonObject;
+    const fields = [...CREATE_FIELDS, EPIC_LINK_FIELD];
+
+    it("is refused by the stage tool, naming the field, and nothing is staged", async () => {
+      const h = harness();
+      const result = await h.stage(withEpic("SYN-5"), "chat-1", fields, route);
+      expect(result).toMatchObject({
+        isError: true,
+        data: {
+          outcome: "rejected",
+          reason: "field-validation",
+          ref: "story",
+          fieldId: "customfield_10014",
+          validation: "invalid-epic-link",
+        },
+      });
+      expect(h.deps.store.size()).toBe(0);
+      expect(h.activity.at(-1)).toMatchObject({ phase: "refused", refusal: "invalid-fields" });
+    });
+
+    it("is staged when the Epic Link points to an Epic", async () => {
+      const h = harness();
+      const result = await h.stage(withEpic("SYN-9"), "chat-1", fields, route);
+      expect(result.data).toMatchObject({ newDraft: true, itemCount: 1 });
+      expect(h.deps.store.size()).toBe(1);
+    });
   });
 
   describe("a template that requires a link (parentLink)", () => {
@@ -656,7 +735,7 @@ describe("jira.draft-stage (#4178)", () => {
         isError: true,
         data: {
           ref: "a",
-          violations: [{ ruleId: "parent-type-mismatch", subject: "parent: Task" }],
+          violations: [{ ruleId: "parent-type-mismatch", subject: "parent: Task (found: Story)" }],
         },
       });
       expect(h.deps.store.size()).toBe(0);
@@ -730,12 +809,72 @@ describe("jira.draft-stage (#4178)", () => {
       draftId: "99999999-9999-4999-8999-999999999999",
       items: [item("b") as CatalogJsonObject],
     });
-    expect(unknown.data).toMatchObject({ reason: "draft-not-found" });
+    const NOT_FOUND =
+      "No draft with this draftId is held for this Chat, so nothing was staged. Call jira.draft-stage again without a draftId: that starts a new draft; then use the draftId it returns, and do not invent one.";
+    expect(unknown.data).toMatchObject({ reason: "draft-not-found", guidance: NOT_FOUND });
     const foreign = await h.stage({ draftId, items: [item("b") as CatalogJsonObject] }, "chat-2");
-    expect(foreign.data).toMatchObject({ reason: "draft-not-found" });
+    expect(foreign.data).toMatchObject({ reason: "draft-not-found", guidance: NOT_FOUND });
     const repeated = await h.stage({ draftId, items: [item("a") as CatalogJsonObject] });
-    expect(repeated.data).toMatchObject({ reason: "duplicate-ref" });
+    expect(repeated.data).toMatchObject({
+      reason: "duplicate-ref",
+      guidance:
+        "Two items of the draft use the same ref. Give every item its own ref and stage the page again; nothing was staged.",
+    });
     expect(h.deps.store.peek(draftId, "chat-1")?.items).toHaveLength(1);
+  });
+});
+
+// #4357 AC3: the three refusals that carried only a code now say what to do next, pinned exactly.
+describe("what a refused staging tells the model to do next (#4357 AC3)", () => {
+  it("names the way out of a page that did not pass Keiko's check", async () => {
+    const h = harness();
+    const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, connection(), {
+      ...h.deps,
+      prepareRequirements: () => ({
+        ok: true,
+        items: [item("different")],
+        sourceBindings: [{ ref: "source", sourceDigest: "a".repeat(64) }],
+      }),
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        reason: "invalid-input",
+        guidance:
+          "An item of this page did not pass Keiko's check of its fields, links or requirement references. Send the page again with every item in the jira.draft item form; nothing was staged.",
+      },
+    });
+  });
+  it("says a draft cannot be staged on a deployment that is not Data Center", async () => {
+    const h = harness();
+    const result = await executeJiraDraftStageTool(
+      pageOf("a"),
+      CONTEXT,
+      { ...connection(), deployment: "cloud" } as unknown as Parameters<
+        typeof executeJiraDraftStageTool
+      >[2],
+      h.deps,
+    );
+    expect(result.data).toMatchObject({
+      reason: "unsupported-deployment",
+      guidance:
+        "Drafts work with Jira Data Center only, and this connection is not one. Tell the user a draft cannot be staged here. Nothing was staged.",
+    });
+  });
+  it("tells a model to stage again when the connection changed since the draft was staged", async () => {
+    const h = harness();
+    const first = await h.stage({ items: [item("a") as CatalogJsonObject] });
+    const result = await executeJiraDraftStageTool(
+      { draftId: text(first.data.draftId), items: [item("b") as CatalogJsonObject] },
+      CONTEXT,
+      { ...connection(), baseUrl: "https://another-jira.example.invalid/context" },
+      h.deps,
+    );
+    expect(result.data).toMatchObject({
+      reason: "connection-changed",
+      guidance:
+        "The Jira connection changed since this draft was staged, so it cannot be extended. Call jira.draft-stage again without a draftId: that starts a new draft on the current connection. Nothing was staged.",
+    });
   });
 });
 
@@ -768,6 +907,7 @@ describe("refs repeated inside one staged page (review)", () => {
     const resolved = resolveJiraDraftArguments(
       { draftId: text(staged.data.draftId), draftDigest: text(staged.data.draftDigest) },
       (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
     );
     expect(resolved?.ok === true && parseJiraDraft(resolved.arguments)).toBeTruthy();
   });
@@ -775,7 +915,22 @@ describe("refs repeated inside one staged page (review)", () => {
 
 describe("resolving the draft a jira.draft call names (#4178)", () => {
   it("is not a reference when the call carries its own items", () => {
-    expect(resolveJiraDraftArguments({ items: [] }, () => undefined)).toBeUndefined();
+    expect(resolveJiraDraftArguments({ items: [] }, () => undefined, undefined)).toBeUndefined();
+  });
+
+  it("resolves a draft only under the connection it was stored with (#4353 AC4)", async () => {
+    const h = harness();
+    const first = await h.stage({ items: [item("a") as CatalogJsonObject] });
+    const args = { draftId: text(first.data.draftId), draftDigest: text(first.data.draftDigest) };
+    const lookup = (id: string): ReturnType<typeof h.deps.store.get> =>
+      h.deps.store.get(id, "chat-1");
+    const stored = h.deps.store.connectionOf("chat-1");
+    expect(resolveJiraDraftArguments(args, lookup, stored)).toMatchObject({ ok: true });
+    for (const current of ["another-jira", "", undefined])
+      expect(resolveJiraDraftArguments(args, lookup, current)).toEqual({
+        ok: false,
+        reason: "connection-changed",
+      });
   });
 
   it("refuses a draft that was extended after its digest was read", async () => {
@@ -785,8 +940,10 @@ describe("resolving the draft a jira.draft call names (#4178)", () => {
     const digest = text(first.data.draftDigest);
     await h.stage({ draftId, items: [item("b") as CatalogJsonObject] });
     expect(
-      resolveJiraDraftArguments({ draftId, draftDigest: digest }, (id) =>
-        h.deps.store.get(id, "chat-1"),
+      resolveJiraDraftArguments(
+        { draftId, draftDigest: digest },
+        (id) => h.deps.store.get(id, "chat-1"),
+        h.deps.store.connectionOf("chat-1"),
       ),
     ).toEqual({ ok: false, reason: "draft-changed" });
   });
@@ -799,7 +956,7 @@ describe("resolving the draft a jira.draft call names (#4178)", () => {
     ],
     ["a malformed digest", { draftId: "11111111-2222-4333-8444-555555555555", draftDigest: "A" }],
   ])("refuses %s as an unknown draft", (_name, args) => {
-    expect(resolveJiraDraftArguments(args, () => undefined)).toEqual({
+    expect(resolveJiraDraftArguments(args, () => undefined, undefined)).toEqual({
       ok: false,
       reason: "draft-not-found",
     });

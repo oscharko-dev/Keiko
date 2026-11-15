@@ -227,6 +227,11 @@ describe("native Agile writes and authoritative readback", () => {
     expect(await f.run("jira.sprint-update", { sprintId: "9", state: "active" })).toMatchObject({
       ok: false,
       reason: "invalid-transition",
+      detail: {
+        messages: [
+          "A sprint moves from future to active to closed, one step at a time; starting it needs a start and an end date. Nothing was changed.",
+        ],
+      },
     });
     expect(f.http).toHaveBeenCalledTimes(1);
   });
@@ -235,6 +240,7 @@ describe("native Agile writes and authoritative readback", () => {
     expect(await f.run("jira.sprint-update", { sprintId: "9", goal: "Changed" })).toMatchObject({
       ok: false,
       reason: "invalid-transition",
+      detail: { messages: ["A closed sprint cannot be changed again. Nothing was changed."] },
     });
     expect(f.http).toHaveBeenCalledTimes(1);
   });

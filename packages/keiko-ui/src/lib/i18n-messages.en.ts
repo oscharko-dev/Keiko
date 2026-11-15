@@ -89,6 +89,10 @@ export const EN_MESSAGES = {
     "Memory is unavailable until its local vault is repaired. Chat remains available. Resolve the cause and restart Keiko.",
   "memory.readiness.unreadable":
     "The saved Memory vault could not be opened. Check the available key and restart Keiko. Chat remains available.",
+  "credentialCustody.exposed":
+    "The key that protects your stored credentials was readable by another account on this computer. Keiko has now made it private, but the credentials may have been read. Replace them: create a new Jira token and reconnect the Jira Pod, and replace the gateway key in Settings > Models.",
+  "credentialCustody.unattested":
+    "Keiko could not check whether your stored credentials are protected from other accounts on this computer. They keep working. Ask your administrator to allow Windows PowerShell for your account, then restart Keiko.",
   "supportReport.create": "Create error report",
   "supportReport.creating": "Creating report…",
   "supportReport.download": "Download report",
@@ -241,7 +245,8 @@ export const EN_MESSAGES = {
   "gatewaySetup.unusable.unsupported": " Not used (mode declared by the gateway): {models}.",
   "gatewaySetup.unusable.dropped": " Embedding verification failed, not stored: {models}.",
   "gatewaySetup.unusable.unverified": " Kept but unverified as embedding models: {models}.",
-  "gatewaySetup.unusable.unverifiedChat": " Kept but unverified as chat models: {models}.",
+  "gatewaySetup.unusable.unverifiedChat":
+    " Kept, but not verified as chat models: {models}. Choose one in Chat or the Coding Workbench to check it, or verify it in Settings > Models.",
   // The shell undo stack records panel toggles only — no window move/resize/maximize/close reaches
   // it — so the empty-stack labels name that scope instead of promising window changes.
   "shell.command.undo.target": "Undo: {target}",
@@ -528,9 +533,34 @@ export const EN_MESSAGES = {
   "chat.error.scopeChanged.remediation":
     "Check the Chat's current sources, then send your request again.",
   "chat.error.jiraAuthentication.title": "Jira authentication failed",
-  "chat.error.jiraAuthentication.message": "The Jira connection could not be authenticated.",
+  "chat.error.jiraAuthentication.message":
+    "Jira rejected the token of this connection. It may have expired or been revoked.",
   "chat.error.jiraAuthentication.remediation":
-    "Verify the Jira connection in the Knowledge Pods Hub. Before requesting another change, check its outcome in Jira.",
+    "Open the Local Knowledge window, replace the token on the Jira Pod and verify the connection. This Chat and its draft stay as they are. Before requesting another change, check its outcome in Jira.",
+  "chat.error.knowledgePodUnavailable.title": "Knowledge Pod unavailable",
+  "chat.error.knowledgePodUnavailable.message":
+    "The selected Knowledge Pod no longer exists or is being deleted. Choose another Knowledge Pod.",
+  "chat.error.knowledgePodUnavailable.remediation":
+    "The list has been refreshed. Pick a Knowledge Pod from it.",
+  "chat.error.knowledgeStoreUnavailable.title": "Knowledge Pods cannot be checked",
+  "chat.error.knowledgeStoreUnavailable.message":
+    "The Knowledge Pod store is unavailable, so the selection could not be checked. Try again in a moment.",
+  "chat.error.knowledgeStoreUnavailable.remediation": "If this keeps happening, restart Keiko.",
+  "chat.error.jiraPodUnavailable.title": "Jira Pod no longer available",
+  "chat.error.jiraPodUnavailable.message":
+    "The Jira Pod bound to this chat is no longer available. Choose a Jira Pod again.",
+  "chat.error.jiraPodUnavailable.remediation":
+    "Open the Connectors menu above the conversation and switch on a Jira Pod, then send your message again.",
+  "chat.error.jiraPodVerification.title": "Jira Pod needs verification",
+  "chat.error.jiraPodVerification.message":
+    "The Jira Pod must be verified again before this chat can use it. Verify it in the Local Knowledge window.",
+  "chat.error.jiraPodVerification.remediation":
+    "Open the Local Knowledge window, verify the Jira connection, then send your message again.",
+  "chat.error.jiraPodConnectionChanged.title": "Jira connection changed",
+  "chat.error.jiraPodConnectionChanged.message":
+    "The Jira connection changed after this chat chose its Jira Pod. Choose the Jira Pod again.",
+  "chat.error.jiraPodConnectionChanged.remediation":
+    "Open the Connectors menu above the conversation and switch the Jira Pod on again, then send your message again.",
   "chat.error.gatewayTimeout.title": "Model gateway did not answer in time",
   "chat.error.gatewayTimeout.message":
     "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large.",
@@ -557,6 +587,88 @@ export const EN_MESSAGES = {
   "chat.error.attemptAdmission.remediation":
     "Check the model gateway before sending a new request.",
   "chat.error.attachmentOversized.message": "Attached content is too large. Shorten or remove it.",
+  "chat.error.group.retry.title": "Please try again",
+  "chat.error.group.retry.message": "That did not go through just now. This is usually temporary.",
+  "chat.error.group.retry.remediation":
+    "Send your message again in a moment. If it keeps happening, give the Support ID to whoever runs Keiko.",
+  "chat.error.group.stopped.title": "Stopped",
+  "chat.error.group.stopped.message": "This answer was stopped.",
+  "chat.error.group.stopped.remediation": "Send your message again if you still want an answer.",
+  "chat.error.group.inProgress.title": "An answer is still being written",
+  "chat.error.group.inProgress.message": "This chat is still working on the previous message.",
+  "chat.error.group.inProgress.remediation":
+    "Wait for the answer to finish, or stop it, then send your message.",
+  "chat.error.group.modelDeclined.title": "The model declined this request",
+  "chat.error.group.modelDeclined.message":
+    "The model chose not to answer this request. Sending it again unchanged gets the same result.",
+  "chat.error.group.modelDeclined.remediation": "Rephrase the request or ask in a different way.",
+  "chat.error.group.gatewaySignIn.title": "The model gateway refused the sign-in",
+  "chat.error.group.gatewaySignIn.message":
+    "Keiko's access key for the model gateway was not accepted.",
+  "chat.error.group.gatewaySignIn.remediation":
+    "Only the person who runs the model gateway can fix this: the sign-in (API key) has to be renewed in Settings.",
+  "chat.error.group.proxyUnreachable.title": "The proxy cannot be reached",
+  "chat.error.group.proxyUnreachable.message":
+    "Keiko cannot reach the proxy that leads to the model gateway.",
+  "chat.error.group.proxyUnreachable.remediation":
+    "Ask the person who runs the network to check the proxy address and that the proxy is running.",
+  "chat.error.group.proxySignIn.title": "The proxy asks for a sign-in",
+  "chat.error.group.proxySignIn.message":
+    "The proxy in front of the model gateway rejected Keiko's sign-in or needs one.",
+  "chat.error.group.proxySignIn.remediation":
+    "Ask the person who runs the network for the proxy credentials and enter them in Settings.",
+  "chat.error.group.proxyFailed.title": "The connection through the proxy failed",
+  "chat.error.group.proxyFailed.message":
+    "The proxy could not set up the connection to the model gateway.",
+  "chat.error.group.proxyFailed.remediation":
+    "Try again. If it keeps happening, ask the person who runs the network to check the proxy and the gateway address.",
+  "chat.error.group.proxyBlocked.title": "The proxy blocks the model gateway",
+  "chat.error.group.proxyBlocked.message":
+    "A rule of the proxy blocks the connection to the model gateway.",
+  "chat.error.group.proxyBlocked.remediation":
+    "The network team has to allow this connection; changing Keiko's settings does not help.",
+  "chat.error.group.gatewayCertificate.title": "The gateway's certificate is not trusted",
+  "chat.error.group.gatewayCertificate.message":
+    "The secure connection to the model gateway failed because its certificate is not accepted.",
+  "chat.error.group.gatewayCertificate.remediation":
+    "Ask the person who runs the model gateway to add the right certificate authority in the gateway settings.",
+  "chat.error.group.configChanged.title": "The model settings changed",
+  "chat.error.group.configChanged.message":
+    "The model gateway settings changed while your message was being sent.",
+  "chat.error.group.configChanged.remediation": "Send your message again.",
+  "chat.error.group.configInvalid.title": "The model gateway configuration is invalid",
+  "chat.error.group.configInvalid.message":
+    "Keiko cannot use the configured model gateway settings.",
+  "chat.error.group.configInvalid.remediation":
+    "Ask the person who runs the model gateway to correct the configuration in Settings > Models.",
+  "chat.error.group.modelUnavailable.title": "This model is not available",
+  "chat.error.group.modelUnavailable.message": "The model gateway does not know the chosen model.",
+  "chat.error.group.modelUnavailable.remediation": "Choose another model in the model picker.",
+  "chat.error.group.noModel.title": "No model is set up",
+  "chat.error.group.noModel.message": "Keiko has no model to answer with.",
+  "chat.error.group.noModel.remediation": "Set one up in Settings > Models.",
+  "chat.error.group.tooLarge.title": "The request is too large",
+  "chat.error.group.tooLarge.remediation":
+    "Reduce the selected scope or remove large attachments, then send it again.",
+  "chat.error.group.unsupported.title": "That cannot be used here",
+  "chat.error.group.unsupported.remediation":
+    "Remove the attachment, or choose another model or option.",
+  "chat.error.group.invalidPath.title": "The folder or file cannot be used",
+  "chat.error.group.invalidPath.remediation": "Choose another folder or file in Files.",
+  "chat.error.group.reload.title": "Something changed — reload",
+  "chat.error.group.reload.message":
+    "The chat, the project or a selection changed while you were working.",
+  "chat.error.group.reload.remediation": "Reload the chat view and send your message again.",
+  "chat.error.group.chatClosed.title": "This chat is in the trash",
+  "chat.error.group.chatClosed.message": "A chat in the trash cannot receive messages.",
+  "chat.error.group.chatClosed.remediation": "Restore the chat or open another one.",
+  "chat.error.group.regenerateRefused.title": "This answer cannot be regenerated",
+  "chat.error.group.regenerateRefused.message":
+    "Regenerating is not possible while a folder, a Knowledge Pod, Jira or Git changes are connected.",
+  "chat.error.group.regenerateRefused.remediation": "Send the question again as a new message.",
+  "chat.error.group.other.title": "That did not work",
+  "chat.error.group.other.remediation":
+    "Try again. If it keeps happening, give the Support ID to whoever runs Keiko.",
 
   // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
   // workspace shell does not preload editor-only translations. Issue #2120 added the localized

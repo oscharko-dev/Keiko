@@ -446,3 +446,72 @@ describe("evaluateWindowsSecurityDescriptor — captured Windows descriptors", (
     expect(evaluate(CAPTURED_DEFAULT_TEMP)).toEqual(refusedWith("foreign-write"));
   });
 });
+
+// #4358: the secret vault's key file and directory must not even be readable by another account.
+describe("evaluateWindowsSecurityDescriptor — confidentiality policy (foreign access: none)", () => {
+  const secret = (bytes: Uint8Array, principal = STANDARD_USER): WindowsDescriptorVerdict =>
+    evaluateWindowsSecurityDescriptor(bytes, principal, "none");
+
+  it("accepts a descriptor that grants only the user, SYSTEM and Administrators", () => {
+    expect(secret(descriptor())).toEqual(OWNER_PRIVATE);
+    expect(secret(CAPTURED_OWNER_PRIVATE)).toEqual(OWNER_PRIVATE);
+    expect(secret(CAPTURED_OWNER_PRIVATE, ELEVATED_USER)).toEqual(OWNER_PRIVATE);
+  });
+
+  it.each([
+    ["Authenticated Users", AUTHENTICATED_USERS],
+    ["Everyone", EVERYONE],
+    ["another local account", OTHER_USER],
+  ])("refuses read access for %s, which the integrity policy accepts", (_label, sid) => {
+    const bytes = descriptor({ dacl: standardDacl([allowAce(sid, READ_EXECUTE)]) });
+    expect(evaluate(bytes)).toEqual(OWNER_PRIVATE);
+    expect(secret(bytes)).toEqual(refusedWith("foreign-access"));
+  });
+
+  it("refuses every single access right held by a foreign principal", () => {
+    for (let bit = 0; bit < 32; bit += 1) {
+      const mask = (1 << bit) >>> 0;
+      const bytes = descriptor({ dacl: standardDacl([allowAce(OTHER_USER, mask)]) });
+      const expected =
+        (mask & WINDOWS_WRITE_ACCESS_MASK) === 0 ? "foreign-access" : "foreign-write";
+      expect(secret(bytes)).toEqual(refusedWith(expected));
+    }
+  });
+
+  it("reads an inherit-only ACE, which decides who reaches later children of a directory", () => {
+    const readers = descriptor({
+      dacl: standardDacl([allowAce(EVERYONE, READ_EXECUTE, INHERIT_ONLY)]),
+    });
+    const writers = descriptor({
+      dacl: standardDacl([allowAce(EVERYONE, FULL_CONTROL, INHERIT_ONLY)]),
+    });
+    expect(evaluate(readers)).toEqual(OWNER_PRIVATE);
+    expect(secret(readers)).toEqual(refusedWith("foreign-access"));
+    expect(secret(writers)).toEqual(refusedWith("foreign-write"));
+  });
+
+  it("ignores a foreign ACE that grants nothing and any deny ACE", () => {
+    const bytes = descriptor({
+      dacl: standardDacl([
+        allowAce(EVERYONE, 0),
+        rawAce(DENIED, 0, [...u32(FULL_CONTROL), ...sidBytes(EVERYONE)]),
+      ]),
+    });
+    expect(secret(bytes)).toEqual(OWNER_PRIVATE);
+  });
+
+  it("accepts SYSTEM or Administrators as owner for a process that is not elevated", () => {
+    // An elevated run created the key file; the same person, not elevated, must still reach it.
+    for (const owner of [ADMINISTRATORS, SYSTEM]) {
+      const bytes = descriptor({ owner });
+      expect(evaluate(bytes)).toEqual(refusedWith("foreign-owner"));
+      expect(secret(bytes)).toEqual(OWNER_PRIVATE);
+    }
+  });
+
+  it("keeps the owner, NULL-DACL and unsupported-ACE refusals of the integrity policy", () => {
+    expect(secret(descriptor({ owner: OTHER_USER }))).toEqual(refusedWith("foreign-owner"));
+    expect(secret(descriptor({ dacl: null }))).toEqual(refusedWith("null-dacl"));
+    expect(secret(CAPTURED_DEFAULT_TEMP)).toEqual(refusedWith("foreign-write"));
+  });
+});

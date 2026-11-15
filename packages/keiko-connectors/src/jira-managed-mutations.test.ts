@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+  type JiraTestTemplateSet,
+} from "../../../tests/support/jira-test-templates.js";
+
+const NO_TEMPLATES: JiraTestTemplateSet = { templates: [], unreadable: 0 };
 import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian-http-port.js";
@@ -8,6 +15,7 @@ import { jiraEditAlreadyHeld } from "./jira-mutation-confirmation.js";
 
 import {
   field,
+  FIXTURE_PROJECT_ISSUE_TYPES,
   REQUIRED_CUSTOM,
   FIELDS,
   LINKS_FIELD,
@@ -49,14 +57,21 @@ function fixture(attachmentSource?: JiraAttachmentSource): {
         : fixtureWrite(path, request.bodyJson, state, request.upload),
     );
   });
+  let templates: JiraTestTemplateSet = NO_TEMPLATES;
   const controller = new AbortController();
   const beforeEffect = vi.fn(() => true);
   return {
     controller,
     beforeEffect,
     http,
-    run: (operation, args) =>
-      executeJiraManagedMutation(
+    run: (operation, args): ReturnType<typeof executeJiraManagedMutation> => {
+      // A creation needs a template of its type (#4354); the edits and transitions below are
+      // about their own mechanics, and a library with no template leaves them on the plain path.
+      templates =
+        operation === "jira.create"
+          ? permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES)
+          : NO_TEMPLATES;
+      return executeJiraManagedMutation(
         operation,
         args,
         {
@@ -69,11 +84,24 @@ function fixture(attachmentSource?: JiraAttachmentSource): {
           deployment: "data-center",
           baseUrl: "https://jira.example.invalid/context",
           http,
+          issueTemplates: () => templates,
           ...(attachmentSource === undefined ? {} : { attachmentSource }),
         },
-      ),
+      );
+    },
   };
 }
+// #4357 AC3: a metadata refusal with no sentence of its own carries one sentence per closed reason,
+// pinned exactly (they replace the bare shape these expectations used to pin).
+const FIELD_SENTENCES = {
+  "required-field":
+    "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+  "invalid-operation":
+    "The operation sent for the field named in fieldId is not offered for it: use one the field list shows. This write was not made.",
+  "invalid-field":
+    "The value sent for the field named in fieldId does not fit its type: send it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+} as const;
+
 it.each(["project", "issuetype"])("rejects a caller routing override in fields.%s", async (id) => {
   const f = fixture();
   // A routing override is refused before HTTP and named; it moved here from the malformed-argument
@@ -168,7 +196,12 @@ it.each(["summary", "customfield_10000"])(
     ).toEqual({
       ok: false,
       reason: "field-validation",
-      detail: { fieldId: id, validation: "invalid-operation" },
+      detail: {
+        fieldId: id,
+        fieldName: id,
+        validation: "invalid-operation",
+        messages: [FIELD_SENTENCES["invalid-operation"]],
+      },
     });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
@@ -198,7 +231,12 @@ it("keeps selected routing references inside current metadata allowed values", a
   ).toEqual({
     ok: false,
     reason: "field-validation",
-    detail: { fieldId: "issuetype", validation: "invalid-field" },
+    detail: {
+      fieldId: "issuetype",
+      fieldName: "issuetype",
+      validation: "invalid-field",
+      messages: [FIELD_SENTENCES["invalid-field"]],
+    },
   });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
 });
@@ -228,7 +266,15 @@ it.each(["legacy", "current", "immutable-current"])(
         fields: { summary: "Synthetic", customfield_10000: "Required" },
       }),
     ).toEqual({ ok: true, receipt: { issueKey: "SYN-1", issueId: "10001" } });
-    expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "POST", "GET"]);
+    // The metadata read, the project and issue-type reads that name what a template governs, the
+    // POST and its readback.
+    expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
+      "GET",
+      "GET",
+      "GET",
+      "POST",
+      "GET",
+    ]);
     expect(f.http.mock.calls[0]?.[0].url).toContain(
       "/context/rest/api/2/issue/createmeta/10000/issuetypes/10001?startAt=0&maxResults=100",
     );
@@ -410,9 +456,18 @@ it.each(["jira.create", "jira.transition"] as const)(
     expect(await f.run(operation, args)).toEqual({
       ok: false,
       reason: "field-validation",
-      detail: { fieldId: "customfield_10000", validation: "required-field" },
+      detail: {
+        fieldId: "customfield_10000",
+        validation: "required-field",
+        // The name Jira shows travels beside the id so a card can name the field (#4357 R08).
+        fieldName: "customfield_10000",
+        messages: [FIELD_SENTENCES["required-field"]],
+      },
     });
-    expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
+    // A creation also reads the project and issue type that name the template it is judged by.
+    expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(
+      operation === "jira.create" ? ["GET", "GET", "GET"] : ["GET"],
+    );
   },
 );
 // Each refusal names the argument and how to send it again (#4173): a bare `field-validation`
@@ -432,7 +487,8 @@ it.each([
   [
     "jira.edit",
     { issueKey: "SYN-1", fields: { project: { id: "999" } } },
-    { fieldId: "fields", validation: "invalid-field" },
+    // Named as the project it is, with the way out (#4354, L6), no longer as a malformed object.
+    { fieldId: "project", validation: "unsupported-field" },
   ],
   [
     "jira.edit",
@@ -510,9 +566,20 @@ it("collects all create pages before validating a required field on a later page
   ).toEqual({
     ok: false,
     reason: "field-validation",
-    detail: { fieldId: "customfield_10000", validation: "required-field" },
+    detail: {
+      fieldId: "customfield_10000",
+      fieldName: "customfield_10000",
+      validation: "required-field",
+      messages: [FIELD_SENTENCES["required-field"]],
+    },
   });
-  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET"]);
+  // Two metadata pages, then the two identity reads that name the governing template.
+  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
+    "GET",
+    "GET",
+    "GET",
+    "GET",
+  ]);
   expect(f.http.mock.calls[1]?.[0].url).toContain("startAt=2");
 });
 it("refuses duplicate fields across metadata pages instead of accepting incomplete capability data", async () => {
@@ -555,6 +622,7 @@ it("does not fabricate a required unsupported plugin field", async () => {
         ...FIELDS,
         {
           ...field("customfield_10001", "string", true),
+          name: "Plugin value",
           schema: { type: "string", custom: "unsupported:plugin" },
         },
       ],
@@ -572,21 +640,36 @@ it("does not fabricate a required unsupported plugin field", async () => {
   ).toEqual({
     ok: false,
     reason: "field-validation",
-    detail: { validation: "required-field", fieldId: "customfield_10001" },
+    detail: {
+      validation: "required-field",
+      fieldId: "customfield_10001",
+      fieldName: "Plugin value",
+      messages: [FIELD_SENTENCES["required-field"]],
+    },
   });
-  expect(f.http).toHaveBeenCalledOnce();
+  // The metadata read and the two identity reads that name what a template governs.
+  expect(f.http).toHaveBeenCalledTimes(3);
 });
 it("revalidates metadata when edit operations change between actions", async () => {
   const f = fixture();
   const args = { issueKey: "SYN-1", fields: { summary: "Synthetic" } };
   expect((await f.run("jira.edit", args)).ok).toBe(true);
   f.http.mockResolvedValueOnce(
-    response({ fields: { summary: { ...field("summary", "string"), operations: [] } } }),
+    response({
+      fields: {
+        summary: { ...field("summary", "string"), name: "Summary line", operations: [] },
+      },
+    }),
   );
   expect(await f.run("jira.edit", args)).toEqual({
     ok: false,
     reason: "field-validation",
-    detail: { fieldId: "summary", validation: "invalid-operation" },
+    detail: {
+      fieldId: "summary",
+      fieldName: "Summary line",
+      validation: "invalid-operation",
+      messages: [FIELD_SENTENCES["invalid-operation"]],
+    },
   });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
     "GET",
@@ -990,6 +1073,10 @@ it("forwards an opaque plugin value and returns Jira's field error when it refus
       total: FIELDS.length + 1,
     }),
   );
+  f.http.mockResolvedValueOnce(
+    response({ id: "10000", key: "SYN", issueTypes: FIXTURE_PROJECT_ISSUE_TYPES }),
+  );
+  f.http.mockResolvedValueOnce(response({ id: "10001", name: "Task" }));
   f.http.mockResolvedValueOnce({
     kind: "response",
     status: 400,
@@ -1008,6 +1095,7 @@ it("forwards an opaque plugin value and returns Jira's field error when it refus
     reason: "field-validation",
     // The request's metadata names the field a person would recognise.
     detail: {
+      fromJira: true,
       fieldErrors: [
         { fieldId: "customfield_10105", fieldName: "customfield_10105", message: "Sprint id" },
       ],
@@ -1612,6 +1700,10 @@ function twinFixture(found: readonly { key: string; id: string }[]): {
       posted = (JSON.parse(request.bodyJson ?? "{}") as { fields: Record<string, unknown> }).fields;
       return Promise.resolve(response({ id: "10009", key: "SYN-9" }, 201));
     }
+    if (url.pathname.endsWith("/project/10000"))
+      return Promise.resolve(response({ id: "10000", key: "SYN" }));
+    if (url.pathname.endsWith("/issuetype/10001"))
+      return Promise.resolve(response({ id: "10001", name: "Task" }));
     if (url.pathname.includes("createmeta"))
       return Promise.resolve(
         response({
@@ -1648,7 +1740,12 @@ function twinFixture(found: readonly { key: string; id: string }[]): {
         signal: new AbortController().signal,
         beforeEffect: () => true,
       },
-      { deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http },
+      {
+        deployment: "data-center",
+        baseUrl: "https://jira.example.invalid/context",
+        http,
+        issueTemplates: () => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
+      },
     );
   const created = (): Readonly<Record<string, unknown>> => posted;
   const searches = (): readonly string[] =>
@@ -1807,4 +1904,68 @@ it("sends only the base-URL string as raw text and every other body, even a stri
   expect(nativeRequestBody("comment/7/properties/k", "text")).toBe('"text"');
   expect(nativeRequestBody("readonly-mode", { enabled: true })).toBe('{"enabled":true}');
   expect(nativeRequestBody("x", ["a"])).toBe('["a"]');
+});
+
+// #4357 AC3: a field Keiko cannot set is refused with words that hold whether or not it is required.
+it("says a field of an unsupported type cannot be set, for an optional and a required one", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [
+        ...FIELDS,
+        {
+          ...field("customfield_10002", "string", true),
+          schema: {
+            type: "string",
+            custom: "com.atlassian.jira.plugin.system.customfieldtypes:multicheckboxes",
+          },
+        },
+      ],
+      start: 0,
+      size: 100,
+      last: true,
+    }),
+  );
+  const refused = await f.run("jira.create", {
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Synthetic", customfield_10000: "Required" },
+  });
+  expect(refused).toMatchObject({
+    ok: false,
+    reason: "field-validation",
+    detail: {
+      validation: "unsupported-field",
+      fieldId: "customfield_10002",
+      messages: [
+        "The field named in fieldId cannot be set through Keiko: leave it out if it is optional. If it is required, tell the user the issue has to be created in Jira. This write was not made.",
+      ],
+    },
+  });
+});
+
+// #4357: the name Jira shows comes from the instance's own metadata. The metadata parser admits up to
+// 255 characters, more than a detail text takes, so the refusal bounds it instead of tripping a result
+// schema later.
+it("bounds a field name that is longer than a detail text to the detail bound", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, { ...field("customfield_10001", "string", true), name: "N".repeat(250) }],
+      start: 0,
+      size: 100,
+      last: true,
+    }),
+  );
+  const result = await f.run("jira.create", {
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Synthetic", customfield_10000: "Required" },
+  });
+  const name = result.ok
+    ? undefined
+    : (result.detail as { fieldName?: string } | undefined)?.fieldName;
+  expect(name).toBeDefined();
+  expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(200);
+  expect(name?.endsWith("…")).toBe(true);
 });

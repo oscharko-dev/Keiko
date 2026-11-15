@@ -29,8 +29,14 @@ does not undo a completed remote write. Inspect Jira before proposing another mu
 not automatically resend a possibly executed mutation, including PUT, regenerate and streaming
 fallback. A pending result is not evidence that a worker is still running or permission to retry.
 
-For an unverified Live Pod, use **Verify connection** after replacing the token. Replacement retains
-the Pod identity and Chat association but revokes prior access and approvals. Use **Refresh status**
+Replacing a Live Pod's token verifies the new token in the same request through the same
+verification route (`atlassian.connection.checked` records it with `action=verify-after-replace`);
+the card shows "Verifying…" and then the real result, and closing the tab does not change what the
+server stored. If that check fails, or cannot run, the new token stays stored, the Pod shows the
+closed failure status or "Not verified yet", and **Verify connection** repeats it. A Pod whose
+certificate was refused stays in the list with its address and token and says so in one sentence
+beside its remedy. Replacement retains the Pod identity and Chat association but revokes prior
+access and approvals. Use **Refresh status**
 when a lifecycle request's response is uncertain. Removing the Pod deletes its credential and Chat
 bindings. See the [Live Pod guide](../local-knowledge/atlassian-connector-guide.md#jira-live-pods-in-chat)
 for the first-read disclosure, per-action write approvals and current platform limits.
@@ -526,15 +532,17 @@ the version no longer matches and Confluence rejects the update. The connector s
 
 ## 11. `invalid-transition`
 
-| Field             | Value                                             |
-| ----------------- | ------------------------------------------------- |
-| Severity          | Medium                                            |
-| Surface           | Local UI, Atlassian connector (write: transition) |
-| Stable identifier | `invalid-transition` write failure reason         |
+| Field             | Value                                        |
+| ----------------- | -------------------------------------------- |
+| Severity          | Medium                                       |
+| Surface           | Chat and Coding Workbench, `jira.transition` |
+| Stable identifier | `invalid-transition` write failure reason    |
 
 **Symptom**
 
-A `transition-issue` write action reports `invalid-transition`. The issue's status was not changed.
+A `jira.transition` call reports `invalid-transition`. The issue's status was not changed and nothing
+was sent to Jira: the transition id is checked against the transitions Jira lists for the issue at
+that moment, so an id that is not listed is refused before any write.
 
 **Root Cause**
 

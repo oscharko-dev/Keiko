@@ -37,11 +37,14 @@ export function parseExactTexts(markdown) {
   return texts;
 }
 
-/** The rows of the task-suite table: C1 and every `T<number>` task, with an optional letter suffix. */
+/**
+ * The rows of the task-suite table: C1, every `T<number>` task with an optional letter suffix, and
+ * every `J<number>` task (the Jira Pod tasks).
+ */
 export function parseTaskTable(markdown) {
   const rows = new Map();
   for (const line of markdown.split("\n")) {
-    if (!/^\| (?:C1|T\d+[a-z]*)\s+\|/u.test(line)) continue;
+    if (!/^\| (?:C1|[TJ]\d+[a-z]*)\s+\|/u.test(line)) continue;
     const [id, title, mode, baseline, textStatus, expected] = cellsOf(line);
     rows.set(id, { title, mode, baseline: baseline.replaceAll("`", ""), textStatus, expected });
   }

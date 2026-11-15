@@ -153,6 +153,7 @@ function errorDetail(value: unknown): JiraMutationFailureDetail | undefined {
   if (raw === undefined) return undefined;
   const errors = asRecord(raw.errors);
   return sanitizeJiraMutationFailureDetail({
+    fromJira: true,
     messages: raw.errorMessages,
     fieldErrors:
       errors === undefined
@@ -197,7 +198,7 @@ function failureDetail(values: readonly BulkFailure[]): JiraMutationFailureDetai
       ),
     ];
   });
-  return sanitizeJiraMutationFailureDetail({ messages });
+  return sanitizeJiraMutationFailureDetail({ fromJira: true, messages });
 }
 export interface JiraBulkCreateAcknowledgement {
   readonly receipt: JiraBulkCreateReceipt;

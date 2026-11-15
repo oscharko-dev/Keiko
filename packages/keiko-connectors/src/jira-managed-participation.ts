@@ -250,6 +250,26 @@ async function prepare(
     };
   return { ok: true, path, receipt, binding: bound };
 }
+/**
+ * The refusal of a write's arguments names the rule it broke (#4357 AC3), one sentence per cause and
+ * never the refused value: the call takes only `issueKey`, which must be an issue key or id.
+ */
+function refusedSelection(args: CatalogJsonObject): Failure {
+  const extra = Object.keys(args).some((key) => key !== "issueKey");
+  return {
+    ok: false,
+    reason: "field-validation",
+    detail: {
+      validation: "invalid-field",
+      ...(extra ? {} : { fieldId: "issueKey" }),
+      messages: [
+        extra
+          ? "This call takes only issueKey, the issue to act on as the connected user; no user, URL or other argument. Nothing was changed."
+          : "issueKey must be the key or id of one issue, such as ABC-123. Nothing was changed.",
+      ],
+    },
+  };
+}
 /** Changes only the connected user's participation; caller owns approval and durable no-replay. */
 export async function executeJiraParticipationMutation(
   operation: Write,
@@ -259,8 +279,7 @@ export async function executeJiraParticipationMutation(
   baseUrl?: string,
 ): Promise<JiraMutationAttempt> {
   const selected = selection(args, true);
-  if (selected === undefined)
-    return { ok: false, reason: "field-validation", detail: { validation: "invalid-field" } };
+  if (selected === undefined) return refusedSelection(args);
   const { watch, desired } = WRITE_STATE[operation];
   const prepared = await prepare(request, selected, watch, desired, baseUrl);
   if (!prepared.ok) return prepared;

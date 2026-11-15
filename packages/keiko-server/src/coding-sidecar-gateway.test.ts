@@ -121,6 +121,12 @@ import {
 } from "./coding-sidecar-document-parts.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./coding-runtime/opencodeLaunchProfile.js";
+import {
+  createCodingRuntimeContextUsageRegistry,
+  type CodingRuntimeConversation,
+} from "./coding-runtime/codingRuntimeContextUsage.js";
+import { observeGatewayPromptTokens } from "./coding-runtime/codingRuntimeContextUsageObservation.js";
+import { codingJiraCatalogAccounting } from "./coding-runtime/codingJiraCatalogBudget.js";
 import { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
 import {
   expectActivityLogProof,
@@ -7084,6 +7090,128 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
       }
     },
   );
+
+  // #4359: the run's context usage reads the prompt size the provider reported through this
+  // gateway, because the pinned native runtime emits no event Keiko reads it from. Only the
+  // provider's own count is observed, never the conservative estimate of a failed call.
+  it("hands the run's context usage the provider-reported prompt size, and never an estimate", async () => {
+    const observed: { capability: string; promptTokens: number; conversation: unknown }[] = [];
+    const reportingAuthenticator = {
+      authenticate: (): unknown => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+      admitModelCall: (): unknown => ({ ok: true, runId: "run-gateway-test" }),
+      settlePromptTokens: (): unknown => ({ ok: true, runId: "run-gateway-test" }),
+      observeProviderPromptTokens: (
+        capability: string,
+        promptTokens: number,
+        conversation: unknown,
+      ): unknown => {
+        observed.push({ capability, promptTokens, conversation });
+        return undefined;
+      },
+    };
+    const answering = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), {
+      ...depsValue(configValue(provider(), capability()), () => answering),
+      runtimeCapabilityAuthenticator: reportingAuthenticator,
+    });
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toMatchObject({
+      capability: "gateway-capability-material-0000000001",
+      promptTokens: 12,
+      conversation: { toolBearing: false },
+    });
+    observed.length = 0;
+    const failing = vi.fn(() => Promise.reject(new Error("provider unavailable")));
+    await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), {
+      ...depsValue(configValue(provider(), capability()), () => failing),
+      runtimeCapabilityAuthenticator: reportingAuthenticator,
+    });
+    expect(observed).toEqual([]);
+  });
+
+  // #4359 end to end on the production path: a provider-reported prompt size settles at this
+  // gateway, reaches the registry through the production observer, and the run's Jira catalog
+  // budget reads it: a title request is never the run's context, a subagent is a separate
+  // conversation, and a compaction that gives the primary a new head frees a blocked describe.
+  it("feeds the Jira catalog budget from the gateway settle point, per conversation", async () => {
+    const registry = createCodingRuntimeContextUsageRegistry();
+    registry.bindGeometry("run-gateway-test", {
+      capacityTokens: 200_000,
+      reservedOutputTokens: 32_000,
+    });
+    const accounting = codingJiraCatalogAccounting({
+      geometry: { contextWindowTokens: 200_000, maxInputTokens: 160_000, maxOutputTokens: 32_000 },
+      usage: () => registry.readLargest("run-gateway-test"),
+    });
+    const sink = { write: (): void => undefined };
+    const authenticator = {
+      authenticate: (): unknown => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+      admitModelCall: (): unknown => ({ ok: true, runId: "run-gateway-test" }),
+      settlePromptTokens: (): unknown => ({ ok: true, runId: "run-gateway-test" }),
+      observeProviderPromptTokens: (
+        _capability: string,
+        tokens: number,
+        conversation: CodingRuntimeConversation,
+        modelCallId?: number,
+      ): unknown => {
+        observeGatewayPromptTokens(
+          registry,
+          "run-gateway-test",
+          conversation,
+          tokens,
+          modelCallId,
+          sink,
+        );
+        return undefined;
+      },
+    };
+    const offered = modelVisibleTools();
+    const turn = async (
+      tokens: number,
+      system: string,
+      user: string,
+      withTools: boolean,
+    ): Promise<void> => {
+      const response = assistantResponse("azure-coding-model");
+      const answered = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          tools: withTools ? offered : [],
+        }),
+        {
+          ...depsValue(configValue(provider(), capability()), () =>
+            vi.fn(() =>
+              Promise.resolve({ ...response, usage: { ...response.usage, promptTokens: tokens } }),
+            ),
+          ),
+          runtimeCapabilityAuthenticator: authenticator,
+        },
+      );
+      expect(answered).toMatchObject({ status: 200 });
+    };
+    const fits = (): boolean | undefined => accounting.catalogFits([], {});
+    expect(fits()).toBeUndefined();
+    expect(accounting.catalogFitBasis()).toBe("no-sample");
+
+    await turn(90_001, "build agent", "fix the build", true);
+    expect(fits()).toBe(true);
+    expect(accounting.catalogFitBasis()).toBe("provider-sample");
+    await turn(150_002, "title agent", "name this chat", false);
+    expect(fits()).toBe(true);
+    await turn(3_003, "explore agent", "find the config", true);
+    expect(fits()).toBe(true);
+    await turn(140_004, "build agent", "fix the build", true);
+    expect(fits()).toBe(false);
+    // The runtime's history reports the compaction; the primary then continues under a new head.
+    registry.recordCompaction("run-gateway-test", "compaction-1", "2026-11-14T14:40:00.000Z");
+    await turn(12_005, "build agent", "summary of the earlier work", true);
+    expect(fits()).toBe(true);
+    expect(registry.read("run-gateway-test")).toMatchObject({ usedInputTokens: 12_005 });
+  });
 
   it("settles conservatively (the full reserved estimate) when the provider call fails before usage is observed", async () => {
     const chat = vi.fn(() => Promise.reject(new Error("provider unavailable")));

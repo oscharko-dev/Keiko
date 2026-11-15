@@ -1,6 +1,7 @@
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   JIRA_FIELD_VALIDATION_FAILURES,
+  JIRA_RESULT_GUIDANCE_MAX_CHARS,
   JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_MUTATION_RESULT_STATES,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -131,7 +132,7 @@ function writeResult(
       outcome: { type: "string", enum: JIRA_MUTATION_RESULT_STATES },
       replayed: { type: "boolean" },
       unchanged: { type: "boolean" },
-      guidance: text(512),
+      guidance: text(JIRA_RESULT_GUIDANCE_MAX_CHARS),
       browseUrl: text(4096),
       fieldId: receipt.fieldId ?? text(64),
       validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },

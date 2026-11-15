@@ -88,7 +88,7 @@ import {
   CodingWorkbenchNativeActionReview,
   nativeActionLabel,
   nativeActionNamesResource,
-  nativePermissionLabel,
+  nativeActionTitle,
 } from "./CodingWorkbenchNativeActionReview";
 import {
   useCodingWorkbenchTranslate,
@@ -166,7 +166,7 @@ import {
 import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
 import { useCodingWorkbenchRevert } from "@/lib/useCodingWorkbenchRevert";
 import { CodingWorkbenchInboxPanel } from "./CodingWorkbenchInboxPanel";
-import { LocationBindingNotices } from "./CodingWorkbenchLocationNotices";
+import { LocationBindingNotices, locationBlockerKey } from "./CodingWorkbenchLocationNotices";
 import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
 import { changesRefreshSignal } from "./codingWorkbenchChangesSignal";
 import { deliveredMessageSignal } from "./codingWorkbenchInboxSignal";
@@ -496,6 +496,16 @@ export interface CodingWorkbenchGitTarget {
   readonly descriptionReview?: WorkbenchDescriptionReviewTarget;
 }
 
+/**
+ * Opening Git from the repository control. Without a project the person is led straight to choosing
+ * a folder, and the choice returns to this window (#4371).
+ */
+function repositoryGitTarget(root: string | null): CodingWorkbenchGitTarget {
+  return root === null
+    ? { root, binding: "repository", repositoryDialog: "open" }
+    : { root, binding: "repository" };
+}
+
 function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
 function noopSelectRepository(_root: string): void {}
 
@@ -712,7 +722,7 @@ function WorkbenchContextControls({
       location={location}
       offeredLocations={offeredLocations}
       onSelectLocation={onSelectLocation}
-      onOpenGit={() => onOpenGit({ root: repositoryRoot, binding: "repository" })}
+      onOpenGit={() => onOpenGit(repositoryGitTarget(repositoryRoot))}
       placement={placement}
     />
   );
@@ -1061,6 +1071,7 @@ export function CodingWorkbenchWindow({
     activeInstance: activeWorkspace.activeInstance,
     branchLoading: branchInventory.loading,
     branchError: branchInventory.error !== null,
+    branchDenied: branchInventory.denied,
     workspaceLoading: locationSelectionPending(activeWorkspace, history, historySelection),
     workspaceError: activeWorkspace.error !== null,
     runIsActive,
@@ -1145,8 +1156,9 @@ function selectedConversationReadiness(
   };
 }
 
-// Usable as Chat judges its picker: a coding-capable model nobody observed failing. A model whose
-// answer expired or that nobody checked yet is usable, because its run's start checks it first.
+// Usable as Chat judges its picker: a coding-capable model nobody observed failing. A model that
+// nobody checked yet is usable: the pick itself asks the server to check that one model (the
+// profile read with `check=1`), and a run's start joins that check instead of starting another.
 function isUsableSelectedCodingModel(selected: ModelCapability | undefined): boolean {
   return selected !== undefined && isCodingWorkbenchModel(selected);
 }
@@ -1213,7 +1225,8 @@ function useCodingModelSelection(
       null;
     if (next !== state.selectedModelId) {
       setHumanSelectedId(null);
-      actions.setSelectedModel(next);
+      // The window's own choice, not a person's pick: it is read with `check=use` (#4351).
+      actions.adoptModel(next);
     }
   }, [
     actions,
@@ -1570,11 +1583,7 @@ function workbenchStartBlocker(
   locationState: WorkbenchExecutionLocationState,
 ): string | null {
   if (locationState.ready) return startBlockedReason(state, t, showSetup, authorityError);
-  return t(
-    locationState.error
-      ? "codingWorkbench.repository.locationError"
-      : "codingWorkbench.repository.locationBinding",
-  );
+  return t(locationBlockerKey(locationState));
 }
 
 function locationMutationPending(
@@ -1926,7 +1935,13 @@ function WorkbenchColumns({
               onDeny={editorBridge.deny}
               onRetry={editorBridge.retry}
             />
-            <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
+            <RecoveryPanel
+              state={state}
+              taskIntent={taskIntent}
+              actions={actions}
+              onNewTask={() => void history.newTask()}
+              newTaskPending={history.pending}
+            />
             <ResearchGrantChip
               grant={research.grant ?? undefined}
               busy={state.mutation.status === "pending"}
@@ -2497,7 +2512,7 @@ function approvalTitle(
   nativeAction: Parameters<typeof CodingWorkbenchNativeActionReview>[0]["action"] | undefined,
   t: CodingWorkbenchTranslate,
 ): string {
-  if (nativeAction !== undefined) return nativePermissionLabel(nativeAction.permission, t);
+  if (nativeAction !== undefined) return nativeActionTitle(nativeAction, t);
   if (request.actionKind !== undefined) return t(ACTION_KIND_MESSAGE_KEYS[request.actionKind]);
   return t(PERMISSION_KIND_MESSAGE_KEYS[request.kind]);
 }
@@ -3017,10 +3032,18 @@ function RecoveryPanel({
   state,
   taskIntent,
   actions,
-}: LiveSectionProps & { readonly taskIntent: string }): ReactNode {
+  onNewTask,
+  newTaskPending,
+}: LiveSectionProps & {
+  readonly taskIntent: string;
+  readonly onNewTask: () => void;
+  readonly newTaskPending: boolean;
+}): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const snapshot = state.run.value;
   if (snapshot?.state !== "recovery-required") return null;
+  const acknowledged = snapshot.recoveryAcknowledged === true;
+  const intentEmpty = taskIntent.trim().length === 0;
   const busy = state.mutation.status === "pending";
   return (
     <section className={cx(styles.card, styles.recovery)} aria-labelledby="recovery-title">
@@ -3028,13 +3051,52 @@ function RecoveryPanel({
         {t("codingWorkbench.recovery.title")}
       </PanelTitle>
       <p className={styles.summary}>{t("codingWorkbench.recovery.summary")}</p>
-      {snapshot.recoveryAcknowledged === true ? (
+      <RecoveryButtons
+        actions={actions}
+        acknowledged={acknowledged}
+        busy={busy}
+        retryDisabled={busy || !state.canRetry || intentEmpty}
+        retryIntent={taskIntent}
+      />
+      <button
+        className={styles.button}
+        type="button"
+        disabled={busy || newTaskPending}
+        onClick={onNewTask}
+      >
+        {t("codingWorkbench.recovery.newTask")}
+      </button>
+      {acknowledged && intentEmpty ? (
+        <p className={styles.summary}>{t("codingWorkbench.recovery.retryHint")}</p>
+      ) : null}
+    </section>
+  );
+}
+
+// The ways forward from Recovery required: acknowledge, then retry as a fresh run with the
+// person's own description, or leave with a new task. Nothing here sends the unknown write again.
+function RecoveryButtons({
+  actions,
+  acknowledged,
+  busy,
+  retryDisabled,
+  retryIntent,
+}: Pick<LiveSectionProps, "actions"> & {
+  readonly acknowledged: boolean;
+  readonly busy: boolean;
+  readonly retryDisabled: boolean;
+  readonly retryIntent: string;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <>
+      {acknowledged ? (
         <button
           className={cx(styles.button, styles.buttonPrimary)}
           type="button"
-          disabled={busy || !state.canRetry || taskIntent.trim().length === 0}
+          disabled={retryDisabled}
           aria-busy={busy}
-          onClick={() => void actions.retry(taskIntent)}
+          onClick={() => void actions.retry(retryIntent)}
         >
           {t("codingWorkbench.recovery.retry")}
         </button>
@@ -3049,6 +3111,6 @@ function RecoveryPanel({
           {t("codingWorkbench.recovery.acknowledge")}
         </button>
       )}
-    </section>
+    </>
   );
 }

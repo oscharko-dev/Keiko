@@ -270,11 +270,21 @@ function credentialsFor(
       fetches.push(init?.method ?? "GET");
       hooks.beforeResponse?.();
       return Promise.resolve(
-        new Response("[]", { status, headers: anonymous ? { "X-AUSERNAME": "anonymous" } : {} }),
+        new Response("[]", {
+          status,
+          headers: {
+            "X-AREQUESTID": "synthetic-request",
+            ...(anonymous || status === 401 ? { "X-AUSERNAME": "anonymous" } : {}),
+          },
+        }),
       );
     },
   });
 }
+
+// An authentication failure on a Chat read (HTTP 401, or an anonymous 200) is decided by one
+// same-generation identity probe after the original request (#4353).
+const READ_AND_IDENTITY_PROBE = ["GET", "GET"];
 
 async function ask(f: Fixture): Promise<RouteResult> {
   const result = await handleGroundedAsk(f.context, f.deps);
@@ -290,7 +300,7 @@ describe("grounded Jira authentication failure", () => {
   ])("surfaces a reconnect error after HTTP $status (anonymous: $anonymous)", async (remote) => {
     const f = fixture(remote.status, remote.anonymous);
     const result = await ask(f);
-    expect(f.fetches).toEqual(["GET"]);
+    expect(f.fetches).toEqual(READ_AND_IDENTITY_PROBE);
     expect(f.deps.atlassianConnectorCredentials?.custody.getMetadata(f.authRef)).toMatchObject({
       generation: 2,
       livePod: { verificationStatus: "auth-failed" },
@@ -301,7 +311,7 @@ describe("grounded Jira authentication failure", () => {
         error: {
           code: "JIRA_AUTHENTICATION_FAILED",
           message:
-            "Jira authentication failed. Open the Knowledge Pods hub and verify the connection again.",
+            "Jira authentication failed. The token may have expired or been revoked: open the Knowledge Pods hub, replace the token and verify the connection. This Chat and its draft are kept.",
         },
       },
     });
@@ -400,7 +410,7 @@ describe("ordinary Jira Chat authentication failure", () => {
     const { context } = normalChatContext(f);
     const result = await handleSendDesktopChat(context, f.deps);
     await runSerializedChatTurn(f.deps, f.chatId, new AbortController().signal, () => undefined);
-    expect(f.fetches).toEqual(["GET"]);
+    expect(f.fetches).toEqual(READ_AND_IDENTITY_PROBE);
     expect(result).toMatchObject({
       status: 409,
       body: { error: { code: "JIRA_AUTHENTICATION_FAILED", correlationId: context.correlationId } },
@@ -419,7 +429,7 @@ describe("ordinary Jira Chat authentication failure", () => {
       await runSerializedChatTurn(f.deps, f.chatId, new AbortController().signal, () => undefined);
       expect(result).toBe(STREAMING);
       expect(response.statusCode()).toBe(200);
-      expect(f.fetches).toEqual(["GET"]);
+      expect(f.fetches).toEqual(READ_AND_IDENTITY_PROBE);
       expect(response.body()).toContain("event: error\n");
       expect(response.body()).toContain('"code":"JIRA_AUTHENTICATION_FAILED"');
       expect(response.body()).not.toContain("event: cancelled");
@@ -443,6 +453,6 @@ describe("ordinary Jira Chat authentication failure", () => {
     expect(f.deps.atlassianConnectorCredentials?.custody.getMetadata(f.authRef)).toMatchObject({
       livePod: { verificationStatus: "ok" },
     });
-    expect(f.fetches).toEqual(["GET"]);
+    expect(f.fetches).toEqual(READ_AND_IDENTITY_PROBE);
   });
 });

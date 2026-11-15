@@ -1,3 +1,4 @@
+import type { GatewayToolCallingOutcome } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { redactContent } from "@oscharko-dev/keiko-security";
@@ -33,6 +34,12 @@ export function gatewayProbeErrorEvidence(error: unknown): {
 // `transient`: the gateway answered with an overload or timeout status (`transientGatewayStatus`),
 // which proves nothing about the model either way and must not be stored as a verdict.
 export type GatewayToolCallingProbeStatus = "verified" | "unsupported" | "unverified" | "transient";
+
+/** The status the stored verdict follows and the closed outcome that says how the check ended. */
+export interface ToolCallingProbeVerdict {
+  readonly status: GatewayToolCallingProbeStatus;
+  readonly outcome: GatewayToolCallingOutcome;
+}
 
 export type GatewayToolCallingProbeFailureReporter = (error: unknown) => void;
 
@@ -91,6 +98,14 @@ function rejectedStatus(response: Response): GatewayToolCallingProbeStatus {
     return "unsupported";
   }
   return transientGatewayStatus(response.status) ? "transient" : "unverified";
+}
+
+// The check's first attempt is production's request: the tool offered, no forced `tool_choice`. A
+// provider that cannot be forced (a reasoning model in thinking mode answers 400 to it) is judged by
+// what it does without one; only a model that called none is then asked with the forced named call.
+function unforcedToolCallingBody(): Readonly<Record<string, unknown>> {
+  const { tool_choice: _forced, ...body } = toolCallingBody();
+  return body;
 }
 
 function toolCallingBody(): Readonly<Record<string, unknown>> {
@@ -353,29 +368,64 @@ function probeRedactionSecrets(
   return spend?.redactionSecrets ?? redactionSecrets(spend?.env ?? {}, config);
 }
 
+/** The two-step check: what the model does as production asks, then, only if it called no tool, forced. */
+async function executeTwoStepToolCallingProbe(
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  fetchImpl?: typeof fetch,
+  spend?: GatewayProbeSpendContext,
+  signal?: AbortSignal,
+): Promise<ToolCallingProbeVerdict> {
+  const unforced = await sendGatewayToolProbe(
+    config,
+    provider,
+    fetchImpl,
+    spend,
+    signal,
+    unforcedToolCallingBody(),
+  );
+  if (unforced.status !== "verified") return verdictOfRejection(unforced.status);
+  if (hasExpectedToolCall(unforced.payload))
+    return { status: "verified", outcome: "called-unforced" };
+  const forced = await sendGatewayToolProbe(config, provider, fetchImpl, spend, signal);
+  // After an answered first step, a refused forced call is the provider declining `tool_choice`, not a
+  // verdict on the model: the result stays "unverified" with its own reason, never "unsupported".
+  if (forced.status === "unsupported") return { status: "unverified", outcome: "forced-refused" };
+  if (forced.status !== "verified") return { status: forced.status, outcome: "inconclusive" };
+  return hasExpectedToolCall(forced.payload)
+    ? { status: "verified", outcome: "called-only-forced" }
+    : { status: "unsupported", outcome: "no-call" };
+}
+
+function verdictOfRejection(status: GatewayToolCallingProbeStatus): ToolCallingProbeVerdict {
+  return status === "unsupported"
+    ? { status, outcome: "tools-refused" }
+    : { status, outcome: "inconclusive" };
+}
+
 async function executeGatewayToolCallingProbe(
   config: GatewayConfig,
   provider: ModelProviderConfig,
   fetchImpl?: typeof fetch,
   spend?: GatewayProbeSpendContext,
   signal?: AbortSignal,
-): Promise<GatewayToolCallingProbeStatus> {
-  const required = provider.reasoningContinuation === "required-with-tools";
-  let body = required ? thinkingProbeBody() : toolCallingBody();
+): Promise<ToolCallingProbeVerdict> {
+  if (provider.reasoningContinuation !== "required-with-tools")
+    return executeTwoStepToolCallingProbe(config, provider, fetchImpl, spend, signal);
+  let body = thinkingProbeBody();
   // Two tool rounds, an ordinary assistant answer, then a later user turn with tools still present.
-  for (let round = 0; round < (required ? 4 : 1); round++) {
+  for (let round = 0; round < 4; round++) {
     const result = await sendGatewayToolProbe(config, provider, fetchImpl, spend, signal, body);
-    if (result.status !== "verified") return result.status;
-    if (!required) return hasExpectedToolCall(result.payload) ? "verified" : "unsupported";
+    if (result.status !== "verified") return verdictOfRejection(result.status);
     const assistant = continuationProbeMessage(
       result.payload,
       probeRedactionSecrets(config, spend),
     );
     if (assistant === undefined || !expectedContinuationRound(assistant, round))
-      return "unverified";
+      return { status: "unverified", outcome: "inconclusive" };
     body = nextContinuationProbeBody(body, assistant, round);
   }
-  return "verified";
+  return { status: "verified", outcome: "called-unforced" };
 }
 
 function probeInputFits(
@@ -444,6 +494,23 @@ async function sendGatewayToolProbe(
   return { status: "verified", payload };
 }
 
+export async function probeGatewayToolCallingVerdict(
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  fetchImpl?: typeof fetch,
+  reportFailure?: GatewayToolCallingProbeFailureReporter,
+  spend?: GatewayProbeSpendContext,
+  signal?: AbortSignal,
+): Promise<ToolCallingProbeVerdict> {
+  try {
+    return await executeGatewayToolCallingProbe(config, provider, fetchImpl, spend, signal);
+  } catch (error) {
+    signal?.throwIfAborted();
+    reportFailure?.(error);
+    return { status: "unverified", outcome: "inconclusive" };
+  }
+}
+
 export async function probeGatewayToolCalling(
   config: GatewayConfig,
   provider: ModelProviderConfig,
@@ -452,11 +519,7 @@ export async function probeGatewayToolCalling(
   spend?: GatewayProbeSpendContext,
   signal?: AbortSignal,
 ): Promise<GatewayToolCallingProbeStatus> {
-  try {
-    return await executeGatewayToolCallingProbe(config, provider, fetchImpl, spend, signal);
-  } catch (error) {
-    signal?.throwIfAborted();
-    reportFailure?.(error);
-    return "unverified";
-  }
+  return (
+    await probeGatewayToolCallingVerdict(config, provider, fetchImpl, reportFailure, spend, signal)
+  ).status;
 }

@@ -139,6 +139,8 @@ describe("executeAtlassianWriteRequest — classification", () => {
       reason: "field-validation",
       httpStatus: 400,
       remote: {
+        // #4357 AC3: the closed fact that Jira, not Keiko, refused: set where its document is parsed.
+        fromJira: true,
         fieldErrors: [
           { fieldId: "customfield_10105", message: "Number value expected as the Sprint id." },
           { fieldId: "summary" },

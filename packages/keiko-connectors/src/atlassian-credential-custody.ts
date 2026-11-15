@@ -294,6 +294,12 @@ export interface AtlassianCredentialExecutionResolver {
 }
 
 // ─── Custody surface ───────────────────────────────────────────────────────────
+/** What a verification replaces: the stored status and the retained compatibility facts. */
+export interface JiraVerificationState {
+  readonly status: JiraLivePodMetadata["verificationStatus"];
+  readonly compatibility?: JiraDataCenterCompatibilityFacts;
+}
+
 export interface AtlassianCredentialCustody {
   /** Human-only submissions/readiness; this facet cannot resolve stored values. */
   readonly humanInputs?: JiraHumanInputCustody;
@@ -308,7 +314,24 @@ export interface AtlassianCredentialCustody {
   readonly beginVerification: (
     authRef: string,
     expectedGeneration?: number,
-  ) => { readonly metadata: AtlassianCredentialMetadata; readonly revision: number } | undefined;
+  ) =>
+    | {
+        readonly metadata: AtlassianCredentialMetadata;
+        readonly revision: number;
+        /** The state this verification replaces, kept so an unconfirmed result can restore it. */
+        readonly previous: JiraVerificationState;
+      }
+    | undefined;
+  /**
+   * Ends a verification that could neither confirm nor reject the token: the Pod keeps its previous
+   * state and generation, so nothing is invalidated. Stale tickets change nothing.
+   */
+  readonly releaseVerification: (
+    authRef: string,
+    generation: number,
+    revision: number,
+    previous: JiraVerificationState,
+  ) => boolean;
   readonly finishVerification: (
     authRef: string,
     generation: number,
@@ -671,6 +694,12 @@ function beginVerification(
   if (metadata === undefined) return undefined;
   assertCurrentCredential(metadata, expectedGeneration);
   const revision = advanceGeneration(metadata.livePod.verificationRevision);
+  const previous: JiraVerificationState = {
+    status: metadata.livePod.verificationStatus,
+    ...(metadata.livePod.compatibility === undefined
+      ? {}
+      : { compatibility: structuredClone(metadata.livePod.compatibility) }),
+  };
   const next = {
     ...metadata,
     livePod: {
@@ -680,7 +709,52 @@ function beginVerification(
     },
   };
   deps.metadataStore.insert(next);
-  return { metadata: next, revision };
+  return { metadata: next, revision, previous };
+}
+
+function releaseVerification(
+  deps: AtlassianCredentialCustodyDeps,
+  authRef: string,
+  generation: number,
+  revision: number,
+  previous: JiraVerificationState,
+): boolean {
+  const metadata = livePodCredential(deps, authRef);
+  if (
+    metadata?.generation !== generation ||
+    metadata.livePod.verificationRevision !== revision ||
+    !metadata.livePod.verificationInProgress
+  )
+    return false;
+  deps.metadataStore.insert({
+    ...metadata,
+    livePod: {
+      ...withoutCompatibility(metadata.livePod),
+      verificationInProgress: false,
+      verificationStatus: previous.status,
+      ...(previous.compatibility === undefined
+        ? {}
+        : { compatibility: structuredClone(previous.compatibility) }),
+    },
+  });
+  return true;
+}
+
+function assertStorableVerification(
+  status: JiraLivePodMetadata["verificationStatus"],
+  compatibility: JiraDataCenterCompatibilityFacts | undefined,
+): void {
+  // An unconfirmed verification is released, never stored as a status.
+  if (
+    status === "auth-unverified" ||
+    (status !== "unverified" && !isAtlassianConnectionVerificationStatus(status))
+  )
+    throw new AtlassianCredentialCustodyError("invalid-input");
+  if (
+    compatibility !== undefined &&
+    (status !== "ok" || !isJiraDataCenterCompatibilityFacts(compatibility))
+  )
+    throw new AtlassianCredentialCustodyError("invalid-input");
 }
 
 function finishVerification(
@@ -699,13 +773,7 @@ function finishVerification(
     !metadata.livePod.verificationInProgress
   )
     return false;
-  if (status !== "unverified" && !isAtlassianConnectionVerificationStatus(status))
-    throw new AtlassianCredentialCustodyError("invalid-input");
-  if (
-    compatibility !== undefined &&
-    (status !== "ok" || !isJiraDataCenterCompatibilityFacts(compatibility))
-  )
-    throw new AtlassianCredentialCustodyError("invalid-input");
+  assertStorableVerification(status, compatibility);
   commitVerificationStatus(deps, metadata, status, correlationId, compatibility);
   return true;
 }
@@ -964,6 +1032,8 @@ function credentialCustodyPort(
       beginVerification(deps, authRef, expectedGeneration),
     finishVerification: (authRef, generation, revision, status, correlationId, compatibility) =>
       finishVerification(deps, authRef, generation, revision, status, correlationId, compatibility),
+    releaseVerification: (authRef, generation, revision, previous) =>
+      releaseVerification(deps, authRef, generation, revision, previous),
     observeAuthenticationFailure: (authRef, generation, revision, correlationId) =>
       observeAuthenticationFailure(deps, authRef, generation, revision, correlationId),
     // Re-validated on read (KEIKO-0894), matching resolveForExecution below: an authRef that

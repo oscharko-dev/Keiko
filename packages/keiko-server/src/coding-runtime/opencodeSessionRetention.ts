@@ -1,3 +1,5 @@
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSinkFor } from "../process-log-sink.js";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -864,10 +866,11 @@ function removeUnlessHeld(path: string): boolean {
  */
 function protectPrivatePathOnWindows(path: string): void {
   if (process.platform !== "win32") return;
-  protectWindowsOwnerPrivateFile(path);
+  const securityLogSink = processServerLogSinkFor(UNKNOWN_CORRELATION_ID);
+  protectWindowsOwnerPrivateFile(path, { securityLogSink });
   const opened = statSync(path, { bigint: true });
   if (!opened.isFile()) return;
-  const inspection = inspectWindowsOwnerPrivateFiles([path]);
+  const inspection = inspectWindowsOwnerPrivateFiles([path], { securityLogSink });
   const facts = inspection.files[0] ?? { kind: "unavailable" as const };
   const verdict = windowsOwnerPrivateVerdict(facts, inspection.principal, opened);
   if (verdict.kind !== "owner-private") throw new Error("retained-session-not-owner-private");

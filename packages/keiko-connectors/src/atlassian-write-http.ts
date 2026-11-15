@@ -38,6 +38,7 @@ import {
 import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
 import {
   asRecord,
+  identityDecisionReason,
   parseAtlassianJsonValue,
   parseJsonArray,
   parseJsonObjectOrArray,
@@ -136,7 +137,11 @@ function jiraRemoteErrors(bodyText: string): JiraMutationFailureDetail | undefin
     errors === undefined
       ? []
       : Object.entries(errors).map(([fieldId, message]) => ({ fieldId, message }));
-  return sanitizeJiraMutationFailureDetail({ fieldErrors, messages: body.errorMessages });
+  return sanitizeJiraMutationFailureDetail({
+    fromJira: true,
+    fieldErrors,
+    messages: body.errorMessages,
+  });
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -171,6 +176,12 @@ function classifyTransport(
     : { ok: false, reason: "unavailable" };
 }
 
+function failureReason(
+  result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
+): AtlassianConnectorWriteFailureReason {
+  return identityDecisionReason(result) ?? failureReasonForWriteStatus(result.status);
+}
+
 function classifyFailure(
   result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
 ): AtlassianWriteHttpOutcome {
@@ -180,10 +191,7 @@ function classifyFailure(
       : undefined;
   return {
     ok: false,
-    reason:
-      result.status === 401 && result.authentication === "confirmed"
-        ? "permission-denied"
-        : failureReasonForWriteStatus(result.status),
+    reason: failureReason(result),
     httpStatus: result.status,
     ...(remote === undefined ? {} : { remote }),
   };

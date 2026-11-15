@@ -560,6 +560,8 @@ export type CodingWorkbenchRuntimeUnavailableReason =
   | "payload-missing"
   | "payload-unapproved"
   | "payload-tampered"
+  // The installed runtime is an earlier, retired OpenCode (#4359): the person updates Keiko.
+  | "runtime-outdated"
   | "secure-read-unavailable"
   | "loopback-unavailable"
   | "runtime-unqualified"
@@ -567,7 +569,10 @@ export type CodingWorkbenchRuntimeUnavailableReason =
   | "gateway-service-stopped"
   | "gateway-service-stale"
   | "gateway-service-unknown"
-  | "gateway-service-unqualified";
+  | "gateway-service-unqualified"
+  // The Windows installation folder is not on a local disk, or Windows could not check it now.
+  | "install-volume-not-local"
+  | "install-volume-unverified";
 
 export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbenchRuntimeUnavailableReason[] =
   Object.freeze([
@@ -577,6 +582,7 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "payload-missing",
     "payload-unapproved",
     "payload-tampered",
+    "runtime-outdated",
     "secure-read-unavailable",
     "loopback-unavailable",
     "runtime-unqualified",
@@ -585,6 +591,8 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "gateway-service-stale",
     "gateway-service-unknown",
     "gateway-service-unqualified",
+    "install-volume-not-local",
+    "install-volume-unverified",
   ] as const);
 
 /**

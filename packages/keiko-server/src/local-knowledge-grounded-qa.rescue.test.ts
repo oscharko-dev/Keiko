@@ -731,6 +731,70 @@ describe("grounded prompt context evidence", () => {
   });
 });
 
+// #4371: a turn whose scope names a Knowledge Pod (or Pod Set) that no longer exists is refused with
+// a readable conflict before any model call, so a pod that vanished after it was bound can never
+// reach the provider.
+describe("a turn whose scope names a vanished Knowledge Pod", () => {
+  it.each([
+    {
+      scope: { kind: "capsule", capsuleId: "cap-vanished" as KnowledgeCapsuleId, connectedAtMs: 1 },
+      message: "The selected Knowledge Pod no longer exists.",
+    },
+    {
+      scope: {
+        kind: "capsule-set",
+        capsuleSetId: "set-vanished" as CapsuleSetId,
+        connectedAtMs: 1,
+      },
+      message: "The selected Knowledge Pod Set no longer exists.",
+    },
+  ] as const)("is refused before any model call: $message", async ({ scope, message }) => {
+    openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    }).close();
+    const project = rescueStore.createProject(rescueTmp, "vanished-pod-project");
+    const created = rescueStore.createChat(project.path, "Vanished", "chat-model");
+    const chat = rescueStore.updateChat(created.id, { localKnowledgeScope: scope });
+    let modelCalls = 0;
+    const fakeModel: ModelPort = {
+      call: () => {
+        modelCalls += 1;
+        return Promise.reject(new Error("the model must not be called"));
+      },
+    };
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model")],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model")],
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => fakeModel,
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "What is alpha?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result).toMatchObject({ status: 409, body: { error: { message } } });
+    expect(modelCalls).toBe(0);
+  });
+});
+
 // PR #3678 review: a model window too small for every retrieved reference trims the prompt. The
 // prompt then names only the references it carries, and the answer and its evidence report the
 // fitted count — never the retrieved total the model did not see.
@@ -1189,6 +1253,7 @@ describe("weakly supported citations", () => {
       const turn: NonNullable<UiHandlerDeps["chatToolTurn"]> = {
         onTranscript: (): void => undefined,
         hasUsableObservation: (): boolean => true,
+        reportEvidence: [],
         reportsToolAction: false,
         readOnlySynthesisRequest: (request): Parameters<ModelPort["call"]>[0] => request,
         meter: (model): ModelPort => model,

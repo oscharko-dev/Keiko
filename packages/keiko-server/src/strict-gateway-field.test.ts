@@ -14,6 +14,7 @@ import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
   awaitAnyInitializedConversationReadyChatModel,
   codingWorkbenchProbesSettledForTests,
+  checkSelectedConversationModel,
   initializeConfiguredConversationReadiness,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
@@ -468,6 +469,7 @@ describe("strict LiteLLM field twin", () => {
     try {
       const fixture = await setUpFieldGateway(port, fieldTmpDir());
       deps = fixture.deps;
+      await checkSelectedConversationModel(deps, "dotsocr", "corr-field-pick-dotsocr");
       const explicit = await handleCreateDesktopChat(
         ctx("POST", {
           projectPath: fixture.projectDir,
@@ -476,7 +478,7 @@ describe("strict LiteLLM field twin", () => {
         }),
         deps,
       );
-      // Credential verification already established that warm dotsocr can answer.
+      // The person picked dotsocr first: the pick is what checks it (#4351), and the warm model answers.
       expect(explicit.status).toBe(201);
       const defaulted = await handleCreateDesktopChat(
         ctx("POST", { projectPath: fixture.projectDir, title: "Standard danach" }),
@@ -541,6 +543,8 @@ describe("strict LiteLLM field twin", () => {
         "qwen-chat",
         "corr-field-explicit-join",
       );
+      // Startup checked only the model in use; the person's pick is what finds dotsocr unready.
+      await checkSelectedConversationModel(deps, "dotsocr", "corr-field-pick-unready");
       expect(deps.gatewayConfig?.verifiedCapability("dotsocr")?.fields.conversationReady).toBe(
         false,
       );
@@ -747,9 +751,10 @@ describe("strict LiteLLM field twin", () => {
 
   // The field gateway has six tool-capable models. Persisting one model's conclusion bumps the
   // configuration generation, and a run that started under the previous generation has its
-  // conclusion discarded: probing them all at once stored the first and silently dropped the rest,
-  // leaving every other model in the picker at 4,096 for the whole cooldown.
-  it("retains startup context verification for every tool-capable model after an explicit profile check", async () => {
+  // conclusion discarded: probing them all at once stored the first and silently dropped the rest.
+  // Since #4351 nothing probes them all: an explicit check proves the model in use, a pick proves the
+  // model picked, and every other listed model stays at 4,096 until someone picks it.
+  it("proves the context window of the checked model, and of another tool-capable model only when it is picked", async () => {
     resetCodingWorkbenchContextWindowProbesForTests();
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const gateway = startStrictLiteLlm(
@@ -790,6 +795,17 @@ describe("strict LiteLLM field twin", () => {
       expect(profile.body).toMatchObject({ status: "available" });
       await codingWorkbenchProbesSettledForTests();
 
+      // #4351: the explicit check proved the model in use; the other listed model stays unproven.
+      expect(windows()).toEqual([
+        ["qwen-chat", 32_000],
+        ["gemma-chat", 4_096],
+      ]);
+      // Picking it proves it, and only it.
+      await handleCodingSidecarGatewayProfile(
+        ctx("GET", {}, {}, "/api?modelId=gemma-chat&check=1"),
+        deps,
+      );
+      await codingWorkbenchProbesSettledForTests();
       expect(windows()).toEqual([
         ["qwen-chat", 32_000],
         ["gemma-chat", 32_000],

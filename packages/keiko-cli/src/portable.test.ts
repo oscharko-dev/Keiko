@@ -13,7 +13,7 @@ import {
 import { createHash } from "node:crypto";
 import { spawn, type SpawnOptions } from "node:child_process";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 
@@ -46,7 +46,13 @@ import {
   INSTALL_LAYOUT_OVERRIDES_ENV,
 } from "./install-layout.js";
 import { windowsLauncher } from "./launcher-platforms.js";
-import { portableManagedSetupLockPath, validatePortableRoot } from "./portable-install.js";
+import {
+  PortableSetupBusyError,
+  portableManagedSetupLockPath,
+  validatePortableRoot,
+} from "./portable-install.js";
+import type { LaunchFailureReason } from "./launch-failure-note.js";
+import { PortableLaunchRefusal } from "./portable-launch-failure.js";
 import { parseWindowsStartMenuRegistration } from "./portable-maintenance.js";
 import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import {
@@ -56,6 +62,17 @@ import {
 } from "./portable-registration.js";
 import { defaultManagedRoot } from "./portable-shared.js";
 import { hashPortableTreeKht1 } from "@oscharko-dev/keiko-security/portable-tree-attestation";
+import { loadServer } from "./lazy-modules.js";
+
+// The default startup recovery loads the whole keiko-server package on first use. Under vitest that
+// is a cold module graph of thousands of built files, which vite processes one by one: 26 to 29 s
+// measured twice in the gates container (arm64, 16 cores) against 3.5 s for the same import from
+// plain Node. The first test that reaches it would carry that one-time cost inside its own 15 s
+// budget and fail on a host that is slower than the CI runner, while proving nothing about portable
+// recovery. Loading it here, during collection, puts the cost where no test budget runs; the loader
+// is memoised, so every test that uses the real recovery then finds the package loaded. The test's
+// own 15-second budget and every assertion are unchanged.
+await loadServer();
 
 type PortableTarget = "windows-x64" | "macos-arm64" | "macos-x64";
 
@@ -863,14 +880,20 @@ describe("runPortableCli", () => {
       expect(windowsLocalVolumeTestControl.checkedPaths.length).toBeGreaterThan(0);
       expect(windowsLocalVolumeTestControl.checkedPaths).toContain(root);
       expect(selectedStateDirs).toEqual([stateDir]);
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
+      // #4358: the failed command also leaves its closed `portable.launch.failed` line. The pin on
+      // the refusal itself is unchanged: exactly one security event, correlated and body-free.
+      const refusal = events.filter((event) => event.op !== "portable.launch.failed");
+      expect(refusal).toHaveLength(1);
+      expect(refusal[0]).toMatchObject({
         category: "security",
         op: "security.windows-shortcut.system-root-refused",
         errorKind: "unsafe-target",
         extra: { mode: "create", failureKind: "WindowsSystemDirectoryError" },
       });
-      expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(refusal[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(
+        events.filter((event) => event.op === "portable.launch.failed").map((e) => e.extra?.reason),
+      ).toEqual(["setup-failed"]);
       expect(JSON.stringify(events)).not.toContain("attacker");
       expect(JSON.stringify(events)).not.toContain(shortcut);
     } finally {
@@ -3232,6 +3255,7 @@ describe("runPortableCli", () => {
       "foreign launcher\n",
     );
     const c = capture();
+    const logged: SecurityLogEvent[] = [];
 
     const code = await runPortableCli(
       portableLaunchArgs(target, newSource, managedRoot, stateDir),
@@ -3239,6 +3263,7 @@ describe("runPortableCli", () => {
       env,
       {
         homedir: () => home,
+        securityLogSinkFactory: () => ({ write: (event): void => void logged.push(event) }),
         lifecycleFn: (command) => {
           events.push(command);
           return Promise.resolve(0);
@@ -3246,12 +3271,243 @@ describe("runPortableCli", () => {
       },
     );
 
-    expect(code).toBe(1);
+    // #4358 (owner decision): the upgrade failed, the previous install is running again, so the
+    // command ends with 0 and not with the failure of the upgrade; the failure stays on its stream.
+    // This pinned 1 before: that made a double-click that did start Keiko look like a failed start.
+    expect(code).toBe(0);
+    // ... and it still leaves one body-free line, which is all a double-click keeps of it
+    expect(
+      logged.filter((event) => event.op === "portable.launch.failed").map((e) => e.extra),
+    ).toEqual([
+      expect.objectContaining({ reason: "upgrade-failed", launcherBox: "not-requested" }),
+    ]);
     expect(events).toEqual(["stop", "start"]);
     expect(packageVersionAt(managedRoot, target)).toBe("0.2.11");
     expect(readFileSync(activeMarker, "utf8")).toBe("old install marker\n");
     expect(registration(stateDir)).toMatchObject({ packageVersion: "0.2.11" });
     expect(c.err()).toContain("portable registration refused unknown artifact");
+  });
+
+  it("still ends non-zero, with the relaunch's own reason, when the previous install cannot start either", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const stateDir = join(root, "state");
+    const target: PortableTarget = "windows-x64";
+    const managedRoot = managedRootForTarget(home, target);
+    const env = windowsPortableEnv(home);
+    const oldSource = writePortableFixture(join(root, "bootstrap"), target, "0.2.11");
+    const newSource = writePortableFixture(join(root, "downloaded"), target, "0.2.12");
+    await runPortableCli(
+      portableLaunchArgs(target, oldSource, managedRoot, stateDir),
+      capture().io,
+      env,
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+    writeFileSync(
+      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk"),
+      "foreign launcher\n",
+    );
+    const logged: SecurityLogEvent[] = [];
+
+    const code = await runPortableCli(
+      portableLaunchArgs(target, newSource, managedRoot, stateDir),
+      capture().io,
+      env,
+      {
+        homedir: () => home,
+        securityLogSinkFactory: () => ({ write: (event): void => void logged.push(event) }),
+        notifyFailureFn: () => undefined,
+        lifecycleFn: (command, _args, _io, _env, deps) => {
+          if (command === "start") deps.recordFailure?.("health-timeout");
+          return Promise.resolve(command === "start" ? 1 : 0);
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    // two lines, in order: the failed upgrade, then the end of the command. The command's reason (the
+    // one the box and the note carry) is the relaunch's: Keiko does not run at all, which is what the
+    // person must act on; the failed upgrade is recorded as its own line.
+    const failed = logged.filter((event) => event.op === "portable.launch.failed");
+    expect(failed.map((event) => event.extra?.reason)).toEqual([
+      "upgrade-failed",
+      "health-timeout",
+    ]);
+  });
+
+  // #4358: every non-zero exit of `portable launch` leaves a closed reason (for the native
+  // launcher's failure box, through the note) and exactly one registered log line, and the CLI
+  // starts no notifier process of its own on Windows. The reasons themselves are recorded where they
+  // arise (lifecycle-failure-reasons.test.ts for the start, the table below for the launch).
+  describe("a launch that ends non-zero", () => {
+    async function installedLaunch(
+      reasonFor: (deps: {
+        recordFailure?: ((reason: LaunchFailureReason) => void) | undefined;
+      }) => number | Promise<number>,
+      launcherEnv: Record<string, string>,
+    ): Promise<{
+      readonly code: number;
+      readonly logged: SecurityLogEvent[];
+      readonly spawned: string[];
+    }> {
+      const root = tempRoot();
+      const home = join(root, "home");
+      const stateDir = join(root, "state");
+      const target: PortableTarget = "windows-x64";
+      const managedRoot = managedRootForTarget(home, target);
+      const env = { ...windowsPortableEnv(home), ...launcherEnv };
+      const source = writePortableFixture(join(root, "bootstrap"), target, "0.2.11");
+      await runPortableCli(
+        portableLaunchArgs(target, source, managedRoot, stateDir),
+        capture().io,
+        env,
+        {
+          homedir: () => home,
+          now: () => NOW,
+          spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+        },
+      );
+      const logged: SecurityLogEvent[] = [];
+      const spawned: string[] = [];
+      const code = await runPortableCli(
+        portableLaunchArgs(target, managedRoot, managedRoot, stateDir),
+        capture().io,
+        env,
+        {
+          homedir: () => home,
+          now: () => NOW,
+          securityLogSinkFactory: () => ({ write: (event): void => void logged.push(event) }),
+          spawnFn: (command) => {
+            spawned.push(command);
+            return spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+          },
+          notifyFailureFn: () => undefined,
+          lifecycleFn: (_command, _args, _io, _env, deps) => Promise.resolve(reasonFor(deps)),
+        },
+      );
+      return { code, logged, spawned };
+    }
+
+    // The launcher names its note inside the temporary directory and the CLI honors only that folder.
+    const notes: string[] = [];
+    afterEach(() => {
+      for (const note of notes.splice(0)) rmSync(note, { force: true });
+    });
+    function uniqueNote(): string {
+      const note = join(
+        tmpdir(),
+        `keiko-launch-note-${String(Math.floor(Math.random() * 1e9))}.txt`,
+      );
+      notes.push(note);
+      return note;
+    }
+
+    it("leaves the reason in the launcher's note and one log line, and starts no process", async () => {
+      const note = uniqueNote();
+
+      const { code, logged, spawned } = await installedLaunch(
+        (deps) => {
+          deps.recordFailure?.("port-in-use");
+          return 1;
+        },
+        { KEIKO_PORTABLE_UI_LAUNCH: "1", KEIKO_PORTABLE_FAILURE_NOTE: note },
+      );
+
+      expect(code).toBe(1);
+      expect(readFileSync(note, "utf8")).toBe("port-in-use");
+      const failed = logged.filter((event) => event.op === "portable.launch.failed");
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toMatchObject({
+        level: "error",
+        errorKind: "conflict",
+        extra: { reason: "port-in-use", launcherBox: "written" },
+      });
+      // the CLI starts no helper process for the box: the launcher shows it
+      expect(spawned).toEqual([]);
+    });
+
+    // The reasons the launcher has its own text for (keiko-portable-launcher.c, the token table; the
+    // table itself is pinned in portable-launcher-feedback.test.ts): each reaches the note unchanged.
+    it.each(["health-timeout", "port-in-use", "setup-busy", "lifecycle-busy"] as const)(
+      "hands the launcher the token %s",
+      async (reason) => {
+        const note = uniqueNote();
+
+        const { code } = await installedLaunch(
+          (deps) => {
+            deps.recordFailure?.(reason);
+            return 1;
+          },
+          { KEIKO_PORTABLE_UI_LAUNCH: "1", KEIKO_PORTABLE_FAILURE_NOTE: note },
+        );
+
+        expect(code).toBe(1);
+        expect(readFileSync(note, "utf8")).toBe(reason);
+      },
+    );
+
+    it("names launch-error when no cause was recorded, and writes no note outside a double-click", async () => {
+      const note = uniqueNote();
+
+      const { code, logged } = await installedLaunch(() => 1, {
+        KEIKO_PORTABLE_FAILURE_NOTE: note,
+      });
+
+      expect(code).toBe(1);
+      expect(existsSync(note)).toBe(false);
+      const failed = logged.filter((event) => event.op === "portable.launch.failed");
+      expect(failed.map((event) => event.extra)).toEqual([
+        expect.objectContaining({ reason: "launch-error", launcherBox: "not-requested" }),
+      ]);
+    });
+
+    it("leaves a line and says so on its stream when the note cannot be written", async () => {
+      // a note path of another shape is refused, never written
+      const { code, logged } = await installedLaunch(() => 1, {
+        KEIKO_PORTABLE_UI_LAUNCH: "1",
+        KEIKO_PORTABLE_FAILURE_NOTE: join(tempRoot(), "somewhere-else.txt"),
+      });
+
+      expect(code).toBe(1);
+      const failed = logged.filter((event) => event.op === "portable.launch.failed");
+      expect(failed.map((event) => event.extra)).toEqual([
+        expect.objectContaining({ reason: "launch-error", launcherBox: "failed" }),
+      ]);
+    });
+
+    it.each([
+      ["a busy setup lock", new PortableSetupBusyError(), "setup-busy"],
+      [
+        "a launch that needs recovery",
+        new PortableLaunchRefusal("recovery", "recovery-required"),
+        "recovery-required",
+      ],
+      [
+        "a refused registration",
+        new PortableLaunchRefusal("registration", "registration-invalid"),
+        "registration-invalid",
+      ],
+      ["any other error", new Error("boom"), "launch-error"],
+    ] as const)("classifies %s as %s", async (_label, error, reason) => {
+      const note = uniqueNote();
+
+      const { code, logged } = await installedLaunch(
+        () => {
+          throw error;
+        },
+        { KEIKO_PORTABLE_UI_LAUNCH: "1", KEIKO_PORTABLE_FAILURE_NOTE: note },
+      );
+
+      expect(code).toBe(1);
+      expect(readFileSync(note, "utf8")).toBe(reason);
+      expect(
+        logged.filter((event) => event.op === "portable.launch.failed").map((e) => e.extra?.reason),
+      ).toEqual([reason]);
+    });
   });
 
   it("adopts and launches a pristine same-path portable root", async () => {
@@ -3504,5 +3760,81 @@ describe("runPortableCli", () => {
       name.startsWith(".portable-registration-"),
     );
     expect(leftovers).toEqual([]);
+  });
+
+  // #4358 v5: a double-click on the downloaded `Keiko.exe` shows nothing for minutes while the
+  // managed installation is set up (about nine minutes under x64 emulation, then the cold start).
+  // That feedback now comes from the native launcher itself, before Node loads (pinned in
+  // portable-launcher-feedback.test.ts); the CLI no longer starts a PowerShell of its own for it.
+  // What moved here from the old "first-installation notice" tests: the setup is still the same
+  // path for a first installation, the installed copy and an upgrade, and the CLI starts no helper
+  // process of its own on any of them - the only process it starts is the managed launcher.
+  describe("first installation under a double-click", () => {
+    const launcherDeps = (
+      home: string,
+      spawned: { command: string }[],
+    ): Parameters<typeof runPortableCli>[3] => ({
+      homedir: () => home,
+      now: () => NOW,
+      spawnFn: (command): ReturnType<typeof spawn> => {
+        spawned.push({ command });
+        return spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+      },
+      lifecycleFn: () => Promise.resolve(0),
+    });
+
+    it("sets up and starts only the managed launcher: no notice process of its own", async () => {
+      const root = tempRoot();
+      const home = join(root, "home");
+      const source = writePortableFixture(join(root, "bootstrap"), "windows-x64");
+      const managedRoot = managedRootForTarget(home, "windows-x64");
+      const env = { ...windowsPortableEnv(home), KEIKO_PORTABLE_UI_LAUNCH: "1" };
+      const spawned: { command: string }[] = [];
+
+      const code = await runPortableCli(
+        portableLaunchArgs("windows-x64", source, managedRoot, join(root, "state")),
+        capture().io,
+        env,
+        launcherDeps(home, spawned),
+      );
+
+      expect(code).toBe(0);
+      expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.11");
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]?.command).toContain(managedRoot);
+    });
+
+    it("upgrades over an installed copy and launches the installed copy the same way", async () => {
+      const root = tempRoot();
+      const home = join(root, "home");
+      const stateDir = join(root, "state");
+      const managedRoot = managedRootForTarget(home, "windows-x64");
+      const env = { ...windowsPortableEnv(home), KEIKO_PORTABLE_UI_LAUNCH: "1" };
+      const oldSource = writePortableFixture(join(root, "bootstrap"), "windows-x64", "0.2.11");
+      const newSource = writePortableFixture(join(root, "downloaded"), "windows-x64", "0.2.12");
+      const spawned: { command: string }[] = [];
+      await runPortableCli(
+        portableLaunchArgs("windows-x64", oldSource, managedRoot, stateDir),
+        capture().io,
+        env,
+        launcherDeps(home, spawned),
+      );
+
+      const installed = await runPortableCli(
+        portableLaunchArgs("windows-x64", managedRoot, managedRoot, stateDir),
+        capture().io,
+        env,
+        launcherDeps(home, spawned),
+      );
+      const upgrade = await runPortableCli(
+        portableLaunchArgs("windows-x64", newSource, managedRoot, stateDir),
+        capture().io,
+        env,
+        launcherDeps(home, spawned),
+      );
+
+      expect([installed, upgrade]).toEqual([0, 0]);
+      expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.12");
+    });
   });
 });

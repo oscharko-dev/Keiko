@@ -28,9 +28,11 @@ import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import type { CodingToolNativeCharge } from "./codingToolFacadePorts.js";
 import { OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE } from "./opencodeNativeDeliveryTools.js";
 import {
+  OPENCODE_CODE_MODE_PROGRAM,
   OPENCODE_CODE_MODE_SCHEDULE,
   OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS,
   OPENCODE_CODE_MODE_SESSION_MOVE,
+  OPENCODE_CODE_MODE_SESSION_RENAME,
   OPENCODE_CODE_MODE_WORKTREE_CREATE,
   OPENCODE_NATIVE_POLICY_ACTION,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCES,
@@ -174,6 +176,7 @@ const PERMISSION_LOG_VALUES = [
   "external_directory",
   "doom_loop",
   "opencode_session_move",
+  "opencode_session_rename",
   "opencode_worktree_create",
   "opencode_schedule",
 ] as const;
@@ -718,6 +721,12 @@ export interface OpenCodeNativePolicyInput {
   readonly mcp?: OpenCodeNativeMcpGrants | undefined;
   /** Whether the operator admitted a web search integration (nativeWebSearch.ts, #3903 AC3). */
   readonly webSearch?: boolean | undefined;
+  /**
+   * The run's runtime decides every nested effect of a Code Mode program itself (its pin's
+   * `decidesNestedEffects`, #4359). Only then does the program, which asserts nothing on its own,
+   * pass without a card; absent or false keeps the program's own decision (fail closed).
+   */
+  readonly codeModeNestedEffectsDecided?: boolean | undefined;
 }
 
 export interface OpenCodeNativeMcpGrants {
@@ -736,7 +745,15 @@ export interface OpenCodeNativeMcpGrants {
       readonly mutation?: import("./opencodeNativeMcpMutationJournal.js").NativeMcpMutationSource;
     }
   >;
-  readonly servers: ReadonlyMap<string, { readonly remote: boolean; readonly managed?: boolean }>;
+  readonly servers: ReadonlyMap<
+    string,
+    {
+      readonly remote: boolean;
+      readonly managed?: boolean;
+      /** The human chose this managed server for the run: the same grant as its read tools. */
+      readonly runGrantedRead?: boolean;
+    }
+  >;
 }
 
 export function decideOpenCodeNativePolicy(
@@ -822,13 +839,28 @@ function classifiedOrUnresolvable(input: OpenCodeNativePolicyInput): Classified 
   }
 }
 
-/** A read tool of a managed server the human chose for this run; a write never qualifies. */
+/**
+ * A read tool of a managed server the human chose for this run, or the resource listing and reading
+ * of such servers (#4359); a write never qualifies.
+ */
 function runGrantedRead(
   request: OpenCodeNativePolicyRequest,
   mcp: OpenCodeNativeMcpGrants | undefined,
 ): boolean {
   const grant = mcp?.actions.get(request.permission);
-  return grant?.runGrantedRead === true && grant.managed === true && grant.risk === "read";
+  if (grant !== undefined) {
+    return grant.runGrantedRead === true && grant.managed === true && grant.risk === "read";
+  }
+  // Listing and reading resources is a read of each named server, so it needs the same grant as
+  // that server's read tools; a registered or managed server nobody granted gets no free read.
+  return (
+    MCP_RESOURCE_ACTIONS.has(request.permission) &&
+    request.resources.length > 0 &&
+    request.resources.every((resource) => {
+      const server = mcp?.servers.get(resource.split(":")[0] ?? "");
+      return server?.managed === true && server.runGrantedRead === true;
+    })
+  );
 }
 
 function nativeInternetUnavailable(input: OpenCodeNativePolicyInput): boolean {
@@ -853,6 +885,7 @@ function admittedRootsOf(input: OpenCodeNativePolicyInput): AdmittedRoots {
     planRoot: input.planRoot,
     externalRoots: input.externalRoots ?? [],
     webSearch: input.webSearch === true,
+    codeModeNestedEffectsDecided: input.codeModeNestedEffectsDecided === true,
   };
 }
 
@@ -880,6 +913,32 @@ interface AdmittedRoots {
   readonly externalRoots?: readonly string[] | undefined;
   /** The operator admitted a web search integration. */
   readonly webSearch?: boolean | undefined;
+  readonly codeModeNestedEffectsDecided?: boolean | undefined;
+}
+
+function classifyCodeModeProgram(roots: AdmittedRoots): Classified {
+  return roots.codeModeNestedEffectsDecided === true ? CODE_MODE_PROGRAM : EXECUTE;
+}
+
+/** The management tools of Code Mode, each decided by its own rule. */
+function classifyCodeModeAction(
+  request: OpenCodeNativePolicyRequest,
+  roots: AdmittedRoots,
+): Classified | undefined {
+  switch (request.permission) {
+    case OPENCODE_CODE_MODE_SESSION_MOVE:
+      return classifySessionMove(request, roots.workspaceRoot);
+    case OPENCODE_CODE_MODE_SESSION_RENAME:
+      return classifySessionRename(request);
+    case OPENCODE_CODE_MODE_WORKTREE_CREATE:
+      return classifyWorktreeCreate(request);
+    case OPENCODE_CODE_MODE_SCHEDULE:
+      return classifySchedule(request);
+    case OPENCODE_CODE_MODE_PROGRAM:
+      return classifyCodeModeProgram(roots);
+    default:
+      return undefined;
+  }
 }
 
 function classifyNativeAction(
@@ -887,10 +946,8 @@ function classifyNativeAction(
   roots: AdmittedRoots,
 ): Classified {
   const { permission, resources } = request;
-  if (permission === OPENCODE_CODE_MODE_SESSION_MOVE)
-    return classifySessionMove(request, roots.workspaceRoot);
-  if (permission === OPENCODE_CODE_MODE_WORKTREE_CREATE) return classifyWorktreeCreate(request);
-  if (permission === OPENCODE_CODE_MODE_SCHEDULE) return classifySchedule(request);
+  const codeMode = classifyCodeModeAction(request, roots);
+  if (codeMode !== undefined) return codeMode;
   if (permission === "websearch") return roots.webSearch === true ? EGRESS : WEBSEARCH_UNCONFIGURED;
   if (!KNOWN_ACTIONS.has(permission))
     return {
@@ -937,6 +994,45 @@ function classifySessionMove(
           "Keiko refused this action: the target is not an existing directory inside the task workspace.",
       }
     : guarded;
+}
+
+/**
+ * Code Mode's `session_rename` (#4359): it sets the title of the run's own OpenCode session and
+ * nothing else (no file, command, network or repository), so like a move it is allowed in every
+ * mode for the run's own session and refused for another, with one bounded single-line title.
+ */
+const SESSION_TITLE_MAX_CHARS = 200;
+
+function hasControlCharacter(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.codePointAt(index) ?? 0;
+    // C0 and C1 controls (U+0085 NEXT LINE among them) and the Unicode line and paragraph breaks.
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029)
+      return true;
+  }
+  return false;
+}
+
+function classifySessionRename(request: OpenCodeNativePolicyRequest): Classified {
+  // The calling session must be known: two missing identities never "match".
+  const own = typeof request.sessionID === "string" && request.sessionID.length > 0;
+  const target = request.targetSessionID ?? request.sessionID;
+  const [title, ...rest] = request.resources;
+  if (
+    !own ||
+    target !== request.sessionID ||
+    title === undefined ||
+    rest.length > 0 ||
+    title.trim().length === 0 ||
+    title.length > SESSION_TITLE_MAX_CHARS ||
+    hasControlCharacter(title)
+  )
+    return {
+      reason: "unsupported-action",
+      message:
+        "Keiko refused this action: a session may set only its own title, one line of at most 200 characters.",
+    };
+  return READ;
 }
 
 /**
@@ -1092,6 +1188,20 @@ const EGRESS: OpenCodeNativeActionClassification = Object.freeze({
   scope: "internet",
   risk: "medium",
   label: "native-egress",
+});
+/**
+ * The Code Mode program itself (#4359). It asserts no permission and can do nothing but call its
+ * nested tools, each of which reaches this policy as its own decision on a runtime whose pin says
+ * so; such a program is a plain computation and passes in every mode. Anywhere else it keeps the
+ * command-execution decision (ask below Full access) and its text for the human to review; a
+ * request that offers none is refused as having nothing to review.
+ */
+const CODE_MODE_PROGRAM: OpenCodeNativeActionClassification = Object.freeze({
+  actionClass: "workspace-read",
+  kind: "workspace-write",
+  scope: "workspace-contained",
+  risk: "low",
+  label: "native-read",
 });
 const EXECUTE: OpenCodeNativeActionClassification = Object.freeze({
   actionClass: "command-execution",
@@ -1640,6 +1750,7 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "external_directory",
         "doom_loop",
         "opencode_session_move",
+        "opencode_session_rename",
         "opencode_worktree_create",
         "opencode_schedule",
         "mcp",
@@ -1672,6 +1783,7 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "cancelled",
         "unavailable",
         "authority-refused",
+        "template-refused",
       ],
     },
     sessionRelation: {
@@ -1743,7 +1855,8 @@ export type OpenCodeNativePolicyOutcome =
   | "expired"
   | "cancelled"
   | "unavailable"
-  | "authority-refused";
+  | "authority-refused"
+  | "template-refused";
 
 /** The native session that asked: the run's own session or an admitted child session (#3897). */
 export type OpenCodeNativeSessionRelation = "primary" | "child";

@@ -153,6 +153,10 @@ export function validJiraResourceLifecycleReceipt(
     receiptWithinBudget(receipt)
   );
 }
+/**
+ * A resource lifecycle ACK stays unconfirmed, except an issue deletion: Jira accepted the DELETE and
+ * the read-back found the issue gone (#4354, ADR-0128), which the connector reports as a success.
+ */
 export function canConfirmJiraResourceLifecycle(operation: JiraMutationOperation): boolean {
-  return !isJiraResourceLifecycleOperation(operation);
+  return operation === "jira.delete-issue" || !isJiraResourceLifecycleOperation(operation);
 }

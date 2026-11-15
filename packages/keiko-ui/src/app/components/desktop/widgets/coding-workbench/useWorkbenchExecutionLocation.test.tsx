@@ -73,6 +73,7 @@ describe("workbench execution location restoration", () => {
       workspaceError: false,
       branchLoading: false,
       branchError: false,
+      branchDenied: false,
       runIsActive: false,
       folderMode: false,
       refresh,
@@ -104,6 +105,7 @@ describe("workbench execution location restoration", () => {
       workspaceError: false,
       branchLoading: status === "loading",
       branchError: status === "failed",
+      branchDenied: false,
       runIsActive: false,
       folderMode: false,
       refresh,
@@ -127,6 +129,7 @@ describe("workbench execution location restoration", () => {
       workspaceError: false,
       branchLoading: false,
       branchError: false,
+      branchDenied: false,
       runIsActive: false,
       folderMode: false,
       refresh,
@@ -172,6 +175,7 @@ describe("workbench execution location restoration", () => {
         activeInstance: null,
         branchLoading: false,
         branchError: true,
+        branchDenied: false,
         workspaceLoading: false,
         workspaceError: false,
         runIsActive: false,
@@ -196,6 +200,7 @@ describe("workbench execution location restoration", () => {
       workspaceError: false,
       branchLoading: false,
       branchError: false,
+      branchDenied: false,
       runIsActive: false,
       folderMode: false,
       refresh,
@@ -220,6 +225,7 @@ describe("workbench execution location restoration", () => {
         activeInstance: null,
         branchLoading: false,
         branchError: false,
+        branchDenied: false,
         workspaceLoading: false,
         workspaceError: false,
         runIsActive: false,
@@ -248,6 +254,7 @@ describe("workbench execution location restoration", () => {
         activeInstance: null,
         branchLoading: false,
         branchError: false,
+        branchDenied: false,
         workspaceLoading: false,
         workspaceError: false,
         runIsActive: false,
@@ -274,6 +281,7 @@ describe("workbench execution location restoration", () => {
       activeInstance: null as WorkspaceInstance | null,
       branchLoading: false,
       branchError: false,
+      branchDenied: false,
       workspaceLoading: true,
       workspaceError: false,
       runIsActive: false,
@@ -290,6 +298,7 @@ describe("workbench execution location restoration", () => {
       activeInstance: managed,
       branchLoading: false,
       branchError: false,
+      branchDenied: false,
       workspaceLoading: false,
     });
     expect(result.current.ready).toBe(true);
@@ -311,6 +320,7 @@ describe("workbench execution location restoration", () => {
       activeInstance: null as WorkspaceInstance | null,
       branchLoading: false,
       branchError: false,
+      branchDenied: false,
       workspaceLoading: false,
       workspaceError: false,
       runIsActive: false,
@@ -358,6 +368,7 @@ describe("workbench execution location in an ordinary folder", () => {
     workspaceError: false,
     branchLoading: false,
     branchError: false,
+    branchDenied: false,
     runIsActive: false,
     refresh,
   };
@@ -414,5 +425,38 @@ describe("workbench execution location in an ordinary folder", () => {
       result.current.retry();
     });
     await waitFor(() => expect(mocks.selectFolderWorkspace).toHaveBeenCalledTimes(2));
+  });
+});
+
+// #4371: when the server refused the folder (the closed DENIED reason) the checkout says so once.
+describe("a checkout failure the server named as a refusal", () => {
+  const input = {
+    root: "/repo",
+    branch: "main",
+    location: "worktree" as const,
+    folderMode: false,
+    activeInstance: null,
+    branchLoading: false,
+    branchError: true,
+    workspaceLoading: false,
+    workspaceError: false,
+    runIsActive: false,
+    refresh,
+  };
+
+  it("is denied when the branch read was refused", () => {
+    const { result } = renderHook(() =>
+      useWorkbenchExecutionLocation({ ...input, branchDenied: true }),
+    );
+    expect(result.current.error).toBe(true);
+    expect(result.current.denied).toBe(true);
+  });
+
+  it("is not denied for an ordinary failure", () => {
+    const { result } = renderHook(() =>
+      useWorkbenchExecutionLocation({ ...input, branchDenied: false }),
+    );
+    expect(result.current.error).toBe(true);
+    expect(result.current.denied).toBe(false);
   });
 });

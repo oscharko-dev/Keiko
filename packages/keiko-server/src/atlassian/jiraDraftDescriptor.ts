@@ -1,6 +1,7 @@
 import {
   JIRA_DRAFT_PAGE_ITEMS_MAX,
   JIRA_FIELD_VALIDATION_FAILURES,
+  JIRA_RESULT_GUIDANCE_MAX_CHARS,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
@@ -22,7 +23,7 @@ const DESCRIPTION =
   "Save a reviewable backlog draft in Keiko without creating Jira issues. Supports small and large drafts in pages of 1 to " +
   String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
   " items in the jira.draft item form; for Knowledge requirements use jira.draft-batch. Omit draftId to start a new draft; supply the returned draftId only to append to that draft. " +
-  "A page that breaks an issue template is refused whole with the violations to correct. The result returns draftId and draftDigest for review. " +
+  "A page that breaks an issue template is refused whole with the violations to correct. The result returns draftId and draftDigest for jira.draft only. " +
   "Only when the user requests creation in Jira and unresolvedRefCount is 0, call jira.draft with only draftId and the last draftDigest; that tool performs Jira writes under the current write authority, and Keiko asks for any approval the Chat's access mode requires.";
 
 function draftStageInputSchema(): ReturnType<typeof compileExternalCatalogSchema> {
@@ -60,7 +61,7 @@ export function jiraDraftStageDeclaration(): ManagedMcpToolDeclaration {
           newDraft: { type: "boolean" },
           itemCount: { type: "integer", minimum: 0 },
           pageCount: { type: "integer", minimum: 0 },
-          guidance: text(1024),
+          guidance: text(JIRA_RESULT_GUIDANCE_MAX_CHARS),
           unresolvedRefCount: { type: "integer", minimum: 0 },
           unresolvedRefs: { type: "array", maxItems: 32, items: text(32) },
           ref: text(32),

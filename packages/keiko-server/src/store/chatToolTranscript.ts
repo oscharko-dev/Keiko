@@ -6,13 +6,18 @@ import {
 import { jiraMutationToolId } from "../atlassian/jiraMutationToolId.js";
 import type { DatabaseSync } from "node:sqlite";
 import type {
+  ChatClaimNotice,
   ChatToolBatchProgress,
   ChatToolExchange,
   ChatToolTranscript,
+  ChatToolTurnEnd,
+  ChatToolTurnEndReason,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   CHAT_TOOL_BATCH_TOOL_NAME,
+  isChatClaimNotice,
   isChatToolBatchProgress,
+  isChatToolTurnEnd,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   isChatToolReadGrantView,
@@ -46,6 +51,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "../process-log-sink.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import { admitsApprovalTransition, admitsFirstApproval } from "./chatToolApprovalTransition.js";
 import { invalidRequest, notFound } from "./errors.js";
@@ -86,6 +92,16 @@ export type ChatToolTranscriptUpdate =
       readonly batchProgress: ChatToolBatchProgress;
     }
   | { readonly kind: "read-consent"; readonly grant: ChatToolReadGrantView }
+  | {
+      /** The marker follows the turn's final answer: a value sets it, undefined clears it. */
+      readonly kind: "claim-notice";
+      readonly notice: ChatClaimNotice | undefined;
+    }
+  | {
+      /** How the turn ended early, as closed facts (#4355): a value sets it, undefined clears it. */
+      readonly kind: "turn-end";
+      readonly end: ChatToolTurnEnd | undefined;
+    }
   | {
       readonly kind: "write-approval";
       readonly callId: string;
@@ -174,6 +190,8 @@ const UPDATE = defineActivityLogOperation({
         "read-consent",
         "write-approval",
         "human-input",
+        "claim-notice",
+        "turn-end",
       ],
     },
     batchPhase: {
@@ -185,6 +203,28 @@ const UPDATE = defineActivityLogOperation({
     batchDraftedCount: { type: "integer", dataClass: "count", required: false },
     batchPlannedCount: { type: "integer", dataClass: "count", required: false },
     batchFailedCount: { type: "integer", dataClass: "count", required: false },
+    claimNotice: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["no-jira-create", "tool-call-not-executed"],
+    },
+    turnEndReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "budget-exhausted",
+        "deadline",
+        "authority-invalid",
+        "authentication-failed",
+        "tool-failure",
+        "output-exhausted",
+        "context-overflow",
+        "tool-not-offered",
+        "model-failure",
+      ],
+    },
     exchangeCount: { type: "integer", dataClass: "count", required: true },
     draftReceiptCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -452,11 +492,78 @@ function validReadGrants(
   );
 }
 
+/**
+ * The two closed facts a turn's final answer states: the claim marker and the early ending. Both are
+ * presentation records on top of the exchanges: one that is not valid is dropped when the transcript
+ * is read, never allowed to cost the conversation its tool history (the stored English answer is
+ * what the Chat then shows).
+ */
+const OPTIONAL_MARKERS = [
+  { key: "claimNotice", name: "claim-notice", valid: isChatClaimNotice },
+  { key: "turnEnd", name: "turn-end", valid: isChatToolTurnEnd },
+] as const;
+type DroppedMarker = (typeof OPTIONAL_MARKERS)[number]["name"];
+function dropInvalidMarkers(value: unknown): readonly DroppedMarker[] {
+  if (!object(value)) return [];
+  const dropped: DroppedMarker[] = [];
+  for (const marker of OPTIONAL_MARKERS) {
+    if (value[marker.key] !== undefined && !marker.valid(value[marker.key])) {
+      Reflect.deleteProperty(value, marker.key);
+      dropped.push(marker.name);
+    }
+  }
+  return dropped;
+}
+const MARKER_OMITTED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.tool-transcript.marker-omitted",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "store.chatToolTranscript.recordOmittedMarker",
+  fields: {
+    marker: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["claim-notice", "turn-end"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-tool-transcript"],
+  proofIds: ["chat.tool-transcript.marker-omitted.line"],
+  releaseImpact: "minor",
+});
+/** Body-free: only which closed marker was dropped; the read goes on with the exchanges. */
+function recordOmittedMarker(marker: DroppedMarker): void {
+  processServerLogSink().write(
+    activityLogEvent(
+      MARKER_OMITTED,
+      { correlationId: UNKNOWN_CORRELATION_ID, level: "warn" },
+      { marker, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
 function validTranscript(
   value: unknown,
   identity: TranscriptIdentity | undefined,
 ): value is StoredTranscript {
-  if (!object(value) || !exact(value, ["schemaVersion", "exchanges", "readGrant", "readGrants"]))
+  if (
+    !object(value) ||
+    !exact(value, [
+      "schemaVersion",
+      "exchanges",
+      "readGrant",
+      "readGrants",
+      "claimNotice",
+      "turnEnd",
+    ])
+  )
     return false;
   if (
     value.schemaVersion !== 1 ||
@@ -569,10 +676,14 @@ function decodeStoredTranscript(
     if (Buffer.byteLength(json) > MAX_TRANSCRIPT_BYTES)
       throw new TypeError("Chat tool transcript exceeds its byte limit");
     const fingerprint = verifiedFingerprint(json, identity);
-    if (verifiedTranscripts.has(fingerprint)) return JSON.parse(json) as StoredTranscript;
     const parsed: unknown = JSON.parse(json);
+    // Every read drops an invalid presentation marker afresh (a cached verdict covers the text, not
+    // the marker); the evidence line is written once per verified text.
+    const dropped = dropInvalidMarkers(parsed);
+    if (verifiedTranscripts.has(fingerprint)) return parsed as StoredTranscript;
     if (validTranscript(parsed, identity)) {
       rememberVerified(fingerprint);
+      for (const marker of dropped) recordOmittedMarker(marker);
       return parsed;
     }
   } catch {
@@ -716,6 +827,8 @@ function applyUpdate(
   if (update.kind === "write-prepared") return applyPrepared(current, update);
   if (update.kind === "progress") return applyProgress(current, update);
   if (update.kind === "write-approval") return applyApproval(current, update, chatId, messageId);
+  if (update.kind === "claim-notice") return { ...current, claimNotice: update.notice };
+  if (update.kind === "turn-end") return { ...current, turnEnd: update.end };
   if (update.kind !== "read-consent") return applyExchange(current, update);
   return applyReadConsent(current, update, chatId);
 }
@@ -974,6 +1087,22 @@ function redactStarted(
     throw invalidRequest("Invalid pending native tool identity.");
   return { ...update, call: redactCall(update, redact) };
 }
+function redactTurnEnd(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "turn-end" }>,
+): ChatToolTranscriptUpdate {
+  if (update.end !== undefined && !isChatToolTurnEnd(update.end))
+    throw invalidRequest("Invalid turn ending.");
+  // The record is closed facts (a reason, tool names, issue keys, counts): validated, never free text.
+  return { kind: "turn-end", end: update.end };
+}
+function redactClaimNotice(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "claim-notice" }>,
+): ChatToolTranscriptUpdate {
+  if (update.notice !== undefined && !isChatClaimNotice(update.notice))
+    throw invalidRequest("Invalid claim notice.");
+  // Copy only the closed marker; nothing else of the update survives.
+  return { kind: "claim-notice", notice: update.notice };
+}
 function redactHumanInput(
   update: Extract<ChatToolTranscriptUpdate, { kind: "human-input" }>,
 ): ChatToolTranscriptUpdate {
@@ -992,7 +1121,7 @@ function redactHumanInput(
 function redactStateUpdate(
   update: Exclude<
     ChatToolTranscriptUpdate,
-    { kind: "started" | "captured" | "settled" | "human-input" }
+    { kind: "started" | "captured" | "settled" | "human-input" | "claim-notice" | "turn-end" }
   >,
 ): ChatToolTranscriptUpdate {
   if (update.kind === "write-prepared") {
@@ -1025,6 +1154,8 @@ function redactUpdate(
   if (update.kind === "captured") return redactCaptured(update, redact);
   if (update.kind === "settled") return redactSettlement(update, redact);
   if (update.kind === "human-input") return redactHumanInput(update);
+  if (update.kind === "claim-notice") return redactClaimNotice(update);
+  if (update.kind === "turn-end") return redactTurnEnd(update);
   return redactStateUpdate(update);
 }
 
@@ -1097,6 +1228,17 @@ function draftReceiptLogFields(update: ChatToolTranscriptUpdate): { draftReceipt
       : 0,
   };
 }
+/** Only the closed value of a marker reaches the line; absent means cleared. */
+function markerLogFields(update: ChatToolTranscriptUpdate): {
+  readonly claimNotice?: ChatClaimNotice;
+  readonly turnEndReason?: ChatToolTurnEndReason;
+} {
+  if (update.kind === "claim-notice" && update.notice !== undefined)
+    return { claimNotice: update.notice };
+  if (update.kind === "turn-end" && update.end !== undefined)
+    return { turnEndReason: update.end.reason };
+  return {};
+}
 export function updateChatToolTranscript(
   db: DatabaseSync,
   id: string,
@@ -1135,6 +1277,7 @@ export function updateChatToolTranscript(
         messageDigest: sha256Hex(id),
         phase: update.kind,
         exchangeCount: count,
+        ...markerLogFields(update),
         ...draftReceiptLogFields(update),
         ...progressLogFields(update),
         completeness: "complete",

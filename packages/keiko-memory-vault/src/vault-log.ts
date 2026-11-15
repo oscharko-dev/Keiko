@@ -36,10 +36,10 @@ import { createHash } from "node:crypto";
 
 import {
   activityLogEvent,
-  classifyErrorKind,
   defineActivityLogOperation,
   recordActivityLogLoss,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { securityErrorKind } from "@oscharko-dev/keiko-security";
 
 export type MemoryVaultLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -109,44 +109,14 @@ export function nullMemoryVaultLogSink(): MemoryVaultLogSink {
   return NULL_SINK;
 }
 
-// Monotonic elapsed milliseconds, rounded to 3 decimals so a line stays stable in width.
-// `performance.now()` rather than `Date.now()` so a clock step cannot produce a negative
-// duration across a vault-open or an encryption sweep.
-export function startMemoryVaultLogTimer(): () => number {
-  const startedAt = performance.now();
-  return (): number => Math.round((performance.now() - startedAt) * 1000) / 1000;
-}
-
-// The shape an error KIND may have is `classifyErrorKind` (ADR-0173 D11), imported from
-// `keiko-contracts` rather than declared here, so this reducer and the ones in `knowledge-log.ts`,
-// `log-port.ts`, `keiko-activity-log/src/server-log.ts` and
-// `keiko-model-gateway/src/observability.ts` cannot drift into accepting different things: an
-// identifier, a taxonomy code, a constructor name — never a sentence.
-//
-// READING the property is itself a call into foreign code — `code`/`name` are ordinary properties
-// on an object this layer did not build, so an accessor or Proxy trap can throw. Every call site
-// classifies a cause while already handling a failure (a corrupt DB open, a migration sweep that
-// just threw), so a throw here would replace a diagnosable failure with a classification failure.
-// An unreadable property degrades to the next candidate, exactly like a property whose value fails
-// the shape gate.
-function errorKindProperty(error: object, key: string): string | undefined {
-  let value: unknown;
-  try {
-    value = (error as Record<string, unknown>)[key];
-  } catch {
-    return undefined;
-  }
-  return classifyErrorKind(value);
-}
-
-// Classification only: the coded `code`, else the constructor `name`, else "unknown". The message
-// is NEVER read — a thrown error's message routinely carries a path or a fragment of the value
-// that failed — and neither `code` nor `name` is trusted just because it is called one: both must
-// pass `classifyErrorKind`'s shape gate first.
-export function memoryVaultErrorKind(error: unknown): string {
-  if (typeof error !== "object" || error === null) return "unknown";
-  return errorKindProperty(error, "code") ?? errorKindProperty(error, "name") ?? "unknown";
-}
+// The elapsed-time timer and the error-kind reducer are the security port's own: one definition of
+// each, so the two ports cannot drift into measuring or classifying differently (ADR-0173 D11). A
+// vault-open or an encryption sweep reads the same monotonic timer, and a thrown cause is reduced to
+// an identifier, a taxonomy code or a constructor name — never a message.
+export {
+  securityErrorKind as memoryVaultErrorKind,
+  startSecurityLogTimer as startMemoryVaultLogTimer,
+} from "@oscharko-dev/keiko-security";
 
 // ─── Writing a line must never become the failure it describes ────────────────
 //
@@ -214,7 +184,7 @@ function reportFailedMemoryVaultLogSink(
 ): void {
   if (REPORTED_FAILED_SINKS.has(sink)) return;
   REPORTED_FAILED_SINKS.add(sink);
-  const errorKind = memoryVaultErrorKind(cause);
+  const errorKind = securityErrorKind(cause);
   const droppedOpDigest = operationDigest(droppedOp);
   try {
     sink.write(

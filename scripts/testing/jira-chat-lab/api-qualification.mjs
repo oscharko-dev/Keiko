@@ -15,6 +15,7 @@ import {
   loadSession,
   requireLicense,
 } from "./lab-client.mjs";
+import { withFixtureFieldOptional } from "./seed-fields.mjs";
 import { privateJson } from "./private-json.mjs";
 import { observeQualificationFixtures } from "./api-qualification-cases.mjs";
 import { dispatchQualification, qualificationWitness } from "./api-qualification-runtime.mjs";
@@ -574,6 +575,8 @@ async function executeCases(context, specifications, report, directory, witness,
   fixture.runId = report.runId;
   context.qualificationFixtureState = fixture;
   context.qualificationWitness = witness;
+  // KEIKO_JIRA_LAB_QUALIFY_DISCOVERY=1 puts the product's own discover and describe before the dispatch.
+  context.qualifyDiscovery = process.env.KEIKO_JIRA_LAB_QUALIFY_DISCOVERY === "1";
   const state = {
     context,
     fixture,
@@ -592,6 +595,8 @@ async function executeCases(context, specifications, report, directory, witness,
       verificationReferences:
         evidence.runtimeAvailability === "unknown" ? [] : [`${report.file}#${evidence.id}`],
     });
+    if (context.discoveryProofs !== undefined)
+      report.discoveryProofs = [...context.discoveryProofs];
     recordLeftoverState(report, evidence);
     recordFailedRoot(state.failedRoots, specification, evidence);
     privateJson(join(directory, report.file), report);
@@ -766,10 +771,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       throw new TypeError(
         "Usage: api-qualification.mjs <private-session> [comma-separated-tools] [owned-snapshot-id]",
       );
-    const { counts } = await qualifyApi(
-      directory,
-      only === "*" ? undefined : only?.split(","),
-      snapshotId,
+    // The qualification's own creates run in a project that inherits the lab's required field.
+    const { counts } = await withFixtureFieldOptional(loadSession(directory), () =>
+      qualifyApi(directory, only === "*" ? undefined : only?.split(","), snapshotId),
     );
     if (counts.unknown > 0) process.exitCode = 1;
   } catch (error) {

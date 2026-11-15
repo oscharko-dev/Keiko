@@ -1,5 +1,5 @@
 import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connectors.js";
-import type { JiraTemplateViolation } from "./jira-issue-template.js";
+import type { JiraTemplateGateFact, JiraTemplateViolation } from "./jira-issue-template.js";
 import { compareStrings } from "./comparators.js";
 
 export const JIRA_AVATAR_MUTATIONS = Object.freeze([
@@ -411,8 +411,34 @@ export const JIRA_DRAFT_ID_PATTERN =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 export const JIRA_DRAFT_DIGEST_PATTERN = "^[0-9a-f]{64}$";
 /** Why a `jira.draft` call that names a staged draft is refused before anyone is asked. */
-export const JIRA_DRAFT_REFUSALS = ["draft-not-found", "draft-changed", "draft-invalid"] as const;
+export const JIRA_DRAFT_REFUSALS = [
+  "draft-not-found",
+  "draft-changed",
+  "draft-invalid",
+  "connection-changed",
+] as const;
 export type JiraDraftRefusalReason = (typeof JIRA_DRAFT_REFUSALS)[number];
+/**
+ * Why a draft that resolves is still invalid, as a closed code: the person reads one localized
+ * sentence per code that names what to change (#4355). The model-facing guidance sentence is its
+ * own text; this code carries no draft content.
+ */
+export const JIRA_DRAFT_PROBLEMS = [
+  "draft-shape",
+  "items-missing",
+  "item-shape",
+  "item-ref",
+  "item-ids",
+  "item-fields",
+  "item-parent",
+  "item-links",
+  "item-requirements",
+  "ref-duplicate",
+  "ref-self",
+  "ref-unknown",
+  "ref-cycle",
+] as const;
+export type JiraDraftProblemCode = (typeof JIRA_DRAFT_PROBLEMS)[number];
 /** A model-chosen local reference that relations between draft items use before keys exist. */
 export const JIRA_DRAFT_REF_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,31}$";
 const DRAFT_REF = new RegExp(JIRA_DRAFT_REF_PATTERN, "u");
@@ -483,6 +509,133 @@ export function isJiraAttachmentPreview(value: unknown): value is JiraAttachment
     isAttachmentSize(Reflect.get(value, "sizeBytes")) &&
     typeof digest === "string" &&
     SHA256_HEX.test(digest)
+  );
+}
+/**
+ * The projects a write approval names, read by the server when the approval was requested: the
+ * project reference exactly as the call carries it (`ref`, a numeric id or a key) and, when Jira
+ * answered, the project's key and name. A name a card cannot show (too long, a control character)
+ * is dropped on its own and the key stays; a reference Jira did not answer carries neither, and the
+ * approval then shows that reference and never invents a name. Bounded; never a remote body.
+ */
+export const JIRA_APPROVAL_PROJECTS_MAX = 8;
+const APPROVAL_PROJECT_REF = /^\w{1,32}$/u;
+const APPROVAL_PROJECT_KEY = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/u;
+const APPROVAL_PROJECT_NAME_CHARS_MAX = 255;
+/** A Jira id and the name Jira gives it to this person, for a card that must not show the id alone. */
+export interface JiraApprovalNamedId {
+  readonly id: string;
+  readonly name: string;
+}
+export interface JiraApprovalProject {
+  readonly ref: string;
+  readonly key?: string;
+  readonly name?: string;
+  /**
+   * The issue types the call references that this project's own answer names, by id. A type the
+   * project does not list is simply absent: the card then says so in words and never invents a name.
+   */
+  readonly issueTypes?: readonly JiraApprovalNamedId[];
+}
+// eslint-disable-next-line no-control-regex -- a project name is shown to people.
+const DISPLAY_TEXT_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f]/u;
+/** A project name a card can show: bounded, trimmed, no control characters. */
+export function isJiraApprovalProjectName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    value.length > 0 &&
+    value.length <= APPROVAL_PROJECT_NAME_CHARS_MAX &&
+    !DISPLAY_TEXT_FORBIDDEN.test(value)
+  );
+}
+export const JIRA_APPROVAL_NAMES_MAX = 64;
+const APPROVAL_NAMED_ID = /^[A-Za-z0-9_.:-]{1,80}$/u;
+export function isJiraApprovalNamedId(value: unknown): value is JiraApprovalNamedId {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const id: unknown = Reflect.get(value, "id");
+  return (
+    Object.keys(value).sort(compareStrings).join() === "id,name" &&
+    typeof id === "string" &&
+    APPROVAL_NAMED_ID.test(id) &&
+    isJiraApprovalProjectName(Reflect.get(value, "name"))
+  );
+}
+/** The named ids a card carries: bounded, each id once. Absent means none was read. */
+export function isJiraApprovalNamedIds(value: unknown): value is readonly JiraApprovalNamedId[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= JIRA_APPROVAL_NAMES_MAX &&
+    value.every(isJiraApprovalNamedId) &&
+    new Set(value.map((entry: JiraApprovalNamedId) => entry.id)).size === value.length
+  );
+}
+function isApprovalProjectIdentity(value: object, keys: string): boolean {
+  if (keys === "ref") return true;
+  const key: unknown = Reflect.get(value, "key");
+  if (typeof key !== "string" || !APPROVAL_PROJECT_KEY.test(key)) return false;
+  return (
+    keys === "key,ref" ||
+    (keys === "key,name,ref" && isJiraApprovalProjectName(Reflect.get(value, "name")))
+  );
+}
+export function isJiraApprovalProject(value: unknown): value is JiraApprovalProject {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const ref: unknown = Reflect.get(value, "ref");
+  const keys = Object.keys(value)
+    .filter((key) => key !== "issueTypes")
+    .sort(compareStrings)
+    .join();
+  return (
+    typeof ref === "string" &&
+    APPROVAL_PROJECT_REF.test(ref) &&
+    isApprovalProjectIdentity(value, keys) &&
+    (!Object.hasOwn(value, "issueTypes") ||
+      isJiraApprovalNamedIds(Reflect.get(value, "issueTypes")))
+  );
+}
+export function isJiraApprovalProjects(value: unknown): value is readonly JiraApprovalProject[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= JIRA_APPROVAL_PROJECTS_MAX &&
+    value.every(isJiraApprovalProject) &&
+    new Set(value.map((entry: JiraApprovalProject) => entry.ref)).size === value.length
+  );
+}
+/**
+ * The status change a `jira.transition` approval covers, read by the server when the approval was
+ * requested, in the words Jira shows the acting person: the transition id exactly as the call carries
+ * it (`ref`) and, when Jira's transition list for the issue answered, the transition's name and the
+ * status it leads to. An entry with only the `ref` means the list could not be read: the card says so
+ * in words and never invents a name. Bounded; never a remote body, and never part of the action's
+ * digest (the display changes, the binding does not).
+ */
+export interface JiraApprovalTransition {
+  readonly ref: string;
+  readonly name?: string;
+  readonly targetStatusName?: string;
+  /**
+   * Jira answered and does not offer this transition for the issue right now, so approving it would
+   * fail. Carries no names: the card says so in words before the person decides.
+   */
+  readonly unavailable?: true;
+}
+const APPROVAL_TRANSITION_REF = /^\d{1,10}$/u;
+const APPROVAL_TRANSITION_KEYS = new Set(["ref", "name", "targetStatusName", "unavailable"]);
+export function isJiraApprovalTransition(value: unknown): value is JiraApprovalTransition {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const ref: unknown = Reflect.get(value, "ref");
+  return (
+    typeof ref === "string" &&
+    APPROVAL_TRANSITION_REF.test(ref) &&
+    Object.keys(value).every((key) => APPROVAL_TRANSITION_KEYS.has(key)) &&
+    ["name", "targetStatusName"].every(
+      (key) => !Object.hasOwn(value, key) || isJiraApprovalProjectName(Reflect.get(value, key)),
+    ) &&
+    (!Object.hasOwn(value, "unavailable") ||
+      (Reflect.get(value, "unavailable") === true && Object.keys(value).length === 2))
   );
 }
 /** Rejected means a known local refusal before dispatch; non-2xx status alone remains unknown. */
@@ -678,6 +831,8 @@ export const JIRA_FIELD_VALIDATION_FAILURES = [
   "invalid-field",
   "invalid-operation",
   "bounds-exceeded",
+  /** An Epic Link whose target the instance does not know as an Epic (#4354). */
+  "invalid-epic-link",
 ] as const;
 export type JiraFieldValidationFailure = (typeof JIRA_FIELD_VALIDATION_FAILURES)[number];
 export const JIRA_MUTATION_DETAIL_LIMITS = Object.freeze({
@@ -700,7 +855,15 @@ export interface JiraMutationFieldError {
 export interface JiraMutationFailureDetail {
   /** The adapter independently observed the requested state before any effect. */
   readonly unchanged?: true;
+  /**
+   * Jira's own error document: set only where Keiko parses a refusal Jira sent. A closed fact about
+   * who refused, so the instruction a model reads never guesses it from the detail's shape (#4357).
+   * Never sent to the model.
+   */
+  readonly fromJira?: true;
   readonly fieldId?: string;
+  /** The name Jira shows for `fieldId` when Keiko's own check refused it: what a person reads (#4357). */
+  readonly fieldName?: string;
   readonly validation?: JiraFieldValidationFailure;
   readonly fieldErrors?: readonly JiraMutationFieldError[];
   readonly messages?: readonly string[];
@@ -733,6 +896,13 @@ export type JiraMutationAttempt =
       /** Internal bounded serializer evidence; omitted from model results and remote receipts. */
       readonly descriptionConvertedHeadingCount?: number;
       readonly descriptionProjection?: "supported-markdown";
+      /**
+       * Template rules the issue already broke in fields this edit did not touch. They did not block
+       * the write; the person is told (#4354).
+       */
+      readonly templateNotices?: readonly JiraTemplateViolation[];
+      /** Closed facts of the template gate that went on with less than the full picture; Activity Log only. */
+      readonly templateGateFacts?: readonly JiraTemplateGateFact[];
     }
   | {
       readonly ok: false;
@@ -746,6 +916,8 @@ export type JiraMutationAttempt =
       /** A prepared description is evidence even when the provider refuses the subsequent write. */
       readonly descriptionConvertedHeadingCount?: number;
       readonly descriptionProjection?: "supported-markdown";
+      /** Closed facts of the template gate; a write the gate let through may still fail afterwards. */
+      readonly templateGateFacts?: readonly JiraTemplateGateFact[];
     };
 
 // eslint-disable-next-line no-control-regex -- remote text is shown to a model, not a terminal.
@@ -779,6 +951,10 @@ function boundedDetailText(text: string): string {
 function detailFieldId(value: unknown): value is string {
   return typeof value === "string" && DETAIL_FIELD_ID.test(value);
 }
+function detailFieldName(value: unknown): { readonly fieldName: string } | undefined {
+  const fieldName = detailText(value);
+  return fieldName === undefined ? undefined : { fieldName };
+}
 function detailFieldErrors(value: unknown): readonly JiraMutationFieldError[] {
   if (!Array.isArray(value)) return [];
   const errors: JiraMutationFieldError[] = [];
@@ -811,14 +987,18 @@ export function sanitizeJiraMutationFailureDetail(
   const messages = detailMessages(Reflect.get(value, "messages"));
   const detail: JiraMutationFailureDetail = {
     ...(Reflect.get(value, "unchanged") === true ? { unchanged: true } : {}),
+    ...(Reflect.get(value, "fromJira") === true ? { fromJira: true } : {}),
     ...(detailFieldId(fieldId) ? { fieldId } : {}),
+    ...detailFieldName(Reflect.get(value, "fieldName")),
     ...(VALIDATION_FAILURES.has(validation)
       ? { validation: validation as JiraFieldValidationFailure }
       : {}),
     ...(fieldErrors.length === 0 ? {} : { fieldErrors }),
     ...(messages.length === 0 ? {} : { messages }),
   };
-  return Object.keys(detail).length === 0 ? undefined : detail;
+  // The fact about who refused explains nothing by itself: without a field error or a message there
+  // is no detail at all, as before.
+  return Object.keys(detail).every((key) => key === "fromJira") ? undefined : detail;
 }
 
 // eslint-disable-next-line no-control-regex -- a link type name is a single-line identifier.
@@ -868,3 +1048,14 @@ export function sanitizeJiraMutationLinkAccount(
     ? { requested, created, missing: refs, unconfirmed }
     : undefined;
 }
+
+/**
+ * The most characters of the `guidance` sentence any Jira write result may carry. It is not a guess:
+ * the template refusals' guidance (a parent rule, a section rule, every rule hint, several templates)
+ * is the longest the producers write, and `jiraTemplateGuidanceVariants` in the producer
+ * enumerates every variant, so one test holds the longest of them within this bound AND the bound
+ * within a stated margin of it. The result schemas of every write tool (the mutation tools, the draft
+ * run, draft-stage) and the producer share this one value: a longer guidance made the catalog reject
+ * the whole result (`result-contract-failed`, data null, #4354).
+ */
+export const JIRA_RESULT_GUIDANCE_MAX_CHARS = 1280;

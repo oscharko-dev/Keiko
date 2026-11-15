@@ -60,6 +60,16 @@ export async function resolveVerificationRuntimeTarget(
         filesystem: "execution-root",
         maxOutputBytes: METADATA_MAX_BYTES,
         defaultTimeoutMs: METADATA_TIMEOUT_MS,
+        // Only credential values are scrubbed from this probe's output, not every non-allowlisted
+        // environment value (the default for every other command). The probe runs one fixed,
+        // repository-independent script (`RUNTIME_METADATA_SOURCE`, a constant launched as
+        // `node -e <constant>` from the execution root, the only subcommand METADATA_RULES allows),
+        // no repository code runs, and its output is bounded to METADATA_MAX_BYTES (1 KiB) and
+        // parsed against a closed key set. Under the default scrub a host that exports an ordinary
+        // value equal to part of the Node version (the official Node image's NODE_VERSION=24.18.0)
+        // got `[REDACTED]` back and the target was refused as unavailable. Credential-named and
+        // credential-shaped values stay scrubbed, which still fails the probe closed.
+        outputScrub: "credentials-only",
       },
       commandRules: METADATA_RULES,
       spawn: nodeSpawnFn,

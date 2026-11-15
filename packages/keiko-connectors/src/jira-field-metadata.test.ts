@@ -336,6 +336,31 @@ describe("bounded Jira metadata field/operation matrix", () => {
       expect(write(invalid)).toMatchObject({ ok: false, reason: "invalid-field" });
   });
 
+  // The live Gemma composer run sent the numeric id Keiko had returned as a bare string and got an
+  // invalid-field refusal that explained nothing. The check is as strict as before; the refusal now
+  // says which forms are accepted (#4354).
+  it("explains a refused issue reference instead of only naming the field", () => {
+    const result = parseJiraFieldMetadata([
+      field("parent", "issuelink", { schema: { type: "issuelink", system: "parent" } }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    for (const invalid of ["13602", 13602, "REQ", { key: "REQ 1" }, { key: "REQ-1", id: "1" }]) {
+      const refused = validateJiraFieldChanges(
+        result.fields,
+        { parent: invalid },
+        "create",
+        "data-center",
+      );
+      expect(refused, JSON.stringify(invalid)).toMatchObject({
+        ok: false,
+        reason: "invalid-field",
+        fieldId: "parent",
+      });
+      if (refused.ok) throw new Error("Expected a refusal");
+      expect(refused.message, JSON.stringify(invalid)).toContain('"PROJ-12"');
+    }
+  });
+
   it("keeps dedicated system fields out of plain field writes", () => {
     const result = parseJiraFieldMetadata([
       field("attachment", "array", {
@@ -1096,6 +1121,21 @@ describe("description admission before requirement trace", () => {
       update: {},
       descriptionConvertedHeadingCount: 1,
       descriptionProjection: "supported-markdown",
+    });
+  });
+});
+
+describe("a key that is not a field id (#4357 AC3)", () => {
+  it("names the tool that lists the field ids, as registered, for a create and for an edit", () => {
+    const result = parsed();
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(
+      validateJiraFieldChanges(result.fields, { "not a field id": "x" }, "create", "data-center"),
+    ).toMatchObject({
+      ok: false,
+      reason: "invalid-field",
+      message:
+        "A key in fields is not a field id. Use the field ids jira.create-fields returns for a create, or jira.edit-fields for an edit.",
     });
   });
 });

@@ -1,7 +1,9 @@
+import { isMarkdownSkillRefusalReason } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { OPTIONAL_COUNT_FIELD } from "./activity-log-field-shapes.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { processServerLogSink } from "./process-log-sink.js";
 
@@ -30,6 +32,7 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
         "jira-template-list",
         "jira-template-validate",
         "jira-template-propose",
+        "jira-template-bind",
       ],
     },
     phase: {
@@ -39,6 +42,38 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
       values: ["started", "completed", "rejected", "failed"],
     },
     httpStatus: { type: "integer", dataClass: "count", required: true },
+    // Why a rejected save was refused: the closed reason the browser also receives, never text.
+    // Kept equal to MARKDOWN_SKILL_REFUSAL_REASONS by a route test (a registration must be literal).
+    refusalReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "template-marker-misplaced",
+        "template-not-a-template",
+        "template-front-matter-unterminated",
+        "template-malformed-line",
+        "template-unknown-key",
+        "template-duplicate-key",
+        "template-missing-key",
+        "template-invalid-value",
+        "template-limit-exceeded",
+        "template-unsafe-pattern",
+        "template-no-rules",
+        "text-empty",
+        "text-control-characters",
+      ],
+    },
+    // A Jira template proposal accounts for every issue type of the project (#4354): the number of
+    // types and of proposals, and the number without one per closed reason. Counts only.
+    typeCount: OPTIONAL_COUNT_FIELD,
+    proposalCount: OPTIONAL_COUNT_FIELD,
+    nothingToLearnCount: OPTIONAL_COUNT_FIELD,
+    templateInvalidCount: OPTIONAL_COUNT_FIELD,
+    jiraUnavailableCount: OPTIONAL_COUNT_FIELD,
+    beyondLimitCount: OPTIONAL_COUNT_FIELD,
+    // Proposals kept although one of their two Jira reads was not answered (#4354).
+    partialProposalCount: OPTIONAL_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -62,19 +97,41 @@ export type MarkdownSkillAction =
   | "selection-change"
   | "jira-template-list"
   | "jira-template-validate"
-  | "jira-template-propose";
+  | "jira-template-propose"
+  | "jira-template-bind";
+
+/** What a template proposal accounted for, as counts per closed reason (#4354). */
+export interface MarkdownSkillProposalAccounting {
+  readonly typeCount: number;
+  readonly proposalCount: number;
+  readonly nothingToLearnCount: number;
+  readonly templateInvalidCount: number;
+  readonly jiraUnavailableCount: number;
+  readonly beyondLimitCount: number;
+  readonly partialProposalCount: number;
+}
 
 export function logMarkdownSkillOperation(
   correlationId: string | undefined,
   action: MarkdownSkillAction,
   phase: "started" | "completed" | "rejected" | "failed",
   status: number,
+  accounting?: MarkdownSkillProposalAccounting,
+  refusalReason?: string,
 ): void {
   processServerLogSink().write(
     activityLogEvent(
       MARKDOWN_SKILL_OPERATION,
       { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID },
-      { action, phase, httpStatus: status, completeness: "complete", loss: "none" },
+      {
+        action,
+        phase,
+        httpStatus: status,
+        ...accounting,
+        ...(isMarkdownSkillRefusalReason(refusalReason) ? { refusalReason } : {}),
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
 }
@@ -109,7 +166,7 @@ const MARKDOWN_SKILL_WORKFLOW_OPERATION = defineActivityLogOperation({
     },
     skillRevision: { type: "integer", dataClass: "count", required: true },
     skillDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    skillByteCount: { type: "integer", dataClass: "count", required: false },
+    skillByteCount: OPTIONAL_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },

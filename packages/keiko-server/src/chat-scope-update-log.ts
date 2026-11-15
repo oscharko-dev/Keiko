@@ -11,6 +11,15 @@ import {
   deriveChatGroundingScopeIdentity,
 } from "./store/chat-grounding-scope-identity.js";
 
+// Why a scope update that named a Knowledge Pod was refused before it changed anything (#4371).
+export const KNOWLEDGE_SCOPE_REFUSAL_REASONS = [
+  "knowledge-pod-missing",
+  "knowledge-pod-set-missing",
+  "knowledge-pod-deleting",
+  "knowledge-store-unavailable",
+] as const;
+export type KnowledgeScopeRefusalReason = (typeof KNOWLEDGE_SCOPE_REFUSAL_REASONS)[number];
+
 const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -24,6 +33,12 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: ["applied", "conflict", "cancellation-requested", "denied"],
+    },
+    refusalReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: KNOWLEDGE_SCOPE_REFUSAL_REASONS,
     },
     expectedScopeDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     actualScopeDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
@@ -60,11 +75,12 @@ export function logChatScopeUpdate(
   patch: UpdateChatPatch,
   correlationId: string | undefined,
   cancelledGenerationCount?: number,
+  refusalReason?: KnowledgeScopeRefusalReason,
 ): void {
   const expected = patch.expectedGroundingScopeIdentity;
   let status = 200;
   if (outcome === "conflict") status = 409;
-  else if (outcome === "denied") status = 400;
+  else if (outcome === "denied") status = refusalStatus(refusalReason);
   processServerLogSink().write(
     activityLogEvent(
       CHAT_SCOPE_UPDATE,
@@ -75,6 +91,7 @@ export function logChatScopeUpdate(
       {
         outcome,
         ...(cancelledGenerationCount === undefined ? {} : { cancelledGenerationCount }),
+        ...(refusalReason === undefined ? {} : { refusalReason }),
         ...(expected === undefined
           ? {}
           : { expectedScopeDigest: expected.slice("gsi-v1:".length) }),
@@ -90,6 +107,11 @@ export function logChatScopeUpdate(
       },
     ),
   );
+}
+
+function refusalStatus(reason: KnowledgeScopeRefusalReason | undefined): number {
+  if (reason === undefined) return 400;
+  return reason === "knowledge-store-unavailable" ? 503 : 409;
 }
 
 function jiraStateEvidence(chat: Chat): {

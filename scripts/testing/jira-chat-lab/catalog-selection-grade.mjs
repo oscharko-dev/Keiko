@@ -2,6 +2,8 @@
 // a laboratory. The model's answer text is never evidence; only the tool transcript and native
 // Jira truth are.
 
+import { gradeUnavailable } from "./catalog-selection-unavailable.mjs";
+
 const DISCOVERY_ALIASES = new Set(["jira_discover", "jira_describe"]);
 const toolAlias = (name) => String(name ?? "").replaceAll(/[.-]/gu, "_");
 
@@ -10,6 +12,34 @@ export function selectionPath(exchanges) {
   return exchanges.some((exchange) => DISCOVERY_ALIASES.has(toolAlias(exchange.call?.name)))
     ? "discovery"
     : "direct";
+}
+
+const REFUSAL_REASON = "invalid-arguments";
+
+/** A catalog-level refusal: the dispatcher's own reason, or the tool's own failed result. */
+function refusedForArguments(exchange) {
+  const { result } = exchange;
+  return result?.reason === REFUSAL_REASON || result?.data?.reason === REFUSAL_REASON;
+}
+
+/**
+ * The model's `jira.describe` calls of a turn and how many the catalog refused for their arguments
+ * (an identity the registry does not know, or a repeated one). The gateway's own refusals never
+ * reach the transcript, so they are counted separately; this reads the transcript only.
+ * `firstRefused` says the first selection call of the turn failed, the case #4357 targets.
+ */
+export function describeTrace(exchanges, gateway = undefined) {
+  const calls = exchanges.filter((exchange) => toolAlias(exchange.call?.name) === "jira_describe");
+  const refused = calls.map((exchange) => refusedForArguments(exchange));
+  return {
+    calls: calls.length,
+    refused: refused.filter(Boolean).length,
+    // Any call that did not complete, so a refusal for another reason stays visible beside it.
+    failed: calls.filter((exchange) => exchange.result?.status !== "completed").length,
+    firstRefused: refused[0] === true,
+    // The gateway's own refusal of the call never reaches the transcript; it is counted apart.
+    gatewayRefused: refusedTarget(gateway, "jira.describe"),
+  };
 }
 
 /** Native operations the model actually called, without the local catalog lookups. */
@@ -104,6 +134,29 @@ function missingTarget(effect, otherCalls) {
   return { status: "wrong-tool", detail };
 }
 
+const escaped = (word) => word.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+
+/**
+ * A read that must return one type only (#4369): selected when the call's JQL names the type (by id
+ * or by a name the caller sees) or when the result carries none of the other types' keys; else the
+ * search answered a broader question. The answer text is still no evidence.
+ */
+function restrictedVerdict(target, verdict, restriction) {
+  if (verdict.status !== "selected" || restriction === undefined) return verdict;
+  const jql = String(target.call?.arguments?.jql ?? "");
+  const named = (word) => new RegExp(`(?<![\\w-])${escaped(word)}(?![\\w-])`, "iu").test(jql);
+  const typed = /\b(?:issuetype|type)\b/iu.test(jql) && restriction.typeWords.some(named);
+  if (typed) return { ...verdict, detail: `${verdict.detail}; the JQL names the type` };
+  const leaves = resultLeaves(target.result?.data);
+  const extra = restriction.forbidden.filter((key) => leaves.has(key));
+  return extra.length === 0
+    ? { ...verdict, detail: `${verdict.detail}; the result holds no other type` }
+    : {
+        status: "wrong-result",
+        detail: `the search named no type and returned ${extra.length} issues of other types`,
+      };
+}
+
 function writeVerdict(target, effect) {
   if ((effect.stray ?? 0) > 0)
     return { status: "wrong-result", detail: `${effect.stray} writes the request did not ask for` };
@@ -134,15 +187,81 @@ export function callTrace(exchanges) {
   );
 }
 
+const REFUSAL_MESSAGE_CHARS = 400;
+const REFUSAL_NAMES_MAX = 16;
+const REFUSAL_NAME_CHARS = 64;
+const boundedText = (value, max) => (typeof value === "string" ? value.slice(0, max) : undefined);
+
+function refusalNames(data) {
+  const names = Array.isArray(data?.invalidArguments) ? data.invalidArguments : [];
+  return names
+    .map((name) => boundedText(name, REFUSAL_NAME_CHARS))
+    .filter((name) => name !== undefined)
+    .slice(0, REFUSAL_NAMES_MAX);
+}
+
+function refusalMessage(exchange) {
+  const { data } = exchange.result ?? {};
+  return [data?.message, data?.guidance, exchange.result?.message]
+    .map((text) => boundedText(text, REFUSAL_MESSAGE_CHARS))
+    .find((text) => text !== undefined);
+}
+
+/**
+ * Diagnosis of the calls that did not succeed: the closed reason, the names of the arguments the
+ * product refused, and the refusal message exactly as the model received it, bounded. The data
+ * itself and every argument value stay out.
+ */
+export function refusalTrace(exchanges) {
+  return exchanges.filter((exchange) => !succeeded(exchange)).map(refusalEntry);
+}
+
+const closedOf = (...values) =>
+  String(values.find((value) => value !== undefined) ?? "none").slice(0, REFUSAL_NAME_CHARS);
+
+/** The names of the arguments the model passed (never a value), so a failed call can be diagnosed from the report. */
+function argumentNames(exchange) {
+  const args = exchange.call?.arguments;
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return [];
+  return Object.keys(args)
+    .map((name) => boundedText(name, REFUSAL_NAME_CHARS))
+    .filter((name) => name !== undefined)
+    .slice(0, REFUSAL_NAMES_MAX);
+}
+
+function refusalEntry(exchange) {
+  const { result } = exchange;
+  const message = refusalMessage(exchange);
+  return {
+    call: toolAlias(exchange.call?.name),
+    argumentNames: argumentNames(exchange),
+    status: closedOf(result?.status),
+    outcome: closedOf(result?.data?.outcome),
+    reason: closedOf(result?.reason, result?.data?.reason),
+    invalidArguments: refusalNames(result?.data),
+    ...(message === undefined ? {} : { message }),
+  };
+}
+
 /**
  * One attempt: `turn` is { failure, exchanges, gateway: { unrecovered, circuit } }, `tokens` the
  * native read truth, `effect` the native write verification. A gateway outage, an unavailable
  * native truth, or a turn that failed before it returned a transcript is invalid, never a product
  * or model verdict: without a transcript the selection is unknowable.
  */
-export function gradeSelection(entry, turn, { tokens = [], effect, truthUnavailable } = {}) {
-  const verdict = gradeTurn(entry, turn, { tokens, effect, truthUnavailable });
-  return { ...verdict, calls: callTrace(turn.exchanges ?? []) };
+export function gradeSelection(
+  entry,
+  turn,
+  { tokens = [], effect, truthUnavailable, restriction, native } = {},
+) {
+  const verdict = gradeTurn(entry, turn, { tokens, effect, truthUnavailable, restriction, native });
+  const exchanges = turn.exchanges ?? [];
+  return {
+    ...verdict,
+    calls: callTrace(exchanges),
+    refusals: refusalTrace(exchanges),
+    describe: describeTrace(exchanges, turn.gateway),
+  };
 }
 
 function invalidReason(turn, exchanges, truthUnavailable) {
@@ -192,17 +311,19 @@ function refusedVerdict(entry, turn, verdict, effect) {
   };
 }
 
-function gradeTurn(entry, turn, { tokens, effect, truthUnavailable }) {
+function gradeTurn(entry, turn, proof) {
+  const { tokens, effect, truthUnavailable, restriction } = proof;
   const exchanges = turn.exchanges ?? [];
   const path = selectionPath(exchanges);
   const invalid = invalidReason(turn, exchanges, truthUnavailable);
   if (invalid !== undefined) return { status: "invalid", path, detail: invalid };
+  if (entry.effect === "unavailable") return { ...gradeUnavailable(entry, turn, proof), path };
   const calls = operationCalls(exchanges);
   const target = targetCall(calls, entry.tool, entry.effect === "write" ? [] : tokens);
   if (target !== undefined)
     return entry.effect === "write"
       ? { ...writeVerdict(target, effect), path }
-      : { ...readVerdict(target, tokens), path };
+      : { ...restrictedVerdict(target, readVerdict(target, tokens), restriction), path };
   const verdict = untargetedVerdict(entry, calls, { tokens, effect });
   return { ...refusedVerdict(entry, turn, verdict, effect), path };
 }
@@ -230,6 +351,7 @@ export function summarizeSelection(attempts) {
   });
   const total = (key) => rows.reduce((sum, row) => sum + row[key], 0);
   const valid = total("valid");
+  const describe = describeSummary(attempts);
   // Like the scorecard's repeat rule: a run that lost most of its attempts to outages measures
   // nothing, so it is reported as insufficient instead of as a low (or perfect) rate.
   const sufficient = attempts.length > 0 && valid >= Math.ceil(attempts.length / 2);
@@ -240,6 +362,25 @@ export function summarizeSelection(attempts) {
     alternative: total("alternative"),
     wrongArguments: total("wrongArguments"),
     invalid: total("invalid"),
+    describe,
     sufficient,
+  };
+}
+
+/**
+ * How often the catalog refused the model's selection call, over the valid attempts: turns that
+ * called `jira.describe` at all, turns whose first call was refused, and every refused call.
+ */
+export function describeSummary(attempts) {
+  const traced = attempts.filter((attempt) => attempt.status !== "invalid" && attempt.describe);
+  const sum = (pick) => traced.reduce((total, attempt) => total + pick(attempt.describe), 0);
+  return {
+    turns: traced.filter((attempt) => attempt.describe.calls > 0).length,
+    firstRefusedTurns: traced.filter((attempt) => attempt.describe.firstRefused).length,
+    calls: sum((trace) => trace.calls),
+    refused: sum((trace) => trace.refused),
+    failed: sum((trace) => trace.failed ?? 0),
+    gatewayRefused: sum((trace) => trace.gatewayRefused ?? 0),
+    validTurns: traced.length,
   };
 }

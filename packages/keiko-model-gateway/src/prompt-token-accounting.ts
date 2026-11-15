@@ -1,3 +1,4 @@
+import { providerToolSchema } from "./provider-tool-schema.js";
 import {
   countContextTokens,
   countContextTokensForSegments,
@@ -105,14 +106,21 @@ export function openAiCompatiblePromptMessage(
 export function openAiCompatiblePromptTools(
   tools: readonly ToolDefinition[],
 ): readonly Record<string, unknown>[] {
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-    },
-  }));
+  // The one place every tool definition leaves for an OpenAI-compatible provider, whichever source
+  // built it (the governed catalog, a native extension, a direct definition): a parameters schema a
+  // provider refuses at the top level is projected here. A schema that needs nothing passes through
+  // unchanged, and an already projected one is its own fixed point.
+  return tools.map((tool) => {
+    const advertised = providerToolSchema(tool.parameters, tool.description);
+    return {
+      type: "function",
+      function: {
+        name: tool.name,
+        description: advertised.description,
+        parameters: advertised.parameters,
+      },
+    };
+  });
 }
 
 export interface GatewayPromptTokenOptions {

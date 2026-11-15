@@ -4,6 +4,7 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
+  jiraOperationInReleaseScope,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   McpServerDefinition,
@@ -55,7 +56,10 @@ export type CodingJiraTool =
  * governed by its own workspace authority, which that source does not (yet) consult.
  */
 const CODING_JIRA_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
-  (operation) => operation !== "jira.draft" && operation !== "jira.attach",
+  (operation) =>
+    operation !== "jira.draft" &&
+    operation !== "jira.attach" &&
+    jiraOperationInReleaseScope(operation),
 );
 
 /** Reads are the human's grant; writes keep following the run's autonomy mode. */
@@ -196,7 +200,7 @@ export function codingRunMcpServers(
 
 // ─── Activity Log ───────────────────────────────────────────────────────────────────────────────
 
-const JIRA_POD_ACTIONS = ["bind", "call", "serialize-description"] as const;
+const JIRA_POD_ACTIONS = ["bind", "call", "discover", "describe", "serialize-description"] as const;
 const JIRA_POD_OUTCOMES = ["bound", "refused", "completed", "failed"] as const;
 const JIRA_POD_REASONS = [
   "unavailable",
@@ -206,8 +210,28 @@ const JIRA_POD_REASONS = [
   "unsupported-runtime",
   "tool-failed",
   "scope-missing",
+  // A refused describe (#4359): the closed fault of the Coding catalog's own checks.
+  "invalid-arguments",
+  "effect-denied",
+  "handler-unavailable",
+  "budget-exhausted",
+  "input-bound",
   "internal",
 ] as const;
+/** Which check of a describe refused: the discriminator that a generic tool error hid. */
+const JIRA_POD_SELECTION_STAGES = [
+  "current",
+  "busy",
+  "identity",
+  "scope",
+  "admit",
+  "size",
+  "fits",
+] as const;
+/** What the context budget of a describe stood on when it could not be established. */
+const JIRA_POD_FIT_BASES = ["provider-sample", "no-sample", "geometry-mismatch"] as const;
+export type CodingJiraSelectionStage = (typeof JIRA_POD_SELECTION_STAGES)[number];
+export type CodingJiraFitBasis = (typeof JIRA_POD_FIT_BASES)[number];
 
 const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -240,7 +264,19 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["jira-read", "jira-write"],
+      values: ["jira-read", "jira-write", "jira-discovery"],
+    },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...JIRA_POD_SELECTION_STAGES],
+    },
+    fitBasis: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...JIRA_POD_FIT_BASES],
     },
     toolDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     risk: { type: "string", dataClass: "closed-enum", required: false, values: ["read", "write"] },
@@ -302,11 +338,15 @@ export interface CodingJiraPodLine
     (typeof CODING_JIRA_READS)[number] | (typeof CODING_JIRA_MUTATIONS)[number] | undefined;
   readonly risk?: McpToolRisk | undefined;
   readonly descriptionProjection?: "supported-markdown" | undefined;
+  readonly stage?: CodingJiraSelectionStage | undefined;
+  readonly fitBasis?: CodingJiraFitBasis | undefined;
 }
 
 const CODING_JIRA_POD_LINE_FIELDS = [
   "reason",
   "risk",
+  "stage",
+  "fitBasis",
   "toolCount",
   "linkRequestedCount",
   "linkCreatedCount",
@@ -332,6 +372,9 @@ export function recordCodingJiraPod(
       {
         ...activityActionFields(line, CODING_JIRA_POD_LINE_FIELDS),
         ...(line.tool === undefined ? {} : jiraToolLogFields(line.tool)),
+        ...(line.action === "discover" || line.action === "describe"
+          ? { toolClass: "jira-discovery" as const }
+          : {}),
       },
     ),
   );
@@ -339,6 +382,8 @@ export function recordCodingJiraPod(
     const stage = {
       bind: "coding-binding",
       call: "coding-call",
+      discover: "coding-call",
+      describe: "coding-call",
       "serialize-description": "description-projection",
     } as const;
     recordJiraOperationActivity(
@@ -348,8 +393,32 @@ export function recordCodingJiraPod(
       {
         stage: stage[line.action],
         outcome: line.outcome,
-        reason: line.reason ?? "none",
+        reason: operationReason(line.reason),
       },
     );
+  }
+}
+
+type DescribeOnlyReason =
+  | "invalid-arguments"
+  | "effect-denied"
+  | "handler-unavailable"
+  | "budget-exhausted"
+  | "input-bound";
+
+/** A tool's own failure vocabulary is older than a describe's; its refusals read as tool failures. */
+function operationReason(
+  reason: CodingJiraPodLine["reason"],
+): Exclude<NonNullable<CodingJiraPodLine["reason"]>, DescribeOnlyReason> | "none" {
+  if (reason === undefined) return "none";
+  switch (reason) {
+    case "invalid-arguments":
+    case "effect-denied":
+    case "handler-unavailable":
+    case "budget-exhausted":
+    case "input-bound":
+      return "tool-failed";
+    default:
+      return reason;
   }
 }

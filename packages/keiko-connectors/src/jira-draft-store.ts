@@ -68,6 +68,14 @@ export interface JiraDraftStore {
    */
   readonly complete: (id: string, owner: string, digest: string) => void;
   readonly size: () => number;
+  /**
+   * The fingerprint of the connection this owner is on now, or undefined when it has none. A draft
+   * resolves for a write only under the fingerprint it was stored with (see
+   * `resolveJiraDraftArguments`), so a Pod switch or a new credential generation invalidates it.
+   */
+  readonly connectionOf: (owner: string) => string | undefined;
+  /** Composition binds the owner's current connection once; an unbound store has none. */
+  readonly bindConnection: (resolve: (owner: string) => string | undefined) => void;
 }
 
 export interface JiraDraftStoreOptions {
@@ -251,6 +259,17 @@ function settledRevisions(drafts: Drafts): {
   };
 }
 
+/** The owner's current connection, bound once by composition; unbound, an owner has none. */
+function connectionBinding(): Pick<JiraDraftStore, "connectionOf" | "bindConnection"> {
+  let resolve: (owner: string) => string | undefined = () => undefined;
+  return {
+    connectionOf: (owner) => resolve(owner),
+    bindConnection: (next): void => {
+      resolve = next;
+    },
+  };
+}
+
 export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraDraftStore {
   const now = options.now ?? Date.now;
   const newId = options.newId ?? randomUUID;
@@ -298,5 +317,6 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
       if (peek(id, owner)?.digest === digest) settled.settle(id, digest);
     },
     size: () => drafts.size,
+    ...connectionBinding(),
   };
 }

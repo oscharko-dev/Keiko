@@ -353,7 +353,11 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
     });
   });
 
-  it("projects provider input usage only from completed assistant messages", () => {
+  // #4359: the pinned runtime's protocol surface carries no `message.updated` event, so no reader
+  // derives provider usage from history. The run's context usage takes the provider-reported prompt
+  // size from Keiko's own model gateway (codingRuntimeContextUsage.test.ts and
+  // coding-sidecar-gateway.test.ts pin that source). The history projection must stay free of it.
+  it("projects no provider usage from assistant messages of the history", () => {
     const completed = assistantMessage({
       finish: "stop",
       time: { created: 1, completed: 10 },
@@ -361,24 +365,12 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
     });
     const parsed = parseOpenCodeHistory([
       syncRow(1, "message.updated.1", { sessionID: "ses_1", info: completed }),
-      syncRow(2, "message.updated.1", {
-        sessionID: "ses_1",
-        info: assistantMessage({ tokens: { ...tokens(), input: 99_000 } }),
-      }),
-      syncRow(3, "message.updated.1", { sessionID: "ses_1", info: userMessage() }),
+      syncRow(2, "message.updated.1", { sessionID: "ses_1", info: userMessage() }),
     ]);
 
-    expect(parsed).toMatchObject({
-      ok: true,
-      value: [
-        { sequence: 1, providerTokenUsage: { inputTokens: 42_000 } },
-        { sequence: 2 },
-        { sequence: 3 },
-      ],
-    });
+    expect(parsed).toMatchObject({ ok: true, value: [{ sequence: 1 }, { sequence: 2 }] });
     if (!parsed.ok) throw new Error("expected parsed history");
-    expect(parsed.value[1]).not.toHaveProperty("providerTokenUsage");
-    expect(parsed.value[2]).not.toHaveProperty("providerTokenUsage");
+    for (const event of parsed.value) expect(event).not.toHaveProperty("providerTokenUsage");
   });
 
   // #2475 first-contact regression: OpenCode 1.18.30 reports `path: ""` for a session whose

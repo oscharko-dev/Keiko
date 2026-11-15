@@ -19,6 +19,7 @@ import {
   type ChatToolTurnPort,
   type ChatToolTurnOptions,
 } from "./chat-tool-turn.js";
+import { requireNoJiraPodRefusal } from "./chat-jira-pod-refusal.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { logConversationAdmission } from "./conversation-readiness-log.js";
@@ -342,6 +343,8 @@ function acceptedSources(
       ? prepareAcceptedKnowledgeChatAuthority(deps, turn)
       : prepareAcceptedJiraChatAuthority(deps, turn);
   const mcp = prepareAcceptedMcpChatAuthority(deps, turn);
+  // A Jira Pod that cannot serve this Chat says so; every other refusal stays the generic one.
+  requireNoJiraPodRefusal(jira);
   requireDispatch(jira.ok && mcp.ok, "denied", "authority-invalid");
   const registered = deps.agentAuthorityRegistry?.registerChatSources(
     [jira.envelope, mcp.envelope],

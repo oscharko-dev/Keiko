@@ -197,6 +197,27 @@ it("selects only the exact synthetic Jira service and its existing running peers
   ).toThrow();
 });
 
+it("accepts the recorded private-address binding of the TLS front, and only that one", () => {
+  const session = { project: "keiko-jira-4081-test", httpPort: 18084 };
+  const withAddress = (address) => {
+    const records = containers();
+    const tls = records[1];
+    const [port] = Object.keys(tls.NetworkSettings.Ports);
+    tls.NetworkSettings.Ports[port].push({ HostIp: address, HostPort: port.split("/")[0] });
+    tls.Config.Cmd.push(address);
+    return records;
+  };
+  const records = withAddress("10.0.0.79");
+  expect(validateServices(session, records, "10.0.0.79").tls.Id).toBe(records[1].Id);
+  // An extra binding the session never recorded, a different address, or a recorded address that
+  // is not published all fail: the published surface is exactly what the session declares.
+  expect(() => validateServices(session, records)).toThrow();
+  expect(() => validateServices(session, records, "10.0.0.80")).toThrow();
+  expect(() => validateServices(session, containers(), "10.0.0.79")).toThrow();
+  const wide = withAddress("0.0.0.0");
+  expect(() => validateServices(session, wide, "10.0.0.79")).toThrow();
+});
+
 const OLD_SESSION = {
   schemaVersion: 1,
   project: "keiko-jira-4081-test",

@@ -990,6 +990,81 @@ function scriptedJudge(): EntailmentJudge {
   };
 }
 
+// #4355: figures Keiko computed for a Jira report are judged against the report the turn read,
+// beside the citation's own excerpt. The judge decides; nothing is exempted.
+describe("supplemental turn evidence for entailment", () => {
+  const REPORT = ["Issues checked: 33", "Issues with deviations: 5", "Epics in scope: 4"];
+  const KNOWLEDGE = [
+    { marker: 1, excerptText: "The requirements document lists five requirements." },
+  ];
+  // Supported only when the text the judge reads states the claim's figure.
+  const figureJudge = (seen: EntailmentJudgeInput[] = []): EntailmentJudge => ({
+    judge: (input): Promise<EntailmentVerdict> => {
+      seen.push(input);
+      const figure = /\d+/u.exec(input.claimText)?.[0] ?? "";
+      const read = `${input.excerptText}\n${input.turnEvidenceText ?? ""}`;
+      return Promise.resolve(read.includes(`: ${figure}`) ? "supported" : "unsupported");
+    },
+  });
+  const withReport = { ...DEFAULT_ENTAILMENT_OPTIONS, supplementalEvidence: REPORT };
+
+  it("flags a computed figure that only a Knowledge excerpt was shown for (the defect)", async () => {
+    const result = await reconcileNumericClaimEntailment(
+      "Keiko checked 33 issues [1].",
+      KNOWLEDGE,
+      figureJudge(),
+    );
+    expect(result.unentailed).toEqual([{ citedPaths: ["[1]"] }]);
+  });
+
+  it("accepts the figure once the judge also reads the report, and reports no extra cited path", async () => {
+    const seen: EntailmentJudgeInput[] = [];
+    const result = await reconcileNumericClaimEntailment(
+      "Keiko checked 33 issues [1].",
+      KNOWLEDGE,
+      figureJudge(seen),
+      withReport,
+    );
+    expect(result).toMatchObject({ judgedClaims: 1, unentailed: [] });
+    // The report lines travel as their own input, never merged into the cited excerpt.
+    expect(seen[0]?.turnEvidenceText).toContain("Issues checked: 33");
+    expect(seen[0]?.turnEvidenceText).not.toContain("Epics in scope");
+    expect(seen[0]?.excerptText).toBe("The requirements document lists five requirements.");
+  });
+
+  it("still flags a figure the report did not compute", async () => {
+    const result = await reconcileNumericClaimEntailment(
+      "Keiko checked 99 issues [1].",
+      KNOWLEDGE,
+      figureJudge(),
+      withReport,
+    );
+    expect(result.unentailed).toEqual([{ citedPaths: ["[1]"] }]);
+  });
+
+  it("never stands in for a cited excerpt that could not be read", async () => {
+    const result = await reconcileNumericClaimEntailment(
+      "Keiko checked 33 issues [1].",
+      [{ marker: 1, excerptText: "" }],
+      figureJudge(),
+      withReport,
+    );
+    expect(result).toMatchObject({ judgedClaims: 0, unavailableClaims: 1, unentailed: [] });
+  });
+
+  it("leaves a turn without report evidence unchanged", async () => {
+    const seen: EntailmentJudgeInput[] = [];
+    await reconcileNumericClaimEntailment(
+      "Keiko checked 33 issues [1].",
+      KNOWLEDGE,
+      figureJudge(seen),
+      { ...DEFAULT_ENTAILMENT_OPTIONS, supplementalEvidence: [] },
+    );
+    expect(seen[0]?.excerptText).toBe("The requirements document lists five requirements.");
+    expect(seen[0]).not.toHaveProperty("turnEvidenceText");
+  });
+});
+
 describe("numeric citation entailment", () => {
   it("judges a trailing numeric marker against its exact selected excerpt", async () => {
     const result = await reconcileNumericClaimEntailment(

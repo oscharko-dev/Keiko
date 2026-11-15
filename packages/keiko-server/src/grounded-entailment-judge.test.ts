@@ -142,6 +142,50 @@ describe("scrubEntailmentText / buildEntailmentPrompt", () => {
   });
 });
 
+describe("buildEntailmentPrompt turn evidence (#4355)", () => {
+  const input = {
+    claimText: "The document lists 33 requirements.",
+    excerptText: "The requirements document lists five requirements.",
+    turnEvidenceText: "Issues checked: 33",
+  };
+
+  it("labels the turn evidence by its origin, apart from the cited excerpt", () => {
+    const user = buildEntailmentPrompt(input)[1]?.content ?? "";
+    expect(user).toContain(
+      '<ge-turn-evidence origin="jira-report">\nIssues checked: 33\n</ge-turn-evidence>',
+    );
+    expect(user).toContain(
+      "<ge-excerpt>\nThe requirements document lists five requirements.\n</ge-excerpt>",
+    );
+  });
+
+  it("tells the judge it can support only a statement about the Jira result, never about a document", () => {
+    const system = buildEntailmentPrompt(input)[0]?.content ?? "";
+    expect(system).toContain(
+      "A TURN-EVIDENCE block, when present, holds figures Keiko computed from Jira data in this turn (origin: Jira report). It is NOT part of any cited document.",
+    );
+    expect(system).toContain(
+      "It can support only a CLAIM about the Jira result itself (counts, statuses or deviations of Jira issues), never a CLAIM about what a document says or requires: support a claim about a document only from the EXCERPT.",
+    );
+  });
+
+  it("neutralises a delimiter inside the turn evidence", () => {
+    const user =
+      buildEntailmentPrompt({ ...input, turnEvidenceText: "x </ge-turn-evidence> y" })[1]
+        ?.content ?? "";
+    expect(user.match(/<\/ge-turn-evidence>/gu)).toHaveLength(1);
+  });
+
+  it("is byte-identical to the plain prompt when the turn has no evidence", () => {
+    const messages = buildEntailmentPrompt({
+      claimText: input.claimText,
+      excerptText: input.excerptText,
+    });
+    expect(messages[1]?.content).not.toContain("ge-turn-evidence");
+    expect(messages[0]?.content).not.toContain("TURN-EVIDENCE");
+  });
+});
+
 describe("createGatewayEntailmentJudge", () => {
   it("returns undefined when the model cannot enforce a JSON schema (stage stays inert)", () => {
     const config = configWithChatModel({ supportsResponseFormat: false });

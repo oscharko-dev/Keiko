@@ -648,6 +648,34 @@ describe("fetchItem — issue documents, metadata, and the failure matrix", () =
     ).resolves.toStrictEqual({ kind: "skipped", reason: "timeout" });
   });
 
+  // #4353: the server's identity read decides a Data Center 401. An unsettled one stops the run
+  // without blaming the token; a confirmed one is this item's missing permission.
+  it.each([
+    ["unconfirmed", { kind: "fatal", reason: "auth-unverified" }],
+    ["confirmed", { kind: "skipped", reason: "permission-denied" }],
+    [undefined, { kind: "fatal", reason: "auth-failed" }],
+  ] as const)("maps a 401 with identity decision %s", async (authentication, expected) => {
+    const source = createJiraSyncSource({
+      baseUrl: BASE_URL,
+      connectorId: "cred-test",
+      projectKeys: ["PLAT"],
+    });
+    const outcome = await source.fetchItem(
+      { itemKey: "jira:cred-test:1", issueId: "1" },
+      contextFor(() =>
+        Promise.resolve({
+          kind: "response",
+          status: 401,
+          bodyText: "",
+          bodyBytes: 0,
+          truncated: false,
+          ...(authentication === undefined ? {} : { authentication }),
+        }),
+      ),
+    );
+    expect(outcome).toStrictEqual(expected);
+  });
+
   it("skips a transport-truncated issue payload with bounds-exceeded", async () => {
     const source = createJiraSyncSource({
       baseUrl: BASE_URL,

@@ -324,6 +324,8 @@ const UPDATE_INSTALL_MODE_DETECTED_OPERATION = defineActivityLogOperation({
         "portable-setup-failed",
         "portable-it-managed",
         "portable-registration-invalid",
+        "portable-volume-not-local",
+        "portable-volume-unverified",
         "portable-non-stable",
       ],
     },

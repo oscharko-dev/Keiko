@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   omittedReportFindingKeys,
+  rawReportKeyCorrection,
+  rawReportKeys,
+  reportEvidenceLines,
   reportCoverageCorrection,
   reportCoverageMismatches,
   reportFindingCorrection,
@@ -296,4 +299,64 @@ it("states the report's keys for each mismatched requirement in one fixed senten
   expect(text).toContain("gives 70 requirement(s)");
   expect(text).toContain("LH-163: RPT-64; and 6 more.");
   expect(text).not.toContain("LH-164");
+});
+
+function reportSummary(report: Record<string, unknown>, status = "completed"): ChatToolExchange {
+  return {
+    call: { id: "call-summary", name: "jira_report", arguments: {} },
+    result: {
+      schemaVersion: 1,
+      invocationId: "invocation-summary",
+      toolRef: { canonicalId: "keiko.jira.report", contractVersion: 1 },
+      status,
+      reason: "none",
+      effectStarted: true,
+      data: { outcome: "succeeded", report },
+    },
+  } as unknown as ChatToolExchange;
+}
+const SUMMARY = {
+  figures: "Issues in scope: 33\n\nEpics: 4",
+  progress: { project: { total: 33, done: 20, donePercent: 61 }, byType: [{ total: 1 }] },
+  compliance: { issuesChecked: 33, issuesJudged: 33, checker: "applied", byRule: [{ n: 1 }] },
+  completeness: { complete: true },
+};
+
+describe("reportEvidenceLines", () => {
+  it("states the computed figures one per line, from the figure text and the scalar members", () => {
+    expect(reportEvidenceLines([reportSummary(SUMMARY)])).toEqual([
+      "Issues in scope: 33",
+      "Epics: 4",
+      "total: 33",
+      "done: 20",
+      "donePercent: 61",
+      "issuesChecked: 33",
+      "issuesJudged: 33",
+      "checker: applied",
+      "complete: true",
+    ]);
+  });
+
+  it("is empty without a completed report summary", () => {
+    expect(reportEvidenceLines([])).toEqual([]);
+    expect(reportEvidenceLines([reportSummary(SUMMARY, "failed")])).toEqual([]);
+    expect(reportEvidenceLines([reportPage("deviations", ["RPT-5"])])).toEqual([]);
+  });
+});
+
+describe("rawReportKeys", () => {
+  it("names the result keys an answer prints as key: value", () => {
+    const answer = "Checked issuesChecked: 33, issuesJudged = 33 and 61 % done.";
+    expect(rawReportKeys([reportSummary(SUMMARY)], answer)).toEqual([
+      "issuesChecked",
+      "issuesJudged",
+    ]);
+    expect(rawReportKeyCorrection(["issuesChecked"])).toContain("issuesChecked");
+  });
+
+  it("accepts the same figures in words and ignores a turn without a report", () => {
+    const words = "33 issues were checked and judged; 61 % are done.";
+    expect(rawReportKeys([reportSummary(SUMMARY)], words)).toEqual([]);
+    expect(rawReportKeys([], "issuesChecked: 33")).toEqual([]);
+  });
 });

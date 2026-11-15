@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { resolveWindowsPowerShellExecutable } from "@oscharko-dev/keiko-security";
+import { resolveWindowsUrlOpener, type WindowsBrowserApp } from "@oscharko-dev/keiko-security";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import {
   mintLauncherPairingAttestation,
@@ -63,7 +63,7 @@ export function nativeBrowserCommand(
   target: LauncherBrowserTarget,
   url: string,
   platform: NodeJS.Platform,
-): { command: string; args: string[] } | undefined {
+): { command: string; args: string[]; timeoutMs?: number } | undefined {
   if (platform === "darwin") {
     const ids = {
       chrome: "com.google.Chrome",
@@ -78,25 +78,17 @@ export function nativeBrowserCommand(
   }
   if (platform === "win32") {
     if (target === "safari") return undefined;
-    const app = {
+    const apps: Record<Exclude<LauncherBrowserTarget, "safari">, WindowsBrowserApp | undefined> = {
       default: undefined,
       chrome: "chrome.exe",
       firefox: "firefox.exe",
       edge: "msedge.exe",
-    }[target];
-    const command =
-      app === undefined
-        ? `Start-Process '${url.replaceAll("'", "''")}'`
-        : `Start-Process '${app}' -ArgumentList '${url.replaceAll("'", "''")}'`;
-    return {
-      command: resolveWindowsPowerShellExecutable(process.env),
-      args: [
-        "-NoProfile",
-        "-NonInteractive",
-        "-EncodedCommand",
-        Buffer.from(command, "utf16le").toString("base64"),
-      ],
     };
+    const app = apps[target];
+    // The shared Windows opener bounds `Start-Process` from the program's first statement and the
+    // inbox PowerShell host start separately (#4358); 5 s for both killed it before it ran.
+    const opener = resolveWindowsUrlOpener(url, process.env, app);
+    return { command: opener.command, args: [...opener.args], timeoutMs: opener.timeoutMs };
   }
   if (platform !== "linux" || target === "safari") return undefined;
   return {
@@ -166,7 +158,7 @@ function openNativeBrowser(target: LauncherBrowserTarget, url: string): Promise<
     execFile(
       command.command,
       command.args,
-      { shell: false, timeout: 5_000, maxBuffer: 1024, env },
+      { shell: false, timeout: command.timeoutMs ?? 5_000, maxBuffer: 1024, env },
       (error) => {
         if (error === null) resolve();
         else reject(new TypeError("Browser opener failed"));

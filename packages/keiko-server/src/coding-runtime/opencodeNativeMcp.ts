@@ -290,15 +290,25 @@ function nativeGrants(
       );
     }
   }
-  return {
-    actions,
-    servers: new Map(
-      servers.map((server) => [
-        server.name,
-        managedNames.has(server.name)
-          ? { remote: true, managed: true }
-          : { remote: server.transport.kind === "remote" },
-      ]),
-    ),
-  };
+  return { actions, servers: nativeServers(servers, managedNames, grantedNames) };
+}
+
+function nativeServers(
+  servers: readonly McpServerDefinition[],
+  managedNames: ReadonlySet<string>,
+  grantedNames: ReadonlySet<string>,
+): OpenCodeNativeMcpGrants["servers"] {
+  return new Map(
+    servers.map((server) => [
+      server.name,
+      managedNames.has(server.name)
+        ? {
+            remote: true,
+            managed: true,
+            // The same grant that lets the run read through this server's read tools (#4359).
+            ...(grantedNames.has(server.name) ? { runGrantedRead: true } : {}),
+          }
+        : { remote: server.transport.kind === "remote" },
+    ]),
+  );
 }

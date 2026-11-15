@@ -64,7 +64,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set(
     "accept action-approvals action-sheet actions activate active activity agent agent-runs " +
     "answer api app-session apply apply-description approval-review approvals approve " +
     "approve-description archive atlassian-connectors attachments audit authorization " +
-    "authorize autonomy-policy blame bootstrap branches breakpoints browser build cancel " +
+    "authorize autonomy-policy bind blame bootstrap branches breakpoints browser build cancel " +
     "capabilities capability capsule-sets capsules capture-from-conversation catalog " +
     "challenge channel chat chats check citation-preview cleanup client clone code " +
     "codex-subscription coding-sidecar coding-workbench commands commit compact completion " +
@@ -87,7 +87,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set(
     "remediation remotes rename repair replace-apply replace-preview report repository " +
     "repositories request research resolve resume retrieve retry revert review " +
     "review-description review-items review-queue revoke root roots rotate runs runtime " +
-    "schedules scopes screens screenshot search select semantic-tokens session sessions set " +
+    "schedules scopes screens screenshot search select selection semantic-tokens session sessions set " +
     "settings setup sign-out skill skills snapshot snapshots snippets sources speak stack " +
     "stage staging state status stop stream structured summary switch sync-jobs takeover " +
     "task-workspaces telemetry terminal test-generation token tombstones tool traceability " +

@@ -2,7 +2,11 @@ import { KNOWLEDGE_DOCUMENTS_TOOL_ID } from "@oscharko-dev/keiko-contracts/runti
 import { chatToolSelectionFits, offeredDefinitions } from "./chat-tool-schema-selection.js";
 import { JIRA_MUTATION_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
-import { gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  captureCatalogBinding,
+  gatewayToolDefinitions,
+  ToolCatalogError,
+} from "@oscharko-dev/keiko-tool-catalog";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { chatKnowledgeScopes } from "./requirement-inventory.js";
 import { randomUUID } from "node:crypto";
@@ -11,7 +15,11 @@ import { createCodingToolInvocationRegistry } from "./coding-runtime/codingToolI
 import type { CodingToolInvocationRegistry } from "./coding-runtime/codingToolInvocationRegistry.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { processServerLogSink } from "./process-log-sink.js";
-import { recordJiraCatalogSelection } from "./atlassian/jiraCatalogSelectionActivity.js";
+import {
+  recordJiraCatalogSelection,
+  recordJiraCatalogSelectionRefused,
+  type RefusedSelectionParts,
+} from "./atlassian/jiraCatalogSelectionActivity.js";
 import {
   defaultServerDiagnosticSink,
   emitServerDiagnostic,
@@ -42,6 +50,7 @@ import type {
   CatalogToolBudgetPort,
   CatalogConsumer,
   CatalogToolBinder,
+  OfferedToolSet,
 } from "./tool-catalog/catalogToolPorts.js";
 import { gatewayMessagesForToolExchange } from "./conversation-gateway.js";
 import { jiraDraftCondensedRows } from "./atlassian/jiraDraftModelData.js";
@@ -52,7 +61,9 @@ import { createHarnessCatalogBudget, type ModelPort } from "@oscharko-dev/keiko-
 import type { HarnessLimits } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { chatToolTurnLimits } from "./chat-tool-turn-budget.js";
+import { chatTurnDeadlineSignal, isChatTurnDeadlineReason } from "./chat-tool-turn-deadline.js";
 import {
+  chatToolTurnEnd,
   chatToolTurnEndReason,
   chatToolTurnHoldsWrite,
   chatToolTurnPartialAnswer,
@@ -61,6 +72,7 @@ import {
   recordChatToolTurnCorrected,
   recordChatToolBatchDraftOffer,
   recordChatToolTurnEnded,
+  type ChatToolTurnCancelReason,
   type ChatToolTurnEndReason,
 } from "./chat-tool-turn-ending.js";
 import {
@@ -75,9 +87,19 @@ import {
 import { withNestedCallerAdmission } from "./chat-tool-nested-admission.js";
 import { fitToolContinuation, fitToolRoundOutput } from "./chat-tool-continuation-fit.js";
 import {
+  announcedCreateCorrection,
+  announcedCreateCount,
+  correctionRoundOffersTools,
+  toolCallAsTextCorrection,
+  toolCallsWrittenAsText,
+} from "./chat-tool-announced-create.js";
+import {
   omittedReportFindingKeys,
+  rawReportKeyCorrection,
+  rawReportKeys,
   reportCoverageCorrection,
   reportCoverageMismatches,
+  reportEvidenceLines,
   reportFindingCorrection,
   unsupportedIssueKeyCorrection,
   unsupportedIssueKeys,
@@ -100,8 +122,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   isChatToolBatchProgress,
+  type ChatClaimNotice,
   type ChatToolBatchProgress,
   type ChatToolExchange,
+  type ChatToolTurnEnd,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolConsumerContext } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
@@ -116,6 +140,7 @@ import {
 } from "./store/chatToolTranscript.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
+import { requireNoJiraPodRefusal } from "./chat-jira-pod-refusal.js";
 import { CatalogDispatchFault, requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 import { isGatewayAdmissionRefusal } from "./grounded-gateway-error-status.js";
 import {
@@ -161,6 +186,14 @@ type AnswerCorrectionLog =
   | {
       readonly correctionKind: "unsupported-issue-key";
       readonly unsupportedKeyCount: number;
+    }
+  | {
+      readonly correctionKind: "raw-report-key";
+      readonly rawReportKeyCount: number;
+    }
+  | {
+      readonly correctionKind: "announced-create" | "tool-call-as-text";
+      readonly announcementCount: number;
     };
 
 // Local estimates are not provider counts; the margin keeps the gateway's exact admission and its
@@ -221,10 +254,12 @@ export function mintAndBoundChatTurn<
     nowMs: Date.now(),
     correlationId,
   });
+  // A Jira Pod that cannot serve this Chat says so; every other refusal stays the generic one.
+  requireNoJiraPodRefusal(authority);
   requireDispatch(authority.ok, "denied", "authority-invalid");
   const remaining = Date.parse(authority.envelope.expiresAt) - Date.now();
   requireDispatch(remaining > 0, "denied", "authority-expired");
-  return { authority, signal: AbortSignal.any([...signals, AbortSignal.timeout(remaining)]) };
+  return { authority, signal: AbortSignal.any([...signals, chatTurnDeadlineSignal(remaining)]) };
 }
 /**
  * Whether a turn's answer reports a change tool's outcome (#4292). A change Keiko did not send
@@ -393,6 +428,9 @@ function reportTurnFailure(
   operation:
     | "chat.tool-turn.batch-progress"
     | "chat.tool-turn.selection-release"
+    | "chat.tool-turn.claim-notice"
+    | "chat.tool-turn.turn-end"
+    | "chat.tool-turn.state-unreadable"
     | "chat.tool-turn.finalize" = "chat.tool-turn.batch-progress",
 ): void {
   const { deps, correlationId } = options;
@@ -469,6 +507,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private scopeChangeEnded = false;
   private scopeInterruption: ChatGenerationInterruption | undefined;
   private readonly abortController = new AbortController();
+  /** The turn ended: nothing it logs or answers afterwards may describe it again. */
+  private finished = false;
+  private endingRecorded = false;
+  private readonly finishedListeners: (() => void)[] = [];
   private promptTokens = 0;
   private completionTokens = 0;
   private activeModelId: string | undefined;
@@ -482,6 +524,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private toolDefinitions: readonly ToolDefinition[];
   /** The correction the next round carries after the gateway's own correction was rejected too. */
   private correction: GatewayMessage | undefined;
+  /** A correction about a claimed action is answered without any tool: it can never write. */
+  private correctionWithoutTools = false;
+  /** The claimed actions a correction round was asked about (#4355). */
+  private claimedKinds: readonly ("announced-create" | "tool-call-as-text")[] = [];
+  /** The text the claim detection saw: the person's words and what the turn already held. */
+  private claimContext: readonly string[] = [];
   /** The turn corrected a rejected call and no round has dispatched a tool call since. */
   private correctedSinceProgress = false;
   /** The first admission of a correction round follows an attempt the turn could not use. */
@@ -599,11 +647,15 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       "failed",
       "handler-unavailable",
     );
-    const selection = await this.options.selectTools(identities);
+    const selection = await this.options.selectTools(identities).catch((error: unknown) => {
+      this.noteRefusedSelection(error, identities);
+      throw error;
+    });
     try {
       this.context.signal.throwIfAborted();
       const binder = selection.bind(this.context, this.budget.port, this.invocationRegistry);
       const offered = binder.offer();
+      this.admitBinding(selection.managed, offered, identities);
       const definitions = gatewayToolDefinitions(
         selection.managed.catalog,
         selection.managed.projection.profile,
@@ -616,6 +668,45 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       await selection.close();
       throw error;
     }
+  }
+  /**
+   * The gateway binds every round by capturing catalog, projection and offer with one function.
+   * Run that same capture here, so a selection the gateway could not bind is refused with its
+   * closed reason and the earlier selection is kept, instead of failing the next round.
+   */
+  private admitBinding(
+    managed: ChatRoundCatalog,
+    offered: OfferedToolSet,
+    identities: readonly string[],
+  ): void {
+    try {
+      captureCatalogBinding({
+        catalog: managed.catalog,
+        projection: managed.projection,
+        offered,
+      });
+    } catch (error) {
+      this.noteRefusedSelection(error, identities, {
+        catalog: managed.catalog,
+        projection: managed.projection,
+        offered,
+      });
+      throw error;
+    }
+  }
+  /** A selection refused for its size leaves its counts on the Activity Log; nothing else does. */
+  private noteRefusedSelection(
+    error: unknown,
+    identities: readonly string[],
+    parts?: RefusedSelectionParts,
+  ): void {
+    if (!(error instanceof ToolCatalogError) || error.reason !== "input-bound") return;
+    recordJiraCatalogSelectionRefused(processServerLogSink(), {
+      correlationId: this.options.correlationId,
+      surface: "chat",
+      requestedCount: new Set(identities).size,
+      ...(parts === undefined ? {} : { parts }),
+    });
   }
   private selectionFits(
     request: GatewayCallRequest,
@@ -676,6 +767,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     await Promise.all([pending?.close(), selected?.close(), prepared?.close()]);
   }
   private async finalizeTurn(): Promise<void> {
+    this.finished = true;
+    for (const listener of this.finishedListeners.splice(0)) listener();
     try {
       await this.releaseToolSelection();
     } catch (error) {
@@ -1264,10 +1357,69 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     // The answer no longer describes the turn once the correction round dispatched another call.
     if (answer === undefined || this.transcriptExchangeCount() !== this.uncorrectedExchangeCount)
       return undefined;
-    const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
+    const expired = this.endedByDeadline(signal);
     if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
+    // The correction round failed: the original answer is published unchanged, and a false claim
+    // in it is marked in the stored turn.
+    this.settleClaimNotice(answer);
     this.endedAnswer = this.knowledgeAnswer(answer);
     return this.endedAnswer;
+  }
+
+  private stillClaims(kind: "announced-create" | "tool-call-as-text", content: string): boolean {
+    return kind === "announced-create"
+      ? announcedCreateCount(this.settledExchanges, content, this.claimContext) > 0
+      : toolCallsWrittenAsText(content) > 0;
+  }
+
+  /**
+   * The marker describes the turn's FINAL answer (#4355): every final answer states it afresh. It
+   * is set while the answer still claims what a correction asked about, and cleared otherwise, so
+   * a marker an earlier leg of the same turn stored never outlives the answer it described. The
+   * answer text itself stays as the model wrote it. An announced create outranks a tool call
+   * written as text, since the person acts on whether an issue exists; a created receipt in the
+   * turn never leaves a create claim standing.
+   */
+  private settleClaimNotice(answer: NormalizedResponse, end?: ChatToolTurnEnd): void {
+    const still = this.claimedKinds.filter((kind) => this.stillClaims(kind, answer.content));
+    let notice: ChatClaimNotice | undefined;
+    if (still.includes("announced-create")) notice = "no-jira-create";
+    else if (still.length > 0) notice = "tool-call-not-executed";
+    this.storeClaimNotice(notice);
+    this.storeTurnEnd(end);
+  }
+
+  /**
+   * The ending describes the turn's FINAL answer too: an early end states it, and any other final
+   * answer clears what an earlier leg of the same turn stored, so the Chat never words an answer
+   * as an ending it is not (#4355).
+   */
+  private storeTurnEnd(end: ChatToolTurnEnd | undefined): void {
+    const { deps, message, correlationId } = this.options;
+    try {
+      const stored = deps.store.findMessageById(message.id)?.toolTranscript?.turnEnd;
+      if (JSON.stringify(stored) === JSON.stringify(end)) return;
+      deps.store.updateChatToolTranscript(message.id, { kind: "turn-end", end }, correlationId);
+    } catch (error: unknown) {
+      // The English answer is stored regardless; the missing record only costs the translation.
+      reportTurnFailure(this.options, error, "chat.tool-turn.turn-end");
+    }
+  }
+
+  private storeClaimNotice(notice: ChatClaimNotice | undefined): void {
+    const { deps, message, correlationId } = this.options;
+    try {
+      // Only a change is written: a plain turn never gains a transcript for this.
+      if (deps.store.findMessageById(message.id)?.toolTranscript?.claimNotice === notice) return;
+      deps.store.updateChatToolTranscript(
+        message.id,
+        { kind: "claim-notice", notice },
+        correlationId,
+      );
+    } catch (error: unknown) {
+      // The answer is still published unchanged; the missing note is a diagnostic, not a failure.
+      reportTurnFailure(this.options, error, "chat.tool-turn.claim-notice");
+    }
   }
 
   /**
@@ -1279,21 +1431,26 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     modelId: string,
     signal: AbortSignal,
   ): NormalizedResponse | undefined {
-    const { deps, message, correlationId, budget } = this.options;
-    const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
+    const { message, correlationId, budget } = this.options;
+    const expired = this.endedByDeadline(signal);
     if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
     const reason = this.endReason(error, expired);
-    // Unsettled calls stay in the answer: one may have reached Jira before bookkeeping failed.
-    const exchanges = deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
+    // Unsettled calls stay in the answer: one may have reached Jira before bookkeeping failed. When
+    // the store cannot be read, the exchanges this turn settled still are the receipt (#4355).
+    const stored = this.storedExchanges();
+    const exchanges = stored.length > 0 ? stored : this.settledExchanges;
     if (reason === undefined || !exchanges.some((exchange) => exchange.result !== undefined))
       return undefined;
-    recordChatToolTurnEnded(processServerLogSink(), {
-      correlationId,
-      messageId: message.id,
-      reason,
-      exchanges,
-      budget,
-    });
+    if (!this.endingRecorded) {
+      this.endingRecorded = true;
+      recordChatToolTurnEnded(processServerLogSink(), {
+        correlationId,
+        messageId: message.id,
+        reason,
+        exchanges,
+        budget,
+      });
+    }
     logKnowledgeCoverage(
       correlationId,
       knowledgeTurnCoverage(exchanges, {
@@ -1314,6 +1471,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         costClass: "low",
       },
     };
+    this.settleClaimNotice(this.endedAnswer, chatToolTurnEnd(exchanges, reason));
     return this.endedAnswer;
   }
 
@@ -1338,12 +1496,69 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
    * with no settled exchange stays a cancellation.
    */
   public get answersAtDeadline(): boolean {
+    // What the turn itself settled is known in memory; the stored transcript is read only for
+    // exchanges an earlier leg of the same message settled, and a failed read answers "unknown",
+    // never a throw inside an abort listener (#4355).
+    if (this.settledExchanges.length > 0) return true;
+    return this.storedExchanges().some((exchange) => exchange.result !== undefined);
+  }
+
+  /**
+   * The Activity Log line of a turn that ended without an answer of its own: the closed reason and the
+   * counts of what this turn settled in memory. Exactly one line per turn: a finished turn, or one whose
+   * ending is already recorded (by the cancellation or by the deadline answer, whichever came first),
+   * adds none. Runs inside an abort listener, so it reads no store and never throws.
+   */
+  public recordEnding(reason: ChatToolTurnCancelReason): void {
+    const { message, correlationId, budget } = this.options;
+    if (this.finished || this.endingRecorded) return;
+    this.endingRecorded = true;
+    try {
+      recordChatToolTurnEnded(processServerLogSink(), {
+        correlationId,
+        messageId: message.id,
+        reason,
+        exchanges: this.settledExchanges,
+        budget,
+      });
+    } catch (error: unknown) {
+      reportTurnFailure(this.options, error, "chat.tool-turn.state-unreadable");
+    }
+  }
+
+  /** Runs `listener` once when the turn finishes; a finished turn runs it at once. */
+  public onFinished(listener: () => void): void {
+    if (this.finished) listener();
+    else this.finishedListeners.push(listener);
+  }
+
+  /** Whether this abort reason is this turn's own deadline: identity, never the error's class. */
+  public isDeadlineReason(reason: unknown): boolean {
+    return isChatTurnDeadlineReason(reason);
+  }
+
+  /** The stored transcript's exchanges; unreadable is empty and recorded under the closed diagnostic. */
+  private storedExchanges(): readonly ChatToolExchange[] {
     const { deps, message } = this.options;
-    return (
-      deps.store
-        .findMessageById(message.id)
-        ?.toolTranscript?.exchanges.some((exchange) => exchange.result !== undefined) ?? false
-    );
+    try {
+      return deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
+    } catch (error: unknown) {
+      reportTurnFailure(this.options, error, "chat.tool-turn.state-unreadable");
+      return [];
+    }
+  }
+
+  /**
+   * Whether the deadline is what ended this turn. Every signal that aborted names its cause: the
+   * deadline's reason makes it a deadline, any other reason (a stop, a dropped request, a revocation)
+   * is that cause, and the first cause to fire is the one the signal carries. Only when nothing was
+   * aborted, as when the turn's own budget accounting refused further work, does the clock state
+   * whether the deadline passed.
+   */
+  private endedByDeadline(signal: AbortSignal): boolean {
+    const aborted = [signal, this.options.context.signal].filter((candidate) => candidate.aborted);
+    if (aborted.length === 0) return Date.now() >= Date.parse(this.context.authorityExpiresAt);
+    return aborted.every((candidate) => isChatTurnDeadlineReason(candidate.reason));
   }
 
   /**
@@ -1355,6 +1570,11 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     return transcriptReportsToolAction(
       deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [],
     );
+  }
+
+  /** The figures Keiko computed for a Jira report in this turn, one per line; none without one. */
+  public get reportEvidence(): readonly string[] {
+    return reportEvidenceLines(this.settledExchanges);
   }
 
   /** True once the turn answered from its transcript; callers must deliver, not cancel, it. */
@@ -1409,6 +1629,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         offered,
       },
     };
+    if (this.correctionWithoutTools) return { ...round, toolCatalog: undefined };
     return this.fittedRoundOutput(round, offered);
   }
   private fittedRoundOutput(
@@ -1649,7 +1870,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
           completionTokens: this.completionTokens,
         },
       };
-      return this.correctAnswer(answer, request) ? undefined : this.knowledgeAnswer(answer);
+      if (this.correctAnswer(answer, request)) return undefined;
+      this.settleClaimNotice(answer);
+      return this.knowledgeAnswer(answer);
     }
     requireDispatch(
       response.toolCalls.length <= this.limits.maxToolCalls - this.counters.toolCalls,
@@ -1786,10 +2009,19 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     if (this.counters.iterations >= this.limits.maxIterations) return false;
     const correction = this.answerCorrection(answer, request);
     if (correction === undefined) return false;
+    // The claim check of every later answer reads the text the first detection saw.
+    this.claimContext = this.detectionContext(request);
     this.uncorrectedAnswer = answer;
     this.uncorrectedExchangeCount = this.transcriptExchangeCount();
     this.continuation.push({ role: "assistant", content: answer.content });
     this.correction = { role: "system", content: correction.content };
+    const kinds = correction.logs.map((log) => log.correctionKind);
+    this.correctionWithoutTools = !correctionRoundOffersTools(kinds);
+    this.claimedKinds = correction.logs.flatMap((log) =>
+      log.correctionKind === "announced-create" || log.correctionKind === "tool-call-as-text"
+        ? [log.correctionKind]
+        : [],
+    );
     for (const log of correction.logs)
       recordChatToolTurnCorrected(processServerLogSink(), {
         correlationId: this.options.correlationId,
@@ -1798,6 +2030,11 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         ...log,
       });
     return true;
+  }
+
+  /** What the person and the turn already said: a key named there is not a claimed creation. */
+  private detectionContext(request: GatewayCallRequest): readonly string[] {
+    return [...request.messages, ...this.continuation].map((message) => message.content);
   }
 
   private answerCorrection(
@@ -1817,13 +2054,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         content: reportCoverageCorrection(mismatched),
         log: { correctionKind: "report-coverage", mismatchedRequirementCount: mismatched.length },
       });
-    const context = [...request.messages, ...this.continuation].map((message) => message.content);
+    const context = this.detectionContext(request);
     const unsupported = unsupportedIssueKeys(this.settledExchanges, context, answer.content);
     if (unsupported.length > 0)
       corrections.push({
         content: unsupportedIssueKeyCorrection(unsupported),
         log: { correctionKind: "unsupported-issue-key", unsupportedKeyCount: unsupported.length },
       });
+    corrections.push(...claimedActionCorrections(this.settledExchanges, answer.content, context));
     const coverage = knowledgeTurnCoverage(this.settledExchanges, {
       incidentalReadCallIds: [...this.incidentalKnowledgeReadCallIds],
     });
@@ -1885,8 +2123,49 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
 
   private clearCorrection(): void {
     this.correction = undefined;
+    this.correctionWithoutTools = false;
     this.correctionAdmissionPending = false;
   }
+}
+
+/**
+ * What an answer claims that its own turn does not bear out (#4355): a created issue no create call
+ * made, a tool call written as text, and internal report result keys printed as if they were prose.
+ */
+function claimedActionCorrections(
+  exchanges: readonly ChatToolExchange[],
+  answer: string,
+  context: readonly string[],
+): { readonly content: string; readonly log: AnswerCorrectionLog }[] {
+  const announced = announcedCreateCount(exchanges, answer, context);
+  const writtenCalls = toolCallsWrittenAsText(answer);
+  const rawKeys = rawReportKeys(exchanges, answer);
+  return [
+    ...(announced === 0
+      ? []
+      : [
+          {
+            content: announcedCreateCorrection(announced),
+            log: { correctionKind: "announced-create", announcementCount: announced } as const,
+          },
+        ]),
+    ...(writtenCalls === 0
+      ? []
+      : [
+          {
+            content: toolCallAsTextCorrection(writtenCalls),
+            log: { correctionKind: "tool-call-as-text", announcementCount: writtenCalls } as const,
+          },
+        ]),
+    ...(rawKeys.length === 0
+      ? []
+      : [
+          {
+            content: rawReportKeyCorrection(rawKeys),
+            log: { correctionKind: "raw-report-key", rawReportKeyCount: rawKeys.length } as const,
+          },
+        ]),
+  ];
 }
 
 const EMPTY_ROUND_CORRECTION =
@@ -1931,6 +2210,7 @@ export type ChatToolTurnPort = Pick<
   | "answersAfterScopeChange"
   | "endedEarly"
   | "reportsToolAction"
+  | "reportEvidence"
   | "readOnlySynthesisRequest"
   | "settleRetryFailure"
   | "bindEvidenceSources"

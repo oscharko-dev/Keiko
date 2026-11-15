@@ -28,6 +28,14 @@
   border: 0;
   background: transparent;
 }
+.cmpCompactMessage {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+}
 .cmpNotice.cmpCompactNotice button {
   min-width: 0;
   max-width: 100%;

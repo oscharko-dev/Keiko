@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a81b4a5b3986e6e5ce725df386c54caec3935a2e1ca01698cf147768850a2efa"
+    "catalogDigest": "f640ffca29975a9dd7974634300b140baabc0bc1e47a99ad2fd621f8e20a3b74"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 695,
-    "proofCount": 718,
-    "resolvedProofCount": 718,
-    "failureClassCount": 401,
+    "operationCount": 705,
+    "proofCount": 728,
+    "resolvedProofCount": 728,
+    "failureClassCount": 403,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -139,6 +139,7 @@
         "chat.send.rejected",
         "chat.tool-mutation",
         "chat.tool-mutation.projected",
+        "chat.tool-transcript.marker-omitted",
         "chat.tool-transcript.updated",
         "chat.tool-turn.batch-draft-offer",
         "chat.tool-turn.context-fitted",
@@ -152,8 +153,11 @@
         "http.request.body.failed",
         "http.request.body.received",
         "http.request.body.rejected",
+        "jira.approval.names",
+        "jira.approval.project",
         "jira.attachment.source",
         "jira.catalog.selection",
+        "jira.catalog.selection-refused",
         "jira.citation.markers",
         "jira.field.admission",
         "jira.operation.avatars",
@@ -225,6 +229,7 @@
         "client.git-operation.settled",
         "client.jira-fields.presented",
         "client.jira-result.presented",
+        "client.knowledge-catalog.refreshed",
         "client.knowledge-catalog.unavailable",
         "client.markdown.layout",
         "client.scope.notice",
@@ -306,6 +311,8 @@
         "gateway.readiness.compatibility-retry.failed",
         "gateway.readiness.compatibility-retry.skipped",
         "gateway.readiness.completed",
+        "gateway.readiness.scope",
+        "gateway.readiness.selection",
         "gateway.readiness.started",
         "gateway.reasoning-history",
         "gateway.reranker.setup.resolved",
@@ -785,7 +792,7 @@
         "activity-log.writer-rejected",
         "chat.content-policy.resolved",
         "memory.audit.state-cache.seeded",
-        "portable.windows-alert.spawn-failed",
+        "portable.launch.failed",
         "process.exiting",
         "process.fatal",
         "server-log.line-dropped",
@@ -823,6 +830,7 @@
         "cli.support.export.failed",
         "cli.uninstall.completed",
         "cli.uninstall.failed",
+        "cli.uninstall.handoff",
         "cli.uninstall.started",
         "evidence.retention",
         "portable.normal-startup-recovery.completed",
@@ -838,6 +846,7 @@
         "security.keychain.withheld",
         "security.log.sink-failed",
         "security.portable-tree-attestation.failed",
+        "security.vault.custody",
         "security.vault.entries-delete-failed",
         "security.vault.entries-deleted",
         "security.vault.entries-merge-failed",
@@ -856,6 +865,7 @@
         "security.windows-portable-alert.system-root-refused",
         "security.windows-portable-legacy-launcher.system-binary-missing",
         "security.windows-portable-legacy-launcher.system-root-refused",
+        "security.windows-program.run",
         "security.windows-shortcut.system-binary-missing",
         "security.windows-shortcut.system-root-refused",
         "sqlite.state-path.refused",
@@ -893,7 +903,7 @@
     "chat-tool-transcript": ["bff.dependency-failure"],
     "chat-tool-authority": ["editor-delivery.dependency-failure"],
     "chat-tool-mutation": ["bff.dependency-failure"],
-    "atlassian-action-execution": ["bff.dependency-failure"],
+    "atlassian-action-execution": ["bff.rejection"],
     "mcp-managed": ["tools-workflows.dependency-failure"],
     "chat-creation-intent": ["bff.dependency-failure"],
     "chat-draft-persistence": ["bff.dependency-failure"],
@@ -928,6 +938,7 @@
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
     "client-update-notice": ["client-diagnostics.dependency-failure"],
+    "client-knowledge-catalog-refresh": ["client-diagnostics.dependency-failure"],
     "client-editor-line-ending": ["client-diagnostics.dependency-failure"],
     "client-binding": ["client-diagnostics.dependency-failure"],
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
@@ -1275,10 +1286,11 @@
     "voice-live-dictation-admission": ["model-gateway.rejection"],
     "voice-realtime-policy": ["model-gateway.dependency-failure"],
     "voice-realtime-session": ["model-gateway.dependency-failure"],
-    "windows-alert-spawn": ["lifecycle-crash.dependency-failure"],
+    "portable-launch-failure": ["lifecycle-crash.dependency-failure"],
     "windows-authenticode-system-binary": ["runtime-packages.rejection"],
     "windows-local-volume": ["runtime-packages.rejection"],
     "windows-owner-private": ["runtime-packages.rejection"],
+    "windows-program-latency": ["runtime-packages.dependency-failure"],
     "windows-shortcut-system-binary": ["runtime-packages.dependency-failure"],
     "windows-shortcut-system-root": ["runtime-packages.rejection"],
     "windows-system-binary-unavailable": ["runtime-packages.dependency-failure"],
@@ -1485,6 +1497,9 @@
     "chat.tool-mutation.projected.line": [
       "packages/keiko-server/src/store/chatToolTranscript.test.ts"
     ],
+    "chat.tool-transcript.marker-omitted.line": [
+      "packages/keiko-server/src/store/chatToolTranscript.test.ts"
+    ],
     "chat.tool-transcript.updated.line": [
       "packages/keiko-server/src/store/chatToolTranscript.test.ts"
     ],
@@ -1523,7 +1538,8 @@
     ],
     "cli.lifecycle.health.decision": [
       "packages/keiko-cli/src/lifecycle-browser-default.test.ts",
-      "packages/keiko-cli/src/lifecycle-health-owner.test.ts"
+      "packages/keiko-cli/src/lifecycle-health-owner.test.ts",
+      "packages/keiko-cli/src/lifecycle-start-window.test.ts"
     ],
     "cli.lifecycle.native-owner.outcome": [
       "packages/keiko-cli/src/lifecycle-diagnostics.test.ts",
@@ -1550,6 +1566,7 @@
     "cli.uninstall.failed.persisted": [
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],
+    "cli.uninstall.handoff.persisted": ["packages/keiko-cli/src/uninstall.test.ts"],
     "cli.uninstall.started.persisted": [
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],
@@ -1623,6 +1640,9 @@
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.jira-result.presented.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.knowledge-catalog.refreshed.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.knowledge-catalog.unavailable.line": [
@@ -1762,7 +1782,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"
     ],
     "coding-runtime.context-usage.observed.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.test.ts"
+      "packages/keiko-server/src/coding-runtime/codingRuntimeContextUsageObservation.test.ts"
     ],
     "coding-runtime.descendants.swept.emitted-line": [
       "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.test.ts"
@@ -1871,6 +1891,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
     "coding-runtime.native-policy.decided.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeCodeModeEffects.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeNativePolicyLinks.test.ts"
     ],
@@ -2378,6 +2399,8 @@
       "packages/keiko-server/src/gateway-readiness.native-cancellation.test.ts",
       "packages/keiko-server/src/gateway-readiness.test.ts"
     ],
+    "gateway.readiness.scope.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
+    "gateway.readiness.selection.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
     "gateway.readiness.started.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
     "gateway.reasoning-history.lifecycle": [
       "packages/keiko-model-gateway/src/reasoning-history.test.ts"
@@ -2720,23 +2743,34 @@
     "indexing.start.refused.line": [
       "packages/keiko-server/src/local-knowledge-handlers.logging.test.ts"
     ],
+    "jira.approval.names.line": [
+      "packages/keiko-server/src/atlassian/jiraChatApprovalNames.test.ts"
+    ],
+    "jira.approval.project.line": [
+      "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.test.ts"
+    ],
     "jira.attachment.source.line": [
       "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts"
     ],
     "jira.catalog.selection.line": [
       "packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.test.ts"
     ],
+    "jira.catalog.selection-refused.line": [
+      "packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.test.ts"
+    ],
     "jira.citation.markers.line": [
       "packages/keiko-server/src/atlassian/jiraCitationMarkers.test.ts"
     ],
     "jira.field.admission.line": [
+      "packages/keiko-server/src/atlassian/jiraFieldRefusalLog.test.ts",
       "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"
     ],
     "jira.operation.avatars.line": [
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
     ],
     "jira.operation.configuration.line": [
-      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts"
     ],
     "jira.operation.core.line": [
       "packages/keiko-server/src/atlassian/jiraManagedProvider.test.ts",
@@ -2749,6 +2783,7 @@
     ],
     "jira.operation.issues.line": [
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
     ],
     "jira.operation.local.line": [
@@ -2761,10 +2796,12 @@
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
     ],
     "jira.operation.planning.line": [
-      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts"
     ],
     "jira.operation.projects.line": [
-      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
+      "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts",
+      "packages/keiko-server/src/atlassian/jiraReadFailureGuidance.test.ts"
     ],
     "jira.operation.properties.line": [
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
@@ -2776,6 +2813,7 @@
       "packages/keiko-server/src/atlassian/jiraOperationActivity.test.ts"
     ],
     "jira.template.admission.line": [
+      "packages/keiko-server/src/atlassian/jiraFieldRefusalLog.test.ts",
       "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"
     ],
     "jira.template.metadata.line": [
@@ -2861,6 +2899,9 @@
     "native-file-dialog.selection.projected.counts": [
       "packages/keiko-server/src/native-file-dialog/route.test.ts"
     ],
+    "portable.launch.failed.emitted-line": [
+      "packages/keiko-cli/src/portable-launch-failure.activity-log-proof.test.ts"
+    ],
     "portable.normal-startup-recovery.completed.outcome": [
       "packages/keiko-server/src/update-portable-normal-startup.test.ts"
     ],
@@ -2869,9 +2910,6 @@
     ],
     "portable.runtime.native-helper-bound.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.test.ts"
-    ],
-    "portable.windows-alert.spawn-failed.emitted-line": [
-      "packages/keiko-cli/src/portable-launch-notifier.activity-log-proof.test.ts"
     ],
     "portable.windows-authenticode.system-binary-refused.emitted-line": [
       "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.test.ts"
@@ -3104,6 +3142,9 @@
     "security.portable-tree-attestation.failed.driver": [
       "packages/keiko-security/src/portable-tree-attestation.test.ts"
     ],
+    "security.vault.custody.decision": [
+      "packages/keiko-security/src/windows-vault-custody.test.ts"
+    ],
     "security.vault.entries-delete-failed.count": [
       "packages/keiko-security/src/secret-vault.test.ts"
     ],
@@ -3150,6 +3191,9 @@
     "security.windows-portable-legacy-launcher.system-root-refused.emitted-line": [
       "packages/keiko-cli/src/security-log.activity-log-proof.test.ts"
     ],
+    "security.windows-program.run.outcome": [
+      "packages/keiko-security/src/windows-powershell-program.test.ts"
+    ],
     "security.windows-shortcut.system-binary-missing.mode": [
       "packages/keiko-security/src/windows-shortcuts.test.ts"
     ],
@@ -3183,6 +3227,7 @@
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "skills.library.operation.lifecycle": [
+      "packages/keiko-server/src/markdown-skill-jira-template-routes.test.ts",
       "packages/keiko-server/src/markdown-skill-routes.test.ts"
     ],
     "skills.workflow.attached.line": [

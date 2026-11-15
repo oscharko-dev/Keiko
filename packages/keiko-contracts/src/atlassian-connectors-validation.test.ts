@@ -498,7 +498,7 @@ describe("validateAtlassianSyncJobState (discriminated lifecycle)", () => {
     expect(
       errorsOf(validateAtlassianSyncJobState(job("failed", { failureReason: "disk exploded" }))),
     ).toContain(
-      "syncJob.failureReason must be one of auth-failed|permission-denied|rate-limited|timeout|unavailable|scope-exceeded|bounds-exceeded|cancelled|malformed-payload",
+      "syncJob.failureReason must be one of auth-failed|auth-unverified|permission-denied|rate-limited|timeout|unavailable|scope-exceeded|bounds-exceeded|cancelled|malformed-payload",
     );
     expect(
       errorsOf(validateAtlassianSyncJobState(job("partial", { failureReasons: [] }))),

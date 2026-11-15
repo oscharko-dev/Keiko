@@ -103,8 +103,15 @@ export async function observeReciprocalConfiguration(
 export async function observeReciprocalLinks(
   request: JiraMutationRequest,
   input: ReciprocalInput,
+  beforeEffect = false,
 ): Promise<ReciprocalObservation<readonly RemoteLinkSnapshot[]>> {
-  const actor = await readSavedActor(request, input.actor);
+  // Before the request a key that is not the connected user's is an argument to correct (#4357 AC3);
+  // after an acknowledgement it is an identity that changed, and the old words stand.
+  const actor = await readSavedActor(
+    request,
+    input.actor,
+    beforeEffect ? { beforeEffect: true, mismatchAs: "conflict" } : {},
+  );
   if (!actor.ok) return reciprocalFailure(actor);
   const issue = await bindIssueLifecycleIssue(request, input.issue);
   if (issue !== undefined) return reciprocalFailure(issue);

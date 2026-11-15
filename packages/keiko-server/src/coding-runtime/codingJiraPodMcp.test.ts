@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import type {
-  AtlassianCredentialMetadata,
-  AtlassianHttpBodyPort,
-  AtlassianHttpBodyRequest,
-  AtlassianHttpBodyResult,
+import {
+  jiraTemplateViolationGuidance,
+  type AtlassianCredentialMetadata,
+  type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyRequest,
+  type AtlassianHttpBodyResult,
 } from "@oscharko-dev/keiko-connectors";
 import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
@@ -41,6 +45,12 @@ import {
   codingJiraServerDefinition,
   type CodingJiraPodBinding,
 } from "./codingJiraPodBinding.js";
+import { codingJiraCatalogAccounting } from "./codingJiraCatalogBudget.js";
+import {
+  createCodingRuntimeContextUsageRegistry,
+  type CodingRuntimeConversation,
+} from "./codingRuntimeContextUsage.js";
+import { observeGatewayPromptTokens } from "./codingRuntimeContextUsageObservation.js";
 import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
 import { jiraOperationDefinitions } from "../atlassian/jiraOperationRegistry.js";
 import { postAndIdentityReadTransport } from "../../../../tests/support/jira-post-and-identity-read-fixture.js";
@@ -386,7 +396,7 @@ function connect(h: Harness, connections: CodingJiraConnections): Client {
   };
 }
 
-function proofLines(h: Harness): readonly Readonly<Record<string, unknown>>[] {
+function podLines(h: Harness): readonly Readonly<Record<string, unknown>>[] {
   return h.records
     .filter((record) => record.op === "coding-runtime.jira-pod")
     .map((record) =>
@@ -395,6 +405,16 @@ function proofLines(h: Harness): readonly Readonly<Record<string, unknown>>[] {
         formatActivityLogProofLine(record),
       ),
     );
+}
+
+/** The decision lines of binding and calls. The client's own describe is observed separately. */
+function proofLines(h: Harness): readonly Readonly<Record<string, unknown>>[] {
+  return podLines(h).filter((line) => line.toolClass !== "jira-discovery");
+}
+
+/** The lines of discover and describe (#4359): refused or completed, in closed words. */
+function discoveryLines(h: Harness): readonly Readonly<Record<string, unknown>>[] {
+  return podLines(h).filter((line) => line.toolClass === "jira-discovery");
 }
 
 describe("resolving the Pod the human chose", () => {
@@ -489,7 +509,7 @@ describe("serving the bound Pod through the relay", () => {
       expect(description).not.toMatch(/untrusted data|Data Center only|Never retry/u);
   });
 
-  it("starts with only local discovery, then replaces the exact selected typed tools", async () => {
+  it("starts with only local discovery, then merges the exact selected typed tools", async () => {
     const h = harness();
     const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
@@ -498,7 +518,12 @@ describe("serving the bound Pod through the relay", () => {
     expect(await client.list()).toEqual(["jira.discover", "jira.describe", "jira.projects"]);
     expect(client.notifications).toEqual(["notifications/tools/list_changed"]);
     await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"]);
-    expect(await client.list()).toEqual(["jira.discover", "jira.describe", "jira.issue"]);
+    expect(await client.list()).toEqual([
+      "jira.discover",
+      "jira.describe",
+      "jira.issue",
+      "jira.projects",
+    ]);
     await client.select([]);
     expect(await client.list()).toEqual(["jira.discover", "jira.describe"]);
     expect(h.http).not.toHaveBeenCalled();
@@ -562,6 +587,140 @@ describe("serving the bound Pod through the relay", () => {
     expect(h.http).not.toHaveBeenCalled();
     expect(h.retained).toEqual([]);
     expect(h.begun).toEqual([]);
+  });
+
+  // #4359: every other case here hands the catalog `catalogFits: () => true`. This one composes the
+  // run's accounting exactly as the backend does, from the real context-usage registry, and drives
+  // discover, describe and a typed call against the fixture Jira without a stand-in for admission.
+  it("serves discover, describe and a call on the real accounting once the run has a provider sample", async () => {
+    const h = retainingHarness(harness());
+    const registry = createCodingRuntimeContextUsageRegistry();
+    const geometry = {
+      contextWindowTokens: 272_000,
+      maxInputTokens: 239_232,
+      maxOutputTokens: 32_768,
+    };
+    const client = connect(
+      h,
+      h.pods.connections(undefined, bound(h), {
+        runId: h.context.correlationId,
+        currentScopes: () => ["issue-tracker.read"],
+        ...codingJiraCatalogAccounting({
+          geometry,
+          usage: () => registry.readLargest(h.context.correlationId),
+        }),
+      }),
+    );
+    const found = await client.rawCall("jira.discover", { query: "issue", maxResults: 5 });
+    expect(found.structuredContent).toMatchObject({ outcome: "succeeded" });
+    // The documented first moment of a run: no provider usage yet, so no schema expansion.
+    expect(
+      (await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"])).structuredContent,
+    ).toMatchObject({
+      outcome: "failed",
+      reason: "selection-unavailable",
+    });
+    expect(discoveryLines(h).at(-1)).toMatchObject({
+      action: "describe",
+      outcome: "refused",
+      stage: "fits",
+      fitBasis: "no-sample",
+    });
+    // What the gateway settle point hands the production observer, per conversation of the run.
+    const gatewaySample = (conversation: CodingRuntimeConversation, tokens: number): void => {
+      observeGatewayPromptTokens(
+        registry,
+        h.context.correlationId,
+        conversation,
+        tokens,
+        undefined,
+        { write: (): void => undefined },
+      );
+    };
+    const primary = { agentKey: "build", headKey: "build-head", toolBearing: true };
+    registry.bindGeometry(h.context.correlationId, {
+      capacityTokens: geometry.contextWindowTokens,
+      reservedOutputTokens: geometry.maxOutputTokens,
+    });
+    gatewaySample(primary, 7_303);
+    gatewaySample({ agentKey: "explore", headKey: "explore-head", toolBearing: true }, 3_001);
+    const selected = await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"]);
+    expect(selected.structuredContent).toMatchObject({ outcome: "succeeded" });
+    expect(await client.list()).toContain("jira.issue");
+    const read = await client.rawCall("jira.issue", { issueKey: "SYN-1" });
+    expect(read.structuredContent).toMatchObject({ outcome: "succeeded" });
+    expect(JSON.stringify(read)).toContain("SYN-1");
+    expect(h.http).toHaveBeenCalled();
+    expect(proofLines(h)).toEqual([
+      expect.objectContaining({ action: "call", outcome: "completed", toolClass: "jira-read" }),
+    ]);
+    // The primary fills up: a further describe is refused on its budget, then a compaction gives
+    // the primary a new head and the pressure is gone.
+    gatewaySample(primary, 232_005);
+    expect((await client.select(["GET /rest/api/2/project"])).structuredContent).toMatchObject({
+      outcome: "failed",
+    });
+    expect(discoveryLines(h).at(-1)).toMatchObject({
+      action: "describe",
+      outcome: "refused",
+      stage: "fits",
+      fitBasis: "provider-sample",
+    });
+    // The compaction is reconciled from the runtime's history; the primary's context is rewritten.
+    registry.recordCompaction(h.context.correlationId, "compaction-1", "2026-11-14T14:40:00.000Z");
+    gatewaySample({ ...primary, headKey: "build-head-after-compaction" }, 9_006);
+    expect((await client.select(["GET /rest/api/2/project"])).structuredContent).toMatchObject({
+      outcome: "succeeded",
+    });
+  });
+
+  // #4359: a refused describe reached the model only as a generic tool error and left no line, so
+  // a clerk's Workbench run could not be reconstructed. The line names the check that refused.
+  it("records which check refused a describe, and what its budget stood on, as closed words", async () => {
+    const h = retainingHarness(harness());
+    let fits: boolean | undefined;
+    const client = connect(
+      h,
+      h.pods.connections(undefined, bound(h), {
+        ...runAuthority(h),
+        catalogFits: () => fits,
+        catalogFitBasis: () => "no-sample",
+      }),
+    );
+    await client.rawCall("jira.discover", { maxResults: 1 });
+    await client.select(["GET /rest/api/2/project"]);
+    fits = false;
+    await client.select(["GET /rest/api/2/issue/{issueIdOrKey}"]);
+    fits = true;
+    await client.select(["jira.not-an-operation"]);
+    await client.select(["GET /rest/api/2/project"]);
+    const lines = discoveryLines(h);
+    expect(lines).toEqual([
+      expect.objectContaining({ action: "discover", outcome: "completed" }),
+      expect.objectContaining({
+        action: "describe",
+        outcome: "refused",
+        reason: "handler-unavailable",
+        stage: "fits",
+        fitBasis: "no-sample",
+      }),
+      expect.objectContaining({
+        action: "describe",
+        outcome: "refused",
+        reason: "budget-exhausted",
+        stage: "fits",
+      }),
+      expect.objectContaining({
+        action: "describe",
+        outcome: "refused",
+        reason: "invalid-arguments",
+        stage: "identity",
+      }),
+      expect.objectContaining({ action: "describe", outcome: "completed" }),
+    ]);
+    // Closed words only: neither a requested identity, a path nor a tool name is recorded.
+    expect(JSON.stringify(lines)).not.toMatch(/rest\/api|issueIdOrKey|not-an-operation|project/u);
+    expect(h.http).not.toHaveBeenCalled();
   });
 
   // #4176: an attachment reads Chat-connected files, which a Coding run has no authority over, so
@@ -988,8 +1147,9 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
       { ruleId: "summary-too-short", subject: "at least 40 characters", template: "SYN/Story" },
     ]);
     expect(result.structuredContent?.guidance).toBe(
-      "Nothing was changed: this breaks the issue template of the project. " +
-        "Correct what violations name (ruleId, subject), then send it again.",
+      jiraTemplateViolationGuidance([
+        { ruleId: "summary-too-short", subject: "at least 40 characters", template: "SYN/Story" },
+      ]),
     );
     expect(writes(h)).toBe(0);
     expect(h.dispatched).not.toHaveBeenCalled();
@@ -1090,6 +1250,131 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
     const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     await client.call("jira.edit", { issueKey: "SYN-1", fields: { summary: "Too short" } });
     expect(writes(h)).toBe(1);
+  });
+
+  describe("the dry run before the human is asked (#4354 L4)", () => {
+    const LONG_SUMMARY =
+      "A summary that is long enough for the forty character minimum of the rule";
+
+    it("hands the model the refusal of a write that breaks a template and sends nothing", async () => {
+      const h = harness({ template: EDIT_TEMPLATE });
+      const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+        tool: "jira.edit",
+        arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+      });
+      expect(refusal).toContain("Nothing was changed");
+      expect(refusal).toContain("summary");
+      expect(writes(h)).toBe(0);
+    });
+
+    it("logs the refusal on the template admission line, pre-approval, under the run's correlation", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const h = harness({ template: EDIT_TEMPLATE });
+        await h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+        });
+        const events = sink.events.filter(({ op }) => op === "jira.template.admission");
+        expect(events).toHaveLength(1);
+        expect(events[0]?.correlationId).toBe(runAuthority(h).runId);
+        expect(events[0]?.extra).toMatchObject({
+          operation: "jira.edit",
+          stage: "pre-approval",
+          ruleIds: ["summary-too-short"],
+        });
+      } finally {
+        resetServerLogger();
+      }
+    });
+
+    it("logs a refusal by Keiko's own field validation, which has no violations, on the field admission line", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const h = harness();
+        const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { notAField: "x" } },
+        });
+        expect(refusal).toContain('"reason":"field-validation"');
+        const events = sink.events.filter(({ op }) => op === "jira.field.admission");
+        expect(events).toHaveLength(1);
+        expect(events[0]?.extra).toMatchObject({ stage: "pre-approval", refusedCount: 1 });
+        expect(sink.lines().join("\n")).not.toContain("notAField");
+      } finally {
+        resetServerLogger();
+      }
+    });
+
+    it("logs an attachment call the release switch refuses before any card, as one closed line", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        const h = harness();
+        const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.attach",
+          arguments: { issueKey: "SYN-1", fileName: "private-report.txt" },
+        });
+        expect(refusal).toContain('"reason":"unavailable"');
+        const events = sink.events.filter(({ op }) => op.startsWith("jira.operation."));
+        expect(events).toHaveLength(1);
+        expect(events[0]?.extra).toMatchObject({
+          operation: "jira.attach",
+          stage: "release-scope",
+          outcome: "refused",
+          reason: "unavailable",
+        });
+        expect(sink.lines().join("\n")).not.toContain("private-report");
+        expect(writes(h)).toBe(0);
+      } finally {
+        resetServerLogger();
+      }
+    });
+
+    it("leaves a conforming write, and a write no template governs, to the human's card", async () => {
+      const governed = harness({ template: EDIT_TEMPLATE });
+      await expect(
+        governed.pods.preflightWrite(bound(governed), runAuthority(governed), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: LONG_SUMMARY } },
+        }),
+      ).resolves.toBeUndefined();
+      const free = harness();
+      await expect(
+        free.pods.preflightWrite(bound(free), runAuthority(free), {
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+        }),
+      ).resolves.toBeUndefined();
+      expect(writes(governed) + writes(free)).toBe(0);
+    });
+
+    it("refuses a creation no template governs, naming the way out, before any card", async () => {
+      const h = harness();
+      const refusal = await h.pods.preflightWrite(bound(h), runAuthority(h), {
+        tool: "jira.create",
+        arguments: {
+          projectId: "10000",
+          issueTypeId: "3",
+          fields: { summary: LONG_SUMMARY, customfield_10000: "x" },
+        },
+      });
+      expect(refusal).toContain("template-missing");
+      expect(writes(h)).toBe(0);
+    });
+
+    it("does nothing for a name that is not a registered Jira write", async () => {
+      const h = harness({ template: EDIT_TEMPLATE });
+      await expect(
+        h.pods.preflightWrite(bound(h), runAuthority(h), {
+          tool: "jira.search",
+          arguments: { jql: "project = SYN" },
+        }),
+      ).resolves.toBeUndefined();
+      expect(h.http).not.toHaveBeenCalled();
+    });
   });
 
   it("refuses requirement references a Coding run cannot trace, and still writes without them", async () => {

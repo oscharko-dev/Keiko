@@ -290,7 +290,7 @@ import {
   RequestBodyCancelledError,
   RequestBodyTooLargeError,
 } from "./bounded-request-body.js";
-import { userFacingProjects } from "./workspace-root-membership.js";
+import { projectReadable, userFacingProjects } from "./workspace-root-membership.js";
 import {
   buildChatCompactionContextText,
   selectGatewayPromptAssembly,
@@ -308,6 +308,7 @@ import {
   resolveAppSessionReadAuthority,
 } from "./coding-app-session/appSessionReadAuthority.js";
 import { ConversationAttachmentStoreError } from "./conversation-attachment-store.js";
+import { JIRA_POD_REFUSALS, JiraPodRefusalFault } from "./chat-jira-pod-refusal.js";
 export {
   MAX_CONTEXT_MESSAGES,
   conversationForGateway,
@@ -496,6 +497,7 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
     (item) => ({
       ...item,
       available: isProjectAvailable(item),
+      readable: projectReadable(item),
     }),
   );
   const chats = deps.store.listChats(project.path, CHAT_SIDEBAR_LIST_LIMIT);
@@ -503,7 +505,11 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
     .listMessages(chat.id, CHAT_HISTORY_READ_LIMIT)
     .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
   return {
-    project: { ...project, available: isProjectAvailable(project) },
+    project: {
+      ...project,
+      available: isProjectAvailable(project),
+      readable: projectReadable(project),
+    },
     chat,
     messages: browserChatMessages(messages),
     projects,
@@ -581,6 +587,12 @@ export function catalogDispatchErrorResult(
   site: readonly [operation: string, source: string] = ["POST /api/desktop/chat", "chat.send"],
 ): RouteResult {
   if (emitDiagnostic) emitGatewayErrorDiagnostic(deps, error, correlationId, ...site);
+  if (error instanceof JiraPodRefusalFault) {
+    // A state conflict the person can resolve (choose or verify the Jira Pod again), not a
+    // permission question: 409, like the other refused scope states, with a closed code.
+    const { code, message } = JIRA_POD_REFUSALS[error.readiness];
+    return { status: 409, body: errorBody(code, message, correlationId) };
+  }
   const [status, code, message] = CHAT_TOOL_ERROR_RESPONSES[error.status];
   return { status, body: errorBody(code, message, correlationId) };
 }

@@ -141,8 +141,13 @@ export function releaseSnapshotMatches(
 export async function readReleaseContext(
   request: JiraMutationRequest,
   selected: ReleaseSelection,
+  beforeEffect = false,
 ): Promise<ReleaseObservation<ReleaseContext>> {
-  const actor = await readSavedActor(request, selected.actorKey);
+  const actor = await readSavedActor(
+    request,
+    selected.actorKey,
+    beforeEffect ? { beforeEffect: true, mismatchAs: "conflict" } : {},
+  );
   if (!actor.ok) return actor;
   const project = await readJiraBoundProject(request, selected.projectId);
   if (!project.ok) return project;

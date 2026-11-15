@@ -25,21 +25,85 @@ const TOOL_SCHEMA_REPAIR_PREFIX =
 export function schemaMismatchGuidance(repair: GatewayToolCallRepair | undefined): string {
   const shape = repair?.shape;
   if (shape === undefined) return "";
+  const choice = choiceGuidance(shape);
+  return [
+    choice === "" || !choiceCoversMissing(shape) ? missingGuidance(shape) : "",
+    choice,
+    invalidGuidance(shape),
+    expectedGuidance(shape),
+    countGuidance(shape),
+  ].join("");
+}
+
+/** The ceiling of the sentence that states each rejected property's rule (the Jira result-guidance bound). */
+const EXPECTED_GUIDANCE_CHARS_MAX = 1280;
+/**
+ * What the schema states at each rejected or missing property, in one sentence of one form for
+ * every tool ("path must be a string in uri format, 1 to 255 characters"). The rules come from the
+ * tool's own schema, never from the arguments, so the correction says what to send without
+ * quoting what was sent. A property whose allowed values the sentence above already names is not
+ * repeated.
+ */
+/** The sentence, the properties it states and how many were left out (here or by the schema owner). */
+export interface StatedExpectations {
+  readonly text: string;
+  readonly statedCount: number;
+  readonly omittedCount: number;
+}
+export function statedExpectations(shape: CatalogSchemaMismatch): StatedExpectations {
+  const entries = (shape.expected ?? []).filter((entry) => entry.path !== shape.allowed?.path);
+  const kept: string[] = [];
+  let chars = " Expected: .".length;
+  for (const entry of entries) {
+    const text = `${entry.path} must be ${entry.rule}`;
+    chars += text.length + 2;
+    if (chars > EXPECTED_GUIDANCE_CHARS_MAX) break;
+    kept.push(text);
+  }
+  return {
+    text: kept.length === 0 ? "" : ` Expected: ${kept.join("; ")}.`,
+    statedCount: kept.length,
+    omittedCount: entries.length - kept.length + (shape.expectedOmittedCount ?? 0),
+  };
+}
+function expectedGuidance(shape: CatalogSchemaMismatch): string {
+  return statedExpectations(shape).text;
+}
+
+function missingGuidance(shape: CatalogSchemaMismatch): string {
+  if (shape.missingRequired.length === 0) return "";
+  // The managed-runtime dialect requires every declared property. An external JSON Schema does
+  // not, and telling a model to pass `false` there produced values its own schema refuses.
+  const rule =
+    shape.optionalProperties === true
+      ? ""
+      : " Every property the schema declares is required; pass an explicit value such as false or [] when a property does not apply.";
+  return ` Missing required properties: ${shape.missingRequired.join(", ")}.${rule}`;
+}
+
+function invalidGuidance(shape: CatalogSchemaMismatch): string {
+  if (shape.invalidPaths.length === 0) return "";
+  const allowed =
+    shape.allowed === undefined
+      ? ""
+      : ` The value of ${shape.allowed.path} must be one of: ${shape.allowed.values.map((value) => JSON.stringify(value)).join(", ")}.`;
+  return ` Properties whose value does not match the schema: ${shape.invalidPaths.join(", ")}.${allowed}`;
+}
+
+/** What the schema does declare, so removing the stray property does not invite another one. */
+function declaredSuffix(shape: CatalogSchemaMismatch): string {
+  const declared = shape.declaredProperties;
+  return declared === undefined || declared.length === 0
+    ? ""
+    : `; it declares only: ${declared.join(", ")}`;
+}
+
+function countGuidance(shape: CatalogSchemaMismatch): string {
   const parts: string[] = [];
-  if (shape.missingRequired.length > 0) {
-    parts.push(
-      ` Missing required properties: ${shape.missingRequired.join(", ")}. Every property the schema declares is required; pass an explicit value such as false or [] when a property does not apply.`,
-    );
-  }
-  if (shape.invalidPaths.length > 0) {
-    parts.push(
-      ` Properties whose value does not match the schema: ${shape.invalidPaths.join(", ")}.`,
-    );
-  }
   if (shape.unexpectedPropertyCount > 0) {
     const plural = shape.unexpectedPropertyCount === 1 ? "property is" : "properties are";
     parts.push(
-      ` ${String(shape.unexpectedPropertyCount)} ${plural} not declared by the schema and must be removed.`,
+      ` ${String(shape.unexpectedPropertyCount)} ${plural} not declared by the schema and must be removed${declaredSuffix(shape)}.`,
     );
   }
   if (shape.droppedPathCount > 0) {
@@ -48,6 +112,22 @@ export function schemaMismatchGuidance(repair: GatewayToolCallRepair | undefined
     );
   }
   return parts.join("");
+}
+
+/** The rule of a failed `oneOf` or `anyOf`, in the schema's own property names. */
+function choiceGuidance(shape: CatalogSchemaMismatch): string {
+  const choice = shape.choice;
+  if (choice === undefined) return "";
+  const names = choice.alternatives.map((names) => names.join(" and ")).join(", ");
+  return choice.kind === "exactly-one"
+    ? ` Supply exactly one of: ${names}; omit the others.`
+    : ` Supply at least one of: ${names}.`;
+}
+
+/** A missing property that is one alternative of the choice is not missing on its own. */
+function choiceCoversMissing(shape: CatalogSchemaMismatch): boolean {
+  const named = new Set(shape.choice?.alternatives.flat());
+  return shape.missingRequired.every((path) => named.has(path));
 }
 
 /** The one correction a rejected tool call gets, in the schema's vocabulary only. */

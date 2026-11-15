@@ -10,11 +10,36 @@ import type { ChatMessage } from "../store/index.js";
 import {
   JIRA_MUTATION_OPERATIONS,
   isJiraAvatarUploadOperation,
+  type JiraApprovalNamedId,
+  type JiraApprovalProject,
+  type JiraApprovalTransition,
   type JiraAttachmentPreview,
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { parseJiraAttachmentArguments, parseJiraDraft } from "@oscharko-dev/keiko-connectors";
+import {
+  isJiraDraftItem,
+  parseJiraAttachmentArguments,
+  parseJiraDraft,
+  type StagedJiraDraft,
+  type StagedJiraDraftItem,
+} from "@oscharko-dev/keiko-connectors";
+import { JIRA_DRAFT_PAGE_ITEMS_MAX } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { jiraChatConnectionFingerprint } from "./jiraChatConnectionIdentity.js";
 import { chatDraftArguments } from "./jiraChatDraftArguments.js";
+import {
+  jiraApprovalIssueTypeReferences,
+  jiraApprovalProjectReferences,
+  PROJECT_READ_TIMEOUT_MS,
+  reviewedJiraProjects,
+} from "./jiraChatApprovalProjects.js";
+import {
+  jiraApprovalFieldReferences,
+  jiraApprovalTransitionTarget,
+  reviewedJiraFieldNames,
+  reviewedJiraTransition,
+} from "./jiraChatApprovalNames.js";
+import type { HeldJiraDraft } from "./jiraApprovalExpiry.js";
+import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import {
   jiraChatAttachmentLimit,
   previewJiraChatAttachment,
@@ -131,7 +156,16 @@ function draftRequirementsCheck(
 
 type ReviewAction = Pick<JiraChatCatalogAction, "actionId" | "argumentsDigest">;
 export type JiraChatTurnReviewPorts = Required<
-  Pick<JiraChatAdmissionOptions, "preflightWrite" | "attachmentPreview" | "draftItemRefs">
+  Pick<
+    JiraChatAdmissionOptions,
+    | "preflightWrite"
+    | "attachmentPreview"
+    | "projectPreview"
+    | "transitionPreview"
+    | "fieldNamesPreview"
+    | "draftItemRefs"
+    | "holdDraft"
+  >
 > &
   Pick<JiraChatAdmissionOptions, "sourcePreparation">;
 interface JiraChatTurnReviewAccess {
@@ -156,6 +190,87 @@ function proposedWriteArguments(
     : undefined;
 }
 
+const sameItems = (left: unknown, right: unknown): boolean =>
+  sha256Hex(canonicalise(left)) === sha256Hex(canonicalise(right));
+
+/**
+ * The draft this write sends stays the Chat's open draft while its approval is pending (#4354 AC4):
+ * a staged draft already is one, and inline items are kept in the existing draft store, once. If
+ * the approval then expires, the model resubmits the draft by reference instead of drafting anew.
+ */
+function holdOpenDraft(
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+): HeldJiraDraft | undefined {
+  const store = options.deps.jiraDraftStore;
+  const args = proposedWriteArguments(access, action);
+  if (action.tool !== "jira.draft" || store === undefined || args === undefined) return undefined;
+  const resolved = chatDraftArguments(store, context.chatId, args);
+  if (!resolved.ok) return undefined;
+  if (resolved.staged)
+    return typeof args.draftId === "string"
+      ? heldOf(store.peek(args.draftId, context.chatId))
+      : undefined;
+  return holdInlineItems(options, store, resolved.arguments.items, context);
+}
+
+/** Whether these are well-formed draft items by the check the staging tool applies to a page. */
+function isStagedItems(items: unknown): items is readonly StagedJiraDraftItem[] {
+  return Array.isArray(items) && items.length > 0 && items.every(isJiraDraftItem);
+}
+
+function holdInlineItems(
+  options: JiraChatTurnOptions,
+  store: NonNullable<UiHandlerDeps["jiraDraftStore"]>,
+  items: unknown,
+  context: JiraChatCatalogContext,
+): HeldJiraDraft | undefined {
+  if (!isStagedItems(items)) return undefined;
+  const current = resolveCurrentJiraChatAuthority(
+    options.deps,
+    context.chatId,
+    context.authorityReference,
+    new Date().toISOString(),
+    context.correlationId,
+  );
+  if (!current.ok) return undefined;
+  const fingerprint = jiraChatConnectionFingerprint(current.credential);
+  const open = store.latest(context.chatId);
+  if (open?.fingerprint === fingerprint && sameItems(open.items, items)) return heldOf(open);
+  let draft: StagedJiraDraft | undefined;
+  for (let start = 0; start < items.length; start += JIRA_DRAFT_PAGE_ITEMS_MAX) {
+    const page = items.slice(start, start + JIRA_DRAFT_PAGE_ITEMS_MAX);
+    const appended = store.append(context.chatId, draft?.id, fingerprint, page);
+    if (!appended.ok) return undefined;
+    draft = appended.draft;
+  }
+  if (draft === undefined) return undefined;
+  recordJiraDraftActivity(options.deps.activityLog, context.correlationId, {
+    phase: "held",
+    newDraft: true,
+    pageItemCount: 0,
+    itemCount: draft.items.length,
+    pageCount: draft.pageCount,
+    byteCount: draft.bytes,
+    unresolvedRefCount: 0,
+    violationCount: 0,
+    durationMs: 0,
+  });
+  return heldOf(draft);
+}
+
+function heldOf(
+  draft:
+    | { readonly id: string; readonly digest: string; readonly items: readonly unknown[] }
+    | undefined,
+): HeldJiraDraft | undefined {
+  return draft === undefined
+    ? undefined
+    : { id: draft.id, digest: draft.digest, itemCount: draft.items.length };
+}
+
 /** The same Jira review owners serve a Jira-only turn and a turn with other connected sources. */
 export function createJiraChatTurnReviewPorts(
   options: JiraChatTurnOptions,
@@ -170,6 +285,10 @@ export function createJiraChatTurnReviewPorts(
       untracedAdvice: draftUntracedAdvice(options.deps, options.openTrace),
     }),
     attachmentPreview: (action) => reviewedAttachment(options, access, action),
+    projectPreview: (action) => reviewedProjectsOf(options, access, action),
+    transitionPreview: (action) => reviewedTransitionOf(options, access, action),
+    fieldNamesPreview: (action) => reviewedFieldNamesOf(options, access, action),
+    holdDraft: (action, context) => holdOpenDraft(options, access, action, context),
     draftItemRefs: (action): readonly string[] | undefined => {
       const args = proposedWriteArguments(access, action);
       if (args === undefined || !access.reviewableWrite(action)) return undefined;
@@ -177,6 +296,95 @@ export function createJiraChatTurnReviewPorts(
       return draft.ok ? parseJiraDraft(draft.arguments)?.items.map((item) => item.ref) : undefined;
     },
   };
+}
+
+/**
+ * What an approval-time metadata read needs, or undefined when the write cannot be reviewed or its
+ * read is not admitted: the call's arguments and the one bounded read window (F09, R04).
+ */
+function approvalReview(
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+  action: JiraChatCatalogAction,
+):
+  | {
+      readonly args: Readonly<Record<string, unknown>>;
+      readonly read: Parameters<typeof reviewedJiraTransition>[1];
+    }
+  | undefined {
+  const args = proposedWriteArguments(access, action);
+  if (args === undefined || !access.reviewableWrite(action) || !access.readAllowed(action))
+    return undefined;
+  const { message, correlationId, authority, signal } = options;
+  return {
+    args,
+    read: {
+      chatId: message.chatId,
+      authorityReference: authority.reference,
+      signal,
+      correlationId,
+      readAllowed: () => access.readAllowed(action),
+      window: approvalWindow(action),
+    },
+  };
+}
+
+/** One deadline per proposed write, so the reads that name its card share a single window. */
+const APPROVAL_WINDOWS = new WeakMap<JiraChatCatalogAction, AbortSignal>();
+function approvalWindow(action: JiraChatCatalogAction): AbortSignal {
+  const existing = APPROVAL_WINDOWS.get(action);
+  if (existing !== undefined) return existing;
+  const started = AbortSignal.timeout(PROJECT_READ_TIMEOUT_MS);
+  APPROVAL_WINDOWS.set(action, started);
+  return started;
+}
+
+/** The projects the proposed write targets, read now so the approval card names each (F09). */
+async function reviewedProjectsOf(
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+  action: JiraChatCatalogAction,
+): Promise<readonly JiraApprovalProject[] | undefined> {
+  const review = approvalReview(options, access, action);
+  if (review === undefined) return undefined;
+  const { deps, message } = options;
+  return reviewedJiraProjects(
+    deps,
+    review.read,
+    jiraApprovalProjectReferences(deps, message.chatId, action.tool, review.args),
+    jiraApprovalIssueTypeReferences(deps, message.chatId, action.tool, review.args),
+  );
+}
+
+/** The status change the proposed transition makes, read now so the approval card names it (R04). */
+async function reviewedTransitionOf(
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+  action: JiraChatCatalogAction,
+): Promise<JiraApprovalTransition | undefined> {
+  const review = approvalReview(options, access, action);
+  if (review === undefined) return undefined;
+  return reviewedJiraTransition(
+    options.deps,
+    review.read,
+    jiraApprovalTransitionTarget(action.tool, review.args),
+  );
+}
+
+/** The names of the fields the proposed write carries, read now so the card names them (R04). */
+async function reviewedFieldNamesOf(
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+  action: JiraChatCatalogAction,
+): Promise<readonly JiraApprovalNamedId[] | undefined> {
+  const review = approvalReview(options, access, action);
+  if (review === undefined) return undefined;
+  const { deps, message } = options;
+  return reviewedJiraFieldNames(
+    deps,
+    review.read,
+    jiraApprovalFieldReferences(deps, message.chatId, action.tool, review.args),
+  );
 }
 
 /** The file the model proposes to attach, read now for the human's review (#4176). */

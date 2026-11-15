@@ -19,6 +19,7 @@ import {
 import type { UiHandlerDeps } from "../deps.js";
 import {
   emitServerDiagnostic,
+  serverDiagnosticFromError,
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
@@ -34,7 +35,13 @@ import {
   writeContentFreeSessionStream,
   type SessionStreamFlowCounts,
 } from "./sessionStreamWriter.js";
-import { resolveCodingAppSessionDenialWindows } from "./denialWindows.js";
+import {
+  DENIAL_ALERT_THRESHOLD,
+  LOCAL_SESSION_DENIAL_REASONS,
+  resolveCodingAppSessionDenialWindows,
+  type LocalSessionDenialReason,
+  type LocalSessionDenialSummary,
+} from "./denialWindows.js";
 import {
   APP_SESSION_ACTIVE_COOKIE_COUNT,
   APP_SESSION_COOKIE_MAX_AGE_SECONDS,
@@ -45,11 +52,7 @@ import {
   serializeSessionCookies,
 } from "./sessionCookie.js";
 
-import {
-  SESSION_EXPIRY_REFUSAL_REASONS,
-  SESSION_PROOF_REFUSAL_REASONS,
-} from "./sessionRegistry.js";
-import type { CodingAppSessionRepairFailureReason } from "./sessionChannel.js";
+import { SESSION_EXPIRY_REFUSAL_REASONS } from "./sessionRegistry.js";
 
 const MAX_PAIRING_BODY_BYTES = 8 * 1_024;
 export { CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS };
@@ -107,6 +110,12 @@ const CODING_APP_SESSION_PAIRED_OPERATION = defineActivityLogOperation({
       values: ["none", "inactive", "active"],
       required: false,
     },
+    reconnect: {
+      type: "string",
+      dataClass: "closed-enum",
+      values: ["no-credential", "live-credential", "ended-credential", "after-restart"],
+      required: false,
+    },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -135,6 +144,24 @@ const CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
+// Shared field shapes of the two local-session refusal registrations: one count per closed refusal
+// reason (so every refused repair is counted whichever caller sent it), the window state flag, and
+// the two closed reason sets.
+const DENIAL_REASON_COUNT = { type: "integer", dataClass: "count", required: true } as const;
+const WINDOW_CLOSED_FLAG = { type: "boolean", dataClass: "closed-enum", required: true } as const;
+const WINDOW_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: ["authority-unavailable"],
+} as const;
+const REFUSAL_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: LOCAL_SESSION_DENIAL_REASONS,
+} as const;
+
 const LOCAL_SESSION_DENIED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -143,13 +170,22 @@ const LOCAL_SESSION_DENIED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.localSessionDenied",
   fields: {
-    count: { type: "integer", dataClass: "count", required: true },
-    reason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["authority-unavailable"],
-    },
+    count: DENIAL_REASON_COUNT,
+    reason: WINDOW_REASON_FIELD,
+    // `false`: the alert raised when the window crossed its threshold. `true`: the window's final
+    // summary, written for every window that refused anything. Read the closed one for the totals.
+    windowClosed: WINDOW_CLOSED_FLAG,
+    approvalCount: DENIAL_REASON_COUNT,
+    inactivityCount: DENIAL_REASON_COUNT,
+    invalidClockCount: DENIAL_REASON_COUNT,
+    lifetimeCount: DENIAL_REASON_COUNT,
+    proofMalformedCount: DENIAL_REASON_COUNT,
+    proofMissingCount: DENIAL_REASON_COUNT,
+    secretMismatchCount: DENIAL_REASON_COUNT,
+    sessionUnregisteredCount: DENIAL_REASON_COUNT,
+    lifetimeInsufficientCount: DENIAL_REASON_COUNT,
+    proofUnavailableCount: DENIAL_REASON_COUNT,
+    channelUnavailableCount: DENIAL_REASON_COUNT,
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -167,20 +203,10 @@ const LOCAL_SESSION_REFUSED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.localSessionRefused",
   fields: {
-    reason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: [
-        ...SESSION_PROOF_REFUSAL_REASONS,
-        "lifetime-insufficient",
-        "proof-unavailable",
-        "channel-unavailable",
-      ],
-    },
-    count: { type: "integer", dataClass: "count", required: true },
-    presentedProofCount: { type: "integer", dataClass: "count", required: true },
-    distinctProofCount: { type: "integer", dataClass: "count", required: true },
+    reason: REFUSAL_REASON_FIELD,
+    count: DENIAL_REASON_COUNT,
+    presentedProofCount: DENIAL_REASON_COUNT,
+    distinctProofCount: DENIAL_REASON_COUNT,
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -201,9 +227,9 @@ const RECORDED_REPAIR_REFUSALS: ReadonlySet<string> = new Set([
 function localSessionRefused(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  reason: CodingAppSessionRepairFailureReason | "channel-unavailable",
+  reason: LocalSessionDenialReason,
 ): RouteResult {
-  if (!RECORDED_REPAIR_REFUSALS.has(reason)) return localSessionDenied(ctx, deps);
+  if (!RECORDED_REPAIR_REFUSALS.has(reason)) return localSessionDenied(ctx, deps, reason);
   const { presentedProofCount, distinctProofCount } = readSessionCookieObservation(ctx.req);
   appSessionActivity(deps).write(
     activityLogEvent(
@@ -212,19 +238,78 @@ function localSessionRefused(
       { reason, count: 1, presentedProofCount, distinctProofCount },
     ),
   );
-  return localSessionDenied(ctx, deps);
+  return localSessionDenied(ctx, deps, reason);
 }
 
-function localSessionDenied(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  resolveCodingAppSessionDenialWindows(deps).recordLocalSessionDenial(Date.now(), (count) => {
-    appSessionActivity(deps).write(
-      activityLogEvent(
-        LOCAL_SESSION_DENIED_OPERATION,
-        { level: "warn", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-        { reason: "authority-unavailable", count },
-      ),
+function writeLocalSessionDenial(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  summary: LocalSessionDenialSummary,
+): void {
+  const { histogram } = summary;
+  // An alert above the threshold stays a warning; a quiet window's summary is information.
+  const level = summary.windowClosed && summary.count < DENIAL_ALERT_THRESHOLD ? "info" : "warn";
+  appSessionActivity(deps).write(
+    activityLogEvent(
+      LOCAL_SESSION_DENIED_OPERATION,
+      { level, correlationId },
+      {
+        reason: "authority-unavailable",
+        count: summary.count,
+        windowClosed: summary.windowClosed,
+        approvalCount: histogram.approval,
+        inactivityCount: histogram.inactivity,
+        invalidClockCount: histogram["invalid-clock"],
+        lifetimeCount: histogram.lifetime,
+        proofMalformedCount: histogram["proof-malformed"],
+        proofMissingCount: histogram["proof-missing"],
+        secretMismatchCount: histogram["secret-mismatch"],
+        sessionUnregisteredCount: histogram["session-unregistered"],
+        lifetimeInsufficientCount: histogram["lifetime-insufficient"],
+        proofUnavailableCount: histogram["proof-unavailable"],
+        channelUnavailableCount: histogram["channel-unavailable"],
+      },
+    ),
+  );
+}
+
+// The summary is written from a window timer, from the next denial after the window and from graph
+// disposal. None of those may let a failing sink escape as an uncaught exception, so a write that
+// throws takes the existing structured diagnostic path under the denial's correlation (#4370).
+function writeLocalSessionDenialGuarded(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  summary: LocalSessionDenialSummary,
+): void {
+  try {
+    writeLocalSessionDenial(deps, correlationId, summary);
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "coding-app-session.local-session.denied",
+        source: "coding-app-session-routes",
+        error,
+        redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      }),
     );
-  });
+  }
+}
+
+function localSessionDenied(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  reason: LocalSessionDenialReason,
+): RouteResult {
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  resolveCodingAppSessionDenialWindows(deps).recordLocalSessionDenial(
+    Date.now(),
+    reason,
+    (summary) => {
+      writeLocalSessionDenialGuarded(deps, correlationId, summary);
+    },
+  );
   // An unpaired browser, a stale cookie and an absent channel are ordinary states of a page load:
   // the refusal is recorded above and the caller receives the content-free acknowledgement with no
   // cookie, as before #4321 (a 401 here fails every unpaired page load in the browser console).
@@ -400,7 +485,7 @@ export async function handleCodingAppSessionPair(
   const channel = deps.codingAppSessionChannel;
   if (channel === undefined) return ackResult();
   const attestation = await readPairingBody(ctx.req);
-  const result = channel.pair(attestation);
+  const result = channel.pair(attestation, readSessionCookie(ctx.req));
   if (!result.paired) {
     // KEIKO-0838: aggregate denials into one rate-limited, count-only diagnostic per window.
     resolveCodingAppSessionDenialWindows(deps).recordPairingDenial(Date.now(), (count) => {
@@ -412,7 +497,7 @@ export async function handleCodingAppSessionPair(
     activityLogEvent(
       CODING_APP_SESSION_PAIRED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      result.capacityDecision ?? {},
+      { ...result.capacityDecision, reconnect: result.reconnect },
     ),
   );
   return ackResult(issuedCookie(ctx.req, result.cookieToken));

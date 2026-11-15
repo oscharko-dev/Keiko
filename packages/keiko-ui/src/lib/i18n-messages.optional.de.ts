@@ -976,7 +976,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "filePreview.lang.text": "text",
   "filePreview.lang.binary": "binär",
   "atlassianConnectors.live.rename": "Pod umbenennen",
-  "atlassianConnectors.live.renameTitle": "Jira-Pod umbenennen",
+  "atlassianConnectors.live.renameTitle": "Jira Pod umbenennen",
   "atlassianConnectors.live.rotateTitle": "Jira-Token ersetzen",
   "atlassianConnectors.live.replaceToken": "Token ersetzen",
   "atlassianConnectors.live.newToken": "Neues API-Token",
@@ -984,7 +984,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.live.saveToken": "Token speichern",
   "atlassianConnectors.live.saving": "Änderungen werden gespeichert…",
   "atlassianConnectors.live.rotateHint":
-    "Der Pod und seine Chat-Verbindungen bleiben erhalten. Der Tokenwechsel stoppt den aktuellen Zugriff und ausstehende Aktionen; prüfe die Verbindung danach erneut.",
+    "Der Pod und seine Chat-Verbindungen bleiben erhalten. Der Tokenwechsel stoppt den aktuellen Zugriff und ausstehende Aktionen; Keiko prüft das neue Token sofort.",
   "atlassianConnectors.live.operationFailed":
     "Die Aktion konnte nicht bestätigt werden. Aktualisiere den Pod-Status, bevor du weitere Änderungen vornimmst.",
   "atlassianConnectors.live.refresh": "Status aktualisieren",
@@ -995,10 +995,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Aktualisiere den Status, bevor du diesen Pod verwendest.",
   "atlassianConnectors.live.verifyRequired":
     "Prüfe die Verbindung, bevor du diesen Pod verwendest.",
+  "atlassianConnectors.live.tlsFailed.wayOut":
+    "Bis zur erfolgreichen Prüfung bleibt der Pod gespeichert, ist aber nicht nutzbar; du kannst ihn auch entfernen.",
   "atlassianConnectors.live.remove": "Pod entfernen",
   "atlassianConnectors.live.keep": "Pod behalten",
   "atlassianConnectors.live.removeConfirm":
-    "Diesen Jira-Pod und sein Token entfernen? Verbundene Chats werden getrennt.",
+    "Diesen Jira Pod und sein Token entfernen? Verbundene Chats werden getrennt.",
   "atlassianConnectors.live.patHint":
     "Erstelle ein persönliches Zugriffstoken in deinem Jira-Profil. Es wird nie wieder angezeigt.",
   "atlassianConnectors.live.displayNamePlaceholder": "z. B. Jira Data Center",
@@ -1012,6 +1014,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.writeApproval.rejected": "Aktion abgelehnt",
   "chat.jira.writeApproval.expired": "Aktionsfreigabe abgelaufen",
   "chat.jira.writeApproval.revoked": "Aktionsfreigabe widerrufen",
+  "chat.jira.writeApproval.expiredHint":
+    "Die Freigabe ist abgelaufen, bevor jemand entschieden hat, deshalb wurde in Jira nichts geändert. Frage erneut an und gib die Freigabe frei, solange die Karte offen ist.",
+  "chat.jira.writeApproval.revokedHint":
+    "Die Freigabe wurde widerrufen, deshalb wurde in Jira nichts geändert. Frage erneut an, wenn du die Änderung noch willst, und gib sie dann frei.",
+  "chat.jira.writeApproval.outcomeUnknownHint":
+    "Diese Karte kann nicht zeigen, ob die Aktion ausgeführt wurde. Das Ergebnis zeigt den Ausgang; gibt es keines, prüfe den Vorgang in Jira.",
   "chat.jira.writeApproval.preview": "Details der vorgeschlagenen Aktion",
   "chat.jira.writeApproval.working": "Aktion wird geprüft…",
   "chat.jira.writeApproval.failed":
@@ -1123,6 +1131,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.fact.projectAssignee": "Standardbearbeiter",
   "chat.jira.fact.issueType": "Vorgangstyp",
   "chat.jira.fact.transition": "Statusübergang",
+  "chat.jira.fact.idUnnamed": "{id} (Jira nennt keinen Namen dazu)",
+  "chat.jira.fact.fieldUnnamed": "Feld {id} (Jira nennt keinen Namen dazu)",
+  "chat.jira.fact.transitionUnread":
+    "Keiko konnte den Statuswechsel nicht aus Jira lesen. Wohin er führt, steht deshalb nicht hier (Übergangs-ID {id}).",
+  "chat.jira.fact.transitionUnavailable":
+    "Jira bietet diesen Statuswechsel für den Vorgang gerade nicht an. Die Freigabe würde deshalb fehlschlagen (Übergangs-ID {id}).",
   "chat.jira.fact.comment": "Kommentar",
   "chat.jira.fact.commentId": "Kommentar-ID",
   "chat.jira.access.schemeId": "Schema-ID",
@@ -2313,6 +2327,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.permissionGranted": "Berechtigung erteilt",
   "chat.jira.outcome.permissionDenied": "Berechtigung nicht erteilt",
   "chat.jira.outcome.moreResults": "{count} weitere Ergebnisse anzeigen",
+  "chat.jira.outcome.moreResultsOne": "1 weiteres Ergebnis anzeigen",
   "chat.jira.outcome.openBoard": "Board öffnen",
   "chat.jira.outcome.returned": "Zurückgegebene Ergebnisse: {count}.",
   "chat.jira.outcome.returnedTotal": "{count} von {total} Ergebnissen zurückgegeben.",
@@ -2332,8 +2347,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.state.excluded": "Ausgeschlossen",
   "chat.jira.outcome.rule.parent-type-mismatch":
     "Das übergeordnete Issue muss einen erlaubten Vorgangstyp haben ({subject}).",
+  "chat.jira.outcome.failure.authUnverified":
+    "Jira konnte gerade nicht geprüft werden, deshalb wurde diese Anfrage nicht weitergegeben. Die Verbindung bleibt unverändert. Versuche es gleich noch einmal.",
   "chat.jira.outcome.failure.auth":
-    "Prüfe die Verbindung des Jira-Pods und seine Zugangsdaten, bevor du es erneut versuchst.",
+    "Jira hat das Token abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden. Ersetze es am Jira Pod, verifiziere die Verbindung und versuche es erneut.",
   "chat.jira.outcome.failure.permission":
     "Prüfe die Berechtigung des Jira-Kontos für das angeforderte Projekt und die Aktion.",
   "chat.jira.outcome.failure.notFound":
@@ -2502,30 +2519,30 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.write.pendingHelp":
     "Es liegt kein abschließendes Ergebnis vor. Das bestätigt keine laufende Ausführung. Die Aktion wird nicht automatisch wiederholt.",
 
-  "atlassianConnectors.live.empty": "Noch keine Jira-Pods.",
+  "atlassianConnectors.live.empty": "Noch keine Jira Pods.",
   "chat.jira.podUnavailable": "Aktueller Pod nicht verfügbar",
   "chat.jira.verifyRequired": "Verifikation erforderlich",
   "chat.jira.addToWorkspace": "Zum Arbeitsbereich hinzufügen",
   "chat.jira.workspaceHint":
-    "Ziehe diesen Jira-Pod auf den Workspace oder füge ihn mit dieser Schaltfläche hinzu. Verbinde seinen Port mit einem Chat.",
-  "chat.jira.liveReady": "Verifizierter Jira-Pod",
+    "Ziehe diesen Jira Pod auf den Workspace oder füge ihn mit dieser Schaltfläche hinzu. Verbinde seinen Port mit einem Chat.",
+  "chat.jira.liveReady": "Verifizierter Jira Pod",
   "chat.jira.liveUnavailable":
-    "Jira-Pod nicht verfügbar; öffne Knowledge Pods, um ihn zu prüfen oder neu zu verbinden.",
+    "Jira Pod nicht verfügbar; öffne das Fenster Lokales Wissen, um ihn zu prüfen oder neu zu verbinden.",
   "chat.connectors.title": "Konnektoren",
   "chat.connectors.active": "Konnektoren: {count} aktiv",
   "chat.connectors.mcp": "MCP-Server",
-  "chat.connectors.jira": "Jira-Pods",
+  "chat.connectors.jira": "Jira Pods",
   "chat.connectors.jiraAdministration": "Jira-Instanz administrieren",
   "chat.connectors.jiraAdministrationHelp":
     "Änderungen an gemeinsamer Jira-Konfiguration, etwa Masken und Monitoring, für diesen ausgewählten Pod gesondert erlauben. Gewöhnliche Jira-Schreibaktionen folgen weiterhin dem gewählten Modus. Vollzugriff aktiviert die Instanzverwaltung nicht; Jiras eigene Berechtigungen gelten weiterhin.",
   "chat.connectors.manage": "Verwalten",
   "chat.connectors.noServers": "Keine MCP-Server eingerichtet",
-  "chat.connectors.noPods": "Noch keine Jira-Pods",
+  "chat.connectors.noPods": "Noch keine Jira Pods",
   "chat.connectors.attention": "Prüfen",
   "chat.connectors.access": "Zugriff",
   "chat.connectors.failed": "Nicht gespeichert. Bitte erneut versuchen.",
   "atlassianConnectors.live.title": "Jira Live-Pods",
-  "atlassianConnectors.live.add": "Jira-Pod erstellen",
+  "atlassianConnectors.live.add": "Jira Pod erstellen",
   "chat.mcp.tool": "MCP-Aktion",
   "chat.mcp.writeApproval.title": "MCP-Aktion freigeben",
   "chat.mcp.write.notDispatched": "Nicht an den MCP-Server gesendet",
@@ -2542,6 +2559,43 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Aktion hat begonnen. Warte auf ihr Ergebnis, bevor du einen weiteren Schreibzugriff startest.",
   "chat.jira.outcome.issues": "Jira-Vorgänge",
   "chat.jira.outcome.problems": "Was Jira gemeldet hat",
+  "chat.jira.outcome.itemOrdinal": "Eintrag {position}",
+  "chat.jira.outcome.notCreated": "Nicht angelegt: {count}",
+  "chat.jira.outcome.draftProblem.draft-shape":
+    "Der Entwurf hat kein lesbares Format. Bitte Keiko, die Vorgänge neu zu entwerfen.",
+  "chat.jira.outcome.draftProblem.items-missing":
+    "Der Entwurf enthält keine Vorgänge. Bitte Keiko, die anzulegenden Vorgänge zu nennen.",
+  "chat.jira.outcome.draftProblem.item-shape":
+    "enthält Angaben, die Keiko nicht lesen kann. Bitte Keiko, diesen Vorgang neu zu formulieren.",
+  "chat.jira.outcome.draftProblem.item-ref":
+    "hat keinen verwendbaren Namen. Bitte Keiko, jedem Vorgang einen eigenen kurzen Namen zu geben.",
+  "chat.jira.outcome.draftProblem.item-ids":
+    "hat kein gültiges Projekt oder keinen gültigen Vorgangstyp. Wähle Projekt und Vorgangstyp erneut aus.",
+  "chat.jira.outcome.draftProblem.item-fields":
+    "braucht eine Zusammenfassung und darf kein anderes Projekt oder keinen anderen Vorgangstyp nennen. Bitte Keiko, die Felder zu vervollständigen.",
+  "chat.jira.outcome.draftProblem.item-parent":
+    "hat einen übergeordneten Vorgang, den Keiko nicht lesen kann. Bitte Keiko, den übergeordneten Vorgang erneut zu nennen.",
+  "chat.jira.outcome.draftProblem.item-links":
+    "hat eine Verknüpfung, die Keiko nicht lesen kann. Bitte Keiko, Verknüpfungstyp, Richtung und Ziel erneut zu nennen.",
+  "chat.jira.outcome.draftProblem.item-requirements":
+    "hat Anforderungsverweise, die Keiko nicht lesen kann. Bitte Keiko, sie erneut aufzulisten.",
+  "chat.jira.outcome.draftProblem.ref-duplicate":
+    "Zwei Vorgänge haben denselben Namen. Bitte Keiko, jedem Vorgang einen eigenen Namen zu geben.",
+  "chat.jira.outcome.draftProblem.ref-self":
+    "nennt sich selbst als übergeordneten Vorgang oder Verknüpfungsziel. Bitte Keiko, auf einen anderen Vorgang zu verweisen.",
+  "chat.jira.outcome.draftProblem.ref-unknown":
+    "verweist auf einen Vorgang, der nicht im Entwurf steht. Füge ihn dem Entwurf hinzu oder nenne einen vorhandenen Vorgangsschlüssel.",
+  "chat.jira.outcome.draftProblem.ref-cycle":
+    "Die Beziehungen zwischen übergeordneten Vorgängen und Verknüpfungen bilden einen Kreis. Bitte Keiko, jeden übergeordneten Vorgang so zu wählen, dass er nicht von seinem Unterpunkt abhängt.",
+  "chat.jira.outcome.draftItem": "Eintrag {position}",
+  "chat.jira.outcome.draftItemUnknown": "Ein Eintrag",
+  "chat.jira.outcome.draftRefusal.draft-not-found":
+    "Der Entwurf ist nicht mehr verfügbar, deshalb wurde nichts geändert. Bitte Keiko, die Vorgänge neu zu entwerfen.",
+  "chat.jira.outcome.draftRefusal.draft-changed":
+    "Der Entwurf hat sich geändert, seit du ihn geprüft hast. Deshalb wurde nichts geändert. Prüfe den aktuellen Entwurf und gib ihn erneut frei.",
+  "chat.jira.outcome.draftRefusal.connection-changed":
+    "Die Jira-Verbindung hat sich geändert, seit dieser Entwurf erstellt wurde. Deshalb wurde nichts geändert. Erstelle den Entwurf erneut für das aktuelle Jira.",
+  "chat.jira.outcome.itemUnlisted": "Eintrag, der nicht in Ihrer Anfrage stand",
   "chat.jira.outcome.more": "und {count} weitere",
   "chat.jira.outcome.newTab": "(öffnet Jira in einem neuen Tab)",
   "chat.jira.outcome.validation.required-field": "Ein Pflichtfeld in Jira fehlte.",
@@ -2549,9 +2603,21 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Ein Pflichtfeld in Jira kann Keiko nicht befüllen.",
   "chat.jira.outcome.validation.invalid-field":
     "Ein Jira-Feld hatte einen Wert, den Jira nicht annimmt.",
+  "chat.jira.outcome.validation.invalid-epic-link":
+    "Der Epic Link zeigt auf einen Vorgang, der kein Epic ist oder den dieses Konto nicht sehen kann.",
   "chat.jira.outcome.validation.invalid-operation":
     "Die gewünschte Feldänderung ist in Jira nicht möglich.",
   "chat.jira.outcome.validation.bounds-exceeded": "Die Änderung war zu groß für einen Schritt.",
+  "chat.jira.outcome.linksMissing":
+    "Dieser Vorgang wurde schon angelegt, aber nicht alle gewünschten Verknüpfungen sind daran. Es wurde nichts noch einmal gesendet. Ergänze die fehlenden Verknüpfungen in Jira oder bitte Keiko darum.",
+  "chat.jira.outcome.validation.named.required-field":
+    "Das Jira-Feld „{field}“ ist ein Pflichtfeld, aber es wurde kein Wert dafür angegeben.",
+  "chat.jira.outcome.validation.named.unsupported-field":
+    "Das Jira-Feld „{field}“ lässt sich von Keiko aus nicht ausfüllen.",
+  "chat.jira.outcome.validation.named.invalid-field":
+    "Der Wert für das Jira-Feld „{field}“ ist keiner, den Jira akzeptiert.",
+  "chat.jira.outcome.validation.named.invalid-operation":
+    "Diese Änderung ist für das Jira-Feld „{field}“ nicht möglich.",
   "chat.jira.outcome.nothingSent": "Es wurde nichts an Jira gesendet.",
   "chat.jira.outcome.rules": "Nicht erfüllte Vorlagenregeln",
   "chat.jira.outcome.rule.summary-too-short": "Die Zusammenfassung ist zu kurz.",
@@ -2571,13 +2637,20 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Der Vorgang braucht einen übergeordneten Vorgang ({subject}).",
   "chat.jira.outcome.rule.template-unreadable":
     "Die Vorlage „{subject}“ konnte nicht gelesen werden.",
+  "chat.jira.outcome.rule.template-missing":
+    "Für den Vorgangstyp „{subject}“ gibt es keine Vorlage, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere die Vorlage und frage dann erneut.",
+  "chat.jira.outcome.rule.template-not-activated":
+    "Für „{subject}“ gibt es nur Regeln für den Wechsel in einen Status, deshalb wurde nichts angelegt. Öffne Skills, wähle „Aus Projekt vorschlagen“, prüfe und speichere eine Vorlage zum Anlegen und frage dann erneut.",
+  "chat.jira.outcome.rule.template-binding-unresolved":
+    "Die Vorlage „{subject}“ nennt einen Vorgangstyp oder einen Status, den dieses Jira dir nicht zeigt, deshalb wurde nichts geändert. Öffne die Vorlage in Skills, schreibe ihn so, wie dieses Jira ihn dir zeigt, und speichere sie, oder bitte die Autorin oder den Autor, sie gegen Jira zu prüfen. Frage dann erneut.",
+  "chat.jira.outcome.templateNotices":
+    "Die Änderung wurde vorgenommen. Der Vorgang verletzt bereits diese Vorlagenregeln in Feldern, die diese Änderung nicht berührt hat. Bitte Keiko, sie zu beheben, oder korrigiere sie in Jira.",
+  "chat.jira.outcome.failure.releaseScope":
+    "Anhänge gehören nicht zu diesem Release, deshalb wurde in Jira nichts geändert. Beschreibe die Datei stattdessen in einem Kommentar oder füge sie direkt in Jira hinzu.",
   "chat.jira.tool": "Jira-Aktion",
   "chat.jira.catalog.discover": "Jira-Aktionen finden",
   "chat.jira.catalog.describe": "Jira-Aktionen auswählen",
-  "chat.jira.catalog.actions": "Jira-Aktionen",
-  "chat.jira.catalog.read": "Liest Jira",
-  "chat.jira.catalog.write": "Ändert Jira",
-  "chat.jira.catalog.local": "Lokale Vorbereitung",
+  "chat.jira.catalog.found": "Keiko hat nachgesehen, welche Jira-Aktionen passen.",
   "chat.jira.catalog.selected": "Aktionsauswahl aktualisiert",
   "chat.jira.catalog.invalidArguments":
     "Die Jira-Aktionsauswahl war ungültig. Suche verfügbare Aktionen und wähle sie erneut aus.",
@@ -2623,8 +2696,14 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "browserApproval.notice":
     "Verbinde diesen Browser, um private Entwürfe zu speichern und geschützte Funktionen zu verwenden.",
   "browserApproval.launchNotice": "Keiko öffnet ein verbundenes Fenster in diesem Browser.",
+  "browserApproval.restarted":
+    "Keiko wurde neu gestartet, deshalb muss dieser Browser erneut verbunden werden. Ein Klick auf „Browser verbinden“ genügt. Dein geöffneter Chat und sein Entwurf bleiben erhalten. Ein Browser, den du unter Einstellungen → Sicherheit → Browser-Freigaben gemerkt hast, verbindet sich von selbst wieder.",
+  "browserApproval.restartedCompact":
+    "Keiko wurde neu gestartet. Verbinde erneut; Chat und Entwurf bleiben erhalten.",
   "browserApproval.launchFailed":
     "Keiko konnte diesen Browser nicht verbinden. Versuche es erneut oder öffne Keiko über den Starter.",
+  "browserApproval.launchOpenedElsewhere":
+    "Keiko hat die Verbindung in einem neuen Browserfenster oder Tab geöffnet. Falls sie in einem anderen Browser oder Profil erschienen ist, mach dort weiter.",
   "browserApproval.open": "Browser verbinden",
   "browserApproval.description":
     "Gib diesen Browser über einen Browser frei, der bereits mit dieser Keiko-Installation verbunden ist.",
@@ -2737,9 +2816,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
 
   "chat.skills.jira.title": "Jira-Vorlagen",
   "chat.skills.jira.description": "Gelten automatisch für jede Jira-Änderung durch Keiko.",
-  "chat.skills.jira.pod": "Jira-Pod",
+  "chat.skills.jira.pod": "Jira Pod",
   "chat.skills.jira.podRequired":
-    "Verbinde einen bereiten Jira-Pod, um eine Vorlage zu prüfen oder vorzuschlagen.",
+    "Verbinde einen bereiten Jira Pod, um eine Vorlage zu prüfen oder vorzuschlagen.",
   "chat.skills.jira.empty": "Noch keine Vorlagen. Erstelle eine aus einem Jira-Projekt.",
   "chat.skills.jira.invalid": "Muss korrigiert werden",
   "chat.skills.jira.checking": "Wird mit Jira abgeglichen …",
@@ -2761,11 +2840,29 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Mehrere Felder heißen {subject}. Verwende die Feld-ID, um eindeutig zu sein.",
   "chat.skills.jira.finding.unknown-link-type": "Der Verknüpfungstyp {subject} existiert nicht.",
   "chat.skills.jira.finding.unknown-transition-target":
-    "{subject} ist kein Status des Projekts. Ein Übergangsname oder eine ID lässt sich hier nicht prüfen.",
+    "{subject} ist kein Status des Projekts. Ein Übergangsname lässt sich nicht sprachübergreifend verbinden: Nenne den Zielstatus so, wie dieses Jira ihn zeigt, dann gilt die Regel für alle.",
+  "chat.skills.jira.finding.wrong-parent-field":
+    "Das Eltern-Feld verknüpft diesen Vorgangstyp hier nicht mit seinem Elternvorgang: {subject}. Davon betroffene Schreibvorgänge lassen sich nicht erfüllen.",
   "chat.skills.jira.projectKey": "Projektschlüssel",
   "chat.skills.jira.propose": "Aus Projekt vorschlagen",
   "chat.skills.jira.proposeTitle": "Vorlage aus einem Jira-Projekt erstellen",
   "chat.skills.jira.proposing": "Projekt wird gelesen…",
+  "chat.skills.jira.proposalCount":
+    "{types} Vorgangstypen: {proposals} mit Vorschlag, {without} ohne.",
+  "chat.skills.jira.withoutProposalLine": "{issueType}: {reason}",
+  "chat.skills.jira.withoutProposal.nothing-to-learn":
+    "Von diesem Typ gibt es noch keine Vorgänge, aus denen sich etwas ableiten lässt.",
+  "chat.skills.jira.withoutProposal.template-invalid":
+    "Die abgeleitete Vorlage war nicht gültig, deshalb gibt es keinen Vorschlag.",
+  "chat.skills.jira.withoutProposal.jira-unavailable":
+    "Jira hat für diesen Typ nicht geantwortet. Versuch es noch einmal.",
+  "chat.skills.jira.withoutProposal.beyond-limit":
+    "Nicht geprüft: Das Projekt hat mehr Vorgangstypen, als ein Vorschlagslauf abdeckt.",
+  "chat.skills.jira.withoutProposalMore": "und {count} weitere ohne Vorschlag.",
+  "chat.skills.jira.partial.required-fields-unavailable":
+    "Jira hat für die Pflichtfelder dieses Typs nicht geantwortet; prüf sie, bevor du speicherst.",
+  "chat.skills.jira.partial.samples-unavailable":
+    "Jira hat für die Beispielvorgänge dieses Typs nicht geantwortet; prüf die Abschnitte, bevor du speicherst.",
   "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
   "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
   "chat.skills.jira.error":
@@ -2785,6 +2882,34 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Skills konnten nicht aktualisiert werden. Auswahl neu laden und erneut versuchen.",
   "chat.skills.upload": "Markdown hochladen (.md, bis 128 KiB)",
   "chat.skills.retry": "Neu laden",
+  "chat.skills.refusal.template-marker-misplaced":
+    "Die Einstellungen der Vorlage stehen nicht ganz oben in der Datei. Beginne die Datei mit einer Zeile, die nur --- enthält, und setze die Einstellungen direkt darunter.",
+  "chat.skills.refusal.template-not-a-template":
+    "Das ist keine gültige Jira-Vorlage. Setze ihre Einstellungen an den Anfang der Datei, zwischen zwei Zeilen, die nur --- enthalten.",
+  "chat.skills.refusal.template-front-matter-unterminated":
+    "Die Einstellungen am Dateianfang sind nicht abgeschlossen. Füge nach der letzten Einstellung eine Zeile ein, die nur --- enthält.",
+  "chat.skills.refusal.template-malformed-line":
+    "Eine Zeile bei den Einstellungen am Dateianfang ist nicht als „Name: Wert“ geschrieben, zum Beispiel „project: REQ“. Korrigiere diese Zeile.",
+  "chat.skills.refusal.template-unknown-key":
+    "Bei den Einstellungen am Dateianfang steht ein Name, den Keiko nicht kennt. Entferne die Zeile oder korrigiere den Namen.",
+  "chat.skills.refusal.template-duplicate-key":
+    "Dieselbe Einstellung steht zweimal am Dateianfang. Behalte nur eine der beiden Zeilen.",
+  "chat.skills.refusal.template-missing-key":
+    "Am Dateianfang fehlt eine Pflichteinstellung, zum Beispiel project oder issueType. Ergänze sie.",
+  "chat.skills.refusal.template-invalid-value":
+    "Eine Einstellung am Dateianfang hat einen Wert, den Keiko nicht verwenden kann, zum Beispiel eine falsche Zahl oder eine falsch geschriebene Option. Prüfe die Schreibweise.",
+  "chat.skills.refusal.template-limit-exceeded":
+    "Die Vorlage hat zu viele Einträge. Eine Liste darf höchstens {listItems} Einträge haben ({activations} bei activateOn), die Vorlage höchstens {sections} Pflichtabschnitte. Entferne einige.",
+  "chat.skills.refusal.template-unsafe-pattern":
+    "Ein Prüfmuster (der Suchausdruck, gegen den eine Regel einen Text prüft) ist zu kompliziert oder nutzt etwas, das Keiko nicht unterstützt. Nimm ein kürzeres, einfacheres Muster oder schreibe den Text ohne Muster.",
+  "chat.skills.refusal.template-no-rules":
+    "Die Vorlage verlangt noch nichts. Ergänze mindestens eine Regel, zum Beispiel einen Pflichtabschnitt.",
+  "chat.skills.refusal.text-empty":
+    "Die Datei enthält noch keinen Text. Schreibe etwas und speichere erneut.",
+  "chat.skills.refusal.text-control-characters":
+    "Der Text enthält Zeichen, die Keiko nicht speichern kann. Entferne sie und speichere erneut.",
+  "chat.skills.refusal.line": "Schau dir Zeile {line} an.",
+  "chat.skills.refusal.kept": "Dein Text bleibt im Editor erhalten.",
   "chat.skills.loading": "Skills werden geladen…",
   "chat.skills.empty": "Noch keine Chat-Skills.",
   "chat.skills.fileError": "Wähle eine nicht leere .md-Datei mit maximal 128 KiB.",
@@ -2814,6 +2939,22 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.useInChat": "In diesem Chat verwenden",
   "chat.skills.jira.proposeDescription":
     "Keiko liest aktuelle Vorgänge eines Projekts und schlägt je Vorgangstyp eine Vorlage vor. Jede öffnet sich zur Prüfung im Editor, bevor du sie speicherst.",
+  "chat.skills.jira.bind": "Mit diesem Jira verbinden",
+  "chat.skills.jira.binding": "Verbinde…",
+  "chat.skills.jira.bound": "Mit dem Vorgangstyp „{issueType}“ dieses Jiras verbunden.",
+  "chat.skills.jira.boundParents":
+    "Mit dem Vorgangstyp „{issueType}“ und {count} erlaubten übergeordneten Typen dieses Jiras verbunden.",
+  "chat.skills.jira.validBound": "Passt zu Jira und ist mit dessen Vorgangstypen verbunden.",
+  "chat.skills.jira.bindOffer":
+    "Passt zu Jira nur über den Namen. Verbinde sie, damit sie auch für Kolleginnen und Kollegen gilt, die Jira in einer anderen Sprache nutzen.",
+  "chat.skills.jira.bindAmbiguous":
+    "Mehrere Vorgangstypen heißen in diesem Jira „{subject}“, deshalb kann die Vorlage nicht verbunden werden.",
+  "chat.skills.jira.bindFailed":
+    "Die Vorlage konnte gerade nicht verbunden werden. Versuche es noch einmal.",
+  "chat.skills.jira.sharedType":
+    "Eine weitere Vorlage gilt auch für diesen Vorgangstyp: Jede Änderung muss beide erfüllen.",
+  "chat.skills.jira.bindDead":
+    "Diese Vorlage ist mit einem Vorgangstyp verbunden, den es in diesem Projekt nicht mehr gibt („{subject}“), deshalb gilt sie für nichts und blockiert nichts. Ändere den Vorgangstyp oder lösche die Vorlage.",
   "chat.skills.jira.openProposal": "Im Editor öffnen",
   "agentLauncher.agent": "Agent",
   "agentLauncher.agentCount": "{count} Agenten",
@@ -3114,6 +3255,45 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Der Pull wurde abgeschlossen, aber Editor-Puffer müssen wiederhergestellt werden. Prüfen Sie offene Dateien, bevor Sie fortfahren.",
   "chat.turn.failed": "Beitrag fehlgeschlagen",
   "chat.turn.cancelled": "Beitrag abgebrochen",
+  "chat.claimNotice.label": "Hinweis von Keiko",
+  "chat.claimNotice.noJiraCreate": "In diesem Durchgang wurde kein Jira-Vorgang angelegt.",
+  "chat.claimNotice.toolCallNotExecuted":
+    "Ein als Text geschriebener Tool-Aufruf in dieser Antwort wurde nicht ausgeführt.",
+  "chat.turnEnd.lead": "Diese Anfrage wurde nicht abgeschlossen.",
+  "chat.turnEnd.reason.budgetExhausted":
+    "In diesem Durchgang wurde das Limit für Aktionen erreicht.",
+  "chat.turnEnd.reason.deadline": "Die Zeit für diesen Durchgang ist abgelaufen.",
+  "chat.turnEnd.reason.authorityInvalid":
+    "Der Modus, die Quellen oder die Verbindung des Chats haben sich geändert.",
+  "chat.turnEnd.reason.authenticationFailed":
+    "Die Anmeldung bei Jira ist fehlgeschlagen. Das Zugangs-Token ist möglicherweise abgelaufen oder wurde widerrufen. Öffne das Fenster Lokales Wissen, ersetze das Token am Jira Pod und verifiziere die Verbindung.",
+  "chat.turnEnd.reason.toolFailure": "Eine Aktion konnte nicht abgeschlossen werden.",
+  "chat.turnEnd.reason.outputExhausted": "Das Modell hat sein Ausgabelimit erreicht.",
+  "chat.turnEnd.reason.contextOverflow":
+    "Die Unterhaltung passt nicht mehr in das Kontextfenster des Modells.",
+  "chat.turnEnd.reason.toolNotOffered":
+    "Das Modell hat eine Aktion angefordert, die in diesem Chat nicht verfügbar ist. Frag noch einmal oder nenne die gewünschte Aktion.",
+  "chat.turnEnd.reason.modelFailure": "Die Anfrage an das Modell ist fehlgeschlagen.",
+  "chat.turnEnd.completed": "In diesem Durchgang erledigt:",
+  "chat.turnEnd.unconfirmed":
+    "Gesendet, aber nicht bestätigt — prüfe das in Jira, bevor du es erneut versuchst:",
+  "chat.turnEnd.unsettled":
+    "Gestartet, aber nicht abgeschlossen — prüfe das in Jira, bevor du es erneut versuchst:",
+  "chat.turnEnd.notDone":
+    "Nicht erledigt — von Jira abgelehnt, durch einen früheren Eintrag blockiert oder nicht rechtzeitig gestartet:",
+  "chat.turnEnd.itemWithoutKey": "(Eintrag {item}, ohne Schlüssel)",
+  "chat.turnEnd.state.created": "angelegt",
+  "chat.turnEnd.state.existing": "vorhanden",
+  "chat.turnEnd.state.failed": "fehlgeschlagen",
+  "chat.turnEnd.state.uncertain": "unsicher",
+  "chat.turnEnd.state.skipped": "übersprungen",
+  "chat.turnEnd.state.excluded": "ausgeschlossen",
+  "chat.turnEnd.state.pending": "ausstehend",
+  "chat.turnEnd.more": "…und {count} weitere.",
+  "chat.turnEnd.counts":
+    "Lesezugriffe abgeschlossen: {reads}. Abgelehnte oder fehlgeschlagene Aktionen: {refused}.",
+  "chat.turnEnd.footer":
+    "Der Rest der Anfrage wurde nicht erledigt. Schick eine weitere Nachricht, um hier weiterzumachen; abgeschlossene Schreibvorgänge werden nicht wiederholt, außer du verlangst sie erneut.",
   "chat.contextWindow.label": "Hinweis zum Kontextfenster",
   "chat.contextWindow.notice":
     "Der sichtbare Verlauf enthält {count} Beiträge. Kontext jenseits der Grenze von 48 Beiträgen kann komprimiert werden.",
@@ -4186,7 +4366,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.segment.tools": "Werkzeugdefinitionen",
   "chat.context.connectors": "Konnektoren",
   "chat.context.connector.mcp": "MCP-Server",
-  "chat.context.connector.jira": "Jira-Pod",
+  "chat.context.connector.jira": "Jira Pod",
   "chat.context.connector.knowledge": "Knowledge Pods",
   "chat.context.connector.idle": "Nicht verbunden",
   "chat.context.connector.tools": "{count} Werkzeuge",
@@ -4610,6 +4790,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.model.unavailable": "Modellliste nicht verfügbar",
   "chat.model.noEligible": "Kein dialogfähiges Modell",
   "chat.model.change": "Modell wechseln",
+  "chat.model.checking": "{model} wird geprüft…",
+  "chat.model.notReady":
+    "{model} ist nicht bereit. Wähle ein anderes Modell oder prüfe es unter Einstellungen > Modelle.",
   "chat.noModelAlert":
     "Derzeit ist kein dialogfähiges Modell verfügbar. Prüfe den Gateway- und Modellstatus in den Einstellungen.",
   "chat.loadingGateway": "Verbindung zum Gateway wird hergestellt…",
@@ -4618,6 +4801,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.send.noModel": "Kein Modell verfügbar",
   "chat.send.connecting": "Gateway wird verbunden",
   "chat.send.cancel": "Antwort abbrechen",
+  "chat.send.running": "Senden ist nicht möglich, solange eine Antwort läuft",
+  "chat.send.runningHint":
+    "Deine nächste Nachricht kann gesendet werden, sobald diese Antwort fertig ist – oder brich die Antwort zuerst ab.",
   "chat.send.statusQueued": "Nachricht wird gesendet…",
   "chat.send.statusContacting": "Antwort wird vorbereitet…",
   "chat.send.statusAwaitingDecision": "Deine Entscheidung steht aus",
@@ -4632,15 +4818,19 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.voice.batchFinish": "Sprechen beenden",
   "chat.voice.batchMode":
     "Digital Twin: Sprich, um Keiko zu unterbrechen, oder nutze die Taste Unterbrechen.",
+  "chat.error.modelCheckCooldown":
+    "Das gewählte Modell hat vor einem Moment nicht geantwortet. Warte kurz und versuche es erneut, oder wähle ein anderes Modell.",
+  "chat.error.modelChecking":
+    "Das gewählte Modell wird noch geprüft. Warte, bis es antwortet, und sende dann erneut.",
+  "chat.error.modelNotReady":
+    "Das gewählte Modell hat seine Prüfung nicht bestanden, deshalb wurde nichts gesendet. Wähle ein anderes Modell oder prüfe es unter Einstellungen > Modelle und versuche es erneut.",
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
   "chat.error.memoryUpdate": "Speicher konnte nicht aktualisiert werden.",
-  "chat.grounding.dataLabel": "Datenquellen",
-  "chat.grounding.noDataSources": "Keine Datenquellen",
-  "chat.grounding.dataCatalogEmpty": "Keine einsatzbereiten Daten-Pods oder Pod-Sets verfügbar.",
   "chat.grounding.label": "Wissensquellen",
   "chat.grounding.mode": "Grounding-Modus",
   "chat.grounding.strategy": "Strategie",
+  "chat.grounding.jiraOnly": "Nur Jira Pod",
   "chat.grounding.modelOnly": "Nur Modell",
   "chat.grounding.liveFiles": "Live-Dateikontext",
   "chat.grounding.liveFilesUnavailableHint":
@@ -5116,6 +5306,22 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Gerade geprüft. Keiko kann die Update-Download-Informationen weiterhin nicht prüfen.",
   "updates.check.portableSetupRequired":
     "Gerade geprüft. Portable Setup ist weiterhin erforderlich, bevor App-interne Updates funktionieren können.",
+  "updates.status.portableVolume.notLocal": "Nicht auf einem lokalen Laufwerk",
+  "updates.status.portableVolume.unverified": "Installationsordner nicht geprüft",
+  "updates.check.portableVolume.notLocal":
+    "Gerade geprüft. Keiko ist nicht auf einem lokalen Laufwerk installiert und kann sich deshalb nicht selbst aktualisieren.",
+  "updates.check.portableVolume.unverified":
+    "Gerade geprüft. Keiko konnte seinen Installationsordner nicht prüfen; versuch es gleich noch einmal.",
+  "updates.portableVolume.notLocal.title": "Keiko ist nicht auf einem lokalen Laufwerk installiert",
+  "updates.portableVolume.notLocal.body":
+    "Keiko liegt in einem Netzwerkordner oder einem umgeleiteten Ordner. App-interne Updates funktionieren nur von der eigenen Festplatte dieses Computers.",
+  "updates.portableVolume.notLocal.action":
+    "Installiere Keiko auf einem lokalen Laufwerk dieses Computers und prüfe dann erneut.",
+  "updates.portableVolume.unverified.title": "Keiko konnte seinen Installationsordner nicht prüfen",
+  "updates.portableVolume.unverified.body":
+    "Windows hat gerade zu langsam geantwortet. App-interne Updates pausieren, bis die Prüfung gelingt.",
+  "updates.portableVolume.unverified.action":
+    "Versuch es gleich noch einmal. Wenn es so bleibt, starte Keiko neu.",
   "updates.check.portableExternallyManaged":
     "Gerade geprüft. Diese Installation wird weiterhin außerhalb von Keiko verwaltet, daher sind App-interne Updates nicht verfügbar.",
   "updates.check.policyDisabled":
@@ -5482,7 +5688,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.verify.ok.copy": "Die Anmeldeinformation wurde erfolgreich authentifiziert.",
   "atlassianConnectors.verify.auth-failed.label": "Authentifizierung fehlgeschlagen",
   "atlassianConnectors.verify.auth-failed.copy":
-    "Prüfe das Konto und das Token. Prüfe die Verbindung danach erneut.",
+    "Das Token wurde abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden. Erstelle in Jira ein neues Token, ersetze es hier und verifiziere erneut.",
+  "atlassianConnectors.verify.auth-unverified.label": "Nicht bestätigt",
+  "atlassianConnectors.verify.auth-unverified.copy":
+    "Die Antwort stammt nicht von Jira selbst, zum Beispiel weil ein Anmelde-Proxy oder eine Sicherheitsprüfung geantwortet hat. Das Token wurde nicht abgelehnt und nichts wurde geändert. Melde dich erneut an oder versuche es später noch einmal; das Token kannst du jederzeit ersetzen.",
   "atlassianConnectors.verify.forbidden.label": "Zugriff verweigert",
   "atlassianConnectors.verify.forbidden.copy":
     "Atlassian hat den Zugriff verweigert. Prüfe die Kontoberechtigungen sowie Einschränkungen der Website oder Lizenz. Prüfe die Verbindung danach erneut.",
@@ -5500,10 +5709,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Adresse lieferte keine gültige Atlassian-JSON-Antwort. Prüfe die Adresse und das Anmelde-Gateway.",
   "atlassianConnectors.verify.unsupported-version.label": "Jira-Version nicht unterstützt",
   "atlassianConnectors.verify.unsupported-version.copy":
-    "Jira meldet eine nicht unterstützte Bereitstellung oder Version oder widersprüchliche Versionsangaben. Prüfe die Adresse und den REST-v2-Zugriff auf Jira Server oder Data Center ab Version 10.3 und verifiziere erneut.",
+    "Keiko benötigt Jira Data Center ab Version 10.3.0. Jira meldet eine ältere oder nicht unterstützte Version oder widersprüchliche Versionsangaben. Aktualisiere Jira auf 10.3.0 oder neuer oder gib die Adresse einer unterstützten Instanz ein und verifiziere erneut.",
   "atlassianConnectors.verify.tls-failed.label": "Zertifikatsprüfung fehlgeschlagen",
   "atlassianConnectors.verify.tls-failed.copy":
-    "Prüfe Gültigkeit, Hostname und vertrauenswürdige Zertifizierungsstelle.",
+    "Keiko vertraut diesem Zertifikat nicht. Prüfe Gültigkeit und Hostname. Setze bei einer privaten Zertifizierungsstelle KEIKO_CA_BUNDLE_PATH auf deren PEM-Datei, starte Keiko neu und verifiziere erneut. Schalte die Zertifikatsprüfung niemals ab.",
   "atlassianConnectors.scope.confluenceLabel": "Confluence-Bereichsschlüssel",
   "atlassianConnectors.scope.confluencePlaceholder": "z. B. ENG",
   "atlassianConnectors.scope.jiraLabel": "Jira-Projektschlüssel",
@@ -5546,6 +5755,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.sync.change.failedItems": "Fehlgeschlagen",
   "atlassianConnectors.sync.change.deniedItems": "Verweigert",
   "atlassianConnectors.sync.degradedTitle": "Einige Elemente konnten nicht synchronisiert werden",
+  "atlassianConnectors.sync.reason.auth-unverified":
+    "Jira konnte gerade nicht geprüft werden. Die Verbindung bleibt unverändert. Versuche es gleich noch einmal.",
   "atlassianConnectors.sync.reason.auth-failed":
     "Authentifizierung fehlgeschlagen. Prüfen Sie die Connector-Anmeldeinformation erneut.",
   "atlassianConnectors.sync.reason.permission-denied":
@@ -5637,7 +5848,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Jira-Fortschritts-, Konformitäts- und Abdeckungsbericht berechnen",
   "atlassianConnectors.action.jira.draft-stage": "Teil eines Jira-Backlog-Entwurfs vorbereiten",
   "atlassianConnectors.action.jira.draft-batch": "Jira-Vorgänge aus Anforderungen entwerfen",
-  "chat.jira.report.estimateField": "Schätzfeld: {name} ({id})",
+  "chat.jira.report.estimateField": "Schätzfeld: {name}",
   "chat.jira.report.estimateUnavailable": "Schätzung nicht verfügbar: {reason}",
   "chat.jira.report.estimateReason.project-not-specified": "kein Projekt angegeben",
   "chat.jira.report.estimateReason.field-not-found":
@@ -5647,7 +5858,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.report.estimateReason.metadata-unavailable":
     "die Schätzkonfiguration des Projekts konnte nicht gelesen werden",
   "chat.jira.report.figures":
-    "Die Zahlen berechnet Keiko aus den gelesenen Jira-Daten, nicht das Modell.",
+    "Keiko berechnet die Zahlen aus den gelesenen Jira-Daten, nicht das Modell.",
   "chat.jira.report.reading": "Jira wird gelesen: {read} von {total} Vorgängen",
   "chat.jira.report.readingUnknown": "Jira wird gelesen: {read} Vorgänge",
   "chat.jira.report.complete": "Vollständig: {read} Vorgänge gelesen",
@@ -5668,6 +5879,18 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.report.donePercent": "{percent} % erledigt",
   "chat.jira.report.compliance":
     "{issues} von {checked} Vorgängen weichen ab ({count} Abweichungen)",
+  "chat.jira.report.templateNone":
+    "Kein Vorgang wurde gegen eine Vorlage geprüft: Für {types} gibt es keine Vorlage.",
+  "chat.jira.report.templatePartial":
+    "{checked} von {total} Vorgängen wurden gegen eine Vorlage geprüft, {without} nicht: Für {types} gibt es keine Vorlage.",
+  "chat.jira.report.templateNoneUnnamed": "Kein Vorgang wurde gegen eine Vorlage geprüft.",
+  "chat.jira.report.templatePartialUnnamed":
+    "{checked} von {total} Vorgängen wurden gegen eine Vorlage geprüft, {without} nicht.",
+  "chat.jira.report.requiredFieldsPartial":
+    "Pflichtfelder wurden nur für einen Teil der Vorgangstypen geprüft.",
+  "chat.jira.report.requiredFieldsUnavailable": "Pflichtfelder konnten nicht geprüft werden.",
+  "chat.jira.report.requiredFieldsClean":
+    "Pflichtfelder: {judged} Vorgänge geprüft, keine Abweichung.",
   "chat.jira.report.coverage":
     "{epics} Epics ohne Inhalt, {orphans} Vorgänge ohne Epic oder übergeordneten Vorgang",
   "chat.jira.report.coverageUnobserved":
@@ -5704,6 +5927,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.result.succeededTarget": "Ergebnis: {target}",
   "atlassianConnectors.result.failedTitle": "Aktion fehlgeschlagen",
   "atlassianConnectors.result.reason.auth-failed": "Authentifizierung fehlgeschlagen.",
+  "atlassianConnectors.result.reason.auth-unverified":
+    "Jira konnte gerade nicht geprüft werden. Die Verbindung bleibt unverändert. Versuche es gleich noch einmal.",
+  "atlassianConnectors.live.compatibilityMissing":
+    "Für diesen Jira Pod sind noch keine Kompatibilitätsangaben gespeichert. Verifiziere die Verbindung erneut, um sie zu erhalten; es wird keine Berechtigung hinzugefügt.",
   "atlassianConnectors.result.reason.permission-denied": "Berechtigung verweigert.",
   "atlassianConnectors.result.reason.not-found": "Das Ziel existiert nicht mehr.",
   "atlassianConnectors.result.reason.rate-limited": "Atlassian hat die Anfrage gedrosselt.",

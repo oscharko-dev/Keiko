@@ -40,12 +40,14 @@ vi.mock("../testing/jira-chat-lab/lab-client.mjs", () => ({
 const {
   createSelectionObjects,
   orphanedIssues,
+  ownedSubtask,
   removeNative,
   scopeSnapshot,
   selectionNames,
   strayWrites,
 } = await import("../testing/jira-chat-lab/catalog-selection-objects.mjs");
-const { SELECTION_CASES } = await import("../testing/jira-chat-lab/catalog-selection-cases.mjs");
+const { LANGUAGE_SELECTION_CASES, SELECTION_CASES } =
+  await import("../testing/jira-chat-lab/catalog-selection-cases.mjs");
 
 describe("removeNative", () => {
   beforeEach(() => {
@@ -182,6 +184,18 @@ describe("scopeSnapshot content", () => {
     }
     reads.set(`${issue("K-1")}/comment`, { comments: [{ id: "5", body: "first" }] });
     reads.set(`${issue("K-2")}/comment`, { comments: [] });
+  });
+
+  it("does not count the sub-task a create case adds under an owned issue as a stray write", async () => {
+    reads.set(`${issue("K-1")}?`, { fields: { summary: "K-1", subtasks: [] } });
+    const before = await scopeSnapshot({}, { project: "KEIKO" }, created);
+    reads.set(`${issue("K-1")}?`, { fields: { summary: "K-1", subtasks: [{ key: "K-9" }] } });
+    const after = await scopeSnapshot({}, { project: "KEIKO" }, created);
+    expect(strayWrites(before, after, [], "Auswahl t")).toMatchObject({ issueChanged: 0 });
+    // Any other change of the owned issue's fields is still a stray write.
+    reads.set(`${issue("K-1")}?`, { fields: { summary: "other", subtasks: [{ key: "K-9" }] } });
+    const edited = await scopeSnapshot({}, { project: "KEIKO" }, created);
+    expect(strayWrites(before, edited, [], "Auswahl t")).toMatchObject({ issueChanged: 1 });
   });
 
   it("sees an edited comment and a removed agile object as stray writes", async () => {
@@ -408,5 +422,63 @@ describe("owned read truths", () => {
     const values = Array.from({ length: 26 }, (_, index) => ({ name: `Board ${index}` }));
     reads.set(path, { values: [...values, { name: selection.boardName }] });
     await expect(truth("boards")).rejects.toThrow("exceeds one tool page");
+  });
+});
+
+describe("ownedSubtask (#4369: a second issue type for the restricted search)", () => {
+  beforeEach(() => {
+    requests.length = 0;
+    reads.clear();
+    creations.clear();
+  });
+
+  it("creates a Sub-task of the project's own Sub-task type under the named parent", async () => {
+    reads.set("/rest/api/2/project/KEIKO", {
+      issueTypes: [
+        { id: "10002", name: "Task", subtask: false },
+        { id: "10003", name: "Sub-task", subtask: true },
+      ],
+    });
+    creations.set("/rest/api/2/issue", { key: "KEIKO-90" });
+    const key = await ownedSubtask(
+      {},
+      { project: "KEIKO", requiredFieldId: "customfield_1" },
+      "S",
+      "KEIKO-5",
+    );
+    expect(key).toBe("KEIKO-90");
+    const sent = requests.find(
+      (entry) => entry.method === "POST" && entry.path === "/rest/api/2/issue",
+    );
+    expect(sent.body.fields).toMatchObject({
+      project: { key: "KEIKO" },
+      issuetype: { id: "10003" },
+      parent: { key: "KEIKO-5" },
+      summary: "S",
+      customfield_1: "Synthetic required value",
+    });
+  });
+
+  it("refuses a project without a Sub-task type and an identity that is no issue key", async () => {
+    reads.set("/rest/api/2/project/KEIKO", {
+      issueTypes: [{ id: "10002", name: "Task", subtask: false }],
+    });
+    await expect(ownedSubtask({}, { project: "KEIKO" }, "S", "KEIKO-5")).rejects.toThrow(
+      "no Sub-task type",
+    );
+    reads.set("/rest/api/2/project/KEIKO", { issueTypes: [{ id: "10003", subtask: true }] });
+    creations.set("/rest/api/2/issue", { key: "not a key" });
+    await expect(ownedSubtask({}, { project: "KEIKO" }, "S", "KEIKO-5")).rejects.toThrow(
+      "Invalid owned selection sub-task",
+    );
+  });
+
+  it("the search-by-type case prepares one and owns it for the cleanup", async () => {
+    reads.set("/rest/api/2/project/KEIKO", { issueTypes: [{ id: "10003", subtask: true }] });
+    creations.set("/rest/api/2/issue", { key: "KEIKO-91" });
+    const entry = LANGUAGE_SELECTION_CASES.find((candidate) => candidate.id === "search-by-type");
+    const fixture = { project: "KEIKO", selection: { issueKey: "KEIKO-5", extraIssueKeys: [] } };
+    expect(await entry.prepare({}, fixture, "tag")).toEqual({ key: "KEIKO-91" });
+    expect(fixture.selection.extraIssueKeys).toEqual(["KEIKO-91"]);
   });
 });

@@ -254,7 +254,9 @@ export async function admitAgilePlanning(
   input: PlanningInput,
   source: JiraIssueTemplateSource | undefined,
 ): Promise<PlanningObservation<PlanningAdmission>> {
-  const actor = await readSavedActor(requests.issue, input.expectedActorKey);
+  const actor = await readSavedActor(requests.issue, input.expectedActorKey, {
+    beforeEffect: true,
+  });
   if (!actor.ok) return actor;
   const board = await boardAdmission(requests, input);
   if (board !== undefined) return board;

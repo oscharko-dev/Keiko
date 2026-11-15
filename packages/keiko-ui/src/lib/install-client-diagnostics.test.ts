@@ -1433,6 +1433,22 @@ it("posts the knowledge catalog counts on the wire and spends the routine budget
   expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
 });
 
+it("posts a catalog refresh report on the wire and spends the routine budget (#4371)", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const knowledgeCatalogRefresh = { outcome: "ok", duration: "5s-10s" } as const;
+  for (let index = 1; index <= 25; index += 1) {
+    fanOutClientDiagnostic("Keiko knowledge catalog refresh settled.", {
+      correlationId: "ui_catalog-refresh-0001",
+      knowledgeCatalogRefresh,
+    });
+  }
+  expect(lastPostedBody(fetchMock)).toMatchObject({ knowledgeCatalogRefresh });
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+});
+
 // #3876 review: a restored coding run reports where its messages went as counts. It is routine
 // evidence: it reaches the wire as its own closed report and never spends the failure budget.
 it("posts a restored coding run's counts on the wire and spends the routine budget", () => {

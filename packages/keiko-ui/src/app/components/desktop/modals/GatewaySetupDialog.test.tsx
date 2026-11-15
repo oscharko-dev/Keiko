@@ -496,6 +496,31 @@ describe("GatewaySetupDialog", () => {
     );
   });
 
+  it("says plainly that a model kept without a verdict is not verified and what to do", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "slow-default",
+      testedModelIds: [],
+      unverifiedChatModelIds: ["slow-default", "would-answer"],
+      providerCount: 2,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent(/not verified as chat models: slow-default, would-answer/i);
+    expect(status).toHaveTextContent(/Choose one in Chat or the Coding Workbench to check it/i);
+    expect(status).toHaveTextContent(/verify it in Settings > Models/i);
+  });
+
   it("exposes an optional Figma access token field in gateway setup", () => {
     render(<GatewaySetupDialog />);
 

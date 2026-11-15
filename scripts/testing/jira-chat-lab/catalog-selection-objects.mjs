@@ -30,7 +30,7 @@ async function projectObjects(session, fixture, created) {
   created.versionId = String(version.id);
 }
 
-async function ownedIssue(session, fixture, summary) {
+export async function ownedIssue(session, fixture, summary) {
   const issue = await write(session, "admin", "POST", "/rest/api/2/issue", {
     fields: {
       project: { key: fixture.project },
@@ -48,12 +48,49 @@ async function ownedIssue(session, fixture, summary) {
   return String(issue.key);
 }
 
+/**
+ * An owned Sub-task of the project (an issue of a type other than Task), created under `parentKey`; the
+ * restricted reads of the lane need one so that a search which names no type is told apart from one that
+ * does (#4369: all 34 issues of the fixture project were Tasks, so the case could not discriminate).
+ */
+export async function ownedSubtask(session, fixture, summary, parentKey) {
+  const project = await checked(
+    session,
+    "catalog-selection-fixture",
+    "GET",
+    `/rest/api/2/project/${encodeURIComponent(fixture.project)}`,
+    basicAuth(session, "admin"),
+  );
+  const subtask = (project.issueTypes ?? []).find((type) => type.subtask === true);
+  if (subtask === undefined) throw new TypeError("The fixture project has no Sub-task type");
+  const issue = await write(session, "admin", "POST", "/rest/api/2/issue", {
+    fields: {
+      project: { key: fixture.project },
+      issuetype: { id: String(subtask.id) },
+      parent: { key: parentKey },
+      summary,
+      description: "Synthetic Keiko laboratory data. No customer content.",
+      ...(fixture.requiredFieldId === undefined
+        ? {}
+        : { [fixture.requiredFieldId]: "Synthetic required value" }),
+    },
+  });
+  if (!/^[A-Z][A-Z0-9]+-\d+$/u.test(String(issue.key)))
+    throw new TypeError("Invalid owned selection sub-task identity");
+  return String(issue.key);
+}
+
 async function issueObjects(session, created, tag) {
   const issue = `/rest/api/2/issue/${encodeURIComponent(created.issueKey)}`;
   const link = await write(session, "admin", "POST", `${issue}/remotelink`, {
     object: { url: `https://example.invalid/selection/${tag}`, title: created.remoteLinkTitle },
   });
   created.remoteLinkId = String(link.id);
+  // The api actor writes the comment, so the update case needs only its own comment grant.
+  const comment = await write(session, "api", "POST", `${issue}/comment`, {
+    body: created.commentBody,
+  });
+  created.commentId = String(comment.id);
   await write(
     session,
     "admin",
@@ -126,6 +163,9 @@ export function selectionNames(_fixture, tag) {
     versionName: `Auswahl Version ${tag}`,
     remoteLinkTitle: `Auswahl Link ${tag}`,
     propertyKey: `keiko.selection.owned.${tag}`,
+    commentBody: `Auswahl Kommentar ${tag}`,
+    // Issues a delete case creates for itself, so a failed run still removes them.
+    extraIssueKeys: [],
     filterName: `Auswahl Favorit ${tag}`,
     boardName: `Auswahl Board ${tag}`,
     sprintName: `Auswahl Sprint ${tag}`,
@@ -198,6 +238,8 @@ const VOLATILE_FIELDS = new Set([
   "watches",
   "votes",
   "issuelinks",
+  // A Sub-task created under an owned issue lists itself there: the create case's own effect.
+  "subtasks",
   "worklog",
   "comment",
   "timespent",
@@ -544,24 +586,38 @@ function changedRow(previous, row) {
  * removals the lane may run (owned objects, or objects carrying `marker`), `foreign` counts added
  * objects the lane does not own and leaves in place, `changed` objects whose label or update stamp
  * changed, `removed` objects that disappeared, and `issueChanged` a change to an owned issue's
- * fields. Changes and removals are counted but cannot be undone by the lane.
+ * fields. Changes and removals are counted but cannot be undone by the lane. `effects` names the
+ * object paths the case itself is expected to change (`changed`) or delete (`removed`).
  */
-export function strayWrites(before, after, expected, marker) {
+export function strayWrites(before, after, expected, marker, effects = {}) {
+  const expectedRemoved = new Set(effects.removed ?? []);
+  const { remove, foreign, changed } = classifyRows(before, after, expected, marker, effects);
+  // The case's own removal of an object that already existed is its effect, not a stray.
+  const removed = [...before.objects.keys()].filter(
+    (path) => !after.objects.has(path) && !expectedRemoved.has(path),
+  ).length;
+  const issueChanged = before.issueState === after.issueState ? 0 : 1;
+  const count = remove.length + foreign + changed + removed + issueChanged;
+  return { remove, foreign, changed, removed, issueChanged, count };
+}
+
+/** Added and changed objects: what the lane may remove, what it leaves, what it only counts. */
+function classifyRows(before, after, expected, marker, effects) {
   const expectedKeys = new Set(expected.map(removalKey));
+  const expectedChanged = new Set(effects.changed ?? []);
   const remove = [];
   let foreign = 0;
   let changed = 0;
   for (const [path, row] of after.objects) {
     const previous = before.objects.get(path);
-    if (previous !== undefined) changed += changedRow(previous, row) ? 1 : 0;
-    else if (expectedKeys.has(path)) continue;
+    if (previous !== undefined) {
+      // The case's own change of an existing object (an updated comment) is its effect.
+      changed += changedRow(previous, row) && !expectedChanged.has(path) ? 1 : 0;
+    } else if (expectedKeys.has(path)) continue;
     else if (row.owned || row.label.includes(marker)) remove.push(row.removal ?? path);
     else foreign += 1;
   }
-  const removed = [...before.objects.keys()].filter((path) => !after.objects.has(path)).length;
-  const issueChanged = before.issueState === after.issueState ? 0 : 1;
-  const count = remove.length + foreign + changed + removed + issueChanged;
-  return { remove, foreign, changed, removed, issueChanged, count };
+  return { remove, foreign, changed };
 }
 
 /** Removes the run's owned objects; a partially created set removes what exists. */
@@ -587,6 +643,9 @@ export async function removeSelectionObjects(session, created) {
     ...optional(
       created.linkTargetKey,
       `/rest/api/2/issue/${encodeURIComponent(created.linkTargetKey)}?deleteSubtasks=true`,
+    ),
+    ...(created.extraIssueKeys ?? []).map(
+      (key) => `/rest/api/2/issue/${encodeURIComponent(key)}?deleteSubtasks=true`,
     ),
   ]);
   await attempt(

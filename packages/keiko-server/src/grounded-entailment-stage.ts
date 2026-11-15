@@ -324,6 +324,10 @@ function entailmentOptionsFor(deps: UiHandlerDeps): EntailmentOptions {
       DEFAULT_ENTAILMENT_OPTIONS.maxExcerptChars,
       currentGroundingLimits(deps).maxExcerptChars,
     ),
+    // Read when the answer is judged, not when the stage is built: the report settles in between.
+    get supplementalEvidence(): readonly string[] {
+      return deps.chatToolTurn?.reportEvidence ?? [];
+    },
   };
 }
 

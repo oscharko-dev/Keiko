@@ -398,6 +398,15 @@ describe("AC9 current Chat result cards", () => {
     ["raw JSON", { body: '{"items":[{"key":"LIM7-1"}]}' }],
     ["prefixed JSON", { body: 'Further details\n{"secret":1}' }],
     ["multiple JSON blocks", { body: 'First {"secret":1} then [1,2]' }],
+    ["wiki heading", { body: "h2. Ziel\nDas Ziel ist klar." }],
+    ["wiki code macro", { body: "Before {code:java}int a;{code} after" }],
+    ["wiki table row", { body: "||Name||Value||" }],
+    ["wiki body table row", { body: "|alpha|1|" }],
+    ["wiki bullet line", { body: "Scope\n* first point" }],
+    ["wiki bold", { body: "an *important* point" }],
+    ["wiki labelled link", { body: "see [the guide|https://docs.example.test/g]" }],
+    ["wiki bare web link", { body: "see [https://docs.example.test/g]" }],
+    ["wiki monospace", { body: "set {{config.json}} first" }],
     ["English fallback", { body: "A readable view of this result is unavailable." }],
     ["German fallback", { body: "Für dieses Ergebnis ist keine lesbare Ansicht verfügbar." }],
     ["empty heading", { title: "" }],
@@ -409,6 +418,15 @@ describe("AC9 current Chat result cards", () => {
     expect(result).toMatchObject({ status: "red", detail: "cards-readability-failed" });
     expect(f.page.reload).not.toHaveBeenCalled();
     expect(f.listeners.size).toBe(0);
+  });
+  it("accepts ordinary prose that only resembles markup", async () => {
+    const f = fixture();
+    f.state.cards = [
+      card("LIM7-1", {
+        body: "Retention is 2 * 3 days, [optional] items, (a|b), a_b_c, [ok|fail], [~jdoe], -old- and {{open *unclosed.",
+      }),
+    ];
+    expect((await assertCardsReadable(f.ctx, { reload: true })).status).toBe("green");
   });
   it("reads a report card whose read status is a second direct output", async () => {
     const f = fixture();

@@ -1,3 +1,5 @@
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { CODING_JIRA_SERVER_NAME } from "./codingJiraPodBinding.js";
 import {
   bindNativeMcpHumanTurn,
   type NativeMcpMutationJournal,
@@ -45,6 +47,7 @@ import {
 } from "./nativeBuildSettings.js";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  CodingWorkbenchNativeJiraWriteReview,
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
   CodingWorkbenchActionClass,
@@ -302,7 +305,8 @@ import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { type OpenCodeToolProfile, openCodeVisibleToolNames } from "./opencodeToolSchemas.js";
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
 import { javaToolOptions } from "./javaToolOptions.js";
-import { processServerLogSink } from "../process-log-sink.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink, processServerLogSinkFor } from "../process-log-sink.js";
 import {
   openCodeCatalogAliasFor,
   openCodeCatalogSettlementBudgetMs,
@@ -605,6 +609,27 @@ export interface OpenCodeRuntimeCompositionInput {
    * #3903 AC3); absent, the policy refuses `websearch` and the provider has nothing to call.
    */
   readonly nativeWebSearch?: NativeWebSearch | undefined;
+  /**
+   * Native profile only, a run with a bound Jira Pod (#4354 L4): the dry run of a managed Jira
+   * write the human is about to be asked about. A returned string is the model-facing refusal and
+   * no approval card is raised; `undefined` admits the card. The executor gate stays authoritative.
+   */
+  readonly jiraWritePreflight?:
+    | ((call: {
+        readonly tool: string;
+        readonly arguments: CatalogJsonObject;
+      }) => Promise<string | undefined>)
+    | undefined;
+  /**
+   * Native profile only, a run with a bound Jira Pod (#4359): the plain facts of a managed Jira
+   * write the human is asked about, so the card reads like Chat's approval of the same write.
+   */
+  readonly jiraWriteReview?:
+    | ((call: {
+        readonly tool: string;
+        readonly arguments: CatalogJsonObject;
+      }) => CodingWorkbenchNativeJiraWriteReview)
+    | undefined;
   /**
    * Native profile only: the user's global and the project's OpenCode configuration documents for
    * one run, in merge order (#3900 AC4, `opencodeConfigDocuments.ts`), read before its launch
@@ -1052,6 +1077,10 @@ function compositionToolBridgeDeps(
       ? {}
       : { externalReadRoots: input.externalReadRoots }),
     ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
+    ...(input.jiraWritePreflight === undefined
+      ? {}
+      : { jiraWritePreflight: input.jiraWritePreflight }),
+    ...(input.jiraWriteReview === undefined ? {} : { jiraWriteReview: input.jiraWriteReview }),
   };
 }
 
@@ -3704,12 +3733,18 @@ type RunStateAccess = NonNullable<OpenCodeRuntimeCompositionInput["runStateAcces
 const WINDOWS_RUN_STATE_ACCESS: RunStateAccess = Object.freeze({
   protectRoot: (runRoot: string): void => {
     if (process.platform === "win32") {
-      protectWindowsOwnerPrivateFile(runRoot, { inheritToChildren: true });
+      protectWindowsOwnerPrivateFile(runRoot, {
+        inheritToChildren: true,
+        securityLogSink: processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
+      });
     }
   },
   // Without a copy there is nothing to hand over: the runtime creates its database below the root.
   adoptCopy: (path: string): void => {
-    if (process.platform === "win32" && existsSync(path)) inheritWindowsParentDacl(path);
+    if (process.platform === "win32" && existsSync(path))
+      inheritWindowsParentDacl(path, {
+        securityLogSink: processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
+      });
   },
 });
 
@@ -3853,6 +3888,8 @@ interface ToolBridgeExecutionDeps {
   readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
   readonly externalReadRoots?: readonly string[] | undefined;
   readonly nativeWebSearch?: NativeWebSearch | undefined;
+  readonly jiraWritePreflight?: OpenCodeRuntimeCompositionInput["jiraWritePreflight"];
+  readonly jiraWriteReview?: OpenCodeRuntimeCompositionInput["jiraWriteReview"];
 }
 
 /** Where a delivered tool result's model-facing rendering is recorded (#3873). */
@@ -4346,6 +4383,9 @@ async function handleNativePolicyRequest(
     ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
     ...(deps.externalReadRoots === undefined ? {} : { externalRoots: deps.externalReadRoots }),
     webSearch: deps.nativeWebSearch?.admitted === true,
+    codeModeNestedEffectsDecided:
+      openCodeRuntimeVersionPin(run.verification.summary.upstreamVersion)?.decidesNestedEffects ===
+      true,
   };
   const decided = decideOpenCodeNativePolicy({ ...policyInput, nowMs: Date.now() });
   const decision = admittedSessionMove(run, request, decided);
@@ -4560,6 +4600,69 @@ async function settleNativePolicyOutcome(
 }
 
 /**
+ * A managed Jira write the human would be asked about is dry-run first (#4354 L4), so a write that
+ * breaks the customer's issue templates ends as the model's refusal and no card is raised for it.
+ * Only a write of the Jira Pod bound to this run is checked; every other action, a Pod read and a
+ * run without a preflight take the ordinary path, and the executor gate refuses after approval.
+ */
+async function jiraTemplateRefusal(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  deps: ToolBridgeExecutionDeps,
+): Promise<string | undefined> {
+  const mutation = run.mcp?.actions.get(request.permission)?.mutation;
+  if (
+    deps.jiraWritePreflight === undefined ||
+    mutation?.serverName !== CODING_JIRA_SERVER_NAME ||
+    request.mcpInput === undefined
+  )
+    return undefined;
+  const args = jsonArguments(request.mcpInput);
+  return args === undefined
+    ? undefined
+    : deps.jiraWritePreflight({ tool: mutation.toolName, arguments: args });
+}
+
+/**
+ * The ask of a managed Jira write names the write in plain facts: the call the model sent and the
+ * names this run's reads gave its ids, which the card renders as Chat's approval does (#4359). Any
+ * other ask, and a run without a review, keep the ask as it is.
+ */
+export function withJiraWriteReview(
+  decision: Extract<OpenCodeNativePolicyDecision, { readonly effect: "ask" }>,
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  deps: ToolBridgeExecutionDeps,
+): Extract<OpenCodeNativePolicyDecision, { readonly effect: "ask" }> {
+  const mutation = run.mcp?.actions.get(request.permission)?.mutation;
+  const args = request.mcpInput === undefined ? undefined : jsonArguments(request.mcpInput);
+  const nativeAction = decision.event.nativeAction;
+  if (
+    deps.jiraWriteReview === undefined ||
+    mutation?.serverName !== CODING_JIRA_SERVER_NAME ||
+    args === undefined ||
+    nativeAction === undefined
+  )
+    return decision;
+  const jira = deps.jiraWriteReview({ tool: mutation.toolName, arguments: args });
+  return {
+    ...decision,
+    event: { ...decision.event, nativeAction: { ...nativeAction, jira } },
+  };
+}
+
+/**
+ * The runtime's decoded MCP arguments as plain JSON. They were parsed from the request body, so
+ * the copy cannot fail; a value that is not an object is left unchecked.
+ */
+function jsonArguments(value: Readonly<Record<string, unknown>>): CatalogJsonObject | undefined {
+  const copy: unknown = structuredClone(value);
+  return typeof copy === "object" && copy !== null && !Array.isArray(copy)
+    ? (copy as CatalogJsonObject)
+    : undefined;
+}
+
+/**
  * An allowed action as it is, an asked one after the human's decision and the re-check of its
  * paths: a refusal found by the re-check, or the decision itself.
  */
@@ -4574,9 +4677,19 @@ async function humanDecidedOutcome(
     readonly recheck: () => OpenCodeNativePolicyDecision;
   },
 ): Promise<NativePolicySettlement> {
+  const templateRefusal =
+    decision.effect === "ask" ? await jiraTemplateRefusal(run, request, deps) : undefined;
+  if (templateRefusal !== undefined)
+    return { outcome: "template-refused", refusal: templateRefusal };
   const outcome: OpenCodeNativePolicyOutcome =
     decision.effect === "ask"
-      ? await nativePolicyHumanDecision(run, decision, signal, deps, context.approvals)
+      ? await nativePolicyHumanDecision(
+          run,
+          withJiraWriteReview(decision, run, request, deps),
+          signal,
+          deps,
+          context.approvals,
+        )
       : "allowed";
   noteDeniedVerification(deps, request, outcome);
   if (outcome !== "allowed" && outcome !== "approved") return { outcome };

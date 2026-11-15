@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
+  jiraOperationInReleaseScope,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   mcpToolAction,
@@ -32,7 +33,11 @@ import {
 
 /** A draft is approved as one reviewed tree in Chat (#4178) and an attachment reads Chat-connected files (#4176); Coding runs offer neither. */
 const CODING_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
-  (operation) => operation !== "jira.draft" && operation !== "jira.attach",
+  (operation) =>
+    operation !== "jira.draft" &&
+    operation !== "jira.attach" &&
+    // Attachments are outside Release 1 (#4354): neither attachment operation is offered.
+    jiraOperationInReleaseScope(operation),
 );
 
 const BINDING = {
@@ -59,6 +64,7 @@ describe("the run's Jira server definition", () => {
     expect(CODING_READS).not.toContain("jira.draft-batch");
     expect(CODING_READS).toHaveLength(JIRA_MANAGED_READ_TOOLS.length - 1);
     expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.attach"]);
+    expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.delete-attachment"]);
   });
 
   it("reaches the policy as jira_<tool> without any two tools sharing an action", () => {
@@ -169,7 +175,20 @@ describe("the coding-runtime.jira-pod Activity Log operation", () => {
   it("keeps a bounded log class and an exact digest for every executable Jira tool", () => {
     const registry: readonly ActivityLogOperationRegistration[] = ACTIVITY_LOG_OPERATION_REGISTRY;
     const registration = registry.find((entry) => entry.op === "coding-runtime.jira-pod");
-    expect(registration?.fields.toolClass?.values).toEqual(["jira-read", "jira-write"]);
+    expect(registration?.fields.toolClass?.values).toEqual([
+      "jira-read",
+      "jira-write",
+      "jira-discovery",
+    ]);
+    // The budget a refused describe stood on and the check that refused it are closed vocabularies.
+    expect(registration?.fields.fitBasis).toMatchObject({
+      dataClass: "closed-enum",
+      values: ["provider-sample", "no-sample", "geometry-mismatch"],
+    });
+    expect(registration?.fields.stage).toMatchObject({
+      dataClass: "closed-enum",
+      values: ["current", "busy", "identity", "scope", "admit", "size", "fits"],
+    });
     expect(registration?.fields.toolDigest).toMatchObject({ dataClass: "digest", maxLength: 64 });
     expect(registration?.fields).not.toHaveProperty("tool");
     const digests = new Set<string>();

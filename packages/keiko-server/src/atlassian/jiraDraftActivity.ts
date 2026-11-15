@@ -12,7 +12,8 @@ import { JIRA_TEMPLATE_RULE_COUNT_FIELDS, jiraTemplateRuleCountFields } from "./
  * Refusals of the final `jira.draft` call beside the staging ones. `requirements-untraced` is the
  * once-per-turn advisory for a draft whose items name no requirement in a Chat that holds some.
  */
-type JiraDraftSubmitRefusal = "draft-changed" | "draft-invalid" | "requirements-untraced";
+type JiraDraftSubmitRefusal =
+  "draft-changed" | "draft-invalid" | "requirements-untraced" | "approval-expired";
 type JiraDraftRefusalKind = JiraDraftRefusal | JiraDraftSubmitRefusal;
 
 const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
@@ -29,7 +30,7 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["staged", "submitted", "refused", "progress", "executed", "named"],
+      values: ["staged", "submitted", "refused", "progress", "executed", "named", "held"],
     },
     refusal: {
       type: "string",
@@ -47,6 +48,7 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
         "draft-changed",
         "draft-invalid",
         "requirements-untraced",
+        "approval-expired",
       ],
     },
     newDraft: { type: "boolean", dataClass: "closed-enum", required: true },
@@ -79,8 +81,10 @@ export interface JiraDraftLogInput extends Omit<JiraDraftActivity, "phase" | "re
   /**
    * `named`: a tool turn told the model which staged draft the Chat holds (#4292). Naming stages,
    * checks and waits for nothing, so its page, reference, violation and duration counts are zero.
+   * `held`: the draft a write sends was kept as the Chat's open draft before its approval was asked
+   * for (#4354 AC4); `approval-expired` is the refusal of a write whose approval ran out.
    */
-  readonly phase: JiraDraftActivity["phase"] | "submitted" | "named";
+  readonly phase: JiraDraftActivity["phase"] | "submitted" | "named" | "held";
   readonly refusal?: JiraDraftRefusalKind;
 }
 
@@ -96,6 +100,7 @@ const REFUSAL_KIND: Readonly<Record<JiraDraftRefusalKind, ActivityLogErrorKind>>
   "draft-changed": "conflict",
   "draft-invalid": "invalid-request",
   "requirements-untraced": "invalid-request",
+  "approval-expired": "timeout",
 };
 
 function readFields(input: JiraDraftLogInput): Record<string, number> {

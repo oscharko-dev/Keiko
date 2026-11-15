@@ -5,6 +5,8 @@ interface ReadbackFaultControls {
   readonly denyReadback: boolean;
   readonly throwReadback: boolean;
   readonly missingReadback?: boolean;
+  /** The read-back answers a server error, which establishes nothing about the object. */
+  readonly serverErrorReadback?: boolean;
 }
 /** The injectable faults every directory-style fixture shares. */
 export interface SharedFixtureControls extends ReadbackFaultControls {
@@ -35,6 +37,8 @@ export function readbackFault(
   if (controls.denyReadback) return { ok: false, reason: "permission-denied", httpStatus: 403 };
   if (controls.missingReadback === true && path !== "myself")
     return { ok: false, reason: "not-found", httpStatus: 404 };
+  if (controls.serverErrorReadback === true && path !== "myself")
+    return { ok: false, reason: "unavailable", httpStatus: 503 };
   return undefined;
 }
 

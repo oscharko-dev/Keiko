@@ -2110,6 +2110,36 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     await deps.dispose?.();
   });
 
+  // #4371 F21: the launch directory is the default project only when the read surface lets the
+  // person use it. One inside a tool's own state area (here `.claude`) is refused by every Git and
+  // Files read, so seeding it made the first project a refused one.
+  it("does not seed a launch directory that the read surface refuses", async () => {
+    const refused = join(tmp("launch-refused-"), ".claude", "worktrees", "keiko");
+    mkdirSync(refused, { recursive: true });
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-launch-refused-"),
+      env: {},
+      uiDbPath: join(tmp("db-launch-refused-"), "keiko-ui.db"),
+      initialProjectPath: refused,
+    });
+
+    try {
+      expect(deps.preferredProjectPath).toBeUndefined();
+      expect(deps.store.listProjects()).toEqual([]);
+      // The skip is recorded body-free: the closed reason, never the path.
+      const lines = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ extra: { decision: "denied", reason: "denied-locus" } });
+      expect(JSON.stringify(lines[0])).not.toContain("launch-refused-");
+    } finally {
+      await deps.dispose?.();
+      resetServerLogger();
+    }
+  });
+
   it("grants package-script trust for an explicitly launcher-selected initial project", async () => {
     const projectDir = tmp("launcher-selected-project-");
     const deps = buildUiHandlerDeps({
@@ -3611,11 +3641,11 @@ describe("buildUiHandlerDeps — Atlassian registry isolation (KEIKO-0565, PR #3
         approval: {
           schemaVersion: "1",
           approvalId: "apr_isolation-test",
-          connectorId: "jira:isolation-test",
-          provider: "jira",
-          actionType: "add-issue-comment",
+          connectorId: "confluence:isolation-test",
+          provider: "confluence",
+          actionType: "add-page-comment",
           actionClass: "connector-write",
-          requiredScope: "issue-tracker.write",
+          requiredScope: "knowledge-base.write",
           risk: "low",
           reviewReason: "deterministic-risk-approval-required",
           correlationId: "req_isolation-test",
@@ -3627,10 +3657,10 @@ describe("buildUiHandlerDeps — Atlassian registry isolation (KEIKO-0565, PR #3
           envelopeDigest: "digest-isolation-test",
           workspaceRoot: "/repo",
         },
-        authRef: "atlassian:jira:isolation-test",
+        authRef: "atlassian:confluence:isolation-test",
         payload: {
           kind: "write-action",
-          action: { type: "add-issue-comment", issueKey: "PROJ-1", commentText: "isolation" },
+          action: { type: "add-page-comment", pageId: "1", commentText: "isolation" },
         },
       });
       expect(created.ok).toBe(true);
@@ -3643,9 +3673,9 @@ describe("buildUiHandlerDeps — Atlassian registry isolation (KEIKO-0565, PR #3
         schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
         activityId: "act_isolation-test",
         occurredAt: Date.now(),
-        connectorId: "jira:isolation-test",
-        provider: "jira",
-        actionType: "add-issue-comment",
+        connectorId: "confluence:isolation-test",
+        provider: "confluence",
+        actionType: "add-page-comment",
         actionClass: "connector-write",
         disposition: "allowed",
         outcome: "succeeded",
@@ -3653,10 +3683,10 @@ describe("buildUiHandlerDeps — Atlassian registry isolation (KEIKO-0565, PR #3
         durationMs: 0,
       });
       expect(
-        resolveAtlassianSyncJobRegistry(depsA).listActivity("jira:isolation-test"),
+        resolveAtlassianSyncJobRegistry(depsA).listActivity("confluence:isolation-test"),
       ).toHaveLength(1);
       expect(
-        resolveAtlassianSyncJobRegistry(depsB).listActivity("jira:isolation-test"),
+        resolveAtlassianSyncJobRegistry(depsB).listActivity("confluence:isolation-test"),
       ).toHaveLength(0);
     } finally {
       await depsA.dispose?.();
@@ -3689,11 +3719,11 @@ describe("buildUiHandlerDeps — Atlassian registry disposal (#2906 round 2)", (
         approval: {
           schemaVersion: "1",
           approvalId: "apr_dispose-test",
-          connectorId: "jira:dispose-test",
-          provider: "jira",
-          actionType: "add-issue-comment",
+          connectorId: "confluence:dispose-test",
+          provider: "confluence",
+          actionType: "add-page-comment",
           actionClass: "connector-write",
-          requiredScope: "issue-tracker.write",
+          requiredScope: "knowledge-base.write",
           risk: "low",
           reviewReason: "deterministic-risk-approval-required",
           correlationId: "req_dispose-test",
@@ -3705,10 +3735,10 @@ describe("buildUiHandlerDeps — Atlassian registry disposal (#2906 round 2)", (
           envelopeDigest: "digest-dispose-test",
           workspaceRoot: "/repo",
         },
-        authRef: "atlassian:jira:dispose-test",
+        authRef: "atlassian:confluence:dispose-test",
         payload: {
           kind: "write-action",
-          action: { type: "add-issue-comment", issueKey: "PROJ-1", commentText: "dispose" },
+          action: { type: "add-page-comment", pageId: "1", commentText: "dispose" },
         },
       });
       expect(created.ok).toBe(true);
@@ -3716,9 +3746,9 @@ describe("buildUiHandlerDeps — Atlassian registry disposal (#2906 round 2)", (
         schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
         activityId: "act_dispose-test",
         occurredAt: Date.now(),
-        connectorId: "jira:dispose-test",
-        provider: "jira",
-        actionType: "add-issue-comment",
+        connectorId: "confluence:dispose-test",
+        provider: "confluence",
+        actionType: "add-page-comment",
         actionClass: "connector-write",
         disposition: "allowed",
         outcome: "succeeded",
@@ -3726,24 +3756,24 @@ describe("buildUiHandlerDeps — Atlassian registry disposal (#2906 round 2)", (
         durationMs: 0,
       });
       expect(resolveAtlassianActionApprovalRegistry(depsA).listPending()).toHaveLength(1);
-      expect(resolveAtlassianSyncJobRegistry(depsA).listActivity("jira:dispose-test")).toHaveLength(
-        1,
-      );
+      expect(
+        resolveAtlassianSyncJobRegistry(depsA).listActivity("confluence:dispose-test"),
+      ).toHaveLength(1);
 
       // Disposing graph A must clear ITS OWN registries -- before the fix, createUiHandlerDispose
       // never called reset(), so both the pending approval and the recorded activity survived
       // disposal, indistinguishable from a live graph.
       await depsA.dispose?.();
       expect(resolveAtlassianActionApprovalRegistry(depsA).listPending()).toHaveLength(0);
-      expect(resolveAtlassianSyncJobRegistry(depsA).listActivity("jira:dispose-test")).toHaveLength(
-        0,
-      );
+      expect(
+        resolveAtlassianSyncJobRegistry(depsA).listActivity("confluence:dispose-test"),
+      ).toHaveLength(0);
 
       // Graph B was never touched: no write from A ever landed there, disposing A notwithstanding.
       expect(resolveAtlassianActionApprovalRegistry(depsB).listPending()).toHaveLength(0);
-      expect(resolveAtlassianSyncJobRegistry(depsB).listActivity("jira:dispose-test")).toHaveLength(
-        0,
-      );
+      expect(
+        resolveAtlassianSyncJobRegistry(depsB).listActivity("confluence:dispose-test"),
+      ).toHaveLength(0);
     } finally {
       await depsB.dispose?.();
     }

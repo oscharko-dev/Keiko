@@ -329,6 +329,23 @@ describe("fixed native schema mutations", () => {
       })),
     ).toMatchObject({ ok: true });
   });
+  // #4354: an operation that can change the hidden population's post-state is held back before any
+  // write whenever the saved template library cannot be read in full. One pin per operation.
+  it.each(["jira.delete-custom-fields", "jira.update-link-type", "jira.delete-link-type"])(
+    "%s refuses an unreadable template library before any write",
+    async (name) => {
+      const f = schemaMutationFixture();
+      const scenario = SCHEMA_MUTATION_FIXTURE_CASES.find((item) => item.name === name);
+      if (scenario === undefined) throw new TypeError(`Missing schema scenario ${name}`);
+      expect(
+        await execute(scenario.name, scenario.args, f.request, false, () => ({
+          templates: [],
+          unreadable: 1,
+        })),
+      ).toMatchObject({ ok: false, violations: [{ ruleId: "template-unreadable" }] });
+      expect(f.calls.every((call) => call.method === "GET")).toBe(true);
+    },
+  );
   it("never interprets ordinary prose or terminology as issue enforcement", async () => {
     const f = schemaMutationFixture();
     const scenario = SCHEMA_MUTATION_FIXTURE_CASES[10];

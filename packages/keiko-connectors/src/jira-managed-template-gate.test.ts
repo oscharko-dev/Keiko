@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  jiraTemplateBindingDigest,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
+  type JiraTemplateBindingIds,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -272,9 +274,45 @@ interface ReadRoute {
   readonly body: unknown;
   readonly status?: number;
 }
+/** The transitions the issue offers: unnamed, in the acting user's German, or in English. */
+function transitionsOf(remote: Remote): readonly Record<string, unknown>[] {
+  if (remote.unnamedTransitions)
+    return [
+      { id: "31", to: { id: "3" }, fields: {} },
+      { id: "41", to: { id: "4" }, fields: {} },
+    ];
+  const [start, park, ready, parked] = remote.german
+    ? ["Fortschritt starten", "Parken", "In Arbeit", "Geparkt"]
+    : ["Start", "Park", "Ready", "Parked"];
+  return [
+    { id: "31", name: start, to: { id: "3", name: ready }, fields: {} },
+    { id: "41", name: park, to: { id: "4", name: parked }, fields: {} },
+  ];
+}
+/** The statuses of the project's workflows in the acting user's language. */
+function statusesOf(remote: Remote): readonly Record<string, unknown>[] {
+  const [todo, ready, parked] = remote.german
+    ? ["Zu erledigen", "In Arbeit", "Geparkt"]
+    : ["To Do", "Ready", "Parked"];
+  return [
+    {
+      id: "10001",
+      name: "Story",
+      statuses: [
+        { id: "1", name: todo },
+        { id: "3", name: ready },
+        { id: "4", name: parked },
+      ],
+    },
+  ];
+}
 function readRoutes(remote: Remote): readonly ReadRoute[] {
   return [
-    { suffix: "/project/10000", body: { id: "10000", key: "SYN" } },
+    ...(remote.statusList === "absent"
+      ? [{ suffix: "/project/SYN/statuses", body: {}, status: 404 }]
+      : []),
+    { suffix: "/project/10000", body: projectBody(remote) },
+    { suffix: "/project/SYN", body: projectBody(remote) },
     { suffix: "/issuetype/10001", body: { id: "10001", name: remote.issueTypeName ?? "Story" } },
     {
       includes: "createmeta",
@@ -286,22 +324,10 @@ function readRoutes(remote: Remote): readonly ReadRoute[] {
         total: (remote.createFields ?? CREATE_FIELDS).length,
       },
     },
+    { suffix: "/project/SYN/statuses", body: statusesOf(remote) },
     { suffix: "editmeta", body: { fields: EDIT_FIELDS } },
     { suffix: "assignable/search", body: [{ name: "alice", active: true }] },
-    {
-      suffix: "/transitions",
-      body: {
-        transitions: remote.unnamedTransitions
-          ? [
-              { id: "31", to: { id: "3" }, fields: {} },
-              { id: "41", to: { id: "4" }, fields: {} },
-            ]
-          : [
-              { id: "31", name: "Start", to: { id: "3", name: "Ready" }, fields: {} },
-              { id: "41", name: "Park", to: { id: "4", name: "Parked" }, fields: {} },
-            ],
-      },
-    },
+    { suffix: "/transitions", body: { transitions: transitionsOf(remote) } },
     remote.fieldCatalog
       ? { suffix: "/field", body: [{ id: "customfield_10016", name: "Story Points" }] }
       : { suffix: "/field", body: {}, status: 404 },
@@ -316,9 +342,40 @@ function readRoutes(remote: Remote): readonly ReadRoute[] {
     },
   ];
 }
+/** The project as the acting user sees it: issue types are named in the user's own language. */
+function projectBody(remote: Remote): Record<string, unknown> {
+  if (remote.typeList === "absent") return { id: "10000", key: "SYN" };
+  if (remote.typeList === "oversized")
+    return {
+      id: "10000",
+      key: "SYN",
+      issueTypes: Array.from({ length: 201 }, (_, index) => ({
+        id: String(1000 + index),
+        name: `Type ${String(index)}`,
+      })),
+    };
+  return {
+    id: "10000",
+    key: "SYN",
+    issueTypes: remote.projectTypes ?? [
+      { id: "10001", name: remote.issueTypeName ?? "Story" },
+      ...["Task", "Bug", "Epic", "Sub-task", "Improvement", "New Feature"]
+        .filter((name) => name !== (remote.issueTypeName ?? "Story"))
+        .map((name, index) => ({ id: String(7 + index * 100), name })),
+    ],
+  };
+}
 interface Remote {
+  /** Jira answers the project's statuses without a list, so no transition rule can be shown unresolved. */
+  statusList?: "absent";
+  /** How Jira lists the project's issue types: not at all, or more than the gate reads. */
+  typeList?: "absent" | "oversized";
+  /** The project's issue types as the acting user sees them. */
+  projectTypes?: readonly { id: string; name: string }[];
   issue: Record<string, unknown>;
   fieldCatalog: boolean;
+  /** The acting user's profile is German: statuses and transitions carry German names. */
+  german?: boolean;
   /** Jira answered transitions without transition or status names. */
   unnamedTransitions?: boolean;
   parentType?: { id: string; name: string };
@@ -410,6 +467,214 @@ const SET = (...templates: JiraIssueTemplate[]): JiraIssueTemplateSet => ({
   unreadable: 0,
 });
 
+// #4354 (the first customer's Jira runs in German): a name is localized per user, an id is not. A
+// template the product bound to the issue type's id governs in every profile language; one it could
+// not bind that names a type this Jira does not offer the acting user is refused, never passed unchecked.
+describe("localized issue type names", () => {
+  const INSTANCE = "0123456789abcdef0123456789abcdef";
+  const bound = (
+    typed: string,
+    id: string,
+    frontMatter: readonly string[],
+    parentIssueTypeIds?: readonly string[],
+  ): JiraIssueTemplate => {
+    const base = template(frontMatter, SECTIONS, typed);
+    return {
+      ...base,
+      binding: {
+        digest: jiraTemplateBindingDigest(INSTANCE, base, {
+          issueTypeId: id,
+          ...(parentIssueTypeIds === undefined ? {} : { parentIssueTypeIds }),
+        }),
+        issueTypeId: id,
+        ...(parentIssueTypeIds === undefined ? {} : { parentIssueTypeIds }),
+      },
+    };
+  };
+  const MIN = ["activateOn: [create, edit]", "summaryMinLength: 30"];
+  /** The acting user's own view: the type 10001 is called `name`, and Story is 7. */
+  const view = (name: string): Partial<Remote> => ({
+    issueTypeName: name,
+    projectTypes: [
+      { id: "10001", name },
+      { id: "7", name: name === "Story" ? "Bug" : "Story" },
+    ],
+  });
+  const editRemote = (name: string): Remote => ({
+    ...view(name),
+    fieldCatalog: true,
+    issue: {
+      project: { key: "SYN" },
+      issuetype: { id: "10001", name },
+      status: { id: "1", name: "To Do" },
+      summary: "A long enough original summary for the template rule",
+      description: FULL_DESCRIPTION,
+      labels: [],
+      issuelinks: [],
+    },
+  });
+  /** An edit of a Story (7) of a project whose other type, 10001, is called Task. */
+  const storyEditRemote: Remote = {
+    ...view("Task"),
+    fieldCatalog: true,
+    issue: {
+      project: { key: "SYN" },
+      issuetype: { id: "7", name: "Story" },
+      status: { id: "1", name: "To Do" },
+      summary: "A long enough original summary for the template rule",
+      description: FULL_DESCRIPTION,
+      labels: [],
+      issuelinks: [],
+    },
+  };
+  const SHORT = { ...CREATE, fields: { summary: "Add login", description: FULL_DESCRIPTION } };
+
+  it.each([
+    ["the author saw Aufgabe, the acting user sees Task", "Aufgabe", "Task"],
+    ["the author saw Task, the acting user sees Aufgabe", "Task", "Aufgabe"],
+    ["the author saw Sub-Task, the acting user sees Sub-task", "Sub-Task", "Sub-task"],
+  ])("governs a bound create by id: %s", async (_name, typed, acting) => {
+    const f = fixture(SET(bound(typed, "10001", MIN)), { ...editRemote(acting) });
+    expect(await f.run("jira.create", SHORT)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "summary-too-short", template: `SYN/${typed}` }],
+    });
+    expect(f.writes()).toEqual([]);
+    const ok = fixture(SET(bound(typed, "10001", MIN)), { ...editRemote(acting) });
+    await ok.run("jira.create", {
+      ...CREATE,
+      fields: { summary: "Add the login flow for the new portal", description: FULL_DESCRIPTION },
+    });
+    expect(ok.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+  });
+
+  it.each([
+    ["Aufgabe", "Task"],
+    ["Task", "Aufgabe"],
+  ])(
+    "governs a bound edit by id, so the rule applies (author %s, user %s)",
+    async (typed, acting) => {
+      const f = fixture(SET(bound(typed, "10001", MIN)), editRemote(acting));
+      expect(
+        await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Short" } }),
+      ).toMatchObject({
+        ok: false,
+        violations: [{ ruleId: "summary-too-short", template: `SYN/${typed}` }],
+      });
+      expect(f.writes()).toEqual([]);
+    },
+  );
+
+  it("refuses an edit, never passes it unchecked, when a template names a type this Jira does not offer", async () => {
+    // Written as Task, read by a user who sees Aufgabe: nothing binds it, so nothing may assume it
+    // governs nothing.
+    const f = fixture(SET(template(MIN, SECTIONS, "Task")), editRemote("Aufgabe"));
+    expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Short" } })).toEqual({
+      ok: false,
+      reason: "field-validation",
+      violations: [
+        { ruleId: "template-binding-unresolved", subject: "SYN/Task", template: "SYN/Task" },
+      ],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("refuses a create, an edit and a transition the same way for a template that names an unknown type", async () => {
+    const legacy = template(
+      ["activateOn: [create, edit, transition]", ...MIN.slice(1)],
+      SECTIONS,
+      "Aufgabe",
+    );
+    for (const [op, args] of [
+      ["jira.create", SHORT],
+      ["jira.edit", { issueKey: "SYN-1", fields: { summary: "Short" } }],
+      ["jira.transition", { issueKey: "SYN-1", transitionId: "31" }],
+    ] as const) {
+      const f = fixture(SET(legacy), editRemote("Task"));
+      expect(await f.run(op, args), op).toMatchObject({
+        ok: false,
+        violations: [{ ruleId: "template-binding-unresolved", subject: "SYN/Aufgabe" }],
+      });
+      expect(f.writes(), op).toEqual([]);
+    }
+  });
+
+  // B2 (a): a template bound for this Jira whose bound id is no type of the project is dead.
+  it("lets a Story edit through beside a dead bound template, which blocks nothing", async () => {
+    const dead = bound("Task", "99999", MIN);
+    const f = fixture(SET(dead), storyEditRemote);
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { summary: "A summary that is long enough for the rule" },
+    });
+    expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
+  });
+
+  // B2 (b): an unbound template whose typed name is in nobody's view stays fail-closed project-wide,
+  // and the refusal names the template.
+  it("refuses a Story edit beside an unbound template that names an unknown type, and names the template", async () => {
+    const f = fixture(SET(template(MIN, SECTIONS, "Aufgabe")), storyEditRemote);
+    expect(
+      await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Short" } }),
+    ).toMatchObject({
+      ok: false,
+      violations: [
+        { ruleId: "template-binding-unresolved", subject: "SYN/Aufgabe", template: "SYN/Aufgabe" },
+      ],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  // S3: the escape was silent. The write still goes on, and the Activity Log is told.
+  it.each(["absent", "oversized"] as const)(
+    "records that the type list was %s when it lets a write through unresolved",
+    async (typeList) => {
+      const f = fixture(SET(template(MIN, SECTIONS, "Aufgabe")), {
+        ...storyEditRemote,
+        typeList,
+      });
+      const result = await f.run("jira.edit", {
+        issueKey: "SYN-1",
+        fields: { summary: "A summary that is long enough for the rule" },
+      });
+      // The fact describes the gate's decision, whatever the write did afterwards.
+      expect(result).toMatchObject({ templateGateFacts: ["type-list-unavailable"] });
+      expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
+    },
+  );
+
+  it("does not refuse for a template of another type that this Jira does offer", async () => {
+    const f = fixture(
+      SET(bound("Aufgabe", "10001", MIN), template(MIN, SECTIONS, "Story")),
+      editRemote("Task"),
+    );
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { summary: "A summary that is long enough for the rule" },
+    });
+    expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
+  });
+
+  it("compares the parent's type by id, under whatever name the acting user sees", async () => {
+    const parentRule = ["activateOn: [create]", "parentField: parent", "parentIssueTypes: [Epic]"];
+    const withParent = { ...CREATE, fields: { ...CREATE.fields, parent: { key: "SYN-2" } } };
+    const allowed = fixture(SET(bound("Story", "10001", parentRule, ["7"])), {
+      ...editRemote("Story"),
+      parentType: { id: "7", name: "Epos" },
+    });
+    await allowed.run("jira.create", withParent);
+    expect(allowed.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+    const refused = fixture(SET(bound("Story", "10001", parentRule, ["7"])), {
+      ...editRemote("Story"),
+      parentType: { id: "9", name: "Epic" },
+    });
+    expect(await refused.run("jira.create", withParent)).toMatchObject({
+      violations: [{ ruleId: "parent-type-mismatch" }],
+    });
+    expect(refused.writes()).toEqual([]);
+  });
+});
+
 describe("create", () => {
   it("blocks a disallowed independently read parent type before the real create dispatch", async () => {
     const saved = SET(
@@ -482,22 +747,71 @@ describe("create", () => {
     expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
   });
 
-  it("changes nothing and reads nothing extra when no template is configured", async () => {
-    for (const templates of [undefined, SET()]) {
-      const f = fixture(templates);
-      await f.run("jira.create", CREATE);
-      expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
-      expect(f.paths().some((line) => line.includes("/project/"))).toBe(false);
-    }
+  // #4354: a creation is sent only when a saved template activated for creating governs the
+  // project and issue type. These cases were the pass-through pins of the earlier rule; the owner
+  // decided on 2026-11-13 that nothing is created without a template, so they are inverted here.
+  it("refuses a creation when no template library is wired, before any write", async () => {
+    const f = fixture(undefined);
+    expect(await f.run("jira.create", CREATE)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      violations: [{ ruleId: "template-missing", subject: "template library", template: "*" }],
+    });
+    expect(f.writes()).toEqual([]);
   });
 
-  it("ignores a template of another project, another issue type or another activation point", async () => {
+  it("refuses a creation when the library holds no template, naming project and issue type", async () => {
+    const f = fixture(SET());
+    expect(await f.run("jira.create", CREATE)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      violations: [{ ruleId: "template-missing", subject: "Story", template: "SYN/Story" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("refuses a creation when only templates of another project or issue type exist", async () => {
     const other = { ...template(ALL_POINTS), project: "OTHER" };
     const bug = { ...template(ALL_POINTS), issueType: "Bug" };
-    const editOnly = template(["activateOn: [edit]"]);
-    const f = fixture(SET(other, bug, editOnly));
-    await f.run("jira.create", { ...CREATE, fields: { summary: "x" } });
-    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+    const f = fixture(SET(other, bug));
+    expect(await f.run("jira.create", { ...CREATE, fields: { summary: "x" } })).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-missing", template: "SYN/Story" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("tells a template of the type that only governs a status change from a missing one", async () => {
+    const transitionOnly = template(["activateOn: [transition:Ready]"]);
+    const f = fixture(SET(transitionOnly), { issue: {}, fieldCatalog: true });
+    expect(await f.run("jira.create", CREATE)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-not-activated", template: "SYN/Story" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("lets a template that names edit govern the creation of its type as well", async () => {
+    const f = fixture(SET(template(["activateOn: [edit]", "summaryMinLength: 40"])), {
+      issue: {},
+      fieldCatalog: true,
+    });
+    expect(await f.run("jira.create", CREATE)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "summary-too-short" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("matches the issue type by name without case and by numeric id", async () => {
+    for (const issueType of ["story", "10001"]) {
+      const f = fixture(
+        SET({ ...template(["activateOn: [create]", "summaryMinLength: 1"]), issueType }),
+        { issue: {}, fieldCatalog: true },
+      );
+      expect(await f.run("jira.create", CREATE)).not.toHaveProperty("violations");
+      expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+    }
   });
 
   it("fails closed when a stored template no longer parses", async () => {
@@ -544,6 +858,32 @@ describe("create", () => {
   });
 });
 
+describe("an edit never changes the project or the issue type of an issue (#4354, L6)", () => {
+  it.each([
+    ["jira.edit", "project", { key: "OTHER" }],
+    ["jira.edit", "issuetype", { id: "10002" }],
+    ["jira.transition", "project", { key: "OTHER" }],
+    ["jira.transition", "issuetype", { id: "10002" }],
+  ] as const)(
+    "refuses %s carrying %s before any request, naming the way",
+    async (op, id, value) => {
+      const f = fixture(SET(template(ALL_POINTS)));
+      const args =
+        op === "jira.edit"
+          ? { issueKey: "SYN-1", fields: { summary: "A longer summary", [id]: value } }
+          : { issueKey: "SYN-1", transitionId: "31", fields: { [id]: value } };
+      const result = await f.run(op, args);
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "field-validation",
+        detail: { fieldId: id, validation: "unsupported-field" },
+      });
+      expect(JSON.stringify(result)).toMatch(/Move.*create the issue again/u);
+      expect(f.http).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("edit", () => {
   const rules = [...ALL_POINTS, "summaryMinLength: 10", "requiredFields: [Story Points]"];
 
@@ -563,21 +903,59 @@ describe("edit", () => {
     expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
   });
 
-  it("refuses an edit that leaves the issue violating, naming the violation", async () => {
+  // #4354, owner decision 2026-11-13: an edit may not make things worse. A rule broken by a field the
+  // edit touches, or newly broken, blocks it; a rule the issue already broke in an untouched field
+  // does not block and is named to the person.
+  it("refuses an edit that breaks a field it touches, and names only that rule", async () => {
     const f = fixture(SET(template(rules)));
     const result = await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "short" } });
     expect(result).toMatchObject({
       ok: false,
       reason: "field-validation",
-      violations: [
-        { ruleId: "summary-too-short" },
-        { ruleId: "field-missing", subject: "Story Points" },
-      ],
+      violations: [{ ruleId: "summary-too-short" }],
     });
+    expect(JSON.stringify(result)).not.toContain("Story Points");
     expect(f.writes()).toEqual([]);
   });
 
-  it("falls back to the instance field list when a name is not on the edit screen", async () => {
+  // The fixture answers a read after the write with the old issue, so the write is not confirmed;
+  // these cases are about whether the gate lets the PUT go out, which is what `writes()` shows.
+  it("lets an edit through when the issue already broke a rule in a field the edit does not touch", async () => {
+    const f = fixture(SET(template(rules)));
+    const result = await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { summary: "A longer summary" },
+    });
+    expect(result).not.toHaveProperty("violations");
+    expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
+  });
+
+  it("lets an edit through on an issue whose type has no template", async () => {
+    for (const templates of [SET(), SET({ ...template(rules), issueType: "Bug" })]) {
+      const f = fixture(templates);
+      const result = await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "short" } });
+      expect(result).not.toHaveProperty("violations");
+      expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
+    }
+  });
+
+  it("governs an edit by any template of the type, whichever plain activation it names", async () => {
+    for (const activation of ["create", "edit"]) {
+      const f = fixture(SET(template([`activateOn: [${activation}]`, "summaryMinLength: 10"])));
+      expect(
+        await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "short" } }),
+      ).toMatchObject({ ok: false, violations: [{ ruleId: "summary-too-short" }] });
+      expect(f.writes()).toEqual([]);
+    }
+  });
+
+  it("does not let a transition-only template govern an edit", async () => {
+    const f = fixture(SET(template(["activateOn: [transition:Ready]", "summaryMinLength: 10"])));
+    await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "short" } });
+    expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
+  });
+
+  it("lets an edit through when the rule names a field the instance lacks and the edit does not set it", async () => {
     const f = fixture(SET(template(rules)), {
       fieldCatalog: false,
       issue: {
@@ -587,10 +965,8 @@ describe("edit", () => {
         description: FULL_DESCRIPTION,
       },
     });
-    expect(
-      await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "A longer summary" } }),
-    ).toMatchObject({ violations: [{ ruleId: "field-unavailable", subject: "Story Points" }] });
-    expect(f.writes()).toEqual([]);
+    await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "A longer summary" } });
+    expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1"]);
   });
 
   it("does not govern an issue of another type", async () => {
@@ -713,6 +1089,12 @@ describe("dry run before approval", () => {
         ok: false,
         reason: "malformed-payload",
         violations: [{ ruleId: "template-unreadable" }],
+        // #4357 AC3: a dispatch drops the violations of this reason, so the sentence stays.
+        detail: {
+          messages: [
+            "Jira's answer about the project or issue type could not be read completely, so the project's template cannot be applied. This write was not made.",
+          ],
+        },
       });
     }
     expect(f.writes()).toEqual([]);
@@ -764,6 +1146,12 @@ describe("dry run before approval", () => {
         ok: false,
         reason: "conflict",
         violations: [{ ruleId: "template-unreadable" }],
+        // #4357 AC3: the sentence names what was unreadable (the field list), not the project.
+        detail: {
+          messages: [
+            "Jira's answer about the field list of the issue's type could not be read completely, so the project's template cannot be applied. This write was not made.",
+          ],
+        },
       });
       expect(await f.run(operation, args)).toMatchObject({ ok: false, reason: "conflict" });
       expect(f.writes()).toEqual([]);
@@ -1051,5 +1439,184 @@ describe("a Data Center Epic create against a stored formal rule", () => {
       },
     });
     expect(f.writes()).toEqual([]);
+  });
+});
+
+// #4354 Part 2: the names Jira localizes besides issue types. A field named in the author's language
+// and a transition target named by a status are bound to ids when the template is bound, and the gate
+// matches by id from then on; a target that is neither bound nor a status name the acting user sees may
+// belong to a rule of another language, so the transition is refused instead of passing unchecked.
+describe("localized field names and transition targets", () => {
+  const INSTANCE_ID = "0123456789abcdef0123456789abcdef";
+  const withBinding = (
+    front: readonly string[],
+    ids: Omit<JiraTemplateBindingIds, "issueTypeId">,
+  ): JiraIssueTemplate => {
+    const base = template(front, "# T");
+    const all: JiraTemplateBindingIds = { issueTypeId: "10001", ...ids };
+    return {
+      ...base,
+      binding: { digest: jiraTemplateBindingDigest(INSTANCE_ID, base, all), ...all },
+    };
+  };
+  const conforming: Remote = {
+    fieldCatalog: true,
+    issue: {
+      project: { key: "SYN" },
+      issuetype: { id: "10001", name: "Story" },
+      status: { id: "1", name: "To Do" },
+      customfield_10016: 8,
+    },
+  };
+  const missing: Remote = {
+    fieldCatalog: true,
+    issue: {
+      project: { key: "SYN" },
+      issuetype: { id: "10001", name: "Story" },
+      status: { id: "1", name: "To Do" },
+    },
+  };
+  const FIELD = ["activateOn: [create, edit]", "requiredFields: [Story Punkte]"];
+  const GERMAN_FIELD = { requiredFieldIds: ["customfield_10016"] };
+
+  it("judges a required field by its bound id although the acting user sees another name", async () => {
+    const f = fixture(SET(withBinding(FIELD, GERMAN_FIELD)));
+    expect(await f.run("jira.create", CREATE)).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      violations: [{ ruleId: "field-missing" }],
+    });
+    expect(f.writes()).toEqual([]);
+    const ok = fixture(SET(withBinding(FIELD, GERMAN_FIELD)));
+    await ok.run("jira.create", { ...CREATE, fields: { ...CREATE.fields, customfield_10016: 5 } });
+    expect(ok.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+  });
+
+  const TRANSITION = ["activateOn: [transition:Fertig]", "requiredFields: [Story Points]"];
+  const move = { issueKey: "SYN-1", transitionId: "31" };
+
+  it("governs a transition by the bound id of its target status, under any status name", async () => {
+    const f = fixture(SET(withBinding(TRANSITION, { transitionStatusIds: ["3"] })), missing);
+    expect(await f.run("jira.transition", move)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "field-missing", subject: "Story Points" }],
+    });
+    expect(f.writes()).toEqual([]);
+    // Park leads to another status: the rule does not govern it.
+    const other = fixture(SET(withBinding(TRANSITION, { transitionStatusIds: ["3"] })), missing);
+    await other.run("jira.transition", { issueKey: "SYN-1", transitionId: "41" });
+    expect(other.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  it("refuses a transition beside an unbound rule whose target no status of this Jira has, naming the template", async () => {
+    const f = fixture(SET(template(TRANSITION, "# T")), conforming);
+    expect(await f.run("jira.transition", move)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      violations: [
+        { ruleId: "template-binding-unresolved", subject: "SYN/Story", template: "SYN/Story" },
+      ],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("lets a transition through beside a rule bound to a status that is gone: it is dead", async () => {
+    const f = fixture(SET(withBinding(TRANSITION, { transitionStatusIds: ["99"] })), conforming);
+    await f.run("jira.transition", move);
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  it("does not refuse for a target that is a status name this Jira shows, or a typed transition id", async () => {
+    for (const target of ["Ready", "31"]) {
+      const f = fixture(
+        SET(
+          template([`activateOn: [transition:${target}]`, "requiredFields: [Story Points]"], "# T"),
+        ),
+        conforming,
+      );
+      await f.run("jira.transition", move);
+      expect(f.writes(), target).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+    }
+  });
+
+  // Audit (#4354): the unresolved rule is about THIS issue's templates and what THIS issue offers.
+  it("checks a rule that names a transition of this issue by its name, for an English user too", async () => {
+    const named = template(
+      ["activateOn: [transition:Start]", "requiredFields: [Story Points]"],
+      "# T",
+    );
+    const f = fixture(SET(named), missing);
+    expect(await f.run("jira.transition", move)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "field-missing" }],
+    });
+    expect(f.writes()).toEqual([]);
+    // The other transition is not the one the rule names: it goes through unchecked.
+    const other = fixture(SET(named), missing);
+    await other.run("jira.transition", { issueKey: "SYN-1", transitionId: "41" });
+    expect(other.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  // Audit (#4354): the same unbound rule, typed in English, for a user whose Jira shows German names.
+  it("refuses, naming the template, a rule typed in English for a user whose transitions and statuses are German", async () => {
+    const english = template(
+      ["activateOn: [transition:Start Progress]", "requiredFields: [Story Points]"],
+      "# T",
+    );
+    const f = fixture(SET(english), { ...conforming, german: true });
+    expect(await f.run("jira.transition", move)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      violations: [
+        { ruleId: "template-binding-unresolved", subject: "SYN/Story", template: "SYN/Story" },
+      ],
+    });
+    expect(f.writes()).toEqual([]);
+    // The same rule is checked normally once the target is one this user's Jira shows.
+    const shown = template(
+      ["activateOn: [transition:Fortschritt starten]", "requiredFields: [Story Points]"],
+      "# T",
+    );
+    const ok = fixture(SET(shown), { ...conforming, german: true });
+    await ok.run("jira.transition", move);
+    expect(ok.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  it("lets a Story transition through beside an unbound template of another issue type that types a name target", async () => {
+    const bugByName = template(
+      ["activateOn: [transition:Start Progress]", "requiredFields: [Story Points]"],
+      "# T",
+      "Bug",
+    );
+    const f = fixture(SET(bugByName), { ...conforming, german: true });
+    await f.run("jira.transition", move);
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  it("lets a Story transition through beside an unbound template of another issue type", async () => {
+    const bug = template(TRANSITION, "# T", "Bug");
+    const f = fixture(SET(bug), conforming);
+    await f.run("jira.transition", move);
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
+  it("refuses a numeric target that is no transition id of this issue instead of assuming it is one", async () => {
+    const numeric = template(
+      ["activateOn: [transition:99]", "requiredFields: [Story Points]"],
+      "# T",
+    );
+    const f = fixture(SET(numeric), conforming);
+    expect(await f.run("jira.transition", move)).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "template-binding-unresolved", template: "SYN/Story" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("records that the status list was missing when it lets such a transition through", async () => {
+    const f = fixture(SET(template(TRANSITION, "# T")), { ...conforming, statusList: "absent" });
+    expect(await f.run("jira.transition", move)).toMatchObject({
+      templateGateFacts: ["status-list-unavailable"],
+    });
   });
 });

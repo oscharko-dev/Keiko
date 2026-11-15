@@ -20,6 +20,22 @@ function memoryReadinessNotice(health: BackendHealth, t: I18nTranslate): ReactNo
   );
 }
 
+// #4358: how the credential vaults are kept on Windows. Only the two states a person must act on
+// are shown; `attested` and `protected` show nothing, and so does any value outside the closed
+// states (dropped where the health response is read).
+function credentialCustodyNotice(health: BackendHealth, t: I18nTranslate): ReactNode {
+  if (health.state !== "loaded") return null;
+  const custody = health.health.credentialCustody;
+  if (custody !== "exposed" && custody !== "unattested") return null;
+  return (
+    <div className="source-limit-alert">
+      <output>
+        {t(custody === "exposed" ? "credentialCustody.exposed" : "credentialCustody.unattested")}
+      </output>
+    </div>
+  );
+}
+
 function readinessUnavailable(health: BackendHealth): boolean {
   if (health.state === "unavailable") return true;
   return (
@@ -43,7 +59,12 @@ export function DiagnosticReadinessNotice({
   const activeReport = report ?? previousReport;
   const hasReport = useSupportReportPresence(activeReport?.correlationId ?? READINESS_REPORT_KEY);
   const unavailable = readinessUnavailable(health);
-  const memory = memoryReadinessNotice(health, t);
+  const memory = (
+    <>
+      {memoryReadinessNotice(health, t)}
+      {credentialCustodyNotice(health, t)}
+    </>
+  );
   if (!unavailable && !hasReport) return memory;
   return (
     <>

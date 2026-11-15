@@ -22,12 +22,14 @@ import type {
   JiraReportComplianceChecker,
   JiraReportStore,
 } from "@oscharko-dev/keiko-connectors";
+import { currentJiraChatConnectionFingerprint } from "./atlassian/jiraChatConnectionIdentity.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import {
   installJiraChatCatalogRuntime,
   type JiraChatCatalogRuntime,
 } from "./atlassian/jiraChatCatalogRuntime.js";
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import type { CodingRuntimeConversation } from "./coding-runtime/codingRuntimeContextUsage.js";
 import { createCodingJiraPods, type CodingJiraPods } from "./coding-runtime/codingJiraPodMcp.js";
 import { jiraEmailTemplateInspection } from "./atlassian/jiraEmailTemplateComposition.js";
 import {
@@ -227,7 +229,11 @@ import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.j
 import { stopChatCompactionWork } from "./chat-compaction-model-call.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { closeFileServerLogSinks, resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
-import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
+import {
+  recordWorkspaceRootDenial,
+  recordWorkspaceRootDenied,
+} from "./workspace-root-denial-log.js";
+import { pathIsDenied } from "./files-deny.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -894,6 +900,16 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
               capability: string,
               reservedPromptTokens: number,
               actualPromptTokens: number,
+              modelCallId?: number,
+            ) => unknown)
+          | undefined;
+        // A prompt size the provider itself reported for an admitted call (never an estimate): the
+        // run's context usage reads it (#4359).
+        readonly observeProviderPromptTokens?:
+          | ((
+              capability: string,
+              providerPromptTokens: number,
+              conversation: CodingRuntimeConversation,
               modelCallId?: number,
             ) => unknown)
           | undefined;
@@ -1997,6 +2013,42 @@ export function currentGatewayVerification(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
 ): GatewayVerificationState {
   return deps.gatewayConfig?.verification() ?? UNVERIFIED_GATEWAY;
+}
+
+// Models a person explicitly verified in Settings, per configuration holder and generation (#4351).
+const explicitModelUse = new WeakMap<
+  object,
+  { readonly generation: number; readonly models: Set<string> }
+>();
+
+/**
+ * An explicit Settings verification of this model passed: a person asked for the model, and it
+ * answered. Dropped with the configuration generation it was observed under, never persisted.
+ */
+export function recordExplicitModelUse(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+  observedGeneration: number | undefined,
+): void {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined || observedGeneration !== holder.generation()) return;
+  const current = explicitModelUse.get(holder);
+  if (current?.generation === observedGeneration) current.models.add(modelId);
+  else explicitModelUse.set(holder, { generation: observedGeneration, models: new Set([modelId]) });
+}
+
+/**
+ * Whether a person has used this model in the current configuration generation: an actual model call
+ * (a Chat or Coding turn) completed through the generation's gateway, or an explicit Settings
+ * verification passed. A startup observation is not use. Passive reads gate any provider request on
+ * this, so opening a Chat saved on a model nobody used never loads that model.
+ */
+export function modelUsedByPerson(deps: UiHandlerDeps, modelId: string): boolean {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return false;
+  const explicit = explicitModelUse.get(holder);
+  if (explicit?.generation === holder.generation() && explicit.models.has(modelId)) return true;
+  return currentGateway(deps)?.hasServedModel(modelId) === true;
 }
 
 /** Legacy freshness window used only to describe the age of observed readiness in diagnostics. */
@@ -3397,6 +3449,17 @@ function seedInitialProject(
   }
   const normalizedPath = validateProjectPath(initialProjectPath, { mustExist: true });
   assertUiDbOutsideProject(uiDbPath, normalizedPath);
+  // A launch directory the read surface refuses (Keiko's own tool-state area) is no project: every
+  // Git and Files read of it is denied, so offering it only starts the person on a refused folder.
+  // It is the very predicate the Files and Git routes apply to a requested root (#4371). The
+  // decision is recorded body-free on the existing denial line: closed reason, no path.
+  if (pathIsDenied(normalizedPath)) {
+    recordWorkspaceRootDenied(
+      { reason: "denied-locus", failureKind: "DENIED", errorKind: "authority-denied" },
+      { correlationId },
+    );
+    return undefined;
+  }
   const project = store.createProject(normalizedPath);
   if (trustSource === "explicit-launcher-selection") {
     workspaceScriptTrust.grant(project.path, correlationId);
@@ -3981,6 +4044,8 @@ function resolvedUpdatePreflight(
               { ...args.options.env },
               undefined,
               bindSecurityLogCorrelation(processServerLogSink(), UNKNOWN_CORRELATION_ID),
+              // The preflight service only reads availability; the update session checks fresh.
+              "passive-read",
             ),
         }),
     ...(args.options.updatePreflightCatalog === undefined
@@ -5164,10 +5229,12 @@ function installChatToolCatalogs(
     primary: options.activityLog ?? processServerLogSink(),
     diagnostics: options.diagnostics ?? defaultServerDiagnosticSink,
   };
-  return installKnowledgeChatCatalogRuntime(
-    installMcpChatCatalogRuntime(installJiraChatCatalogRuntime(deps, log), log),
-    log,
+  const installed = installJiraChatCatalogRuntime(deps, log);
+  // A staged draft resolves only on the connection it was stored with (#4354, #4353 AC4).
+  installed.jiraDraftStore?.bindConnection((chatId) =>
+    currentJiraChatConnectionFingerprint(installed, chatId),
   );
+  return installKnowledgeChatCatalogRuntime(installMcpChatCatalogRuntime(installed, log), log);
 }
 
 /**
@@ -5241,6 +5308,7 @@ function assembleUiHandlerRuntimeServices(
     codingRuntimeEvidenceAggregator,
     codingRuntimeHost,
     peripherals.memoryVault,
+    runtimeComposition.runtimeVersion,
   );
   const gitChangeSnapshotService = createGitChangeSnapshotService({
     logSink: processServerLogSink(),
@@ -5315,6 +5383,7 @@ function buildUiCodingRuntimeControlPlane(
   codingRuntimeEvidenceAggregator: ReturnType<typeof createCodingRuntimeEvidenceAggregator>,
   codingRuntimeHost: NonNullable<BuildHandlerDepsOptions["codingRuntimeHost"]> | undefined,
   memoryVault: MemoryVaultStore | undefined,
+  runtimeVersion?: CodingWorkbenchRuntimeVersion,
 ): ReturnType<typeof createCodingRuntimeControlPlane> | undefined {
   if (!args.bundle.codingRuntimeSnapshotStore || !args.bundle.workspaceLifecycle) return undefined;
   const projectMemory =
@@ -5333,6 +5402,7 @@ function buildUiCodingRuntimeControlPlane(
       activityLog: processServerLogSink(),
     }),
     deploymentCeiling: resolveCodingRuntimeDeploymentCeiling(args.options),
+    ...(runtimeVersion === undefined ? {} : { runtimeVersion }),
     snapshots: args.bundle.codingRuntimeSnapshotStore,
     evidence: codingRuntimeEvidenceAggregator,
     workspaceLifecycle: args.bundle.workspaceLifecycle,

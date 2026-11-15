@@ -21,6 +21,10 @@ import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs"
 import { runQualificationBatches } from "../testing/jira-chat-lab/api-qualification.mjs";
 import { jiraOperationForTool } from "../../packages/keiko-server/dist/atlassian/jiraManagedProvider.js";
 
+// These tests start the product without a Jira; the baseline templates have their own suite
+// (jira-chat-lab-baseline-templates.test.mjs).
+vi.stubEnv("KEIKO_JIRA_LAB_BASELINE_TEMPLATES", "off");
+
 vi.mock("../testing/jira-chat-lab/run-preflight.mjs", () => ({
   prepareLabRun: async () => () => undefined,
 }));
@@ -181,29 +185,35 @@ it.each([
         run: async (context, specifications) => {
           const chat = await prepareModelFreeChat(context, actor, administration);
           expect(chat.jiraAdministrationEnabled === true).toBe(administration);
-          for (const specification of specifications) {
-            expect(specification).toBe(dispatched++);
-            const result = await dispatchQualification(
-              context,
-              chat,
-              { tool: "jira.projects", identity: "GET /rest/api/2/project" },
-              {},
-            );
-            expect(result.dispatch.kind).toBe("settled");
-            expect(result.dispatch.result).toMatchObject({
-              status: "completed",
-              data: {
-                outcome: "succeeded",
-                items: [{ id: "10000", key: "KEIKO", name: "Synthetic project" }],
-              },
-            });
-            expect(result.dispatch.receipt).toMatchObject({
-              effectStarted: true,
-              budgetDisposition: "committed",
-            });
-            expect(result.mutation).toBe(false);
-            expect(result.journal).toBeUndefined();
-          }
+          // Sequential on purpose: the dispatch order is asserted, so the calls chain instead of
+          // awaiting inside a loop.
+          await specifications.reduce(
+            (previous, specification) =>
+              previous.then(async () => {
+                expect(specification).toBe(dispatched++);
+                const result = await dispatchQualification(
+                  context,
+                  chat,
+                  { tool: "jira.projects", identity: "GET /rest/api/2/project" },
+                  {},
+                );
+                expect(result.dispatch.kind).toBe("settled");
+                expect(result.dispatch.result).toMatchObject({
+                  status: "completed",
+                  data: {
+                    outcome: "succeeded",
+                    items: [{ id: "10000", key: "KEIKO", name: "Synthetic project" }],
+                  },
+                });
+                expect(result.dispatch.receipt).toMatchObject({
+                  effectStarted: true,
+                  budgetDisposition: "committed",
+                });
+                expect(result.mutation).toBe(false);
+                expect(result.journal).toBeUndefined();
+              }),
+            Promise.resolve(),
+          );
           expect(
             context.deps.store
               .listMessages(chat.id)

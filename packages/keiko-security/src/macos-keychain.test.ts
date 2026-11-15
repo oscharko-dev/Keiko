@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "./log-port.js";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,6 +63,7 @@ describe("readMacosKeychainSecret", () => {
     requirePosixShellStandIn(context);
     const started = process.hrtime.bigint();
     const read = readMacosKeychainSecret("svc", "acct", {
+      sink: nullSecurityLogSink(),
       executable: HANGS,
       timeoutMs: 250,
       platform: "darwin",
@@ -80,6 +82,7 @@ describe("readMacosKeychainSecret", () => {
     // second timeout on the boot path.
     expect(
       readMacosKeychainSecret("svc", "acct", {
+        sink: nullSecurityLogSink(),
         executable: REFUSES,
         platform: "darwin",
         timeoutMs: 30_000,
@@ -97,6 +100,7 @@ describe("readMacosKeychainSecret", () => {
     // item-not-found status may mean "store one".
     expect(
       readMacosKeychainSecret("svc", "acct", {
+        sink: nullSecurityLogSink(),
         executable: DENIES,
         platform: "darwin",
         timeoutMs: 30_000,
@@ -107,6 +111,7 @@ describe("readMacosKeychainSecret", () => {
   it("returns the stored secret without surrounding whitespace", (context) => {
     requirePosixShellStandIn(context);
     const read = readMacosKeychainSecret("svc", "acct", {
+      sink: nullSecurityLogSink(),
       executable: ANSWERS,
       platform: "darwin",
       timeoutMs: 30_000,
@@ -120,7 +125,11 @@ describe("readMacosKeychainSecret", () => {
   it("reports the tier unavailable off darwin without spawning anything", () => {
     // HANGS would block for 30s if it were spawned, so returning promptly is the proof.
     const started = process.hrtime.bigint();
-    const read = readMacosKeychainSecret("svc", "acct", { executable: HANGS, platform: "linux" });
+    const read = readMacosKeychainSecret("svc", "acct", {
+      sink: nullSecurityLogSink(),
+      executable: HANGS,
+      platform: "linux",
+    });
     expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(1_000);
     expect(read).toEqual({ kind: "unavailable" });
   });
@@ -138,6 +147,7 @@ describe("readMacosKeychainSecret", () => {
     for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       const started = process.hrtime.bigint();
       const read = readMacosKeychainSecret("svc", "acct", {
+        sink: nullSecurityLogSink(),
         executable: HANGS,
         timeoutMs,
         platform: "darwin",
@@ -152,7 +162,11 @@ describe("readMacosKeychainSecret", () => {
     // from the load-proof test budget), so no test ever reaches the host keychain. On darwin the
     // fixture answers "no such item"; on any other host the tier reports itself unavailable
     // without spawning at all.
-    const read = readMacosKeychainSecret("svc", "acct", { executable: REFUSES, timeoutMs: 30_000 });
+    const read = readMacosKeychainSecret("svc", "acct", {
+      sink: nullSecurityLogSink(),
+      executable: REFUSES,
+      timeoutMs: 30_000,
+    });
     expect(read.kind).toBe(process.platform === "darwin" ? "absent" : "unavailable");
   });
 
@@ -163,7 +177,10 @@ describe("readMacosKeychainSecret", () => {
     // first, exactly as the equivalent-executable HANGS-off-darwin test above proves for the
     // caller-supplied path).
     const started = process.hrtime.bigint();
-    const read = readMacosKeychainSecret("svc", "acct", { platform: "linux" });
+    const read = readMacosKeychainSecret("svc", "acct", {
+      sink: nullSecurityLogSink(),
+      platform: "linux",
+    });
     expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(1_000);
     expect(read).toEqual({ kind: "unavailable" });
   });
@@ -175,7 +192,11 @@ describe("readMacosKeychainSecret", () => {
     // while the hang deterministically proves the production bound fires — the call returns
     // unavailable after ~KEYCHAIN_SPAWN_TIMEOUT_MS instead of waiting 30s for the fixture.
     const started = process.hrtime.bigint();
-    const read = readMacosKeychainSecret("svc", "acct", { executable: HANGS, platform: "darwin" });
+    const read = readMacosKeychainSecret("svc", "acct", {
+      sink: nullSecurityLogSink(),
+      executable: HANGS,
+      platform: "darwin",
+    });
     const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
     expect(elapsedMs).toBeGreaterThanOrEqual(KEYCHAIN_SPAWN_TIMEOUT_MS - 100);
     expect(elapsedMs).toBeLessThan(15_000);
@@ -211,6 +232,7 @@ describe("keychain secret memo", () => {
     requirePosixShellStandIn(context);
     const security = countingSecurity();
     const options = {
+      sink: nullSecurityLogSink(),
       executable: security.executable,
       platform: "darwin" as const,
       timeoutMs: 30_000,
@@ -233,6 +255,7 @@ describe("keychain secret memo", () => {
     requirePosixShellStandIn(context);
     const security = countingSecurity();
     const options = {
+      sink: nullSecurityLogSink(),
       executable: security.executable,
       platform: "darwin" as const,
       timeoutMs: 30_000,
@@ -247,7 +270,13 @@ describe("keychain secret memo", () => {
   it("never remembers a keychain that did not answer", (context) => {
     requirePosixShellStandIn(context);
     const memo = createKeychainSecretMemo();
-    const options = { executable: DENIES, platform: "darwin" as const, timeoutMs: 30_000, memo };
+    const options = {
+      sink: nullSecurityLogSink(),
+      executable: DENIES,
+      platform: "darwin" as const,
+      timeoutMs: 30_000,
+      memo,
+    };
     expect(readMacosKeychainSecret("svc", "acct", options)).toEqual({ kind: "unavailable" });
     expect(memo.get("svc", "acct")).toBeUndefined();
   });
@@ -255,7 +284,11 @@ describe("keychain secret memo", () => {
   it("keeps a fake executable without a memo of its own uncached", (context) => {
     requirePosixShellStandIn(context);
     const security = countingSecurity();
-    const options = { executable: security.executable, platform: "darwin" as const };
+    const options = {
+      sink: nullSecurityLogSink(),
+      executable: security.executable,
+      platform: "darwin" as const,
+    };
     readMacosKeychainSecret("svc", "acct", options);
     readMacosKeychainSecret("svc", "acct", options);
     expect(security.count()).toBe(2);
@@ -267,6 +300,7 @@ describe("writeMacosKeychainSecret", () => {
     requirePosixShellStandIn(context);
     const started = process.hrtime.bigint();
     const stored = writeMacosKeychainSecret("svc", "acct", "secret", {
+      sink: nullSecurityLogSink(),
       executable: HANGS,
       timeoutMs: 250,
       platform: "darwin",
@@ -279,6 +313,7 @@ describe("writeMacosKeychainSecret", () => {
     requirePosixShellStandIn(context);
     expect(
       writeMacosKeychainSecret("svc", "acct", "secret", {
+        sink: nullSecurityLogSink(),
         executable: REFUSES,
         platform: "darwin",
         timeoutMs: 30_000,
@@ -290,6 +325,7 @@ describe("writeMacosKeychainSecret", () => {
     requirePosixShellStandIn(context);
     expect(
       writeMacosKeychainSecret("svc", "acct", "secret", {
+        sink: nullSecurityLogSink(),
         executable: STORES,
         platform: "darwin",
         timeoutMs: 30_000,
@@ -313,6 +349,7 @@ describe("writeMacosKeychainSecret", () => {
     const secret = "SENTINEL-KEY-MATERIAL";
     expect(
       writeMacosKeychainSecret("svc", "acct", secret, {
+        sink: nullSecurityLogSink(),
         executable: recorder,
         platform: "darwin",
         timeoutMs: 30_000,
@@ -334,6 +371,7 @@ describe("writeMacosKeychainSecret", () => {
 
     expect(
       writeMacosKeychainSecret("svc", "acct", "secret", {
+        sink: nullSecurityLogSink(),
         executable,
         platform: "darwin",
         timeoutMs: 30_000,
@@ -352,6 +390,7 @@ describe("writeMacosKeychainSecret", () => {
     chmodSync(recorder, 0o700);
 
     writeMacosKeychainSecret("svc", "acct", "secret", {
+      sink: nullSecurityLogSink(),
       executable: recorder,
       platform: "darwin",
       timeoutMs: 30_000,
@@ -362,7 +401,11 @@ describe("writeMacosKeychainSecret", () => {
   it("does not spawn off darwin", () => {
     const started = process.hrtime.bigint();
     expect(
-      writeMacosKeychainSecret("svc", "acct", "secret", { executable: HANGS, platform: "linux" }),
+      writeMacosKeychainSecret("svc", "acct", "secret", {
+        sink: nullSecurityLogSink(),
+        executable: HANGS,
+        platform: "linux",
+      }),
     ).toBe(false);
     expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(1_000);
   });
@@ -374,6 +417,7 @@ describe("writeMacosKeychainSecret", () => {
     // promptly and never throws.
     const started = process.hrtime.bigint();
     const stored = writeMacosKeychainSecret("svc", "acct", "secret", {
+      sink: nullSecurityLogSink(),
       executable: STORES,
       timeoutMs: 30_000,
     });
@@ -387,6 +431,7 @@ describe("writeMacosKeychainSecret", () => {
     // production default deterministic — the write gives up after ~KEYCHAIN_SPAWN_TIMEOUT_MS.
     const started = process.hrtime.bigint();
     const stored = writeMacosKeychainSecret("svc", "acct", "secret", {
+      sink: nullSecurityLogSink(),
       executable: HANGS,
       platform: "darwin",
     });
@@ -528,6 +573,7 @@ describe("readMacosKeychainSecret sink wiring", () => {
   it("stays exactly as silent as before when no sink is wired", () => {
     expect(() => {
       readMacosKeychainSecret("svc", "acct", {
+        sink: nullSecurityLogSink(),
         executable: DENIES,
         platform: "darwin",
         timeoutMs: 30_000,

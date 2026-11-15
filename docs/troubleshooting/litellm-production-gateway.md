@@ -467,6 +467,39 @@ that answered but refused forced tool calls does not support tools through this 
 model that does, or fix the gateway's tool parser and run the model's check in Settings → Models
 once.
 
+### A shared gateway loads a model nobody selected
+
+| Field             | Value                                                                                  |
+| ----------------- | -------------------------------------------------------------------------------------- |
+| Stable identifier | `gateway.readiness.scope` and `gateway.readiness.automatic.started` with `checkReason` |
+
+**Symptom**
+
+Before the fix of #4351, every Keiko start sent a real chat request to every chat model the gateway
+listed, so the gateway loaded each of them: a large model nobody selected was loaded, evicted the
+model another installation was using, and used free memory or metered spend.
+
+**Root Cause**
+
+Keiko adopted every listed alias into its catalog and then checked each of them at startup, in
+Gateway Setup and in the background Workbench verification. Listing costs nothing; a check loads the
+model.
+
+**Diagnostic Steps**
+
+At the start, `gateway.readiness.scope` records how many chat models were listed
+(`listedModelCount`) and how many the decision checks (`checkedModelCount`, normally 1) with the
+closed `reason`: `startup` for the elected default, `fallback` for the next model of the election
+order after the default was refused definitively, `selection` for a person's first explicit pick. A
+`gateway.readiness.automatic.started` line carries the same `checkReason`. No line for another model
+means no request was sent to it.
+
+**Resolution**
+
+None needed on a release with #4351. A model nobody has used is listed and unverified; picking it in
+the Chat or Coding Workbench picker checks it once, and the picker says so. Settings → Models keeps
+the explicit check of every model.
+
 ---
 
 ## Authenticate x-litellm-key against a proxy that ignores it

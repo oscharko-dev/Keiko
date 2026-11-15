@@ -102,6 +102,7 @@ interface IssueLifecycleControls {
   denyReadback: boolean;
   throwReadback: boolean;
   missingReadback: boolean;
+  serverErrorReadback: boolean;
   reject: boolean;
   actorChangesBefore: boolean;
   actorChangesAfter: boolean;
@@ -200,6 +201,7 @@ function lifecycleState(selected: LifecycleCase): IssueLifecycleState {
       denyReadback: false,
       throwReadback: false,
       missingReadback: false,
+      serverErrorReadback: false,
       reject: false,
       actorChangesBefore: false,
       actorChangesAfter: false,

@@ -111,8 +111,27 @@ export interface SessionRegistry {
   readonly revokeApproval: (approvalId: string) => number;
   /** Share an expiry observed by the browser-approval owner with every associated live session. */
   readonly expireApprovalsAt: (observedAtMs: number) => number;
+  /** Valid sessions only: an expired entry that nothing has swept yet is not counted. */
   readonly sessionCount: () => number;
+  /**
+   * Non-touching, non-logging classification of a presented proof, for reconnect evidence. It
+   * verifies nothing and exposes no session state beyond whether the proof's session is registered.
+   */
+  readonly proofStanding: (cookieToken: string | undefined) => SessionProofStanding;
 }
+
+/**
+ * What a registry knows about a proof a browser presented, without verifying its secret.
+ * `valid` names a session that would still verify; `ended` a session this process issued that is no
+ * longer valid (expired and not yet swept, expired and swept, revoked or evicted); `unknown` a
+ * session id this process never issued: an earlier process, or a foreign value.
+ */
+export interface SessionProofStanding {
+  readonly presented: "absent" | "malformed" | "valid" | "ended" | "unknown";
+}
+
+/** Session ids kept only to tell an ended credential from one this process never issued. */
+const MAX_REMEMBERED_SESSION_IDS = 4_096;
 
 /** Browser identity approval caps session validity; it grants no task or autonomy authority. */
 export interface SessionApprovalBinding {
@@ -158,6 +177,8 @@ interface RegistryState {
   readonly activityLog?: ServerLogSink | undefined;
   readonly observeApprovalExpiry?: ((observedAtMs: number) => void) | undefined;
   readonly sessions: Map<string, StoredSession>;
+  /** Ids (never secrets) of the sessions this process issued, bounded, oldest forgotten first. */
+  readonly issuedSessionIds: Set<string>;
   readonly now: () => number;
   readonly idleTtlMs: number;
   readonly absoluteTtlMs: number;
@@ -279,7 +300,7 @@ function recordProofRefusal(
       {
         reason,
         registered,
-        sessionCount: state.sessions.size,
+        sessionCount: countValidSessions(state),
         purpose: observation.purpose ?? "verification",
         ...(observation.presentedProofCount === undefined
           ? {}
@@ -315,7 +336,7 @@ function recordObservedExpiry(
     activityLogEvent(
       EXPIRY_OPERATION,
       { level: "info", correlationId: UNKNOWN_CORRELATION_ID },
-      { expiredSessionCount, sessionCount: state.sessions.size, reason },
+      { expiredSessionCount, sessionCount: countValidSessions(state), reason },
     ),
   );
 }
@@ -360,6 +381,17 @@ function isExpired(state: RegistryState, stored: StoredSession, nowMs: number): 
     nowMs - stored.issuedAtMs >= state.absoluteTtlMs ||
     (stored.activeOperationCount === 0 && nowMs - stored.lastSeenAtMs >= state.idleTtlMs)
   );
+}
+
+/**
+ * Sessions that would still verify now. The map also holds expired entries until something observes
+ * them, so its size overstates how many browsers can act; every logged and reported count uses this.
+ */
+function countValidSessions(state: RegistryState): number {
+  const nowMs = state.now();
+  let valid = 0;
+  for (const stored of state.sessions.values()) if (!isExpired(state, stored, nowMs)) valid += 1;
+  return valid;
 }
 
 function approvalExpired(stored: StoredSession, nowMs: number): boolean {
@@ -436,9 +468,11 @@ function mintSession(
   const issuedAtMs = state.now();
   assertApprovalBinding(approval, issuedAtMs);
   const capacityDecision = evictOldestIfFull(state);
+  const sessionId = state.mintSessionId();
+  rememberIssuedSessionId(state, sessionId);
   return {
     ...storeSession(state, {
-      sessionId: state.mintSessionId(),
+      sessionId,
       principalLabel,
       rotationCount: 0,
       issuedAtMs,
@@ -527,6 +561,28 @@ function verifyForCookieRepair(
   );
 }
 
+function rememberIssuedSessionId(state: RegistryState, sessionId: string): void {
+  state.issuedSessionIds.add(sessionId);
+  if (state.issuedSessionIds.size <= MAX_REMEMBERED_SESSION_IDS) return;
+  const oldest = state.issuedSessionIds.values().next();
+  if (oldest.done !== true) state.issuedSessionIds.delete(oldest.value);
+}
+
+// Non-touching and non-mutating: an expired entry that nothing has swept yet is `ended`, never `valid`,
+// and the lookup removes nothing, so reconnect evidence cannot change what it describes.
+function proofStanding(
+  state: RegistryState,
+  cookieToken: string | undefined,
+): SessionProofStanding {
+  if (cookieToken === undefined) return { presented: "absent" };
+  const parsed = parseCookieToken(cookieToken);
+  if (parsed === undefined) return { presented: "malformed" };
+  const stored = state.sessions.get(parsed.sessionId);
+  if (stored !== undefined)
+    return { presented: isExpired(state, stored, state.now()) ? "ended" : "valid" };
+  return { presented: state.issuedSessionIds.has(parsed.sessionId) ? "ended" : "unknown" };
+}
+
 function inspectOwnedSession(state: RegistryState, sessionId: string): AppSession | undefined {
   const stored = state.sessions.get(sessionId);
   if (stored === undefined) return undefined;
@@ -596,6 +652,7 @@ function beginSessionOperation(
 function createRegistryState(deps: SessionRegistryDeps): RegistryState {
   return {
     sessions: new Map<string, StoredSession>(),
+    issuedSessionIds: new Set<string>(),
     activityLog: deps.activityLog,
     observeApprovalExpiry: deps.observeApprovalExpiry,
     now: deps.now ?? Date.now,
@@ -649,7 +706,8 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
     revokeApproval: (approvalId: string): number => revokeApprovalSessions(state, approvalId),
     expireApprovalsAt: (observedAtMs: number): number =>
       expireApprovalSessions(state, observedAtMs),
-    sessionCount: (): number => state.sessions.size,
+    sessionCount: (): number => countValidSessions(state),
+    proofStanding: (cookieToken): SessionProofStanding => proofStanding(state, cookieToken),
   };
 }
 

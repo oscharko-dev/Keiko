@@ -47,6 +47,7 @@ import {
   type WindowType,
 } from "./WindowsRegistry";
 import { WindowBodyBoundary } from "./WindowBodyBoundary";
+import { startingProjectRoot } from "./startingProjectRoot";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi, WorkspaceLinkedGitChangeComparison } from "../hooks/useWorkspace.types";
 import selectionStyles from "../WorkspaceSelection.module.css";
@@ -962,7 +963,7 @@ function WindowFrameImpl({
   // is the single retarget choke point threaded into every window's render context below.
   const activeWorkspace = useOptionalActiveWorkspace();
   const activeProject = useOptionalChatSessionProject();
-  const selectedRoot = activeProject?.available === true ? activeProject.path : null;
+  const selectedRoot = startingProjectRoot(activeProject);
   const activeRoot = activeWorkspace?.activeRoot ?? null;
   const activeBinding = activeWorkspace?.activeBinding ?? null;
   const activeInstance = activeWorkspace?.activeInstance ?? null;

@@ -2,14 +2,19 @@ import {
   JIRA_TEMPLATE_VIOLATIONS_MAX,
   isSafeAtlassianIdentifier,
   jiraIssueTemplateLabel,
+  jiraTemplateBoundStatusId,
+  jiraTemplateGovernsWrites,
+  jiraTemplateIssueTypeMatches,
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldMetadata,
   type JiraIssueTemplate,
+  type JiraMutationFailureDetail,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import {
-  checkJiraIssueTemplates,
+  evaluateJiraTemplateChange,
+  JIRA_TEMPLATE_IMPACT_SUBJECTS,
   jiraTemplatesNeedingTransitionNames,
   matchingJiraIssueTemplates,
   resolveJiraTemplateFieldIds,
@@ -21,7 +26,11 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
 import { parseJiraFieldMetadata } from "./jira-field-metadata.js";
 import { jiraNativeText } from "./jira-native-values.js";
-import { bindJiraTemplateParentTypes } from "./jira-template-parent-types.js";
+import { noteJiraTemplateGateFact, noteJiraTemplateNotices } from "./jira-template-notices.js";
+import {
+  bindJiraTemplateParentTypes,
+  jiraTemplateNativeIssueType,
+} from "./jira-template-parent-types.js";
 
 /**
  * Write admission against customer-defined issue templates (#4177). One gate sits between the
@@ -69,22 +78,30 @@ export interface JiraTemplateGateInput {
     readonly issueTypeId?: string;
     readonly issueKey?: string;
   };
-  readonly transition?: {
-    readonly id: string;
-    readonly name?: string;
-    readonly targetStatusName?: string;
-  };
+  readonly transition?: JiraTemplateGateTransition;
+}
+/** The transition being performed, and the transitions the issue offers now (ids and names). */
+export interface JiraTemplateGateTransition {
+  readonly id: string;
+  readonly name?: string;
+  readonly targetStatusName?: string;
+  readonly targetStatusId?: string;
+  readonly available?: readonly { readonly id: string; readonly name?: string }[];
 }
 export type JiraTemplateGateResult =
   | {
       readonly ok: true;
       /** The requested links in the order the write must send them, when templates reordered them. */
       readonly links?: readonly JiraIssueLinkRequest[];
+      /** Violations that already existed in fields an edit did not touch: named, never blocking. */
+      readonly notices?: readonly JiraTemplateViolation[];
     }
   | {
       readonly ok: false;
       readonly reason: AtlassianConnectorWriteFailureReason;
       readonly violations?: readonly JiraTemplateViolation[];
+      /** The sentence of a refusal whose reason is not `field-validation`, which carries no violations. */
+      readonly detail?: JiraMutationFailureDetail;
     };
 
 const OK = { ok: true } as const;
@@ -124,19 +141,45 @@ function unreadableRefusal(names: readonly string[] | undefined): JiraTemplateGa
     violations: [{ ruleId: "template-unreadable", subject: subject.slice(0, 120), template: "*" }],
   };
 }
+/**
+ * The violation below reaches a model only through the dry run: a dispatch drops violations unless the
+ * reason is `field-validation`, which would leave the closed reason alone (#4357 AC3). So the refusal
+ * also carries one sentence per cause, which both paths keep.
+ */
+/** What the template check could not read: the write's own subject, so a sentence is true of it. */
+type IdentitySubject = "project-and-type" | "issue" | "field-list";
+const IDENTITY_SUBJECTS: Readonly<Record<IdentitySubject, string>> = {
+  "project-and-type": "the project or issue type",
+  issue: "the issue",
+  "field-list": "the field list of the issue's type",
+};
+function identityMessage(subject: IdentitySubject, reason: string): string {
+  const what = IDENTITY_SUBJECTS[subject];
+  const applied = "so the project's template cannot be applied. This write was not made.";
+  if (reason === "not-found")
+    return `Keiko did not find ${what}, or this connection cannot see it, ${applied}`;
+  if (reason === "permission-denied") return `This connection may not read ${what}, ${applied}`;
+  if (reason === "malformed-payload" || reason === "conflict")
+    return `Jira's answer about ${what} could not be read completely, ${applied}`;
+  return `Keiko could not read ${what} from Jira just now, ${applied}`;
+}
 function identityRefusal(
   failure: Extract<JiraTemplateGateResult, { ok: false }>,
-  templates: readonly JiraIssueTemplate[],
+  subject: IdentitySubject,
 ): JiraTemplateGateResult {
   // Preserve the closed native failure, but also keep the refusal visible to the existing
   // template-only dry run. It must not reinterpret unbound rule selection as a successful check.
+  // One violation: the refusal is about the unbound identity, so it names no candidate template.
   return {
     ...failure,
-    violations: templates.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX).map((template) => ({
-      ruleId: "template-unreadable",
-      subject: "native project and issue-type identity",
-      template: jiraIssueTemplateLabel(template),
-    })),
+    detail: failure.detail ?? { messages: [identityMessage(subject, failure.reason)] },
+    violations: [
+      {
+        ruleId: "template-unreadable",
+        subject: "native project and issue-type identity",
+        template: "*",
+      },
+    ],
   };
 }
 
@@ -160,6 +203,11 @@ function numericId(value: unknown): value is string {
 
 interface Identity {
   readonly issueId?: string;
+  /**
+   * The project's issue types as this credential sees them, when the identity read already had them;
+   * `null` when that read showed the Jira does not list them.
+   */
+  readonly projectIssueTypes?: readonly { readonly id: string; readonly name: string }[] | null;
   readonly projectKey: string;
   readonly issueType: { readonly id: string; readonly name: string };
   readonly prior: Readonly<Record<string, unknown>>;
@@ -189,7 +237,12 @@ export async function readJiraCreateTemplateIdentity(
   const name = type.body?.name;
   if (type.status !== 200 || type.body?.id !== issueTypeId || !nativeTypeName(name))
     return MALFORMED;
-  return { projectKey, issueType: { id: issueTypeId, name }, prior: {} };
+  return {
+    projectKey,
+    issueType: { id: issueTypeId, name },
+    projectIssueTypes: projectTypesOf(projectRead.body) ?? null,
+    prior: {},
+  };
 }
 
 function nativeTypeName(value: unknown): value is string {
@@ -292,7 +345,14 @@ function mergedCatalog(
   ...lists: readonly (readonly JiraFieldCatalogEntry[])[]
 ): readonly JiraFieldCatalogEntry[] {
   const known = new Map<string, JiraFieldCatalogEntry>();
-  for (const entry of lists.flat()) known.set(entry.id, { id: entry.id, name: entry.name });
+  for (const entry of lists.flat()) {
+    const schemaCustom = "schemaCustom" in entry ? entry.schemaCustom : undefined;
+    known.set(entry.id, {
+      id: entry.id,
+      name: entry.name,
+      ...(typeof schemaCustom === "string" ? { schemaCustom } : {}),
+    });
+  }
   return [...known.values()];
 }
 
@@ -300,12 +360,23 @@ function metadataCatalog(metadata: readonly JiraFieldMetadata[]): readonly JiraF
   return mergedCatalog(JIRA_TEMPLATE_SYSTEM_FIELDS, metadata);
 }
 
-function references(templates: readonly JiraIssueTemplate[]): readonly string[] {
-  return templates.flatMap((template) => [
-    ...template.requiredFields,
-    ...(template.parent.field === undefined ? [] : [template.parent.field]),
-  ]);
+/** A field reference of a template, with the template whose binding says what it names (#4354). */
+interface TemplateReference {
+  readonly template: JiraIssueTemplate;
+  readonly reference: string;
 }
+function references(templates: readonly JiraIssueTemplate[]): readonly TemplateReference[] {
+  return templates.flatMap((template) =>
+    [
+      ...template.requiredFields,
+      ...(template.parent.field === undefined ? [] : [template.parent.field]),
+    ].map((reference) => ({ template, reference })),
+  );
+}
+const idsOf = (
+  entry: TemplateReference,
+  catalog: readonly JiraFieldCatalogEntry[],
+): readonly string[] => resolveJiraTemplateFieldIds(entry.reference, catalog, entry.template);
 
 /**
  * The fields a template reference can name: Jira's system fields and the instance field list
@@ -334,7 +405,15 @@ function fieldCatalogValues(items: readonly unknown[]): readonly JiraFieldCatalo
   return items.flatMap((item): readonly JiraFieldCatalogEntry[] => {
     const record = asRecord(item);
     return typeof record?.id === "string" && typeof record.name === "string"
-      ? [{ id: record.id, name: record.name }]
+      ? [
+          {
+            id: record.id,
+            name: record.name,
+            ...(typeof asRecord(record.schema)?.custom === "string"
+              ? { schemaCustom: String(asRecord(record.schema)?.custom) }
+              : {}),
+          },
+        ]
       : [];
   });
 }
@@ -353,7 +432,7 @@ function bulkReferenceRules(
       (template) =>
         (projectKey === undefined ||
           template.project.trim().toLowerCase() === projectKey.trim().toLowerCase()) &&
-        template.activations.some((activation) => activation.kind === "edit"),
+        jiraTemplateGovernsWrites(template),
     )
     .flatMap((template) =>
       [
@@ -405,7 +484,7 @@ function bulkReferenceViolation(rule: BulkReferenceRule): JiraTemplateViolation 
   return {
     ruleId: "template-unreadable",
     template: jiraIssueTemplateLabel(rule.template),
-    subject: `Bulk issue-field impact: ${rule.reference}`.slice(0, 120),
+    subject: `${JIRA_TEMPLATE_IMPACT_SUBJECTS.bulkPrefix}${rule.reference}`.slice(0, 120),
   };
 }
 function bulkReferenceViolations(
@@ -417,7 +496,7 @@ function bulkReferenceViolations(
     values === undefined ? JIRA_TEMPLATE_SYSTEM_FIELDS : systemAndInstanceFields(values);
   const violations: JiraTemplateViolation[] = [];
   for (const rule of rules) {
-    const ids = resolveJiraTemplateFieldIds(rule.reference, catalog);
+    const ids = resolveJiraTemplateFieldIds(rule.reference, catalog, rule.template);
     if (ids.length === 0 || ids.some((id) => bulkFieldAffected(id, kind, values ?? [])))
       violations.push(bulkReferenceViolation(rule));
   }
@@ -442,8 +521,8 @@ export async function gateJiraBulkReferenceChange(input: {
   const rules = bulkReferenceRules(set.templates, input.projectKey);
   if (rules.length === 0) return OK;
   const unresolved = rules.some(
-    ({ reference }) =>
-      resolveJiraTemplateFieldIds(reference, JIRA_TEMPLATE_SYSTEM_FIELDS).length === 0,
+    ({ reference, template }) =>
+      resolveJiraTemplateFieldIds(reference, JIRA_TEMPLATE_SYSTEM_FIELDS, template).length === 0,
   );
   const values = unresolved ? await readFieldCatalogValues(input.request) : [];
   const violations = bulkReferenceViolations(rules, input.kind, values);
@@ -465,8 +544,8 @@ function schemaRuleAffected(
 ): boolean {
   if (impact.kind === "issue-type") return typeSchemaRuleAffected(template, impact.types);
   if (impact.kind === "link-type") return linkSchemaRuleAffected(template, impact.names);
-  return references([template]).some((reference) => {
-    const ids = resolveJiraTemplateFieldIds(reference, catalog);
+  return references([template]).some((entry) => {
+    const ids = idsOf(entry, catalog);
     return ids.length === 0 || ids.some((id) => impact.fields.some((field) => field.id === id));
   });
 }
@@ -474,7 +553,9 @@ function typeSchemaRuleAffected(
   template: JiraIssueTemplate,
   types: readonly { readonly id: string; readonly name: string }[],
 ): boolean {
-  return [template.issueType, ...(template.parent.issueTypes ?? [])].some((reference) =>
+  const bound = [template.binding?.issueTypeId, ...(template.binding?.parentIssueTypeIds ?? [])];
+  const typed = [template.issueType, ...(template.parent.issueTypes ?? [])];
+  return [...typed, ...bound.filter((id): id is string => id !== undefined)].some((reference) =>
     types.some((type) => sameType(reference, type.id) || sameType(reference, type.name)),
   );
 }
@@ -485,7 +566,7 @@ function linkSchemaRuleAffected(template: JiraIssueTemplate, names: readonly str
   )
     return true;
   return references([template]).some(
-    (reference) => sameType(reference, "issuelinks") || sameType(reference, "Issue Links"),
+    ({ reference }) => sameType(reference, "issuelinks") || sameType(reference, "Issue Links"),
   );
 }
 function mayReferenceDeletedIssue(id: string, values: readonly unknown[]): boolean {
@@ -497,14 +578,14 @@ function mayReferenceDeletedIssue(id: string, values: readonly unknown[]): boole
 function deletionRuleAffected(template: JiraIssueTemplate, values: readonly unknown[]): boolean {
   if (template.parent.link !== undefined) return true;
   const catalog = systemAndInstanceFields(values);
-  return references([template]).some((reference) => {
-    const ids = resolveJiraTemplateFieldIds(reference, catalog);
+  return references([template]).some((entry) => {
+    const ids = idsOf(entry, catalog);
     return ids.length === 0 || ids.some((id) => mayReferenceDeletedIssue(id, values));
   });
 }
 function schemaImpactResult(
   affected: readonly JiraIssueTemplate[],
-  subject = "Schema changes require complete governed issue migration",
+  subject: string = JIRA_TEMPLATE_IMPACT_SUBJECTS.schema,
 ): JiraTemplateGateResult {
   return affected.length === 0
     ? OK
@@ -526,7 +607,7 @@ async function issueDeletionImpact(
   templates: readonly JiraIssueTemplate[],
 ): Promise<JiraTemplateGateResult> {
   const unresolved = references(templates).some(
-    (reference) => resolveJiraTemplateFieldIds(reference, JIRA_TEMPLATE_SYSTEM_FIELDS).length === 0,
+    (entry) => idsOf(entry, JIRA_TEMPLATE_SYSTEM_FIELDS).length === 0,
   );
   const values = unresolved ? await readFieldCatalogValues(request) : [];
   return schemaImpactResult(
@@ -567,9 +648,7 @@ async function completeCatalog(
   templates: readonly JiraIssueTemplate[],
 ): Promise<readonly JiraFieldCatalogEntry[]> {
   const local = metadataCatalog(input.metadata);
-  const unresolved = references(templates).some(
-    (reference) => resolveJiraTemplateFieldIds(reference, local).length === 0,
-  );
+  const unresolved = references(templates).some((entry) => idsOf(entry, local).length === 0);
   if (!unresolved) return local;
   const remote = await readJiraFieldCatalog(input.request);
   return remote === undefined ? local : mergedCatalog(remote, local);
@@ -584,7 +663,7 @@ async function completeIdentity(
   if (input.operation === "create") return identity;
   const base = new Set<string>(BASE_FIELDS);
   const extra = references(templates)
-    .flatMap((reference) => resolveJiraTemplateFieldIds(reference, catalog))
+    .flatMap((entry) => idsOf(entry, catalog))
     .filter((id) => !base.has(id));
   if (extra.length === 0) return identity;
   const current = await issueIdentity(input.request, input.target.issueKey, extra);
@@ -613,9 +692,7 @@ function evidenceFields(
     ...(Object.keys(template.summary).length === 0 ? [] : ["summary"]),
     ...(template.requiredSections.length === 0 ? [] : ["description"]),
     ...(checksLabels ? ["labels"] : []),
-    ...references([template]).flatMap((reference) =>
-      resolveJiraTemplateFieldIds(reference, catalog),
-    ),
+    ...references([template]).flatMap((entry) => idsOf(entry, catalog)),
   ];
 }
 function readableParent(value: unknown): boolean {
@@ -656,26 +733,275 @@ function evidenceViolations(
     .slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX);
 }
 
-/** Fail-closed admission. No templates, or none governing this write, is the unchanged path. */
+/** A creation no template governs: refused before any effect, with the way out in the guidance. */
+function missingTemplateRefusal(
+  ruleId: "template-missing" | "template-not-activated",
+  identity: Identity,
+): JiraTemplateGateResult {
+  return {
+    ok: false,
+    reason: "field-validation",
+    violations: [
+      {
+        ruleId,
+        subject: identity.issueType.name.slice(0, 120),
+        template: `${identity.projectKey}/${identity.issueType.name}`.slice(0, 256),
+      },
+    ],
+  };
+}
+/** The host supplied no template library at all: nothing can govern, so nothing is created. */
+export function jiraNoTemplateLibraryRefusal(): JiraTemplateGateResult {
+  return {
+    ok: false,
+    reason: "field-validation",
+    violations: [{ ruleId: "template-missing", subject: "template library", template: "*" }],
+  };
+}
+/** Creating and editing are governed by plain activations; a transition only by its own rules. */
+function governsOperation(
+  template: JiraIssueTemplate,
+  operation: JiraTemplateGateInput["operation"],
+): boolean {
+  return operation === "transition"
+    ? template.activations.some((activation) => activation.kind === "transition")
+    : jiraTemplateGovernsWrites(template);
+}
+function sameProject(template: JiraIssueTemplate, identity: Identity): boolean {
+  return template.project.trim().toLowerCase() === identity.projectKey.trim().toLowerCase();
+}
+function sameTemplateType(template: JiraIssueTemplate, identity: Identity): boolean {
+  return (
+    sameProject(template, identity) && jiraTemplateIssueTypeMatches(template, identity.issueType)
+  );
+}
+const PROJECT_TYPES_MAX = 200;
+function projectTypesOf(
+  body: Record<string, unknown> | undefined,
+): readonly { readonly id: string; readonly name: string }[] | undefined {
+  const listed = asArray(body?.issueTypes);
+  if (listed === undefined || listed.length > PROJECT_TYPES_MAX) return undefined;
+  return listed.flatMap((item) => {
+    const type = jiraTemplateNativeIssueType(item);
+    return type === undefined ? [] : [type];
+  });
+}
+/** The issue types of the project as the acting user's credential sees them (names are localized). */
+async function readProjectIssueTypes(
+  request: JiraMutationRequest,
+  projectKey: string,
+): Promise<
+  | readonly { readonly id: string; readonly name: string }[]
+  | undefined
+  | Extract<JiraTemplateGateResult, { ok: false }>
+> {
+  const read = await request(`project/${encodeURIComponent(projectKey)}`);
+  if (!read.ok) return read;
+  return read.status === 200 ? projectTypesOf(read.body) : MALFORMED;
+}
+/** The status names of every workflow of the project in the acting user's own view, or undefined when Jira does not list them. */
+async function readProjectStatusNames(
+  request: JiraMutationRequest,
+  projectKey: string,
+): Promise<ReadonlySet<string> | undefined> {
+  const read = await request(
+    `project/${encodeURIComponent(projectKey)}/statuses`,
+    "GET",
+    undefined,
+    "json-array",
+  );
+  const types = read.ok ? read.items : undefined;
+  if (types === undefined || types.length > PROJECT_TYPES_MAX) return undefined;
+  const names = new Set<string>();
+  for (const type of types)
+    for (const status of asArray(asRecord(type)?.statuses) ?? []) {
+      const name = asRecord(status)?.name;
+      if (typeof name === "string") names.add(name.trim().toLowerCase());
+    }
+  return names;
+}
+
+const TRANSITION_ID_TARGET = /^\d{1,10}$/u;
+
+const NO_STATUSES: ReadonlySet<string> = new Set();
+
+/**
+ * The typed targets of a template's `transition:<target>` rules that nothing the acting user sees
+ * explains (#4354): not bound to a status id, not the name or id of a transition THIS issue offers
+ * now, and not a status name of the project (`"unread"` when Jira did not list the statuses: a name
+ * cannot then be judged). A numeric target is a transition id only where this issue offers that id;
+ * it is never assumed to be one.
+ */
+function unresolvedTargets(
+  template: JiraIssueTemplate,
+  transition: JiraTemplateGateTransition | undefined,
+  statuses: ReadonlySet<string> | "unread",
+): readonly string[] {
+  const offered = transition?.available ?? [];
+  return template.activations.flatMap((activation) => {
+    if (activation.kind !== "transition" || activation.target === undefined) return [];
+    if (jiraTemplateBoundStatusId(template, activation) !== undefined) return [];
+    const typed = activation.target;
+    const name = typed.trim().toLowerCase();
+    if (offered.some((item) => item.id === typed || item.name?.trim().toLowerCase() === name))
+      return [];
+    if (TRANSITION_ID_TARGET.test(typed)) return [typed];
+    return statuses === "unread" || statuses.has(name) ? [] : [typed];
+  });
+}
+
+/**
+ * A transition beside a template that GOVERNS THIS ISSUE (its type matches by the one matcher) and
+ * has a transition rule whose target the acting user's view cannot explain may be governed by that
+ * rule in another profile language: nothing is changed, and the violation names the template. Never a
+ * silent pass (#4354). A template of another issue type is not this rule's business, and one bound
+ * for this Jira whose status id is gone is dead and blocks nothing. When Jira does not list the
+ * project's statuses a name target cannot be judged: the transition goes on and the gate records
+ * `status-list-unavailable` (a Jira that cannot list statuses must not block every transition).
+ */
+async function unresolvedTransitionRefusal(
+  input: JiraTemplateGateInput,
+  candidates: readonly JiraIssueTemplate[],
+  identity: Identity,
+): Promise<JiraTemplateGateResult | undefined> {
+  if (input.operation !== "transition") return undefined;
+  const { transition } = input;
+  const pending = candidates.filter(
+    (template) =>
+      sameTemplateType(template, identity) &&
+      unresolvedTargets(template, transition, NO_STATUSES).length > 0,
+  );
+  if (pending.length === 0) return undefined;
+  // The status list is read only when a name target is what is left to explain.
+  const needsNames = pending.some(
+    (template) =>
+      unresolvedTargets(template, transition, "unread").length <
+      unresolvedTargets(template, transition, NO_STATUSES).length,
+  );
+  const statuses = needsNames
+    ? await readProjectStatusNames(input.request, identity.projectKey)
+    : NO_STATUSES;
+  if (statuses === undefined) noteJiraTemplateGateFact("status-list-unavailable");
+  const unresolved = pending.filter(
+    (template) => unresolvedTargets(template, transition, statuses ?? "unread").length > 0,
+  );
+  return unresolved.length === 0 ? undefined : unresolvedRefusal(unresolved);
+}
+
+function unresolvedRefusal(templates: readonly JiraIssueTemplate[]): JiraTemplateGateResult {
+  return {
+    ok: false,
+    reason: "field-validation",
+    violations: templates.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX).map((template) => ({
+      ruleId: "template-binding-unresolved" as const,
+      // The template itself, so a person knows which one to fix: its project and typed issue type.
+      subject: jiraIssueTemplateLabel(template).slice(0, 120),
+      template: jiraIssueTemplateLabel(template).slice(0, 256),
+    })),
+  };
+}
+
+/**
+ * A template of this project that governs writes and names an issue type this Jira does not offer
+ * the acting user (a name typed in another profile language, or a type its binding no longer finds)
+ * may govern this very write: nothing is written, and the violation names the template and the typed
+ * type. Never a silent pass (#4354).
+ */
+async function unresolvedBindingRefusal(
+  input: JiraTemplateGateInput,
+  candidates: readonly JiraIssueTemplate[],
+  identity: Identity,
+): Promise<JiraTemplateGateResult | undefined> {
+  const pending = candidates.filter(
+    (template) => sameProject(template, identity) && !sameTemplateType(template, identity),
+  );
+  if (pending.length === 0) return undefined;
+  const types =
+    identity.projectIssueTypes === undefined
+      ? await readProjectIssueTypes(input.request, identity.projectKey)
+      : (identity.projectIssueTypes ?? undefined);
+  // A Jira that does not list the project's issue types cannot show a template unresolved: the name
+  // matching of before stays. Jira Data Center and Cloud always list them, so this is recorded.
+  if (types === undefined) {
+    noteJiraTemplateGateFact("type-list-unavailable");
+    return undefined;
+  }
+  if ("ok" in types) return identityRefusal(types, "project-and-type");
+  // A template bound for this Jira whose id is no type of the project is dead: it names a type that
+  // does not exist here, so it governs nothing and blocks nothing. Only a template matched by NAME
+  // (unbound, or bound for another Jira or to other typed names) can be in a language nobody sees.
+  const unresolved = pending.filter(
+    (template) =>
+      template.binding === undefined &&
+      !types.some((type) => jiraTemplateIssueTypeMatches(template, type)),
+  );
+  return unresolved.length === 0 ? undefined : unresolvedRefusal(unresolved);
+}
+
+/**
+ * Fail-closed admission. A CREATION is sent only when a saved template activated for creating
+ * governs its project and issue type (#4354): no library, no template for the type, or only
+ * templates of other activation points is a refusal, never a pass. An EDIT is judged by what it
+ * touches, never worse than before (an issue whose type has no template is edited freely), and a
+ * status change is free: only a template activated for `transition:<target>` governs it, while the
+ * fields a transition carries are an edit of those fields (owner decision, 2026-11-13).
+ */
 export async function gateJiraMutationByTemplates(
   input: JiraTemplateGateInput,
 ): Promise<JiraTemplateGateResult> {
   // A source that throws propagates: the owner's executor turns it into a correlated, redacted
   // diagnostic and an unavailable outcome, so the write still never reaches Jira.
   const set = input.source?.();
-  if (set === undefined) return OK;
-  if (set.unreadable > 0) return unreadableRefusal(set.unreadableNames);
+  if (set === undefined) return input.operation === "create" ? jiraNoTemplateLibraryRefusal() : OK;
+  const early = admissionWithoutIdentity(input, set);
+  if (early !== undefined) return early;
   const candidates = set.templates.filter((template) =>
-    template.activations.some((activation) => activation.kind === input.operation),
+    governsOperation(template, input.operation),
   );
-  if (candidates.length === 0) return OK;
   const first =
     input.operation === "create"
       ? await createIdentity(input.request, input.target)
       : await issueIdentity(input.request, input.target.issueKey);
-  return "ok" in first
-    ? identityRefusal(first, candidates)
-    : checkCandidates(input, candidates, first);
+  if ("ok" in first)
+    return identityRefusal(first, input.operation === "create" ? "project-and-type" : "issue");
+  return judgeWithIdentity(input, set, candidates, first);
+}
+/** The identity is known: an unresolvable template, a creation no template governs, then the rules. */
+async function judgeWithIdentity(
+  input: JiraTemplateGateInput,
+  set: JiraIssueTemplateSet,
+  candidates: readonly JiraIssueTemplate[],
+  identity: Identity,
+): Promise<JiraTemplateGateResult> {
+  return (
+    (await unresolvedBindingRefusal(input, candidates, identity)) ??
+    (await unresolvedTransitionRefusal(input, candidates, identity)) ??
+    (input.operation === "create" ? createWithoutTemplate(set, candidates, identity) : undefined) ??
+    checkCandidates(input, candidates, identity)
+  );
+}
+/** What is decided before any identity is read: an unreadable library, or nothing that governs. */
+function admissionWithoutIdentity(
+  input: JiraTemplateGateInput,
+  set: JiraIssueTemplateSet,
+): JiraTemplateGateResult | undefined {
+  if (set.unreadable > 0) return unreadableRefusal(set.unreadableNames);
+  const governing = set.templates.some((template) => governsOperation(template, input.operation));
+  return governing || input.operation === "create" ? undefined : OK;
+}
+/** A creation whose type has no template activated for it is refused, naming why. */
+function createWithoutTemplate(
+  set: JiraIssueTemplateSet,
+  candidates: readonly JiraIssueTemplate[],
+  identity: Identity,
+): JiraTemplateGateResult | undefined {
+  if (candidates.some((template) => sameTemplateType(template, identity))) return undefined;
+  return missingTemplateRefusal(
+    set.templates.some((template) => sameTemplateType(template, identity))
+      ? "template-not-activated"
+      : "template-missing",
+    identity,
+  );
 }
 
 function sameType(left: string, right: string): boolean {
@@ -709,7 +1035,7 @@ async function checkCandidates(
   if (matching.length === 0) return OK;
   const catalog = await completeCatalog(input, matching);
   const identity = await completeIdentity(input, first, catalog, matching);
-  if ("ok" in identity) return identityRefusal(identity, matching);
+  if ("ok" in identity) return identityRefusal(identity, "field-list");
   const ordered = requiredLinksFirst(input.links ?? [], matching);
   // Only the link that rides on the request itself exists in the state this write leaves.
   const primary = planJiraIssueLinks(ordered, identity.prior.issuelinks).inline;
@@ -722,7 +1048,45 @@ async function checkCandidates(
   const unreadable = evidenceViolations(subject, matching, catalog);
   if (unreadable.length > 0)
     return { ok: false, reason: "field-validation", violations: unreadable };
-  const violations = checkJiraIssueTemplates(matching, subject, catalog);
-  if (violations.length > 0) return { ok: false, reason: "field-validation", violations };
-  return ordered.length === 0 ? OK : { ok: true, links: ordered };
+  const verdict = evaluateJiraTemplateChange({
+    templates: matching,
+    after: subject,
+    before:
+      input.operation === "edit"
+        ? await beforeSubject(input, identity, matching, catalog)
+        : undefined,
+    touched: touchedFields(input),
+    catalog,
+  });
+  if (verdict.blocking.length > 0)
+    return { ok: false, reason: "field-validation", violations: verdict.blocking };
+  noteJiraTemplateNotices(verdict.notices);
+  return {
+    ok: true,
+    ...(ordered.length === 0 ? {} : { links: ordered }),
+    ...(verdict.notices.length === 0 ? {} : { notices: verdict.notices }),
+  };
+}
+/** The wire field ids this write sets; labels and links are fields of the issue too. */
+function touchedFields(input: JiraTemplateGateInput): ReadonlySet<string> {
+  const touched = new Set(Object.keys(input.validated.fields));
+  if (input.validated.update.labels !== undefined) touched.add("labels");
+  if ((input.links?.length ?? 0) > 0 || input.plannedIssueLinks !== undefined)
+    touched.add("issuelinks");
+  return touched;
+}
+/** The issue as it stands: the same subject with none of the write's changes. */
+async function beforeSubject(
+  input: JiraTemplateGateInput,
+  identity: Identity,
+  matching: readonly JiraIssueTemplate[],
+  catalog: readonly JiraFieldCatalogEntry[],
+): Promise<JiraTemplateSubject> {
+  const { plannedIssueLinks: _planned, ...unchanged } = input;
+  return bindJiraTemplateParentTypes(
+    input.request,
+    subjectOf({ ...unchanged, validated: { fields: {}, update: {} }, links: [] }, identity),
+    matching,
+    catalog,
+  );
 }

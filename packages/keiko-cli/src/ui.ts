@@ -59,7 +59,8 @@ import {
 // ui.ts on every `keiko` invocation, and this one eager import accounted for most of
 // the measured ~410ms per-command module-loading tax (`keiko --version` included).
 // Only type imports may reference the package at module scope here.
-import { loadServer as loadServerModule } from "./lazy-modules.js";
+import { loadSecurity, loadServer as loadServerModule } from "./lazy-modules.js";
+import { beginUiStartupProgress, type UiStartupProgress } from "./ui-startup-progress.js";
 import {
   processExitingActivityLogEvent,
   processFatalActivityLogEvent,
@@ -195,6 +196,14 @@ const PROCESS_STARTED_OPERATION = defineActivityLogOperation({
       maxLength: 64,
     },
     gatewayProviderCount: { type: "integer", dataClass: "count", required: false },
+    // Whether this launched UI process could record its startup sign of life for the launcher that
+    // waits on it (#4358, ui-startup-progress.ts). Absent when no launcher asked for one.
+    startupSign: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["reported", "record-unavailable", "write-failed"],
+    },
     processScope: {
       type: "string",
       dataClass: "closed-enum",
@@ -1415,6 +1424,7 @@ async function reportProcessStarted(
         ...(installMode === undefined ? {} : { installMode }),
         ...(installModeErrorKind === undefined ? {} : { installModeErrorKind }),
         ...(gatewayProviderCount === undefined ? {} : { gatewayProviderCount }),
+        ...(startupSignState === undefined ? {} : { startupSign: startupSignState }),
       },
     ),
   );
@@ -1645,6 +1655,9 @@ async function reportStartedAndWaitForShutdown(input: ReportStartedInput): Promi
     installModeProbe: deps.installModeProbe,
     onHeartbeat: input.hooks.onHeartbeat,
   });
+  // The server listens and has answered its own start-up probes: the launcher's health check takes
+  // over from the sign of life.
+  endStartupProgress();
   const activity: WaitForShutdownActivity = {
     activityLog,
     startedAt,
@@ -1821,7 +1834,9 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
   const launch = await launchActivityLog(options, isRealLaunch);
   const { loadedServer, activityLog, closeActivityLog } = launch;
   const factory = deps.createServer ?? (await loadServerModule()).createUiServer;
+  advanceStartupProgress();
   runStartupReadinessCheck(options, loadedServer);
+  advanceStartupProgress();
   const startupRecovery = handlerDeps.updateStartupRecovery;
   const readiness = { open: startupRecovery === undefined };
   const recoveryContext = {
@@ -1834,6 +1849,7 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
     io,
   };
   const recoveryCurrent = await reconcileBeforeListen(recoveryContext);
+  advanceStartupProgress();
   const server = await factory({
     staticRoot,
     csp,
@@ -1844,7 +1860,9 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
     ...(activityLog === undefined ? {} : { activityLog }),
   });
   applyServerTimeouts(server);
+  advanceStartupProgress();
   await listen(server, parsed.port);
+  advanceStartupProgress();
   launch.loadedServer?.prewarmJavaParserWorker();
   const exit = armExitEvidence(server, io, launch, stateDir);
   await reconcileAfterListen({ ...recoveryContext, current: recoveryCurrent, server });
@@ -1942,6 +1960,7 @@ async function launchUiFromDeps(
   // and the injected-server test path alike — this is a second, memoized, already-cached call, not
   // a new load.
   const logLevel = (await loadServerModule()).resolveServerLogThreshold(effectiveEnv);
+  advanceStartupProgress();
   const runtimeEnv = withDefaultLocalRuntimeStateEnv(stateDir, parsed, effectiveEnv, cwd);
   const handlerDeps = await buildHandlerDepsOrReport(
     parsed,
@@ -1953,9 +1972,11 @@ async function launchUiFromDeps(
     deps.buildHandlerDeps,
   );
   if (typeof handlerDeps === "number") return handlerDeps;
+  advanceStartupProgress();
   try {
     const launchProjectResult = await registerLaunchProjectOrReport(cwd, handlerDeps, io);
     if (launchProjectResult !== null) return launchProjectResult;
+    advanceStartupProgress();
     await startUiServer({
       staticRoot,
       csp: csp.csp,
@@ -1992,8 +2013,11 @@ export async function runUiCli(
     return reExec;
   }
   prepareUiInstallLayoutEvidence(cwd, effectiveEnv, deps);
+  await beginStartupProgress(cwd, effectiveEnv, parsed, deps);
+  advanceStartupProgress();
   const staticRoot = deps.staticRoot ?? defaultStaticRoot(cwd);
   if (!ensureStaticRoot(staticRoot, io)) {
+    endStartupProgress();
     return 1;
   }
   const cspRuntime = await createLiveCspSource(
@@ -2018,7 +2042,52 @@ export async function runUiCli(
     );
   } finally {
     cspRuntime.dispose();
+    endStartupProgress();
   }
+}
+
+// #4358, Windows only: while this process loads its code and initialises, it records its startup
+// progress for the launcher that waits on it (ui-startup-progress.ts): every module it loads, every
+// phase below, and the bound of a Windows program that blocks it. Only a launched UI reports: the
+// launcher supplied the launch id it waits on. Other platforms record nothing.
+let startupProgress: UiStartupProgress | undefined;
+let startupSignState: "reported" | "record-unavailable" | "write-failed" | undefined;
+
+async function beginStartupProgress(
+  cwd: string,
+  env: EnvSource,
+  parsed: UiCliArgs,
+  deps: UiCliDeps,
+): Promise<void> {
+  const launchId = parsed.launchId ?? env[KEIKO_UI_LAUNCH_ID_ENV];
+  if (process.platform !== "win32") return;
+  if (deps.createServer !== undefined || launchId === undefined) return;
+  startupSignState = "reported";
+  const progress = beginUiStartupProgress(resolveRuntimeStateDir(cwd, env), launchId, {
+    recordFailure: (failure) => {
+      if (failure !== "unreadable") startupSignState = failure;
+    },
+  });
+  startupProgress = progress;
+  const { setWindowsProgramObserver } = await loadSecurity();
+  setWindowsProgramObserver((boundMs) => {
+    progress.announce(boundMs);
+  });
+}
+
+/** A startup phase of the UI command completed: real progress on the main thread. */
+function advanceStartupProgress(): void {
+  startupProgress?.advance();
+}
+
+function endStartupProgress(): void {
+  const progress = startupProgress;
+  if (progress === undefined) return;
+  startupProgress = undefined;
+  progress.stop();
+  void loadSecurity().then(({ setWindowsProgramObserver }) => {
+    setWindowsProgramObserver(undefined);
+  });
 }
 
 function prepareUiProcessScope(parsed: UiCliArgs, io: CliIo): boolean {

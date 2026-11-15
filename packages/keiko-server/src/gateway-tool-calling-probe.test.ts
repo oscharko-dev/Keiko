@@ -7,7 +7,10 @@ import {
   type GatewayConfig,
   type ModelProviderConfig,
 } from "@oscharko-dev/keiko-model-gateway";
-import { probeGatewayToolCalling } from "./gateway-tool-calling-probe.js";
+import {
+  probeGatewayToolCalling,
+  probeGatewayToolCallingVerdict,
+} from "./gateway-tool-calling-probe.js";
 import * as spendBudget from "./gateway-spend-budget.js";
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
@@ -248,7 +251,7 @@ describe("probeGatewayToolCalling", () => {
     },
   );
 
-  it("verifies support only when the forced function call is present", async () => {
+  it("verifies support only when the offered function is actually called", async () => {
     let requestBody = "";
     const fetchImpl: typeof fetch = (_url, init) => {
       requestBody = typeof init?.body === "string" ? init.body : "";
@@ -268,8 +271,119 @@ describe("probeGatewayToolCalling", () => {
     };
 
     await expect(probeGatewayToolCalling(CONFIG, PROVIDER, fetchImpl)).resolves.toBe("verified");
-    expect(JSON.parse(requestBody)).toMatchObject({
-      tool_choice: { type: "function", function: { name: "report_readiness" } },
+    // Production offers tools without forcing one, and the check runs the same way first (#4351).
+    expect(JSON.parse(requestBody)).not.toHaveProperty("tool_choice");
+  });
+
+  // #4351 (owner decisions 2026-11-13): the check first runs exactly as production does, with the
+  // tool offered and no forced tool_choice; only a model that called none is asked with the forced call.
+  describe("two-step tool-calling check", () => {
+    const CALL = {
+      choices: [
+        {
+          message: {
+            tool_calls: [{ function: { name: "report_readiness", arguments: '{"status":"ok"}' } }],
+          },
+        },
+      ],
+    };
+    const PLAIN = { choices: [{ message: { content: "I will not call a tool." } }] };
+
+    function scripted(
+      unforced: () => Response,
+      forced: () => Response,
+    ): { readonly fetchImpl: typeof fetch; readonly bodies: Record<string, unknown>[] } {
+      const bodies: Record<string, unknown>[] = [];
+      const fetchImpl: typeof fetch = (_url, init) => {
+        const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
+          string,
+          unknown
+        >;
+        bodies.push(body);
+        return Promise.resolve(body.tool_choice === undefined ? unforced() : forced());
+      };
+      return { fetchImpl, bodies };
+    }
+
+    it("a model that calls the tool unforced is verified in one request, without tool_choice", async () => {
+      const { fetchImpl, bodies } = scripted(
+        () => jsonResponse(CALL),
+        () => {
+          throw new Error("a forced call must not be needed");
+        },
+      );
+      await expect(probeGatewayToolCallingVerdict(CONFIG, PROVIDER, fetchImpl)).resolves.toEqual({
+        status: "verified",
+        outcome: "called-unforced",
+      });
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]).not.toHaveProperty("tool_choice");
+      expect(bodies[0]).toHaveProperty("tools");
+    });
+
+    it("a model that calls the tool only when forced is asked a second time, forced", async () => {
+      const { fetchImpl, bodies } = scripted(
+        () => jsonResponse(PLAIN),
+        () => jsonResponse(CALL),
+      );
+      await expect(probeGatewayToolCallingVerdict(CONFIG, PROVIDER, fetchImpl)).resolves.toEqual({
+        status: "verified",
+        outcome: "called-only-forced",
+      });
+      expect(bodies).toHaveLength(2);
+      expect(bodies[1]).toMatchObject({
+        tool_choice: { type: "function", function: { name: "report_readiness" } },
+      });
+    });
+
+    it("a forced call the provider refuses is no verdict: unverified, never unsupported", async () => {
+      const { fetchImpl, bodies } = scripted(
+        () => jsonResponse(PLAIN),
+        () =>
+          jsonResponse({ error: { message: "tool_choice is not allowed in thinking mode" } }, 400),
+      );
+      await expect(probeGatewayToolCallingVerdict(CONFIG, PROVIDER, fetchImpl)).resolves.toEqual({
+        status: "unverified",
+        outcome: "forced-refused",
+      });
+      expect(bodies.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("a model that calls no tool in either step does not call tools", async () => {
+      const { fetchImpl } = scripted(
+        () => jsonResponse(PLAIN),
+        () => jsonResponse(PLAIN),
+      );
+      await expect(probeGatewayToolCallingVerdict(CONFIG, PROVIDER, fetchImpl)).resolves.toEqual({
+        status: "unsupported",
+        outcome: "no-call",
+      });
+    });
+
+    it("an endpoint that refuses the offered tool is a verdict, and no forced request follows", async () => {
+      const { fetchImpl, bodies } = scripted(
+        () => jsonResponse({ error: { message: "tools are not supported" } }, 400),
+        () => jsonResponse(CALL),
+      );
+      await expect(probeGatewayToolCallingVerdict(CONFIG, PROVIDER, fetchImpl)).resolves.toEqual({
+        status: "unsupported",
+        outcome: "tools-refused",
+      });
+      expect(bodies.every((body) => body.tool_choice === undefined)).toBe(true);
+    });
+
+    it.each([
+      ["the first step", 503, 200],
+      ["the forced step", 200, 503],
+    ] as const)("a busy gateway in %s is inconclusive", async (_name, first, second) => {
+      const { fetchImpl } = scripted(
+        () => jsonResponse(first === 200 ? PLAIN : {}, first),
+        () => jsonResponse(second === 200 ? CALL : {}, second),
+      );
+      await expect(probeGatewayToolCallingVerdict(CONFIG, PROVIDER, fetchImpl)).resolves.toEqual({
+        status: "transient",
+        outcome: "inconclusive",
+      });
     });
   });
 

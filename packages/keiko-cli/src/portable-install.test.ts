@@ -7,16 +7,19 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
   truncateSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+
+beforeAll(() => {
+  // The first call runs `npm pack --dry-run`; the upgrade precondition tests read its answer.
+  realRootPackListing();
+}, 120_000);
 
 const renameControl = vi.hoisted(() => ({
   recreateLockTarget: undefined as string | undefined,
@@ -84,33 +87,25 @@ import type {
   ValidatedPortableRoot,
 } from "./portable-install.js";
 import { writeFailedRegistration, writeManagedRegistration } from "./portable-registration.js";
+import {
+  realRootPackListing,
+  writePortableAppPayload,
+} from "./test-support/portable-app-payload.js";
 import { hashPortableTreeKht1 } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 import {
   PACKAGE_NAME,
   layoutFor,
   primaryLauncherName,
   targetRuntime,
+  type PortableLayout,
   type PortableTarget,
 } from "./portable-shared.js";
+import { policyAllowedParent } from "./test-support/policy-allowed-parent.js";
 
 const tempRoots: string[] = [];
-const REAL_TMPDIR = realpathSync(tmpdir());
-
-function pathInsideRepository(path: string): boolean {
-  let cursor = path;
-  for (;;) {
-    if (existsSync(join(cursor, ".git"))) return true;
-    const parent = dirname(cursor);
-    if (parent === cursor) return false;
-    cursor = parent;
-  }
-}
 
 function makePolicyAllowedRoot(): string {
-  const cwdParent = dirname(process.cwd());
-  const parent =
-    cwdParent.startsWith(REAL_TMPDIR) || pathInsideRepository(cwdParent) ? homedir() : cwdParent;
-  const root = mkdtempSync(join(parent, ".keiko-portable-upgrade-test-"));
+  const root = mkdtempSync(join(policyAllowedParent(), ".keiko-portable-upgrade-test-"));
   tempRoots.push(root);
   return root;
 }
@@ -142,7 +137,7 @@ function seedPortableRoot(
   return { layout, manifest };
 }
 
-async function seedWindowsGenerationRoot(root: string): Promise<string> {
+async function seedWindowsGenerationRoot(root: string, appPayload = false): Promise<string> {
   const launcher = Buffer.from("signed root launcher");
   rmSync(join(root, ".portable", "generations"), { recursive: true, force: true });
   const provisionalRoot = join(root, ".portable", "generations", "pending");
@@ -159,6 +154,8 @@ async function seedWindowsGenerationRoot(root: string): Promise<string> {
     join(provisionalRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
     "supervisor",
   );
+  // Before the tree is sealed: the generation's digest covers the real package's entries.
+  if (appPayload) writePortableAppPayload(provisionalRoot);
   writeFileSync(join(root, "Keiko.exe"), launcher);
   writeFileSync(
     join(root, "support", "keiko-support.cmd"),
@@ -486,6 +483,114 @@ describe("portable install decisions", () => {
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toContain(backupRoot);
   });
+
+  // #4358: the click upgrade of a first installation refused a real payload at its precondition,
+  // "portable managed install changed before upgrade", because the inspection did not know the
+  // files npm packs beside `dist`. Each installation here carries the real package's entries, in
+  // every layout the inspection serves: the flat first installation of each platform and the
+  // Windows generation. A foreign entry inside a sealed generation is refused earlier, by the tree
+  // attestation; the ones outside it reach the inspection.
+  const UPGRADE_LAYOUTS = [
+    ["flat windows-x64", "windows-x64"],
+    ["flat linux-x64", "linux-x64"],
+    ["flat macos-arm64", "macos-arm64"],
+    ["Windows generation", "windows-generation"],
+  ] as const;
+  const UPGRADE_FOREIGN = [
+    ["no foreign entry", undefined],
+    ["a file the package does not pack in app/", "app"],
+    ["a foreign file at the install root", "root"],
+    ["a foreign file in .portable/", "portable"],
+    ["a folder named like an always-packed file in app/", "app-folder"],
+  ] as const;
+
+  async function seedUpgradeCurrent(
+    layout: (typeof UPGRADE_LAYOUTS)[number][1],
+    root: string,
+  ): Promise<{ current: ValidatedPortableRoot; managedRoot: string; target: PortableTarget }> {
+    const managedRoot = join(root, "managed", layout === "macos-arm64" ? "Keiko.app" : "Keiko");
+    if (layout === "windows-generation") {
+      await seedWindowsGenerationRoot(managedRoot, true);
+      return {
+        current: validatePortableRoot("windows-x64", managedRoot),
+        managedRoot,
+        target: "windows-x64",
+      };
+    }
+    const current = seedPortableRoot(layout, managedRoot, "0.2.15");
+    writePortableAppPayload(current.layout.resourceRoot);
+    return { current, managedRoot, target: layout };
+  }
+
+  function foreignPath(
+    kind: (typeof UPGRADE_FOREIGN)[number][1],
+    layout: PortableLayout,
+  ): string | undefined {
+    if (kind === undefined) return undefined;
+    const paths = {
+      app: join(layout.resourceRoot, "app", "FOREIGN.txt"),
+      root: join(layout.installRoot, "FOREIGN-ROOT.txt"),
+      portable: join(layout.resourceRoot, ".portable", "FOREIGN.json"),
+      "app-folder": join(layout.resourceRoot, "app", "LICENSE.d", "FOREIGN.txt"),
+    } as const;
+    return paths[kind];
+  }
+
+  it.each(
+    UPGRADE_LAYOUTS.flatMap(([layoutName, layout]) =>
+      UPGRADE_FOREIGN.map(([foreignName, foreign]) => ({
+        layoutName,
+        layout,
+        foreignName,
+        foreign,
+      })),
+    ),
+  )(
+    "upgrade precondition: $layoutName with $foreignName",
+    async ({ layout, foreign }) => {
+      const root = makePolicyAllowedRoot();
+      const { current, managedRoot, target } = await seedUpgradeCurrent(layout, root);
+      const source = seedPortableRoot(target, join(root, "source"), "0.4.0");
+      const foreignFile = foreignPath(foreign, current.layout);
+      if (foreignFile !== undefined) {
+        mkdirSync(dirname(foreignFile), { recursive: true });
+        writeFileSync(foreignFile, "unowned\n");
+      }
+      const stateDir = join(root, ".keiko-state");
+      const env = { APPDATA: join(root, "appdata") };
+      mkdirSync(stateDir, { recursive: true });
+      writeManagedRegistration({
+        stateDir,
+        layout: current.layout,
+        manifest: current.manifest,
+        env,
+        home: root,
+        now: new Date("2026-08-02T00:00:00.000Z"),
+      });
+
+      let thrown: unknown;
+      try {
+        upgradeManagedInstall({
+          target,
+          source,
+          current,
+          managedRoot,
+          stateDir,
+          env,
+          home: root,
+          now: new Date("2026-08-03T00:00:00.000Z"),
+          io: { out: () => undefined, err: () => undefined },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      const message = thrown instanceof Error ? thrown.message : "";
+      expect(message.includes("changed before upgrade")).toBe(foreignFile !== undefined);
+      if (foreignFile !== undefined) expect(existsSync(foreignFile)).toBe(true);
+    },
+    60_000,
+  );
 
   it("revokes a managed-upgrade capability before releasing its locks", async () => {
     const root = makePolicyAllowedRoot();

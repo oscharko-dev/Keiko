@@ -22,7 +22,7 @@ const EPIC_LINK = "com.pyxis.greenhopper.jira:gh-epic-link";
 const STORY_POINTS = "com.atlassian.jira.plugin.system.customfieldtypes:float";
 const BULK = 50;
 
-async function ensureProject({ session, auth }, key, name) {
+export async function ensureProject({ session, auth }, key, name) {
   const existing = await labRequest(session, "GET", `/rest/api/2/project/${key}`, auth);
   if (existing.status === 200) return existing.value;
   await checked(session, `project-${key}`, "POST", "/rest/api/2/project", auth, {
@@ -73,7 +73,7 @@ export async function fieldIds({ session, auth }, projectKey) {
 const wiki = (sections) =>
   sections.map((name) => `h3. ${name}\nSynthetischer Inhalt.`).join("\n\n");
 
-async function bulkCreate({ session, auth }, project, items) {
+export async function bulkCreate({ session, auth }, project, items) {
   const keys = [];
   const slices = Array.from({ length: Math.ceil(items.length / BULK) }, (_, index) =>
     items.slice(index * BULK, (index + 1) * BULK),

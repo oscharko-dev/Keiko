@@ -1,9 +1,11 @@
 import { expect, it, vi } from "vitest";
 import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
+import { GatewayToolCatalogError } from "@oscharko-dev/keiko-model-gateway";
 import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
   JIRA_ENTITY_PROPERTY_READ_DEFINITIONS,
+  JIRA_PROPERTY_ENTITIES,
   jiraEntityPropertyDeclarationForTool,
 } from "./jiraEntityPropertyDescriptors.js";
 import { createJiraProviderForCatalog, jiraOperationForTool } from "./jiraManagedProvider.js";
@@ -172,5 +174,77 @@ it.each([
         effects: ["remote-read"],
       });
     }
+  },
+);
+
+// #4357 AC4. The read `jira.issue-property-keys` was refused in the selection run of 2026-11-12 with
+// `catalogReason=invalid-shape`, `missingRequired=["issueIdOrKey"]`, no unexpected property and no
+// invalid path: the model sent no issue identity. That refusal is the schema working as designed (the
+// same tool completed 82 times in the lab logs), so the class pin below holds the invariant that
+// makes it correct and actionable for every entity-property tool: empty arguments are refused naming
+// exactly the identity the entity requires, the correction the model receives names it, and the
+// offered schema keeps `required`. Expected names derive from the entity table the descriptors are
+// built from, never from a restated list.
+const PROPERTY_TOOLS = (
+  Object.keys(JIRA_PROPERTY_ENTITIES) as (keyof typeof JIRA_PROPERTY_ENTITIES)[]
+).flatMap((kind) => [
+  { name: `jira.${kind}-property-keys`, kind, single: false },
+  { name: `jira.${kind}-property`, kind, single: true },
+]);
+function emptyArgumentMismatch(name: string): {
+  readonly shape: NonNullable<ReturnType<typeof describeCatalogSchemaMismatch>>;
+  readonly inputSchema: Record<string, unknown>;
+} {
+  const declaration = jiraEntityPropertyDeclarationForTool(name);
+  if (declaration === undefined) throw new TypeError("Missing property declaration");
+  const shape = describeCatalogSchemaMismatch(declaration.descriptor.inputSchema, {});
+  if (shape === undefined) throw new TypeError(`${name} accepted empty arguments`);
+  return { shape, inputSchema: declaration.descriptor.inputSchema };
+}
+it.each(PROPERTY_TOOLS)(
+  "refuses empty arguments of $name naming exactly the required identity",
+  ({ name, kind, single }) => {
+    const entity = JIRA_PROPERTY_ENTITIES[kind];
+    const { shape, inputSchema } = emptyArgumentMismatch(name);
+    const required = [...entity.required, ...(single ? ["propertyKey"] : [])].sort();
+    if ("userSelector" in entity) {
+      // The exactly-one choice owns username and userKey; what is named beyond it is the rest.
+      expect(shape.choice).toEqual({
+        kind: "exactly-one",
+        alternatives: [["username"], ["userKey"]],
+      });
+      const choiceNames = new Set(shape.choice?.alternatives.flat());
+      const beyondChoice = shape.missingRequired.filter((path) => !choiceNames.has(path));
+      expect([...beyondChoice].sort()).toEqual(required);
+    } else {
+      expect([...shape.missingRequired].sort()).toEqual(required);
+      expect(shape.choice).toBeUndefined();
+      // No root alternative: the provider projection passes this schema through unchanged, so the
+      // model is offered exactly these required names.
+      expect(inputSchema.oneOf).toBeUndefined();
+      expect([...(inputSchema.required as string[])].sort()).toEqual(required);
+    }
+    expect(shape.invalidPaths).toEqual([]);
+    expect(shape.unexpectedPropertyCount).toBe(0);
+  },
+);
+it.each(PROPERTY_TOOLS)(
+  "tells the model what to supply when $name arguments are empty",
+  ({ name }) => {
+    const { shape } = emptyArgumentMismatch(name);
+    const correction = new GatewayToolCatalogError("invalid-arguments", undefined, true, {
+      toolCallId: "call-1",
+      offeredAlias: name.replaceAll(/[.-]/gu, "_"),
+      shape,
+    }).correction();
+    if (correction === undefined) throw new TypeError("Missing schema correction");
+    const choiceNames = new Set(shape.choice?.alternatives.flat());
+    if (shape.missingRequired.some((path) => !choiceNames.has(path)))
+      expect(correction).toContain(
+        `Missing required properties: ${shape.missingRequired.join(", ")}.`,
+      );
+    if (shape.choice !== undefined)
+      expect(correction).toContain("Supply exactly one of: username, userKey; omit the others.");
+    expect(correction).not.toContain("invalid-shape");
   },
 );

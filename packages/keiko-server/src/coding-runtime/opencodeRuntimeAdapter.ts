@@ -37,7 +37,11 @@ import {
   OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_FILE,
 } from "./opencodeNativeLaunchSecrets.js";
 import { createGeneratedOpenCodeNativePolicyPlugin } from "./opencodeNativePolicyPlugin.js";
-import { isApprovedOpenCodeRuntimeVersion } from "./opencodeRuntimeVersions.js";
+import {
+  OPENCODE_PINNED_VERSION,
+  isApprovedOpenCodeRuntimeVersion,
+  openCodeRuntimeVersionPin,
+} from "./opencodeRuntimeVersions.js";
 import { OpenCodeV2HttpStatusError } from "./opencodeV2HttpClient.js";
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
@@ -50,7 +54,6 @@ import {
 } from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeReconciler,
-  isOpenCodeProviderTokenUsage,
   isOpenCodeCompactionActivity,
   OPEN_CODE_EVENT_KINDS,
   type OpenCodeReconciliationEvent,
@@ -775,7 +778,7 @@ export function createOpenCodeRuntimeAdapter(
       while (turnCurrent(generation, signal)) {
         const outcome = await pollTurnOnce(generation, signal, sessionId);
         if (outcome !== undefined) return outcome;
-        await waitForTurnChange(signal, generation);
+        await waitForTurnChange(signal, generation); // NOSONAR typescript:S9382 -- one poll per turn change, in order
       }
       return turnSettled(generation) ? (turnSettledOutcome ?? false) : false;
     } finally {
@@ -1186,7 +1189,7 @@ async function applyHistoryPlan(
   const activity = takeSafeActivity(ports, planned.events);
   for (const event of prepared.projections) {
     const identity = eventIdentity(event);
-    const receipt: unknown = await ports.governedSink.execute(identity, event);
+    const receipt: unknown = await ports.governedSink.execute(identity, event); // NOSONAR typescript:S9382 -- receipts settle in projection order
     if (receipt !== "applied" && receipt !== "duplicate") throw new Error("sink-receipt-invalid");
   }
   if (!prepared.commit()) throw new Error("reconciler-commit-conflict");
@@ -1566,22 +1569,11 @@ function validControl(value: unknown): value is OpenCodeLiveControl {
 
 const RECONCILIATION_EVENT_KEYS = ["id", "aggregateId", "sequence", "digest", "kind"];
 const RECONCILIATION_EVENT_COMPACTION_KEYS = [...RECONCILIATION_EVENT_KEYS, "compaction"];
-const RECONCILIATION_EVENT_USAGE_KEYS = [...RECONCILIATION_EVENT_KEYS, "providerTokenUsage"];
-const RECONCILIATION_EVENT_COMPACTION_USAGE_KEYS = [
-  ...RECONCILIATION_EVENT_KEYS,
-  "compaction",
-  "providerTokenUsage",
-];
 
 function reconciliationEventKeys(event: OpenCodeReconciliationEvent): readonly string[] {
-  if (event.compaction !== undefined) {
-    return event.providerTokenUsage === undefined
-      ? RECONCILIATION_EVENT_COMPACTION_KEYS
-      : RECONCILIATION_EVENT_COMPACTION_USAGE_KEYS;
-  }
-  return event.providerTokenUsage === undefined
+  return event.compaction === undefined
     ? RECONCILIATION_EVENT_KEYS
-    : RECONCILIATION_EVENT_USAGE_KEYS;
+    : RECONCILIATION_EVENT_COMPACTION_KEYS;
 }
 
 function validEvent(event: OpenCodeReconciliationEvent): boolean {
@@ -1593,8 +1585,7 @@ function validEvent(event: OpenCodeReconciliationEvent): boolean {
     event.sequence >= 0 &&
     DIGEST.test(event.digest) &&
     OPEN_CODE_EVENT_KINDS.includes(event.kind) &&
-    isOpenCodeCompactionActivity(event.compaction) &&
-    isOpenCodeProviderTokenUsage(event.providerTokenUsage)
+    isOpenCodeCompactionActivity(event.compaction)
   );
 }
 
@@ -1683,7 +1674,11 @@ export function createGeneratedOpenCodeV2Plugins(
   const plugins: Record<string, string> =
     profile === "native"
       ? {
-          keiko_native_policy: createGeneratedOpenCodeNativePolicyPlugin(),
+          keiko_native_policy: createGeneratedOpenCodeNativePolicyPlugin({
+            // #4359: a runtime whose pin decides every nested effect sends no program for review.
+            programReviewed:
+              openCodeRuntimeVersionPin(OPENCODE_PINNED_VERSION)?.decidesNestedEffects !== true,
+          }),
           [OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_FILE]:
             createGeneratedOpenCodeLaunchSecretsPlugin(),
           keiko_native_context: createGeneratedOpenCodeNativeContextPlugin("native"),

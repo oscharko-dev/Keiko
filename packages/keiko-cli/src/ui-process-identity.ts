@@ -1,12 +1,18 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { resolveWindowsPowerShellExecutable } from "@oscharko-dev/keiko-security";
+import {
+  readWindowsProcessCommandLine,
+  unwiredSecurityLogSink,
+  type SecurityLogSink,
+} from "@oscharko-dev/keiko-security";
 import { KEIKO_UI_LAUNCH_ID_ENV, UI_LAUNCH_ID_FLAG } from "./state-paths.js";
 
 export interface LiveLaunchIdentityReaders {
   readonly platform?: NodeJS.Platform;
   readonly readEnviron?: (pid: number) => string | undefined;
   readonly readCommandLine?: (pid: number) => string | undefined;
+  /** Where the Windows process query reports a slow or unavailable run. */
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 function isIdentityFieldBoundary(ch: string | undefined): boolean {
@@ -63,24 +69,6 @@ function runPs(args: readonly string[]): string | undefined {
   return undefined;
 }
 
-function readWindowsCommandLine(pid: number): string | undefined {
-  try {
-    const result = spawnSync(
-      resolveWindowsPowerShellExecutable(),
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `(Get-CimInstance Win32_Process -Filter 'ProcessId=${String(pid)}').CommandLine`,
-      ],
-      { encoding: "utf8", timeout: 3_000, windowsHide: true, shell: false },
-    );
-    return result.status === 0 ? result.stdout : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function defaultReadProcessEnviron(
   pid: number,
   platform: NodeJS.Platform,
@@ -93,10 +81,11 @@ export function defaultReadProcessEnviron(
 export function defaultReadProcessCommandLine(
   pid: number,
   platform: NodeJS.Platform,
+  securityLogSink: SecurityLogSink,
 ): string | undefined {
   if (platform === "linux") return readProcFile(pid, "cmdline");
   if (platform === "darwin") return runPs(["-p", String(pid), "-ww", "-o", "args="]);
-  if (platform === "win32") return readWindowsCommandLine(pid);
+  if (platform === "win32") return readWindowsProcessCommandLine(pid, { securityLogSink });
   return undefined;
 }
 
@@ -113,7 +102,12 @@ export function liveProcessHasLaunchId(
   if (environ !== undefined && liveIdentityTextHasLaunchId(environ, launchId)) return true;
   const cmdline = (
     options.readCommandLine ??
-    ((id: number): string | undefined => defaultReadProcessCommandLine(id, platform))
+    ((id: number): string | undefined =>
+      defaultReadProcessCommandLine(
+        id,
+        platform,
+        options.securityLogSink ?? unwiredSecurityLogSink(),
+      ))
   )(pid);
   return cmdline !== undefined && liveIdentityTextHasLaunchId(cmdline, launchId);
 }

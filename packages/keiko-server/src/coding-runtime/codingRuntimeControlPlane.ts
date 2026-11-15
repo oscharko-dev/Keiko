@@ -7,6 +7,7 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchContextUsage,
   CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchRuntimeVersion,
   SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -202,6 +203,8 @@ export interface CodingRuntimeToolFacadeBridge {
 }
 
 export interface CodingRuntimeControlPlaneInput {
+  /** The activated runtime's version facts, for the run's start line (#4359). */
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   readonly historyStore?: UiStore | undefined;
   /** The server's native session continuity service, shared with the runtime host. */
   readonly sessionContinuity?: CodingSessionContinuity | undefined;
@@ -366,6 +369,7 @@ function createControlPlaneOrchestrator(
     ...(input.runtimeHost?.contextUsage
       ? { contextUsage: input.runtimeHost.contextUsage.read }
       : {}),
+    ...(input.runtimeVersion ? { runtimeVersion: input.runtimeVersion } : {}),
     ...(input.projectMemory ? { projectMemory: input.projectMemory } : {}),
     ...(input.repositoryInstructions
       ? { repositoryInstructions: input.repositoryInstructions }

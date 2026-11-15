@@ -11,13 +11,15 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { useState, type ComponentProps } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow, clearKnowledgeCatalogCacheForTests } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -310,3 +312,115 @@ describe("ChatWindow a11y", () => {
     expect(results).toHaveNoViolations();
   });
 });
+
+// #4371 AC4 — the Knowledge Pod picker and the composer while an answer runs pass the accessibility
+// checks in English and in German. The locale comes from the same stored preference the product reads.
+describe.each([
+  {
+    locale: "en",
+    groundingMode: "Grounding mode",
+    cancel: "Cancel response",
+    sendRunning: "Send is unavailable while a response is running",
+  },
+  {
+    locale: "de",
+    groundingMode: "Grounding-Modus",
+    cancel: "Antwort abbrechen",
+    sendRunning: "Senden ist nicht möglich, solange eine Antwort läuft",
+  },
+] as const)(
+  "ChatWindow a11y — picker and running answer in $locale",
+  ({ locale, groundingMode, cancel, sendRunning }) => {
+    beforeEach(() => {
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    });
+    afterEach(() => {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    });
+
+    it("jest-axe: the known Knowledge Pods are listed while a refresh is still pending", async () => {
+      const user = userEvent.setup();
+      const pod = {
+        id: "cap-known" as KnowledgeCapsuleId,
+        displayName: "Requirements",
+        lifecycleState: "ready" as const,
+        sourceCount: 1,
+        updatedAt: 1,
+      };
+      fetchCapsulesMock
+        .mockResolvedValueOnce({ capsules: [pod] })
+        .mockReturnValueOnce(new Promise(() => undefined));
+      const { container } = render(
+        <I18nProvider>
+          <ChatSessionProvider value={makeSession({ activeChat: makeChat() })}>
+            <ChatWindow />
+          </ChatSessionProvider>
+        </I18nProvider>,
+      );
+      await vi.waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+      await user.click(await screen.findByRole("combobox", { name: groundingMode }));
+      await user.keyboard("{Escape}");
+      await user.click(screen.getByRole("combobox", { name: groundingMode }));
+      await vi.waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(2));
+
+      // Listed and selectable before the refresh answers.
+      const option = await screen.findByRole("option", { name: /Requirements/u });
+      expect(option).not.toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByRole("combobox", { name: groundingMode })).toBeEnabled();
+      // The open menu sits in a portal outside any page landmark; the page-level `region` rule does
+      // not describe a component, so it is the one rule left out (the component tests above run axe on
+      // their container, where it does not apply either).
+      const results = await axe(document.body, { rules: { region: { enabled: false } } });
+      expect(results).toHaveNoViolations();
+      expect(container).toBeTruthy();
+    });
+
+    it("jest-axe: no Send-like control cancels a running answer and a second message is refused with a reason", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <I18nProvider>
+          <ChatSessionProvider
+            value={makeSession({
+              activeChat: makeChat(),
+              draft: "next message",
+              sendStatus: "streaming",
+              sending: true,
+              models: [
+                {
+                  id: "example-chat-model",
+                  supportsImageInput: false,
+                  supportsDocumentInput: false,
+                } as ChatSessionApi["models"][number],
+              ],
+            })}
+          >
+            <ChatWindow />
+          </ChatSessionProvider>
+        </I18nProvider>,
+      );
+      // The German catalogs load on demand: wait for the localized window before reading names.
+      await screen.findByRole("combobox", { name: groundingMode }, { timeout: 5000 });
+      const stop = screen.getByRole("button", { name: cancel });
+      const inertSend = screen.getByRole("button", { name: sendRunning });
+      // The control that cancels is not the Send control, and Send is inert.
+      expect(stop).not.toBe(inertSend);
+      expect(stop).not.toHaveClass("cmp-send");
+      expect(inertSend).toHaveAttribute("aria-disabled", "true");
+      expect(inertSend).toHaveAttribute("type", "button");
+
+      // A second message is refused with a readable reason, announced politely.
+      const input = document.querySelector<HTMLElement>('[role="textbox"]');
+      if (input === null) throw new Error("Missing composer input");
+      await user.click(input);
+      await user.keyboard("{Enter}");
+      const status = container.querySelector('[data-send-status="streaming"]');
+      expect(status).toHaveAttribute("aria-live", "polite");
+      expect(
+        status?.querySelector("[data-send-refusal]")?.textContent?.trim().length,
+      ).toBeGreaterThan(10);
+
+      const results = await axe(container);
+      expect(results).toHaveNoViolations();
+    });
+  },
+);

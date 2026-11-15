@@ -58,43 +58,71 @@ const FIELDS = new Set([
   "linkType",
   "linkId",
 ]);
-function input(operation: Operation, args: CatalogJsonObject): Input | undefined {
+const LINK_ARGUMENTS = [...FIELDS].join(", ");
+const LINK_TYPE_KEYS: ReadonlySet<string> = new Set(["id", "name", "inward", "outward"]);
+type IssueLinkCheck =
+  { readonly ok: true; readonly input: Input } | { readonly ok: false; readonly message: string };
+const refused = (message: string): IssueLinkCheck => ({ ok: false, message });
+/**
+ * The input of one issue-link write, or the first rule it breaks as one sentence for the model
+ * (#4357 AC3). The checks and the sentences are one function, so the order of the causes is the order
+ * of the validation and a check added later cannot be left without its sentence. No value the model
+ * sent is echoed.
+ */
+/** The link type when it is exactly the four fields of one type, and nothing else. */
+function closedLinkType(value: unknown): NativeLinkType | undefined {
+  const raw = asRecord(value);
+  return raw !== undefined && Object.keys(raw).every((key) => LINK_TYPE_KEYS.has(key))
+    ? nativeLinkType(raw)
+    : undefined;
+}
+function checkIssueLinkInput(operation: Operation, args: CatalogJsonObject): IssueLinkCheck {
+  if (Object.keys(args).some((key) => !FIELDS.has(key)))
+    return refused(`This call takes only ${LINK_ARGUMENTS}.`);
+  if (!linkActorInput(args, FIELDS))
+    return refused(
+      "expectedActorKey must be the key of the connected Jira user; jira.myself returns it.",
+    );
   if (
-    !linkActorInput(args, FIELDS) ||
     !isSafeAtlassianIdentifier(args.inwardIssueIdOrKey) ||
     !isSafeAtlassianIdentifier(args.outwardIssueIdOrKey)
   )
-    return undefined;
-  const raw = asRecord(args.linkType);
-  const type = nativeLinkType(raw);
-  if (
-    type === undefined ||
-    raw === undefined ||
-    Object.keys(raw).some((key) => !["id", "name", "inward", "outward"].includes(key))
-  )
-    return undefined;
+    return refused(
+      "inwardIssueIdOrKey and outwardIssueIdOrKey must each be the key or id of one issue.",
+    );
+  const type = closedLinkType(args.linkType);
+  if (type === undefined)
+    return refused(
+      "linkType must be exactly { id, name, inward, outward } of one type, as jira.link-types lists it.",
+    );
   const base = {
     inward: args.inwardIssueIdOrKey,
     outward: args.outwardIssueIdOrKey,
     actorKey: args.expectedActorKey,
     type,
   };
-  if (operation === "jira.delete-issue-link") {
-    if (jiraNativeId(args.linkId)) {
-      return { ...base, linkId: args.linkId };
-    }
-    return undefined;
-  }
-  if (args.linkId === undefined) {
-    return base;
-  }
-  return undefined;
+  if (operation === "jira.delete-issue-link")
+    return jiraNativeId(args.linkId)
+      ? { ok: true, input: { ...base, linkId: args.linkId } }
+      : refused("A delete takes linkId: the numeric ID of the link to delete.");
+  return args.linkId === undefined
+    ? { ok: true, input: base }
+    : refused("A create takes no linkId: Jira assigns it.");
+}
+function invalidMessage(operation: Operation, args: CatalogJsonObject): string {
+  const checked = checkIssueLinkInput(operation, args);
+  return checked.ok ? "" : checked.message;
+}
+function input(operation: Operation, args: CatalogJsonObject): Input | undefined {
+  const checked = checkIssueLinkInput(operation, args);
+  return checked.ok ? checked.input : undefined;
 }
 async function inspect(
   request: JiraMutationRequest,
   selected: Input,
+  preDispatch = false,
 ): Promise<LinkObservation<State>> {
-  const actor = await bindLinkActor(request, selected.actorKey);
+  const actor = await bindLinkActor(request, selected.actorKey, preDispatch);
   if (!actor.ok) return actor;
   const type = await readLinkType(request, selected.type);
   if (!type.ok) return type;
@@ -298,7 +326,7 @@ async function admitIssueLink(
   selected: Input,
   templates: JiraIssueTemplateSource | undefined,
 ): Promise<LinkObservation<State>> {
-  const prior = await inspect(request, selected);
+  const prior = await inspect(request, selected, true);
   if (!prior.ok) return prior;
   const refusal = beforeEffect(selected, prior.value);
   if (refusal !== undefined) return refusal;
@@ -314,11 +342,15 @@ async function admitIssueLink(
   }
   const gate = await templateAdmission(request, selected, prior.value, templates);
   if (!gate.ok) return gate;
-  const rechecked = await inspect(request, {
-    ...selected,
-    inward: prior.value.inward.issue.id,
-    outward: prior.value.outward.issue.id,
-  });
+  const rechecked = await inspect(
+    request,
+    {
+      ...selected,
+      inward: prior.value.inward.issue.id,
+      outward: prior.value.outward.issue.id,
+    },
+    true,
+  );
   if (!rechecked.ok) return rechecked;
   if (!sameState(prior.value, rechecked.value))
     return linkConflict(
@@ -355,8 +387,7 @@ export async function executeJiraIssueLinkMutation(
   return runLinkMutation(
     {
       selected: input(operation, args),
-      invalid:
-        "Review both issues, the connected actor key and exact link type ID/name/inward/outward labels. Delete also requires the native link ID; optional comment side effects are unavailable.",
+      invalid: invalidMessage(operation, args),
       admit: (selected) => admitIssueLink(request, selected, templates),
       receiptFor,
       dispatch: (selected, state) => dispatchIssueLink(request, selected, state),

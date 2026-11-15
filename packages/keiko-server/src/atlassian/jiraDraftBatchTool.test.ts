@@ -42,6 +42,7 @@ import {
   rulesText,
   type JiraDraftBatchContext,
 } from "./jiraDraftBatchTool.js";
+import { permissiveJiraTemplates } from "../../../../tests/support/jira-test-templates.js";
 
 const DRAFT_ID = "11111111-2222-4333-8444-555555555555";
 const fixtures: PodFixture[] = [];
@@ -133,7 +134,8 @@ function connection(
     baseUrl: "https://jira.example.invalid/context",
     identity: "credential-1",
     http,
-    ...(templates === undefined ? {} : { issueTemplates: (): JiraIssueTemplateSet => templates }),
+    issueTemplates: (): JiraIssueTemplateSet =>
+      templates ?? permissiveJiraTemplates(["SYN"], ["Story", "Task", "Epic", "Bug", "Sub-task"]),
   };
 }
 

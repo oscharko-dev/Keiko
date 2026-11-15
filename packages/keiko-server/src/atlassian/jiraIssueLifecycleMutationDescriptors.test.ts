@@ -8,33 +8,57 @@ import {
 } from "./jiraIssueLifecycleMutationDescriptors.js";
 
 describe("closed issue lifecycle declarations", () => {
-  it.each(CASES)("declares $name without completed-effect claims", ({ name, args, receipt }) => {
-    const tool = declaration(name);
-    if (tool === undefined) throw new TypeError("Missing issue lifecycle declaration");
-    expect(isBoundedExternalJsonSchema(DEFINITIONS[name].input)).toBe(true);
-    expect(isBoundedExternalJsonSchema(DEFINITIONS[name].result)).toBe(true);
-    expect(describeCatalogSchemaMismatch(tool.descriptor.inputSchema, args)).toBeUndefined();
-    expect(
-      describeCatalogSchemaMismatch(tool.descriptor.inputSchema, { ...args, notifyUsers: false }),
-    ).toBeDefined();
-    expect(
-      describeCatalogSchemaMismatch(tool.descriptor.inputSchema, {
-        ...args,
-        confirmUnverifiedEffect: false,
-      }),
-    ).toBeDefined();
-    expect(
-      describeCatalogSchemaMismatch(tool.descriptor.resultSchema, {
-        outcome: "succeeded-unconfirmed",
-        ...receipt,
-      }),
-    ).toBeUndefined();
+  // An issue deletion is the one lifecycle effect that may be declared succeeded (#4354, ADR-0128);
+  // the others keep refusing any completed-effect claim, exactly as before.
+  const COMPLETED_CLAIM_REFUSED = CASES.filter(({ name }) => name !== "jira.delete-issue");
+  it.each(COMPLETED_CLAIM_REFUSED)(
+    "declares $name without completed-effect claims",
+    ({ name, args, receipt }) => {
+      const tool = declaration(name);
+      if (tool === undefined) throw new TypeError("Missing issue lifecycle declaration");
+      expect(isBoundedExternalJsonSchema(DEFINITIONS[name].input)).toBe(true);
+      expect(isBoundedExternalJsonSchema(DEFINITIONS[name].result)).toBe(true);
+      expect(describeCatalogSchemaMismatch(tool.descriptor.inputSchema, args)).toBeUndefined();
+      expect(
+        describeCatalogSchemaMismatch(tool.descriptor.inputSchema, { ...args, notifyUsers: false }),
+      ).toBeDefined();
+      expect(
+        describeCatalogSchemaMismatch(tool.descriptor.inputSchema, {
+          ...args,
+          confirmUnverifiedEffect: false,
+        }),
+      ).toBeDefined();
+      expect(
+        describeCatalogSchemaMismatch(tool.descriptor.resultSchema, {
+          outcome: "succeeded-unconfirmed",
+          ...receipt,
+        }),
+      ).toBeUndefined();
+      expect(
+        describeCatalogSchemaMismatch(tool.descriptor.resultSchema, {
+          outcome: "succeeded",
+          ...receipt,
+        }),
+      ).toBeDefined();
+    },
+  );
+  it("declares an accepted issue deletion that read back as gone as succeeded, and nothing else as completed", () => {
+    const tool = declaration("jira.delete-issue");
+    if (tool === undefined) throw new TypeError("Missing delete declaration");
+    const { receipt } = CASES[1];
+    for (const outcome of ["succeeded", "succeeded-unconfirmed"])
+      expect(
+        describeCatalogSchemaMismatch(tool.descriptor.resultSchema, { outcome, ...receipt }),
+      ).toBeUndefined();
+    // The receipt still states the issue is gone; a receipt that says otherwise is no deletion.
     expect(
       describeCatalogSchemaMismatch(tool.descriptor.resultSchema, {
         outcome: "succeeded",
         ...receipt,
+        issuePresent: true,
       }),
     ).toBeDefined();
+    expect(tool.descriptor.description).toContain("reads as gone");
   });
   it("does not expose recursive deletion or task hierarchy moves", () => {
     const tool = declaration("jira.delete-issue");

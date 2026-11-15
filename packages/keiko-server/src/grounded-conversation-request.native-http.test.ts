@@ -148,7 +148,7 @@ function runtime(baseUrl: string, disabled: boolean): { deps: UiHandlerDeps; cha
       join(root, `src/part-${String(index)}.ts`),
       "export const preferences = 'compare options and explain reversible next steps';\n",
     );
-  mkdirSync(join(root, "manual"));
+  mkdirSync(join(root, "manual"), { recursive: true });
   writeFileSync(
     join(root, "manual/customer.txt"),
     "Customer manual\nThe maximum operating limit is 37 units.\n",

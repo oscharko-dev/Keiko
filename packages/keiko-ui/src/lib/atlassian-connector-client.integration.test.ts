@@ -30,6 +30,9 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 
+// A 401 that Jira itself authored (its request id and the anonymous-user marker): the only kind
+// that is a definitive token rejection (#4353).
+const JIRA_401_HEADERS = { "X-AREQUESTID": "synthetic-request", "X-AUSERNAME": "anonymous" };
 const { fixtureDnsLookup } = vi.hoisted(() => ({
   fixtureDnsLookup: vi.fn(async (hostname: string) => {
     if (hostname !== "jira.example" && hostname !== "cloud.example")
@@ -308,7 +311,9 @@ const hubVerificationCases = [
     status: "auth-failed",
     en: "Authentication failed",
     de: "Authentifizierung fehlgeschlagen",
-    replies: (): Response[] => [new Response(privateProviderDetail, { status: 401 })],
+    replies: (): Response[] => [
+      new Response(privateProviderDetail, { status: 401, headers: JIRA_401_HEADERS }),
+    ],
   },
   {
     status: "forbidden",
@@ -471,7 +476,7 @@ it("removes the Hub's verified state after a revoked PAT fails real re-verificat
     (item) => item.authRef === metadata.authRef,
   );
   assert(verified?.deployment === "data-center");
-  responses.push(new Response(privateProviderDetail, { status: 401 }));
+  responses.push(new Response(privateProviderDetail, { status: 401, headers: JIRA_401_HEADERS }));
   // A verified Pod keeps its secondary actions, re-verification included, in the "…" menu.
   await userEvent.click(within(card).getByRole("button", { name: /^More actions:/u }));
   await userEvent.click(within(card).getByRole("menuitem", { name: "Verify connection" }));

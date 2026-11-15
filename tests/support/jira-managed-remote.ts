@@ -104,7 +104,8 @@ export interface SyntheticJira {
 }
 /** The instance's own attachment switch and upload limit (#4176). */
 export const SYNTHETIC_UPLOAD_LIMIT = 1_048_576;
-export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBodyResult {
+/** The metadata routes: attachment switch, create/edit screens and the available transitions. */
+function fixtureMetadataRead(path: string): AtlassianHttpBodyResult | undefined {
   if (path.endsWith("/attachment/meta"))
     return response({ enabled: true, uploadLimit: SYNTHETIC_UPLOAD_LIMIT });
   if (path.includes("createmeta"))
@@ -122,6 +123,39 @@ export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBo
     return response({
       transitions: [{ id: "31", to: { id: "3" }, fields: { customfield_10000: REQUIRED_CUSTOM } }],
     });
+  return undefined;
+}
+/**
+ * The issue types the synthetic project lists, as Jira always does (#4354): every name and numeric id
+ * the fixtures' templates use resolves to one of them, so no template reads as naming a type nobody sees.
+ */
+export const FIXTURE_PROJECT_ISSUE_TYPES = [
+  { id: "10000", name: "Epic" },
+  { id: "10001", name: "Story" },
+  { id: "10002", name: "Task" },
+  { id: "10003", name: "Sub-task" },
+  { id: "1", name: "Bug" },
+  { id: "2", name: "Improvement" },
+  { id: "3", name: "New Feature" },
+  { id: "4", name: "Type 4" },
+  { id: "5", name: "Type 5" },
+  { id: "7", name: "Type 7" },
+];
+/** The identity a creation is judged by: a template governs a project and an issue type (#4354). */
+function fixtureIdentityRead(path: string): AtlassianHttpBodyResult | undefined {
+  const project = /\/project\/([A-Za-z0-9_]{1,40})$/u.exec(path);
+  if (project?.[1] !== undefined)
+    return response({
+      id: "10000",
+      key: /^\d+$/u.test(project[1]) ? "SYN" : project[1],
+      issueTypes: FIXTURE_PROJECT_ISSUE_TYPES,
+    });
+  const issueType = /\/issuetype\/(\d{1,10})$/u.exec(path);
+  return issueType === null ? undefined : response({ id: issueType[1], name: "Task" });
+}
+export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBodyResult {
+  const routed = fixtureMetadataRead(path) ?? fixtureIdentityRead(path);
+  if (routed !== undefined) return routed;
   if (path.endsWith("assignable/search"))
     return response([{ name: "synthetic-user", active: true }]);
   // A draft item's identity search: the synthetic project holds the one issue SYN-1, found by its
@@ -134,8 +168,13 @@ export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBo
       issues: [{ key: "SYN-1", id: "10001", fields: { summary: state.fields.summary } }],
     });
   if (path.endsWith("/comment/10002")) return response({ id: "10002", body: state.comment });
-  if (path.endsWith("/issue/SYN-1"))
-    return response({ id: "10001", key: "SYN-1", fields: state.fields });
+  const issueNumber = /\/issue\/SYN-(\d{1,3})$/u.exec(path)?.[1];
+  if (issueNumber !== undefined)
+    return response({
+      id: String(10000 + Number(issueNumber)),
+      key: `SYN-${issueNumber}`,
+      fields: state.fields,
+    });
   return response({}, 404);
 }
 function fixtureLabelUpdates(mutation: Record<string, unknown>, state: SyntheticJira): void {

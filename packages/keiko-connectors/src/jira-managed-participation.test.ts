@@ -282,6 +282,42 @@ describe("closed current-user participation", () => {
     });
     expect(request).not.toHaveBeenCalled();
   });
+  // #4357 AC3: a refused participation write names the rule, one fixed sentence per cause, and
+  // never the refused value.
+  it.each([
+    [
+      "an argument the call does not take",
+      { issueKey: "APP-1", username: "another" },
+      undefined,
+      "This call takes only issueKey, the issue to act on as the connected user; no user, URL or other argument. Nothing was changed.",
+    ],
+    [
+      "an issue key that is not one",
+      { issueKey: "../x" },
+      "issueKey",
+      "issueKey must be the key or id of one issue, such as ABC-123. Nothing was changed.",
+    ],
+    [
+      "a missing issue key",
+      {},
+      "issueKey",
+      "issueKey must be the key or id of one issue, such as ABC-123. Nothing was changed.",
+    ],
+  ])("names the rule a participation write broke: %s", async (_name, args, fieldId, message) => {
+    const request = vi.fn<JiraMutationRequest>();
+    for (const operation of ["jira.watch", "jira.unwatch", "jira.vote", "jira.unvote"] as const) {
+      expect(await executeJiraParticipationMutation(operation, args, request)).toEqual({
+        ok: false,
+        reason: "field-validation",
+        detail: {
+          validation: "invalid-field",
+          ...(fieldId === undefined ? {} : { fieldId }),
+          messages: [message],
+        },
+      });
+    }
+    expect(request).not.toHaveBeenCalled();
+  });
   it("does not equate a permission-hidden watcher list with zero watchers", async () => {
     const request = vi
       .fn<JiraMutationRequest>()

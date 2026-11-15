@@ -1,5 +1,10 @@
 import { createContext, useMemo, type ReactNode } from "react";
+import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  JiraApprovalProject,
+  JiraApprovalTransition,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { JiraDraftField } from "./jiraDraftTree";
 import type { OptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { jiraStandardFieldLabel } from "./jira-standard-field-label";
@@ -19,6 +24,8 @@ export interface JiraNames {
   readonly fields: ReadonlyMap<string, string>;
   readonly choices: JiraChoices;
   readonly binding?: string | undefined;
+  /** The transition the approval on screen covers, by the id the call carries (R04). */
+  readonly transitions?: ReadonlyMap<string, JiraApprovalTransition>;
 }
 export const NO_JIRA_NAMES: JiraNames = {
   projects: new Map(),
@@ -64,6 +71,78 @@ export function jiraNamesOf(transcripts: Transcripts): JiraNames {
   };
 }
 
+/**
+ * How an approval card names a project: the server read its key and name when it built the
+ * approval, so the first card of a Chat says the same as every later one. A project Jira did not
+ * answer is the reference the call carries, a numeric id marked as one ("ID 10000" from the message
+ * catalog), never taken for a name; a project whose name could not be shown is its key.
+ */
+function approvalProjectLabel(project: JiraApprovalProject, t: OptionalWidgetTranslate): string {
+  if (project.key !== undefined)
+    return project.name === undefined ? project.key : `${project.name} (${project.key})`;
+  return /^\d+$/u.test(project.ref) ? `${t("memoria.id")} ${project.ref}` : project.ref;
+}
+
+/** The names the approval itself carries, over what this Chat's own reads called the same ids. */
+export function withApprovalProjects(
+  names: JiraNames,
+  binding: string | undefined,
+  approval: ChatToolWriteApprovalView,
+  t: OptionalWidgetTranslate,
+): JiraNames {
+  if (approval.kind !== "jira-chat-write") return { ...names, binding };
+  const projects = new Map(names.projects);
+  const issueTypes = new Map(names.issueTypes);
+  const fields = new Map(names.fields);
+  for (const project of approval.projects ?? []) {
+    projects.set(JSON.stringify([binding, project.ref]), approvalProjectLabel(project, t));
+    for (const type of project.issueTypes ?? [])
+      issueTypes.set(JSON.stringify([binding, type.id]), type.name);
+  }
+  for (const field of approval.fields ?? [])
+    fields.set(JSON.stringify([binding, field.id]), field.name);
+  const { transition } = approval;
+  return {
+    ...names,
+    projects,
+    issueTypes,
+    fields,
+    binding,
+    ...(transition === undefined ? {} : { transitions: new Map([[transition.ref, transition]]) }),
+  };
+}
+
+/**
+ * How an approval card names a status change: the status it leads to, and the transition's own name
+ * where that differs, as Jira shows them to this person. A transition whose list could not be read is
+ * said so in words, never a bare number; undefined when the approval carries no transition at all.
+ */
+export function jiraTransitionLabel(
+  names: JiraNames,
+  id: string,
+  t: OptionalWidgetTranslate,
+): string | undefined {
+  const transition = names.transitions?.get(id);
+  if (transition === undefined) return undefined;
+  const { name, targetStatusName } = transition;
+  // Jira answered and does not offer it now: said before the person decides, never as unreadable.
+  if (transition.unavailable === true) return t("chat.jira.fact.transitionUnavailable", { id });
+  if (targetStatusName === undefined && name === undefined)
+    return t("chat.jira.fact.transitionUnread", { id });
+  if (targetStatusName === undefined) return name;
+  return name === undefined || name === targetStatusName
+    ? targetStatusName
+    : `${targetStatusName} (${name})`;
+}
+
+/**
+ * How a card says an id whose name Jira did not give: a numeric id marked as one ("ID 10002"), never a
+ * bare number that reads like a name; anything else is the reference as sent.
+ */
+export function jiraIdLabel(id: string, t: OptionalWidgetTranslate): string {
+  return /^\d+$/u.test(id) ? `${t("memoria.id")} ${id}` : id;
+}
+
 export function jiraNameOf(
   names: JiraNames,
   kind: "projects" | "issueTypes" | "fields",
@@ -102,6 +181,23 @@ export function jiraNamed(
     ...(label === undefined ? {} : { label }),
     value: jiraChoiceValue(field.id, field.value, target, names.choices, names.binding),
   };
+}
+
+/**
+ * A field of an approval card named as far as it can be: Jira's own name, else a built-in field's
+ * wording, else - for a custom field Jira gave no name for - a plain sentence that keeps the id as the
+ * detail (R04). The field itself is never altered by this; only what the card says about it.
+ */
+export function jiraCardField(
+  field: JiraDraftField,
+  names: JiraNames,
+  target: JiraFieldTarget,
+  t: OptionalWidgetTranslate,
+): JiraDraftField {
+  const named = jiraNamed(field, names, target, t);
+  return named.label === undefined && /^customfield_\d+$/u.test(named.id)
+    ? { ...named, label: t("chat.jira.fact.fieldUnnamed", { id: named.id }) }
+    : named;
 }
 
 /**

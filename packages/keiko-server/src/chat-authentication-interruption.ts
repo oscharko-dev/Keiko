@@ -17,7 +17,7 @@ export function chatAuthenticationInterruption(
   if (!signal.aborted || signal.reason !== CHAT_TURN_JIRA_AUTHENTICATION_FAILED) return undefined;
   const code = "JIRA_AUTHENTICATION_FAILED";
   const message =
-    "Jira authentication failed. Open the Knowledge Pods hub and verify the connection again.";
+    "Jira authentication failed. The token may have expired or been revoked: open the Knowledge Pods hub, replace the token and verify the connection. This Chat and its draft are kept.";
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({

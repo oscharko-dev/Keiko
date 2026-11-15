@@ -41,6 +41,7 @@ import { openCodeNativeVerificationKind } from "./opencodeNativePolicy.js";
 import { OPENCODE_PLAN_CARRIER_TOOLS } from "./opencodeProtocol.js";
 import { openCodePlanCarrierSignal } from "./opencodeSafeActivity.js";
 import { ConversationLedger } from "./opencodeV2HistoryConversation.js";
+import { OPTIONAL_COUNT_FIELD } from "../activity-log-field-shapes.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
 
@@ -50,9 +51,6 @@ function historyToolAdmitted(name: string, profile: OpenCodeToolProfile): boolea
   return HISTORY_TOOLS.has(name) || (profile === "code-mode" && name === "execute");
 }
 const NATIVE_RETRY_FIELDS: ReadonlySet<string> = new Set(["attempt", "at", "error"]);
-
-// An optional body-free count, the shape most of these fields share.
-const OPTIONAL_COUNT = { type: "integer", dataClass: "count", required: false } as const;
 
 const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -67,14 +65,14 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     emptyTextCount: { type: "integer", dataClass: "count", required: true },
     // #3878: how many of the signals carried model reasoning to the live timeline; a count only.
     // `required: false`: lines written before this field existed lack it.
-    reasoningSignalCount: OPTIONAL_COUNT,
-    nativeRetrySignalCount: OPTIONAL_COUNT,
+    reasoningSignalCount: OPTIONAL_COUNT_FIELD,
+    nativeRetrySignalCount: OPTIONAL_COUNT_FIELD,
     // #3873 review (PR #3876): the runtime event stream's events that did not cost a history read of
     // their own, because a read already queued or a later control hint's read covered them
     // (`coalescedSyncHints`), since the previous line. Each one is a read saved; when a run's timeline
     // lags or skips an update, this says how many events one read stood for. Absent when the composition
     // reports none (a projection built without the stream).
-    mergedEventCount: OPTIONAL_COUNT,
+    mergedEventCount: OPTIONAL_COUNT_FIELD,
     // #3873 review (PR #3876): OpenCode 2.0.10 persists a streamed text or reasoning part only empty
     // and complete, so the live timeline grows from the event stream's ephemeral deltas
     // (`opencodeV2LiveText.ts`). Counts since the previous line, never text: the deltas appended to a
@@ -82,12 +80,12 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     // interrupted since, or it is full); the parts whose complete text did not extend what the
     // timeline had already shown, which keeps the shown text. `required: false` because a line written
     // before these fields existed lacks them.
-    liveDeltaCount: OPTIONAL_COUNT,
-    liveDroppedCount: OPTIONAL_COUNT,
-    liveDivergedCount: OPTIONAL_COUNT,
+    liveDeltaCount: OPTIONAL_COUNT_FIELD,
+    liveDroppedCount: OPTIONAL_COUNT_FIELD,
+    liveDivergedCount: OPTIONAL_COUNT_FIELD,
     // The idle messages of this pass that did not end the run's work because a subagent launched in
     // the background had not yet reported back (`backgroundChildren`); a count, absent when none.
-    heldIdleCount: OPTIONAL_COUNT,
+    heldIdleCount: OPTIONAL_COUNT_FIELD,
     // #4104: how the pass obtained the session's messages. `tail` read only the messages from the
     // last checkpoint's anchor on and carried the older ones over unchanged; `full` read the whole
     // window (the first pass, a catch-up after an event cap, a retry that holds an uncommitted page);
@@ -102,11 +100,11 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["tail", "full", "verify", "anchor-lost"],
     },
-    readMessageCount: OPTIONAL_COUNT,
+    readMessageCount: OPTIONAL_COUNT_FIELD,
     // #4279: the window held only the newest messages of a session past the read bound, so older
     // ones were left out of this pass. Present only then.
     windowTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
-    retainedMessageCount: OPTIONAL_COUNT,
+    retainedMessageCount: OPTIONAL_COUNT_FIELD,
   },
   causal: "correlation",
   lifecycle: "state",

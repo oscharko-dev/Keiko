@@ -56,7 +56,7 @@ import {
   atlassianApiEndpointsFor,
   atlassianApiUrl,
   classifyListResult,
-  failureReasonForStatus,
+  classifyItemFailureResponse,
   parseJsonRecord,
   type AtlassianApiEndpoints,
 } from "./atlassian-sync-classify.js";
@@ -442,12 +442,6 @@ type IssueFetchResult =
   | { readonly kind: "skipped"; readonly reason: AtlassianSyncFailureReason }
   | { readonly kind: "fatal"; readonly reason: AtlassianSyncFailureReason };
 
-function classifyIssueFailureStatus(status: number): IssueFetchResult {
-  if (status === 401) return { kind: "fatal", reason: "auth-failed" };
-  if (status === 404) return { kind: "missing" };
-  return { kind: "skipped", reason: failureReasonForStatus(status) };
-}
-
 async function fetchIssuePayload(
   context: AtlassianSyncFetchContext,
   endpoints: AtlassianApiEndpoints,
@@ -462,7 +456,7 @@ async function fetchIssuePayload(
   if (result.kind === "timeout") return { kind: "skipped", reason: "timeout" };
   if (result.kind === "network-error") return { kind: "skipped", reason: "unavailable" };
   if (result.status < 200 || result.status >= 300) {
-    return classifyIssueFailureStatus(result.status);
+    return classifyItemFailureResponse(result);
   }
   // A truncated issue payload can never be indexed faithfully (mid-JSON truncation is malformed
   // by construction): skipped with bounds-exceeded, the run continues.

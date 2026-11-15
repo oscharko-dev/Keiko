@@ -69,6 +69,7 @@ const ACTION_OUTCOME = defineActivityLogOperation({
       required: true,
       values: [
         "auth-failed",
+        "auth-unverified",
         "permission-denied",
         "effect-denied",
         "cancelled",

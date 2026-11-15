@@ -20,6 +20,7 @@ import {
   type BrowserApprovalProofResult,
   type BrowserApprovalManagementSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
   createFakeSessionPairingPort,
   extractSessionCookie,
@@ -138,6 +139,48 @@ async function proveFor(
 }
 
 describe("browser approval on the real mounted BFF", () => {
+  it("records how a remembered browser's renewal relates to the credential it presented (#4370)", async () => {
+    const { server, owner } = await fixture();
+    const pair = keyPair();
+    const approved = await approveBrowser(server, owner, pair);
+    const body = (await approved.json()) as BrowserApprovalProofResult;
+    if (body.state !== "active" || body.approval === undefined) throw new Error("Missing approval");
+    const sink = createBufferedServerLogSink();
+    (server.deps as unknown as { activityLog?: typeof sink }).activityLog = sink;
+    const foreign = `keiko_coding_app_session=sess_${"d".repeat(24)}.credential-of-an-earlier-process`;
+    for (const cookie of [undefined, foreign, owner]) {
+      const challenged = await post(server, "challenge", {
+        purpose: "renew",
+        subjectId: body.approval.approvalId,
+      });
+      const parsed = validateBrowserApprovalChallengeResult(await challenged.json());
+      if (!parsed.ok || parsed.value.state !== "challenge") throw new Error("Missing challenge");
+      const signature = sign(
+        "sha256",
+        Buffer.from(browserApprovalChallengeText(parsed.value.challenge)),
+        { key: pair.privateKey, dsaEncoding: "ieee-p1363" },
+      ).toString("base64url");
+      const response = await post(
+        server,
+        "prove",
+        { challengeId: parsed.value.challenge.challengeId, signature },
+        cookie,
+      );
+      expect(((await response.json()) as BrowserApprovalProofResult).state).toBe("active");
+    }
+    const proves = sink.events.filter(
+      (event) =>
+        event.op === "coding-app-session.browser-approval.state" && event.extra?.action === "prove",
+    );
+    expect(proves.map((event) => event.extra?.reconnect)).toEqual([
+      "no-credential",
+      "after-restart",
+      "live-credential",
+    ]);
+    expect(JSON.stringify(proves)).not.toContain("credential-of-an-earlier-process");
+    expect(JSON.stringify(proves)).not.toContain(owner.split("=")[1] ?? "unreachable");
+  });
+
   it("emits canonical client management contracts for remembered and session-only grants", async () => {
     const { server, owner } = await fixture();
     await approveBrowser(server, owner, keyPair(), false);

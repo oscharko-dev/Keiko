@@ -69,7 +69,11 @@ import {
   type ContextLaneId,
 } from "./context-engineering.js";
 
-export { MARKDOWN_SKILL_LIMITS } from "./markdown-skills.js";
+export {
+  isMarkdownSkillRefusalReason,
+  MARKDOWN_SKILL_LIMITS,
+  MARKDOWN_SKILL_REFUSAL_REASONS,
+} from "./markdown-skills.js";
 export type {
   MarkdownSkillReference,
   MarkdownSkillSelection,
@@ -77,6 +81,7 @@ export type {
   MarkdownSkillMetadata,
   MarkdownSkillDocument,
   MarkdownSkillUpload,
+  MarkdownSkillRefusalReason,
 } from "./markdown-skills.js";
 
 export interface Project {
@@ -594,9 +599,176 @@ export function isChatToolBatchProgress(value: unknown): value is ChatToolBatchP
   );
 }
 
+/**
+ * A fact Keiko states about the answer a turn published (#4355): the answer claimed an effect its
+ * own turn does not bear out and the correction could not remove the claim. The server states the
+ * closed marker; the Chat words it from its message catalog, so no language is guessed here.
+ */
+export const CHAT_CLAIM_NOTICES = ["no-jira-create", "tool-call-not-executed"] as const;
+export type ChatClaimNotice = (typeof CHAT_CLAIM_NOTICES)[number];
+export function isChatClaimNotice(value: unknown): value is ChatClaimNotice {
+  return (CHAT_CLAIM_NOTICES as readonly unknown[]).includes(value);
+}
+
+/**
+ * Why a Chat tool turn ended before the model gave its own answer (#4175, #4355). One closed
+ * vocabulary: the server's ending function writes it to the `chat.tool-turn.ended` log line and to
+ * the transcript from the same value, and the Chat words each member from its message catalog.
+ */
+export const CHAT_TOOL_TURN_END_REASONS = [
+  "budget-exhausted",
+  "deadline",
+  "authority-invalid",
+  "authentication-failed",
+  "tool-failure",
+  "output-exhausted",
+  "context-overflow",
+  "tool-not-offered",
+  "model-failure",
+] as const;
+export type ChatToolTurnEndReason = (typeof CHAT_TOOL_TURN_END_REASONS)[number];
+export function isChatToolTurnEndReason(value: unknown): value is ChatToolTurnEndReason {
+  return (CHAT_TOOL_TURN_END_REASONS as readonly unknown[]).includes(value);
+}
+
+/** The state a backlog-draft item carried when its turn ended. */
+export const CHAT_TURN_END_ITEM_STATES = [
+  "created",
+  "existing",
+  "failed",
+  "uncertain",
+  "skipped",
+  "excluded",
+  "pending",
+] as const;
+export type ChatTurnEndItemState = (typeof CHAT_TURN_END_ITEM_STATES)[number];
+
+/**
+ * One receipt of an ended turn: the tool, the issue key (or key range) Jira acknowledged, and for a
+ * backlog-draft item its position and state. Facts only, no text, so any language can word it.
+ */
+export interface ChatTurnEndReceipt {
+  readonly tool: string;
+  readonly key?: string | undefined;
+  /** 1-based position of a draft item that has no key. */
+  readonly item?: number | undefined;
+  readonly state?: ChatTurnEndItemState | undefined;
+}
+export const CHAT_TURN_END_RECEIPTS_MAX = 1000;
+const CHAT_TURN_END_TEXT_MAX = 600;
+const CHAT_TURN_END_KEYS = [
+  "reason",
+  "answer",
+  "completed",
+  "unconfirmed",
+  "unsettled",
+  "notDone",
+  "moreCount",
+  "readCount",
+  "refusedCount",
+] as const;
+const CHAT_TURN_END_RECEIPT_KEYS: ReadonlySet<string> = new Set(["tool", "key", "item", "state"]);
+
+/**
+ * How a turn ended early, as closed facts (#4355): the reason and the receipts its deterministic
+ * answer lists. The stored English answer stays the fallback for exports and older clients.
+ */
+export interface ChatToolTurnEnd {
+  readonly reason: ChatToolTurnEndReason;
+  /**
+   * Fingerprint of the stored English ending this record was built with. The Chat words the ending
+   * only for an answer whose stored text still matches it, so a record that outlived its answer
+   * (a failed clearing write) can never replace a real model answer.
+   */
+  readonly answer: string;
+  /** Writes Jira acknowledged. */
+  readonly completed: readonly ChatTurnEndReceipt[];
+  /** Writes sent whose outcome is not confirmed. */
+  readonly unconfirmed: readonly ChatTurnEndReceipt[];
+  /** Calls started but never settled. */
+  readonly unsettled: readonly ChatTurnEndReceipt[];
+  /** Draft items refused, blocked or not started. */
+  readonly notDone: readonly ChatTurnEndReceipt[];
+  /** Receipts beyond the per-list bound, over all four lists. */
+  readonly moreCount: number;
+  readonly readCount: number;
+  readonly refusedCount: number;
+}
+
+/**
+ * A short fingerprint of an answer's text: its length and a 32-bit FNV-1a over the code point at each UTF-16 index.
+ * It binds a stored ending record to the exact text it describes; it is not a security digest and
+ * never leaves the machine. One definition, used by the server that writes it and the Chat that
+ * compares it.
+ */
+export function chatTurnEndAnswerFingerprint(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = Math.imul(hash ^ (text.codePointAt(index) ?? 0), 0x01000193) >>> 0;
+  }
+  return `${String(text.length)}:${hash.toString(16).padStart(8, "0")}`;
+}
+const CHAT_TURN_END_ANSWER_PATTERN = /^\d{1,9}:[0-9a-f]{8}$/u;
+
+function isTurnEndText(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= CHAT_TURN_END_TEXT_MAX;
+}
+function isTurnEndCount(value: unknown, max: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
+}
+function isTurnEndReceiptDetail(entry: Record<string, unknown>): boolean {
+  return (
+    (entry.key === undefined || isTurnEndText(entry.key)) &&
+    (entry.item === undefined || (isTurnEndCount(entry.item, 1_000_000) && entry.item > 0)) &&
+    (entry.state === undefined ||
+      (CHAT_TURN_END_ITEM_STATES as readonly unknown[]).includes(entry.state))
+  );
+}
+function isTurnEndReceipt(value: unknown): value is ChatTurnEndReceipt {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    Object.keys(entry).every((key) => CHAT_TURN_END_RECEIPT_KEYS.has(key)) &&
+    isTurnEndText(entry.tool) &&
+    isTurnEndReceiptDetail(entry)
+  );
+}
+function isTurnEndReceiptList(value: unknown): value is readonly ChatTurnEndReceipt[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= CHAT_TURN_END_RECEIPTS_MAX &&
+    value.every(isTurnEndReceipt)
+  );
+}
+const CHAT_TURN_END_LISTS = ["completed", "unconfirmed", "unsettled", "notDone"] as const;
+const CHAT_TURN_END_COUNTS = ["moreCount", "readCount", "refusedCount"] as const;
+function hasTurnEndShape(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.length === CHAT_TURN_END_KEYS.length &&
+    CHAT_TURN_END_KEYS.every((key) => keys.includes(key))
+  );
+}
+/** A closed, bounded ending record; anything else is not one (exact keys, closed reason). */
+export function isChatToolTurnEnd(value: unknown): value is ChatToolTurnEnd {
+  return (
+    hasTurnEndShape(value) &&
+    isChatToolTurnEndReason(value.reason) &&
+    typeof value.answer === "string" &&
+    CHAT_TURN_END_ANSWER_PATTERN.test(value.answer) &&
+    CHAT_TURN_END_LISTS.every((key) => isTurnEndReceiptList(value[key])) &&
+    CHAT_TURN_END_COUNTS.every((key) => isTurnEndCount(value[key], 1_000_000_000))
+  );
+}
+
 export interface ChatToolTranscript {
   readonly schemaVersion: 1;
   readonly exchanges: readonly ChatToolExchange[];
+  /** Absent unless the published answer carries a claim the turn does not bear out. */
+  readonly claimNotice?: ChatClaimNotice | undefined;
+  /** Absent unless the turn ended early; the stored answer is then its English rendering. */
+  readonly turnEnd?: ChatToolTurnEnd | undefined;
   /** Latest update retained for older clients and the existing consent event. */
   readonly readGrant?: ChatToolReadGrantView | undefined;
   /** At most one current disclosure per source kind; older transcripts contain only readGrant. */
@@ -724,6 +896,10 @@ export interface ProjectWithAvailability extends Project {
   // A project row is not sufficient authority for workspace capabilities. Governed consumers
   // admit only explicit `true`; `false` or an absent field fails closed and requires reconnection.
   readonly workspaceAvailable?: boolean;
+  // `false` when the Files and Git routes refuse this folder (a tool's own state area): the project
+  // stays listed and can be chosen, but the shell never offers it as the starting project (#4371).
+  // Absent reads as readable.
+  readonly readable?: boolean;
 }
 
 // ─── Chat status (BFF wire — mirror of UiStore Chat["status"]) ───────────────────
@@ -2201,6 +2377,108 @@ export interface BffError {
 }
 
 /**
+ * Every error code a person can reach on the Chat path (send, stream, approve, regenerate, cancel,
+ * bind or unbind a Pod, change the scope; #4355). It is a closed list on purpose: the Chat's code
+ * table maps each member to the text a person reads or to an explicit "never shown" reason, and the
+ * type of that table fails the build when a member has neither. The gateway members are pinned to
+ * the gateway's own `ERROR_CODES` by a server test, so a new gateway code cannot reach a person
+ * without text. The server codes are traced from the handlers on the path.
+ */
+export const CHAT_PATH_ERROR_CODES = [
+  // The model gateway (`ERROR_CODES` in keiko-security).
+  "GATEWAY_AUTHENTICATION",
+  "GATEWAY_TRANSPORT",
+  "GATEWAY_MODEL_REFUSAL",
+  "GATEWAY_MALFORMED_TOOL_CALL",
+  "GATEWAY_CONTEXT_OVERFLOW",
+  "GATEWAY_ATTEMPT_ADMISSION_DENIED",
+  "GATEWAY_RATE_LIMIT",
+  "GATEWAY_TIMEOUT",
+  "GATEWAY_CANCELLED",
+  "GATEWAY_CIRCUIT_OPEN",
+  "GATEWAY_PROVIDER_ERROR",
+  "GATEWAY_CONFIG_INVALID",
+  "GATEWAY_UNKNOWN_MODEL",
+  "GATEWAY_PROXY_UNREACHABLE",
+  "GATEWAY_PROXY_AUTH_REQUIRED",
+  "GATEWAY_PROXY_EGRESS_FAILED",
+  "GATEWAY_PROXY_BLOCKED_BY_POLICY",
+  "GATEWAY_TLS_CA_FAILURE",
+  "GATEWAY_OUTPUT_EXHAUSTED",
+  // The chat handlers and the stream.
+  "PAYLOAD_TOO_LARGE",
+  "BAD_REQUEST",
+  "INVALID_REQUEST",
+  "NOT_FOUND",
+  "NOT_APPLIABLE",
+  "FORBIDDEN",
+  "CONFLICT",
+  "INTERNAL",
+  "UNAVAILABLE",
+  "CANCELLED",
+  "REQUEST_CANCELLED",
+  "CLARIFICATION_NEEDED",
+  "NO_MODEL",
+  "INVALID_PATH",
+  "PATH_NOT_FOUND",
+  "PATH_NOT_DIRECTORY",
+  "PROJECT_IDENTITY_CHANGED",
+  "CHAT_CLOSED",
+  "CHAT_TURN_IN_PROGRESS",
+  "CHAT_TURN_IDEMPOTENCY_CONFLICT",
+  "SKILL_SELECTION_CHANGED",
+  "GATEWAY_CONFIG_CHANGED",
+  "GROUNDING_SCOPE_CHANGED",
+  "STREAMING_UNSUPPORTED",
+  "TOO_MANY_STREAMS",
+  "DESKTOP_CHAT_STREAM_STALLED",
+  "CHAT_TOOL_TIMEOUT",
+  "CHAT_TOOL_UNAVAILABLE",
+  "CONVERSATION_UNSUPPORTED_MODALITY",
+  "CONVERSATION_UNSUPPORTED_FILE_TYPE",
+  "CONVERSATION_OVERSIZED_CONTEXT",
+  "CONVERSATION_UNAVAILABLE_MODEL",
+  "CONVERSATION_MODEL_NOT_READY",
+  // Pods and the Jira connection.
+  "JIRA_AUTHENTICATION_FAILED",
+  "JIRA_POD_UNAVAILABLE",
+  "JIRA_POD_VERIFICATION_REQUIRED",
+  "JIRA_POD_CONNECTION_CHANGED",
+  "KNOWLEDGE_POD_UNAVAILABLE",
+  "KNOWLEDGE_STORE_UNAVAILABLE",
+  // Approving, rejecting and answering a Jira action.
+  "CHAT_WRITE_APPROVAL_UNAVAILABLE",
+  "VALIDATION_FAILED",
+  "JIRA_DRAFT_UNAVAILABLE",
+  "JIRA_HUMAN_INPUT_UNAVAILABLE",
+  "APPROVAL_NOT_FOUND",
+  "CREDENTIAL_NOT_FOUND",
+  "ATLASSIAN_CONNECTORS_UNAVAILABLE",
+  // Every route.
+  "FORBIDDEN_HOST",
+  "FORBIDDEN_CSRF",
+  "UNSUPPORTED_MEDIA_TYPE",
+  "STARTUP_RECOVERY_PENDING",
+  "METHOD_NOT_ALLOWED",
+  // The stream's fallback when a failure body carries no code of its own.
+  "GATEWAY_ERROR",
+  // The Chat's skill selection.
+  "SKILL_SURFACE_UNSUPPORTED",
+  // The Git-change description and apply routes of a Chat's Git-change scope.
+  "GIT_CHANGE_APPLY_READER_UNAUTHORIZED",
+  "GIT_CHANGE_APPLY_REMOTE_UNRESOLVED",
+  "GIT_CHANGE_APPLY_REPOSITORY_UNAVAILABLE",
+  "GIT_CHANGE_APPLY_UNAVAILABLE",
+  "GIT_CHANGE_APPLY_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_APPROVE_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED",
+  "GIT_CHANGE_DESCRIPTION_UNAVAILABLE",
+  "GIT_CHANGE_REVIEW_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_SCOPE_NOT_FOUND",
+] as const;
+export type ChatPathErrorCode = (typeof CHAT_PATH_ERROR_CODES)[number];
+
+/**
  * The one definition of the `UNKNOWN_REPOSITORY` code for its producers (the issue preview and the
  * GitHub issue reader authorization routes) and its consumers (the Coding Workbench intake and the
  * issue reader authorization hook), so a rename can never map the refusal to a generic failure on
@@ -2689,6 +2967,21 @@ export type GatewayReadinessProbeName =
 
 export type GatewayReadinessProbeStatus = "passed" | "failed" | "unsupported" | "skipped";
 
+/**
+ * How a tool-calling check ended (#4351). The check first offers the tool the way production does, with
+ * no forced `tool_choice`; only a model that called none gets a second attempt with the forced named call.
+ * `forced-refused` and `inconclusive` are never a verdict that the model cannot call tools.
+ */
+export const GATEWAY_TOOL_CALLING_OUTCOMES = [
+  "called-unforced",
+  "called-only-forced",
+  "forced-refused",
+  "no-call",
+  "tools-refused",
+  "inconclusive",
+] as const;
+export type GatewayToolCallingOutcome = (typeof GATEWAY_TOOL_CALLING_OUTCOMES)[number];
+
 export type GatewayReadinessOverallStatus = "ready" | "partial" | "failed";
 
 export interface GatewayReadinessProbeResult {
@@ -2699,6 +2992,8 @@ export interface GatewayReadinessProbeResult {
   readonly latencyMs: number;
   readonly evidence: string;
   readonly warning?: string | undefined;
+  /** Only on the tool-calling probe: which closed outcome the two-step check reached. */
+  readonly toolCallingOutcome?: GatewayToolCallingOutcome | undefined;
   // Present only when transport-level evidence conclusively proves a capability value. A semantic
   // sentinel mismatch remains unsupported in the report but must not rewrite durable capability
   // configuration as false.

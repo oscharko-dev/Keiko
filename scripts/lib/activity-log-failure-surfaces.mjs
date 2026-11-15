@@ -53,7 +53,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-cli", emitterPrefix: "lifecycle-browser-activity", surface: "ui" },
   { owner: "keiko-cli", emitterPrefix: "lifecycle-health-activity", surface: "ui" },
   { owner: "keiko-cli", emitterPrefix: "lifecycle-native-activity", surface: "ui" },
-  { owner: "keiko-cli", emitterPrefix: "portable-launch-notifier", surface: "lifecycle-crash" },
+  { owner: "keiko-cli", emitterPrefix: "portable-launch-failure", surface: "lifecycle-crash" },
   { owner: "keiko-cli", emitterPrefix: "process-activity-log", surface: "lifecycle-crash" },
   { owner: "keiko-cli", emitterPrefix: "security-log", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "support", surface: "runtime-packages" },
@@ -87,6 +87,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   {
     owner: "keiko-server",
     emitterPrefix: "client-diagnostics-routes",
+    surface: "client-diagnostics",
+  },
+  {
+    owner: "keiko-server",
+    emitterPrefix: "client-diagnostics-catalog-refresh",
     surface: "client-diagnostics",
   },
   { owner: "keiko-server", emitterPrefix: "client-jira-fields-log", surface: "client-diagnostics" },

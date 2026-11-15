@@ -11,6 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider, loadLocaleMessages, translate } from "@/lib/i18n";
 import type { GatewayReadinessReport, ModelCapability, SafeGatewayConfig } from "@/lib/types";
 import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
+import settingsMessages from "./settings-i18n.messages.json";
+import {
+  GATEWAY_TOOL_CALLING_OUTCOMES,
+  type GatewayToolCallingOutcome,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import { axe } from "jest-axe";
 
 it("attributes embedding verification to the configured retrieval model in the copied report", () => {
   const report: GatewayReadinessReport = {
@@ -265,6 +271,19 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
       expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/chat model — not verified/i);
     });
     expect(screen.getByTestId("conv-elig-ok").className).toContain("ml-type");
+  });
+
+  // #4351: what Keiko learned about a deployment is visible to the operator, in plain words.
+  it("shows that Keiko detected a model returning its reasoning on tool turns", async () => {
+    primeFetches([
+      { ...chatCapability("test-chat-reasoning"), reasoningOnToolTurns: "detected" as const },
+      chatCapability("test-chat-plain"),
+    ]);
+    render(<SettingsPanel />);
+    // Exactly one of the two models carries the learned fact.
+    expect(
+      await screen.findAllByText("Returns its reasoning on tool turns: detected"),
+    ).toHaveLength(1);
   });
 
   it("restores the server-observed ready state when Settings is reopened", async () => {
@@ -835,6 +854,76 @@ describe("SettingsPanel gateway readiness checks", () => {
     expect(runGatewayReadinessMock).toHaveBeenCalledWith("test-chat-1", undefined);
     expect(catalogRefresh).toHaveBeenCalledTimes(1);
     window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, catalogRefresh);
+  });
+
+  // #4351: the tool-calling check ends in one closed outcome; each gets one plain sentence in the
+  // person's language that says what it was and what to do. The sentences come from the catalog by
+  // the closed value, so a new outcome without one fails here.
+  function outcomeReport(outcome: GatewayToolCallingOutcome): GatewayReadinessReport {
+    const status =
+      outcome === "called-unforced" || outcome === "called-only-forced"
+        ? "passed"
+        : outcome === "no-call" || outcome === "tools-refused"
+          ? "unsupported"
+          : "failed";
+    return {
+      modelId: "test-chat-1",
+      checkedAt: "2026-06-24T09:00:00.000Z",
+      overallStatus: status === "passed" ? "ready" : "partial",
+      probes: [
+        { name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" },
+        {
+          name: "tool_calling",
+          status,
+          latencyMs: 11,
+          evidence: `server evidence for ${outcome}`,
+          toolCallingOutcome: outcome,
+        },
+      ],
+      verifiedCapabilities: status === "passed" ? { toolCalling: true } : {},
+    };
+  }
+
+  const outcomeKey = (outcome: GatewayToolCallingOutcome): keyof typeof settingsMessages =>
+    `settings.models.toolOutcome.${outcome}`;
+
+  it.each(GATEWAY_TOOL_CALLING_OUTCOMES)(
+    "words the %s outcome in English, in place of the server's evidence",
+    async (outcome) => {
+      primeFetches([chatCapability("test-chat-1")]);
+      runGatewayReadinessMock.mockResolvedValue(outcomeReport(outcome));
+      render(<SettingsPanel />);
+      fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+      const sentence = await screen.findByText(settingsMessages[outcomeKey(outcome)].en);
+      expect(sentence).toBeInTheDocument();
+      expect(screen.queryByText(`server evidence for ${outcome}`)).toBeNull();
+      // The sentence itself passes the accessibility rules (the row around it is not under test).
+      expect(await axe(sentence)).toHaveNoViolations();
+    },
+  );
+
+  it.each(GATEWAY_TOOL_CALLING_OUTCOMES)("words the %s outcome in German", async (outcome) => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem("keiko.locale", "de");
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue(outcomeReport(outcome));
+    render(
+      <I18nProvider>
+        <SettingsPanel />
+      </I18nProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Bereitschaft prüfen" }));
+    expect(await screen.findByText(settingsMessages[outcomeKey(outcome)].de)).toBeInTheDocument();
+  });
+
+  it("keeps a model that called a tool only when forced admitted, with the tools badge", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue(outcomeReport("called-only-forced"));
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    await screen.findByText(settingsMessages["settings.models.toolOutcome.called-only-forced"].en);
+    expect(screen.getByText("Working today")).toBeInTheDocument();
+    expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Tools");
   });
 
   it("surfaces unsupported probe evidence for partial readiness", async () => {

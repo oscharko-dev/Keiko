@@ -75,7 +75,7 @@ function keyFromEnv(env: Readonly<Record<string, string | undefined>>): Buffer |
 // does not answer (`unavailable`) skips the store attempt: it would meet the same wall and spend a
 // second timeout on the boot path for nothing. `options` is a test seam only — production calls it
 // with none and gets the real `security` CLI and the production bound.
-export function keyFromKeychain(options: MacosKeychainOptions = {}): Buffer | undefined {
+export function keyFromKeychain(options: MacosKeychainOptions): Buffer | undefined {
   const account = userInfo().username;
   const read = readMacosKeychainSecret(KEYCHAIN_SERVICE, account, options);
   if (read.kind === "unavailable") return undefined;
@@ -111,7 +111,7 @@ function keyFromKeyfile(memoryDir: string): Buffer {
 export function resolveVaultKey(
   env: Readonly<Record<string, string | undefined>>,
   memoryDir: string,
-  keychainAccess: KeychainAccess = keyFromKeychain,
+  keychainAccess: KeychainAccess,
 ): ResolvedVaultKey {
   const fromEnv = keyFromEnv(env);
   if (fromEnv !== undefined) return { key: fromEnv, source: "env" };

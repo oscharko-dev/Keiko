@@ -69,10 +69,13 @@ export function jiraApplicationLinkId(value: unknown): value is string {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value)
   );
 }
+/** Longest text of an actor key, an application or link name and a relationship; longest destination. */
+const TEXT_MAX_CHARS = 255;
+const URL_MAX_CHARS = 2048;
 function destination(value: unknown): value is string {
   return (
     isSafeAtlassianConnectorBaseUrl(value) &&
-    savedText(value, 2048) &&
+    savedText(value, URL_MAX_CHARS) &&
     !/[\s\\]/u.test(value) &&
     !/%(?:2e|2f|5c|25)/iu.test(new URL(value).pathname)
   );
@@ -85,7 +88,7 @@ export function reciprocalApplication(
   const raw = asRecord(value);
   if (raw === undefined || (exact && !savedExactKeys(raw, APPLICATION_KEYS))) return undefined;
   return jiraApplicationLinkId(raw.id) &&
-    savedText(raw.name, 255) &&
+    savedText(raw.name, TEXT_MAX_CHARS) &&
     destination(raw.displayUrl) &&
     destination(raw.rpcUrl)
     ? { id: raw.id, name: raw.name, displayUrl: raw.displayUrl, rpcUrl: raw.rpcUrl }
@@ -93,7 +96,9 @@ export function reciprocalApplication(
 }
 export function reciprocalManifest(value: unknown): ReciprocalManifest | undefined {
   const raw = asRecord(value);
-  return raw?.typeId === "jira" && jiraApplicationLinkId(raw.id) && savedText(raw.name, 255)
+  return raw?.typeId === "jira" &&
+    jiraApplicationLinkId(raw.id) &&
+    savedText(raw.name, TEXT_MAX_CHARS)
     ? { id: raw.id, name: raw.name }
     : undefined;
 }
@@ -114,9 +119,9 @@ function remoteFields(
   | Pick<ReciprocalInput, "remoteId" | "remoteTitle" | "sourceRelationship" | "targetRelationship">
   | undefined {
   return jiraNativeId(args.remoteIssueId) &&
-    savedText(args.remoteIssueTitle, 255) &&
-    savedText(args.sourceRelationship, 255) &&
-    savedText(args.targetRelationship, 255)
+    savedText(args.remoteIssueTitle, TEXT_MAX_CHARS) &&
+    savedText(args.sourceRelationship, TEXT_MAX_CHARS) &&
+    savedText(args.targetRelationship, TEXT_MAX_CHARS)
     ? {
         remoteId: args.remoteIssueId,
         remoteTitle: args.remoteIssueTitle,
@@ -125,22 +130,55 @@ function remoteFields(
       }
     : undefined;
 }
-export function parseReciprocalInput(args: CatalogJsonObject): ReciprocalInput | undefined {
-  if (
-    !savedExactKeys(args, INPUT_KEYS) ||
-    !savedText(args.expectedActorKey, 255) ||
-    args.expectLocalLinkAbsent !== true ||
-    args.acceptNativeDelegatedEffect !== true
-  )
-    return undefined;
+/** The one check order of an input, named by its first broken rule. */
+export type ReciprocalInputCause =
+  "arguments" | "actor" | "acceptance" | "issue" | "application" | "remote" | "size";
+export type ReciprocalInputCheck =
+  | { readonly ok: true; readonly input: ReciprocalInput }
+  | { readonly ok: false; readonly cause: ReciprocalInputCause };
+const refused = (name: ReciprocalInputCause): ReciprocalInputCheck => ({ ok: false, cause: name });
+/**
+ * The input of one reciprocal link, or the first rule it breaks. The parser and the sentence a
+ * refused model reads both come from this one function (#4357 AC3), so they cannot drift apart.
+ */
+export function checkReciprocalInput(
+  args: CatalogJsonObject,
+  maxBytes: number = TOOL_CATALOG_LIMITS.maxArgumentBytes,
+): ReciprocalInputCheck {
+  if (!savedExactKeys(args, INPUT_KEYS)) return refused("arguments");
+  if (!savedText(args.expectedActorKey, TEXT_MAX_CHARS)) return refused("actor");
+  if (args.expectLocalLinkAbsent !== true || args.acceptNativeDelegatedEffect !== true)
+    return refused("acceptance");
   const issue = issueLifecycleReview(args.expectedIssue);
+  if (issue === undefined) return refused("issue");
   const application = reciprocalApplication(args.expectedApplication, true);
+  if (application === undefined) return refused("application");
   const remote = remoteFields(args);
-  if (issue === undefined || application === undefined || remote === undefined) return undefined;
-  return new TextEncoder().encode(JSON.stringify(args)).byteLength <=
-    TOOL_CATALOG_LIMITS.maxArgumentBytes
-    ? { actor: args.expectedActorKey, issue, application, ...remote }
-    : undefined;
+  if (remote === undefined) return refused("remote");
+  if (new TextEncoder().encode(JSON.stringify(args)).byteLength > maxBytes) return refused("size");
+  return { ok: true, input: { actor: args.expectedActorKey, issue, application, ...remote } };
+}
+const NOTHING_CHANGED = "Nothing was changed.";
+/**
+ * One sentence per cause (#4357 AC3): it names the rule the model must satisfy, built from the
+ * constants the checks use, never the refused value, and within the 200-byte bound of a detail
+ * message. The record is exhaustive, so a cause added to the check cannot be left without one.
+ */
+const INPUT_SENTENCES: Readonly<Record<ReciprocalInputCause, string>> = {
+  arguments: `This call takes only ${[...INPUT_KEYS].join(", ")}.`,
+  actor: `expectedActorKey must be the key of the connected Jira user (non-blank, at most ${String(TEXT_MAX_CHARS)} characters); jira.myself returns it. ${NOTHING_CHANGED}`,
+  acceptance: `Send expectLocalLinkAbsent:true and acceptNativeDelegatedEffect:true: the local link must not exist yet, and Jira performs the reciprocal effect itself. ${NOTHING_CHANGED}`,
+  issue: `expectedIssue must be the issue as reviewed: id, key, summary, projectId and issueTypeId, nothing else. ${NOTHING_CHANGED}`,
+  application: `expectedApplication must be the configured link: id (UUID), name (at most ${String(TEXT_MAX_CHARS)}), displayUrl and rpcUrl (HTTPS, at most ${String(URL_MAX_CHARS)}, no credentials, query, fragment, whitespace or backslash).`,
+  remote: `remoteIssueId must be a numeric ID; remoteIssueTitle, sourceRelationship and targetRelationship must be non-blank text of at most ${String(TEXT_MAX_CHARS)} characters. ${NOTHING_CHANGED}`,
+  size: `The arguments are larger than one call may carry. ${NOTHING_CHANGED}`,
+};
+export function reciprocalInputRefusal(failed: ReciprocalInputCause): ReciprocalFailure {
+  return {
+    ok: false,
+    reason: "field-validation",
+    detail: { validation: "invalid-field", messages: [INPUT_SENTENCES[failed]] },
+  };
 }
 export function reciprocalGlobalId(applicationId: string, issueId: string): string {
   return `appId=${applicationId}&issueId=${issueId}`;

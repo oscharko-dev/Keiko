@@ -50,6 +50,16 @@ import { bugWithRelationAndLink, subtasksUnderTask } from "./hierarchy.mjs";
 import { modesAndReadableApproval } from "./modes.mjs";
 import { rerunCreatesNoDuplicates } from "./rerun.mjs";
 import {
+  ESTIMATE_RULE_OBLIGATIONS,
+  ESTIMATE_RULE_PROMPT,
+  TIME_FIELD,
+  configuredEstimateField,
+  deriveEstimate,
+  estimateDescriptor,
+  gradeEstimateRule,
+  storyPointsFieldId,
+} from "./estimate-rule.mjs";
+import {
   complianceFieldIds,
   estimateOf,
   gradeProgress,
@@ -68,6 +78,7 @@ import {
 import { aggregateParts, countsOf, NO_TURN, result, snapshotBefore } from "./journey-support.mjs";
 import { draftFindingsPart } from "./draft-findings.mjs";
 import { largeProjectPart } from "./large-project.mjs";
+import { gradeAnswerClean } from "./raw-keys.mjs";
 import { templateTestCasesPart } from "./template-test-cases.mjs";
 import {
   epicTemplateConforms,
@@ -237,30 +248,156 @@ const PROGRESS_FIELDS = (fieldIds) =>
     .filter((field) => field !== undefined)
     .join(",");
 
-async function projectProgress(ctx, chat) {
-  const turn = await ctx.turn(chat, progressPrompt(estimateOf(ctx.truth)));
-  const issues = await ctx.search("project = RPT", PROGRESS_FIELDS(ctx.truth.fieldIds));
-  const truth = progressTruth(issues, ctx.truth.fieldIds, ctx.truth.estimate);
-  const grade = gradeProgress(turn.answer, truth);
-  const parts = [
+/**
+ * The facts the product's estimate rule is derived from, read natively: the board's configured
+ * estimation field and the unique Story Points field. When they cannot be read (a lab context
+ * without a native reader, or a project whose board has no estimation field) the result carries the
+ * reason, and the estimate is `unverified` with it in the detail: the truth file's old estimate is
+ * never graded in its place.
+ */
+/** The project S10 reads: RPT, or the estimate-case project a run selects (seed-estimate-cases.mjs). */
+const estimateProject = (ctx) => ctx.estimateProject ?? "RPT";
+
+async function nativeEstimateFacts(ctx) {
+  if (ctx.nativeGet === undefined)
+    return { unavailable: "this lab context has no native Jira reader" };
+  const [fields, configured] = await Promise.all([
+    ctx.nativeGet("/rest/api/2/field"),
+    configuredEstimateField(ctx.nativeGet, estimateProject(ctx)),
+  ]);
+  if (configured === undefined)
+    return {
+      unavailable: `the board of ${estimateProject(ctx)} reports no configured estimation field`,
+    };
+  const storyPoints = storyPointsFieldId(fields);
+  // The names Jira shows the reading account (German on a German session), never a hardcoded label.
+  const nativeNames = Object.fromEntries(
+    [TIME_FIELD, configured, storyPoints]
+      .filter(Boolean)
+      .map((id) => [
+        id,
+        (Array.isArray(fields) ? fields : []).find((field) => field.id === id)?.name,
+      ])
+      .filter(([, name]) => typeof name === "string"),
+  );
+  return { configured, storyPoints, nativeNames };
+}
+
+/** What the S10 turn asks and what Jira must hold: the expectation follows the product's rule. */
+async function progressPlan(ctx) {
+  const facts = await nativeEstimateFacts(ctx);
+  const baseFields = PROGRESS_FIELDS(ctx.truth.fieldIds);
+  if (facts.unavailable !== undefined)
+    return {
+      fields: baseFields,
+      estimate: estimateOf(ctx.truth),
+      prompt: undefined,
+      unavailable: facts.unavailable,
+    };
+  const fields = [
+    ...new Set([...baseFields.split(","), TIME_FIELD, facts.configured, facts.storyPoints]),
+  ]
+    .filter(Boolean)
+    .join(",");
+  const project = estimateProject(ctx);
+  const derived = deriveEstimate({
+    issues: await ctx.search(`project = ${project}`, fields),
+    ...facts,
+  });
+  return { fields, derived, estimate: estimateDescriptor(derived), prompt: ESTIMATE_RULE_PROMPT };
+}
+
+/** The graded parts of the answer: the three figures and, under the rule, its three statements. */
+function progressParts(grade, rule) {
+  const statements =
+    rule === undefined
+      ? []
+      : Object.entries(ESTIMATE_RULE_OBLIGATIONS).map(([key, name]) => [
+          name,
+          { graded: true, ok: rule[key].ok },
+        ]);
+  return [
     ["counts-by-type-status", grade.counts],
     ["per-epic-progress", grade.epics],
     ["estimate-totals", grade.estimate],
+    ...statements,
   ].filter(([, part]) => part.graded);
+}
+
+const ruleDetail = (derived, rule) =>
+  derived === undefined
+    ? ""
+    : `; estimate case ${derived.case} (${rule.source.detail}; ${rule.unused.detail}; ${rule.other.detail})`;
+
+async function projectProgress(ctx, chat, options) {
+  const plan = await progressPlan(ctx);
+  const base = progressPrompt(plan.estimate, estimateProject(ctx));
+  const turn = await ctx.turn(
+    chat,
+    plan.prompt === undefined ? base : `${base}\n${plan.prompt.join("\n")}`,
+  );
+  const issues = await ctx.search(`project = ${estimateProject(ctx)}`, plan.fields);
+  const truth = progressTruth(
+    issues,
+    ctx.truth.fieldIds,
+    plan.derived === undefined ? ctx.truth.estimate : plan.estimate,
+  );
+  const grade = gradeProgress(turn.answer, truth);
+  const rule =
+    plan.derived === undefined ? undefined : gradeEstimateRule(turn.answer, plan.derived);
+  // Without native estimate facts the figure and the rule statements are not graded at all.
+  const parts = progressParts(grade, rule).filter(
+    ([name]) => plan.unavailable === undefined || name !== "estimate-totals",
+  );
   const failed = parts.filter(([, part]) => !part.ok);
   const ungraded = [grade.epics, grade.estimate].filter((part) => !part.graded).length;
   const answer = {
     label: "answer",
     status: failed.length === 0 ? "green" : "red",
     covers: parts.map(([name]) => name),
-    detail: `${issues.length} issues; type/status counts ${grade.counts.matched}/${grade.counts.expected} exact (${grade.counts.extra} extra), epics ${grade.epics.graded ? `${grade.epics.matched}/${grade.epics.expected}` : "not gradable"}, estimate ${grade.estimate.graded ? (grade.estimate.ok ? "exact" : "wrong") : "not gradable"}, ${grade.conflicts} conflicting lines${ungraded > 0 ? "; ungradable parts are not credited" : ""}`,
+    detail: `${issues.length} issues; type/status counts ${grade.counts.matched}/${grade.counts.expected} exact (${grade.counts.extra} extra), epics ${grade.epics.graded ? `${grade.epics.matched}/${grade.epics.expected}` : "not gradable"}, estimate ${grade.estimate.graded ? (grade.estimate.ok ? "exact" : "wrong") : "not gradable"}, ${grade.conflicts} conflicting lines${ungraded > 0 ? "; ungradable parts are not credited" : ""}${ruleDetail(plan.derived, rule)}`,
   };
   const large = await largeProjectPart(ctx);
   const unavailable = await unavailableProgressPart(ctx);
+  const raw = await answerCleanPart(ctx, chat, turn);
   return aggregateParts(
-    [answer, large.part, unavailable.part],
-    [turn, large.turn, unavailable.turn],
+    [answer, raw, ...estimateUnverified(plan), large.part, unavailable.part],
+    [
+      turn,
+      NO_TURN,
+      ...(plan.unavailable === undefined ? [] : [NO_TURN]),
+      large.turn,
+      unavailable.turn,
+    ],
+    options,
   );
+}
+
+/** The part `answer-clean` (#4355): no raw result keys in the answer, no flag in the stored message. */
+async function answerCleanPart(ctx, chat, turn) {
+  return {
+    label: "answer clean",
+    covers: ["answer-clean"],
+    ...gradeAnswerClean({
+      answer: turn.answer,
+      exchanges: turn.toolExchanges,
+      stored: await ctx.storedAnswer?.(chat, turn.answer),
+      turn,
+    }),
+  };
+}
+
+/** The estimate part when its native facts were unreadable: unverified, never green, with the reason. */
+function estimateUnverified(plan) {
+  if (plan.unavailable === undefined) return [];
+  return [
+    {
+      label: "estimate rule",
+      status: "unverified",
+      covers: ["estimate-totals", ...Object.values(ESTIMATE_RULE_OBLIGATIONS)],
+      detail: `native estimate facts unavailable (${plan.unavailable}); the figure and the three statements are not graded`,
+    },
+  ];
 }
 
 // ---------- S12 ----------
@@ -523,7 +660,8 @@ export const JOURNEYS = {
   },
   S08: (ctx, chat) => bugWithRelationAndLink(ctx, chat),
   S09: (ctx, chat) => subtasksUnderTask(ctx, chat),
-  S10: (ctx, chat) => projectProgress(ctx, chat),
+  // The Composer lane's C07 asks for the strict aggregate: an unverified part is never green.
+  S10: (ctx, chat, options) => projectProgress(ctx, chat, options),
   S11b: (ctx, chat) => largeComplianceReport(ctx, chat),
   S11: (ctx, chat) =>
     // AC1 before AC3: the lead's templates for RPT are the structure the compliance check applies.

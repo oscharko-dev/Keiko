@@ -9,7 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, win32 as win32Path } from "node:path";
+import { dirname, join, relative, resolve, sep, win32 as win32Path } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
@@ -30,6 +30,11 @@ import {
 import type { CliIo } from "./runner.js";
 import { emitCliWindowsSystemFailure } from "./security-log.js";
 import { defaultManagedRoot, type PortableLayout, type PortableTarget } from "./portable-shared.js";
+import { portableAppEntries } from "./portable-app-record.js";
+import {
+  portableRuntimeRecordEntries,
+  RUNTIME_ACTIVATION_RECORD_PATH,
+} from "./portable-runtime-record.js";
 
 export type ManagedRootMode = "default" | "custom";
 export type NativeRegistrationKind = "windows-start-menu" | "macos-system-applications";
@@ -728,14 +733,68 @@ function selectedWindowsGenerationRoot(layout: PortableLayout): string | undefin
   return /^\.portable\/generations\/[a-f0-9]{64}$/u.test(relativeRoot) ? relativeRoot : undefined;
 }
 
+// The runtime files the selected payload's own record names and the app files its own package
+// names, as paths below the install root. A first installation is a flat copy of the payload and an
+// updated one a generation folder; both carry the record their staging wrote and the package npm
+// packed, so neither needs a hand-kept list of these files (#4358).
+interface InstalledRuntimeEntries {
+  readonly files: ReadonlySet<string>;
+  readonly prefixes: readonly string[];
+}
+
+function installedRuntimeEntries(layout: PortableLayout): InstalledRuntimeEntries {
+  const base = normalizedRelativePath(layout.installRoot, layout.resourceRoot);
+  const prefix = base === "" ? "" : `${base}/`;
+  const runtime = portableRuntimeRecordEntries(layout.resourceRoot);
+  const app = portableAppEntries(layout.resourceRoot);
+  return {
+    files: new Set([...runtime.files, ...app.files].map((file) => `${prefix}${file}`)),
+    prefixes: [...runtime.prefixes, ...app.prefixes].map((folder) => `${prefix}${folder}`),
+  };
+}
+
+function recordedRuntimeFile(relPath: string, runtime: InstalledRuntimeEntries): boolean {
+  return (
+    runtime.files.has(relPath) || runtime.prefixes.some((folder) => relPath.startsWith(folder))
+  );
+}
+
+function recordedRuntimeDirectory(relPath: string, runtime: InstalledRuntimeEntries): boolean {
+  const folder = `${relPath}/`;
+  return (
+    [...runtime.files].some((file) => file.startsWith(folder)) ||
+    runtime.prefixes.some((root) => root.startsWith(folder) || folder.startsWith(root))
+  );
+}
+
+interface ManagedScanRules {
+  readonly layout: PortableLayout;
+  readonly windowsGenerationRoots: readonly string[] | undefined;
+  readonly runtime: InstalledRuntimeEntries;
+}
+
+function knownManagedDirectory(relPath: string, rules: ManagedScanRules): boolean {
+  return (
+    allowlistedDirectory(relPath, rules.layout, rules.windowsGenerationRoots) ||
+    recordedRuntimeDirectory(relPath, rules.runtime)
+  );
+}
+
+function knownManagedFile(relPath: string, rules: ManagedScanRules): boolean {
+  return (
+    allowlistedFile(relPath, rules.layout, rules.windowsGenerationRoots) ||
+    recordedRuntimeFile(relPath, rules.runtime)
+  );
+}
+
 function scanManagedTree(
   absPath: string,
-  layout: PortableLayout,
-  windowsGenerationRoots: readonly string[] | undefined,
+  rules: ManagedScanRules,
   files: string[],
   directories: string[],
   issues: string[],
 ): void {
+  const { layout } = rules;
   directories.push(absPath);
   for (const name of readdirSync(absPath)) {
     const entryPath = join(absPath, name);
@@ -746,11 +805,11 @@ function scanManagedTree(
     }
     const relPath = normalizedRelativePath(layout.installRoot, entryPath);
     if (stat.isDirectory()) {
-      if (!allowlistedDirectory(relPath, layout, windowsGenerationRoots)) {
+      if (!knownManagedDirectory(relPath, rules)) {
         issues.push(topLevelUnknown(relPath));
         continue;
       }
-      scanManagedTree(entryPath, layout, windowsGenerationRoots, files, directories, issues);
+      scanManagedTree(entryPath, rules, files, directories, issues);
       continue;
     }
     if (!stat.isFile()) {
@@ -761,7 +820,7 @@ function scanManagedTree(
       issues.push(`portable managed install refused hardlink at ${entryPath}`);
       continue;
     }
-    if (!allowlistedFile(relPath, layout, windowsGenerationRoots)) {
+    if (!knownManagedFile(relPath, rules)) {
       issues.push(topLevelUnknown(relPath));
       continue;
     }
@@ -787,7 +846,8 @@ function inspectPortableManagedInstallWithWindowsGenerationRoots(
       issues: ["portable managed install refused malformed Windows generation layout"],
     };
   }
-  scanManagedTree(layout.installRoot, layout, windowsGenerationRoots, files, directories, issues);
+  const rules = { layout, windowsGenerationRoots, runtime: installedRuntimeEntries(layout) };
+  scanManagedTree(layout.installRoot, rules, files, directories, issues);
   return { files, directories, issues };
 }
 
@@ -839,6 +899,185 @@ export function removePortableManagedInstall(
   }
 }
 
+// A file or folder another program holds open cannot be removed on Windows, and the running
+// program's own files are held by that very program (#4358). These codes name such a refusal; any
+// other error is a real failure and stops the removal where it is.
+const LOCKED_ENTRY_CODES: ReadonlySet<string> = new Set(["EPERM", "EBUSY", "EACCES", "ENOTEMPTY"]);
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+export interface ManagedRemovalOptions {
+  /**
+   * Leave the launcher and the setup manifest, which identify the installation to a second run,
+   * to the caller: the removal reports them as remaining without touching them.
+   */
+  readonly deferIdentity: boolean;
+  readonly unlink?: ((path: string) => void) | undefined;
+  readonly rmdir?: ((path: string) => void) | undefined;
+}
+
+export interface ManagedRemovalOutcome {
+  readonly removedCount: number;
+  /** Files that could not be removed or were deferred, in removal order. */
+  readonly residueFiles: readonly string[];
+  /** The part of `residueFiles` that identifies the installation; always the last entries. */
+  readonly identityResidue: readonly string[];
+  /** Folders still holding something, deepest first. */
+  readonly residueDirectories: readonly string[];
+}
+
+// The files a second run needs to find and judge an interrupted removal go last: the record that
+// names the runtime files and the package.json that names the app files (inspection reads both),
+// then the launcher the registration binds and the setup manifest that identifies the installation.
+function identityLast(
+  layout: PortableLayout,
+  files: readonly string[],
+): { readonly payload: readonly string[]; readonly identity: readonly string[] } {
+  const identityPaths = [
+    join(layout.resourceRoot, ...RUNTIME_ACTIVATION_RECORD_PATH.split("/")),
+    layout.packageJsonPath,
+    layout.primaryLauncherPath,
+    layout.setupManifestPath,
+  ];
+  return {
+    payload: files.filter((file) => !identityPaths.includes(file)),
+    identity: identityPaths.filter((path) => files.includes(path)),
+  };
+}
+
+// What `keiko uninstall` needs to run once more from this copy: the Node runtime, the CLI entry and the
+// packages it loads. These go after every other payload file, and before only the identity files, so
+// that a removal that is interrupted (a logoff, a restart) leaves a copy whose own command still runs
+// and finishes the removal, as long as only the other files were gone.
+//
+// The set is `app/dist` (the CLI and the workspace packages it imports), `app/node_modules` (their
+// dependencies, native add-ons that sit there included) and `runtime/node` (the Node binary). The
+// version `uninstall` reads from `app/package.json` is an identity file and goes after this set, and
+// the registration, journal and state files it reads go last. It does not load `runtime/native`
+// (helpers, vector add-on, search tool), `runtime/sidecars`, `runtime/licenses`, the package's
+// notices, `release-impact.catalog.json` or `scripts/`: those go earlier. The classification of the
+// real package and runtime payload is pinned in portable-maintenance.app-payload.test.ts; the
+// completeness of the closure itself is measured on Windows.
+function splitRunSet(
+  layout: PortableLayout,
+  payload: readonly string[],
+): { readonly rest: readonly string[]; readonly runSet: readonly string[] } {
+  const prefixes = [
+    join(layout.resourceRoot, "app", "dist"),
+    join(layout.resourceRoot, "app", "node_modules"),
+    join(layout.resourceRoot, "runtime", "node"),
+  ].map((path) => `${path}${sep}`);
+  const inRunSet = (file: string): boolean => prefixes.some((prefix) => file.startsWith(prefix));
+  return {
+    rest: payload.filter((file) => !inRunSet(file)),
+    runSet: payload.filter(inRunSet),
+  };
+}
+
+function removeEntryTolerant(path: string, remove: (path: string) => void): "removed" | "locked" {
+  try {
+    remove(path);
+    return "removed";
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "ENOENT") return "removed";
+    if (code !== undefined && LOCKED_ENTRY_CODES.has(code)) return "locked";
+    throw error;
+  }
+}
+
+interface FileRemovalState {
+  removedCount: number;
+  readonly residueFiles: string[];
+  readonly identityResidue: string[];
+}
+
+// Removes `paths` in order; what cannot be removed joins the residue.
+function removeFilesTolerant(
+  paths: readonly string[],
+  state: FileRemovalState,
+  io: CliIo,
+  unlink: (path: string) => void,
+): void {
+  for (const file of paths) {
+    if (removeEntryTolerant(file, unlink) === "removed") {
+      state.removedCount += 1;
+      io.out(`removed: ${file}\n`);
+    } else state.residueFiles.push(file);
+  }
+}
+
+function removeFilesInOrder(
+  layout: PortableLayout,
+  files: readonly string[],
+  io: CliIo,
+  options: ManagedRemovalOptions,
+): FileRemovalState {
+  const unlink = options.unlink ?? unlinkSync;
+  const { payload, identity } = identityLast(layout, files);
+  const { rest, runSet } = splitRunSet(layout, payload);
+  const state: FileRemovalState = { removedCount: 0, residueFiles: [], identityResidue: [] };
+  removeFilesTolerant(rest, state, io, unlink);
+  // The run set and then the identity files are touched only when nothing before them is left: a
+  // second run needs them to find the installation, and the run set to run at all. A caller that
+  // hands the rest to a helper takes both over, in this order.
+  const keepIdentity = (): void => {
+    state.residueFiles.push(...identity);
+    state.identityResidue.push(...identity);
+  };
+  if (options.deferIdentity || state.residueFiles.length > 0) {
+    state.residueFiles.push(...runSet);
+    keepIdentity();
+    return state;
+  }
+  removeFilesTolerant(runSet, state, io, unlink);
+  if (state.residueFiles.length > 0) {
+    keepIdentity();
+    return state;
+  }
+  removeFilesTolerant(identity, state, io, unlink);
+  state.identityResidue.push(...state.residueFiles);
+  return state;
+}
+
+/**
+ * Removes a managed installation file by file and keeps going past an entry that cannot be removed,
+ * instead of stopping at the first refusal and leaving the rest to chance. The caller learns exactly
+ * what remains. Only entries the inspection accepted are touched, so a foreign file is never
+ * removed; a folder that still holds one stays.
+ */
+export function removePortableManagedInstallTolerant(
+  layout: PortableLayout,
+  io: CliIo,
+  options: ManagedRemovalOptions,
+): ManagedRemovalOutcome {
+  if (!existsSync(layout.installRoot)) {
+    return { removedCount: 0, residueFiles: [], identityResidue: [], residueDirectories: [] };
+  }
+  const scan = inspectPortableManagedInstall(layout);
+  if (scan.issues.length > 0) throw new Error(scan.issues[0]);
+  const rmdir = options.rmdir ?? rmdirSync;
+  const { removedCount, residueFiles, identityResidue } = removeFilesInOrder(
+    layout,
+    scan.files,
+    io,
+    options,
+  );
+  const residueDirectories: string[] = [];
+  for (const directory of [...scan.directories].reverse()) {
+    const holdsResidue = [...residueFiles, ...residueDirectories].some((entry) =>
+      entry.startsWith(`${directory}${sep}`),
+    );
+    if (!holdsResidue && removeEntryTolerant(directory, rmdir) === "removed") {
+      io.out(`removed: ${directory}\n`);
+    } else residueDirectories.push(directory);
+  }
+  return { removedCount, residueFiles, identityResidue, residueDirectories };
+}
+
 export function removePortableRegistrationArtifacts({
   layout,
   target,
@@ -857,4 +1096,71 @@ export function removePortableRegistrationArtifacts({
     removed += removeLegacyWindowsRegistration(layout, env, home, dryRun, io, options) ? 1 : 0;
   }
   return removed;
+}
+
+function emptyTreeDirectories(root: string, directories: string[]): void {
+  directories.push(root);
+  for (const name of readdirSync(root)) {
+    const entry = join(root, name);
+    const stat = lstatSync(entry);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(topLevelUnknown(normalizedRelativePath(directories[0] ?? root, entry)));
+    }
+    emptyTreeDirectories(entry, directories);
+  }
+}
+
+/**
+ * Removes what is left of an installation that an interrupted removal reduced to folders: the
+ * folders, deepest first, each without its content. It holds no file; any entry that is not a
+ * folder is a foreign one and refuses the whole removal, so nothing is deleted through it. A folder
+ * another program holds open stays and is reported, as in the file-by-file removal.
+ */
+export function removeEmptyInstallTree(
+  root: string,
+  io: CliIo,
+  rmdir: (path: string) => void = rmdirSync,
+): ManagedRemovalOutcome {
+  if (!existsSync(root)) {
+    return { removedCount: 0, residueFiles: [], identityResidue: [], residueDirectories: [] };
+  }
+  const directories: string[] = [];
+  emptyTreeDirectories(root, directories);
+  const residueDirectories: string[] = [];
+  let removedCount = 0;
+  for (const directory of [...directories].reverse()) {
+    const holdsResidue = residueDirectories.some((entry) => entry.startsWith(`${directory}${sep}`));
+    if (!holdsResidue && removeEntryTolerant(directory, rmdir) === "removed") {
+      removedCount += 1;
+      io.out(`removed: ${directory}\n`);
+    } else residueDirectories.push(directory);
+  }
+  return { removedCount, residueFiles: [], identityResidue: [], residueDirectories };
+}
+
+const WOULD_REMOVE_PREFIX = "would-remove: ";
+
+/**
+ * The registration artifacts (the Windows Start-menu entry and its legacy launcher) a removal would
+ * delete, each already verified as Keiko's own by the same checks the removal runs. Nothing is
+ * deleted; a caller that hands the deletion to a helper learns the exact paths through this.
+ */
+export function portableRegistrationArtifactPaths(
+  input: Omit<PortableRegistrationRemovalInput, "dryRun" | "io">,
+): readonly string[] {
+  const paths: string[] = [];
+  removePortableRegistrationArtifacts({
+    ...input,
+    dryRun: true,
+    io: {
+      out: (text: string): void => {
+        for (const line of text.split("\n")) {
+          if (line.startsWith(WOULD_REMOVE_PREFIX))
+            paths.push(line.slice(WOULD_REMOVE_PREFIX.length));
+        }
+      },
+      err: (_text: string): void => undefined,
+    },
+  });
+  return paths;
 }

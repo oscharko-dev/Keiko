@@ -190,6 +190,42 @@ export function matchesSeededTruth(jira, large) {
   );
 }
 
+/** No localization: the names are the seed's own English ones. */
+const NO_NAMES = Object.freeze({ types: new Map(), statuses: new Map() });
+
+/**
+ * The names Jira shows an account that reads in another language, by issue type id and status id:
+ * `{ types, statuses }`, each a map from the English (seeded) name to the name that account sees.
+ * `english` and `local` read a Jira list endpoint as the administrator and as the reading account.
+ */
+export async function displayNames({ english, local }) {
+  const pair = async (path) => {
+    const [base, shown] = await Promise.all([english(path), local(path)]);
+    const byId = new Map(shown.map((entry) => [String(entry.id), entry.name]));
+    return new Map(base.map((entry) => [entry.name, byId.get(String(entry.id)) ?? entry.name]));
+  };
+  return {
+    types: await pair("/rest/api/2/issuetype"),
+    statuses: await pair("/rest/api/2/status"),
+  };
+}
+
+/** The Jira figures with their type and status names replaced by the reading account's names. */
+export function localizeFigures(jira, names) {
+  const type = (name) => names.types.get(name) ?? name;
+  const status = (name) => names.statuses.get(name) ?? name;
+  return {
+    ...jira,
+    byType: new Map([...jira.byType].map(([name, value]) => [type(name), value])),
+    byStatus: new Map(
+      [...jira.byStatus].map(([key, value]) => {
+        const [name, state] = key.split(";");
+        return [`${type(name)};${status(state)}`, value];
+      }),
+    ),
+  };
+}
+
 /** The truth `gradeProgress` takes, from the JQL counts (lower-cased keys, as the answer is read). */
 function progressTruthOfJira(jira) {
   return {
@@ -327,9 +363,29 @@ function typeProblems(data, jira) {
   return problems;
 }
 
+const STATUS_FIGURES_HEAD = "Issues per type and status (type;status;issues):";
+const STATUS_FIGURE = /^([^;]+);([^;]+);(\d+)$/u;
+/**
+ * The type and status rows of the plain figure lines. A summary lists a table beside the figures
+ * only when it is whole (#4356); a larger one is stated by the figures alone.
+ */
+function statusFigureRows(figures) {
+  const lines = String(figures ?? "").split("\n");
+  const start = lines.indexOf(STATUS_FIGURES_HEAD);
+  if (start < 0) return [];
+  const rows = [];
+  for (const line of lines.slice(start + 1)) {
+    const match = STATUS_FIGURE.exec(line.trim());
+    if (match === null) break;
+    rows.push({ typeName: match[1], statusName: match[2], total: Number(match[3]) });
+  }
+  return rows;
+}
+
 function statusProblems(data, jira) {
   const problems = [];
-  const rows = records(data.report.progress?.byStatus?.items);
+  const listed = records(data.report.progress?.byStatus?.items);
+  const rows = listed.length > 0 ? listed : statusFigureRows(data.report.figures);
   const stated = new Map(rows.map((item) => [`${item.typeName};${item.statusName}`, item.total]));
   for (const [key, expected] of jira.byStatus)
     expectEqual(problems, key, stated.get(key), expected);
@@ -432,12 +488,14 @@ export async function largeProjectPart(ctx) {
     await ctx.freshChat("autonomous-delivery"),
     progressPrompt(undefined, LARGE_PROJECT),
   );
-  const jira = await largeJiraFigures(ctx.count, large);
-  if (!matchesSeededTruth(jira, large))
+  const seeded = await largeJiraFigures(ctx.count, large);
+  if (!matchesSeededTruth(seeded, large))
     return NOT_CREDITED(
       turn,
-      `Jira holds ${jira.total} issues but the seed recorded ${large.issueCount} with other figures; the laboratory drifted and nothing is credited`,
+      `Jira holds ${seeded.total} issues but the seed recorded ${large.issueCount} with other figures; the laboratory drifted and nothing is credited`,
     );
+  // The report and the answer name types and statuses as the reading account sees them.
+  const jira = localizeFigures(seeded, (await ctx.displayNames?.()) ?? NO_NAMES);
   const report = gradeReportFigures(turn.toolExchanges, jira);
   if (report === undefined)
     return NOT_CREDITED(

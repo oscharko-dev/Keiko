@@ -230,4 +230,154 @@ describe("providerToolSchema", () => {
       "Provide exactly one of these argument sets: a; or no arguments.",
     );
   });
+
+  // A provider refuses a function whose parameters carry oneOf, anyOf, allOf, enum, const or not at
+  // the top level (HTTP 400 for jira.set-issue-property: a root allOf holding a oneOf).
+  const ROOT_KEYWORDS = ["oneOf", "anyOf", "allOf", "enum", "const", "not"] as const;
+
+  function expectPlainObject(parameters: Record<string, unknown>): void {
+    expect(parameters.type).toBe("object");
+    for (const key of ROOT_KEYWORDS) expect(parameters).not.toHaveProperty(key);
+  }
+
+  const SET_PROPERTY = {
+    type: "object",
+    properties: {
+      issueKey: { type: "string" },
+      propertyKey: { type: "string" },
+      expectedValueNodes: { type: "array" },
+      expectAbsent: { type: "boolean" },
+    },
+    required: ["issueKey", "propertyKey"],
+    additionalProperties: false,
+    allOf: [{ oneOf: [{ required: ["expectedValueNodes"] }, { required: ["expectAbsent"] }] }],
+  };
+
+  it("folds a root allOf holding a oneOf and names the exclusive required sets", () => {
+    const before = JSON.stringify(SET_PROPERTY);
+    const result = providerToolSchema(SET_PROPERTY, "Sets a property.");
+    expect(JSON.stringify(SET_PROPERTY)).toBe(before);
+    expectPlainObject(result.parameters);
+    expect(result.parameters).toEqual({
+      type: "object",
+      properties: SET_PROPERTY.properties,
+      required: ["issueKey", "propertyKey"],
+      additionalProperties: false,
+    });
+    expect(result.description).toBe(
+      "Sets a property. Provide exactly one of these argument sets: expectedValueNodes; or expectAbsent.",
+    );
+  });
+
+  it("folds the properties and required names of every allOf member into the root", () => {
+    const result = providerToolSchema(
+      {
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+        allOf: [
+          { properties: { b: { type: "integer" }, a: { type: "number" } }, required: ["b"] },
+          { pattern: "^x" },
+        ],
+      },
+      "d",
+    );
+    expectPlainObject(result.parameters);
+    // The base definition of a property wins over a member's.
+    expect(result.parameters.properties).toEqual({ a: { type: "string" }, b: { type: "integer" } });
+    expect(result.parameters.required).toEqual(["a", "b"]);
+    expect(result.description).toBe("d");
+  });
+
+  it("drops a root not and names the combination it forbids", () => {
+    const result = providerToolSchema(
+      {
+        type: "object",
+        properties: {
+          key: { type: "string" },
+          startAt: { type: "integer" },
+          maxResults: { type: "integer" },
+        },
+        not: { anyOf: [{ required: ["key", "startAt"] }, { required: ["key", "maxResults"] }] },
+      },
+      "Lists properties.",
+    );
+    expectPlainObject(result.parameters);
+    expect(result.description).toBe(
+      "Lists properties. Do not provide any of these combinations: key + startAt; or key + maxResults.",
+    );
+  });
+
+  it.each([
+    [{ required: ["a", "b"] }, "Do not provide all of these together: a + b."],
+    [{ required: ["a"] }, "Do not provide a."],
+  ])("states a single forbidden set in words (%j)", (not, sentence) => {
+    const result = providerToolSchema({ type: "object", properties: {}, not }, "d");
+    expectPlainObject(result.parameters);
+    expect(result.description).toBe(`d ${sentence}`);
+  });
+
+  it("describes an alternative that must leave an argument out", () => {
+    const result = providerToolSchema(
+      {
+        type: "object",
+        properties: { active: { type: "boolean" }, acceptUnverifiedAccess: { type: "boolean" } },
+        allOf: [
+          { anyOf: [{ not: { required: ["active"] } }, { required: ["acceptUnverifiedAccess"] }] },
+        ],
+      },
+      "Updates a user.",
+    );
+    expectPlainObject(result.parameters);
+    expect(result.description).toContain("without active; or acceptUnverifiedAccess");
+  });
+
+  it.each([
+    ["an enum", { type: "object", enum: [{ a: 1 }], properties: { a: { type: "integer" } } }],
+    ["a const", { type: "object", const: { a: 1 }, properties: { a: { type: "integer" } } }],
+    ["a root type list", { type: ["object", "null"], properties: { a: { type: "integer" } } }],
+  ])("projects %s at the root to a plain object", (_name, schema) => {
+    const result = providerToolSchema(schema, "d");
+    expectPlainObject(result.parameters);
+    expect(result.parameters.properties).toEqual({ a: { type: "integer" } });
+  });
+
+  it("is a fixed point: a projected schema is projected to itself", () => {
+    const once = providerToolSchema(SET_PROPERTY, "d");
+    const twice = providerToolSchema(once.parameters, once.description);
+    expect(twice.parameters).toBe(once.parameters);
+    expect(twice.description).toBe(once.description);
+  });
+
+  it("keeps the sentence bounded when a schema forbids very many combinations", () => {
+    const sets = Array.from({ length: 40 }, (_unused, index) => ({
+      required: [`a${String(index)}`, `b${String(index)}`],
+    }));
+    const result = providerToolSchema(
+      { type: "object", properties: {}, not: { anyOf: sets } },
+      "d",
+    );
+    expect(result.description.split("; or ")).toHaveLength(8);
+  });
+
+  it("keeps the alternatives sentence bounded, naming the first eight and counting the rest", () => {
+    const alternatives = Array.from({ length: 20 }, (_unused, index) => ({
+      type: "object",
+      properties: { [`field${String(index)}`]: { type: "string" } },
+      required: [`field${String(index)}`],
+    }));
+    const result = providerToolSchema({ type: "object", oneOf: alternatives }, "d");
+    const parts = result.description.split("; or ");
+    expect(parts).toHaveLength(9);
+    expect(parts.at(-1)).toBe("12 more argument sets.");
+    expect(result.description).toContain("field7");
+    expect(result.description).not.toContain("field8");
+    // All twenty properties are still advertised; only the sentence is bounded.
+    expect(Object.keys(result.parameters.properties as object)).toHaveLength(20);
+  });
+
+  it("leaves a schema whose allOf cannot be folded as it is", () => {
+    const schema = { type: "object", allOf: [{ type: "object" }, "not an object"] };
+    expect(providerToolSchema(schema, "d")).toEqual({ parameters: schema, description: "d" });
+  });
 });

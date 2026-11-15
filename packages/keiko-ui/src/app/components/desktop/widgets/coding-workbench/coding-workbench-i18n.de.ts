@@ -533,6 +533,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.noBranch": "Kein Branch",
   "codingWorkbench.repository.loading": "Repositories werden geladen…",
   "codingWorkbench.repository.none": "Repository auswählen",
+  "codingWorkbench.repository.noProject": "Noch kein Projekt gewählt: Wähle einen Ordner.",
+  "codingWorkbench.repository.chooseFolder": "Ordner wählen",
   "codingWorkbench.repository.unavailable": "nicht verfügbar",
   "codingWorkbench.repository.unavailableHelp":
     "Dieses Repository ist in Git nicht mehr verfügbar. Wähle ein anderes Repository oder verbinde es in Git erneut.",
@@ -544,6 +546,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Auf dieser Installation führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree eines Git-Repositorys aus und kann daher nicht in diesem Ordner arbeiten. Wähle ein Git-Repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
+  "codingWorkbench.repository.deniedBlocker":
+    "Keiko darf diesen Ordner nicht lesen. Wähle ein Repository an einem anderen Ort.",
   "codingWorkbench.repository.loadError":
     "Repositories konnten nicht geladen werden. Aktualisiere die Liste und versuche es erneut.",
   "codingWorkbench.repository.retryLoad": "Erneut versuchen",
@@ -609,6 +613,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko konnte den Zustand des Windows-Runtime-Gateways nicht lesen. Führe im Terminal aus: keiko gateway-service status",
   "codingWorkbench.gatewayService.unqualified":
     "Dieser Keiko-Build kann unter Windows keine Coding-Läufe starten. Sie brauchen das Windows-Runtime-Gateway, das nur ein freigegebenes Keiko-Paket nutzen kann. Ein anderes Repository zu wählen, ändert daran nichts.",
+  "codingWorkbench.installVolume.notLocal":
+    "Coding-Läufe können nicht starten, weil Keiko in einem Netzwerkordner oder einem umgeleiteten Ordner installiert ist. Installiere Keiko auf einem lokalen Laufwerk dieses Computers.",
+  "codingWorkbench.installVolume.unverified":
+    "Keiko konnte seinen Installationsordner gerade nicht prüfen, weil Windows zu langsam geantwortet hat. Versuch es gleich noch einmal; wenn es so bleibt, starte Keiko neu.",
+  "codingWorkbench.runtime.outdated":
+    "Coding-Läufe können nicht starten, weil die mit diesem Keiko installierte Coding-Engine eine ältere Version ist, die Keiko nicht mehr freigibt. Aktualisiere Keiko auf die neueste Version.",
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":
@@ -1145,6 +1155,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Führt dieses Code-Mode-Programm einmal in der Skript-Sandbox von OpenCode aus.",
   "codingWorkbench.approval.native.help.worktree":
     "Legt einen neuen Aufgaben-Workspace auf eigenem Branch an; dieser Lauf bleibt hier.",
+  "codingWorkbench.approval.native.help.jira": "Nimmt genau diese Änderung in Jira vor, einmalig.",
   "codingWorkbench.approval.native.help.schedule":
     "Ändert, wann Keiko diese Aufgabe selbst fortsetzt, im Modus, den Sie dafür gewählt haben.",
   "codingWorkbench.approval.native.resources": "Angeforderter Befehl, Pfade oder Adressen",
@@ -1164,6 +1175,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.native.permission.websearch": "Websuche",
   "codingWorkbench.approval.native.permission.execute": "Code-Mode-Skript",
   "codingWorkbench.approval.native.permission.worktree": "Neuer Task-Workspace",
+  "codingWorkbench.approval.native.permission.jira": "Jira-Änderung",
   "codingWorkbench.approval.native.permission.schedule": "Geplante Fortsetzung",
   "codingWorkbench.approval.native.permission.other": "Native Aktion",
   "codingWorkbench.approval.native.label.native-shell": "Nativer Shell-Befehl",
@@ -1191,9 +1203,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Wiederherstellung erforderlich",
   "codingWorkbench.recovery.title": "Vor erneutem Versuch abgleichen",
   "codingWorkbench.recovery.summary":
-    "Eine vorherige Aktion kann bereits Dateien verändert haben. Prüfe ihr Ergebnis vor einem neuen Versuch; Keiko wiederholt sie nicht.",
+    "Keiko weiß nicht, ob die letzte Aktion durchgegangen ist, zum Beispiel eine Änderung in Jira oder eine Dateiänderung. Prüfe zuerst dort das Ergebnis. Keiko sendet sie nie von selbst erneut.",
   "codingWorkbench.recovery.retry": "Als neuen Lauf wiederholen",
   "codingWorkbench.recovery.acknowledge": "Wiederherstellung bestätigen",
+  "codingWorkbench.recovery.newTask": "Neue Aufgabe starten",
+  "codingWorkbench.recovery.retryHint":
+    "Um die Aufgabe als neuen Lauf zu wiederholen, beschreibe sie im Feld darunter. Oder starte eine neue Aufgabe.",
   "codingWorkbench.header.notReady": "Nicht startbereit",
   "codingWorkbench.header.readyEvaluation": "Start — ungeprüfte Evaluations-Runtime",
   "codingWorkbench.runState.idle": "Bereit zum Starten",
@@ -1444,6 +1459,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Kontextfenster des gewählten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens; {code}). Keiko konnte 32.000 Tokens dafür nicht bestätigen. Wähle ein größeres Modell oder lass das Gateway max_input_tokens für dieses Modell angeben und starte dann erneut.",
   "codingWorkbench.alert.startRefusedModelVerificationPending":
     "Keiko prüft das Kontextfenster des gewählten Modells gerade beim Gateway ({code}). Bei einem ausgelasteten Gateway kann das einige Minuten dauern; starte erneut, sobald die Prüfung abgeschlossen ist.",
+  "codingWorkbench.alert.startEndedModelChanged":
+    "Das Modell hat gewechselt, während es geprüft wurde, deshalb wurde kein Lauf gestartet ({code}). Wähle das gewünschte Modell und starte erneut.",
   "codingWorkbench.alert.startRefusedWorkspaceLocation":
     "Unter Windows führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree aus, nicht in deinem eigenen Checkout oder Ordner ({code}). Wähle „Neuer lokaler Worktree“ als Arbeitsort eines Git-Repositorys und starte erneut.",
   "codingWorkbench.alert.startRefusedWorkspaceVolume":

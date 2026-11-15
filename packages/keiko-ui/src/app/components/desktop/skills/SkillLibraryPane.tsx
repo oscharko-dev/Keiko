@@ -1,12 +1,13 @@
 "use client";
 
 import { useId, type ReactNode } from "react";
+import { JIRA_ISSUE_TEMPLATE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { Icons } from "../Icons";
 import { JiraTemplateList, PodSelect, type JiraTemplates } from "./JiraTemplateTools";
 import { SkillChatToggle } from "./SkillChatToggle";
-import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
+import type { MarkdownSkillLibrary, MarkdownSkillLibraryError } from "./useMarkdownSkillLibrary";
 import type { SkillWorkspace } from "./useSkillWorkspace";
 import styles from "./MarkdownSkillControl.module.css";
 
@@ -195,25 +196,61 @@ function LibraryStatus({
   readonly skill: ChatMarkdownSkill;
 }): ReactNode {
   const t = useTranslate();
+  const refusal =
+    typeof library.error === "object" ? <RefusalNotice error={library.error} /> : null;
+  if (refusal !== null && !skill.failed) return refusal;
   if (library.error !== undefined || skill.failed)
     return (
-      <div role="alert" className={styles.cmpAlert}>
-        <span>{t(skillLibraryErrorKey(library.error, skill.requireNoSkill === true))}</span>
-        <button
-          type="button"
-          disabled={library.busy}
-          onClick={() => {
-            void library.refresh();
-            void skill.refresh();
-          }}
-        >
-          {t("chat.skills.retry")}
-        </button>
-      </div>
+      <>
+        {refusal}
+        <div role="alert" className={styles.cmpAlert}>
+          <span>{t(skillLibraryErrorKey(library.error, skill.requireNoSkill === true))}</span>
+          <button
+            type="button"
+            disabled={library.busy}
+            onClick={() => {
+              void library.refresh();
+              void skill.refresh();
+            }}
+          >
+            {t("chat.skills.retry")}
+          </button>
+        </div>
+      </>
     );
   if (library.busy && !library.available)
     return <output className={styles.cmpEmpty}>{t("chat.skills.loading")}</output>;
   return null;
+}
+
+// The limits a refusal sentence may name, read from the parser's own constants.
+const REFUSAL_LIMITS = {
+  listItems: JIRA_ISSUE_TEMPLATE_LIMITS.listItems,
+  activations: JIRA_ISSUE_TEMPLATE_LIMITS.activations,
+  sections: JIRA_ISSUE_TEMPLATE_LIMITS.sections,
+};
+
+/**
+ * A save the server refused for what the text says: the one thing to change, in plain words. The
+ * text stays in the editor and reloading would not help, so there is no Reload here.
+ */
+function RefusalNotice({
+  error,
+}: {
+  readonly error: Extract<MarkdownSkillLibraryError, { readonly kind: "refused" }>;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <div role="alert" className={styles.cmpAlert}>
+      <span>
+        {t(`chat.skills.refusal.${error.reason}`, REFUSAL_LIMITS)}
+        {error.line === undefined
+          ? ""
+          : ` ${t("chat.skills.refusal.line", { line: error.line })}`}{" "}
+        {t("chat.skills.refusal.kept")}
+      </span>
+    </div>
+  );
 }
 
 function skillLibraryErrorKey(

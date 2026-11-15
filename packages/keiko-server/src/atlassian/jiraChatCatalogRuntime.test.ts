@@ -23,11 +23,13 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   JIRA_READ_TOOL_FAMILIES,
+  jiraOperationInReleaseScope,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { isCoreMutationTool } from "./jiraManagedMutationDescriptors.js";
 import { jiraOperationForTool } from "./jiraManagedProvider.js";
 import { JIRA_CATALOG_DISCOVERY_TOOLS } from "./jiraCatalogDiscovery.js";
 import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
+import { selectionBinds } from "../../../../tests/support/jira-binding-probe.js";
 import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
 
 const CURATED_JIRA_ALIASES = [
@@ -47,8 +49,11 @@ const CURATED_JIRA_ALIASES = [
   "jira_assign",
   "jira_comment",
   "jira_transition",
-  "jira_attach",
   "jira_draft",
+  // Offered without a search, because a person's first requests need them (#4357).
+  "jira_myself",
+  "jira_watch",
+  "jira_unwatch",
 ] as const;
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -126,6 +131,8 @@ function expectedDefaultCatalogTools(): Set<string> {
   );
   const writes = JIRA_MUTATION_OPERATIONS.filter((tool) => {
     if (!isCoreMutationTool(tool)) return false;
+    // Attachments are outside Release 1 (#4354): the derivation follows the same switch.
+    if (!jiraOperationInReleaseScope(tool)) return false;
     const definition = jiraOperationForTool(tool)?.definition;
     return (
       definition?.kind === "composite" ||
@@ -135,12 +142,26 @@ function expectedDefaultCatalogTools(): Set<string> {
   return new Set<string>([
     ...reads,
     ...writes,
+    // The intended base additions, stated as literals and not derived from the runtime (#4357).
+    "jira.myself",
+    "jira.watch",
+    "jira.unwatch",
     "jira.draft-batch",
     "jira.draft",
     ...JIRA_CATALOG_DISCOVERY_TOOLS,
     ...KNOWLEDGE_CHAT_TOOLS,
   ]);
 }
+
+describe("attachments are left out of Release 1 (#4354)", () => {
+  it("offers neither attachment operation, in the base set or through discovery", () => {
+    const base = expectedDefaultCatalogTools();
+    expect(base.has("jira.attach")).toBe(false);
+    expect(base.has("jira.delete-attachment")).toBe(false);
+    expect(JIRA_DEFAULT_CATALOG_TOOLS).not.toContain("jira.attach");
+    expect(JIRA_DEFAULT_CATALOG_TOOLS).not.toContain("jira.delete-attachment");
+  });
+});
 
 describe("default Jira catalog set", () => {
   it("equals the set derived from the owning contract constants", () => {
@@ -161,7 +182,7 @@ describe("default Jira catalog set", () => {
 });
 
 describe("application-owned Jira catalog initialization", () => {
-  it("advertises all 18 curated Jira tools with discovery, Knowledge and batch before selection", async () => {
+  it(`advertises all ${String(CURATED_JIRA_ALIASES.length)} curated Jira tools with discovery, Knowledge and batch before selection`, async () => {
     const f = fixture();
     expect(
       f.runtime
@@ -195,7 +216,7 @@ describe("application-owned Jira catalog initialization", () => {
     await expect(f.runtime.get()).rejects.toMatchObject({ reason: "log-unavailable" });
     const [first, second] = await Promise.all([f.runtime.get(), f.runtime.get()]);
     expect(second).toBe(first);
-    expect(first.catalog.descriptors).toHaveLength(21 + KNOWLEDGE_CHAT_TOOLS.length);
+    expect(first.catalog.descriptors).toHaveLength(23 + KNOWLEDGE_CHAT_TOOLS.length);
     expect(f.record).toHaveBeenCalledOnce();
     expect(JSON.stringify(f.record.mock.calls)).not.toContain("synthetic-private-sink-failure");
     const records = f.lines.map((line) =>
@@ -216,42 +237,95 @@ describe("application-owned Jira catalog initialization", () => {
     await f.runtime.close();
   });
 
-  it("offers the batch and its draft companion together only to a Chat with Knowledge scopes", async () => {
+  // The draft run commits a staged draft, so it is offered wherever staging is; only the batch, which
+  // drafts from the Chat's Knowledge requirements, needs a Chat with Knowledge scopes (#4355).
+  it("offers the batch only to a Chat with Knowledge scopes and the draft run to every Chat", async () => {
     const f = fixture();
     try {
       const scoped = await f.runtime.get({ knowledgeScoped: true });
       const unscoped = await f.runtime.get({ knowledgeScoped: false });
       expect(await f.runtime.get()).toBe(scoped);
       expect(await f.runtime.get({ knowledgeScoped: false })).toBe(unscoped);
-      for (const alias of ["jira_draft", "jira_draft_batch"]) {
-        const named = (tools: readonly { readonly name: string }[]): number =>
-          tools.filter((tool) => tool.name === alias).length;
-        expect(named(f.runtime.toolDefinitions())).toBe(1);
-        expect(named(f.runtime.toolDefinitions({ knowledgeScoped: true }))).toBe(1);
-        expect(named(f.runtime.toolDefinitions({ knowledgeScoped: false }))).toBe(0);
-        expect(scoped.projection.tools.filter((tool) => tool.alias === alias)).toHaveLength(1);
-        expect(unscoped.projection.tools.map((tool) => tool.alias)).not.toContain(alias);
-      }
-      expect(unscoped.catalog.descriptors).toHaveLength(scoped.catalog.descriptors.length - 2);
-      expect(unscoped.handlerBindings).toHaveLength(scoped.handlerBindings.length - 2);
+      const named = (tools: readonly { readonly name: string }[], alias: string): number =>
+        tools.filter((tool) => tool.name === alias).length;
+      expect(named(f.runtime.toolDefinitions(), "jira_draft_batch")).toBe(1);
+      expect(named(f.runtime.toolDefinitions({ knowledgeScoped: true }), "jira_draft_batch")).toBe(
+        1,
+      );
+      expect(named(f.runtime.toolDefinitions({ knowledgeScoped: false }), "jira_draft_batch")).toBe(
+        0,
+      );
+      for (const scope of [undefined, { knowledgeScoped: true }, { knowledgeScoped: false }])
+        expect(named(f.runtime.toolDefinitions(scope), "jira_draft")).toBe(1);
+      expect(scoped.projection.tools.filter((tool) => tool.alias === "jira_draft")).toHaveLength(1);
+      expect(unscoped.projection.tools.filter((tool) => tool.alias === "jira_draft")).toHaveLength(
+        1,
+      );
+      expect(unscoped.projection.tools.map((tool) => tool.alias)).not.toContain("jira_draft_batch");
+      expect(unscoped.catalog.descriptors).toHaveLength(scoped.catalog.descriptors.length - 1);
+      expect(unscoped.handlerBindings).toHaveLength(scoped.handlerBindings.length - 1);
       expect(f.runtime.toolDefinitions({ knowledgeScoped: false })).toHaveLength(
-        f.runtime.toolDefinitions().length - 2,
+        f.runtime.toolDefinitions().length - 1,
       );
     } finally {
       await f.runtime.close();
     }
   });
 
-  it("keeps an explicitly selected draft without Knowledge scopes while omitting the batch", async () => {
+  // The base is not admitted by a selection: the gateway binds it as it is. It must bind in every
+  // scope, with room left for a selection, or no Chat could start.
+  it.each([{ knowledgeScoped: true }, { knowledgeScoped: false }])(
+    "binds the base of every Chat with room left for a selection (knowledgeScoped=$knowledgeScoped)",
+    async (scope) => {
+      const f = fixture();
+      try {
+        expect(await selectionBinds(f.runtime, [], scope)).toBe(true);
+        const base = await f.runtime.get(scope);
+        const bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value));
+        const largest = Math.max(bytes(base.catalog), bytes(base.projection));
+        expect(largest).toBeLessThan(TOOL_CATALOG_LIMITS.maxArgumentBytes / 2);
+      } finally {
+        await f.runtime.close();
+      }
+    },
+  );
+
+  // No staging tool is ever offered without its commit, and the commit never without the stage: a
+  // staged draft that cannot be committed is a dead end for the person who ordered the issues.
+  it.each([{ knowledgeScoped: true }, { knowledgeScoped: false }])(
+    "never offers staging without its commit or the commit without staging (knowledgeScoped=$knowledgeScoped)",
+    async (scope) => {
+      const f = fixture();
+      try {
+        const offered = [
+          f.runtime.toolDefinitions(scope).map((tool) => tool.name),
+          (await f.runtime.get(scope)).projection.tools.map((tool) => tool.alias),
+          (await f.runtime.select(["GET /rest/api/2/project"], scope)).projection.tools.map(
+            (tool) => tool.alias,
+          ),
+          (await f.runtime.select(["composite:jira.draft"], scope)).projection.tools.map(
+            (tool) => tool.alias,
+          ),
+        ];
+        expect(offered).toHaveLength(4);
+        for (const aliases of offered) {
+          expect(aliases).toContain("jira_draft_stage");
+          expect(aliases).toContain("jira_draft");
+          expect(aliases.includes("jira_draft_batch")).toBe(scope.knowledgeScoped);
+        }
+      } finally {
+        await f.runtime.close();
+      }
+    },
+  );
+
+  it("keeps an explicitly selected draft run once for a Chat without Knowledge scopes", async () => {
     const f = fixture();
     try {
       const selected = await f.runtime.select(["composite:jira.draft"], { knowledgeScoped: false });
       const aliases = selected.projection.tools.map((tool) => tool.alias);
       expect(aliases.filter((alias) => alias === "jira_draft")).toHaveLength(1);
       expect(aliases).not.toContain("jira_draft_batch");
-      expect(
-        f.runtime.toolDefinitions({ knowledgeScoped: false }).map((tool) => tool.name),
-      ).not.toContain("jira_draft");
     } finally {
       await f.runtime.close();
     }
@@ -279,8 +353,8 @@ describe("application-owned Jira catalog initialization", () => {
         expect(Buffer.byteLength(JSON.stringify(selected.catalog), "utf8")).toBeLessThanOrEqual(
           262_144,
         );
-        for (const alias of ["jira_draft", "jira_draft_batch"])
-          expect(aliases.includes(alias)).toBe(scope.knowledgeScoped);
+        expect(aliases).toContain("jira_draft");
+        expect(aliases.includes("jira_draft_batch")).toBe(scope.knowledgeScoped);
         expect(f.runtime.toolDefinitions(scope).map((tool) => tool.name)).toEqual(advertised);
         expect((await f.runtime.get(scope)).projection.tools.map((tool) => tool.alias)).toEqual(
           initial.projection.tools.map((tool) => tool.alias),
@@ -291,7 +365,7 @@ describe("application-owned Jira catalog initialization", () => {
     },
   );
 
-  it("omits the batch companion from an unrelated selection without Knowledge scopes", async () => {
+  it("omits only the batch from an unrelated selection without Knowledge scopes", async () => {
     const f = fixture();
     try {
       const selected = await f.runtime.select(["GET /rest/api/2/project"], {
@@ -299,7 +373,7 @@ describe("application-owned Jira catalog initialization", () => {
       });
       const aliases = selected.projection.tools.map((tool) => tool.alias);
       expect(aliases).toContain("jira_projects");
-      expect(aliases).not.toContain("jira_draft");
+      expect(aliases).toContain("jira_draft");
       expect(aliases).not.toContain("jira_draft_batch");
     } finally {
       await f.runtime.close();

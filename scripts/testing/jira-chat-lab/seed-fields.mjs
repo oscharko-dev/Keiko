@@ -159,8 +159,22 @@ export async function withFixtureFieldOptional(session, run) {
   return result;
 }
 
+const RESTORE_RETRY_DELAY_MS = 2_000;
+
+/**
+ * Puts the requirement back. The administration is a browser session with a ten-second step timeout, and
+ * one slow page ended a finished Gemma run with its report unwritten (2026-11-14): the restore is tried
+ * twice, and only a second failure is an error.
+ */
 async function restoreRequirement(session) {
-  await withLabAdmin(session, (page) => setFixtureFieldRequirement(page, session, true));
+  const restore = () =>
+    withLabAdmin(session, (page) => setFixtureFieldRequirement(page, session, true));
+  try {
+    await restore();
+  } catch {
+    await new Promise((resolve) => globalThis.setTimeout(resolve, RESTORE_RETRY_DELAY_MS));
+    await restore();
+  }
   rmSync(markerPath(session));
 }
 
@@ -178,6 +192,7 @@ async function restoreAfterFailure(session, error) {
         case: "required-field",
         restoreFailed: true,
         errorClass: restore?.constructor?.name ?? "unknown",
+        ...(typeof restore?.reason === "string" ? { reason: restore.reason } : {}),
       }),
     );
   }

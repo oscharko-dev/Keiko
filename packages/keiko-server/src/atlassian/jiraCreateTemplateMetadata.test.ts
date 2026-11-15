@@ -3,8 +3,16 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AtlassianHttpBodyPort, JiraManagedConnection } from "@oscharko-dev/keiko-connectors";
+import {
+  jiraInstanceIdentity,
+  type AtlassianHttpBodyPort,
+  type JiraManagedConnection,
+} from "@oscharko-dev/keiko-connectors";
 import type { MarkdownSkillDocument } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  jiraTemplateBindingDigest,
+  parseJiraIssueTemplate,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
@@ -24,6 +32,7 @@ afterEach(() => {
   for (const cleanup of close.splice(0)) cleanup();
 });
 const SECTIONS = ["Anforderung", "Akzeptanzkriterien", "Quelle"];
+const BASE_URL = "https://jira.example.invalid/context";
 
 function template(type: string, project = "SYN", sections: readonly string[] = SECTIONS): string {
   return [
@@ -114,9 +123,9 @@ function fixture(): TemplateReadFixture {
   const http = metadataHttp();
   const connection: JiraManagedConnection = {
     deployment: "data-center",
-    baseUrl: "https://jira.example.invalid/context",
+    baseUrl: BASE_URL,
     http,
-    issueTemplates: jiraIssueTemplateSource(store),
+    issueTemplates: jiraIssueTemplateSource(store, BASE_URL),
     templateMetadataActivity: (activity) => {
       recordJiraTemplateMetadata(sink, "template-discovery", activity);
     },
@@ -190,6 +199,34 @@ describe("applicable create template metadata through the managed read", () => {
       formatActivityLogProofLine(metadata ?? {}),
     );
     expect(JSON.stringify(f.sink.events)).not.toContain("Akzeptanzkriterien");
+  });
+
+  // #4354: a name is localized per user. A template bound to the issue type's id is offered for it
+  // under whatever name the acting user sees; a binding made for another Jira means nothing here.
+  it("offers a template bound by id under any profile language, and ignores another Jira's binding", async () => {
+    const f = fixture();
+    const bound = (instance: string): string => {
+      const plain = template("Aufgabe");
+      const parsed = parseJiraIssueTemplate(plain);
+      if (!parsed.ok) throw new TypeError("Expected a parseable template");
+      // The digest comes from its producer: the Jira's identity and the typed names it was resolved from.
+      const digest = jiraTemplateBindingDigest(instance, parsed.template, {
+        issueTypeId: "10003",
+        requiredFieldIds: ["description", "customfield_10014"],
+        parentFieldId: "customfield_10014",
+      });
+      return plain.replace(
+        "issueType: Aufgabe",
+        `issueType: Aufgabe\nissueTypeId: "10003"\nrequiredFieldIds: ["description", "customfield_10014"]\nparentFieldId: "customfield_10014"\njiraBinding: "${digest}"`,
+      );
+    };
+    f.add(bound("fedcba9876543210fedcba9876543210"));
+    expect((await f.read()).data.applicableTemplates).toMatchObject({ matchedCount: 0 });
+    f.add(bound(jiraInstanceIdentity(BASE_URL)));
+    expect((await f.read()).data.applicableTemplates).toMatchObject({
+      matchedCount: 1,
+      items: [{ issueType: "Aufgabe" }],
+    });
   });
 
   it("returns a template that restricts the parent's issue type within the result schema", async () => {

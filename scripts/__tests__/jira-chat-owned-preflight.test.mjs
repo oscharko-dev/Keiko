@@ -102,6 +102,8 @@ beforeEach(() => {
   ports.failures = {};
   directory = mkdtempSync(join(tmpdir(), "jira-owned-preflight-"));
   vi.stubEnv("KEIKO_JIRA_LAB_GATEWAY_CONFIG", undefined);
+  // No Jira here; the baseline templates have their own suite (jira-chat-lab-baseline-templates).
+  vi.stubEnv("KEIKO_JIRA_LAB_BASELINE_TEMPLATES", "off");
   vi.stubEnv("KEIKO_JIRA_LAB_CONTEXT_WINDOW", undefined);
   vi.stubGlobal("fetch", ports.fetch);
   vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -290,6 +292,9 @@ describe("owned Chat runs use the canonical parent preflight and lane lease", ()
     expect(ports.buildDeps).toHaveBeenCalledOnce();
     const env = ports.buildDeps.mock.calls[0][0].env;
     expect(env.KEIKO_MEMORY_DIR).toBe(join(root, "memory"));
+    // The state directory is private too, so no diagnostics writer falls back to `<cwd>/.keiko`.
+    expect(env.KEIKO_STATE_DIR).toBe(join(directory, "chat-read-logs"));
+    expect(process.env.KEIKO_STATE_DIR).not.toBe(env.KEIKO_STATE_DIR);
     expect(env.KEIKO_OS_KEYCHAIN).toBe("off");
     expect(ports.probe).toHaveBeenCalledOnce();
   });

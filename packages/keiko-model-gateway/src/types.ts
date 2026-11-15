@@ -127,6 +127,10 @@ export interface ModelProviderConfig {
   // Bounds ONE attempt. The whole buffered call is bounded by the budget `providerRequestBudgetMs`
   // (resilience.ts) derives from this and `maxRetries`.
   readonly timeoutMs: number;
+  // Present (true) only when the stored configuration named `timeoutMs` itself, whatever its value:
+  // an operator's explicit choice, which an explicit check never lifts (#4351). Absent means the
+  // conversational default applied. Not part of any capability fingerprint.
+  readonly timeoutConfigured?: true | undefined;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
   readonly egress?: OutboundHttpEgressConfig | undefined;

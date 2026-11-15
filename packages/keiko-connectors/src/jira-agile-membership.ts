@@ -2,6 +2,7 @@ import type {
   JiraMutationAttempt,
   JiraMutationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { SPRINT_MEMBERSHIP_CLOSED_DETAIL } from "./jira-sprint-transition-messages.js";
 import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { mapWithConcurrency } from "@oscharko-dev/keiko-contracts/runtime/bounded-concurrency";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -56,7 +57,8 @@ async function entityMembership(
     input.target,
   );
   if (!current.ok) return current;
-  if (sprint && current.item.state === "closed") return { ok: false, reason: "invalid-transition" };
+  if (sprint && current.item.state === "closed")
+    return { ok: false, reason: "invalid-transition", detail: SPRINT_MEMBERSHIP_CLOSED_DETAIL };
   const entityReceipt = agileEntityReceipt(current.item, sprint);
   if (entityReceipt === undefined) return AGILE_MALFORMED;
   return {

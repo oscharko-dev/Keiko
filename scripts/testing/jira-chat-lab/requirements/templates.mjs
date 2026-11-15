@@ -50,6 +50,7 @@ export function templateMarkdown({
   parentField,
   parentIssueTypes,
   requiredFields = [],
+  activateOn = ["create"],
 }) {
   const quoted = (value) => JSON.stringify(value);
   const front = [
@@ -58,7 +59,7 @@ export function templateMarkdown({
     "version: 1",
     `project: ${project}`,
     `issueType: ${quoted(issueType)}`,
-    "activateOn: [create]",
+    `activateOn: [${activateOn.join(", ")}]`,
     ...(summaryPattern === undefined ? [] : [`summaryPattern: ${quoted(summaryPattern)}`]),
     ...(rule.labels?.length > 0
       ? [`requiredLabels: [${rule.labels.map((label) => quoted(label)).join(", ")}]`]
@@ -196,7 +197,7 @@ async function defineTemplate(http, markdown, name) {
 }
 
 /** Deletes a template skill at the revision the import returned. */
-async function removeTemplate(http, skill) {
+export async function removeTemplate(http, skill) {
   await http(
     "template-delete",
     `/api/skills/${encodeURIComponent(skill.id)}`,
@@ -323,15 +324,23 @@ const violationsIn = (value) =>
     (item) => isRecord(item) && typeof item.ruleId === "string",
   );
 
-/** The refusal an exchange carries: a `jira.create` rejection or the failed items of a draft. */
+/** The refusal a single result carries on itself: its field-validation violations, and a receipt if any. */
+function resultRefusal(exchange, index, mayHaveReceipt) {
+  const data = exchange.result.data;
+  const violations = data?.reason === "field-validation" ? violationsIn(data.violations) : [];
+  return violations.length === 0
+    ? []
+    : [{ index, violations, receipt: mayHaveReceipt && typeof data.issueKey === "string" }];
+}
+
+/**
+ * The refusal an exchange carries: a `jira.create` rejection, a `jira.draft-stage` rejection (the
+ * staging step of a draft checks the template before anything is written; the violations sit on the
+ * result itself, and nothing can carry a receipt) or the failed items of a draft commit.
+ */
 function refusalOf(exchange, index) {
-  if (toolExchangeOf(exchange, "jira.create")) {
-    const data = exchange.result.data;
-    const violations = data?.reason === "field-validation" ? violationsIn(data.violations) : [];
-    return violations.length === 0
-      ? []
-      : [{ index, violations, receipt: typeof data.issueKey === "string" }];
-  }
+  if (toolExchangeOf(exchange, "jira.draft-stage")) return resultRefusal(exchange, index, false);
+  if (toolExchangeOf(exchange, "jira.create")) return resultRefusal(exchange, index, true);
   if (!toolExchangeOf(exchange, "jira.draft")) return [];
   const items = Array.isArray(exchange.result.data?.items) ? exchange.result.data.items : [];
   return items
@@ -345,14 +354,53 @@ function refusalOf(exchange, index) {
 }
 
 /** Every template refusal of the turn with its position, the violations and a receipt, if any. */
-function templateRefusals(exchanges) {
+export function templateRefusals(exchanges) {
   return (Array.isArray(exchanges) ? exchanges : []).flatMap((exchange, index) =>
     refusalOf(exchange, index),
   );
 }
 
+/**
+ * Every `jira.edit` the gate refused with template violations (the same structured rejection a
+ * create carries). An edit that failed for another reason carries no violation and is not listed.
+ */
+export function editRefusals(exchanges) {
+  return (Array.isArray(exchanges) ? exchanges : []).flatMap((exchange, index) => {
+    if (!toolExchangeOf(exchange, "jira.edit")) return [];
+    const data = exchange.result.data;
+    const violations = data?.outcome === "rejected" ? violationsIn(data.violations) : [];
+    return violations.length === 0 ? [] : [{ index, violations }];
+  });
+}
+
+/**
+ * Every `jira.transition` the gate refused with template violations (the rule lines of a transition rule),
+ * the same structured rejection an edit carries. A transition that failed for another reason lists none.
+ */
+export function transitionRefusals(exchanges) {
+  return (Array.isArray(exchanges) ? exchanges : []).flatMap((exchange, index) => {
+    if (!toolExchangeOf(exchange, "jira.transition")) return [];
+    const data = exchange.result.data;
+    const violations = data?.outcome === "rejected" ? violationsIn(data.violations) : [];
+    return violations.length === 0 ? [] : [{ index, violations }];
+  });
+}
+
+/**
+ * Every succeeded `jira.edit` with the template notices it carried: the rules an issue already
+ * broke in fields the edit did not touch (the product's closed account, never its wording).
+ */
+export function succeededEdits(exchanges) {
+  return (Array.isArray(exchanges) ? exchanges : [])
+    .filter(
+      (exchange) =>
+        toolExchangeOf(exchange, "jira.edit") && exchange.result.data?.outcome === "succeeded",
+    )
+    .map((exchange) => ({ notices: violationsIn(exchange.result.data?.templateNotices) }));
+}
+
 /** Whether an exchange wrote an issue: a succeeded create or a draft item in state created. */
-function wroteIssue(exchange) {
+export function wroteIssue(exchange) {
   if (completedToolExchange(exchange, "jira.create"))
     return exchange.result.data?.outcome === "succeeded";
   const items = toolExchangeOf(exchange, "jira.draft") ? exchange.result.data?.items : [];
@@ -361,18 +409,30 @@ function wroteIssue(exchange) {
   );
 }
 
+/** The template a refusal names, lower case, without the " #n" the product appends when several templates govern one type. */
+const templateName = (name) =>
+  String(name ?? "")
+    .replace(/ #\d+$/u, "")
+    .toLowerCase();
+
 /**
  * Grades the repair of a template refusal. Detected: a refusal of the turn names a content rule
  * of `template` (the `PROJECT/Issue type` the violation reports). Repaired before write: no
  * refusal carries a receipt, an issue was written after the first refusal, and every issue the
  * turn produced satisfies the template as Jira holds it, so the violating content never persisted.
  */
-export function gradeTemplateRepair({ exchanges, issues, template }) {
+export function gradeTemplateRepair({
+  exchanges,
+  issues,
+  template,
+  // The lab's own conformity rule for the template's issue type; Epic unless a lane names another.
+  conforms = epicTemplateConforms,
+}) {
   const refusals = templateRefusals(exchanges);
   const violations = refusals.flatMap((refusal) => refusal.violations);
   const content = violations.filter(
     (item) =>
-      CONTENT_RULES.has(item.ruleId) && item.template?.toLowerCase() === template.toLowerCase(),
+      CONTENT_RULES.has(item.ruleId) && templateName(item.template) === template.toLowerCase(),
   );
   const first = refusals[0]?.index;
   const writtenAfter =
@@ -380,7 +440,7 @@ export function gradeTemplateRepair({ exchanges, issues, template }) {
     (Array.isArray(exchanges) ? exchanges : [])
       .slice(first + 1)
       .some((exchange) => wroteIssue(exchange));
-  const nonconforming = issues.filter((issue) => !epicTemplateConforms(issue));
+  const nonconforming = issues.filter((issue) => !conforms(issue));
   return {
     detected: content.length > 0,
     ruleIds: [...new Set(content.map((item) => item.ruleId))],

@@ -1,5 +1,11 @@
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { recordConnectionCheck, recordJiraHumanInput } from "./credentialActivity.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
+import {
+  recordConnectionCheck,
+  recordJiraHumanInput,
+  type ConnectionCheckDetail,
+  type ProbeCause,
+} from "./credentialActivity.js";
 import { createJiraPrivatePorts, type JiraPrivatePortOptions } from "./httpPrivateIdentity.js";
 import type {
   AtlassianCredentialHttpOptions,
@@ -20,6 +26,9 @@ import {
   type AtlassianHttpRequest,
   type AtlassianHttpBodyRequest,
   type AtlassianHttpResult,
+  type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyResult,
+  type AtlassianAuthenticationFailure,
   type JiraPrivateSessionBinding,
   type JiraPrivateSessionAccess,
   AtlassianCredentialCustodyError,
@@ -28,7 +37,11 @@ import {
 import {
   ambiguousJiraAuthenticationResponse,
   currentJiraAuthenticationObservation,
+  JIRA_IDENTITY_PROBE_DEADLINE_MS,
+  JIRA_IDENTITY_PROBE_WINDOW_MS,
   withJiraAuthenticationObservation,
+  type JiraIdentityProbeOutcome,
+  type JiraUnsettledProbe,
 } from "./jiraAuthenticationObservation.js";
 // Composition-root wiring for Atlassian connector credential custody (Issue #2241, ADR-0128 D1).
 //
@@ -193,7 +206,15 @@ export function buildAtlassianConnectorCredentialDeps(
   maintainInputs = (): void => {
     custody.humanInputs?.sweepExpired();
   };
-  const owner = { options, listenerPorts, executionResolver, custody, metadataStore };
+  const owner: CredentialTransportOwner = {
+    options,
+    listenerPorts,
+    executionResolver,
+    custody,
+    metadataStore,
+    positiveProbes: new Map(),
+    inflightProbes: new Map(),
+  };
   return {
     custody,
     jiraPrivatePortFactory: privatePortFactory(owner),
@@ -215,12 +236,29 @@ function privatePortFactory(
   owner: CredentialTransportOwner,
 ): NonNullable<AtlassianConnectorCredentialDeps["jiraPrivatePortFactory"]> {
   return (metadata, context, options, lifecycle = {}): ReturnType<typeof createJiraPrivatePorts> =>
-    createJiraPrivatePorts(
-      credentialTransportOptions(owner, metadata, context.correlationId, lifecycle),
-      credentialTransportOptions(owner, metadata, context.correlationId, lifecycle, false),
-      context,
-      boundPrivateOptions(metadata, owner.custody.getMetadata(metadata.authRef), options),
-    );
+    createPrivatePorts(owner, metadata, context, options, lifecycle);
+}
+
+function createPrivatePorts(
+  owner: CredentialTransportOwner,
+  metadata: AtlassianCredentialMetadata,
+  context: Parameters<NonNullable<AtlassianConnectorCredentialDeps["jiraPrivatePortFactory"]>>[1],
+  options: JiraPrivatePortOptions,
+  lifecycle: AtlassianCredentialHttpOptions,
+): ReturnType<typeof createJiraPrivatePorts> {
+  // The same by-value snapshot and the same observed wrapper as the ordinary ports: the PAT port
+  // of the private owner is never a second path that decides a 401 on its own.
+  const pinned = structuredClone(metadata);
+  const bound = boundPrivateOptions(pinned, owner.custody.getMetadata(pinned.authRef), options);
+  return createJiraPrivatePorts(
+    credentialTransportOptions(owner, pinned, context.correlationId, lifecycle),
+    credentialTransportOptions(owner, pinned, context.correlationId, lifecycle, false),
+    context,
+    {
+      ...bound,
+      observePatPort: (port) => observePort(owner, pinned, context.correlationId, lifecycle, port),
+    },
+  );
 }
 
 function generationBoundResolver(
@@ -282,14 +320,51 @@ interface CredentialTransportOwner {
   readonly executionResolver: AtlassianCredentialExecutionResolver;
   readonly custody: AtlassianCredentialCustody;
   readonly metadataStore: AtlassianCredentialMetadataStore;
+  /** Credential generation and revision -> end of the short window a positive identity read holds. */
+  readonly positiveProbes: Map<string, number>;
+  /** One identity read in flight per credential generation and revision; callers share it. */
+  readonly inflightProbes: Map<string, ProbeFlight>;
 }
 
-function identityObservation(
+function probeKey(metadata: AtlassianCredentialMetadata): string {
+  const revision =
+    metadata.deployment === "data-center" ? (metadata.livePod?.verificationRevision ?? 0) : 0;
+  return `${metadata.authRef}|${String(metadata.generation ?? 1)}|${String(revision)}`;
+}
+
+function responseCause(
+  status: number,
+  failure: AtlassianAuthenticationFailure | undefined,
+): ProbeCause {
+  if (status === 401) return failure === "denied" ? "captcha" : "foreign-401";
+  if (status === 429) return "http-429";
+  if (status >= 500) return "http-5xx";
+  if (status >= 400) return "http-4xx";
+  return status >= 300 ? "redirect" : "invalid-body";
+}
+
+function probeCauseOf(last: AtlassianHttpBodyResult | undefined): ProbeCause {
+  if (last === undefined) return "probe-error";
+  if (last.kind === "response") return responseCause(last.status, last.authenticationFailure);
+  return last.kind === "timeout" ? "timeout" : "network";
+}
+
+const PROBE_DETAIL = { decision: "probe", routeClass: "other" } as const;
+const IDENTITY_ROUTE_DETAIL = { decision: "identity-route", routeClass: "identity" } as const;
+
+interface ObservedIdentityPort {
+  readonly port: AtlassianHttpBodyPort;
+  readonly last: () => AtlassianHttpBodyResult | undefined;
+  readonly reset: () => void;
+}
+
+/** The identity read's own port; it remembers its last answer so a 401's origin can be judged. */
+function observedIdentityPort(
   owner: CredentialTransportOwner,
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
   lifecycle: AtlassianCredentialHttpOptions,
-): (deadlineAt: number, signal: AbortSignal | undefined) => Promise<boolean> {
+): ObservedIdentityPort {
   const current = (): boolean =>
     currentJiraAuthenticationObservation(metadata, owner.custody.getMetadata(metadata.authRef));
   const port = createGatewayAtlassianHttpBodyPort({
@@ -303,15 +378,207 @@ function identityObservation(
     onResponse: (): boolean => true,
     singleAttempt: true,
   });
-  return async (deadlineAt, signal): Promise<boolean> => {
-    const status = await verifyJiraDataCenterIdentity(port, metadata.baseUrl, {
-      deadlineAt,
-      signal,
-    });
-    if (status === "auth-failed") observedAuthentication(owner, metadata, correlationId)(401);
-    else recordConnectionCheck(owner.options, correlationId, status, undefined, "request");
-    return status === "ok";
+  const seen: { last?: AtlassianHttpBodyResult } = {};
+  return {
+    port: async (request): Promise<AtlassianHttpBodyResult> => {
+      const result = await port(request);
+      seen.last = result;
+      return result;
+    },
+    last: () => seen.last,
+    reset: (): void => {
+      Reflect.deleteProperty(seen, "last");
+    },
   };
+}
+
+/** How a waiter's line names the shared result: the same closed outcomes the leader records. */
+const SHARED_CHECK_OUTCOME = {
+  confirmed: "ok",
+  rejected: "auth-failed",
+  inconclusive: "probe-inconclusive",
+} as const satisfies Record<JiraIdentityProbeOutcome, string>;
+
+interface ProbeResult {
+  readonly outcome: JiraIdentityProbeOutcome;
+  readonly cause?: ProbeCause;
+}
+
+/** One shared identity read: its own deadline and abort, a ref count of the callers waiting on it. */
+interface ProbeFlight {
+  readonly promise: Promise<ProbeResult>;
+  /** The correlation of the caller that started it; sharers link their line to it. */
+  readonly correlationId: string;
+  readonly controller: AbortController;
+  participants: number;
+  gaveUp: number;
+}
+
+async function readIdentity(
+  context: {
+    readonly owner: CredentialTransportOwner;
+    readonly metadata: AtlassianCredentialMetadata;
+    readonly correlationId: string;
+    readonly key: string;
+    readonly identity: ObservedIdentityPort;
+  },
+  signal: AbortSignal,
+): Promise<ProbeResult> {
+  const { owner, metadata, correlationId, key, identity } = context;
+  identity.reset();
+  const status = await verifyJiraDataCenterIdentity(identity.port, metadata.baseUrl, {
+    deadlineAt: Date.now() + JIRA_IDENTITY_PROBE_DEADLINE_MS,
+    signal,
+  });
+  const check = (outcome: "ok" | "probe-inconclusive", detail: ConnectionCheckDetail): void => {
+    recordConnectionCheck(
+      owner.options,
+      correlationId,
+      outcome,
+      undefined,
+      "request",
+      undefined,
+      detail,
+    );
+  };
+  if (status === "ok") {
+    check("ok", PROBE_DETAIL);
+    rememberPositiveProbe(owner, key);
+    return { outcome: "confirmed" };
+  }
+  // Only a 401 Jira itself authored shows a rejected token; a proxy's or a captcha's does not.
+  const answered = identity.last();
+  if (
+    status === "auth-failed" &&
+    answered?.kind === "response" &&
+    answered.authenticationFailure === "jira"
+  ) {
+    observedAuthentication(owner, metadata, correlationId, PROBE_DETAIL)(401, "jira");
+    return { outcome: "rejected" };
+  }
+  const cause = probeCauseOf(answered);
+  check("probe-inconclusive", { ...PROBE_DETAIL, probeCause: cause });
+  return { outcome: "inconclusive", cause };
+}
+
+/** A caller that gives up (cancelled or past its own deadline) leaves the flight to the others. */
+function attachToFlight(flight: ProbeFlight, caller: AbortSignal): void {
+  flight.participants += 1;
+  const giveUp = (): void => {
+    flight.gaveUp += 1;
+    if (flight.gaveUp >= flight.participants) flight.controller.abort();
+  };
+  if (caller.aborted) giveUp();
+  else caller.addEventListener("abort", giveUp, { once: true });
+}
+
+function callerSignal(deadlineAt: number, signal: AbortSignal | undefined): AbortSignal {
+  const deadline = AbortSignal.timeout(Math.max(0, Math.floor(deadlineAt - Date.now())));
+  return signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
+}
+
+/** Waits for the flight, but never past the caller's own cancellation or deadline. */
+function waitForFlight(flight: ProbeFlight, caller: AbortSignal): Promise<ProbeResult> {
+  if (caller.aborted)
+    return Promise.resolve({ outcome: "inconclusive", cause: "cancelled-or-expired" });
+  return new Promise<ProbeResult>((resolve, reject) => {
+    const gone = (): void => {
+      resolve({ outcome: "inconclusive", cause: "cancelled-or-expired" });
+    };
+    caller.addEventListener("abort", gone, { once: true });
+    flight.promise.then(
+      (result) => {
+        caller.removeEventListener("abort", gone);
+        resolve(result);
+      },
+      (error: unknown) => {
+        caller.removeEventListener("abort", gone);
+        reject(error instanceof Error ? error : new Error("identity read failed"));
+      },
+    );
+  });
+}
+
+function identityObservation(
+  owner: CredentialTransportOwner,
+  metadata: AtlassianCredentialMetadata,
+  correlationId: string,
+  lifecycle: AtlassianCredentialHttpOptions,
+): (deadlineAt: number, signal: AbortSignal | undefined) => Promise<JiraIdentityProbeOutcome> {
+  const key = probeKey(metadata);
+  const context = {
+    owner,
+    metadata,
+    correlationId,
+    key,
+    identity: observedIdentityPort(owner, metadata, correlationId, lifecycle),
+  };
+  return async (deadlineAt, signal): Promise<JiraIdentityProbeOutcome> => {
+    // Only a positive result is reused, and only for this exact generation and revision.
+    if ((owner.positiveProbes.get(key) ?? 0) > Date.now()) {
+      recordConnectionCheck(owner.options, correlationId, "ok", undefined, "request", undefined, {
+        decision: "probe-window",
+        routeClass: "other",
+      });
+      return "confirmed";
+    }
+    const caller = callerSignal(deadlineAt, signal);
+    // One probe in flight per credential generation and revision: concurrent 401s share it.
+    const shared = owner.inflightProbes.get(key);
+    if (shared !== undefined) {
+      attachToFlight(shared, caller);
+      return shareProbe(owner, correlationId, shared, await waitForFlight(shared, caller));
+    }
+    const controller = new AbortController();
+    const flight: ProbeFlight = {
+      // The flight leaves the table the moment its probe ends, before any waiter continues, so a
+      // later 401 never inherits a finished (possibly inconclusive) result.
+      promise: readIdentity(context, controller.signal).finally(() => {
+        if (owner.inflightProbes.get(key)?.controller === controller)
+          owner.inflightProbes.delete(key);
+      }),
+      correlationId,
+      controller,
+      participants: 0,
+      gaveUp: 0,
+    };
+    owner.inflightProbes.set(key, flight);
+    attachToFlight(flight, caller);
+    return (await waitForFlight(flight, caller)).outcome;
+  };
+}
+
+function rememberPositiveProbe(owner: CredentialTransportOwner, key: string): void {
+  const now = Date.now();
+  for (const [stored, until] of owner.positiveProbes) {
+    if (until <= now) owner.positiveProbes.delete(stored);
+  }
+  owner.positiveProbes.set(key, now + JIRA_IDENTITY_PROBE_WINDOW_MS);
+}
+
+function shareProbe(
+  owner: CredentialTransportOwner,
+  correlationId: string,
+  flight: ProbeFlight,
+  result: ProbeResult,
+): JiraIdentityProbeOutcome {
+  recordConnectionCheck(
+    owner.options,
+    correlationId,
+    SHARED_CHECK_OUTCOME[result.outcome],
+    undefined,
+    "request",
+    undefined,
+    {
+      decision: "probe-shared",
+      routeClass: "other",
+      ...(result.cause === undefined ? {} : { probeCause: result.cause }),
+      ...(flight.correlationId === correlationId
+        ? {}
+        : { parentCorrelationId: flight.correlationId }),
+    },
+  );
+  return result.outcome;
 }
 
 function observedPort<
@@ -324,14 +591,73 @@ function observedPort<
   lifecycle: AtlassianCredentialHttpOptions,
   create: (options: CreateAtlassianHttpPortOptions) => (request: TRequest) => Promise<TResult>,
 ): (request: TRequest) => Promise<TResult> {
-  const port = create(credentialTransportOptions(owner, metadata, correlationId, lifecycle));
+  // Every 401 may be decided by the identity probe, so the observation binds the credential
+  // generation and verification revision by value: a caller mutating its metadata object later
+  // cannot move what this port observes.
+  const pinned = structuredClone(metadata);
+  const port = create(credentialTransportOptions(owner, pinned, correlationId, lifecycle));
   if (lifecycle.purpose === "verification") return port;
+  return observePort(owner, pinned, correlationId, lifecycle, port);
+}
+
+const UNSETTLED_CAUSE: Readonly<Record<JiraUnsettledProbe, ProbeCause>> = {
+  stale: "stale",
+  "cancelled-or-expired": "cancelled-or-expired",
+  "probe-error": "probe-error",
+  "foreign-401": "foreign-401",
+  "denied-401": "captcha",
+};
+
+/** The one owner of the observed-credential wrapper: every credential-bearing port goes through it. */
+function observePort<
+  TRequest extends AtlassianHttpRequest | AtlassianHttpBodyRequest,
+  TResult extends AtlassianHttpResult,
+>(
+  owner: CredentialTransportOwner,
+  pinned: AtlassianCredentialMetadata,
+  correlationId: string | undefined,
+  lifecycle: AtlassianCredentialHttpOptions,
+  port: (request: TRequest) => Promise<TResult>,
+): (request: TRequest) => Promise<TResult> {
+  const id = correlationId ?? UNKNOWN_CORRELATION_ID;
   return withJiraAuthenticationObservation(
-    metadata,
+    pinned,
     port,
-    () =>
-      currentJiraAuthenticationObservation(metadata, owner.custody.getMetadata(metadata.authRef)),
-    identityObservation(owner, metadata, correlationId ?? UNKNOWN_CORRELATION_ID, lifecycle),
+    () => currentJiraAuthenticationObservation(pinned, owner.custody.getMetadata(pinned.authRef)),
+    identityObservation(owner, pinned, id, lifecycle),
+    {
+      onUnsettled: (reason, error): void => {
+        if (reason === "probe-error") reportProbeFailure(id, error);
+        const identityRoute = reason === "foreign-401" || reason === "denied-401";
+        recordConnectionCheck(
+          owner.options,
+          id,
+          "probe-inconclusive",
+          undefined,
+          "request",
+          undefined,
+          {
+            decision: identityRoute ? "identity-route" : "probe",
+            routeClass: identityRoute ? "identity" : "other",
+            probeCause: UNSETTLED_CAUSE[reason],
+          },
+        );
+      },
+    },
+  );
+}
+
+/** A credential change thrown out of the probe port: body-free class and frames only. */
+function reportProbeFailure(correlationId: string, error: unknown): void {
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "atlassian.connection.checked",
+      source: "atlassian.identity-probe",
+      error,
+      redact: () => "server-operation-failed",
+    }),
   );
 }
 
@@ -339,13 +665,15 @@ function observedAuthentication(
   owner: CredentialTransportOwner,
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
-): (status: number) => void {
+  detail: ConnectionCheckDetail = IDENTITY_ROUTE_DETAIL,
+): (status: number, failure?: AtlassianAuthenticationFailure) => void {
   if (metadata.deployment !== "data-center" || metadata.livePod === undefined)
     return (): void => undefined;
   const { authRef, generation } = metadata;
   const revision = metadata.livePod.verificationRevision;
-  return (status): void => {
-    if (status !== 401) return;
+  return (status, failure): void => {
+    // Only a 401 Jira itself authored shows that the token was rejected (ADR-0128).
+    if (status !== 401 || failure !== "jira") return;
     const applied = owner.custody.observeAuthenticationFailure(
       authRef,
       generation,
@@ -358,6 +686,8 @@ function observedAuthentication(
       "auth-failed",
       applied ? "applied" : "stale",
       "request",
+      undefined,
+      detail,
     );
   };
 }
@@ -387,7 +717,7 @@ function credentialTransportOptions(
   const { options, listenerPorts, executionResolver } = owner;
   const observe =
     lifecycle.purpose === "verification" || !observeCredentialAuthentication
-      ? (): void => undefined
+      ? (_status: number, _failure?: AtlassianAuthenticationFailure): void => undefined
       : observedAuthentication(owner, metadata, correlationId ?? UNKNOWN_CORRELATION_ID);
   const beforeDispatch = lifecycle.beforeDispatch;
   const onResponse = lifecycle.onResponse;
@@ -401,11 +731,11 @@ function credentialTransportOptions(
     egress: options.egress,
     correlationId,
     ...(beforeDispatch === undefined ? {} : { beforeDispatch }),
-    onResponse: (request, status): boolean => {
+    onResponse: (request, status, failure): boolean => {
       try {
-        return onResponse === undefined || onResponse(request, status);
+        return onResponse === undefined || onResponse(request, status, failure);
       } finally {
-        if (!ambiguousJiraAuthenticationResponse(metadata, request)) observe(status);
+        if (!ambiguousJiraAuthenticationResponse(metadata, request)) observe(status, failure);
       }
     },
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),

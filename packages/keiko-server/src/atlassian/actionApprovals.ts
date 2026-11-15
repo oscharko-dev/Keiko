@@ -238,6 +238,12 @@ type RetainedApproval =
 
 export class AtlassianActionApprovalRegistry {
   private readonly entries = new Map<string, RetainedApproval>();
+  /**
+   * Chat write approvals the registry itself saw run out (the positive fact an expiry is decided
+   * by: an entry that is merely gone, after reset or dispose, expired nothing). Bounded, cleared
+   * with the registry.
+   */
+  private readonly expiredChatWrites = new Set<string>();
   private readonly waiters = new Map<string, Set<() => void>>();
   private readonly now: () => number;
 
@@ -299,6 +305,12 @@ export class AtlassianActionApprovalRegistry {
     }
     this.retainWriteApproval(entry, correlationId);
     return { ok: true };
+  }
+
+  /** Whether this registry observed the approval run out before anyone decided (#4354 AC4). */
+  public chatWriteApprovalExpired(approvalId: string, correlationId?: string): boolean {
+    this.evictExpired(correlationId);
+    return this.expiredChatWrites.has(approvalId);
   }
 
   public getChatWriteApproval(
@@ -735,6 +747,7 @@ export class AtlassianActionApprovalRegistry {
     // must not retain this graph's pending waiters after shutdown.
     for (const id of this.waiters.keys()) this.wakeWaiters(id);
     this.entries.clear();
+    this.expiredChatWrites.clear();
   }
 
   private evictExpired(correlationId?: string): void {
@@ -747,6 +760,7 @@ export class AtlassianActionApprovalRegistry {
           : record.entry.approval.expiresAt;
       if (expiresAt > cutoff) continue;
       if (record.kind === "chat-read") this.expireReadGrant(record, correlationId);
+      if (record.kind === "chat-write") this.noteExpiredChatWrite(id);
       if (record.kind === "chat-write")
         recordWriteApproval(
           snapshotWriteApproval(
@@ -757,6 +771,13 @@ export class AtlassianActionApprovalRegistry {
       this.entries.delete(id);
       this.wakeWaiters(id);
     }
+  }
+
+  private noteExpiredChatWrite(approvalId: string): void {
+    this.expiredChatWrites.add(approvalId);
+    if (this.expiredChatWrites.size <= ATLASSIAN_ACTION_APPROVAL_MAX_PENDING * 4) return;
+    const oldest = this.expiredChatWrites.values().next();
+    if (oldest.done !== true) this.expiredChatWrites.delete(oldest.value);
   }
 
   private expireReadGrant(record: RetainedChatReadGrant, correlationId?: string): void {

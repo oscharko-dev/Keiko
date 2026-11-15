@@ -18,6 +18,7 @@ const FIELD_ID = { ...text(64), pattern: JIRA_FIELD_ID_PATTERN };
 const REPORT_INPUT = object({
   projectKey: text(128),
   jql: { type: "string", minLength: 1, maxLength: ATLASSIAN_JQL_MAX_CHARS },
+  epicKey: text(128),
   estimateFieldId: FIELD_ID,
   asOf: { type: "string", pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", maxLength: 10 },
   parentFieldIds: { type: "array", maxItems: 4, items: FIELD_ID },
@@ -38,15 +39,16 @@ const REPORT_INPUT = object({
 });
 
 const DESCRIPTION =
-  "Deterministic Jira report; use it, not jira.search or jira.issue, for any question about a whole project or many issues: " +
-  "progress, estimates, template compliance, requirement coverage, epics without members, issues without an epic. " +
-  "Scope: projectKey and/or jql. Keiko computes every number: quote report.figures verbatim, never recompute. " +
-  "requirementsFromPods covers this Chat's Pod requirements. Estimate is seconds of original estimate unless estimateFieldId. " +
-  "While status is reading, call again with only the reportId. " +
-  "A call without a section returns the summary and report.figures; a call that names a section returns only that page, not the summary. " +
+  "Deterministic Jira report computed by Keiko over a project's issues: progress, estimates, template compliance (which issues deviate). " +
+  "Scope: a project, JQL or one Epic; also counts, requirement coverage, epics without members, issues without an epic. " +
+  "It does not list how a project is configured (workflow statuses, issue types, fields, components, versions): search jira.discover for those. " +
+  "Keiko computes every number: quote report.figures verbatim, never recompute (estimate field and unit included). " +
+  "requirementsFromPods covers this Chat's Pod requirements. " +
+  "While reading, call again with only the reportId. " +
+  "A call without a section returns the summary and report.figures; a call that names a section returns only that page. " +
   "Page a list with reportId, section and startAt (0, then the returned nextStartAt; maxResults up to 100; report every deviation). " +
-  "For a Jira comment, get section comment and post its text verbatim. issuesWithoutTemplate: no template judged them. " +
-  "A refusal names invalidArguments or a message.";
+  "A call that names a reportId takes reportId, section, startAt and maxResults: repeating the report's own projectKey, jql or epicKey is harmless, a different one is refused. " +
+  "For a Jira comment, get section comment and post its text verbatim. issuesWithoutTemplate: no template judged them.";
 
 export function jiraReportDeclaration(): ManagedMcpToolDeclaration {
   return Object.freeze({
