@@ -219,6 +219,15 @@ re-verification. The offer, its expiry and its tool subset are still captured an
 a frozen pair that failed verification is never remembered, and anything not deeply frozen takes the
 full copy, bounds and verification path as before. Re-capturing the unchanged catalog on every Chat
 tool round had made a long Jira turn copy and hash every descriptor dozens of times (#4173).
+The one copy of a binding — catalog, projection and offer (`captureCatalogBinding`) — bounds each part by the
+envelope limit for itself (262,144 bytes); the total is bounded by their sum, not by one bound across all
+three. The projection is derived from the catalog and compared with its recompilation, so a single bound
+across both would only halve what a catalog may hold: it refused a Chat's selection of two to twenty
+natives in the round after the selection had been admitted. The gateway binds a round with this copy and
+the Chat tool turn admits a selection with it, so the two cannot disagree; a selection the gateway could
+not bind is refused as `selection-too-large` and the earlier selection kept. The limit that governs what a
+model can take remains its context window, which the existing selection admission checks separately and
+refuses with `budget-exhausted`.
 An offer bounds admission, not the call it admitted: an invocation admitted under a live offer keeps
 it through its own settlement, bounded by its descriptor's budget, the live authority, the workspace
 revision and its handler's readiness, so an effect that starts after a long step or a human decision

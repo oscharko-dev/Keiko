@@ -39,4 +39,7 @@ export { copyCatalogJson as captureCatalogJson, catalogBytes as catalogJsonBytes
 export { createToolInvocationNormalizer } from "./invocation.js";
 export type { ToolInvocationNormalizer } from "./invocation.js";
 
-export { copyCatalogEnvelope as captureCatalogEnvelope } from "./json.js";
+export {
+  copyCatalogBinding as captureCatalogBinding,
+  copyCatalogEnvelope as captureCatalogEnvelope,
+} from "./json.js";

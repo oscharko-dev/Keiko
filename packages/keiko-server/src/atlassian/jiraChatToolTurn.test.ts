@@ -4942,7 +4942,7 @@ it("walks the selection to the catalog's ceiling: the last fitting size works, t
     .slice(0, 48)
     .map((definition) => definition.identity);
   const outcomes: string[] = [];
-  for (const count of [0, 1, 2, 3, 4, 5, 8, 37]) {
+  for (const count of [0, 3, 35, 36, 37, 40]) {
     const f = fixture(false, undefined, true, false, false, undefined, true);
     configure(f.deps, true, 32768);
     demandSelectedModel(f, false, undefined, natives.slice(0, count));
@@ -4958,17 +4958,51 @@ it("walks the selection to the catalog's ceiling: the last fitting size works, t
       `${String(count)}:${String(describe?.result?.status)}:${refused ? "too-large" : "-"}`,
     );
   }
-  // Measured on 2026-11-14 with the real registry in registry order: three natives fit beside the base
-  // of a Chat without Knowledge scopes, four do not. Before the admission ran the gateway's copy, up to
-  // 37 were admitted, and the round after any selection beyond the budget failed in the gateway. A
+  // Measured on 2026-11-14 with the real registry in registry order: 36 natives fit beside the base of
+  // a Chat without Knowledge scopes, 37 do not. The gateway bounds the catalog, the projection and the
+  // offer each by the envelope limit, and the selection is admitted with that same capture. Before it
+  // was, a selection past the real bound was admitted and the next round failed in the gateway. A
   // change that grows the base or a descriptor moves this, on purpose.
-  const LAST_FITTING = 3;
+  const LAST_FITTING = 36;
   outcomes.forEach((outcome, index) => {
-    const count = [0, 1, 2, 3, 4, 5, 8, 37][index] ?? 0;
+    const count = [0, 3, 35, 36, 37, 40][index] ?? 0;
     expect(outcome, `${String(count)} natives`).toBe(
       count <= LAST_FITTING ? `${String(count)}:completed:-` : `${String(count)}:failed:too-large`,
     );
   });
+}, 180_000);
+
+// The byte bound of the gateway's binding is a safety ceiling; the limit that governs what a model can
+// take is its context window. Thirty natives fit the bytes (see the walk above), and the existing
+// context admission refuses them in a small window with its own closed reason, not the byte one.
+it("refuses a selection that fits the bytes but not the context window, with its own closed reason", async () => {
+  const curated = fixtureOperationTools();
+  const natives = jiraOperationDefinitions()
+    .filter(
+      (definition) =>
+        definition.kind === "native" &&
+        definition.method === "GET" &&
+        definition.apiRoot === "/rest/api/2" &&
+        !curated.has(definition.tool) &&
+        definition.identity !== "GET /rest/api/2/project",
+    )
+    .slice(0, 30)
+    .map((definition) => definition.identity);
+  const outcomes: string[] = [];
+  for (const window of [8192, 20480, 24576]) {
+    const f = fixture(false, undefined, true, false, false, undefined, true);
+    configure(f.deps, true, window);
+    demandSelectedModel(f, false, undefined, natives);
+    await handleSendDesktopChat(sendContext(f, `window-${String(window)}`), f.deps);
+    const describe = demandExchanges(f).find((entry) => entry.call.name === "jira_describe");
+    const data = describe?.result?.data as { readonly reason?: string } | undefined;
+    outcomes.push(`${String(window)}:${String(describe?.result?.status)}:${data?.reason ?? "-"}`);
+  }
+  expect(outcomes).toEqual([
+    "8192:failed:budget-exhausted",
+    "20480:failed:budget-exhausted",
+    "24576:completed:-",
+  ]);
 }, 180_000);
 
 it("extends the curated Jira base after a settled describe round and preserves every original binding", async () => {

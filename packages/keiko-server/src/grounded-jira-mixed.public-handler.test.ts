@@ -1113,20 +1113,22 @@ it("walks a real describe in a mixed turn to the ceiling: every size ends the tu
     .slice(0, 60)
     .map((definition) => definition.identity);
   const outcomes: string[] = [];
-  for (const count of [0, 1, 2, 4, 8, 20, 48])
+  for (const count of [0, 1, 2, 8, 22, 23, 48])
     outcomes.push(await walkedMixedOutcome(natives, count));
-  // Measured on 2026-11-14 with the heaviest descriptors first: the base of a mixed turn already
-  // takes most of the gateway's one envelope budget for catalog, projection and offer (the gateway
-  // copies them together on the first round of a selection), so one native fits and two do not. The
-  // size that does not fit is refused with the closed reason and the turn continues on its earlier
-  // selection. Every size reaches all three provider rounds: an admitted selection always binds.
-  // Before the selection admission ran that copy, two to twenty natives were admitted and the round
-  // after them died with a 502 the stream carried after its 200, so only one provider request was seen.
-  const sizes = [0, 1, 2, 4, 8, 20, 48];
+  // Measured on 2026-11-14 with the heaviest descriptors first: 22 natives fit beside the base of a
+  // mixed turn, 23 do not. The gateway bounds the catalog, the projection and the offer each by the
+  // envelope limit and the selection is admitted with that same capture, so the size that does not fit
+  // is refused with the closed reason and the turn continues on its earlier selection. Every size
+  // reaches all three provider rounds: an admitted selection always binds. While the gateway bounded
+  // the three together, two to twenty natives were admitted and the round after them died with a 502
+  // the stream carried after its 200, so only one provider request was seen.
+  const sizes = [0, 1, 2, 8, 22, 23, 48];
   outcomes.forEach((outcome, index) => {
     const count = sizes[index] ?? 0;
     expect(outcome, `${String(count)} natives`).toBe(
-      count <= 1 ? `${String(count)}:200:completed:-:3` : `${String(count)}:200:failed:too-large:3`,
+      count <= 22
+        ? `${String(count)}:200:completed:-:3`
+        : `${String(count)}:200:failed:too-large:3`,
     );
   });
 });

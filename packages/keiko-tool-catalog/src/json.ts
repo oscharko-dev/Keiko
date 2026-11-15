@@ -209,6 +209,40 @@ export function copyCatalogEnvelope(value: unknown): CatalogJsonValue {
   );
 }
 
+const BINDING_PARTS: ReadonlySet<string> = new Set(["catalog", "projection", "offered", "kind"]);
+
+/**
+ * The one capture of a round's binding: a `catalog`, its `projection` and the `offered` set (and an
+ * optional `kind`). Each part is copied under the envelope bound for itself, so none grows past
+ * `TOOL_CATALOG_LIMITS.maxArgumentBytes` and the total is bounded by their sum. The projection is
+ * derived from the catalog and compared with its recompilation, so a bound on their sum would only
+ * halve what a catalog may hold. The gateway binds a round with this copy and the tool selection is
+ * admitted with it, so the two cannot disagree about what fits.
+ */
+export function copyCatalogBinding(value: unknown): CatalogJsonValue {
+  requireCatalog(
+    typeof value === "object" && value !== null && !Array.isArray(value),
+    "invalid-shape",
+  );
+  const prototype: unknown = Object.getPrototypeOf(value);
+  requireCatalog(prototype === null || prototype === Object.prototype, "invalid-shape");
+  const copy: Record<string, CatalogJsonValue> = Object.create(null) as Record<
+    string,
+    CatalogJsonValue
+  >;
+  for (const [key, part] of dataEntries(value)) {
+    requireCatalog(BINDING_PARTS.has(key), "invalid-shape");
+    // The part sits one level below the envelope, so it keeps the depth it had inside it.
+    copy[key] = copyWithinBounds(
+      part,
+      TOOL_CATALOG_LIMITS.maxArgumentBytes,
+      TOOL_CATALOG_LIMITS.maxSchemaDepth + 5,
+      GENERIC_TOOL_ARGUMENT_LIMITS,
+    );
+  }
+  return copy;
+}
+
 /**
  * The same envelope copy, keeping each value `retained` vouches for by identity. Package-internal:
  * only this package's own issuers may vouch, so it is deliberately absent from the public index.

@@ -2,7 +2,7 @@ import { KNOWLEDGE_DOCUMENTS_TOOL_ID } from "@oscharko-dev/keiko-contracts/runti
 import { chatToolSelectionFits, offeredDefinitions } from "./chat-tool-schema-selection.js";
 import { JIRA_MUTATION_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
-import { captureCatalogEnvelope, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
+import { captureCatalogBinding, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { chatKnowledgeScopes } from "./requirement-inventory.js";
 import { randomUUID } from "node:crypto";
@@ -640,11 +640,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       this.context.signal.throwIfAborted();
       const binder = selection.bind(this.context, this.budget.port, this.invocationRegistry);
       const offered = binder.offer();
-      // The gateway binds every round by copying catalog, projection and offer as one envelope
-      // under one byte budget. The projection is about as large as the catalog, so a selection that
-      // fits the catalog alone can still fail the next round there. Run that same copy here, so an
-      // oversized selection is refused with its closed reason and the earlier selection is kept.
-      captureCatalogEnvelope({
+      // The gateway binds every round by capturing catalog, projection and offer with one function.
+      // Run that same capture here, so a selection the gateway could not bind is refused with its
+      // closed reason and the earlier selection is kept, instead of failing the next round.
+      captureCatalogBinding({
         catalog: selection.managed.catalog,
         projection: selection.managed.projection,
         offered,
