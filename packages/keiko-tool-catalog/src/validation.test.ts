@@ -369,6 +369,12 @@ describe("schema mismatch account", () => {
       invalidPaths: ["changeset.files[].file", "changeset.mode", "changeset.patch"],
       unexpectedPropertyCount: 2,
       droppedPathCount: 0,
+      // What the schema itself states at each path, never the value (a string stays "a string").
+      expected: [
+        { path: "changeset.files[].file", rule: "a string" },
+        { path: "changeset.mode", rule: 'one of "literal", "regex"' },
+        { path: "changeset.patch", rule: "a string, at least 1 character" },
+      ],
     });
     expect(JSON.stringify(mismatch)).not.toContain(secret);
     expect(matchesCatalogSchema(schema, value)).toBe(false);
@@ -399,6 +405,10 @@ describe("schema mismatch account", () => {
       invalidPaths: ["changeset.patch"],
       unexpectedPropertyCount: 0,
       droppedPathCount: 0,
+      expected: [
+        { path: "changeset.files[].file", rule: "a string" },
+        { path: "changeset.patch", rule: "a string, at least 1 character" },
+      ],
     });
     expect(matchesCatalogSchema(schema, value)).toBe(false);
   });
@@ -409,6 +419,7 @@ describe("schema mismatch account", () => {
       invalidPaths: ["$"],
       unexpectedPropertyCount: 0,
       droppedPathCount: 0,
+      expected: [{ path: "$", rule: "an object with the required properties changeset" }],
     });
     const wide = compileCatalogSchema({
       type: "object",

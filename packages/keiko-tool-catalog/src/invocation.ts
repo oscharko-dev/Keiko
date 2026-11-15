@@ -1,5 +1,6 @@
 import type { ToolInvocationBinding } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
+  foldToolOperationName,
   type CatalogJsonObject,
   type CompiledCatalogTool,
   type CompiledToolProjection,
@@ -26,9 +27,39 @@ import {
 } from "./json.js";
 import { requireCatalog } from "./errors.js";
 
+/**
+ * What a name a model wrote means against one round's catalog: an exact offered alias, the one
+ * offered alias it equals after the single spelling fold, several (refused, never the first), an
+ * alias of a tool the catalog has but this round did not offer, or nothing known.
+ */
+export type ToolNameResolution =
+  | { readonly kind: "exact"; readonly alias: string }
+  | { readonly kind: "folded"; readonly alias: string }
+  | { readonly kind: "ambiguous" }
+  | { readonly kind: "not-offered" }
+  | { readonly kind: "unknown" };
+
+/** Pure so the rule is pinned without a catalog: offered aliases, every projected alias, a name. */
+export function resolveToolName(
+  offered: readonly string[],
+  projected: readonly string[],
+  name: string,
+): ToolNameResolution {
+  if (offered.includes(name)) return { kind: "exact", alias: name };
+  const key = foldToolOperationName(name);
+  const folded = offered.filter((alias) => foldToolOperationName(alias) === key);
+  const [only] = folded;
+  if (folded.length === 1 && only !== undefined) return { kind: "folded", alias: only };
+  if (folded.length > 1) return { kind: "ambiguous" };
+  return projected.some((alias) => foldToolOperationName(alias) === key)
+    ? { kind: "not-offered" }
+    : { kind: "unknown" };
+}
+
 export interface ToolInvocationNormalizer {
   readonly binding: ToolInvocationBinding;
   readonly tools: (referenceTimeMs: number) => readonly CompiledCatalogTool[];
+  readonly resolveName: (name: string, referenceTimeMs: number) => ToolNameResolution;
   readonly normalize: (input: unknown, referenceTimeMs: number) => BoundToolInvocation;
   /** Provider aliases are mapped only through the exact server-supplied advertised projection. */
   readonly bindAlias: (
@@ -220,6 +251,12 @@ export function createToolInvocationNormalizer(
   return Object.freeze({
     binding,
     tools: (now: number): readonly CompiledCatalogTool[] => selectedTools(binding, now),
+    resolveName: (name: string, now: number): ToolNameResolution =>
+      resolveToolName(
+        selectedTools(binding, now).map((tool) => tool.alias),
+        binding.projection.tools.map((tool) => tool.alias),
+        name,
+      ),
     normalize: (value: unknown, now: number): BoundToolInvocation => normalize(binding, value, now),
     bindAlias: (alias: string, args: unknown, now: number): BoundToolInvocation =>
       aliasInvocation(binding, alias, args, now),

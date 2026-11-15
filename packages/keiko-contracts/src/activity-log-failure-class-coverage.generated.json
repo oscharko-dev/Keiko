@@ -31833,6 +31833,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "nameResolution",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "projectionDigest",
               "type": "string",
               "dataClass": "digest",
@@ -31845,7 +31851,7 @@
               "required": true
             }
           ],
-          "evidenceClasses": ["completeness-state", "count", "digest", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false
@@ -31948,6 +31954,18 @@
           "analyzerProjection": "failure-cluster",
           "safeContextFields": [
             {
+              "name": "calledNameDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "calledNameLength",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "canonicalToolId",
               "type": "string",
               "dataClass": "opaque-id",
@@ -31969,6 +31987,12 @@
               "name": "droppedPathCount",
               "type": "integer",
               "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "expectationsTruncated",
+              "type": "boolean",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
@@ -32008,6 +32032,12 @@
               "required": true
             },
             {
+              "name": "statedExpectationCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "status",
               "type": "string",
               "dataClass": "closed-enum",
@@ -32024,12 +32054,19 @@
               "type": "integer",
               "dataClass": "count",
               "required": false
+            },
+            {
+              "name": "unofferedNameClass",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             }
           ],
           "evidenceClasses": [
             "closed-enum",
             "completeness-state",
             "count",
+            "digest",
             "loss-state",
             "opaque-id"
           ],
