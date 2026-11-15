@@ -179,8 +179,9 @@ require-safety-comment-for-type-assertion became active for memory-capture, memo
 memory-retrieval, verification and workflows, and no-reflect-get for verification (#3933). On 2026-11-10 no-chained-type-assertions and no-array-filter-map became active for
 sandbox (#3933). On 2026-11-11 no-reflect-get became active for cli and tools, and then for security and ui, and no-chained-type-assertions became active for evaluations (#3933). On 2026-11-12
 require-safety-comment-for-type-assertion became active for evaluations (#3933). On 2026-11-15
-no-accumulating-spread became active for local-knowledge, server and workspace, and
-no-unknown-type-aliases for editor (#3933). The engine refuses an active
+no-accumulating-spread became active for local-knowledge, server and workspace,
+no-unknown-type-aliases for editor, and no-widen-then-assert for local-knowledge and memory-vault
+(#3933). The engine refuses an active
 scope without files on the real repository. A hermetic test fixture writes its policy with only the
 scopes its own files certainly fall in.
 

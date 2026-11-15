@@ -38,6 +38,7 @@ import { createEncryptedContentCipher, PLAINTEXT_CONTENT_CIPHER } from "./store-
 import {
   flushPlaintextResidue,
   STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS,
+  type WalCheckpointConnection,
 } from "./store-content-encryption.js";
 import { scriptedAdapter, seedCapsuleWithVectors, type SeedVectorsOptions } from "./testing.js";
 import type { CitationReference } from "@oscharko-dev/keiko-contracts";
@@ -1019,15 +1020,16 @@ describe("performance guardrail", () => {
 // return without reconstructing an end-to-end migration timeline -- mirrors
 // packages/keiko-memory-vault/src/schema.test.ts's `flushPlaintextResidueWithRetry` suite.
 describe("flushPlaintextResidue (KEIKO-0877)", () => {
+  type CheckpointRow = Partial<{ busy: number; log: number; checkpointed: number }>;
   type CheckpointOutcome =
-    | Partial<{ busy: number; log: number; checkpointed: number }>
+    | CheckpointRow
     | { readonly kind: "throw"; readonly cause: Error }
     // #2906 round-3 review: a real DatabaseSync's .get() can also return `undefined` (no row) --
     // exercised directly rather than only object shapes with missing/non-numeric columns.
     | undefined;
 
   interface FakeDb {
-    readonly db: DatabaseSync;
+    readonly db: WalCheckpointConnection;
     readonly checkpointCalls: { count: number };
     readonly vacuumCalls: { count: number };
   }
@@ -1035,28 +1037,26 @@ describe("flushPlaintextResidue (KEIKO-0877)", () => {
   function fakeDbFor(nextOutcome: () => CheckpointOutcome): FakeDb {
     const checkpointCalls = { count: 0 };
     const vacuumCalls = { count: 0 };
-    const fake: unknown = {
-      prepare(sql: string): unknown {
+    const db: WalCheckpointConnection = {
+      prepare(sql) {
         if (sql !== "PRAGMA wal_checkpoint(TRUNCATE)") {
           throw new Error(`unexpected prepare: ${sql}`);
         }
         return {
-          get(): unknown {
+          get: (): CheckpointRow | undefined => {
             checkpointCalls.count += 1;
             const outcome = nextOutcome();
-            if (typeof outcome === "object" && (outcome as { kind?: string }).kind === "throw") {
-              throw (outcome as { cause: Error }).cause;
-            }
+            if (outcome !== undefined && "kind" in outcome) throw outcome.cause;
             return outcome;
           },
         };
       },
-      exec(sql: string): void {
+      exec(sql) {
         if (sql !== "VACUUM") throw new Error(`unexpected exec: ${sql}`);
         vacuumCalls.count += 1;
       },
     };
-    return { db: fake as DatabaseSync, checkpointCalls, vacuumCalls };
+    return { db, checkpointCalls, vacuumCalls };
   }
 
   function collectingSink(): {

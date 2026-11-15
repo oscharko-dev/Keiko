@@ -4599,11 +4599,8 @@
       "anti-slop/require-safety-comment-for-type-assertion": 6
     },
     "packages/keiko-local-knowledge/src/store-content-encryption.test.ts": {
-      "anti-slop/no-known-value-widening": 4,
-      "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/no-unknown-returns": 2,
-      "anti-slop/no-widen-then-assert": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 22
+      "anti-slop/no-known-value-widening": 2,
+      "anti-slop/require-safety-comment-for-type-assertion": 19
     },
     "packages/keiko-local-knowledge/src/store-content-encryption.ts": {
       "anti-slop/no-chained-type-assertions": 1,
@@ -4932,10 +4929,8 @@
     },
     "packages/keiko-memory-vault/src/schema.test.ts": {
       "anti-slop/no-chained-type-assertions": 3,
-      "anti-slop/no-known-value-widening": 3,
-      "anti-slop/no-unknown-returns": 2,
-      "anti-slop/no-widen-then-assert": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 13
+      "anti-slop/no-known-value-widening": 1,
+      "anti-slop/require-safety-comment-for-type-assertion": 10
     },
     "packages/keiko-memory-vault/src/schema.ts": {
       "anti-slop/no-runtime-typeof": 1,

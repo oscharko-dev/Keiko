@@ -5,6 +5,7 @@ import {
   MIGRATIONS,
   flushPlaintextResidueWithRetry,
   runMigrations,
+  type WalCheckpointConnection,
 } from "./schema.js";
 import { TEST_CIPHER } from "./_support.js";
 import type {
@@ -229,35 +230,33 @@ describe("STRICT-table type enforcement", () => {
 // retry + report behavior is tested against exactly the shape SQLite would return without
 // reconstructing an end-to-end v1→v-current migration timeline.
 describe("flushPlaintextResidueWithRetry", () => {
-  type CheckpointOutcome =
-    | Partial<{ busy: number; log: number; checkpointed: number }>
-    | { readonly kind: "throw"; readonly cause: Error };
+  type CheckpointRow = Partial<{ busy: number; log: number; checkpointed: number }>;
 
   interface FakeDb {
-    readonly db: DatabaseSync;
+    readonly db: WalCheckpointConnection;
     readonly calls: { count: number };
   }
 
+  type CheckpointOutcome = CheckpointRow | { readonly kind: "throw"; readonly cause: Error };
+
   function fakeDbFor(nextOutcome: () => CheckpointOutcome): FakeDb {
     const calls = { count: 0 };
-    const fake: unknown = {
-      prepare(sql: string): unknown {
+    const db: WalCheckpointConnection = {
+      prepare(sql) {
         if (sql !== "PRAGMA wal_checkpoint(TRUNCATE)") {
           throw new Error(`unexpected prepare: ${sql}`);
         }
         return {
-          get(): unknown {
+          get: (): CheckpointRow => {
             calls.count += 1;
             const outcome = nextOutcome();
-            if ((outcome as { kind?: string }).kind === "throw") {
-              throw (outcome as { cause: Error }).cause;
-            }
+            if ("kind" in outcome) throw outcome.cause;
             return outcome;
           },
         };
       },
     };
-    return { db: fake as DatabaseSync, calls };
+    return { db, calls };
   }
 
   function collectingSink(): {

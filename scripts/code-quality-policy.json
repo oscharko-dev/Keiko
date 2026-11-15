@@ -261,7 +261,14 @@
       "disposition": "production-required",
       "migrationIssue": 3915,
       "reason": "Reject needless type-evidence erasure and accumulator copies; preserve boundary input and fresh owned mutation.",
-      "activeScopes": ["production", "documentary", "declarations", "fixtures"]
+      "activeScopes": [
+        "production",
+        "documentary",
+        "declarations",
+        "fixtures",
+        "package:@oscharko-dev/keiko-local-knowledge",
+        "package:@oscharko-dev/keiko-memory-vault"
+      ]
     },
     {
       "id": "anti-slop/require-safety-comment-for-type-assertion",
