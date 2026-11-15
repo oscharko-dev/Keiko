@@ -653,6 +653,7 @@ export const CHAT_TURN_END_RECEIPTS_MAX = 1000;
 const CHAT_TURN_END_TEXT_MAX = 600;
 const CHAT_TURN_END_KEYS = [
   "reason",
+  "answer",
   "completed",
   "unconfirmed",
   "unsettled",
@@ -669,6 +670,12 @@ const CHAT_TURN_END_RECEIPT_KEYS: ReadonlySet<string> = new Set(["tool", "key", 
  */
 export interface ChatToolTurnEnd {
   readonly reason: ChatToolTurnEndReason;
+  /**
+   * Fingerprint of the stored English ending this record was built with. The Chat words the ending
+   * only for an answer whose stored text still matches it, so a record that outlived its answer
+   * (a failed clearing write) can never replace a real model answer.
+   */
+  readonly answer: string;
   /** Writes Jira acknowledged. */
   readonly completed: readonly ChatTurnEndReceipt[];
   /** Writes sent whose outcome is not confirmed. */
@@ -682,6 +689,21 @@ export interface ChatToolTurnEnd {
   readonly readCount: number;
   readonly refusedCount: number;
 }
+
+/**
+ * A short fingerprint of an answer's text: its length and a 32-bit FNV-1a over its UTF-16 units.
+ * It binds a stored ending record to the exact text it describes; it is not a security digest and
+ * never leaves the machine. One definition, used by the server that writes it and the Chat that
+ * compares it.
+ */
+export function chatTurnEndAnswerFingerprint(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193) >>> 0;
+  }
+  return `${String(text.length)}:${hash.toString(16).padStart(8, "0")}`;
+}
+const CHAT_TURN_END_ANSWER_PATTERN = /^\d{1,9}:[0-9a-f]{8}$/u;
 
 function isTurnEndText(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= CHAT_TURN_END_TEXT_MAX;
@@ -728,6 +750,8 @@ export function isChatToolTurnEnd(value: unknown): value is ChatToolTurnEnd {
   return (
     hasTurnEndShape(value) &&
     isChatToolTurnEndReason(value.reason) &&
+    typeof value.answer === "string" &&
+    CHAT_TURN_END_ANSWER_PATTERN.test(value.answer) &&
     CHAT_TURN_END_LISTS.every((key) => isTurnEndReceiptList(value[key])) &&
     CHAT_TURN_END_COUNTS.every((key) => isTurnEndCount(value[key], 1_000_000_000))
   );

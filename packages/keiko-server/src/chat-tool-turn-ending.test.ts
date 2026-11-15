@@ -3,6 +3,7 @@ import {
   CHAT_TOOL_TURN_END_REASONS,
   CHAT_TURN_END_RECEIPTS_MAX,
   isChatToolTurnEnd,
+  chatTurnEndAnswerFingerprint,
   type ChatToolExchange,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -250,8 +251,11 @@ describe("chatToolTurnEnd (#4355)", () => {
       const fields = activityLogOperationSchema(op)?.fields as
         Record<string, { readonly values?: readonly string[] }> | undefined;
       const values = fields?.[op === "chat.tool-turn.ended" ? "reason" : "turnEndReason"]?.values;
-      const logOnly = op === "chat.tool-turn.ended" ? ["deadline-cancelled", "request-aborted"] : [];
-      expect([...(values ?? [])].sort()).toEqual([...CHAT_TOOL_TURN_END_REASONS, ...logOnly].sort());
+      const logOnly =
+        op === "chat.tool-turn.ended" ? ["deadline-cancelled", "request-aborted"] : [];
+      expect([...(values ?? [])].sort()).toEqual(
+        [...CHAT_TOOL_TURN_END_REASONS, ...logOnly].sort(),
+      );
     },
   );
 
@@ -259,6 +263,8 @@ describe("chatToolTurnEnd (#4355)", () => {
     const end = chatToolTurnEnd(TRANSCRIPT, "deadline");
     expect(end).toEqual({
       reason: "deadline",
+      // Bound to the English ending the same tally and reason produce.
+      answer: chatTurnEndAnswerFingerprint(chatToolTurnPartialAnswer(TRANSCRIPT, "deadline")),
       completed: [
         { tool: "jira_create", key: "REQ-12" },
         { tool: "jira_create", key: "REQ-13" },
@@ -304,6 +310,9 @@ describe("chatToolTurnEnd (#4355)", () => {
       const end = chatToolTurnEnd(TRANSCRIPT, reason);
       const answer = chatToolTurnPartialAnswer(TRANSCRIPT, reason);
       expect(end.reason).toBe(reason);
+      expect(end.answer).toBe(
+        chatTurnEndAnswerFingerprint(chatToolTurnPartialAnswer(TRANSCRIPT, reason)),
+      );
       const listed = answer.split("\n").filter((line) => line.startsWith("- "));
       expect(listed).toHaveLength(
         end.completed.length + end.unconfirmed.length + end.unsettled.length + end.notDone.length,

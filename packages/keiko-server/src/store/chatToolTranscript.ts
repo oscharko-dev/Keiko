@@ -51,6 +51,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "../process-log-sink.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import { admitsApprovalTransition, admitsFirstApproval } from "./chatToolApprovalTransition.js";
 import { invalidRequest, notFound } from "./errors.js";
@@ -491,11 +492,60 @@ function validReadGrants(
   );
 }
 
-/** The two closed facts a turn's final answer states: the claim marker and the early ending. */
-function validMarkers(value: Record<string, unknown>): boolean {
-  return (
-    (value.claimNotice === undefined || isChatClaimNotice(value.claimNotice)) &&
-    (value.turnEnd === undefined || isChatToolTurnEnd(value.turnEnd))
+/**
+ * The two closed facts a turn's final answer states: the claim marker and the early ending. Both are
+ * presentation records on top of the exchanges: one that is not valid is dropped when the transcript
+ * is read, never allowed to cost the conversation its tool history (the stored English answer is
+ * what the Chat then shows).
+ */
+const OPTIONAL_MARKERS = [
+  { key: "claimNotice", name: "claim-notice", valid: isChatClaimNotice },
+  { key: "turnEnd", name: "turn-end", valid: isChatToolTurnEnd },
+] as const;
+type DroppedMarker = (typeof OPTIONAL_MARKERS)[number]["name"];
+function dropInvalidMarkers(value: unknown): readonly DroppedMarker[] {
+  if (!object(value)) return [];
+  const dropped: DroppedMarker[] = [];
+  for (const marker of OPTIONAL_MARKERS) {
+    if (value[marker.key] !== undefined && !marker.valid(value[marker.key])) {
+      Reflect.deleteProperty(value, marker.key);
+      dropped.push(marker.name);
+    }
+  }
+  return dropped;
+}
+const MARKER_OMITTED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.tool-transcript.marker-omitted",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "store.chatToolTranscript.recordOmittedMarker",
+  fields: {
+    marker: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["claim-notice", "turn-end"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-tool-transcript"],
+  proofIds: ["chat.tool-transcript.marker-omitted.line"],
+  releaseImpact: "minor",
+});
+/** Body-free: only which closed marker was dropped; the read goes on with the exchanges. */
+function recordOmittedMarker(marker: DroppedMarker): void {
+  processServerLogSink().write(
+    activityLogEvent(
+      MARKER_OMITTED,
+      { correlationId: UNKNOWN_CORRELATION_ID, level: "warn" },
+      { marker, completeness: "complete", loss: "none" },
+    ),
   );
 }
 
@@ -515,7 +565,6 @@ function validTranscript(
     ])
   )
     return false;
-  if (!validMarkers(value)) return false;
   if (
     value.schemaVersion !== 1 ||
     !Array.isArray(value.exchanges) ||
@@ -627,10 +676,14 @@ function decodeStoredTranscript(
     if (Buffer.byteLength(json) > MAX_TRANSCRIPT_BYTES)
       throw new TypeError("Chat tool transcript exceeds its byte limit");
     const fingerprint = verifiedFingerprint(json, identity);
-    if (verifiedTranscripts.has(fingerprint)) return JSON.parse(json) as StoredTranscript;
     const parsed: unknown = JSON.parse(json);
+    // Every read drops an invalid presentation marker afresh (a cached verdict covers the text, not
+    // the marker); the evidence line is written once per verified text.
+    const dropped = dropInvalidMarkers(parsed);
+    if (verifiedTranscripts.has(fingerprint)) return parsed as StoredTranscript;
     if (validTranscript(parsed, identity)) {
       rememberVerified(fingerprint);
+      for (const marker of dropped) recordOmittedMarker(marker);
       return parsed;
     }
   } catch {

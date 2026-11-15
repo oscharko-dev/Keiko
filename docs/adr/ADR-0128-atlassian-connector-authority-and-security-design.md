@@ -1650,6 +1650,15 @@ transcript with exact keys cannot read a row that carries `claimNotice` or `turn
 same one-way rule as for the marker, and the field is optional, so a row without it is read
 unchanged by every build.
 
+Three rules keep that rendering honest (2026-11-15, #4355). A person never reads an internal tool id:
+each receipt names its action with the label the Jira cards already use, and a tool without one reads
+as the neutral "Jira action". The record carries `answer`, a fingerprint of the English ending it was
+built with, and the Chat words the ending only for an answer whose stored text still matches it, so
+a record that outlived its answer (the clearing write failed) can never hide a model's real answer.
+And a stored `turnEnd` or `claimNotice` that is not valid is dropped when the transcript is read,
+with one body-free `chat.tool-transcript.marker-omitted` line per stored text: a presentation record
+must never cost the conversation its tool history, and the stored English answer is the fallback.
+
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically
 before every Jira write, so a Markdown skill's advice the model may ignore is no longer the only

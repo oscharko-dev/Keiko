@@ -22,7 +22,10 @@ import { jiraOperationInReleaseScope } from "@oscharko-dev/keiko-contracts/runti
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createJiraDraftBatchExecutor, type JiraDraftBatchContext } from "./jiraDraftBatchTool.js";
 import { draftTool } from "./jiraChatCatalogRuntime.js";
-import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  chatTurnEndAnswerFingerprint,
+  type ChatToolBatchProgress,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 import { findMessageById as readStoredMessage } from "../store/messages.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -4770,6 +4773,8 @@ it("stores the ending's closed facts from the same reason the log line records",
   const end = user?.toolTranscript?.turnEnd;
   expect(end).toEqual({
     reason: "tool-not-offered",
+    // Bound to the exact English ending the turn stored as its answer.
+    answer: chatTurnEndAnswerFingerprint(assistant?.content ?? ""),
     completed: [],
     unconfirmed: [],
     unsettled: [],

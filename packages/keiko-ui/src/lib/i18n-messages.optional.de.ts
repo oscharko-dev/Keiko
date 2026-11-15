@@ -3198,21 +3198,21 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.claimNotice.noJiraCreate": "In diesem Durchgang wurde kein Jira-Vorgang angelegt.",
   "chat.claimNotice.toolCallNotExecuted":
     "Ein als Text geschriebener Tool-Aufruf in dieser Antwort wurde nicht ausgeführt.",
-  "chat.turnEnd.lead": "Diese Anfrage wurde nicht abgeschlossen: {reason}.",
+  "chat.turnEnd.lead": "Diese Anfrage wurde nicht abgeschlossen.",
   "chat.turnEnd.reason.budgetExhausted":
-    "in diesem Durchgang wurde das Limit für Tool-Aufrufe erreicht",
-  "chat.turnEnd.reason.deadline": "die Zeit für diesen Durchgang ist abgelaufen",
+    "In diesem Durchgang wurde das Limit für Aktionen erreicht.",
+  "chat.turnEnd.reason.deadline": "Die Zeit für diesen Durchgang ist abgelaufen.",
   "chat.turnEnd.reason.authorityInvalid":
-    "der Modus, die Quellen oder die Verbindung des Chats haben sich geändert",
+    "Der Modus, die Quellen oder die Verbindung des Chats haben sich geändert.",
   "chat.turnEnd.reason.authenticationFailed":
-    "Die Anmeldung bei Jira ist fehlgeschlagen. Das Token ist möglicherweise abgelaufen oder wurde widerrufen: Öffne den Knowledge-Pods-Hub, ersetze das Token und prüfe die Verbindung",
-  "chat.turnEnd.reason.toolFailure": "ein Tool-Aufruf konnte nicht abgeschlossen werden",
-  "chat.turnEnd.reason.outputExhausted": "das Modell hat sein Ausgabelimit erreicht",
+    "Die Anmeldung bei Jira ist fehlgeschlagen. Das Zugangs-Token ist möglicherweise abgelaufen oder wurde widerrufen. Öffne das Fenster Lokales Wissen, ersetze das Token am Jira Pod und verifiziere die Verbindung.",
+  "chat.turnEnd.reason.toolFailure": "Eine Aktion konnte nicht abgeschlossen werden.",
+  "chat.turnEnd.reason.outputExhausted": "Das Modell hat sein Ausgabelimit erreicht.",
   "chat.turnEnd.reason.contextOverflow":
-    "die Unterhaltung passt nicht mehr in das Kontextfenster des Modells",
+    "Die Unterhaltung passt nicht mehr in das Kontextfenster des Modells.",
   "chat.turnEnd.reason.toolNotOffered":
-    "das Modell hat eine Aktion angefordert, die in diesem Chat nicht verfügbar ist. Frag noch einmal oder nenne die gewünschte Aktion",
-  "chat.turnEnd.reason.modelFailure": "die Anfrage an das Modell ist fehlgeschlagen",
+    "Das Modell hat eine Aktion angefordert, die in diesem Chat nicht verfügbar ist. Frag noch einmal oder nenne die gewünschte Aktion.",
+  "chat.turnEnd.reason.modelFailure": "Die Anfrage an das Modell ist fehlgeschlagen.",
   "chat.turnEnd.completed": "In diesem Durchgang erledigt:",
   "chat.turnEnd.unconfirmed":
     "Gesendet, aber nicht bestätigt — prüfe das in Jira, bevor du es erneut versuchst:",
@@ -3230,7 +3230,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.turnEnd.state.pending": "ausstehend",
   "chat.turnEnd.more": "…und {count} weitere.",
   "chat.turnEnd.counts":
-    "Lesezugriffe abgeschlossen: {reads}. Abgelehnte oder fehlgeschlagene Tool-Aufrufe: {refused}.",
+    "Lesezugriffe abgeschlossen: {reads}. Abgelehnte oder fehlgeschlagene Aktionen: {refused}.",
   "chat.turnEnd.footer":
     "Der Rest der Anfrage wurde nicht erledigt. Schick eine weitere Nachricht, um hier weiterzumachen; abgeschlossene Schreibvorgänge werden nicht wiederholt, außer du verlangst sie erneut.",
   "chat.contextWindow.label": "Hinweis zum Kontextfenster",

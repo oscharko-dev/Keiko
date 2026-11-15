@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8edc6fdd43d6b947029493670afdd53768889fed734688cdc5c42f4dbaed5cd3"
+    "catalogDigest": "ef8eefd3c747a06f62547e542792e6b2e0d898a21d9c5416672d071613fe9011"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 702,
-    "proofCount": 725,
-    "resolvedProofCount": 725,
+    "operationCount": 703,
+    "proofCount": 726,
+    "resolvedProofCount": 726,
     "failureClassCount": 403,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -139,6 +139,7 @@
         "chat.send.rejected",
         "chat.tool-mutation",
         "chat.tool-mutation.projected",
+        "chat.tool-transcript.marker-omitted",
         "chat.tool-transcript.updated",
         "chat.tool-turn.batch-draft-offer",
         "chat.tool-turn.context-fitted",
@@ -1492,6 +1493,9 @@
       "packages/keiko-server/src/store/chatToolMutations.test.ts"
     ],
     "chat.tool-mutation.projected.line": [
+      "packages/keiko-server/src/store/chatToolTranscript.test.ts"
+    ],
+    "chat.tool-transcript.marker-omitted.line": [
       "packages/keiko-server/src/store/chatToolTranscript.test.ts"
     ],
     "chat.tool-transcript.updated.line": [

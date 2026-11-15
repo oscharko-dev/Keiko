@@ -3998,6 +3998,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "chat.tool-transcript.marker-omitted",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "store.chatToolTranscript.recordOmittedMarker",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      marker: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["claim-notice", "turn-end"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["chat-tool-transcript"],
+    proofIds: ["chat.tool-transcript.marker-omitted.line"],
+    releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "chat.tool-transcript.updated",
     category: "process",
     owner: "keiko-server",

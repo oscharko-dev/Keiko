@@ -1171,6 +1171,7 @@ function ChatBubbleImpl({
   const selectedMessage = messageForSelectedResponseVersion(message, selectedResponseVersion);
   const endText = useTurnEndText(
     message.role !== "user" && (selectedMessage.responseVersion ?? 1) === 1 ? turnEnd : undefined,
+    selectedMessage.content,
   );
   // The stored English answer stays the fallback; the ending is worded from its closed facts.
   const displayedMessage =
@@ -3608,7 +3609,10 @@ function ComposerCoreImpl({
             message.role === "assistant",
         );
   const voiceClaimNoticeText = useClaimNoticeText(claimNoticeOfAnswer(messages, voiceAnswer));
-  const voiceTurnEndText = useTurnEndText(turnEndOfAnswer(messages, voiceAnswer));
+  const voiceTurnEndText = useTurnEndText(
+    turnEndOfAnswer(messages, voiceAnswer),
+    voiceAnswer?.content ?? "",
+  );
   const playback = useAssistantSpeech({
     profile: voiceCapability?.profile ?? "none",
     // Only the canonical assistant answer produced after a spoken user turn is eligible. Typed chat and

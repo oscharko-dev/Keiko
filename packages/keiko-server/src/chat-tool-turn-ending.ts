@@ -1,5 +1,6 @@
 import {
   CHAT_TURN_END_RECEIPTS_MAX,
+  chatTurnEndAnswerFingerprint,
   type ChatToolExchange,
   type ChatToolTurnEnd,
   type ChatToolTurnEndReason,
@@ -187,6 +188,8 @@ export function chatToolTurnEnd(
   const counts = tally(exchanges);
   return {
     reason,
+    // Bound to the stored English ending, which is built from the same tally and reason.
+    answer: chatTurnEndAnswerFingerprint(chatToolTurnPartialAnswer(exchanges, reason)),
     completed: bounded(counts.succeeded),
     unconfirmed: bounded(counts.unconfirmed),
     unsettled: bounded(counts.unsettled),

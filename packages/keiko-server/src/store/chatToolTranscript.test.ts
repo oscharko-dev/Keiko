@@ -340,6 +340,7 @@ describe("ordinary Chat structured tool transcript", () => {
 
   const END = {
     reason: "deadline",
+    answer: "64:0123abcd",
     completed: [{ tool: "jira_create", key: "REQ-1" }],
     unconfirmed: [{ tool: "jira_draft", item: 2, state: "uncertain" }],
     unsettled: [],
@@ -379,6 +380,40 @@ describe("ordinary Chat structured tool transcript", () => {
     expect(line).toContain("deadline");
     expect(line).not.toContain("REQ-1");
     expect(line).not.toContain("jira_create");
+  });
+
+  // An invalid optional marker must never cost the conversation its tool history: it is dropped on
+  // read (the stored English answer is what the Chat shows) and recorded once, body-free.
+  it.each([
+    ["turnEnd", { reason: "Jira is down" }, "turn-end"],
+    ["turnEnd", "not an object", "turn-end"],
+    ["claimNotice", "Note from Keiko", "claim-notice"],
+  ] as const)("drops an invalid %s on read and keeps the exchanges (#4355)", (key, bad, name) => {
+    const { store, db, id, logs } = fixture();
+    store.updateChatToolTranscript(id, { kind: "started", call }, "keep");
+    const row = db.prepare("SELECT tool_transcript_json FROM chat_messages WHERE id = ?").get(id);
+    const stored = JSON.parse(String(row?.tool_transcript_json)) as Record<string, unknown>;
+    stored[key] = bad;
+    db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(
+      JSON.stringify(stored),
+      id,
+    );
+    const read = store.findMessageById(id)?.toolTranscript;
+    expect(read?.exchanges.map((exchange) => exchange.call.id)).toEqual([call.id]);
+    expect(read?.[key]).toBeUndefined();
+    // Every read drops it afresh, and the evidence line is written once per stored text.
+    expect(store.findMessageById(id)?.toolTranscript?.[key]).toBeUndefined();
+    const dropped = logs.events.filter(
+      (entry) => entry.op === "chat.tool-transcript.marker-omitted",
+    );
+    expect(dropped).toHaveLength(1);
+    const line = formatActivityLogProofLine(dropped[0] ?? {});
+    expectActivityLogProof("chat.tool-transcript.marker-omitted.line", line);
+    expect(line).toContain(name);
+    expect(line).not.toContain("Jira is down");
+    // The conversation goes on: a valid ending can be stored over the dropped one.
+    store.updateChatToolTranscript(id, { kind: "turn-end", end: END }, "again");
+    expect(store.findMessageById(id)?.toolTranscript?.turnEnd).toEqual(END);
   });
 
   it("clears the ending when a later final answer is not one, and never hands it to another message (#4355)", () => {
