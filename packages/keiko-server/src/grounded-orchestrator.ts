@@ -8482,14 +8482,19 @@ async function readExcerptExpansionWaves(
     ),
   );
   const expansionInputs = { ...inputs, previousExcerptResults: state.pathResults };
-  for (const alreadyServed of [false, true]) {
-    if (state.elapsedBudgetBlocked || state.remainingBytes <= 0) return;
-    await readExcerptWaves(
-      retryablePaths.filter((path) => servedPaths.has(path) === alreadyServed),
-      expansionInputs,
-      state,
-    );
-  }
+  const budgetBlocked = (): boolean => state.elapsedBudgetBlocked || state.remainingBytes <= 0;
+  if (budgetBlocked()) return;
+  await readExcerptWaves(
+    retryablePaths.filter((path) => !servedPaths.has(path)),
+    expansionInputs,
+    state,
+  );
+  if (budgetBlocked()) return;
+  await readExcerptWaves(
+    retryablePaths.filter((path) => servedPaths.has(path)),
+    expansionInputs,
+    state,
+  );
 }
 
 function initialExcerptWaveState(
