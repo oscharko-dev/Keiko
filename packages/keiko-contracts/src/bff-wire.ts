@@ -2373,7 +2373,7 @@ export interface BffError {
  * table maps each member to the text a person reads or to an explicit "never shown" reason, and the
  * type of that table fails the build when a member has neither. The gateway members are pinned to
  * the gateway's own `ERROR_CODES` by a server test, so a new gateway code cannot reach a person
- * without text. Server codes are traced by hand from the handlers on the path.
+ * without text. The server codes are traced from the handlers on the path.
  */
 export const CHAT_PATH_ERROR_CODES = [
   // The model gateway (`ERROR_CODES` in keiko-security).
@@ -2451,6 +2451,21 @@ export const CHAT_PATH_ERROR_CODES = [
   "UNSUPPORTED_MEDIA_TYPE",
   "STARTUP_RECOVERY_PENDING",
   "METHOD_NOT_ALLOWED",
+  // The stream's fallback when a failure body carries no code of its own.
+  "GATEWAY_ERROR",
+  // The Chat's skill selection.
+  "SKILL_SURFACE_UNSUPPORTED",
+  // The Git-change description and apply routes of a Chat's Git-change scope.
+  "GIT_CHANGE_APPLY_READER_UNAUTHORIZED",
+  "GIT_CHANGE_APPLY_REMOTE_UNRESOLVED",
+  "GIT_CHANGE_APPLY_REPOSITORY_UNAVAILABLE",
+  "GIT_CHANGE_APPLY_UNAVAILABLE",
+  "GIT_CHANGE_APPLY_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_APPROVE_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED",
+  "GIT_CHANGE_DESCRIPTION_UNAVAILABLE",
+  "GIT_CHANGE_REVIEW_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_SCOPE_NOT_FOUND",
 ] as const;
 export type ChatPathErrorCode = (typeof CHAT_PATH_ERROR_CODES)[number];
 

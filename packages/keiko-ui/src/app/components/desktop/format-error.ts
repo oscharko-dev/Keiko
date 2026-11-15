@@ -236,74 +236,116 @@ export const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
 // code reachable on the Chat path maps in this ONE table to a group (one notice per group, in both
 // languages), to its own notice above (`own`), or to an explicit "never shown" reason. The table's
 // type is the closed vocabulary in keiko-contracts, so a code added there without a row here fails
-// the build, and a test walks the table against both catalogs.
+// the build, and a test walks the table against both catalogs. A group exists only where its advice
+// is true for every code in it: a code whose remedy differs gets its own group.
 export type ErrorGroup =
   | "retry"
+  | "stopped"
+  | "inProgress"
+  | "modelDeclined"
   | "gatewaySignIn"
-  | "gatewayProxy"
+  | "proxyUnreachable"
+  | "proxySignIn"
+  | "proxyFailed"
+  | "proxyBlocked"
   | "gatewayCertificate"
-  | "gatewayConfig"
+  | "configChanged"
+  | "configInvalid"
+  | "modelUnavailable"
+  | "noModel"
   | "tooLarge"
   | "unsupported"
   | "invalidPath"
   | "reload"
+  | "chatClosed"
+  | "regenerateRefused"
   | "other";
 export type ErrorCodeEntry =
   { readonly group: ErrorGroup } | { readonly own: true } | { readonly neverShown: string };
 
+/**
+ * Groups whose message stays the server's own sentence (or the caller's fallback): it carries the
+ * fact the group cannot, such as which limit was exceeded or which kind of path was refused. Only
+ * the title and the remedy are worded from the catalog.
+ */
+export const GROUPS_KEEPING_SERVER_MESSAGE: ReadonlySet<ErrorGroup> = new Set([
+  "other",
+  "tooLarge",
+  "unsupported",
+  "invalidPath",
+]);
+
 const RETRY = { group: "retry" } as const;
+const STOPPED = { group: "stopped" } as const;
 const RELOAD = { group: "reload" } as const;
 const OTHER = { group: "other" } as const;
 const OWN = { own: true } as const;
 export const CHAT_ERROR_CODE_TABLE: Readonly<Record<ChatPathErrorCode, ErrorCodeEntry>> = {
-  // (a) Try again: transient, or the turn is still running.
+  // Try again: transient, and a repeat can succeed.
   GATEWAY_TRANSPORT: RETRY,
   GATEWAY_RATE_LIMIT: RETRY,
   GATEWAY_CIRCUIT_OPEN: RETRY,
   GATEWAY_PROVIDER_ERROR: RETRY,
-  GATEWAY_MODEL_REFUSAL: RETRY,
   GATEWAY_MALFORMED_TOOL_CALL: RETRY,
   CHAT_TOOL_TIMEOUT: RETRY,
   CHAT_TOOL_UNAVAILABLE: RETRY,
-  CHAT_TURN_IN_PROGRESS: RETRY,
   TOO_MANY_STREAMS: RETRY,
   UNAVAILABLE: RETRY,
   STARTUP_RECOVERY_PENDING: RETRY,
-  // (b) The model gateway needs its operator; the notice names the kind in plain words.
+  // The person's own Stop is not a failure: a neutral notice if one ever reaches the screen.
+  REQUEST_CANCELLED: STOPPED,
+  CANCELLED: STOPPED,
+  GATEWAY_CANCELLED: STOPPED,
+  // One kind each: what to do differs.
+  CHAT_TURN_IN_PROGRESS: { group: "inProgress" },
+  GATEWAY_MODEL_REFUSAL: { group: "modelDeclined" },
+  // The model gateway needs its operator; the notice names the kind in plain words.
   GATEWAY_AUTHENTICATION: { group: "gatewaySignIn" },
-  GATEWAY_PROXY_AUTH_REQUIRED: { group: "gatewayProxy" },
-  GATEWAY_PROXY_UNREACHABLE: { group: "gatewayProxy" },
-  GATEWAY_PROXY_EGRESS_FAILED: { group: "gatewayProxy" },
-  GATEWAY_PROXY_BLOCKED_BY_POLICY: { group: "gatewayProxy" },
+  GATEWAY_PROXY_UNREACHABLE: { group: "proxyUnreachable" },
+  GATEWAY_PROXY_AUTH_REQUIRED: { group: "proxySignIn" },
+  GATEWAY_PROXY_EGRESS_FAILED: { group: "proxyFailed" },
+  GATEWAY_PROXY_BLOCKED_BY_POLICY: { group: "proxyBlocked" },
   GATEWAY_TLS_CA_FAILURE: { group: "gatewayCertificate" },
-  GATEWAY_CONFIG_INVALID: { group: "gatewayConfig" },
-  GATEWAY_CONFIG_CHANGED: { group: "gatewayConfig" },
-  GATEWAY_UNKNOWN_MODEL: { group: "gatewayConfig" },
-  NO_MODEL: { group: "gatewayConfig" },
-  // (c) The request cannot be sent as it is.
+  GATEWAY_CONFIG_CHANGED: { group: "configChanged" },
+  GATEWAY_CONFIG_INVALID: { group: "configInvalid" },
+  GATEWAY_UNKNOWN_MODEL: { group: "modelUnavailable" },
+  NO_MODEL: { group: "noModel" },
+  // The request cannot be sent as it is.
   PAYLOAD_TOO_LARGE: { group: "tooLarge" },
   CONVERSATION_UNSUPPORTED_MODALITY: { group: "unsupported" },
   CONVERSATION_UNSUPPORTED_FILE_TYPE: { group: "unsupported" },
+  SKILL_SURFACE_UNSUPPORTED: { group: "unsupported" },
   INVALID_PATH: { group: "invalidPath" },
   PATH_NOT_FOUND: { group: "invalidPath" },
   PATH_NOT_DIRECTORY: { group: "invalidPath" },
-  // (d) The state changed: reload.
+  // The selection changed under the person: reloading shows the current one.
   SKILL_SELECTION_CHANGED: RELOAD,
   PROJECT_IDENTITY_CHANGED: RELOAD,
   CHAT_TURN_IDEMPOTENCY_CONFLICT: RELOAD,
-  CHAT_CLOSED: RELOAD,
-  NOT_APPLIABLE: RELOAD,
-  // (e) Everything else: one honest sentence with the support ID.
+  CHAT_CLOSED: { group: "chatClosed" },
+  NOT_APPLIABLE: { group: "regenerateRefused" },
+  // Everything else: the generic title and remedy, with the server's own sentence and the support ID.
   INTERNAL: OTHER,
   BAD_REQUEST: OTHER,
   INVALID_REQUEST: OTHER,
   NOT_FOUND: OTHER,
   FORBIDDEN: OTHER,
   CONFLICT: OTHER,
+  GATEWAY_ERROR: OTHER,
   FORBIDDEN_HOST: OTHER,
   FORBIDDEN_CSRF: OTHER,
   UNSUPPORTED_MEDIA_TYPE: OTHER,
   METHOD_NOT_ALLOWED: OTHER,
+  GIT_CHANGE_APPLY_READER_UNAUTHORIZED: OTHER,
+  GIT_CHANGE_APPLY_REMOTE_UNRESOLVED: OTHER,
+  GIT_CHANGE_APPLY_REPOSITORY_UNAVAILABLE: OTHER,
+  GIT_CHANGE_APPLY_UNAVAILABLE: OTHER,
+  GIT_CHANGE_APPLY_UNKNOWN_PROPOSAL: OTHER,
+  GIT_CHANGE_APPROVE_UNKNOWN_PROPOSAL: OTHER,
+  GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED: OTHER,
+  GIT_CHANGE_DESCRIPTION_UNAVAILABLE: OTHER,
+  GIT_CHANGE_REVIEW_UNKNOWN_PROPOSAL: OTHER,
+  GIT_CHANGE_SCOPE_NOT_FOUND: OTHER,
   // The Jira cards word these through their own surface until each gets its own text.
   CHAT_WRITE_APPROVAL_UNAVAILABLE: OTHER,
   VALIDATION_FAILED: OTHER,
@@ -329,18 +371,14 @@ export const CHAT_ERROR_CODE_TABLE: Readonly<Record<ChatPathErrorCode, ErrorCode
   KNOWLEDGE_STORE_UNAVAILABLE: OWN,
   GROUNDING_SCOPE_CHANGED: OWN,
   CLARIFICATION_NEEDED: OWN,
-  // Never shown to a person, each for its stated reason.
+  // Never shown to a person: the client falls back before any notice (the buffered request, pinned by
+  // the StreamingUnavailableError fallback tests in lib/api.test.ts).
   STREAMING_UNSUPPORTED: { neverShown: "the client falls back to the buffered request" },
-  REQUEST_CANCELLED: { neverShown: "the person's own stop: nothing failed" },
-  CANCELLED: { neverShown: "the person's own stop: nothing failed" },
-  GATEWAY_CANCELLED: { neverShown: "the person's own stop: nothing failed" },
 };
 
 function groupKeyOf(group: ErrorGroup, part: keyof GatewayErrorKeys): MessageKey | undefined {
-  // The generic group words only the title and the remedy: its message stays the server's own
-  // sentence (or the caller's fallback), the one text that says what this particular request got.
-  if (group === "other") return part === "message" ? undefined : `chat.error.group.other.${part}`;
-  return `chat.error.group.${group}.${part}`;
+  if (part === "message" && GROUPS_KEEPING_SERVER_MESSAGE.has(group)) return undefined;
+  return `chat.error.group.${group}.${part}` as MessageKey;
 }
 
 function groupKeysForCode(

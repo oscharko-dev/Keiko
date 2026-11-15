@@ -500,6 +500,8 @@ const EMPTY_MODEL_RESPONSE_PHRASES = [
 // this hook as an ApiError carries its code, so no real provider path arrives without one. A message
 // that merely mentions "max_tokens" or "context length" under another code (a caller's own attempt
 // grant, a provider error that names a parameter) is that code's error and takes its notice.
+// Residual gap: a provider that signals a context overflow with a status the adapter does not read
+// (it classifies HTTP 400, 413 and 422, streamed frames included) gets the generic text.
 function isContextOversizedError(error: unknown): boolean {
   return error instanceof ApiError && CONTEXT_OVERSIZED_API_CODES.has(error.code);
 }
