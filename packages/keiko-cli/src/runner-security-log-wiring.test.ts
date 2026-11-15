@@ -6,7 +6,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
-import { runDetachedWindowsAlert } from "./portable-launch-notifier.js";
+import { emitPortableLaunchFailed } from "./portable-launch-failure.js";
 import type { CliIo } from "./runner.js";
 import { createCliSecurityLogSink } from "./security-log.js";
 import {
@@ -361,10 +361,14 @@ describe("Windows CLI security-log production wiring", () => {
     expect(written.every((event) => event.correlationId === correlationId)).toBe(true);
   });
 
-  it("persists a detached Windows alert error emitted after the command has settled", async () => {
+  // The event here is the closed failure line of a launch (`portable.launch.failed`); the pin it
+  // carries is unchanged: an event emitted after the command has settled is still persisted through
+  // the deferred collector, with the invocation's correlation id (#4358 replaced the detached
+  // Windows alert error that used to be the late event).
+  it("persists an event emitted after the command has settled", async () => {
     const stateDir = String.raw`C:\Keiko\state`;
     const written: PersistedServerLogEvent[] = [];
-    let emitChildError: ((error: Error) => void) | undefined;
+    let emitLate: (() => void) | undefined;
     let resolveWritten: (() => void) | undefined;
     const eventWritten = new Promise<void>((resolve) => {
       resolveWritten = resolve;
@@ -378,20 +382,9 @@ describe("Windows CLI security-log production wiring", () => {
     commandMocks.loadActivityLog.mockResolvedValue({ createActivityLogSink });
     commandMocks.portable.mockImplementation((_args, _io, _env, deps) => {
       const securityLogSink = createCliSecurityLogSink(stateDir, deps?.securityLogSinkFactory);
-      runDetachedWindowsAlert(
-        "Keiko could not start",
-        { SystemRoot: String.raw`C:\Windows` },
-        (_command, _spawnArgs, _options) => ({
-          on: (_event, listener): void => {
-            emitChildError = listener;
-          },
-          unref: (): void => undefined,
-        }),
-        () => undefined,
-        () => true,
-        securityLogSink,
-        () => true,
-      );
+      emitLate = (): void => {
+        emitPortableLaunchFailed(securityLogSink, "launch-error", "not-requested");
+      };
       return 43;
     });
 
@@ -399,8 +392,8 @@ describe("Windows CLI security-log production wiring", () => {
     expect(commandMocks.loadActivityLog).not.toHaveBeenCalled();
 
     await Promise.resolve().then(() => {
-      if (emitChildError === undefined) throw new TypeError("missing child error listener");
-      emitChildError(new Error(String.raw`spawn failed under C:\Users\Sensitive\Keiko`));
+      if (emitLate === undefined) throw new TypeError("missing late emitter");
+      emitLate();
     });
     expect(commandMocks.loadActivityLog).toHaveBeenCalledTimes(1);
     await eventWritten;
@@ -409,19 +402,17 @@ describe("Windows CLI security-log production wiring", () => {
     expect(written).toEqual([
       expect.objectContaining({
         category: "diagnostic",
-        op: "portable.windows-alert.spawn-failed",
+        op: "portable.launch.failed",
         errorKind: "unavailable",
         extra: {
           completeness: "complete",
           loss: "none",
-          surface: "portable-failure-alert",
-          failureKind: "Error",
+          reason: "launch-error",
+          launcherBox: "not-requested",
         },
       }),
     ]);
     expect(written[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
-    expect(JSON.stringify(written)).not.toContain("Sensitive");
-    expect(JSON.stringify(written)).not.toContain("spawn failed");
   });
 
   it("keeps a recovery command available when the deferred Activity Log module cannot load", async () => {

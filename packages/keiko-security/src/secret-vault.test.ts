@@ -717,6 +717,36 @@ describe("createLocalSecretVault — delete", () => {
     expect(persisted).toMatchObject({ count: 2 });
   });
 
+  it("deleteMany reports the foreign entries a pruning caller left, even when it deleted none", () => {
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(dir, "vault-delete-many-foreign.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+    vault.set("cred:a", "secret-A");
+    vault.set("cred:other", "other-secret");
+    events.length = 0;
+    vault.deleteMany(["cred:a"], { foreignRetainedCount: 1 });
+    vault.deleteMany([], { foreignRetainedCount: 1 });
+    // Nothing to delete and nothing to report is silent, as before.
+    vault.deleteMany([]);
+    vault.deleteMany([], { foreignRetainedCount: 0 });
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.extra)).toEqual([
+      expect.objectContaining({ count: 1, foreignRetainedCount: 1 }),
+      expect.objectContaining({ count: 0, foreignRetainedCount: 1 }),
+    ]);
+    expect(vault.list()).toEqual(["cred:other"]);
+    expect(
+      expectActivityLogProof(
+        "security.vault.entries-deleted.count",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({ count: 1, foreignRetainedCount: 1 });
+    expect(JSON.stringify(events)).not.toMatch(/cred:|secret-A|other-secret/u);
+  });
+
   it("emits structured body-free evidence when deleteMany cannot read the store", () => {
     const storePath = join(dir, "vault-delete-fail.enc.json");
     mkdirSync(storePath);

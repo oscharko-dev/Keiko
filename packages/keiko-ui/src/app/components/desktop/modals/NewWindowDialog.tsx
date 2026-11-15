@@ -1,5 +1,6 @@
 "use client";
 
+import { startingProjectPaths } from "../windows/startingProjectRoot";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import {
@@ -1206,7 +1207,8 @@ export function NewWindowDialog({
     setDialogError(null);
     void fetchProjects()
       .then((payload) => {
-        const firstProject = availableProjectPaths(payload.projects)[0];
+        // A project the read surface refuses is never the prefilled folder (#4371).
+        const firstProject = startingProjectPaths(payload.projects)[0];
         if (!cancelled && firstProject !== undefined) {
           setCfg((current) => ({ ...current, root: firstProject }));
         }

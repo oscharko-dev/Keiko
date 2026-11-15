@@ -3835,6 +3835,7 @@ function persistGatewayConfig(
       storagePath,
       evidenceDir: resolveEvidenceDir(deps.evidenceDir, deps.env),
       securityLogSink: bindSecurityLogCorrelation(processServerLogSink(), correlationId),
+      diagnostics: deps.diagnostics,
     },
   );
 }

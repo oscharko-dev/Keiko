@@ -1539,6 +1539,7 @@
           "atlassian.jira-draft",
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
+          "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
           "jira.citation.markers",
@@ -1576,6 +1577,10 @@
         },
         {
           "op": "atlassian.jira-report",
+          "mode": "correlation"
+        },
+        {
+          "op": "jira.approval.project",
           "mode": "correlation"
         },
         {
@@ -1653,6 +1658,7 @@
         "atlassian.jira-draft",
         "atlassian.jira-draft-batch",
         "atlassian.jira-report",
+        "jira.approval.project",
         "jira.attachment.source",
         "jira.catalog.selection",
         "jira.citation.markers",
@@ -2394,6 +2400,60 @@
             "causeChain": false
           },
           "proofIds": ["atlassian.jira-report.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "jira.approval.project",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "failure",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "projectCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "resolvedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "unresolvedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["jira.approval.project.line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -6280,10 +6340,10 @@
       "failureClass": "cli-uninstall",
       "requirementContract": "cli-uninstall",
       "productSurfaces": ["keiko-cli"],
-      "lifecycleTransitions": ["end", "failure", "start"],
+      "lifecycleTransitions": ["end", "failure", "start", "state"],
       "lifecycleOperations": {
         "start": ["cli.uninstall.started"],
-        "state": [],
+        "state": ["cli.uninstall.handoff"],
         "end": ["cli.uninstall.completed"],
         "failure": ["cli.uninstall.failed"],
         "loss": []
@@ -6298,12 +6358,20 @@
           "mode": "none"
         },
         {
+          "op": "cli.uninstall.handoff",
+          "mode": "none"
+        },
+        {
           "op": "cli.uninstall.started",
           "mode": "none"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["cli.uninstall.completed", "cli.uninstall.started"],
+      "resourceSignals": [
+        "cli.uninstall.completed",
+        "cli.uninstall.handoff",
+        "cli.uninstall.started"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -6411,6 +6479,85 @@
             "causeChain": false
           },
           "proofIds": ["cli.uninstall.failed.persisted"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "cli.uninstall.handoff",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "packageTargetSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "refusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "removedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "residueDirectoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "residueFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "resumeState",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "targetSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.uninstall.handoff.persisted"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -39862,16 +40009,58 @@
               "required": true
             },
             {
+              "name": "beyondLimitCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "httpStatus",
               "type": "integer",
               "dataClass": "count",
               "required": true
             },
             {
+              "name": "jiraUnavailableCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "nothingToLearnCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "partialProposalCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "phase",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "proposalCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "templateInvalidCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "typeCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -41974,6 +42163,62 @@
             "search.native-runtime-resolved.state",
             "search.native-runtime-resolved.worker"
           ],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "portable-launch-failure",
+      "requirementContract": "portable-launch-failure",
+      "productSurfaces": ["keiko-cli"],
+      "lifecycleTransitions": ["failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": [],
+        "failure": ["portable.launch.failed"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "portable.launch.failed",
+          "mode": "none"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "portable.launch.failed",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "none",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "launcherBox",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["portable.launch.failed.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -45734,6 +45979,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "foreignRetainedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": ["completeness-state", "count", "loss-state"],
@@ -52588,90 +52839,6 @@
             "causeChain": false
           },
           "proofIds": ["voice.realtime.session-started.profile"],
-          "replayReferences": [],
-          "missingObligations": []
-        }
-      ],
-      "missingObligations": [],
-      "completeness": "complete"
-    },
-    {
-      "failureClass": "windows-alert-spawn",
-      "requirementContract": "windows-alert-spawn",
-      "productSurfaces": ["keiko-cli"],
-      "lifecycleTransitions": ["failure", "state"],
-      "lifecycleOperations": {
-        "start": [],
-        "state": ["portable.setup-notice.requested"],
-        "end": [],
-        "failure": ["portable.windows-alert.spawn-failed"],
-        "loss": []
-      },
-      "causalEdges": [
-        {
-          "op": "portable.setup-notice.requested",
-          "mode": "none"
-        },
-        {
-          "op": "portable.windows-alert.spawn-failed",
-          "mode": "none"
-        }
-      ],
-      "lossSignals": [],
-      "resourceSignals": ["portable.setup-notice.requested"],
-      "replayReferences": [],
-      "operations": [
-        {
-          "op": "portable.setup-notice.requested",
-          "owner": "keiko-cli",
-          "category": "diagnostic",
-          "lifecycle": "state",
-          "causal": "none",
-          "analyzerProjection": "timeline",
-          "safeContextFields": [
-            {
-              "name": "surface",
-              "type": "string",
-              "dataClass": "closed-enum",
-              "required": true
-            }
-          ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
-          "frameCauseEvidence": {
-            "frames": false,
-            "causeChain": false
-          },
-          "proofIds": ["portable.setup-notice.requested.emitted-line"],
-          "replayReferences": [],
-          "missingObligations": []
-        },
-        {
-          "op": "portable.windows-alert.spawn-failed",
-          "owner": "keiko-cli",
-          "category": "diagnostic",
-          "lifecycle": "failure",
-          "causal": "none",
-          "analyzerProjection": "failure-cluster",
-          "safeContextFields": [
-            {
-              "name": "failureKind",
-              "type": "string",
-              "dataClass": "error-kind",
-              "required": true
-            },
-            {
-              "name": "surface",
-              "type": "string",
-              "dataClass": "closed-enum",
-              "required": true
-            }
-          ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
-          "frameCauseEvidence": {
-            "frames": false,
-            "causeChain": false
-          },
-          "proofIds": ["portable.windows-alert.spawn-failed.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }

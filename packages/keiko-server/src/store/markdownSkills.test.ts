@@ -97,6 +97,34 @@ describe("private Markdown skill library (#4023)", () => {
     expect(skill).not.toHaveProperty("permissions");
   });
 
+  describe("the name of a Jira issue template (#4371)", () => {
+    const template = (heading: string): string =>
+      [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: req",
+        "issueType: Task",
+        "activateOn: [create]",
+        "---",
+        heading,
+        "## Beschreibung",
+        "",
+      ].join("\n");
+    it("takes the first heading when there is one", () => {
+      const skill = memoryStore().markdownSkills.import(upload(template("# Aufgaben-Vorlage")));
+      expect(skill.name).toBe("Aufgaben-Vorlage");
+    });
+    it("names a template without a heading after its project and issue type, not its file", () => {
+      const skill = memoryStore().markdownSkills.import(upload(template(""), "skill.md"));
+      expect(skill.name).toBe("REQ · Task");
+    });
+    it("keeps the file name for a document that is not a template", () => {
+      const skill = memoryStore().markdownSkills.import(upload("Plain text.\n", "notes.md"));
+      expect(skill.name).toBe("notes");
+    });
+  });
+
   it("deduplicates identical current content but never overwrites a same-name skill", () => {
     const library = memoryStore().markdownSkills;
     const first = library.import(upload());

@@ -556,6 +556,17 @@ describe("finding an operation in ordinary words (#4357)", () => {
     expect(description).not.toMatch(/stable identity/u);
   });
 
+  it("answers two requests this release cannot do without a search: attaching a file and adding another person as a watcher (#4357)", () => {
+    const f = fixture();
+    const description = f.discover.descriptor.description;
+    expect(description).toMatch(
+      /not available yet and need no search: attaching a file \(offer to describe it in a comment\)/u,
+    );
+    expect(description).toMatch(
+      /adding another person as a watcher \(offer to watch the issue yourself\)/u,
+    );
+  });
+
   it("keeps an unlisted operation out of reach whatever the words say", async () => {
     const f = fixture();
     const restricted = createJiraCatalogDiscoveryProvider({
@@ -613,6 +624,8 @@ describe("a search for an operation outside this release (#4357 AC3)", () => {
     expect(without.data.guidance).toBe(JIRA_OUT_OF_RELEASE_GUIDANCE);
     // The sentence does not contradict the release's own attachment refusal, which names it.
     expect(JIRA_OUT_OF_RELEASE_GUIDANCE).toContain("not part of this release");
+    // It also says what the person can do instead, like the refusal does.
+    expect(JIRA_OUT_OF_RELEASE_GUIDANCE).toContain("describe the file in a comment");
   });
   it("adds no notice to a search that finds an operation or finds nothing at all", async () => {
     const f = fixture();

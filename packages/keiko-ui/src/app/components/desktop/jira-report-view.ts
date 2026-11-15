@@ -31,6 +31,11 @@ export interface JiraReportView {
         readonly issuesWithDeviations: number;
         readonly issuesJudged: number;
         readonly deviationCount: number;
+        /** The issues a template judged, and those no template covers, with their issue types. */
+        readonly issuesChecked: number;
+        readonly issuesWithoutTemplate: number;
+        readonly typesWithoutTemplate: readonly string[];
+        readonly requiredFieldRules: "applied" | "partial" | "unavailable" | "not-requested";
         readonly uncoveredEpics: number;
         readonly orphans: number;
         /** `unobserved`: the scope shows no container, so the epic count is no established zero. */
@@ -63,6 +68,29 @@ function counts<Key extends string>(
     : undefined;
 }
 type Figures = NonNullable<JiraReportView["figures"]>;
+const REQUIRED_FIELD_STATES = ["applied", "partial", "unavailable", "not-requested"] as const;
+/** What a template covers, as the result states it; a result that predates it states none uncovered. */
+function templateCoverageOf(
+  compliance: Record<string, unknown> | undefined,
+): Pick<
+  Figures,
+  "issuesChecked" | "issuesWithoutTemplate" | "typesWithoutTemplate" | "requiredFieldRules"
+> {
+  const byType = compliance?.withoutTemplateByType;
+  return {
+    issuesChecked: count(compliance?.issuesChecked) ?? 0,
+    issuesWithoutTemplate: count(compliance?.issuesWithoutTemplate) ?? 0,
+    typesWithoutTemplate: Array.isArray(byType)
+      ? byType.flatMap((item: unknown) => {
+          const name = record(item)?.typeName;
+          return typeof name === "string" ? [name] : [];
+        })
+      : [],
+    requiredFieldRules:
+      REQUIRED_FIELD_STATES.find((item) => item === compliance?.requiredFieldRules) ??
+      "not-requested",
+  };
+}
 function coverageOf(
   report: Record<string, unknown>,
 ): Pick<Figures, "uncoveredEpics" | "orphans" | "containerRoles"> | undefined {
@@ -77,7 +105,8 @@ function coverageOf(
 function figuresOf(report: Record<string, unknown>): JiraReportView["figures"] {
   const project = record(record(report.progress)?.project);
   const status = counts(project, ["total", "new", "indeterminate", "done"] as const);
-  const audit = counts(record(report.compliance), [
+  const compliance = record(report.compliance);
+  const audit = counts(compliance, [
     "issuesWithDeviations",
     "issuesJudged",
     "deviationCount",
@@ -87,7 +116,14 @@ function figuresOf(report: Record<string, unknown>): JiraReportView["figures"] {
   const percent = project?.donePercent;
   if (status === undefined || audit === undefined || coverage === undefined) return undefined;
   if (inferred === undefined || typeof percent !== "number") return undefined;
-  return { ...status, ...audit, ...coverage, donePercent: percent, inferredParentFields: inferred };
+  return {
+    ...status,
+    ...audit,
+    ...templateCoverageOf(compliance),
+    ...coverage,
+    donePercent: percent,
+    inferredParentFields: inferred,
+  };
 }
 
 function reportCompleteness(

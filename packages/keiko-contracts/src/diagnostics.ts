@@ -2376,11 +2376,17 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // run of another task: the runtime status names the process's latest run, not the window's task
   // (#4271). Once per pick; a run that becomes active afterwards owns the window again.
   "history-run-held",
+  // A person left a run that needed recovery with New task (F30): the run stays recoverable from
+  // Coding History and no longer holds the window. Once per departure.
+  "recovery-left",
   // A window without a stored repository decided its starting repository once the task-workspace
   // state had answered (#4271): it took the shell's project (`repository-seeded`), or it met an
   // active task binding and follows that (`repository-seed-skipped`). Once per window.
   "repository-seeded",
   "repository-seed-skipped",
+  // The Git window handed a repository the person just added or cloned back to the window that
+  // asked for the folder (its return window); no other window changes (#4371). Once per return.
+  "repository-returned",
   // The server refused to register the run's editor bridge: the root boundary refused the run's
   // root, or another tab holds the run's lease. Closed reason only (#4117).
   "bridge-registration-refused",
@@ -2598,8 +2604,10 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
   | { readonly interaction: "event-stream-reconnecting" }
   | { readonly interaction: "history-workspace-switched" }
   | { readonly interaction: "history-run-held" }
+  | { readonly interaction: "recovery-left" }
   | { readonly interaction: "repository-seeded" }
   | { readonly interaction: "repository-seed-skipped" }
+  | { readonly interaction: "repository-returned" }
   | {
       readonly interaction: "bridge-registration-refused";
       readonly refusal: ClientCodingWorkbenchBridgeRefusal;
@@ -2683,8 +2691,10 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   "event-stream-reconnecting": {},
   "history-workspace-switched": {},
   "history-run-held": {},
+  "recovery-left": {},
   "repository-seeded": {},
   "repository-seed-skipped": {},
+  "repository-returned": {},
   "bridge-registration-refused": {
     refusal: (value) => isSetMember(value, CODING_WORKBENCH_BRIDGE_REFUSAL_SET),
   },

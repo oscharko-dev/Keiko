@@ -1,8 +1,10 @@
 import {
   JIRA_MUTATION_OPERATIONS,
+  isJiraApprovalProjects,
   isJiraAttachmentPreview,
   isJiraAvatarUploadOperation,
   isJiraDraftRef,
+  type JiraApprovalProject,
   type JiraAttachmentPreview,
   type JiraMutationOperation,
 } from "./jira-tool-execution.js";
@@ -397,6 +399,12 @@ export interface JiraChatToolWriteApprovalView {
    * name, size and digest, never content. The upload is refused if the file no longer matches (#4176).
    */
   readonly attachment?: JiraAttachmentPreview;
+  /**
+   * The projects the action targets, by key and name, read by the server when the approval was
+   * requested so that every card names them, the first of a Chat included. A project Jira did not
+   * answer is listed by its reference alone; the card never invents a name.
+   */
+  readonly projects?: readonly JiraApprovalProject[];
 }
 export interface McpChatToolWriteApprovalView {
   readonly kind: "mcp-chat-write";
@@ -489,6 +497,16 @@ function validateWriteApprovalAttachment(value: Record<string, unknown>, errors:
   if (value.operation !== "jira.attach" && !uploadWriteApproval(value))
     errors.push("chatWriteApproval.operation is invalid");
 }
+const JIRA_OPTIONAL_APPROVAL_KEYS = ["excludedItemRefs", "attachment", "projects"] as const;
+function validateWriteApprovalOptionals(value: Record<string, unknown>, errors: string[]): void {
+  if (Object.hasOwn(value, "excludedItemRefs")) {
+    validateExcludedItemRefs(value.excludedItemRefs, "chatWriteApproval.excludedItemRefs", errors);
+    if (value.operation !== "jira.draft") errors.push("chatWriteApproval.operation is invalid");
+  }
+  if (Object.hasOwn(value, "attachment")) validateWriteApprovalAttachment(value, errors);
+  if (Object.hasOwn(value, "projects") && !isJiraApprovalProjects(value.projects))
+    errors.push("chatWriteApproval.projects is invalid");
+}
 function validateWriteApprovalKeys(
   value: Record<string, unknown>,
   mcp: boolean,
@@ -498,25 +516,18 @@ function validateWriteApprovalKeys(
     validateKeys(value, MCP_WRITE_APPROVAL_KEYS, errors, "chatWriteApproval");
     return;
   }
-  const excluded = Object.hasOwn(value, "excludedItemRefs");
-  const attached = Object.hasOwn(value, "attachment");
-  if (!attached && uploadWriteApproval(value))
+  if (!Object.hasOwn(value, "attachment") && uploadWriteApproval(value))
     errors.push("chatWriteApproval.attachment is required");
   validateKeys(
     value,
     [
       ...WRITE_APPROVAL_KEYS,
-      ...(excluded ? ["excludedItemRefs"] : []),
-      ...(attached ? ["attachment"] : []),
+      ...JIRA_OPTIONAL_APPROVAL_KEYS.filter((key) => Object.hasOwn(value, key)),
     ],
     errors,
     "chatWriteApproval",
   );
-  if (excluded) {
-    validateExcludedItemRefs(value.excludedItemRefs, "chatWriteApproval.excludedItemRefs", errors);
-    if (value.operation !== "jira.draft") errors.push("chatWriteApproval.operation is invalid");
-  }
-  if (attached) validateWriteApprovalAttachment(value, errors);
+  validateWriteApprovalOptionals(value, errors);
 }
 export function validateChatToolWriteApprovalView(
   value: unknown,

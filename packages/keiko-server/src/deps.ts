@@ -228,7 +228,11 @@ import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.j
 import { stopChatCompactionWork } from "./chat-compaction-model-call.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { closeFileServerLogSinks, resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
-import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
+import {
+  recordWorkspaceRootDenial,
+  recordWorkspaceRootDenied,
+} from "./workspace-root-denial-log.js";
+import { pathIsDenied } from "./files-deny.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -3434,6 +3438,17 @@ function seedInitialProject(
   }
   const normalizedPath = validateProjectPath(initialProjectPath, { mustExist: true });
   assertUiDbOutsideProject(uiDbPath, normalizedPath);
+  // A launch directory the read surface refuses (Keiko's own tool-state area) is no project: every
+  // Git and Files read of it is denied, so offering it only starts the person on a refused folder.
+  // It is the very predicate the Files and Git routes apply to a requested root (#4371). The
+  // decision is recorded body-free on the existing denial line: closed reason, no path.
+  if (pathIsDenied(normalizedPath)) {
+    recordWorkspaceRootDenied(
+      { reason: "denied-locus", failureKind: "DENIED", errorKind: "authority-denied" },
+      { correlationId },
+    );
+    return undefined;
+  }
   const project = store.createProject(normalizedPath);
   if (trustSource === "explicit-launcher-selection") {
     workspaceScriptTrust.grant(project.path, correlationId);

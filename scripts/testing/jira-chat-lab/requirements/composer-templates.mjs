@@ -31,20 +31,36 @@ export const requiredSections = (type) => RULES[type].sections;
  * a Sub-task requires a parent of the type Task; a Bug requires a priority. `activateOn` names the
  * actions the template governs (create by default; the edit lane adds `edit`).
  */
-export function composerTemplates(project, epicLinkFieldId, { activateOn = ["create"] } = {}) {
+export function composerTemplates(
+  project,
+  epicLinkFieldId,
+  { activateOn = ["create"], label = (type) => type } = {},
+) {
   return COMPOSER_TYPES.map((issueType) => {
     const subtask = issueType === "Sub-task";
     const hierarchy = { Story: true, Task: true, Bug: true }[issueType] === true;
+    // `label` is how the lead names a type in the template: the name the session shows (localized in
+    // a German Jira) or the type's id; the lane's own obligations keep the English name.
     const markdown = templateMarkdown({
       project,
-      issueType,
+      issueType: label(issueType),
       rule: RULES[issueType],
       activateOn,
       ...(hierarchy ? { parentField: epicLinkFieldId } : {}),
-      ...(subtask ? { parentField: "parent", parentIssueTypes: [...SUBTASK_PARENT_TYPES] } : {}),
+      ...(subtask
+        ? {
+            parentField: "parent",
+            parentIssueTypes: SUBTASK_PARENT_TYPES.map((type) => label(type)),
+          }
+        : {}),
       requiredFields: issueType === "Bug" ? ["priority"] : [],
     });
-    return { name: `${project}-Composer-${issueType}`, markdown, issueType };
+    return {
+      name: `${project}-Composer-${issueType}`,
+      markdown,
+      issueType,
+      label: label(issueType),
+    };
   });
 }
 
@@ -90,20 +106,23 @@ export function contentRequest(type, each = "die") {
  * for, so that a conformant issue is possible without the model inventing anything. It offers no
  * way to stop at a refusal: a request that cannot be met is reported in words by the model itself.
  */
-export function createPrompt(type, title, { epic, task }) {
+export function createPrompt(type, title, { epic, task, german = false }) {
   const tail = `${contentRequest(type)} Melde den Vorgangsschlüssel.`;
   const base = `Lege im Jira-Projekt REQ`;
+  // A German person says "Aufgabe" or "Teilaufgabe" and adds no English type name; the English
+  // sessions' prompts keep it as the lab always asked.
+  const named = (word, english) => (german ? word : `${word} (Vorgangstyp ${english})`);
   switch (type) {
     case "Epic":
       return `${base} ein Epic mit dem Titel ${quoted(title)} an. ${tail}`;
     case "Story":
       return `${base} eine Story mit dem Titel ${quoted(title)} im Epic ${epic} an. ${tail}`;
     case "Task":
-      return `${base} eine Aufgabe (Vorgangstyp Task) mit dem Titel ${quoted(title)} im Epic ${epic} an. ${tail}`;
+      return `${base} ${named("eine Aufgabe", "Task")} mit dem Titel ${quoted(title)} im Epic ${epic} an. ${tail}`;
     case "Sub-task":
-      return `${base} eine Teilaufgabe (Vorgangstyp Sub-task) mit dem Titel ${quoted(title)} unter der Aufgabe ${task} an. ${tail}`;
+      return `${base} ${named("eine Teilaufgabe", "Sub-task")} mit dem Titel ${quoted(title)} unter der Aufgabe ${task} an. ${tail}`;
     default:
-      return `${base} einen Fehler (Vorgangstyp Bug) mit dem Titel ${quoted(title)} im Epic ${epic} an und verknüpfe ihn über eine Vorgangsverknüpfung vom Typ „Relates“ mit der Aufgabe ${task}. ${tail}`;
+      return `${base} ${named("einen Fehler", "Bug")} mit dem Titel ${quoted(title)} im Epic ${epic} an und verknüpfe ihn über eine Vorgangsverknüpfung vom Typ „Relates“ mit der Aufgabe ${task}. ${tail}`;
   }
 }
 
@@ -112,8 +131,8 @@ export function createPrompt(type, title, { epic, task }) {
  * Task as parent. The content is complete; only the parent is wrong, and only the person can choose
  * another one. The model must say so in plain words, and nothing may be created.
  */
-export function unrepairablePrompt(title, { story }) {
-  return `Lege im Jira-Projekt REQ eine Teilaufgabe (Vorgangstyp Sub-task) mit dem Titel ${quoted(title)} unter dem Vorgang ${story} an. ${contentRequest("Sub-task")} Melde den Vorgangsschlüssel.`;
+export function unrepairablePrompt(title, { story, german = false }) {
+  return `Lege im Jira-Projekt REQ eine Teilaufgabe${german ? "" : " (Vorgangstyp Sub-task)"} mit dem Titel ${quoted(title)} unter dem Vorgang ${story} an. ${contentRequest("Sub-task")} Melde den Vorgangsschlüssel.`;
 }
 
 /**
@@ -121,7 +140,8 @@ export function unrepairablePrompt(title, { story }) {
  * the repair path the person would give: after a refusal, correct the reported violations and use
  * the named epic or parent. The refusal itself must come before any card and any effect.
  */
-export function violationPrompt(type, title, { epic, task }) {
+export function violationPrompt(type, title, { epic, task, label = (name) => name }) {
   const parent = type === "Sub-task" ? `die Aufgabe ${task}` : `das Epic ${epic}`;
-  return `Lege im Jira-Projekt REQ ${type === "Epic" ? "ein Epic" : `einen Vorgang vom Typ ${type}`} mit genau der Zusammenfassung ${quoted(title)} und genau der Beschreibung „Kurzer Test.“ an. Falls das Anlegen abgelehnt wird, korrigiere den Vorgang anhand der gemeldeten Verstöße${type === "Epic" ? "" : `, ordne ihn bei der Korrektur ${parent} zu`} und lege ihn erneut an. Für die Korrektur gilt: ${contentRequest(type)} Melde den Vorgangsschlüssel oder den genauen Fehler.`;
+  // The type is named as the person sees it: the localized name in a German session.
+  return `Lege im Jira-Projekt REQ ${type === "Epic" ? "ein Epic" : `einen Vorgang vom Typ ${label(type)}`} mit genau der Zusammenfassung ${quoted(title)} und genau der Beschreibung „Kurzer Test.“ an. Falls das Anlegen abgelehnt wird, korrigiere den Vorgang anhand der gemeldeten Verstöße${type === "Epic" ? "" : `, ordne ihn bei der Korrektur ${parent} zu`} und lege ihn erneut an. Für die Korrektur gilt: ${contentRequest(type)} Melde den Vorgangsschlüssel oder den genauen Fehler.`;
 }

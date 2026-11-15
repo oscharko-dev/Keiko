@@ -1,5 +1,6 @@
 "use client";
 
+import { startingProjectRoot } from "./windows/startingProjectRoot";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   adoptableGitChat,
@@ -1801,10 +1802,12 @@ function AppShellInner(): ReactNode {
   // Issue #446 (ADR-0090) — the active task-workspace binding state machine. It is provided to the
   // whole shell so the Header switcher and every window's render context read one source of truth.
   const activeWorkspace = useActiveWorkspaceState();
-  const shortcutRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
+  // A project the read surface refuses is never the root a shell shortcut starts in (#4371).
+  const startingRoot = startingProjectRoot(session.activeProject ?? null) ?? undefined;
+  const shortcutRoot = activeWorkspace.activeRoot ?? startingRoot;
   // Git is repository control, not task-worktree content. Opening it from shell chrome must therefore
   // use the selected repository root and must not borrow `activeWorkspace.activeRoot`.
-  const repositoryShortcutRoot = session.activeProject?.path ?? undefined;
+  const repositoryShortcutRoot = startingRoot;
   const [shellShortcutState, setShellShortcutState] = useState<ShellShortcutState>(
     EMPTY_SHELL_SHORTCUT_STATE,
   );

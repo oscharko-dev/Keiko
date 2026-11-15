@@ -63,15 +63,27 @@ function StatusChip({ state }: { readonly state: LivePodState }): ReactNode {
   );
 }
 
+// What a failed check means for the Pod and the two ways out. A certificate refusal never fixes
+// itself and its own remedy is a setting outside the card, so the saved entry says what it is.
+function useFailureGuidance(status: AtlassianConnectorVerifyStatus): string {
+  const t = useTranslate();
+  const copy = t(verifyStatusCopyKey(status));
+  return status === "tls-failed"
+    ? `${copy} ${t("atlassianConnectors.live.tlsFailed.wayOut")}`
+    : copy;
+}
+
+function FailedHint({ status }: { readonly status: AtlassianConnectorVerifyStatus }): ReactNode {
+  return (
+    <p className="acx-hint" aria-hidden="true">
+      {useFailureGuidance(status)}
+    </p>
+  );
+}
+
 function StatusHint({ state }: { readonly state: LivePodState }): ReactNode {
   const t = useTranslate();
-  if (state.kind === "failed") {
-    return (
-      <p className="acx-hint" aria-hidden="true">
-        {t(verifyStatusCopyKey(state.status))}
-      </p>
-    );
-  }
+  if (state.kind === "failed") return <FailedHint status={state.status} />;
   if (state.kind === "unknown") {
     return <p className="acx-hint">{t("atlassianConnectors.live.refreshRequired")}</p>;
   }
@@ -99,17 +111,42 @@ function useCheckedStatus(state: LivePodState): AtlassianConnectorVerifyStatus |
   return checked;
 }
 
-// The one live region of the card: a check's outcome is announced as its label and guidance,
-// also when it succeeded, while the visible card keeps only the chip and, on failure, one line.
-function VerifyAnnouncement({ state }: { readonly state: LivePodState }): ReactNode {
+// The one live region of the card. It exists before a check and announces only the CURRENT state:
+// the previous result is dropped the moment a new check runs, not one render later. A check run in
+// this view that ended well is also shown, not only announced: the person who just connected a Pod
+// must see that it is connected, in the words of the connection page (#4371). Every other outcome
+// stays announced only, with its guidance; the visible card keeps its chip and one failure line.
+export function VerifyAnnouncement({ state }: { readonly state: LivePodState }): ReactNode {
   const t = useTranslate();
-  const status = useCheckedStatus(state);
+  const checked = useCheckedStatus(state);
+  const status = state.kind === "verifying" ? undefined : checked;
+  const guidance = useFailureGuidance(status ?? "ok");
+  const shown = status === "ok";
   return (
-    <output className="sr-only" data-status={status} data-testid="acx-verify-status">
-      {status === undefined
-        ? null
-        : `${t(verifyStatusLabelKey(status))}. ${t(verifyStatusCopyKey(status))}`}
+    <output
+      className={shown ? "acx-notice" : "sr-only"}
+      data-tone={shown ? verifyStatusTone("ok") : undefined}
+      data-status={status}
+      data-testid="acx-verify-status"
+    >
+      {verifyAnnouncementContent(status, guidance, shown, t)}
     </output>
+  );
+}
+
+function verifyAnnouncementContent(
+  status: AtlassianConnectorVerifyStatus | undefined,
+  guidance: string,
+  shown: boolean,
+  t: ReturnType<typeof useTranslate>,
+): ReactNode {
+  if (status === undefined) return null;
+  if (!shown) return `${t(verifyStatusLabelKey(status))}. ${guidance}`;
+  return (
+    <>
+      <span className="acx-notice-label">{t(verifyStatusLabelKey(status))}</span>
+      <span>{guidance}</span>
+    </>
   );
 }
 

@@ -175,9 +175,10 @@ export function gradeHintDelivered({ exchanges, ports = producerPorts }) {
 /** A clause that says an issue was created: a creation verb that nothing negates, defers or applies to the template. */
 const CREATION = /\b(?:angelegt|erstellt|created)\b/iu;
 const NEGATED = /\b(?:nicht|nichts|nie\w*|kein\w*|not|never|no|n't|konnte nicht|unable)\b/iu;
-// "Sobald die Vorlage angelegt ist, kann ich ...": the template is what gets created, or it is a later offer.
+// "Sobald die Vorlage angelegt ist, kann ich ...": the template is what gets created, or it is a later offer or
+// an instruction ("Laut Rückmeldung soll diese hier angelegt werden"): none states that the person's issue exists.
 const NOT_A_CLAIM =
-  /(?:vorlage|template)\W+(?:\w+\W+){0,4}(?:angelegt|erstellt|created)|\b(?:wenn|sobald|danach|falls|nachdem|kann|k(?:ö|oe)nnte|k(?:ö|oe)nnen|w(?:ü|ue)rde|once|after|if|can|could|would)\b/iu;
+  /(?:vorlage|template)\W+(?:\w+\W+){0,4}(?:angelegt|erstellt|created)|\b(?:wenn|sobald|danach|falls|nachdem|kann|k(?:ö|oe)nnte|k(?:ö|oe)nnen|w(?:ü|ue)rde|soll(?:en|te)?|muss|m(?:ü|ue)ssen|once|after|if|can|could|would|should|must)\b/iu;
 const claimsCreation = (clause) =>
   CREATION.test(clause) && !NEGATED.test(clause) && !NOT_A_CLAIM.test(clause);
 
@@ -246,6 +247,42 @@ export function gradeParentRefusal({
   return gradeGuidance(stored, ports.guidance);
 }
 
+/**
+ * A template exists for the type (in whatever words its author wrote it): the product must find it.
+ * A stored refusal that names a missing template means the product did not bind the template to the
+ * type the person asked for (the type's NAME as the acting user sees it differs from the name the
+ * author wrote) and is red; a refusal for a content rule shows it governed the create; an issue
+ * created although the request violates the template shows the same silent miss and is red too.
+ */
+export function gradeTemplateRecognised({ created, exchanges, turn, ports = producerPorts }) {
+  const refusals = templateRefusals(exchanges);
+  const missing = namesRule(refusals, ports.noTemplateRules);
+  if (missing.length > 0)
+    return {
+      status: "red",
+      detail: `the product refused with ${ruleNames(missing)} although a template exists for the type`,
+    };
+  const governed = refusals.filter(
+    (refusal) => !refusal.violations.every((item) => ports.noTemplateRules.includes(item.ruleId)),
+  );
+  if (governed.length > 0)
+    return {
+      status: "green",
+      detail: `the template governed the create: refused with ${ruleNames(governed)}`,
+    };
+  if (created.length > 0)
+    return {
+      status: "red",
+      detail: `${created.length} issues were created without any template refusal although the request violates the template: ${created.map((issue) => issue.key).join(", ")}`,
+    };
+  return (
+    stepProof(turn, "the request") ?? {
+      status: "unverified",
+      detail: "no write was attempted and no refusal is stored; the template was not exercised",
+    }
+  );
+}
+
 /** The own-word parent type: "Teilaufgabe" and "Sub-task" are the request's words, not the answer's. */
 const PARENT_TYPE_WORD = /(?<![\p{L}-])(?:aufgaben?|tasks?)(?![\p{L}])/iu;
 
@@ -264,7 +301,7 @@ export function gradeParentAnswer(answer, ports = producerPorts) {
 }
 
 /** The two obligations of the unrepairable request, with the native first obligation: hard, hard, soft. */
-export function gradeUnrepairable({ created, exchanges, answer, turn, ports }) {
+export function gradeUnrepairable({ created, exchanges, answer, turn, ports, allowed }) {
   return {
     refused: gradeRefusedNatively({
       created,
@@ -272,7 +309,7 @@ export function gradeUnrepairable({ created, exchanges, answer, turn, ports }) {
       turn,
       exchanges,
     }),
-    gate: gradeParentRefusal({ exchanges, ports }),
+    gate: gradeParentRefusal({ exchanges, ports, allowed }),
     plain: gradeParentAnswer(answer, ports),
   };
 }
