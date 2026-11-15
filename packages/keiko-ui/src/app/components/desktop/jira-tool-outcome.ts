@@ -10,6 +10,7 @@ import {
   type JiraFieldValidationFailure,
   type JiraTemplateRuleId,
   JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
+  JIRA_EXISTING_LINKS_MISSING_MESSAGE,
   JIRA_ATTACHMENT_OPERATIONS,
   isJiraReleaseScopeRefusal,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -224,6 +225,8 @@ interface JiraOutcomeProblem {
   readonly item?: JiraOutcomeItemName;
   readonly field?: string;
   readonly message: string;
+  /** A catalog sentence that replaces `message` where the raw text is the model's instruction. */
+  readonly messageKey?: WidgetMessageKey;
 }
 /**
  * One card sentence per draft refusal that is not a field problem, by `data.draftRefusal`: the
@@ -924,7 +927,11 @@ function problemsOf(
     }),
     ...messages.flatMap((entry): JiraOutcomeProblem[] => {
       const message = text(entry);
-      return message === undefined ? [] : [{ ...own, message }];
+      if (message === undefined) return [];
+      // The model's sentence about missing links on an existing draft item is worded from the catalog.
+      return message === JIRA_EXISTING_LINKS_MISSING_MESSAGE
+        ? [{ ...own, message, messageKey: "chat.jira.outcome.linksMissing" }]
+        : [{ ...own, message }];
     }),
   ];
 }

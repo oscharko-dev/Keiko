@@ -2602,6 +2602,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.validation.invalid-operation":
     "Die gewünschte Feldänderung ist in Jira nicht möglich.",
   "chat.jira.outcome.validation.bounds-exceeded": "Die Änderung war zu groß für einen Schritt.",
+  "chat.jira.outcome.linksMissing":
+    "Dieser Vorgang wurde schon angelegt, aber nicht alle gewünschten Verknüpfungen sind daran. Es wurde nichts noch einmal gesendet. Ergänze die fehlenden Verknüpfungen in Jira oder bitte Keiko darum.",
   "chat.jira.outcome.validation.named.required-field":
     "Das Jira-Feld „{field}“ ist ein Pflichtfeld, aber es wurde kein Wert dafür angegeben.",
   "chat.jira.outcome.validation.named.unsupported-field":

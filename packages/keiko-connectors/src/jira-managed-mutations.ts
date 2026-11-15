@@ -162,8 +162,10 @@ import {
 import { executeJiraWorklogDelete, isJiraWorklogDelete } from "./jira-managed-worklog-delete.js";
 import {
   JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
+  JIRA_EXISTING_LINKS_MISSING_MESSAGE,
   isSafeAtlassianIdentifier,
   jiraOperationInReleaseScope,
+  sanitizeJiraMutationFailureDetail,
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldValidationFailure,
   type JiraMutationAttempt,
@@ -320,19 +322,17 @@ function validationFailure(
     (result.fieldId === "requirementIds"
       ? REFERENCES_PLACE
       : FIELD_VALIDATION_MESSAGES[result.reason]);
-  return {
-    ...INVALID,
-    detail: {
-      validation: result.reason,
-      ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
-      // The name Jira shows lets a person read which field is meant; the sentence below stays for
-      // the model (#4357).
-      ...(result.fieldId === undefined || result.fieldName === undefined
-        ? {}
-        : { fieldName: result.fieldName }),
-      messages: [message],
-    },
+  const detail: JiraMutationFailureDetail = {
+    validation: result.reason,
+    ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
+    // The name Jira shows lets a person read which field is meant; the sentence below stays for the
+    // model (#4357). It comes from the instance's metadata, so it is bounded like every detail text.
+    ...(result.fieldId === undefined || result.fieldName === undefined
+      ? {}
+      : { fieldName: result.fieldName }),
+    messages: [message],
   };
+  return { ...INVALID, detail: sanitizeJiraMutationFailureDetail(detail) ?? detail };
 }
 type Validated = Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: true }>;
 function withDescriptionFormatting(
@@ -1393,8 +1393,6 @@ async function attachFile(
   });
 }
 
-const EXISTING_LINKS_MISSING =
-  "This issue already exists from this draft, but not every requested link is on it. Nothing was sent again; add only the missing links with jira.edit.";
 /**
  * An item reconciled to an issue it already created is complete only when that issue also carries
  * the relations the item asks for: a create followed by a failed further link leaves an issue the
@@ -1415,7 +1413,7 @@ async function existingItemWithLinks(
   return {
     ok: false,
     reason: current.ok ? "conflict" : current.reason,
-    detail: { messages: [EXISTING_LINKS_MISSING] },
+    detail: { messages: [JIRA_EXISTING_LINKS_MISSING_MESSAGE] },
     receipt: existing.receipt,
     links: account,
   };

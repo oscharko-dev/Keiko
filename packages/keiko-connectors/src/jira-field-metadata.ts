@@ -774,11 +774,6 @@ function validateUpdates(
 }
 
 /**
- * No caller-supplied Jira update object is forwarded. Only implemented field/verb pairs survive.
- * `requireAll: false` judges only the supplied fields, so a refusal for a missing required field
- * can still name the template rules the rest of the write breaks; it never admits a write.
- */
-/**
  * A refusal names its field by the name Jira shows, so a person reads "Resolution", not an id. Kept
  * apart from the judgement itself: the closed result stays the pin it always was (#4357).
  */
@@ -791,6 +786,11 @@ export function withJiraFieldName(
   return name === undefined || name.length === 0 ? result : { ...result, fieldName: name };
 }
 
+/**
+ * No caller-supplied Jira update object is forwarded. Only implemented field/verb pairs survive.
+ * `requireAll: false` judges only the supplied fields, so a refusal for a missing required field
+ * can still name the template rules the rest of the write breaks; it never admits a write.
+ */
 export function validateJiraFieldChanges(
   metadata: readonly JiraFieldMetadata[],
   changes: unknown,

@@ -621,6 +621,7 @@ it("does not fabricate a required unsupported plugin field", async () => {
         ...FIELDS,
         {
           ...field("customfield_10001", "string", true),
+          name: "Plugin value",
           schema: { type: "string", custom: "unsupported:plugin" },
         },
       ],
@@ -641,7 +642,7 @@ it("does not fabricate a required unsupported plugin field", async () => {
     detail: {
       validation: "required-field",
       fieldId: "customfield_10001",
-      fieldName: "customfield_10001",
+      fieldName: "Plugin value",
       messages: [FIELD_SENTENCES["required-field"]],
     },
   });
@@ -653,14 +654,18 @@ it("revalidates metadata when edit operations change between actions", async () 
   const args = { issueKey: "SYN-1", fields: { summary: "Synthetic" } };
   expect((await f.run("jira.edit", args)).ok).toBe(true);
   f.http.mockResolvedValueOnce(
-    response({ fields: { summary: { ...field("summary", "string"), operations: [] } } }),
+    response({
+      fields: {
+        summary: { ...field("summary", "string"), name: "Summary line", operations: [] },
+      },
+    }),
   );
   expect(await f.run("jira.edit", args)).toEqual({
     ok: false,
     reason: "field-validation",
     detail: {
       fieldId: "summary",
-      fieldName: "summary",
+      fieldName: "Summary line",
       validation: "invalid-operation",
       messages: [FIELD_SENTENCES["invalid-operation"]],
     },
@@ -1934,4 +1939,30 @@ it("says a field of an unsupported type cannot be set, for an optional and a req
       ],
     },
   });
+});
+
+// #4357: the name Jira shows comes from the instance's own metadata. The metadata parser admits up to
+// 255 characters, more than a detail text takes, so the refusal bounds it instead of tripping a result
+// schema later.
+it("bounds a field name that is longer than a detail text to the detail bound", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, { ...field("customfield_10001", "string", true), name: "N".repeat(250) }],
+      start: 0,
+      size: 100,
+      last: true,
+    }),
+  );
+  const result = await f.run("jira.create", {
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Synthetic", customfield_10000: "Required" },
+  });
+  const name = result.ok
+    ? undefined
+    : (result.detail as { fieldName?: string } | undefined)?.fieldName;
+  expect(name).toBeDefined();
+  expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(200);
+  expect(name?.endsWith("…")).toBe(true);
 });

@@ -1358,7 +1358,7 @@ describe("the dry run before approval", () => {
     });
 
     describe("an item Keiko itself would refuse (S05 of #4173)", () => {
-      const EPIC_NAME = field("customfield_10103", "string", true);
+      const EPIC_NAME = { ...field("customfield_10103", "string", true), name: "Epic Name" };
       // A template with no rules of its own: what these items are refused for is not a template rule.
       const ORDINARY = [
         "---",
@@ -1385,7 +1385,7 @@ describe("the dry run before approval", () => {
           state: "failed",
           reason: "field-validation",
           fieldId: "customfield_10103",
-          fieldName: "customfield_10103",
+          fieldName: "Epic Name",
           validation: "required-field",
           messages: [
             "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
@@ -1515,13 +1515,13 @@ describe("the dry run before approval", () => {
   it("refuses a single write Keiko itself would refuse before any approval", async () => {
     const sink = logs();
     const f = preflight(PERMISSIVE_STORY, CREATE, "jira.create", {
-      fields: [field("customfield_10103", "string", true)],
+      fields: [{ ...field("customfield_10103", "string", true), name: "Epic Name" }],
     });
     expect(await f.run()).toEqual({
       outcome: "rejected",
       reason: "field-validation",
       fieldId: "customfield_10103",
-      fieldName: "customfield_10103",
+      fieldName: "Epic Name",
       validation: "required-field",
       messages: [
         "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",

@@ -2469,6 +2469,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The value for the Jira field “{field}” is not one Jira accepts.",
   "chat.jira.outcome.validation.named.invalid-operation":
     "This change is not possible for the Jira field “{field}”.",
+  "chat.jira.outcome.linksMissing":
+    "This issue was already created, but not every requested link is on it. Nothing was sent again. Add the missing links in Jira or ask Keiko to add them.",
   "chat.jira.outcome.nothingSent": "Nothing was sent to Jira.",
   "chat.jira.outcome.rules": "Template rules not met",
   "chat.jira.outcome.rule.summary-too-short": "The summary is too short.",

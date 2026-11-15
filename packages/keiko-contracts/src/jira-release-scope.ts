@@ -15,6 +15,13 @@ export const JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE =
   "Attachments are not part of this release, so nothing was changed in Jira. " +
   "Describe the file in a comment instead, or add it in Jira itself.";
 
+/**
+ * What the model reads when a draft item already exists but not every requested link is on it. A card
+ * words this case from the catalog and never shows this sentence (#4357).
+ */
+export const JIRA_EXISTING_LINKS_MISSING_MESSAGE =
+  "This issue already exists from this draft, but not every requested link is on it. Nothing was sent again; add only the missing links with jira.edit.";
+
 /** Whether the operation is part of the Release 1 scope: false only for a switched-off attachment. */
 export function jiraOperationInReleaseScope(operation: string): boolean {
   return (

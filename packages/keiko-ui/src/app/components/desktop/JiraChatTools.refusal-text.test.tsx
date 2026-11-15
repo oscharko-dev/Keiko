@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it } from "vitest";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { JIRA_EXISTING_LINKS_MISSING_MESSAGE } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { JiraChatTools } from "./JiraChatTools";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
@@ -124,5 +125,52 @@ describe("a refusal of Keiko's own field check names the field, never a paramete
     await show(refused("jira_transition", "required-field", undefined), "en");
     expect(screen.getByText("A required Jira field was missing.")).toBeVisible();
     expectNoModelText();
+  });
+});
+
+// #4357: a draft item that already exists without every requested link tells the person what to do,
+// not the model's instruction to call jira.edit.
+describe("an existing draft item that lacks a requested link", () => {
+  function row(): ChatToolExchange {
+    const base = refused("jira_draft", "required-field", undefined);
+    const result = base.result as NonNullable<ChatToolExchange["result"]>;
+    return {
+      ...base,
+      result: {
+        ...result,
+        data: {
+          outcome: "partial",
+          reason: "conflict",
+          items: [
+            {
+              ref: "one",
+              state: "failed",
+              reason: "conflict",
+              messages: [JIRA_EXISTING_LINKS_MISSING_MESSAGE],
+            },
+          ],
+        },
+      } as NonNullable<ChatToolExchange["result"]>,
+    };
+  }
+  it("says it in English without the model's text", async () => {
+    await show(row(), "en");
+    expect(
+      screen.getByText(
+        "This issue was already created, but not every requested link is on it. Nothing was sent again. Add the missing links in Jira or ask Keiko to add them.",
+      ),
+    ).toBeVisible();
+    expect(document.body.textContent).not.toContain("jira.edit");
+    expect(document.body.textContent).not.toContain("add only the missing links");
+  });
+  it("says it in German and passes axe", async () => {
+    const container = await show(row(), "de");
+    expect(
+      screen.getByText(
+        "Dieser Vorgang wurde schon angelegt, aber nicht alle gewünschten Verknüpfungen sind daran. Es wurde nichts noch einmal gesendet. Ergänze die fehlenden Verknüpfungen in Jira oder bitte Keiko darum.",
+      ),
+    ).toBeVisible();
+    expect(document.body.textContent).not.toContain("jira.edit");
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

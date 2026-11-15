@@ -368,7 +368,7 @@ function JiraProblemList({ view }: { readonly view: JiraToolOutcomeView }): Reac
         <li key={`${String(problem.item?.position ?? 0)}:${problem.field ?? ""}:${String(index)}`}>
           {problem.item === undefined ? null : <JiraItemName item={problem.item} />}
           {problem.field === undefined ? null : <strong>{problem.field}: </strong>}
-          <span>{problem.message}</span>
+          <span>{problem.messageKey === undefined ? problem.message : t(problem.messageKey)}</span>
         </li>
       ))}
       {view.hiddenProblemCount === 0 ? null : (
