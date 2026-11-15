@@ -56,12 +56,16 @@ describe("coding model preference", () => {
   });
 
   it("reports unusable browser storage with closed, body-free evidence", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new DOMException("denied", "SecurityError");
-    });
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("full", "QuotaExceededError");
-    });
+    vi.spyOn(Object.getPrototypeOf(window.localStorage) as Storage, "getItem").mockImplementation(
+      () => {
+        throw new DOMException("denied", "SecurityError");
+      },
+    );
+    vi.spyOn(Object.getPrototypeOf(window.localStorage) as Storage, "setItem").mockImplementation(
+      () => {
+        throw new DOMException("full", "QuotaExceededError");
+      },
+    );
 
     expect(savedCodingModel()).toBeNull();
     rememberCodingModel("gemma-4-31b-it");

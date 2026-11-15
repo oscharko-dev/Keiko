@@ -121,12 +121,16 @@ describe("recognizing that Keiko was restarted (#4370)", () => {
     health(FIRST);
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("blocked", "SecurityError");
-    });
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new DOMException("blocked", "SecurityError");
-    });
+    vi.spyOn(Object.getPrototypeOf(window.sessionStorage) as Storage, "setItem").mockImplementation(
+      () => {
+        throw new DOMException("blocked", "SecurityError");
+      },
+    );
+    vi.spyOn(Object.getPrototypeOf(window.sessionStorage) as Storage, "getItem").mockImplementation(
+      () => {
+        throw new DOMException("blocked", "SecurityError");
+      },
+    );
     await expect(noteConnectedServerInstance()).resolves.toBeUndefined();
     health(SECOND);
     await expect(sessionEndedByRestart()).resolves.toBe(false);

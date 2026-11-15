@@ -5667,7 +5667,10 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         });
         const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
         if (storageFails)
-          vi.spyOn(Storage.prototype, "setItem").mockImplementationOnce(() => {
+          vi.spyOn(
+            Object.getPrototypeOf(window.localStorage) as Storage,
+            "setItem",
+          ).mockImplementationOnce(() => {
             throw new DOMException("storage unavailable", "SecurityError");
           });
         const user = userEvent.setup();

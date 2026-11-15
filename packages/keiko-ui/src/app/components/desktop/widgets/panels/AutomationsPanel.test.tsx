@@ -40,7 +40,7 @@ describe("AutomationsPanel", () => {
 
   it("does not write to window.localStorage when a row is clicked", async () => {
     const user = userEvent.setup();
-    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const setItemSpy = vi.spyOn(Object.getPrototypeOf(window.localStorage) as Storage, "setItem");
     const { container } = render(<AutomationsPanel />);
 
     const row = container.querySelector(".auto-row");

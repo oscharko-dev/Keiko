@@ -48,7 +48,7 @@ function controller(): ChatDraftController {
 
 describe("private chat drafts", () => {
   it("hydrates a saved draft and never persists the body in browser storage", async () => {
-    const local = vi.spyOn(Storage.prototype, "setItem");
+    const local = vi.spyOn(Object.getPrototypeOf(window.localStorage) as Storage, "setItem");
     vi.mocked(readChatDraft).mockResolvedValue({ text: "私の Entwurf", revision: 7 });
     const { result } = renderHook(() => useChatDraft("a"));
     await waitFor(() => expect(result.current.text).toBe("私の Entwurf"));
