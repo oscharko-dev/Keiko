@@ -724,3 +724,13 @@ complete original nine-case producer ran in the Linux arm64 gates container (Nod
 the three records were taken from this run; its fallback-font captures were discarded and the 14
 committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
 changed. This remains updater fixture evidence.
+
+## Final Release 1 merge: template binding, one OpenCode, skills and card texts — 2026-11-15 (#4354, #4359)
+
+The last three heads of Jira Pod Release 1 changed the optional English and German message catalogs
+again (the template binding notes, the outdated-runtime notice of the Coding Workbench), so the
+freshness gate rejected the catalog digests. The complete original nine-case producer ran in the
+Linux arm64 gates container (Node 24.18.0, `KEIKO_WRITE_TRACKED_EVIDENCE=1`): all nine passed. Only
+the source digests and `generatedAt` in the three records were taken from this run; its
+fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
+behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
