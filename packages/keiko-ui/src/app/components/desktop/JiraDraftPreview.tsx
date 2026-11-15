@@ -8,7 +8,13 @@ import type {
   JiraDraftValue,
 } from "./jiraDraftTree";
 import { jiraReadableText } from "./jira-readable-text";
-import { JiraNamesContext, jiraNamed, jiraNameOf, restatesTarget } from "./jiraNames";
+import {
+  JiraNamesContext,
+  jiraCardField,
+  jiraIdLabel,
+  jiraNameOf,
+  restatesTarget,
+} from "./jiraNames";
 import { jiraStandardFieldLabel } from "./jira-standard-field-label";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import styles from "./JiraChatTools.module.css";
@@ -156,7 +162,7 @@ function ItemFields({ item }: { readonly item: JiraDraftTreeItem }): ReactNode {
     <DraftFields
       fields={item.fields
         .filter((field) => !restatesTarget(field, item.projectId, item.issueTypeId))
-        .map((field) => jiraNamed(field, names, item, t))}
+        .map((field) => jiraCardField(field, names, item, t))}
     />
   );
 }
@@ -187,7 +193,8 @@ function ItemRelations({ item }: { readonly item: JiraDraftTreeItem }): ReactNod
       <span className={styles.cmpDraftNote}>
         {t("chat.jira.draft.target", {
           projectId: jiraNameOf(names, "projects", item.projectId) ?? item.projectId,
-          issueTypeId: jiraNameOf(names, "issueTypes", item.issueTypeId) ?? item.issueTypeId,
+          issueTypeId:
+            jiraNameOf(names, "issueTypes", item.issueTypeId) ?? jiraIdLabel(item.issueTypeId, t),
         })}
       </span>
       {notes.length === 0 ? null : <span className={styles.cmpDraftNote}>{notes.join(" · ")}</span>}

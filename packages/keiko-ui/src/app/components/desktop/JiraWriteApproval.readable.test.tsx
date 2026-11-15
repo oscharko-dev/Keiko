@@ -1,6 +1,6 @@
 import { projectJiraDescriptionInput } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { say } from "./jira-result.test-fixture";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
@@ -28,6 +28,45 @@ function approvalFor(operation: Operation): ChatToolWriteApprovalView {
     state: "pending",
   };
 }
+// R04 of the regression walk: a status change was approved as "Transition 11". The approval now
+// carries the transition's name and the status it leads to, as Jira's list for the issue named them
+// for this person, and the card says them in that language.
+async function renderedApproval(
+  operation: Operation,
+  args: Record<string, unknown>,
+  extra: Record<string, unknown>,
+  locale: "en" | "de",
+): Promise<HTMLElement> {
+  await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+  localStorage.setItem(I18N_STORAGE_KEY, locale);
+  const view = { ...approvalFor(operation), ...extra } as ChatToolWriteApprovalView;
+  render(
+    <I18nProvider>
+      <JiraWriteApproval
+        approval={view}
+        call={{ id: "call", name: operation.replace(/[.-]/gu, "_"), arguments: args }}
+        turnState="pending"
+        observe={vi.fn().mockResolvedValue(view)}
+        decide={vi.fn()}
+      />
+    </I18nProvider>,
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /genehmigen|Approve/u })).toBeEnabled(),
+  );
+  return screen.getByRole("region");
+}
+const renderedTransition = (
+  transition: { ref: string; name?: string; targetStatusName?: string } | undefined,
+  locale: "en" | "de",
+): Promise<HTMLElement> =>
+  renderedApproval(
+    "jira.transition",
+    { issueKey: "REQ-4", transitionId: "11" },
+    transition === undefined ? {} : { transition },
+    locale,
+  );
+
 const PREFERENCE_VALUE_LABELS = new Map<unknown, readonly [string, string]>([
   [false, ["Boolean: false", "Wahrheitswert: falsch"]],
   [0, ["Integer: 0", "Ganzzahl: 0"]],
@@ -1196,5 +1235,110 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
       expect(region.textContent).toContain(shown);
     expectNoJson({ region });
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe("the approval of a status change names what it changes", () => {
+  afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
+
+  it("names the target status and the transition in English, never the bare id", async () => {
+    const region = await renderedTransition(
+      { ref: "11", name: "Start progress", targetStatusName: "In Progress" },
+      "en",
+    );
+    expect(region.textContent).toContain("REQ-4");
+    expect(region.textContent).toContain("In Progress (Start progress)");
+    expect(region.textContent).not.toMatch(/\b11\b/u);
+    expectNoJson({ region });
+  });
+
+  it("names them in the words of the person's Jira in German", async () => {
+    const region = await renderedTransition(
+      { ref: "11", name: "Fortschritt starten", targetStatusName: "In Arbeit" },
+      "de",
+    );
+    expect(region.textContent).toContain("Statusübergang");
+    expect(region.textContent).toContain("In Arbeit (Fortschritt starten)");
+    expect(region.textContent).not.toMatch(/\b11\b/u);
+  });
+
+  it("says the target once where the transition is named like it", async () => {
+    const region = await renderedTransition(
+      { ref: "11", name: "In Arbeit", targetStatusName: "In Arbeit" },
+      "de",
+    );
+    expect(region.textContent).toContain("In Arbeit");
+    expect(region.textContent).not.toContain("In Arbeit (In Arbeit)");
+  });
+
+  it("says in words, with the id as detail, that the list could not be read", async () => {
+    const english = await renderedTransition({ ref: "11" }, "en");
+    expect(english.textContent).toContain("Could not be read from Jira");
+    expect(english.textContent).toContain("transition ID 11");
+    cleanup();
+    const german = await renderedTransition({ ref: "11" }, "de");
+    expect(german.textContent).toContain("Konnte nicht aus Jira gelesen werden");
+    expect(german.textContent).toContain("Übergangs-ID 11");
+  });
+
+  it("keeps showing the id as before for an approval that carries no transition", async () => {
+    const region = await renderedTransition(undefined, "en");
+    expect(region.textContent).toContain("11");
+  });
+
+  // R04 (a): the carried field showed as `customfield_10112`.
+  it("names a field the transition carries, in Jira's words, never its id", async () => {
+    const region = await renderedApproval(
+      "jira.transition",
+      { issueKey: "REQ-4", transitionId: "11", fields: { customfield_10112: 5 } },
+      {
+        transition: { ref: "11", targetStatusName: "In Arbeit" },
+        fields: [{ id: "customfield_10112", name: "Geschätzte Punkte" }],
+      },
+      "de",
+    );
+    expect(region.textContent).toContain("Geschätzte Punkte");
+    expect(region.textContent).not.toContain("customfield_10112");
+  });
+
+  it("says in words that Jira gave no name for a field, keeping its id as the detail", async () => {
+    const region = await renderedApproval(
+      "jira.transition",
+      { issueKey: "REQ-4", transitionId: "11", fields: { customfield_10112: 5 } },
+      { transition: { ref: "11", targetStatusName: "In Progress" } },
+      "en",
+    );
+    expect(region.textContent).toContain("Field customfield_10112 (Jira gave no name for it)");
+  });
+
+  // R04 (b): a create card showed "Issue type 10002", the id the model passed.
+  it("names the issue type a create carries from the approval, so a restored card says the same", async () => {
+    const region = await renderedApproval(
+      "jira.create",
+      { projectId: "10000", issueTypeId: "10002", fields: { summary: "Anmeldung" } },
+      {
+        projects: [
+          {
+            ref: "10000",
+            key: "REQ",
+            name: "Anforderungen",
+            issueTypes: [{ id: "10002", name: "Aufgabe" }],
+          },
+        ],
+      },
+      "de",
+    );
+    expect(region.textContent).toContain("Aufgabe");
+    expect(region.textContent).not.toContain("10002");
+  });
+
+  it("says in words that Jira gave no name for an issue type", async () => {
+    const region = await renderedApproval(
+      "jira.create",
+      { projectId: "10000", issueTypeId: "10002", fields: { summary: "Login" } },
+      { projects: [{ ref: "10000", key: "REQ", name: "Requirements" }] },
+      "en",
+    );
+    expect(region.textContent).toContain("ID 10002 (Jira gave no name for it)");
   });
 });

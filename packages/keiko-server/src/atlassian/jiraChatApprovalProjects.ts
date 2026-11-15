@@ -38,7 +38,7 @@ const PROJECT_REFERENCE = /^\w{1,32}$/u;
  */
 export const PROJECT_READ_TIMEOUT_MS = 2_000;
 
-const FAILURES = [
+export const APPROVAL_READ_FAILURES = [
   "not-admitted",
   "failed",
   "malformed-payload",
@@ -56,7 +56,7 @@ const FAILURES = [
   "invalid-transition",
   "field-validation",
 ] as const satisfies readonly (AtlassianConnectorWriteFailureReason | "not-admitted" | "failed")[];
-type Failure = (typeof FAILURES)[number];
+export type ApprovalReadFailure = (typeof APPROVAL_READ_FAILURES)[number];
 
 const PROJECT_NAMES = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -73,7 +73,7 @@ const PROJECT_NAMES = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: [...FAILURES, "none"],
+      values: [...APPROVAL_READ_FAILURES, "none"],
     },
     durationMs: { type: "integer", dataClass: "duration", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -89,13 +89,14 @@ const PROJECT_NAMES = defineActivityLogOperation({
 
 /**
  * An outcome the system expects in ordinary use (nothing was admitted to read, the project is not
- * visible to this actor, the turn was stopped) is routine; an unreachable or misbehaving Jira is not.
+ * visible to this actor, a transition no longer on offer, the turn was stopped) is routine; an unreachable or misbehaving Jira is not.
  */
-function routineOutcome(failure: Failure | undefined): boolean {
+export function routineApprovalFailure(failure: ApprovalReadFailure | undefined): boolean {
   return (
     failure === undefined ||
     failure === "not-admitted" ||
     failure === "not-found" ||
+    failure === "invalid-transition" ||
     failure === "permission-denied" ||
     failure === "cancelled"
   );
@@ -104,14 +105,14 @@ function routineOutcome(failure: Failure | undefined): boolean {
 function recordJiraApprovalProjects(
   correlationId: string,
   counts: { readonly requested: number; readonly resolved: number },
-  failure: Failure | undefined,
+  failure: ApprovalReadFailure | undefined,
   durationMs: number,
 ): void {
   try {
     processServerLogSink().write(
       activityLogEvent(
         PROJECT_NAMES,
-        { correlationId, level: routineOutcome(failure) ? "info" : "warn" },
+        { correlationId, level: routineApprovalFailure(failure) ? "info" : "warn" },
         {
           projectCount: counts.requested,
           resolvedCount: counts.resolved,
@@ -124,18 +125,30 @@ function recordJiraApprovalProjects(
       ),
     );
   } catch (error) {
-    recordActivityLogLoss("port-sink-failed");
-    emitServerDiagnostic(
-      undefined,
-      serverDiagnosticFromError({
-        correlationId,
-        operation: "jira.approval.project-log-failed",
-        source: "jira-chat-approval-projects",
-        error,
-        redact: () => "server-operation-failed",
-      }),
-    );
+    reportApprovalLogFault(correlationId, "jira.approval.project-log-failed", error);
   }
+}
+
+/**
+ * A line that could not be written is a lost line, counted in the loss ledger, with a body-free
+ * diagnostic naming the closed operation; the approval card is never held back by it.
+ */
+export function reportApprovalLogFault(
+  correlationId: string,
+  operation: "jira.approval.project-log-failed" | "jira.approval.names-log-failed",
+  error: unknown,
+): void {
+  recordActivityLogLoss("port-sink-failed");
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId,
+      operation,
+      source: "jira-chat-approval-projects",
+      error,
+      redact: () => "server-operation-failed",
+    }),
+  );
 }
 
 function addReference(refs: string[], value: unknown): void {
@@ -164,13 +177,35 @@ export function jiraApprovalProjectReferences(
   return refs.slice(0, JIRA_APPROVAL_PROJECTS_MAX);
 }
 
+/** The issue type ids a write carries (a create's, or each draft item's), the ones a card must name. */
+export function jiraApprovalIssueTypeReferences(
+  deps: Pick<UiHandlerDeps, "jiraDraftStore">,
+  chatId: string,
+  tool: string,
+  args: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  const ids: unknown[] = [];
+  if (tool === "jira.draft") {
+    const resolved = chatDraftArguments(deps.jiraDraftStore, chatId, args);
+    for (const item of resolved.ok ? (parseJiraDraft(resolved.arguments)?.items ?? []) : [])
+      ids.push(item.issueTypeId);
+  } else {
+    ids.push(args.issueTypeId);
+  }
+  return [
+    ...new Set(
+      ids.filter((id): id is string => typeof id === "string" && PROJECT_REFERENCE.test(id)),
+    ),
+  ];
+}
+
 interface ReadOutcome {
   readonly project: JiraApprovalProject;
-  readonly failure?: Failure;
+  readonly failure?: ApprovalReadFailure;
 }
-type ApprovalProjectDeps = JiraChatAuthorityDeps &
+export type ApprovalProjectDeps = JiraChatAuthorityDeps &
   Pick<UiHandlerDeps, "atlassianConnectorCredentials" | "redactor">;
-interface ApprovalProjectOptions {
+export interface ApprovalProjectOptions {
   readonly chatId: string;
   readonly authorityReference: EditorAgentGovernedAuthorityReference;
   readonly signal: AbortSignal;
@@ -182,7 +217,7 @@ interface ApprovalProjectOptions {
 }
 
 /** A lookup that faulted is a failure of the convenience, never of the card: the reference stays. */
-function reportReadFault(correlationId: string, error: unknown): void {
+export function reportReadFault(correlationId: string, error: unknown): void {
   emitServerDiagnostic(
     undefined,
     serverDiagnosticFromError({
@@ -206,13 +241,14 @@ export async function reviewedJiraProjects(
   deps: ApprovalProjectDeps,
   options: ApprovalProjectOptions,
   references: readonly string[],
+  issueTypeIds: readonly string[] = [],
 ): Promise<readonly JiraApprovalProject[] | undefined> {
   if (references.length === 0) return undefined;
   const started = Date.now();
   const { correlationId } = options;
   let outcomes: readonly ReadOutcome[];
   try {
-    outcomes = await lookup(deps, options, references);
+    outcomes = await lookup(deps, options, references, new Set(issueTypeIds));
   } catch (error) {
     reportReadFault(correlationId, error);
     outcomes = references.map((ref) => ({ project: { ref }, failure: "failed" }));
@@ -233,7 +269,31 @@ async function lookup(
   deps: ApprovalProjectDeps,
   options: ApprovalProjectOptions,
   references: readonly string[],
+  issueTypeIds: ReadonlySet<string>,
 ): Promise<readonly ReadOutcome[]> {
+  const scope = approvalReadScope(deps, options);
+  if (scope === undefined)
+    return references.map((ref) => ({ project: { ref }, failure: "not-admitted" }));
+  const { connection, run } = scope;
+  return Promise.all(
+    references.map((ref, index) => readOne(connection, run, ref, index, issueTypeIds)),
+  );
+}
+
+/** What every approval-time metadata read shares: one admitted connection and one window. */
+export interface ApprovalReadScope {
+  readonly connection: Parameters<typeof readJiraProjectIdentity>[0];
+  readonly run: ReadRun;
+}
+
+/**
+ * The admitted, read-only connection and the one bounded window of an approval's metadata reads, or
+ * undefined when nothing is admitted to read (no current authority, no credential, a stopped turn).
+ */
+export function approvalReadScope(
+  deps: ApprovalProjectDeps,
+  options: ApprovalProjectOptions,
+): ApprovalReadScope | undefined {
   const { chatId, authorityReference, correlationId } = options;
   const signal = AbortSignal.any([
     options.signal,
@@ -252,21 +312,21 @@ async function lookup(
     correlationId,
   );
   const credentials = deps.atlassianConnectorCredentials;
-  if (!current.ok || credentials === undefined || !allowed())
-    return references.map((ref) => ({ project: { ref }, failure: "not-admitted" }));
+  if (!current.ok || credentials === undefined || !allowed()) return undefined;
   const http = credentials.httpBodyPortFactory(current.credential, correlationId, {
     beforeDispatch: (request) => request.method === "GET" && allowed(),
   });
-  const connection = {
-    baseUrl: current.credential.baseUrl,
-    deployment: current.credential.deployment,
-    http,
+  return {
+    connection: {
+      baseUrl: current.credential.baseUrl,
+      deployment: current.credential.deployment,
+      http,
+    },
+    run: { signal, turn: options.signal, allowed, correlationId, redactor: deps.redactor },
   };
-  const run = { signal, turn: options.signal, allowed, correlationId, redactor: deps.redactor };
-  return Promise.all(references.map((ref, index) => readOne(connection, run, ref, index)));
 }
 
-interface ReadRun {
+export interface ReadRun {
   readonly signal: AbortSignal;
   readonly turn: AbortSignal;
   readonly allowed: () => boolean;
@@ -275,10 +335,10 @@ interface ReadRun {
 }
 
 /** Resolves when the window ends or the turn stops, whichever comes first, so no read outlives it. */
-function windowEnded(run: ReadRun, ref: string): Promise<ReadOutcome> {
+export function windowEnded(run: ReadRun): Promise<"cancelled" | "timeout"> {
   return new Promise((resolve) => {
     const settle = (): void => {
-      resolve({ project: { ref }, failure: run.turn.aborted ? "cancelled" : "timeout" });
+      resolve(run.turn.aborted ? "cancelled" : "timeout");
     };
     if (run.signal.aborted) settle();
     else run.signal.addEventListener("abort", settle, { once: true });
@@ -294,12 +354,18 @@ function shown(
   ref: string,
   read: Extract<JiraProjectIdentityResult, { readonly ok: true }>,
   redactor: UiHandlerDeps["redactor"],
+  issueTypeIds: ReadonlySet<string>,
 ): JiraApprovalProject {
   const redacted: unknown = read.name === undefined ? undefined : redactor(read.name);
-  const named =
-    read.name !== undefined && redacted === read.name
-      ? { ref, key: read.key, name: read.name }
-      : { ref, key: read.key };
+  const issueTypes = (read.issueTypes ?? []).filter(
+    (type) => issueTypeIds.has(type.id) && redactor(type.name) === type.name,
+  );
+  const named = {
+    ref,
+    key: read.key,
+    ...(read.name !== undefined && redacted === read.name ? { name: read.name } : {}),
+    ...(issueTypes.length === 0 ? {} : { issueTypes }),
+  };
   return isJiraApprovalProject(named) ? named : { ref };
 }
 
@@ -308,6 +374,7 @@ function readOne(
   run: ReadRun,
   ref: string,
   index: number,
+  issueTypeIds: ReadonlySet<string>,
 ): Promise<ReadOutcome> {
   const attempt = (async (): Promise<ReadOutcome> => {
     try {
@@ -322,12 +389,15 @@ function readOne(
         ref,
       );
       return read.ok
-        ? { project: shown(ref, read, run.redactor) }
+        ? { project: shown(ref, read, run.redactor, issueTypeIds) }
         : { project: { ref }, failure: read.reason };
     } catch (error) {
       reportReadFault(run.correlationId, error);
       return { project: { ref }, failure: "failed" };
     }
   })();
-  return Promise.race([attempt, windowEnded(run, ref)]);
+  return Promise.race([
+    attempt,
+    windowEnded(run).then((failure): ReadOutcome => ({ project: { ref }, failure })),
+  ]);
 }

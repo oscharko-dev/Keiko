@@ -1440,6 +1440,25 @@ display data: it is never part of the action digest, so a name Jira later change
 an approval, and the UI only shows it
 (the card prefers it over names the Chat read earlier).
 
+*Transition, issue type and field names (R04).* The same rule holds for every id the dispatched
+arguments carry on the Release 1 write path: a card never shows an id as its only content. The
+server reads, once and bounded as above, only Jira's own answer for this person (profile language;
+never a table of the product) and stores it on the approval view, so a reloaded or restored card says
+what the first one said. A status change is named by the transition's name and the status it leads
+to (`transition: { ref, name?, targetStatusName? }`, from the issue's own `transitions` read, shown
+as "In Progress (Start progress)" or the status alone where the names agree); the issue types a
+create or draft carries are named by the same `project/{idOrKey}` read that names the project
+(`projects[].issueTypes`, only the referenced ones the project lists); and the fields a write
+carries (`customfield_10112`) by one `field` list read (`fields`, only the referenced ones). What
+Jira did not name is said in words with the id as the detail ("Field customfield_10112 (Jira gave
+no name for it)", "ID 10002 (Jira gave no name for it)", and for a transition whose list could not
+be read, a sentence with the transition ID); a numeric id that is no name is marked as an id. The
+closed outcome of the transition and field reads is recorded body-free, with counts only, on
+`jira.approval.names` (`kind`: `transition` or `fields`). All of it is display data, never part of
+the action digest. Choice values inside a field (priority, version, component, sprint, user) are
+still named only from the Chat's own metadata reads (`jiraChoiceValue`); resolving them at approval
+time is not part of this change.
+
 *Deselection.* The approving human may deselect items; the deselection is bound into the approval
 proof and extends to every item that depends on a deselected one. The stored approval view carries
 it as `excludedItemRefs` (a subset of the draft, so no count of its own), and the transcript store admits exactly one

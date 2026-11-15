@@ -1075,6 +1075,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.fact.projectAssignee": "Default assignee",
   "chat.jira.fact.issueType": "Issue type",
   "chat.jira.fact.transition": "Transition",
+  "chat.jira.fact.idUnnamed": "{id} (Jira gave no name for it)",
+  "chat.jira.fact.fieldUnnamed": "Field {id} (Jira gave no name for it)",
+  "chat.jira.fact.transitionUnread":
+    "Could not be read from Jira, so the status it leads to is not named here (transition ID {id}).",
   "chat.jira.fact.comment": "Comment",
   "chat.jira.fact.commentId": "Comment ID",
   "chat.jira.access.schemeId": "Scheme ID",

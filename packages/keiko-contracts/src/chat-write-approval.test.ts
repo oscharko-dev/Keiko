@@ -205,6 +205,78 @@ it.each(JIRA_AVATAR_UPLOAD_MUTATIONS)(
 describe("the projects a write approval names (F09)", () => {
   const draft = { ...approval(), operation: "jira.draft" as const };
   const named = { ref: "10002", key: "KEI", name: "Keiko synthetic" };
+  // R04: the status change a transition approval covers, named by Jira's own words for the person.
+  it("carries the transition's name and target status on a transition approval, or its reference alone", () => {
+    const base = { ...approval(), operation: "jira.transition" as const };
+    for (const transition of [
+      { ref: "11" },
+      { ref: "11", name: "Fortschritt starten" },
+      { ref: "11", name: "Start progress", targetStatusName: "In Progress" },
+    ])
+      expect(
+        validateChatToolWriteApprovalView({ ...base, transition }).ok,
+        JSON.stringify(transition),
+      ).toBe(true);
+    for (const transition of [
+      {},
+      { ref: "" },
+      { ref: "x11" },
+      { ref: "11", name: "" },
+      { ref: "11", name: " padded " },
+      { ref: "11", targetStatusName: "bad\u0007" },
+      { ref: "11", name: "n".repeat(256) },
+      { ref: "11", extra: "no" },
+      "11",
+      ["11"],
+    ])
+      expect(
+        validateChatToolWriteApprovalView({ ...base, transition }).ok,
+        JSON.stringify(transition),
+      ).toBe(false);
+  });
+
+  it("carries the names of the fields and of the issue types the server read, bounded and display-safe", () => {
+    const base = { ...approval(), operation: "jira.create" as const };
+    expect(
+      validateChatToolWriteApprovalView({
+        ...base,
+        projects: [
+          {
+            ref: "10000",
+            key: "REQ",
+            name: "Anforderungen",
+            issueTypes: [{ id: "10002", name: "Aufgabe" }],
+          },
+        ],
+        fields: [{ id: "customfield_10112", name: "Geschätzte Punkte" }],
+      }).ok,
+    ).toBe(true);
+    for (const patch of [
+      { fields: [] },
+      { fields: [{ id: "customfield_1", name: "" }] },
+      { fields: [{ id: "bad id", name: "x" }] },
+      {
+        fields: [
+          { id: "a", name: "x" },
+          { id: "a", name: "y" },
+        ],
+      },
+      { fields: [{ id: "a", name: "x", extra: 1 }] },
+      { fields: "none" },
+      { projects: [{ ref: "10000", key: "REQ", issueTypes: [{ id: "1", name: "bad\u0007" }] }] },
+    ])
+      expect(
+        validateChatToolWriteApprovalView({ ...base, ...patch }).ok,
+        JSON.stringify(patch),
+      ).toBe(false);
+  });
+
+  it("accepts a transition only on a jira.transition approval", () => {
+    expect(validateChatToolWriteApprovalView({ ...approval(), transition: { ref: "11" } }).ok).toBe(
+      false,
+    );
+  });
+
   it("carries each project's reference with the key and name the server read, or the reference alone", () => {
     for (const projects of [
       [named],

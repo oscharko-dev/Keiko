@@ -165,14 +165,24 @@ async function reviewedIdentity(
   return attachment === undefined ? undefined : { ...identity, attachment };
 }
 
-/** The reviewed identity, plus the projects the approval names by key and name (F09). */
+/**
+ * The reviewed identity, plus what the approval names by Jira's own words: the projects by key and
+ * name (F09) and a status change by its transition's name and target status (R04). Display only.
+ */
 async function withProjects(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
   identity: JiraChatWriteActionIdentity,
 ): Promise<JiraChatWriteActionIdentity> {
   const projects = await options.projectPreview?.(action);
-  return projects === undefined ? identity : { ...identity, projects };
+  const transition = await options.transitionPreview?.(action);
+  const fields = await options.fieldNamesPreview?.(action);
+  return {
+    ...identity,
+    ...(projects === undefined ? {} : { projects }),
+    ...(transition === undefined ? {} : { transition }),
+    ...(fields === undefined ? {} : { fields }),
+  };
 }
 
 /**

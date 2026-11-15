@@ -272,7 +272,8 @@ describe.each(["en", "de"] as const)("AC9 Jira card families in %s", (locale: Lo
       expect(screen.getByRole("button", { name: COPY[locale].approve })).toBeEnabled(),
     );
     expect(screen.getByText("Synthetic provider headline", { exact: true })).toBeVisible();
-    expect(screen.getByText("customfield_20001", { exact: true })).toBeVisible();
+    // The id stays as the detail of a plain sentence that says Jira gave no name for it (R04).
+    expect(screen.getByText(/customfield_20001 \(/u)).toBeVisible();
     expect(container).toHaveTextContent("Reviewed custom value");
     expect(
       screen.queryByText(locale === "en" ? "Summary" : "Zusammenfassung", { exact: true }),

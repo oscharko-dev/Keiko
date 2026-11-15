@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8f7b72db634a792d6b131eec09f0caf69583a7b068b2fe0f66f783b6caab8e44"
+    "catalogDigest": "6050fbf7bc7bbdaa0744f7d64bd2710e5f6e838a5dc6b142988dac1259a00ba3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 702,
-    "proofCount": 725,
-    "resolvedProofCount": 725,
+    "operationCount": 703,
+    "proofCount": 726,
+    "resolvedProofCount": 726,
     "failureClassCount": 403,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -152,6 +152,7 @@
         "http.request.body.failed",
         "http.request.body.received",
         "http.request.body.rejected",
+        "jira.approval.names",
         "jira.approval.project",
         "jira.attachment.source",
         "jira.catalog.selection",
@@ -2734,6 +2735,9 @@
     ],
     "indexing.start.refused.line": [
       "packages/keiko-server/src/local-knowledge-handlers.logging.test.ts"
+    ],
+    "jira.approval.names.line": [
+      "packages/keiko-server/src/atlassian/jiraChatApprovalNames.test.ts"
     ],
     "jira.approval.project.line": [
       "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.test.ts"

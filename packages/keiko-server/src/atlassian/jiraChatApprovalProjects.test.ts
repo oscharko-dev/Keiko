@@ -11,6 +11,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   PROJECT_READ_TIMEOUT_MS,
+  jiraApprovalIssueTypeReferences,
   jiraApprovalProjectReferences,
   reviewedJiraProjects,
 } from "./jiraChatApprovalProjects.js";
@@ -127,6 +128,26 @@ describe("which projects an approval's action targets", () => {
   });
 });
 
+describe("which issue types an approval's action carries", () => {
+  it("takes a create's issueTypeId and each draft item's, once", () => {
+    expect(
+      jiraApprovalIssueTypeReferences({}, "chat-1", "jira.create", { issueTypeId: "10002" }),
+    ).toEqual(["10002"]);
+    const items = [
+      { ref: "a", projectId: "1", issueTypeId: "10002", fields: { summary: "a" } },
+      { ref: "b", projectId: "1", issueTypeId: "10002", fields: { summary: "b" } },
+      { ref: "c", projectId: "1", issueTypeId: "10003", fields: { summary: "c" } },
+    ];
+    expect(jiraApprovalIssueTypeReferences({}, "chat-1", "jira.draft", { items })).toEqual([
+      "10002",
+      "10003",
+    ]);
+    expect(jiraApprovalIssueTypeReferences({}, "chat-1", "jira.edit", { issueKey: "A-1" })).toEqual(
+      [],
+    );
+  });
+});
+
 describe("reading the projects an approval names", () => {
   it("returns key and name as Jira answers, by id and by key, through one GET each", async () => {
     admitted();
@@ -149,6 +170,43 @@ describe("reading the projects an approval names", () => {
     });
     // Body-free: the line carries counts and a closed value, never a key, a name or an id.
     expect(JSON.stringify(logs.events)).not.toMatch(/Synthetic Project|Keiko synthetic|SYN|10000/u);
+  });
+  // R04 (b): a restored or approved create card showed "Issue type 10002". The same project read that
+  // names the project names the issue types the call carries, in the person's language.
+  it("names the issue types the call carries from the same project read, and only those", async () => {
+    admitted();
+    const withTypes = (path: string): ReturnType<AtlassianHttpBodyPort> =>
+      path.endsWith("/10000")
+        ? respond(200, {
+            id: "10000",
+            key: "SYN",
+            name: "Synthetic Project",
+            issueTypes: [
+              { id: "10001", name: "Geschichte" },
+              { id: "10002", name: "Aufgabe" },
+            ],
+          })
+        : found(path);
+    const projects = await reviewedJiraProjects(
+      deps(withTypes),
+      OPTIONS(),
+      ["10000"],
+      ["10002", "99999"],
+    );
+    expect(projects).toEqual([
+      {
+        ref: "10000",
+        key: "SYN",
+        name: "Synthetic Project",
+        issueTypes: [{ id: "10002", name: "Aufgabe" }],
+      },
+    ]);
+    expect(requested).toEqual([{ method: "GET", path: "/rest/api/2/project/10000" }]);
+  });
+  it("lists no issue type for a call that carries none", async () => {
+    admitted();
+    const projects = await reviewedJiraProjects(deps(found), OPTIONS(), ["10000"]);
+    expect(projects?.[0]).not.toHaveProperty("issueTypes");
   });
   it.each([
     [404, "not-found", "info"],

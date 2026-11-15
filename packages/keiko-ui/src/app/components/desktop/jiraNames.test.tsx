@@ -102,7 +102,7 @@ describe("the names on a Jira approval", () => {
     const review = within(screen.getByRole("region", { name: "Review Jira action" }));
     expect(review.getByText("Description")).toBeVisible();
     // A field the reads did not name keeps its id, and the restated target is said once.
-    expect(screen.getByText("customfield_1")).toBeVisible();
+    expect(screen.getByText("Field customfield_1 (Jira gave no name for it)")).toBeVisible();
     expect(screen.queryByText("issuetype")).toBeNull();
     expect(screen.getByText("Create Jira issues")).toBeVisible();
   });
@@ -113,11 +113,34 @@ describe("the names on a Jira approval", () => {
   });
   it("keeps target and custom ids while localizing built-in fields when the Chat did not read names", () => {
     renderInChat(transcript(draft("10002")));
-    expect(screen.getByText("Project 10000 · Issue type 10002")).toBeVisible();
+    expect(screen.getByText("Project 10000 · Issue type ID 10002")).toBeVisible();
     expect(screen.queryByText("description")).toBeNull();
     expect(screen.getByText("Description")).toBeVisible();
     expect(screen.getByText("Synthetic")).toBeVisible();
-    expect(screen.getByText("customfield_1")).toBeVisible();
+    expect(screen.getByText("Field customfield_1 (Jira gave no name for it)")).toBeVisible();
+  });
+  // R04: the names come with the approval, so the first card of a Chat and a restored one say the same.
+  it("names the issue type and a custom field from the approval itself, never from this Chat's reads", () => {
+    const named = {
+      ...draft("10002"),
+      approval: {
+        ...approval,
+        projects: [
+          {
+            ref: "10000",
+            key: "KEIKO",
+            name: "Keiko synthetic",
+            issueTypes: [{ id: "10002", name: "Aufgabe" }],
+          },
+        ],
+        fields: [{ id: "customfield_1", name: "Geschätzte Punkte" }],
+      },
+    };
+    renderInChat(transcript(named));
+    expect(screen.getByText("Project Keiko synthetic (KEIKO) · Issue type Aufgabe")).toBeVisible();
+    expect(screen.getByText("Geschätzte Punkte")).toBeVisible();
+    expect(screen.queryByText(/customfield_1/u)).toBeNull();
+    expect(screen.queryByText(/10002/u)).toBeNull();
   });
   it("names the project on the first card of a Chat from the approval itself (F09)", () => {
     const named = {
@@ -128,7 +151,7 @@ describe("the names on a Jira approval", () => {
       },
     };
     renderInChat(transcript(named));
-    expect(screen.getByText("Project Keiko synthetic (KEIKO) · Issue type 10002")).toBeVisible();
+    expect(screen.getByText("Project Keiko synthetic (KEIKO) · Issue type ID 10002")).toBeVisible();
     expect(screen.queryByText(/Project 10000/u)).toBeNull();
   });
   it("lets the approval's key and name win over what an earlier read of the Chat called the project", () => {
@@ -143,12 +166,12 @@ describe("the names on a Jira approval", () => {
       transcript(read("jira_projects", [{ id: "10000", name: "Stale name" }])),
       transcript(named),
     );
-    expect(screen.getByText("Project Keiko synthetic (KEIKO) · Issue type 10002")).toBeVisible();
+    expect(screen.getByText("Project Keiko synthetic (KEIKO) · Issue type ID 10002")).toBeVisible();
   });
   it("marks a numeric id Jira did not answer as an id and shows a key as sent, never a bare number", () => {
     const unnamed = { ...draft("10002"), approval: { ...approval, projects: [{ ref: "10000" }] } };
     renderInChat(transcript(unnamed));
-    expect(screen.getByText("Project ID 10000 · Issue type 10002")).toBeVisible();
+    expect(screen.getByText("Project ID 10000 · Issue type ID 10002")).toBeVisible();
     const keyed = withApprovalProjects(
       NO_JIRA_NAMES,
       "binding",

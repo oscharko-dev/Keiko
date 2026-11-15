@@ -522,10 +522,20 @@ export const JIRA_APPROVAL_PROJECTS_MAX = 8;
 const APPROVAL_PROJECT_REF = /^\w{1,32}$/u;
 const APPROVAL_PROJECT_KEY = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/u;
 const APPROVAL_PROJECT_NAME_CHARS_MAX = 255;
+/** A Jira id and the name Jira gives it to this person, for a card that must not show the id alone. */
+export interface JiraApprovalNamedId {
+  readonly id: string;
+  readonly name: string;
+}
 export interface JiraApprovalProject {
   readonly ref: string;
   readonly key?: string;
   readonly name?: string;
+  /**
+   * The issue types the call references that this project's own answer names, by id. A type the
+   * project does not list is simply absent: the card then says so in words and never invents a name.
+   */
+  readonly issueTypes?: readonly JiraApprovalNamedId[];
 }
 // eslint-disable-next-line no-control-regex -- a project name is shown to people.
 const DISPLAY_TEXT_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -537,6 +547,28 @@ export function isJiraApprovalProjectName(value: unknown): value is string {
     value.length > 0 &&
     value.length <= APPROVAL_PROJECT_NAME_CHARS_MAX &&
     !DISPLAY_TEXT_FORBIDDEN.test(value)
+  );
+}
+export const JIRA_APPROVAL_NAMES_MAX = 64;
+const APPROVAL_NAMED_ID = /^[A-Za-z0-9_.:-]{1,80}$/u;
+export function isJiraApprovalNamedId(value: unknown): value is JiraApprovalNamedId {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const id: unknown = Reflect.get(value, "id");
+  return (
+    Object.keys(value).sort(compareStrings).join() === "id,name" &&
+    typeof id === "string" &&
+    APPROVAL_NAMED_ID.test(id) &&
+    isJiraApprovalProjectName(Reflect.get(value, "name"))
+  );
+}
+/** The named ids a card carries: bounded, each id once. Absent means none was read. */
+export function isJiraApprovalNamedIds(value: unknown): value is readonly JiraApprovalNamedId[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= JIRA_APPROVAL_NAMES_MAX &&
+    value.every(isJiraApprovalNamedId) &&
+    new Set(value.map((entry: JiraApprovalNamedId) => entry.id)).size === value.length
   );
 }
 function isApprovalProjectIdentity(value: object, keys: string): boolean {
@@ -551,10 +583,16 @@ function isApprovalProjectIdentity(value: object, keys: string): boolean {
 export function isJiraApprovalProject(value: unknown): value is JiraApprovalProject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const ref: unknown = Reflect.get(value, "ref");
+  const keys = Object.keys(value)
+    .filter((key) => key !== "issueTypes")
+    .sort(compareStrings)
+    .join();
   return (
     typeof ref === "string" &&
     APPROVAL_PROJECT_REF.test(ref) &&
-    isApprovalProjectIdentity(value, Object.keys(value).sort(compareStrings).join())
+    isApprovalProjectIdentity(value, keys) &&
+    (!Object.hasOwn(value, "issueTypes") ||
+      isJiraApprovalNamedIds(Reflect.get(value, "issueTypes")))
   );
 }
 export function isJiraApprovalProjects(value: unknown): value is readonly JiraApprovalProject[] {
@@ -564,6 +602,33 @@ export function isJiraApprovalProjects(value: unknown): value is readonly JiraAp
     value.length <= JIRA_APPROVAL_PROJECTS_MAX &&
     value.every(isJiraApprovalProject) &&
     new Set(value.map((entry: JiraApprovalProject) => entry.ref)).size === value.length
+  );
+}
+/**
+ * The status change a `jira.transition` approval covers, read by the server when the approval was
+ * requested, in the words Jira shows the acting person: the transition id exactly as the call carries
+ * it (`ref`) and, when Jira's transition list for the issue answered, the transition's name and the
+ * status it leads to. An entry with only the `ref` means the list could not be read: the card says so
+ * in words and never invents a name. Bounded; never a remote body, and never part of the action's
+ * digest (the display changes, the binding does not).
+ */
+export interface JiraApprovalTransition {
+  readonly ref: string;
+  readonly name?: string;
+  readonly targetStatusName?: string;
+}
+const APPROVAL_TRANSITION_REF = /^\d{1,10}$/u;
+const APPROVAL_TRANSITION_KEYS = new Set(["ref", "name", "targetStatusName"]);
+export function isJiraApprovalTransition(value: unknown): value is JiraApprovalTransition {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const ref: unknown = Reflect.get(value, "ref");
+  return (
+    typeof ref === "string" &&
+    APPROVAL_TRANSITION_REF.test(ref) &&
+    Object.keys(value).every((key) => APPROVAL_TRANSITION_KEYS.has(key)) &&
+    ["name", "targetStatusName"].every(
+      (key) => !Object.hasOwn(value, key) || isJiraApprovalProjectName(Reflect.get(value, key)),
+    )
   );
 }
 /** Rejected means a known local refusal before dispatch; non-2xx status alone remains unknown. */

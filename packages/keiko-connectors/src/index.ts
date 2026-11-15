@@ -339,6 +339,11 @@ export {
   readJiraProjectIdentity,
   type JiraProjectIdentityResult,
 } from "./jira-project-identity.js";
+export { readJiraFieldNames, type JiraFieldNamesResult } from "./jira-field-names.js";
+export {
+  readJiraTransitionIdentity,
+  type JiraTransitionIdentityResult,
+} from "./jira-transition-identity.js";
 export {
   JIRA_TEMPLATE_FINDING_CODES,
   checkJiraIssueTemplate,

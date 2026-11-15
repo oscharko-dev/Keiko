@@ -334,13 +334,23 @@ let draftToSend: Record<string, unknown> = DRAFT_ARGUMENTS;
 /** The arguments the scripted model sends to the draft batch; set means round one calls it. */
 let batchToSend: Record<string, unknown> | undefined;
 /** An attachment call names a connected file; `beforeCall` connects the folder as the model calls. */
-type Mutation = boolean | { readonly attach: string; beforeCall?: () => void };
+type Mutation =
+  | boolean
+  | { readonly attach: string; beforeCall?: () => void }
+  | { readonly transition: TransitionCall };
+/** A status change the scripted model proposes, and the fields it carries (R04). */
+interface TransitionCall {
+  readonly issueKey: string;
+  readonly transitionId: string;
+  readonly fields: Record<string, unknown>;
+}
 /** A backlog draft call: the fixed three-item draft, or arguments produced when the model calls. */
 type DraftCall = boolean | (() => Record<string, unknown>);
 function offeredTool(mutation: Mutation, draft: DraftCall): string {
   if (batchToSend !== undefined) return "keiko.jira.draft.batch";
   if (draft) return "keiko.jira.draft";
-  if (typeof mutation === "object") return "keiko.jira.attach";
+  if (typeof mutation === "object")
+    return "transition" in mutation ? "keiko.jira.transition" : "keiko.jira.attach";
   return mutation ? "keiko.jira.comment" : "keiko.jira.projects";
 }
 /** A model that corrects its comment between rounds, and the answer Jira gives the first write. */
@@ -357,11 +367,17 @@ function toolArguments(
   if (batchToSend !== undefined) return batchToSend;
   if (draft) return typeof draft === "function" ? draft() : draftToSend;
   if (typeof mutation === "object")
-    return {
-      issueKey: "KEIKO-1",
-      source: { kind: "connected-file", path: mutation.attach },
-    };
+    return "transition" in mutation
+      ? { ...mutation.transition }
+      : {
+          issueKey: "KEIKO-1",
+          source: { kind: "connected-file", path: mutation.attach },
+        };
   return mutation ? { issueKey, body } : {};
+}
+/** An attachment call connects its folder as the model calls; no other mutation has a hook. */
+function connectBeforeCall(mutation: Mutation): void {
+  if (typeof mutation === "object" && "attach" in mutation) mutation.beforeCall?.();
 }
 /** `true` keeps requesting a tool; a number requests that many rounds, then answers. */
 function endsTurn(repeatTools: boolean | number, round: number): boolean {
@@ -474,7 +490,7 @@ function syntheticModel(
     operationRound++;
     if (endsTurn(repeatTools, operationRound)) return finalAnswer(base);
     const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
-    if (typeof mutation === "object") mutation.beforeCall?.();
+    connectBeforeCall(mutation);
     return {
       ...base,
       content: "",
@@ -1183,6 +1199,8 @@ function syntheticReply(
   uploads: readonly number[],
 ): { readonly status: number; readonly bodyText: string } {
   const write = request.method !== "GET";
+  if (typeof mutation === "object" && "transition" in mutation)
+    return transitionReply(new URL(request.url).pathname);
   if (typeof mutation === "object")
     return {
       status: 200,
@@ -1192,6 +1210,70 @@ function syntheticReply(
     status: write ? 201 : 200,
     bodyText: mutation ? JSON.stringify({ id: "10001", body: "Synthetic approved comment" }) : "[]",
   };
+}
+/**
+ * A Jira whose acting person reads German: the transitions of the issue and the instance's field list,
+ * which the approval card names its status change and its carried field from (R04).
+ */
+const POINTS_FIELD = {
+  fieldId: "customfield_10112",
+  name: "Geschätzte Punkte",
+  required: false,
+  operations: ["set"],
+  schema: { type: "number", custom: "com.atlassian.jira.plugin.system.customfieldtypes:float" },
+};
+function transitionReply(path: string): { readonly status: number; readonly bodyText: string } {
+  if (path.endsWith("/transitions"))
+    return {
+      status: 200,
+      bodyText: JSON.stringify({
+        transitions: [
+          { id: "21", name: "Erledigen", to: { id: "9", name: "Erledigt" }, fields: {} },
+          {
+            id: "31",
+            name: "Fortschritt starten",
+            to: { id: "3", name: "In Arbeit" },
+            fields: { customfield_10112: POINTS_FIELD },
+          },
+        ],
+      }),
+    };
+  if (path.endsWith("/field"))
+    return {
+      status: 200,
+      bodyText: JSON.stringify([{ id: "customfield_10112", name: "Geschätzte Punkte" }]),
+    };
+  if (path.endsWith("/editmeta"))
+    return {
+      status: 200,
+      bodyText: JSON.stringify({ fields: { customfield_10112: POINTS_FIELD } }),
+    };
+  if (path.endsWith("/issue/KEIKO-1"))
+    return {
+      status: 200,
+      bodyText: JSON.stringify({
+        id: "10001",
+        key: "KEIKO-1",
+        fields: {
+          project: { key: "KEIKO" },
+          issuetype: { id: "10001", name: "Story" },
+          summary: "An existing summary that is long enough",
+          description: "An existing description",
+          labels: [],
+          issuelinks: [],
+        },
+      }),
+    };
+  if (path.endsWith("/project/KEIKO"))
+    return {
+      status: 200,
+      bodyText: JSON.stringify({
+        id: "10010",
+        key: "KEIKO",
+        issueTypes: [{ id: "10001", name: "Story" }],
+      }),
+    };
+  return { status: 200, bodyText: "[]" };
 }
 /** Jira's attachment endpoints for the synthetic issue: the switch, the upload and the readback. */
 function attachmentBody(method: string, path: string, uploads: readonly number[]): string {
@@ -2716,6 +2798,21 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     expect(approval).toMatchObject({
       operation: "jira.draft",
       projects: [{ ref: "10000", key: "SYN", name: "Synthetic Project" }],
+    });
+    await decidePendingWrite(f, "reject");
+    expect((await pending).status).toBe(200);
+  });
+
+  // R04 (b): the staged draft's issue type is named by the same project read that names the project.
+  it("names the issue types of a staged draft's approval from the project's own answer", async () => {
+    const { f } = stagedFixture();
+    const pending = handleSendDesktopChat(sendContext(f, "staged-type-names"), f.deps);
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    const approval = await pendingWriteApproval(f);
+    expect(approval).toMatchObject({
+      operation: "jira.draft",
+      projects: [{ ref: "10000", issueTypes: [{ id: "10001", name: "Story" }] }],
     });
     await decidePendingWrite(f, "reject");
     expect((await pending).status).toBe(200);
@@ -5749,4 +5846,32 @@ describe("an expired write approval says that it expired and keeps the draft (#4
     ).toBe(true);
     expect(f.writes()).toBe(0);
   });
+});
+
+// R04: the approval of a status change names the transition and the status it leads to, and the field
+// it carries, as Jira answers for this person, instead of "Transition 31" and `customfield_10112`.
+// The names ride on the approval the server builds, so a reloaded or restored card says the same, and
+// the action digest the approval is bound to is the one of the call alone.
+it("names the transition, its target status and the carried field on the approval of a status change", async () => {
+  const call = {
+    issueKey: "KEIKO-1",
+    transitionId: "31",
+    fields: { customfield_10112: 5 },
+  };
+  const f = fixture({ transition: call });
+  const pending = send(f, "transition-names");
+  void pending.catch(() => undefined);
+  await awaitReadGrantedForWrite(f);
+  const approval = await pendingWriteApproval(f);
+  expect(approval).toMatchObject({
+    operation: "jira.transition",
+    transition: { ref: "31", name: "Fortschritt starten", targetStatusName: "In Arbeit" },
+    fields: [{ id: "customfield_10112", name: "Geschätzte Punkte" }],
+  });
+  expect(JSON.stringify(approval)).not.toMatch(/Erledigen|Erledigt/u);
+  // Display only: the same call with and without names has one action digest.
+  expect(firstToolExchange(f).call.arguments).toEqual(call);
+  await decidePendingWrite(f, "reject");
+  expect((await pending).status).toBe(200);
+  expect(f.writes()).toBe(0);
 });

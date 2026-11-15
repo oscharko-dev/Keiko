@@ -1131,6 +1131,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.fact.projectAssignee": "Standardbearbeiter",
   "chat.jira.fact.issueType": "Vorgangstyp",
   "chat.jira.fact.transition": "Statusübergang",
+  "chat.jira.fact.idUnnamed": "{id} (Jira nennt keinen Namen dazu)",
+  "chat.jira.fact.fieldUnnamed": "Feld {id} (Jira nennt keinen Namen dazu)",
+  "chat.jira.fact.transitionUnread":
+    "Konnte nicht aus Jira gelesen werden, daher steht hier nicht, in welchen Status es führt (Übergangs-ID {id}).",
   "chat.jira.fact.comment": "Kommentar",
   "chat.jira.fact.commentId": "Kommentar-ID",
   "chat.jira.access.schemeId": "Schema-ID",
