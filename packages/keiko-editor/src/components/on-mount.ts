@@ -76,6 +76,7 @@ import {
   registerKeikoDiagnostics,
   type DiagnosticsScheduler,
   type MonacoDiagnosticsEditor,
+  type MonacoDiagnosticsModel,
   type MonacoMarkerData,
   type MonacoMarkerEditorNamespace,
   type MonacoMarkerSeverities,
@@ -125,6 +126,7 @@ import {
   type EditorCallHierarchyResolver,
   type EditorCallHierarchyResponse,
   type MonacoCallHierarchyEditor,
+  type MonacoCallHierarchyModel,
 } from "./call-hierarchy-bridge.js";
 import {
   REFERENCES_ELIGIBLE_LANGUAGES,
@@ -207,6 +209,8 @@ export interface MountMonaco {
       dispose(): void;
       isDisposed?(): boolean;
     } | null;
+    // Diagnostics publish markers through this; optional so theme-only mounts need not provide it.
+    setModelMarkers?: MonacoMarkerEditorNamespace["setModelMarkers"];
   };
   readonly Uri?: { parse(value: string): MonacoUriLike };
   // `Alt` is needed for the host-owned command chords; `CtrlCmd` also backs save.
@@ -491,6 +495,7 @@ export interface MountEditor {
     getValue(): string;
     setValue?(text: string): void;
     getVersionId?(): number;
+    getLanguageId?(): string;
     getPositionAt?(offset: number): { readonly lineNumber: number; readonly column: number };
     onDidChangeContent?(listener: () => void): monaco.IDisposable;
     readonly uri?: MonacoUriLike;
@@ -868,21 +873,31 @@ function installSemanticTokensProvider(args: WireEditorOnMountArgs): MonacoDispo
   };
 }
 
+// The bridge reads the current model on every invocation, so the URI check runs per call: a model
+// swapped in after mount without a URI yields null instead of an unchecked shape.
+function callHierarchyModel(editor: MountEditor): MonacoCallHierarchyModel | null {
+  const model = editor.getModel?.();
+  const uri = model?.uri;
+  if (model === null || model === undefined || uri === undefined) return null;
+  return { getValue: (): string => model.getValue(), uri };
+}
+
 function installCallHierarchyAction(args: WireEditorOnMountArgs): MonacoDisposable | null {
   const wiring = args.callHierarchy;
   const editor = args.editor;
-  const model = editor.getModel?.();
   if (
     wiring === undefined ||
-    typeof editor.getPosition !== "function" ||
-    model === null ||
-    model === undefined ||
-    typeof model.getValue !== "function" ||
-    model.uri === undefined
+    editor.getPosition === undefined ||
+    callHierarchyModel(editor) === null
   )
     return null;
+  const callHierarchyEditor: MonacoCallHierarchyEditor = {
+    addAction: (descriptor) => editor.addAction(descriptor),
+    getPosition: () => editor.getPosition?.() ?? null,
+    getModel: () => callHierarchyModel(editor),
+  };
   return registerKeikoCallHierarchyAction({
-    editor: editor as unknown as MonacoCallHierarchyEditor,
+    editor: callHierarchyEditor,
     resolve: wiring.resolve,
     isCurrentDocument: wiring.isCurrentDocument,
     documentLanguage: wiring.documentLanguage,
@@ -966,6 +981,25 @@ interface DiagnosticsInstallContext {
   readonly markers: MonacoMarkerEditorNamespace;
 }
 
+type MountModel = NonNullable<ReturnType<NonNullable<MountEditor["getModel"]>>>;
+
+// The live model itself reaches `setModelMarkers`, so this narrows it instead of wrapping it.
+function isDiagnosticsModel(model: MountModel): model is MountModel & MonacoDiagnosticsModel {
+  return (
+    model.getVersionId !== undefined &&
+    model.getLanguageId !== undefined &&
+    model.onDidChangeContent !== undefined &&
+    model.uri !== undefined
+  );
+}
+
+// Checked per call: a model swapped in after mount that lacks a member the bridge calls yields
+// null (no markers) instead of an unchecked shape.
+function diagnosticsModel(editor: MountEditor): MonacoDiagnosticsModel | null {
+  const model = editor.getModel?.() ?? null;
+  return model !== null && isDiagnosticsModel(model) ? model : null;
+}
+
 function resolveDiagnosticsInstallContext(
   args: WireEditorOnMountArgs,
 ): DiagnosticsInstallContext | null {
@@ -973,20 +1007,21 @@ function resolveDiagnosticsInstallContext(
   if (diagnostics === undefined) {
     return null;
   }
-  const editorNamespace = args.monaco.editor as unknown as {
-    setModelMarkers?: MonacoMarkerEditorNamespace["setModelMarkers"];
-  };
+  const setModelMarkers = args.monaco.editor.setModelMarkers;
   const markerSeverity = args.monaco.MarkerSeverity;
-  const diagnosticsEditor = args.editor as unknown as MonacoDiagnosticsEditor;
+  const editor = args.editor;
   if (
-    typeof editorNamespace.setModelMarkers !== "function" ||
+    setModelMarkers === undefined ||
     markerSeverity === undefined ||
-    typeof diagnosticsEditor.getModel !== "function" ||
-    typeof diagnosticsEditor.onDidChangeModel !== "function"
+    editor.getModel === undefined ||
+    editor.onDidChangeModel === undefined
   ) {
     return null;
   }
-  const setModelMarkers = editorNamespace.setModelMarkers;
+  const diagnosticsEditor: MonacoDiagnosticsEditor = {
+    getModel: () => diagnosticsModel(editor),
+    onDidChangeModel: editor.onDidChangeModel.bind(editor),
+  };
   const markers: MonacoMarkerEditorNamespace = {
     MarkerSeverity: markerSeverity,
     setModelMarkers: (model, owner, markerData: readonly MonacoMarkerData[]): void => {

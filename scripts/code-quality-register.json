@@ -3242,15 +3242,13 @@
       "anti-slop/no-conditional-empty-object-spread": 1
     },
     "packages/keiko-editor/src/components/diagnostics-bridge.test.ts": {
-      "anti-slop/no-known-value-widening": 4,
+      "anti-slop/no-known-value-widening": 3,
       "anti-slop/no-unknown-parameters": 1
     },
     "packages/keiko-editor/src/components/diagnostics-bridge.ts": {
       "anti-slop/no-conditional-empty-object-spread": 4,
       "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unknown-returns": 2,
-      "anti-slop/no-unknown-type-aliases": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "packages/keiko-editor/src/components/diff-mount.test.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1,
@@ -3325,20 +3323,18 @@
       "anti-slop/no-known-value-widening": 3
     },
     "packages/keiko-editor/src/components/on-mount.test.ts": {
-      "anti-slop/no-chained-type-assertions": 20,
+      "anti-slop/no-chained-type-assertions": 19,
       "anti-slop/no-conditional-empty-object-spread": 2,
       "anti-slop/no-known-value-widening": 20,
-      "anti-slop/no-unknown-parameters": 2,
-      "anti-slop/require-safety-comment-for-type-assertion": 44
+      "anti-slop/no-unknown-parameters": 1,
+      "anti-slop/require-safety-comment-for-type-assertion": 42
     },
     "packages/keiko-editor/src/components/on-mount.ts": {
-      "anti-slop/no-chained-type-assertions": 3,
       "anti-slop/no-conditional-empty-object-spread": 6,
       "anti-slop/no-known-value-widening": 1,
-      "anti-slop/no-runtime-typeof": 5,
       "anti-slop/no-unknown-parameters": 1,
       "anti-slop/no-unknown-returns": 2,
-      "anti-slop/require-safety-comment-for-type-assertion": 9
+      "anti-slop/require-safety-comment-for-type-assertion": 3
     },
     "packages/keiko-editor/src/components/references-bridge.test.ts": {
       "anti-slop/no-known-value-widening": 1
@@ -4386,8 +4382,7 @@
       "anti-slop/no-chained-type-assertions": 2,
       "anti-slop/no-conditional-empty-object-spread": 2,
       "anti-slop/no-known-value-widening": 3,
-      "anti-slop/require-safety-comment-for-type-assertion": 5,
-      "oxc/no-accumulating-spread": 1
+      "anti-slop/require-safety-comment-for-type-assertion": 5
     },
     "packages/keiko-local-knowledge/src/parsers/pptx-parser.test.ts": {
       "anti-slop/no-runtime-typeof": 1
@@ -4591,11 +4586,8 @@
       "anti-slop/require-safety-comment-for-type-assertion": 6
     },
     "packages/keiko-local-knowledge/src/store-content-encryption.test.ts": {
-      "anti-slop/no-known-value-widening": 4,
-      "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/no-unknown-returns": 2,
-      "anti-slop/no-widen-then-assert": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 22
+      "anti-slop/no-known-value-widening": 2,
+      "anti-slop/require-safety-comment-for-type-assertion": 19
     },
     "packages/keiko-local-knowledge/src/store-content-encryption.ts": {
       "anti-slop/no-chained-type-assertions": 1,
@@ -4924,10 +4916,8 @@
     },
     "packages/keiko-memory-vault/src/schema.test.ts": {
       "anti-slop/no-chained-type-assertions": 3,
-      "anti-slop/no-known-value-widening": 3,
-      "anti-slop/no-unknown-returns": 2,
-      "anti-slop/no-widen-then-assert": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 13
+      "anti-slop/no-known-value-widening": 1,
+      "anti-slop/require-safety-comment-for-type-assertion": 10
     },
     "packages/keiko-memory-vault/src/schema.ts": {
       "anti-slop/no-runtime-typeof": 1,
@@ -11263,8 +11253,7 @@
       "anti-slop/no-unknown-parameters": 26,
       "anti-slop/no-unknown-returns": 4,
       "anti-slop/no-unsafe-dictionary-type": 11,
-      "anti-slop/require-safety-comment-for-type-assertion": 2,
-      "oxc/no-accumulating-spread": 1
+      "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "packages/keiko-server/src/grounded-overview-fallback.ts": {
       "anti-slop/require-safety-comment-for-type-assertion": 1
@@ -11476,8 +11465,7 @@
     "packages/keiko-server/src/grounded-scope-context.test.ts": {
       "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/no-unsafe-dictionary-type": 5,
-      "oxc/no-accumulating-spread": 1
+      "anti-slop/no-unsafe-dictionary-type": 4
     },
     "packages/keiko-server/src/grounded-search-release-blockers.test.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1,
@@ -18493,9 +18481,6 @@
     },
     "packages/keiko-workspace/src/codingRepositorySearchProjection.ts": {
       "anti-slop/no-known-value-widening": 1
-    },
-    "packages/keiko-workspace/src/codingRepositorySearchResult.ts": {
-      "oxc/no-accumulating-spread": 1
     },
     "packages/keiko-workspace/src/content-preservation.test.ts": {
       "anti-slop/no-known-value-widening": 1

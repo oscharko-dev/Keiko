@@ -1207,45 +1207,84 @@ describe("wireEditorOnMount navigation/action/signature providers (#2104)", () =
     );
   });
 
-  it("reads documentLanguage live at call-hierarchy action run time, not frozen at wiring time (KEIKO-0109)", async () => {
-    const fakes = buildFakes();
+  interface CallHierarchyFakeModel {
+    readonly getValue: () => string;
+    readonly uri?: { toString: () => string };
+    readonly getLineCount: () => number;
+    readonly getLineMaxColumn: () => number;
+  }
+
+  function callHierarchyModel(withUri: boolean): CallHierarchyFakeModel {
     const model = {
       getValue: (): string => "function target() {}",
-      uri: { toString: (): string => "keiko-editor://current" },
       getLineCount: (): number => 1,
       getLineMaxColumn: (): number => 21,
     };
-    const editor = {
+    return withUri
+      ? { ...model, uri: { toString: (): string => "keiko-editor://current" } }
+      : model;
+  }
+
+  function callHierarchyEditor(fakes: Fakes, getModel: () => CallHierarchyFakeModel): MountEditor {
+    return {
       ...fakes.editor,
       getPosition: (): { lineNumber: number; column: number } => ({ lineNumber: 1, column: 10 }),
-      getModel: () => model,
+      getModel,
     } as unknown as MountEditor;
+  }
+
+  function callHierarchyWiring(
+    resolve: EditorCallHierarchyResolver,
+    documentLanguage: () => EditorLanguageId,
+  ): NonNullable<WireEditorOnMountArgs["callHierarchy"]> {
+    return {
+      resolve,
+      isCurrentDocument: () => true,
+      streamId: "calls",
+      newRequestId: () => "c",
+      documentLanguage,
+      labels: { command: "Show Call Hierarchy" },
+      onResult: vi.fn(),
+    };
+  }
+
+  function callHierarchyRun(fakes: Fakes): ((editor: MountEditor) => Promise<void>) | undefined {
+    // Unlike the file's other actions, registerKeikoCallHierarchyAction's `run` is genuinely async
+    // (it awaits runLanguageBridgeCall internally); FakeActionDescriptor#run is typed `void` for
+    // its (synchronous) siblings, so reach the real returned promise through a local cast instead
+    // of widening the shared fake's type for every call site in this file.
+    return fakes
+      .actionDescriptors()
+      .find((descriptor) => descriptor.id === "keiko.editor.showCallHierarchy")?.run as
+      ((editor: MountEditor) => Promise<void>) | undefined;
+  }
+
+  it("checks the model per call-hierarchy run: a model without a URI swapped in after mount sends no request", async () => {
+    const fakes = buildFakes();
+    let current = callHierarchyModel(true);
+    const editor = callHierarchyEditor(fakes, () => current);
+    const resolve = vi.fn<EditorCallHierarchyResolver>((query) =>
+      Promise.resolve({ request: query.request.request, roots: [] }),
+    );
+    wire(fakes, { editor, callHierarchy: callHierarchyWiring(resolve, () => "typescript") });
+    current = callHierarchyModel(false);
+
+    await expect(callHierarchyRun(fakes)?.(editor)).resolves.toBeUndefined();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("reads documentLanguage live at call-hierarchy action run time, not frozen at wiring time (KEIKO-0109)", async () => {
+    const fakes = buildFakes();
+    const model = callHierarchyModel(true);
+    const editor = callHierarchyEditor(fakes, () => model);
     let language: EditorLanguageId = "typescript";
     const requests: EditorCallHierarchyRequest[] = [];
     const resolve: EditorCallHierarchyResolver = (query) => {
       requests.push(query.request);
       return Promise.resolve({ request: query.request.request, roots: [] });
     };
-    wire(fakes, {
-      editor,
-      callHierarchy: {
-        resolve,
-        isCurrentDocument: () => true,
-        streamId: "calls",
-        newRequestId: () => "c",
-        documentLanguage: () => language,
-        labels: { command: "Show Call Hierarchy" },
-        onResult: vi.fn(),
-      },
-    });
-    // Unlike the file's other actions, registerKeikoCallHierarchyAction's `run` is genuinely async
-    // (it awaits runLanguageBridgeCall internally); FakeActionDescriptor#run is typed `void` for
-    // its (synchronous) siblings, so reach the real returned promise through a local cast instead
-    // of widening the shared fake's type for every call site in this file.
-    const runCallHierarchyAction = fakes
-      .actionDescriptors()
-      .find((descriptor) => descriptor.id === "keiko.editor.showCallHierarchy")?.run as
-      ((editor: unknown) => Promise<void>) | undefined;
+    wire(fakes, { editor, callHierarchy: callHierarchyWiring(resolve, () => language) });
+    const runCallHierarchyAction = callHierarchyRun(fakes);
 
     await runCallHierarchyAction?.(editor);
     language = "python";
@@ -1441,7 +1480,7 @@ describe("wireEditorOnMount semantic tokens (#2280)", () => {
 describe("wireEditorOnMount diagnostics (#1201)", () => {
   // A diagnostics-capable monaco.editor (marker surface) + editor (model lifecycle), layered onto the
   // base fakes. The diagnostics install path narrows to these structural surfaces.
-  function diagnosticsFakes(): {
+  function diagnosticsFakes(withLanguageId = true): {
     readonly monaco: MountMonaco;
     readonly editor: MountEditor;
     readonly setMarkersCalls: () => number;
@@ -1449,13 +1488,15 @@ describe("wireEditorOnMount diagnostics (#1201)", () => {
   } {
     let modelDisposed = 0;
     let setMarkersCalls = 0;
-    const model = {
+    const modelWithoutLanguageId = {
       getValue: (): string => "const x = 1;\n",
       getVersionId: (): number => 1,
-      getLanguageId: (): string => "typescript",
       onDidChangeContent: (): { dispose: () => void } => ({ dispose: (): void => undefined }),
       uri: { toString: (): string => "inmemory://model/1" },
     };
+    const model = withLanguageId
+      ? { ...modelWithoutLanguageId, getLanguageId: (): string => "typescript" }
+      : modelWithoutLanguageId;
     const base = buildFakes();
     // Mirror the live namespace split: `setModelMarkers` on `monaco.editor`, `MarkerSeverity` on the
     // top-level `monaco` namespace.
@@ -1467,7 +1508,7 @@ describe("wireEditorOnMount diagnostics (#1201)", () => {
         setModelMarkers: (): void => {
           setMarkersCalls += 1;
         },
-      } as unknown as MountMonaco["editor"],
+      },
     };
     const editor = {
       ...base.editor,
@@ -1506,6 +1547,22 @@ describe("wireEditorOnMount diagnostics (#1201)", () => {
     dispose();
     // The clear-on-dispose write happened (markers were touched at least once).
     expect(fakes.setMarkersCalls()).toBeGreaterThanOrEqual(1);
+    expect(fakes.modelDisposed()).toBe(1);
+  });
+
+  it("binds no model that lacks a member the bridge calls, instead of throwing", () => {
+    const fakes = diagnosticsFakes(false);
+    const resolve = vi.fn<EditorDiagnosticsResolver>((query) =>
+      Promise.resolve({ request: query.request.request, diagnostics: [] }),
+    );
+    const dispose = wire(buildFakes(), {
+      editor: fakes.editor,
+      monaco: fakes.monaco,
+      diagnostics: { ...diagnosticsArg(), resolve },
+    });
+    dispose();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(fakes.setMarkersCalls()).toBe(0);
     expect(fakes.modelDisposed()).toBe(1);
   });
 

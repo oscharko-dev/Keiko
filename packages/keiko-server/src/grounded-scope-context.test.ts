@@ -47,16 +47,15 @@ function capture(
     return {
       log,
       completed: (): Readonly<Record<string, unknown>> =>
-        log.events
-          .filter(
-            (event) =>
-              event.op === "search.connected-context.completed" ||
-              event.op === "search.connected-context.completion-details",
-          )
-          .reduce<Readonly<Record<string, unknown>>>(
-            (joined, event) => ({ ...joined, ...event.extra }),
-            {},
-          ),
+        Object.fromEntries(
+          log.events
+            .filter(
+              (event) =>
+                event.op === "search.connected-context.completed" ||
+                event.op === "search.connected-context.completion-details",
+            )
+            .flatMap((event) => Object.entries(event.extra ?? {})),
+        ),
     };
   }
   const stateDir = mkdtempSync(join(tmpdir(), "keiko-known-fit-log-"));

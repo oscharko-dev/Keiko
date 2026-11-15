@@ -19,7 +19,7 @@
 // only rows that do not authenticate with the current key, and sets the marker only after plaintext
 // has been checkpointed and vacuumed away.
 
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 
 import {
   activityLogEvent,
@@ -378,7 +378,7 @@ function isWellFormedCheckpointRow(
 // the connection's busy-timeout configuration, SQLite can raise SQLITE_BUSY as a thrown error
 // instead of returning `{ busy: 1, ... }`. Both are transient-contention shapes and both are retried
 // identically below.
-function attemptWalCheckpointTruncate(db: DatabaseSync): WalCheckpointAttempt {
+function attemptWalCheckpointTruncate(db: WalCheckpointConnection): WalCheckpointAttempt {
   try {
     const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
       Partial<WalCheckpointResult> | undefined;
@@ -446,6 +446,12 @@ function checkpointDegradedError(last: WalCheckpointAttempt): KnowledgeStoreErro
     : new KnowledgeStoreError(message);
 }
 
+/** The part of a SQLite connection that the WAL checkpoint flush calls. */
+export interface WalCheckpointConnection {
+  prepare(sql: string): Pick<StatementSync, "get">;
+  exec(sql: string): void;
+}
+
 // Per ADR-0047 D4, the encryption-scope marker must only be written after this rewrite has fully
 // completed. Unlike keiko-memory-vault's sibling flush (#2906 KEIKO-0713: warn-and-continue, because
 // its marker had already been committed before that flush runs), this package's callers write the
@@ -460,7 +466,7 @@ function checkpointDegradedError(last: WalCheckpointAttempt): KnowledgeStoreErro
 // public package surface -- consumed only by migrateToEncrypted/upgradeEncryptedScope above and by
 // co-located tests.
 export function flushPlaintextResidue(
-  db: DatabaseSync,
+  db: WalCheckpointConnection,
   logSink: KnowledgeLogSink | undefined,
 ): void {
   let last: WalCheckpointAttempt = { kind: "threw", cause: undefined };
