@@ -214,6 +214,7 @@ function cardVerification(
     status: ctrl.unconfirmed ? undefined : currentVerifyStatus(connector, ctrl.verifyStatus),
     verifying:
       ctrl.operation === "verify" ||
+      ctrl.operation === "rotate" ||
       (connector.deployment === "data-center" &&
         connector.livePod?.verificationInProgress === true),
   };

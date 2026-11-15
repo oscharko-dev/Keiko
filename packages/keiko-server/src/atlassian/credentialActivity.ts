@@ -99,7 +99,8 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["verify", "sync", "request"],
+      // `verify-after-replace`: the check Keiko runs right after a token replacement (#4353).
+      values: ["verify", "verify-after-replace", "sync", "request"],
     },
     outcome: {
       type: "string",
@@ -225,7 +226,7 @@ export function recordConnectionCheck(
     | "verification-aborted"
     | "probe-inconclusive",
   verificationState?: "applied" | "stale",
-  source: "verify" | "request" = "verify",
+  source: "verify" | "verify-after-replace" | "request" = "verify",
   jiraCompatibility?: "verified" | "unverified",
   detail?: ConnectionCheckDetail,
 ): void {

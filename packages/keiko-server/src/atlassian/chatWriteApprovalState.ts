@@ -5,6 +5,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { validateChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import type {
+  JiraApprovalProject,
   JiraAttachmentPreview,
   JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -21,6 +22,8 @@ export interface JiraChatWriteActionIdentity extends ChatToolWriteActionIdentity
   readonly operation: JiraMutationOperation;
   /** The reviewed file of a `jira.attach` approval; never part of the action's identity (#4176). */
   readonly attachment?: JiraAttachmentPreview;
+  /** The projects the action targets, read when the approval was requested; never identity (F09). */
+  readonly projects?: readonly JiraApprovalProject[];
 }
 export interface ChatWriteApprovalEntry {
   readonly approval: ChatToolWriteApprovalView;

@@ -263,7 +263,12 @@ function sessionRunVisible(
   detail: CodingHistoryDetail | null,
   ignoredRun: string | undefined,
 ): boolean {
-  if (input.active || input.snapshot?.state === "recovery-required") return true;
+  if (input.active) return true;
+  // A run that needs recovery stays in view so its panel is read, until the person leaves it with
+  // New task (F30): the run remains reachable from Coding History and never locks the window.
+  if (input.snapshot?.state === "recovery-required" && ignoredRun !== input.snapshot.runId) {
+    return true;
+  }
   return (
     detail !== null &&
     input.snapshot?.conversationId === detail.task.id &&
@@ -505,6 +510,9 @@ function useNewTask(
         correlationId: newClientCorrelationId(),
         composerActivity: "coding-task-reset",
       });
+    }
+    if (current.snapshot?.state === "recovery-required") {
+      reportCodingWorkbenchInteraction({ interaction: "recovery-left" }, newClientCorrelationId());
     }
     ignoredRun.current = current.snapshot?.runId;
     awaitingRun.current = current.snapshot === null ? {} : undefined;

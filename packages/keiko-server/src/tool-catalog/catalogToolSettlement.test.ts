@@ -2,6 +2,7 @@ import { CatalogDispatchFault } from "./catalogToolErrors.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCatalogToolBinder } from "./catalogToolDispatch.js";
 import { catalogToolFixture } from "./__fixtures__/catalogToolFixture.js";
+import { chatTurnDeadlineSignal } from "../chat-tool-turn-deadline.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type {
   CatalogHandlerContext,
@@ -496,5 +497,94 @@ describe("catalog invocation settlement lifecycle-emit failure (b3-10)", () => {
     expect(diagnosticsRecord).toHaveBeenCalledWith(
       expect.objectContaining({ operation: "tool-catalog.settlement-emit-failed" }),
     );
+  });
+});
+
+// #4355: the deadline is a fact (the turn's deadline signal that fired, the timer that fired), not a
+// wall-clock comparison inside the callback that already announces it. The wall clock here stays a
+// full second short of the deadline throughout.
+describe("catalog invocation settlement: which cause fired decides (#4355)", () => {
+  async function stopped(
+    stop: (controller: AbortController) => void,
+  ): Promise<{ status: string | undefined; late: boolean }> {
+    const started = deferred<CatalogHandlerContext>();
+    const controller = new AbortController();
+    const fixture = fixtureWith(
+      (f) => ({
+        ...f.input,
+        handlerBindings: [
+          {
+            ...f.handler,
+            execute: (_args, context): Promise<CatalogHandlerResult> => {
+              started.resolve(context);
+              return new Promise(() => undefined);
+            },
+          },
+        ],
+      }),
+      (f) => ({ ...f.context, signal: controller.signal }),
+    );
+    const pending = fixture.binder.dispatch(fixture.request, ID);
+    await started.promise;
+    expect(fixture.now()).toBeLessThan(5000);
+    stop(controller);
+    const outcome = await pending;
+    return {
+      status: outcome.kind === "settled" ? outcome.result.status : undefined,
+      late: fixture.now() >= 5000,
+    };
+  }
+
+  it("settles timeout when the turn's deadline signal fires before the wall clock reaches the deadline", async () => {
+    const timeouts: AbortController[] = [];
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+      const controller = new AbortController();
+      timeouts.push(controller);
+      return controller.signal;
+    });
+    const deadline = chatTurnDeadlineSignal(1);
+    const result = await stopped(() => {
+      timeouts[0]?.abort(new DOMException("The operation timed out", "TimeoutError"));
+    });
+    expect(deadline.aborted).toBe(true);
+    expect(result).toEqual({ status: "timeout", late: false });
+  });
+
+  it("settles cancelled for a TimeoutError that is not the turn's deadline", async () => {
+    const result = await stopped((controller) => {
+      controller.abort(new DOMException("A provider call timed out", "TimeoutError"));
+    });
+    expect(result).toEqual({ status: "cancelled", late: false });
+  });
+
+  it("settles cancelled for a stop before the deadline", async () => {
+    const result = await stopped((controller) => {
+      controller.abort();
+    });
+    expect(result).toEqual({ status: "cancelled", late: false });
+  });
+
+  it("settles timeout when the call's own timer fires a millisecond before the wall clock reaches its deadline", async () => {
+    vi.useFakeTimers();
+    const started = deferred<undefined>();
+    const fixture = fixtureWith((f) => ({
+      ...f.input,
+      handlerBindings: [
+        {
+          ...f.handler,
+          execute: (): Promise<CatalogHandlerResult> => {
+            started.resolve(undefined);
+            return new Promise(() => undefined);
+          },
+        },
+      ],
+    }));
+    const pending = fixture.binder.dispatch(fixture.request, ID);
+    await started.promise;
+    // The timer is due by its own clock; the wall clock mock never moves, so it never reads the deadline.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fixture.now()).toBe(1000);
+    expect((await pending).kind).toBe("settled");
+    expect(fixture.primary.events.at(-1)?.extra?.status).toBe("timeout");
   });
 });

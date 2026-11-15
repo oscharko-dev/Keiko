@@ -511,6 +511,61 @@ export function isJiraAttachmentPreview(value: unknown): value is JiraAttachment
     SHA256_HEX.test(digest)
   );
 }
+/**
+ * The projects a write approval names, read by the server when the approval was requested: the
+ * project reference exactly as the call carries it (`ref`, a numeric id or a key) and, when Jira
+ * answered, the project's key and name. A name a card cannot show (too long, a control character)
+ * is dropped on its own and the key stays; a reference Jira did not answer carries neither, and the
+ * approval then shows that reference and never invents a name. Bounded; never a remote body.
+ */
+export const JIRA_APPROVAL_PROJECTS_MAX = 8;
+const APPROVAL_PROJECT_REF = /^\w{1,32}$/u;
+const APPROVAL_PROJECT_KEY = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/u;
+const APPROVAL_PROJECT_NAME_CHARS_MAX = 255;
+export interface JiraApprovalProject {
+  readonly ref: string;
+  readonly key?: string;
+  readonly name?: string;
+}
+// eslint-disable-next-line no-control-regex -- a project name is shown to people.
+const DISPLAY_TEXT_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f]/u;
+/** A project name a card can show: bounded, trimmed, no control characters. */
+export function isJiraApprovalProjectName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    value.length > 0 &&
+    value.length <= APPROVAL_PROJECT_NAME_CHARS_MAX &&
+    !DISPLAY_TEXT_FORBIDDEN.test(value)
+  );
+}
+function isApprovalProjectIdentity(value: object, keys: string): boolean {
+  if (keys === "ref") return true;
+  const key: unknown = Reflect.get(value, "key");
+  if (typeof key !== "string" || !APPROVAL_PROJECT_KEY.test(key)) return false;
+  return (
+    keys === "key,ref" ||
+    (keys === "key,name,ref" && isJiraApprovalProjectName(Reflect.get(value, "name")))
+  );
+}
+export function isJiraApprovalProject(value: unknown): value is JiraApprovalProject {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const ref: unknown = Reflect.get(value, "ref");
+  return (
+    typeof ref === "string" &&
+    APPROVAL_PROJECT_REF.test(ref) &&
+    isApprovalProjectIdentity(value, Object.keys(value).sort(compareStrings).join())
+  );
+}
+export function isJiraApprovalProjects(value: unknown): value is readonly JiraApprovalProject[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= JIRA_APPROVAL_PROJECTS_MAX &&
+    value.every(isJiraApprovalProject) &&
+    new Set(value.map((entry: JiraApprovalProject) => entry.ref)).size === value.length
+  );
+}
 /** Rejected means a known local refusal before dispatch; non-2xx status alone remains unknown. */
 export const JIRA_MUTATION_OUTCOMES = [
   "not-dispatched",

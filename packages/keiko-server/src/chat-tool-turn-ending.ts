@@ -34,7 +34,13 @@ export type ChatToolTurnEndReason =
   | "context-overflow"
   | "tool-not-offered"
   | "model-failure";
-const REASONS: readonly ChatToolTurnEndReason[] = [
+/**
+ * A turn that ended without any answer of its own (#4355). `deadline-cancelled`: the deadline fired and
+ * no exchange had settled. `request-aborted`: the request signal aborted, which is a person's Stop or a
+ * dropped connection; the server cannot tell the two apart, so they share one closed word.
+ */
+export type ChatToolTurnCancelReason = "deadline-cancelled" | "request-aborted";
+const REASONS: readonly (ChatToolTurnEndReason | ChatToolTurnCancelReason)[] = [
   "budget-exhausted",
   "deadline",
   "authority-invalid",
@@ -44,6 +50,8 @@ const REASONS: readonly ChatToolTurnEndReason[] = [
   "context-overflow",
   "tool-not-offered",
   "model-failure",
+  "deadline-cancelled",
+  "request-aborted",
 ];
 const REASON_TEXT: Readonly<Record<ChatToolTurnEndReason, string>> = {
   "budget-exhausted": "this turn used up its tool-call budget",
@@ -238,7 +246,7 @@ export function recordChatToolTurnEnded(
   input: {
     readonly correlationId: string;
     readonly messageId: string;
-    readonly reason: ChatToolTurnEndReason;
+    readonly reason: ChatToolTurnEndReason | ChatToolTurnCancelReason;
     readonly exchanges: readonly ChatToolExchange[];
     readonly budget: {
       readonly maxToolCalls: number;
@@ -251,7 +259,12 @@ export function recordChatToolTurnEnded(
     log.write(
       activityLogEvent(
         TURN_ENDED,
-        { correlationId: input.correlationId, level: "warn" },
+        // A person's stop or a dropped connection is a routine ending, not a warning; every other
+        // ending is a turn that ran out of room or time.
+        {
+          correlationId: input.correlationId,
+          level: input.reason === "request-aborted" ? "info" : "warn",
+        },
         {
           messageDigest: sha256Hex(input.messageId),
           reason: input.reason,

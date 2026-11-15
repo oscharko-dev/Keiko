@@ -1539,6 +1539,7 @@
           "atlassian.jira-draft",
           "atlassian.jira-draft-batch",
           "atlassian.jira-report",
+          "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
           "jira.citation.markers",
@@ -1576,6 +1577,10 @@
         },
         {
           "op": "atlassian.jira-report",
+          "mode": "correlation"
+        },
+        {
+          "op": "jira.approval.project",
           "mode": "correlation"
         },
         {
@@ -1653,6 +1658,7 @@
         "atlassian.jira-draft",
         "atlassian.jira-draft-batch",
         "atlassian.jira-report",
+        "jira.approval.project",
         "jira.attachment.source",
         "jira.catalog.selection",
         "jira.citation.markers",
@@ -2406,6 +2412,60 @@
             "causeChain": false
           },
           "proofIds": ["atlassian.jira-report.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "jira.approval.project",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "failure",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "projectCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "resolvedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "unresolvedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["jira.approval.project.line"],
           "replayReferences": [],
           "missingObligations": []
         },

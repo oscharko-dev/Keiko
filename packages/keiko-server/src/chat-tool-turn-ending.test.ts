@@ -233,6 +233,31 @@ describe("chatToolTurnPartialAnswer", () => {
   });
 });
 
+describe("the ending of a turn that gave no answer of its own is told by closed words (#4355)", () => {
+  const budget = { maxToolCalls: 250, maxRuntimeMs: 3_600_000 };
+  it.each([
+    ["request-aborted", "info"],
+    ["deadline-cancelled", "warn"],
+    ["deadline", "warn"],
+  ] as const)(
+    "records %s at level %s: a person's stop is routine, a deadline is not",
+    (reason, level) => {
+      const logs = createBufferedServerLogSink();
+      recordChatToolTurnEnded(logs, {
+        correlationId: "turn-ended-reason",
+        messageId: "message-private-id",
+        reason,
+        exchanges: TRANSCRIPT,
+        budget,
+      });
+      const event = logs.events.find((entry) => entry.op === "chat.tool-turn.ended");
+      expect(event?.level).toBe(level);
+      expect(event?.extra).toMatchObject({ reason });
+      expectActivityLogProof("chat.tool-turn.ended.line", formatActivityLogProofLine(event ?? {}));
+    },
+  );
+});
+
 describe("recordChatToolTurnEnded", () => {
   it("records only the reason, counts and envelope bounds", () => {
     const logs = createBufferedServerLogSink();

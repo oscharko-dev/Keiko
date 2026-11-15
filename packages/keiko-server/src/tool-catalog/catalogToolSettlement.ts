@@ -1,3 +1,4 @@
+import { isChatTurnDeadlineReason } from "../chat-tool-turn-deadline.js";
 import { catalogScopeDigest } from "./catalogToolRequest.js";
 import type {
   CatalogConsumer,
@@ -106,7 +107,7 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
     this.watch(this.context.signal);
     this.timer = setTimeout(
       () => {
-        this.checkStopped();
+        this.checkStopped(undefined, true);
       },
       Math.max(0, this.deadlineAt - this.state.options.now()),
     );
@@ -123,9 +124,21 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
     });
     if (signal.aborted) stop();
   }
-  public checkStopped(additionalSignal?: AbortSignal): boolean {
+  /**
+   * Settles the call when it has been stopped. It runs in the abort listener and the timer, so the
+   * clock it reads is the clock at the instant of the cause, and a deadline that already elapsed then
+   * stays the first cause over a stop that follows (the pinned precedence). The deadline is also a fact
+   * without any clock: the turn's deadline signal that fired, and the timer that fired (`timerFired`),
+   * each settle `timeout` even when the wall clock reads a millisecond short; any other abort is a
+   * cancellation (#4355).
+   */
+  public checkStopped(additionalSignal?: AbortSignal, timerFired = false): boolean {
     if (this.settled) return true;
-    if (this.state.options.now() >= this.deadlineAt) {
+    if (
+      timerFired ||
+      this.state.options.now() >= this.deadlineAt ||
+      this.abortedByDeadline(additionalSignal)
+    ) {
       this.finish("timeout", "deadline-exceeded");
       return true;
     }
@@ -134,6 +147,13 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
       return true;
     }
     return false;
+  }
+  /** Every aborted signal names the turn's deadline as its cause; a foreign timeout is not one. */
+  private abortedByDeadline(additionalSignal: AbortSignal | undefined): boolean {
+    const aborted = [this.context.signal, additionalSignal].filter(
+      (signal): signal is AbortSignal => signal?.aborted === true,
+    );
+    return aborted.length > 0 && aborted.every((signal) => isChatTurnDeadlineReason(signal.reason));
   }
   public reserve(): void {
     requireDispatch(this.handler !== undefined, "failed", "handler-unavailable");
