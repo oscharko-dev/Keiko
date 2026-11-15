@@ -370,7 +370,6 @@ export {
 export type {
   RegisterKeikoDiagnosticsArgs,
   DiagnosticsScheduler,
-  DiagnosticsTimerHandle,
   MonacoMarkerSeverities,
   MonacoMarkerData,
   DiagnosticOverviewMarker,

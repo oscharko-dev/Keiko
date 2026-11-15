@@ -99,21 +99,18 @@ export interface MonacoDiagnosticsEditor {
 }
 
 /**
- * A debounce timer id. The default scheduler returns the numeric id of its `setTimeout` timer: a
- * browser returns that number directly, and Node.js converts its timer object to the same id and
- * accepts it in `clearTimeout`.
+ * Injectable debounce scheduler so the lifecycle is deterministic under test. A handle is the numeric
+ * timer id: a browser's `setTimeout` returns it, and Node.js converts its timer object to the same id
+ * and accepts it in `clearTimeout`.
  */
-export type DiagnosticsTimerHandle = number;
-
-/** Injectable debounce scheduler so the lifecycle is deterministic under test. */
 export interface DiagnosticsScheduler {
-  schedule(callback: () => void, delayMs: number): DiagnosticsTimerHandle;
-  cancel(handle: DiagnosticsTimerHandle): void;
+  schedule(callback: () => void, delayMs: number): number;
+  cancel(handle: number): void;
 }
 
 /** The default scheduler: `setTimeout`/`clearTimeout`. */
 export const defaultDiagnosticsScheduler: DiagnosticsScheduler = {
-  schedule: (callback, delayMs): DiagnosticsTimerHandle => Number(setTimeout(callback, delayMs)),
+  schedule: (callback, delayMs): number => Number(setTimeout(callback, delayMs)),
   cancel: (handle): void => {
     clearTimeout(handle);
   },
@@ -250,7 +247,7 @@ interface DiagnosticsState {
   model: MonacoDiagnosticsModel | null;
   contentSub: MonacoDisposable | null;
   // `null` means "no timer scheduled".
-  timer: DiagnosticsTimerHandle | null;
+  timer: number | null;
   controller: AbortController | null;
   latestSeq: number;
 }
