@@ -1869,7 +1869,8 @@ describe.each([false, true])("a turn past the former fixed tool-call cap (stream
     expect(assistant?.content).toBe("No Jira projects are visible.");
     expect(assistant?.content).not.toContain("budget");
     if (stream) expect(body).toContain("event: done");
-  });
+    // Dozens of real tool rounds: more than half the default budget under coverage on a hosted runner.
+  }, 60_000);
 
   it("is cut at the former cap when the envelope is that narrow (control for the scenario)", async () => {
     const { f } = await runReads({
@@ -1881,7 +1882,7 @@ describe.each([false, true])("a turn past the former fixed tool-call cap (stream
     expect(f.requests()).toBe(FORMER_FIXED_CAP);
     const [, assistant] = f.deps.store.listMessages(f.chatId);
     expect(assistant?.content).toContain("this turn used up its tool-call budget");
-  });
+  }, 60_000);
 });
 
 // S11 of epic #4173: Gemma's compliance answer left out the seven estimate deviations the report

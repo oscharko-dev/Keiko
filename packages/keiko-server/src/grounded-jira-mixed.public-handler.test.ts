@@ -1135,7 +1135,9 @@ it("walks a real describe in a mixed turn to the ceiling: every size ends the tu
         : `${String(count)}:200:failed:too-large:3`,
     );
   }
-});
+  // Five whole mixed turns over the complete catalog: the same budget as the selection walk in
+  // jiraChatToolTurn.test.ts, because under coverage on a hosted runner it passes the default.
+}, 180_000);
 
 it("offers curated Jira projects and discovers an additional schema while retaining mixed grounding and its read grant", async () => {
   const f = runtime(false, {}, true);
