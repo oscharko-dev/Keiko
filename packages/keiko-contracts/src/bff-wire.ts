@@ -691,7 +691,7 @@ export interface ChatToolTurnEnd {
 }
 
 /**
- * A short fingerprint of an answer's text: its length and a 32-bit FNV-1a over its UTF-16 units.
+ * A short fingerprint of an answer's text: its length and a 32-bit FNV-1a over the code point at each UTF-16 index.
  * It binds a stored ending record to the exact text it describes; it is not a security digest and
  * never leaves the machine. One definition, used by the server that writes it and the Chat that
  * compares it.
@@ -699,7 +699,7 @@ export interface ChatToolTurnEnd {
 export function chatTurnEndAnswerFingerprint(text: string): string {
   let hash = 0x811c9dc5;
   for (let index = 0; index < text.length; index += 1) {
-    hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193) >>> 0;
+    hash = Math.imul(hash ^ (text.codePointAt(index) ?? 0), 0x01000193) >>> 0;
   }
   return `${String(text.length)}:${hash.toString(16).padStart(8, "0")}`;
 }
