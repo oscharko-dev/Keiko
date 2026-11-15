@@ -38,7 +38,7 @@ import {
  * reference alone, which the card says in words; the gate's own fail-closed read at dispatch is
  * unchanged, and so is the action digest the approval is bound to.
  */
-const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}-\d{1,12}$/u;
+const ISSUE_KEY = /^[A-Za-z]\w{0,63}-\d{1,12}$/u;
 const TRANSITION_ID = /^\d{1,10}$/u;
 
 const APPROVAL_NAMES = defineActivityLogOperation({
@@ -216,7 +216,7 @@ export async function reviewedJiraTransition(
 }
 
 /** Every field id a write names: the keys of `fields`, of each draft item's `fields`, and each update's field. */
-const FIELD_REFERENCE = /^[A-Za-z][A-Za-z0-9_]{0,79}$/u;
+const FIELD_REFERENCE = /^[A-Za-z]\w{0,79}$/u;
 function fieldKeys(fields: unknown): readonly string[] {
   return typeof fields === "object" && fields !== null && !Array.isArray(fields)
     ? Object.keys(fields)

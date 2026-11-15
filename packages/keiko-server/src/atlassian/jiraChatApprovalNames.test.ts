@@ -294,13 +294,12 @@ describe("reading the field names an approval shows", () => {
   });
   it("is absent when the write carries no field, reading nothing", async () => {
     admitted();
-    expect(
-      await reviewedJiraFieldNames(
-        deps(() => respond(200, FIELD_LIST)),
-        OPTIONS(),
-        [],
-      ),
-    ).toBe(undefined);
+    const names = await reviewedJiraFieldNames(
+      deps(() => respond(200, FIELD_LIST)),
+      OPTIONS(),
+      [],
+    );
+    expect(names).toBeUndefined();
     expect(requested).toEqual([]);
   });
   it("is absent, with the failure recorded, when the list cannot be read", async () => {
