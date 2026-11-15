@@ -271,6 +271,40 @@ const APPROVED_SKILLS: SkillDiscoveryResultV1 = (() => {
   return validated.value;
 })();
 
+/** The named inputs of the orchestrator fixture; every one is optional (#4359 audit: no padding). */
+interface FixtureOptions {
+  readonly activityProjection?: CodingSafeActivityProjection | undefined;
+  readonly clock?: (() => Date) | undefined;
+  readonly seededRows?: readonly CodingRuntimeSnapshot[] | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
+  readonly descriptionSupport?: CodingRuntimeDescriptionSupport | undefined;
+  readonly verifiedCommits?: ReadonlyMap<string, VerifiedCommitResult> | undefined;
+  // #3384 B3-22: overridable so the automatic-description-dispatch suite (the one path here that
+  // reaches the real codingRuntimeDescriptionJobStore, which now enforces correlation.ts's
+  // 8-character floor) can mint ids that satisfy it, without changing every other describe block's
+  // established "run-1"/"run-2" convention.
+  readonly newRunId?: (() => string) | undefined;
+  readonly snapshotStore?: CodingRuntimeSnapshotStore | undefined;
+  readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
+  readonly history?: CodingRuntimeHistory | undefined;
+  readonly repositoryInstructions?:
+    Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun"> | undefined;
+  readonly terminalFacts?: CodingRuntimeTerminalFacts | undefined;
+  readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
+  // #3873 review: the workspace the global active pointer resolves to, overridable so a test can
+  // switch it while a run starts.
+  readonly activeRoot?: (() => string) | undefined;
+  // S02/S03 (#3904): the native session continuity the orchestrator declares to and reads from.
+  readonly sessionContinuity?: CodingSessionContinuity | undefined;
+  // #3903 AC4: the persisted task workspaces, the inventory a fork's provisioning source is read from.
+  readonly workspaceInventory?: readonly WorkspaceInstance[] | undefined;
+  // #4359: the activated runtime's version facts, named on the run's start line.
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+}
+
+/** The positional form every older suite uses; new inputs are named through `fixtureFrom`. */
 function fixture(
   activityProjection?: CodingSafeActivityProjection,
   clock?: () => Date,
@@ -280,10 +314,6 @@ function fixture(
   issueIntake?: CodingRuntimeIssueIntake,
   descriptionSupport?: CodingRuntimeDescriptionSupport,
   verifiedCommits?: ReadonlyMap<string, VerifiedCommitResult>,
-  // #3384 B3-22: overridable so the automatic-description-dispatch suite (the one path here that
-  // reaches the real codingRuntimeDescriptionJobStore, which now enforces correlation.ts's
-  // 8-character floor) can mint ids that satisfy it, without changing every other describe block's
-  // established "run-1"/"run-2" convention.
   newRunId?: () => string,
   snapshotStore?: CodingRuntimeSnapshotStore,
   projectMemory?: CodingRuntimeProjectMemoryPort,
@@ -291,16 +321,53 @@ function fixture(
   repositoryInstructions?: Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun">,
   terminalFacts?: CodingRuntimeTerminalFacts,
   runEffort?: (runId: string) => CodingRuntimeHostRunEffort | undefined,
-  // #3873 review: the workspace the global active pointer resolves to, overridable so a test can
-  // switch it while a run starts.
-  activeRoot: () => string = (): string => "/workspace",
-  // S02/S03 (#3904): the native session continuity the orchestrator declares to and reads from.
+  activeRoot?: () => string,
   sessionContinuity?: CodingSessionContinuity,
-  // #3903 AC4: the persisted task workspaces, the inventory a fork's provisioning source is read from.
   workspaceInventory?: readonly WorkspaceInstance[],
-  // #4359: the activated runtime's version facts, named on the run's start line.
-  runtimeVersion?: CodingWorkbenchRuntimeVersion,
 ) {
+  return fixtureFrom({
+    activityProjection,
+    clock,
+    seededRows,
+    diagnostics,
+    activityLog,
+    issueIntake,
+    descriptionSupport,
+    verifiedCommits,
+    newRunId,
+    snapshotStore,
+    projectMemory,
+    history,
+    repositoryInstructions,
+    terminalFacts,
+    runEffort,
+    activeRoot,
+    sessionContinuity,
+    workspaceInventory,
+  });
+}
+
+function fixtureFrom({
+  activityProjection,
+  clock,
+  seededRows = [],
+  diagnostics,
+  activityLog,
+  issueIntake,
+  descriptionSupport,
+  verifiedCommits,
+  newRunId,
+  snapshotStore,
+  projectMemory,
+  history,
+  repositoryInstructions,
+  terminalFacts,
+  runEffort,
+  activeRoot = (): string => "/workspace",
+  sessionContinuity,
+  workspaceInventory,
+  runtimeVersion,
+}: FixtureOptions) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
   const deletePruned = vi.fn();
@@ -1051,15 +1118,10 @@ describe("CodingRuntimeOrchestrator", () => {
   });
   it("names the activated runtime's version and origin on the start line, never a guess", async () => {
     const withVersion = captureActivityLog();
-    const f = fixture(
-      undefined,
-      undefined,
-      [],
-      undefined,
-      withVersion.activityLog,
-      ...Array.from({ length: 13 }, () => undefined),
-      { opencode: "2.1.4", pinned: "2.2.5", origin: "npm-runtime-package" },
-    );
+    const f = fixtureFrom({
+      activityLog: withVersion.activityLog,
+      runtimeVersion: { opencode: "2.1.4", pinned: "2.2.5", origin: "npm-runtime-package" },
+    });
     await f.orchestrator.start(start);
     const event = requireLoggedEvent(
       withVersion.records.find((entry) => entry.op === "coding-runtime.run.started"),
@@ -1093,15 +1155,10 @@ describe("CodingRuntimeOrchestrator", () => {
     ["an empty value", ""],
   ])("starts the run and omits the runtime version fields for %s", async (_name, reported) => {
     const captured = captureActivityLog();
-    const f = fixture(
-      undefined,
-      undefined,
-      [],
-      undefined,
-      captured.activityLog,
-      ...Array.from({ length: 13 }, () => undefined),
-      { opencode: reported, pinned: "2.2.5", origin: "npm-runtime-package" },
-    );
+    const f = fixtureFrom({
+      activityLog: captured.activityLog,
+      runtimeVersion: { opencode: reported, pinned: "2.2.5", origin: "npm-runtime-package" },
+    });
     await expect(f.orchestrator.start(start)).resolves.toBeDefined();
     const event = requireLoggedEvent(
       captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
@@ -1113,15 +1170,14 @@ describe("CodingRuntimeOrchestrator", () => {
   });
   it("keeps a pre-release or build suffix of a version", async () => {
     const captured = captureActivityLog();
-    const f = fixture(
-      undefined,
-      undefined,
-      [],
-      undefined,
-      captured.activityLog,
-      ...Array.from({ length: 13 }, () => undefined),
-      { opencode: "2.2.5-rc.1+build.7", pinned: "2.2.5", origin: "portable-release" },
-    );
+    const f = fixtureFrom({
+      activityLog: captured.activityLog,
+      runtimeVersion: {
+        opencode: "2.2.5-rc.1+build.7",
+        pinned: "2.2.5",
+        origin: "portable-release",
+      },
+    });
     await f.orchestrator.start(start);
     const event = requireLoggedEvent(
       captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
