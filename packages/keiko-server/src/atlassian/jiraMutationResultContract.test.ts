@@ -559,13 +559,18 @@ describe("the no-governing-template guidance takes no caller sentence in product
   });
 
   it("calls it with the violation alone, as exactly one argument", () => {
+    const name = "jiraNoGoverningTemplateGuidance";
     const calls: (readonly string[])[] = [];
     for (const root of [
       new URL("../../../keiko-connectors/src/", import.meta.url),
       new URL("../../", import.meta.url),
     ])
-      for (const file of sources(root))
-        calls.push(...callsOf(readFileSync(file, "utf8"), "jiraNoGoverningTemplateGuidance"));
+      for (const file of sources(root)) {
+        // A file that never spells the name cannot call it. Parsing only the files that do keeps
+        // the walk over both source trees inside the test's time budget under coverage.
+        const text = readFileSync(file, "utf8");
+        if (text.includes(name)) calls.push(...callsOf(text, name));
+      }
     expect(calls).toEqual([["missing"]]);
   });
 });
