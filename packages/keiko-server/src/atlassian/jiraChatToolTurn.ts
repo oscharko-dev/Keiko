@@ -29,6 +29,7 @@ import { chatDraftArguments } from "./jiraChatDraftArguments.js";
 import {
   jiraApprovalIssueTypeReferences,
   jiraApprovalProjectReferences,
+  PROJECT_READ_TIMEOUT_MS,
   reviewedJiraProjects,
 } from "./jiraChatApprovalProjects.js";
 import {
@@ -323,8 +324,19 @@ function approvalReview(
       signal,
       correlationId,
       readAllowed: () => access.readAllowed(action),
+      window: approvalWindow(action),
     },
   };
+}
+
+/** One deadline per proposed write, so the reads that name its card share a single window. */
+const APPROVAL_WINDOWS = new WeakMap<JiraChatCatalogAction, AbortSignal>();
+function approvalWindow(action: JiraChatCatalogAction): AbortSignal {
+  const existing = APPROVAL_WINDOWS.get(action);
+  if (existing !== undefined) return existing;
+  const started = AbortSignal.timeout(PROJECT_READ_TIMEOUT_MS);
+  APPROVAL_WINDOWS.set(action, started);
+  return started;
 }
 
 /** The projects the proposed write targets, read now so the approval card names each (F09). */

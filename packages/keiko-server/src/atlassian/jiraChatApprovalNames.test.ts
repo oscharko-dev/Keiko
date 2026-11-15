@@ -168,14 +168,14 @@ describe("reading the transition an approval names", () => {
     },
   );
 
-  it("leaves the reference alone for a transition the issue does not offer", async () => {
+  it("says Jira does not offer a transition the issue does not offer, not that it could not be read", async () => {
     admitted();
     const shown = await reviewedJiraTransition(
       deps(() => respond(200, { transitions: [{ id: "21", name: "Erledigen" }] })),
       OPTIONS(),
       TARGET,
     );
-    expect(shown).toEqual({ ref: "11" });
+    expect(shown).toEqual({ ref: "11", unavailable: true });
     expect(logs.events.at(-1)?.extra).toMatchObject({ failure: "invalid-transition" });
     expect(logs.events.at(-1)?.level).toBe("info");
   });
@@ -321,5 +321,31 @@ describe("reading the field names an approval shows", () => {
       ["customfield_1"],
     );
     expect(names).toBeUndefined();
+  });
+});
+
+// The reads that name one card share ONE deadline and run together: a slow Jira holds the card for a
+// single window, not for one window per read.
+describe("the reads of one approval share a single window", () => {
+  it("ends slow reads one after another inside one window, not one window each", async () => {
+    admitted();
+    const WINDOW_MS = 400;
+    const hang = (): ReturnType<AtlassianHttpBodyPort> => new Promise<never>(() => undefined);
+    const options = OPTIONS({ window: AbortSignal.timeout(WINDOW_MS) });
+    const started = Date.now();
+    const transition = await reviewedJiraTransition(deps(hang), options, TARGET);
+    const fields = await reviewedJiraFieldNames(deps(hang), options, ["customfield_10112"]);
+    const elapsed = Date.now() - started;
+    expect(transition).toEqual({ ref: "11" });
+    expect(fields).toBeUndefined();
+    // The second read finds the window already over: one window in all, never the sum.
+    expect(elapsed).toBeLessThan(WINDOW_MS * 1.8);
+    expect(logs.events.map((event) => event.extra)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "transition", failure: "timeout" }),
+        // The window is already over: nothing is admitted to read any more.
+        expect.objectContaining({ kind: "fields", failure: "not-admitted" }),
+      ]),
+    );
   });
 });

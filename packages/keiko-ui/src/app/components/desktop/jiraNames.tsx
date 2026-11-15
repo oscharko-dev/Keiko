@@ -125,6 +125,8 @@ export function jiraTransitionLabel(
   const transition = names.transitions?.get(id);
   if (transition === undefined) return undefined;
   const { name, targetStatusName } = transition;
+  // Jira answered and does not offer it now: said before the person decides, never as unreadable.
+  if (transition.unavailable === true) return t("chat.jira.fact.transitionUnavailable", { id });
   if (targetStatusName === undefined && name === undefined)
     return t("chat.jira.fact.transitionUnread", { id });
   if (targetStatusName === undefined) return name;

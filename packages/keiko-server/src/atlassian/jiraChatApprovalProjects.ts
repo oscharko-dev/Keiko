@@ -214,6 +214,11 @@ export interface ApprovalProjectOptions {
   readonly readAllowed?: () => boolean;
   /** The one window of all reads together; tests shorten it. */
   readonly timeoutMs?: number;
+  /**
+   * The one deadline every read of ONE approval shares, started once when the card is first prepared,
+   * so the project, transition and field reads together never hold the card past a single window.
+   */
+  readonly window?: AbortSignal;
 }
 
 /** A lookup that faulted is a failure of the convenience, never of the card: the reference stays. */
@@ -297,7 +302,7 @@ export function approvalReadScope(
   const { chatId, authorityReference, correlationId } = options;
   const signal = AbortSignal.any([
     options.signal,
-    AbortSignal.timeout(options.timeoutMs ?? PROJECT_READ_TIMEOUT_MS),
+    options.window ?? AbortSignal.timeout(options.timeoutMs ?? PROJECT_READ_TIMEOUT_MS),
   ]);
   const allowed = (): boolean => {
     if (signal.aborted) return false;

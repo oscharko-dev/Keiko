@@ -1452,7 +1452,7 @@ create or draft carries are named by the same `project/{idOrKey}` read that name
 carries (`customfield_10112`) by one `field` list read (`fields`, only the referenced ones). What
 Jira did not name is said in words with the id as the detail ("Field customfield_10112 (Jira gave
 no name for it)", "ID 10002 (Jira gave no name for it)", and for a transition whose list could not
-be read, a sentence with the transition ID); a numeric id that is no name is marked as an id. The
+be read, a sentence that says Keiko could not read it, with the transition ID; and a transition Jira's answer does not offer for the issue now is said before the person decides, as a status change that will fail, never as unreadable); a numeric id that is no name is marked as an id. The project, transition and field reads of one card run together under ONE deadline (a single window per approval, started once), so a slow Jira holds the card for one window and never for the sum of its reads; each read is bounded by the transport's response limit (256 KiB, truncated is malformed), so a huge instance cannot make it unbounded. The
 closed outcome of the transition and field reads is recorded body-free, with counts only, on
 `jira.approval.names` (`kind`: `transition` or `fields`). All of it is display data, never part of
 the action digest. Choice values inside a field (priority, version, component, sprint, user) are

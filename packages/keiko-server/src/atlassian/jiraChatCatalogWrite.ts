@@ -169,14 +169,17 @@ async function reviewedIdentity(
  * The reviewed identity, plus what the approval names by Jira's own words: the projects by key and
  * name (F09) and a status change by its transition's name and target status (R04). Display only.
  */
-async function withProjects(
+export async function withApprovalNames(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
   identity: JiraChatWriteActionIdentity,
 ): Promise<JiraChatWriteActionIdentity> {
-  const projects = await options.projectPreview?.(action);
-  const transition = await options.transitionPreview?.(action);
-  const fields = await options.fieldNamesPreview?.(action);
+  // Together, inside the one window they share: the card is never held back by three reads in a row.
+  const [projects, transition, fields] = await Promise.all([
+    options.projectPreview?.(action),
+    options.transitionPreview?.(action),
+    options.fieldNamesPreview?.(action),
+  ]);
   return {
     ...identity,
     ...(projects === undefined ? {} : { projects }),
@@ -222,7 +225,7 @@ async function requestedApproval(
     options.deps,
     context.chatId,
     context.authorityReference,
-    await withProjects(options, action, reviewed),
+    await withApprovalNames(options, action, reviewed),
     new Date(options.now()).toISOString(),
     context.correlationId,
     identity.operation === "jira.draft" ? options.draftItemRefs?.(action) : undefined,

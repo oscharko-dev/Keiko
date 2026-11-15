@@ -212,6 +212,7 @@ describe("the projects a write approval names (F09)", () => {
       { ref: "11" },
       { ref: "11", name: "Fortschritt starten" },
       { ref: "11", name: "Start progress", targetStatusName: "In Progress" },
+      { ref: "11", unavailable: true },
     ])
       expect(
         validateChatToolWriteApprovalView({ ...base, transition }).ok,
@@ -226,6 +227,8 @@ describe("the projects a write approval names (F09)", () => {
       { ref: "11", targetStatusName: "bad\u0007" },
       { ref: "11", name: "n".repeat(256) },
       { ref: "11", extra: "no" },
+      { ref: "11", unavailable: false },
+      { ref: "11", unavailable: true, name: "Start" },
       "11",
       ["11"],
     ])

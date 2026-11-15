@@ -616,9 +616,14 @@ export interface JiraApprovalTransition {
   readonly ref: string;
   readonly name?: string;
   readonly targetStatusName?: string;
+  /**
+   * Jira answered and does not offer this transition for the issue right now, so approving it would
+   * fail. Carries no names: the card says so in words before the person decides.
+   */
+  readonly unavailable?: true;
 }
 const APPROVAL_TRANSITION_REF = /^\d{1,10}$/u;
-const APPROVAL_TRANSITION_KEYS = new Set(["ref", "name", "targetStatusName"]);
+const APPROVAL_TRANSITION_KEYS = new Set(["ref", "name", "targetStatusName", "unavailable"]);
 export function isJiraApprovalTransition(value: unknown): value is JiraApprovalTransition {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const ref: unknown = Reflect.get(value, "ref");
@@ -628,7 +633,9 @@ export function isJiraApprovalTransition(value: unknown): value is JiraApprovalT
     Object.keys(value).every((key) => APPROVAL_TRANSITION_KEYS.has(key)) &&
     ["name", "targetStatusName"].every(
       (key) => !Object.hasOwn(value, key) || isJiraApprovalProjectName(Reflect.get(value, key)),
-    )
+    ) &&
+    (!Object.hasOwn(value, "unavailable") ||
+      (Reflect.get(value, "unavailable") === true && Object.keys(value).length === 2))
   );
 }
 /** Rejected means a known local refusal before dispatch; non-2xx status alone remains unknown. */

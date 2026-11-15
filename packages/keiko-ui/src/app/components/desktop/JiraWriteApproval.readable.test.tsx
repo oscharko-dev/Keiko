@@ -1273,12 +1273,41 @@ describe("the approval of a status change names what it changes", () => {
 
   it("says in words, with the id as detail, that the list could not be read", async () => {
     const english = await renderedTransition({ ref: "11" }, "en");
-    expect(english.textContent).toContain("Could not be read from Jira");
+    expect(english.textContent).toContain(
+      "Keiko could not read this status change from Jira, so where it leads is not named here",
+    );
     expect(english.textContent).toContain("transition ID 11");
     cleanup();
     const german = await renderedTransition({ ref: "11" }, "de");
-    expect(german.textContent).toContain("Konnte nicht aus Jira gelesen werden");
+    expect(german.textContent).toContain(
+      "Keiko konnte den Statuswechsel nicht aus Jira lesen. Wohin er führt, steht deshalb nicht hier",
+    );
     expect(german.textContent).toContain("Übergangs-ID 11");
+  });
+
+  // Jira DID answer, but this status change is not on offer for the issue now: approving it will fail.
+  it("says before the person decides that Jira does not offer the status change, not that it could not be read", async () => {
+    const english = await renderedApproval(
+      "jira.transition",
+      { issueKey: "REQ-4", transitionId: "11" },
+      { transition: { ref: "11", unavailable: true } },
+      "en",
+    );
+    expect(english.textContent).toContain(
+      "Jira does not offer this status change for the issue right now, so approving it will fail (transition ID 11).",
+    );
+    expect(english.textContent).not.toContain("could not read");
+    cleanup();
+    const german = await renderedApproval(
+      "jira.transition",
+      { issueKey: "REQ-4", transitionId: "11" },
+      { transition: { ref: "11", unavailable: true } },
+      "de",
+    );
+    expect(german.textContent).toContain(
+      "Jira bietet diesen Statuswechsel für den Vorgang gerade nicht an. Die Freigabe würde deshalb fehlschlagen (Übergangs-ID 11).",
+    );
+    expect(german.textContent).not.toContain("nicht aus Jira lesen");
   });
 
   it("keeps showing the id as before for an approval that carries no transition", async () => {

@@ -163,9 +163,12 @@ async function readTransition(
         target.issueKey,
         ref,
       );
-      return read.ok
-        ? { shown: shownTransition(ref, read, run.redactor) }
-        : { shown: { ref }, failure: read.reason };
+      if (read.ok) return { shown: shownTransition(ref, read, run.redactor) };
+      // Jira answered and the issue does not offer this transition now: not a failure to read.
+      return {
+        shown: read.reason === "invalid-transition" ? { ref, unavailable: true } : { ref },
+        failure: read.reason,
+      };
     } catch (error) {
       emitServerDiagnostic(
         undefined,

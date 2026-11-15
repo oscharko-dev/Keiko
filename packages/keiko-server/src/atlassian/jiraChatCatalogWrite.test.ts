@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import type { CatalogBoundHandler } from "../tool-catalog/catalogToolPorts.js";
 import { jiraOperationForTool } from "./jiraManagedProvider.js";
-import { jiraChatWriteAction } from "./jiraChatCatalogWrite.js";
+import { jiraChatWriteAction, withApprovalNames } from "./jiraChatCatalogWrite.js";
 import {
   jiraChatCatalogConsumerPort,
   jiraChatCatalogRoutes,
@@ -73,6 +73,8 @@ describe("Jira catalog approval contract binding", () => {
     );
     // Names read for the card (F09) are added after the identity exists and never enter it.
     expect(identity).not.toHaveProperty("projects");
+    expect(identity).not.toHaveProperty("transition");
+    expect(identity).not.toHaveProperty("fields");
     expect(Object.keys(identity ?? {}).sort()).toEqual([
       "actionDigest",
       "invocationId",
@@ -127,4 +129,45 @@ describe("Jira catalog approval contract binding", () => {
       expect(jiraChatWriteAction(action)).toBeUndefined();
     },
   );
+});
+
+// R04: the project, transition and field names of one card are read together, so a slow Jira holds
+// the card for one window and never for the sum of its reads.
+describe("the names an approval card carries are read together", () => {
+  const slow = <T>(value: T, ms: number): Promise<T> =>
+    new Promise((resolve) => {
+      setTimeout(() => {
+        resolve(value);
+      }, ms);
+    });
+  it("adds each name to the identity without waiting for one read after another", async () => {
+    const { action } = fixture();
+    const identity = jiraChatWriteAction(action);
+    if (identity === undefined) throw new TypeError("Missing identity");
+    const options = {
+      projectPreview: () => slow([{ ref: "10000", key: "SYN" }], 300),
+      transitionPreview: () => slow({ ref: "11", targetStatusName: "In Arbeit" }, 300),
+      fieldNamesPreview: () => slow([{ id: "customfield_1", name: "Punkte" }], 300),
+    } as unknown as Parameters<typeof withApprovalNames>[0];
+    const started = Date.now();
+    const named = await withApprovalNames(options, action, identity);
+    expect(Date.now() - started).toBeLessThan(700);
+    expect(named).toMatchObject({
+      actionDigest: identity.actionDigest,
+      projects: [{ ref: "10000", key: "SYN" }],
+      transition: { ref: "11", targetStatusName: "In Arbeit" },
+      fields: [{ id: "customfield_1", name: "Punkte" }],
+    });
+  });
+  it("adds nothing for a read that names nothing", async () => {
+    const { action } = fixture();
+    const identity = jiraChatWriteAction(action);
+    if (identity === undefined) throw new TypeError("Missing identity");
+    const named = await withApprovalNames(
+      {} as Parameters<typeof withApprovalNames>[0],
+      action,
+      identity,
+    );
+    expect(named).toEqual(identity);
+  });
 });

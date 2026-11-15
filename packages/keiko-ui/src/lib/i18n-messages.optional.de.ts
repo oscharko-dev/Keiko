@@ -1134,7 +1134,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.fact.idUnnamed": "{id} (Jira nennt keinen Namen dazu)",
   "chat.jira.fact.fieldUnnamed": "Feld {id} (Jira nennt keinen Namen dazu)",
   "chat.jira.fact.transitionUnread":
-    "Konnte nicht aus Jira gelesen werden, daher steht hier nicht, in welchen Status es führt (Übergangs-ID {id}).",
+    "Keiko konnte den Statuswechsel nicht aus Jira lesen. Wohin er führt, steht deshalb nicht hier (Übergangs-ID {id}).",
+  "chat.jira.fact.transitionUnavailable":
+    "Jira bietet diesen Statuswechsel für den Vorgang gerade nicht an. Die Freigabe würde deshalb fehlschlagen (Übergangs-ID {id}).",
   "chat.jira.fact.comment": "Kommentar",
   "chat.jira.fact.commentId": "Kommentar-ID",
   "chat.jira.access.schemeId": "Schema-ID",
