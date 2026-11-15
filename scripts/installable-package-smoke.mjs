@@ -611,30 +611,28 @@ function removeStaleCorepackCacheLock(lockDir, timeoutMs) {
   }
 }
 
-async function acquireCorepackCacheLock(locator, timeoutMs) {
+async function acquireCorepackCacheLock(locator, timeoutMs, deadline = Date.now() + timeoutMs) {
   const lockDir = corepackCacheLockDir(locator);
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    const ownerToken = `${process.pid}-${randomBytes(9).toString("hex")}`;
-    try {
-      mkdirSync(lockDir, { mode: 0o700 });
-      writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs);
-      const renewal = startCorepackCacheLockRenewal(lockDir, ownerToken, timeoutMs);
-      return () => {
-        renewal.stop();
-        releaseCorepackCacheLock(lockDir, ownerToken);
-        renewal.assertHealthy();
-      };
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-    }
-    removeStaleCorepackCacheLock(lockDir, timeoutMs);
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      throw smokeGateFailure(`timed out waiting for Corepack cache lock for ${locator}`);
-    }
-    await sleep(Math.min(COREPACK_CACHE_LOCK_POLL_MS, remainingMs));
+  const ownerToken = `${process.pid}-${randomBytes(9).toString("hex")}`;
+  try {
+    mkdirSync(lockDir, { mode: 0o700 });
+    writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs);
+    const renewal = startCorepackCacheLockRenewal(lockDir, ownerToken, timeoutMs);
+    return () => {
+      renewal.stop();
+      releaseCorepackCacheLock(lockDir, ownerToken);
+      renewal.assertHealthy();
+    };
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
   }
+  removeStaleCorepackCacheLock(lockDir, timeoutMs);
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    throw smokeGateFailure(`timed out waiting for Corepack cache lock for ${locator}`);
+  }
+  await sleep(Math.min(COREPACK_CACHE_LOCK_POLL_MS, remainingMs));
+  return acquireCorepackCacheLock(locator, timeoutMs, deadline);
 }
 
 export async function withCorepackYarnCacheLock(
@@ -2670,31 +2668,38 @@ async function reserveUiPort() {
   });
 }
 
-async function waitForHealth(baseUrl, child, stdoutChunks, stderrChunks) {
-  const deadline = Date.now() + UI_HEALTH_TIMEOUT_MS;
-  let lastError = "health endpoint did not respond";
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      fail(
-        `keiko ui exited ${String(child.exitCode)} before /api/health was reachable.\n` +
-          `stdout:\n${stdoutChunks.join("")}\n` +
-          `stderr:\n${stderrChunks.join("")}`,
-      );
-    }
-    try {
-      const res = await globalThis.fetch(`${baseUrl}/api/health`);
-      if (res.ok) return;
-      lastError = `/api/health returned ${String(res.status)}`;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-    await sleep(UI_HEALTH_POLL_INTERVAL_MS);
+async function waitForHealth(
+  baseUrl,
+  child,
+  stdoutChunks,
+  stderrChunks,
+  deadline = Date.now() + UI_HEALTH_TIMEOUT_MS,
+  lastError = "health endpoint did not respond",
+) {
+  if (Date.now() >= deadline) {
+    fail(
+      `keiko ui did not become healthy within ${String(UI_HEALTH_TIMEOUT_MS)}ms: ${lastError}\n` +
+        `stdout:\n${stdoutChunks.join("")}\n` +
+        `stderr:\n${stderrChunks.join("")}`,
+    );
   }
-  fail(
-    `keiko ui did not become healthy within ${String(UI_HEALTH_TIMEOUT_MS)}ms: ${lastError}\n` +
-      `stdout:\n${stdoutChunks.join("")}\n` +
-      `stderr:\n${stderrChunks.join("")}`,
-  );
+  if (child.exitCode !== null) {
+    fail(
+      `keiko ui exited ${String(child.exitCode)} before /api/health was reachable.\n` +
+        `stdout:\n${stdoutChunks.join("")}\n` +
+        `stderr:\n${stderrChunks.join("")}`,
+    );
+  }
+  let nextError;
+  try {
+    const res = await globalThis.fetch(`${baseUrl}/api/health`);
+    if (res.ok) return;
+    nextError = `/api/health returned ${String(res.status)}`;
+  } catch (error) {
+    nextError = error instanceof Error ? error.message : String(error);
+  }
+  await sleep(UI_HEALTH_POLL_INTERVAL_MS);
+  return waitForHealth(baseUrl, child, stdoutChunks, stderrChunks, deadline, nextError);
 }
 
 async function stopChild(child) {

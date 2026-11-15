@@ -80,13 +80,17 @@ export function codingPerformanceEnvironment(root = ROOT) {
 export async function collectCodingPerformanceSamples(measure, progress = () => undefined) {
   const samples = [];
   const count = CODING_PERFORMANCE_PROCEDURE.batches * CODING_PERFORMANCE_PROCEDURE.samplesPerBatch;
-  for (let index = 0; index < count + CODING_PERFORMANCE_PROCEDURE.warmups; index += 1) {
+  const total = count + CODING_PERFORMANCE_PROCEDURE.warmups;
+  // A sample owns the runtime until it completes; concurrent samples would corrupt the ruler.
+  async function collectNext(index) {
+    if (index === total) return samples;
     const sample = await measure();
     validateCodingPerformanceSample(sample);
     if (index >= CODING_PERFORMANCE_PROCEDURE.warmups) samples.push(sample);
-    progress({ completed: index + 1, total: count + CODING_PERFORMANCE_PROCEDURE.warmups });
+    progress({ completed: index + 1, total });
+    return collectNext(index + 1);
   }
-  return samples;
+  return collectNext(0);
 }
 
 function readDocument(root, path) {

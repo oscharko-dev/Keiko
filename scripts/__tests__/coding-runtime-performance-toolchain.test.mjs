@@ -215,6 +215,26 @@ describe("coding runtime measurement ownership", () => {
     ).rejects.toThrow("invalid measured output");
     expect(calls).toBe(5);
   });
+
+  it("finishes each sample and publishes its progress before starting the next", async () => {
+    let active = false;
+    let completed = 0;
+    const progress = [];
+    await collectCodingPerformanceSamples(
+      async () => {
+        expect(active).toBe(false);
+        expect(progress).toHaveLength(completed);
+        active = true;
+        await Promise.resolve();
+        active = false;
+        return measuredSample(++completed);
+      },
+      (update) => progress.push(update),
+    );
+    expect(progress).toEqual(
+      Array.from({ length: 32 }, (_, index) => ({ completed: index + 1, total: 32 })),
+    );
+  });
   it("keeps producer failure diagnostics free of paths, credentials and content", () => {
     const message = codingPerformanceFailureSummary(
       "samples",
