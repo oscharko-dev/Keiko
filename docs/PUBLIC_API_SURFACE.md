@@ -1,4 +1,4 @@
-# Public API surface — 1.4.0
+# Public API surface — 1.5.0
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 `KEIKO_PRODUCT_VERSION`.
 
 ## Stability notes
+
+- 1.5.0: root exports and CLI entrypoints remain stable. npm installations now require Node.js
+  `>=26.13.1 <27` and npm `>=11.20.0 <12`; portable distributions carry their own runtime. Jira
+  workflows, memory learning and document parsing expand within the existing product surfaces.
+  The UI store moves from schema 58 to 78, Memory Vault from 11 to 13 and Knowledge from 33 to 34.
+  Migrations preserve existing state, but a downgrade needs a matching pre-update backup and its keys.
 
 - 1.4.0: root exports and CLI entrypoints remain stable. Chat adds Jira write, draft and report
   tools, requirement tools on Knowledge Pods and PowerPoint indexing. The UI store moves from schema
