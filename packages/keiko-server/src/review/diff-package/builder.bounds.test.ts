@@ -129,6 +129,45 @@ describe("token budget (AC3)", () => {
     expect(reads).toBeLessThanOrEqual(included + 32 + 4);
   });
 
+  // R4130-065: a file with a hunk larger than one part is held back for a second pass. Without a
+  // count of the ones that can no longer be shown, every such file was read: 151 reads here.
+  it.each([1, 12])(
+    "stops reading oversized files once they can no longer be shown (%i parts)",
+    async (maxParts) => {
+      const files = Array.from({ length: 150 }, (_, index) => `src/f${String(index)}.ts`);
+      const lines = (salt: string): string =>
+        Array.from({ length: 200 }, (_, index) => `const v${String(index)} = "${salt}";`).join(
+          "\n",
+        ) + "\n";
+      const base = fixture.fastCommit([
+        ...files.map((path) => ({ path, content: lines("before") })),
+        { path: "small.ts", content: "export const value = 1;\n" },
+      ]);
+      const head = fixture.fastCommit([
+        ...files.map((path) => ({ path, content: lines("after") })),
+        { path: "small.ts", content: "export const value = 2;\n" },
+      ]);
+      let reads = 0;
+      const counting = realRunnerDeps({}, (runner): GitProcessRunner => (args, options) => {
+        if (args.includes("diff")) reads += 1;
+        return runner(args, options);
+      });
+      const config = { budgetTokens: 1_500, maxParts };
+      const result = await packaged(fixture, base, head, config, counting);
+
+      const included = result.coverage.included.length;
+      // One part shows no oversized file; twelve parts show the first few in windows.
+      expect(included > 0).toBe(maxParts > 1);
+      expect(result.windowedHunks).toBe(included);
+      expect(result.coverage.summary.changedFiles).toBe(151);
+      expect(result.coverage.unprocessed).toHaveLength(151 - included);
+      // The files shown, then at most 32 misses (plus one parallel batch) are read. The small
+      // file sorts last and is not read after the stop, as before oversized files were windowed.
+      expect(reads).toBeLessThanOrEqual(included + 32 + 4);
+      expect(result.coverage.unprocessed.map((file) => file.path)).toContain("small.ts");
+    },
+  );
+
   it("reports every file that did not fit as unprocessed for the budget", async () => {
     const { base, head } = changeSet();
     const result = await packaged(fixture, base, head, { budgetTokens: 1 });

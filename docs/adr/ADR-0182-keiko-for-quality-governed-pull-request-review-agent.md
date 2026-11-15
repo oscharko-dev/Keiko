@@ -525,7 +525,9 @@ R4130-064). A file with such a hunk is placed after every file that fits, in the
 is shown in windows only when its whole diff fits the windows the parts not yet opened can hold,
 two per part; a larger file is left out whole (`unprocessed`, `budget`) as before the split
 existed, and nothing of it is split. A package of one part therefore never splits a hunk, and the
-rule of #4134 holds there unchanged. Without these rules one file larger than all 12 parts took
+rule of #4134 holds there unchanged. A file that the unopened parts can no longer show beside the
+files already held back is not held: it counts as a budget miss when it is read, so the stop of the
+reads after 32 misses in a row bounds oversized files too (R4130-065). Without these rules one file larger than all 12 parts took
 every part, showed about a tenth of itself and left small files unreviewed, and splitting four
 files of 3.8 MB each held the server's one thread for 37 seconds. The search for a window's end
 grows from the window's start, so its cost follows the window and not the hunk. `hunkCount` and
