@@ -54,7 +54,16 @@ measurements use the exact pair. Run `node scripts/check-runtime-toolchain.mjs -
 qualification. Node 24 is no longer supported (owner decision, 2026-11-15).
 
 The default `gates` service now uses Node 26. The former `gates-node26` compatibility service is
-retired. A narrow Linux test selection installs and builds first when its volumes are empty:
+retired. Compose reuses an existing image and dependency volume until explicitly refreshed. After
+the Node 26 migration, and after later toolchain or lockfile changes, refresh both:
+
+```bash
+docker compose -f docker/gates/docker-compose.yml build gates
+docker compose -f docker/gates/docker-compose.yml run --rm gates npm ci --ignore-scripts
+```
+
+Both gate runners check the exact Node/npm pair before installation or verification and fail on a
+stale image. A narrow Linux test selection installs and builds first when its volumes are empty:
 
 ```bash
 docker compose -f docker/gates/docker-compose.yml run --rm gates \

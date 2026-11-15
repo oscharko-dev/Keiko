@@ -2348,9 +2348,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   (`certificateReadFiles`, at the spelled and the real location, read-only, bound into the policy
   digest and recorded as counts on `coding-runtime.native-certificates.admitted`). The event also
   counts admitted custom certificate directories. On macOS, the filesystem's leading `/private`
-  prefix is not a private-key directory: a selected bundle under `/private/var` or `/private/tmp`
-  can qualify as a custom read root. `/private/etc` and any nested `etc` or `private` component
-  remain excluded from directory admission; all denied roots and credential-name rules still apply.
+  prefix is not a private-key directory: a dedicated custom bundle directory under `/private/var`
+  or `/private/tmp` can qualify as a read root. Shared temporary roots (`/tmp`, `/var/tmp`, the host's
+  resolved temporary directory) and their ancestors never qualify; a selected bundle directly in
+  one admits only its exact file. Directory depth uses the logical macOS path without `/private`.
+  `/private/etc` and any nested `etc` or `private` component remain excluded with both platform path
+  separators and case-insensitive matching; all denied roots and credential-name rules still apply.
   The carve-out
   is a leaf exception only: a credential-named directory above such a file still denies it, every
   other credential name keeps its rule, and whether the file is readable at all stays with the

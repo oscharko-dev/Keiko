@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,7 +28,7 @@ describe.skipIf(process.platform === "win32")("savePrivateJson on Windows", () =
     setServerLogger(createServerLogger({ sink: logs, level: "info" }));
     resetActivityLogLossCountersForTests();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const dir = mkdtempSync(join(tmpdir(), "keiko-private-json-"));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-private-json-")));
     try {
       expect(() => {
         savePrivateJson(join(dir, "config.json"), { synthetic: true });

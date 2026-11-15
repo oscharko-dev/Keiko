@@ -2522,8 +2522,11 @@ invocation key requirement for external connector effects.
 The authenticated Chat PATCH and serializer own the single Jira binding and saved human mode.
 Responses add the server-resolved ceiling and effective mode without replacing the saved selection.
 The Connectors control shares a synchronous publication guard between confirmed PATCH replies and
-canonical focus reads. An older reply cannot replace an already published revision before React renders;
-a read started before an intervening publication is also dropped when their millisecond timestamps tie.
+canonical focus reads. An older reply cannot replace an already published revision before React renders.
+The server's monotonic `jiraBindingGeneration` also orders replies with the same millisecond timestamp;
+a read started before an intervening publication cannot replace an equally versioned publication.
+Unmounting the control closes its publication boundary, so navigating away and back cannot let an old
+read or PATCH reply overwrite the current selection.
 Focus reads never submit a mode change. The existing client stage lifecycle records selection/refresh
 outcomes (`applied`, `stale`, `dropped`, `failed`) without Chat identities or content (#4390).
 The Chat composer's Connectors menu, the Local Knowledge window and workspace ports use that same

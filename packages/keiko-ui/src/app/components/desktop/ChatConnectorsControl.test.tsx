@@ -596,30 +596,104 @@ describe("ChatConnectorsControl", () => {
       },
     );
 
-    it("keeps a newer refresh when an older PATCH settles before the next render", async () => {
-      const user = userEvent.setup();
-      const { persist, finish } = deferredPersist();
-      const changed = vi.fn();
-      let refresh!: (chat: Chat) => void;
-      mocks.canonical.mockReturnValue(
-        new Promise<Chat>((resolve) => {
-          refresh = resolve;
-        }),
-      );
-      render(
-        <ChatConnectorsControl chat={CHAT} onChatChanged={changed} list={list} persist={persist} />,
-      );
-      const panel = await open(user);
-      await user.click(within(panel).getByRole("radio", { name: "Full access" }));
-      act(() => window.dispatchEvent(new Event("focus")));
-      const newer: Chat = { ...CHAT, updatedAt: 4, toolMode: "governed-assist" };
-      await act(async () => {
-        refresh(newer);
-        await Promise.resolve();
-        finish({ ...CHAT, updatedAt: 3, toolMode: "autonomous-delivery" });
-      });
-      expect(changed).toHaveBeenCalledExactlyOnceWith(newer);
-    });
+    it.each([3, 4])(
+      "keeps a newer binding generation at timestamp %i when an older PATCH settles",
+      async (updatedAt) => {
+        const user = userEvent.setup();
+        const { persist, finish } = deferredPersist();
+        const changed = vi.fn();
+        let refresh!: (chat: Chat) => void;
+        mocks.canonical.mockReturnValue(
+          new Promise<Chat>((resolve) => {
+            refresh = resolve;
+          }),
+        );
+        render(
+          <ChatConnectorsControl
+            chat={CHAT}
+            onChatChanged={changed}
+            list={list}
+            persist={persist}
+          />,
+        );
+        const panel = await open(user);
+        await user.click(within(panel).getByRole("radio", { name: "Full access" }));
+        act(() => window.dispatchEvent(new Event("focus")));
+        const newer: Chat = {
+          ...CHAT,
+          updatedAt,
+          jiraBindingGeneration: 3,
+          toolMode: "governed-assist",
+        };
+        await act(async () => {
+          refresh(newer);
+          await Promise.resolve();
+          finish({
+            ...CHAT,
+            updatedAt: 3,
+            jiraBindingGeneration: 2,
+            toolMode: "autonomous-delivery",
+          });
+        });
+        expect(changed).toHaveBeenCalledExactlyOnceWith(newer);
+      },
+    );
+
+    it.each(["read", "patch"] as const)(
+      "drops a late %s from an unmounted Chat after navigating away and back",
+      async (source) => {
+        const user = userEvent.setup();
+        const { persist, finish } = deferredPersist();
+        const next = deferredPersist();
+        const changed = vi.fn();
+        let refresh!: (chat: Chat) => void;
+        mocks.canonical.mockReturnValue(
+          new Promise<Chat>((resolve) => {
+            refresh = resolve;
+          }),
+        );
+        const control = (chat: Chat, save = persist): React.JSX.Element => (
+          <ChatConnectorsControl
+            key={chat.id}
+            chat={chat}
+            onChatChanged={changed}
+            list={list}
+            persist={save}
+          />
+        );
+        const { rerender } = render(control(CHAT));
+        if (source === "read") {
+          act(() => window.dispatchEvent(new Event("focus")));
+        } else {
+          const panel = await open(user);
+          await user.click(within(panel).getByRole("radio", { name: "Full access" }));
+        }
+        const oldReply = source === "read" ? refresh : finish;
+        rerender(control({ ...CHAT, id: "chat-2" }));
+        rerender(control(CHAT, next.persist));
+        const panel = await open(user);
+        await user.click(within(panel).getByRole("radio", { name: "Ask for approval" }));
+        const confirmed: Chat = {
+          ...CHAT,
+          updatedAt: 3,
+          jiraBindingGeneration: 3,
+          toolMode: "governed-assist",
+        };
+        await act(async () => {
+          next.finish(confirmed);
+        });
+        await act(async () => {
+          oldReply({ ...CHAT, toolMode: "autonomous-delivery" });
+        });
+        expect(changed).toHaveBeenCalledExactlyOnceWith(confirmed);
+        expect(mocks.report).toHaveBeenCalledWith(
+          "Chat connector operation settled.",
+          expect.objectContaining({
+            stageReport: expect.objectContaining({ navigationOutcome: "dropped" }),
+          }),
+        );
+      },
+    );
 
     it("orders concurrent focus reads without waiting for a parent render", async () => {
       const changed = vi.fn();

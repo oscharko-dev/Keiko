@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { CHAT_TOOL_DEFAULT_MODE } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { Chat } from "@/lib/types";
 import type { UpdateChatInput } from "@/lib/api";
@@ -39,15 +39,44 @@ interface ChatPublication {
   readonly publish: (updated: Chat, readFrom?: Chat) => PublicationOutcome;
 }
 
+function isOlderChatRevision(updated: Chat, current: Chat): boolean {
+  return (
+    updated.updatedAt < current.updatedAt ||
+    (updated.jiraBindingGeneration ?? 0) < (current.jiraBindingGeneration ?? 0)
+  );
+}
+
+function publicationOutcome(current: Chat, updated: Chat, readFrom?: Chat): PublicationOutcome {
+  if (current.id !== updated.id || current.projectPath !== updated.projectPath) return "dropped";
+  if (isOlderChatRevision(updated, current)) return "stale";
+  // Millisecond timestamps can collide. The server's monotonic binding generation orders
+  // confirmed selections; otherwise an in-flight read cannot undo a publication it never saw.
+  if (
+    readFrom !== undefined &&
+    current !== readFrom &&
+    updated.updatedAt === current.updatedAt &&
+    (updated.jiraBindingGeneration ?? 0) === (current.jiraBindingGeneration ?? 0)
+  )
+    return "stale";
+  return "applied";
+}
+
 /** Reads and writes share one synchronous revision boundary, including before React renders. */
 function useChatPublication(chat: Chat, onChatChanged: (chat: Chat) => void): ChatPublication {
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return (): void => {
+      mounted.current = false;
+    };
+  }, []);
   const latest = useRef(chat);
   const rendered = useRef(chat);
   if (
     rendered.current !== chat &&
     (latest.current.id !== chat.id ||
       latest.current.projectPath !== chat.projectPath ||
-      chat.updatedAt >= latest.current.updatedAt)
+      !isOlderChatRevision(chat, latest.current))
   ) {
     latest.current = chat;
   }
@@ -55,17 +84,9 @@ function useChatPublication(chat: Chat, onChatChanged: (chat: Chat) => void): Ch
   return {
     latest,
     publish(updated, readFrom): PublicationOutcome {
-      if (latest.current.id !== updated.id || latest.current.projectPath !== updated.projectPath)
-        return "dropped";
-      if (updated.updatedAt < latest.current.updatedAt) return "stale";
-      // updatedAt is a millisecond timestamp: an earlier read cannot undo a confirmed PATCH
-      // in the same millisecond, nor another read already adopted while this one was in flight.
-      if (
-        readFrom !== undefined &&
-        latest.current !== readFrom &&
-        updated.updatedAt === latest.current.updatedAt
-      )
-        return "stale";
+      if (!mounted.current) return "dropped";
+      const outcome = publicationOutcome(latest.current, updated, readFrom);
+      if (outcome !== "applied") return outcome;
       latest.current = updated;
       onChatChanged(updated);
       return "applied";

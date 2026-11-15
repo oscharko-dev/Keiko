@@ -1,5 +1,6 @@
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { readdirSync, realpathSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, parse, relative, sep } from "node:path";
 
 // The read-only support roots of the project's toolchains for the native profile (#3897). The
@@ -333,17 +334,26 @@ export const NATIVE_BUILD_ENV_NAMES: readonly string[] = Object.freeze([
   ...BUILD_OPTION_ENV,
   ...BUILD_REGISTRY_ENV,
 ]);
-const SYSTEM_CONFIGURATION = /(^|\/)(etc|private)(\/|$)/u;
+const SYSTEM_CONFIGURATION = /(^|[\\/])(etc|private)([\\/]|$)/iu;
 const BUILD_OPTION_SECRET = /(password|passwd|secret|token|api[-_]?key|credential|\bauth)/iu;
 
-function isSystemCertificateDirectory(directory: string): boolean {
+function isDeniedCertificateDirectory(directory: string): boolean {
   // macOS resolves /var and /tmp below the filesystem's /private prefix. That prefix is not
   // an SSL private-key directory. /private/etc and any nested etc/private component stay denied.
   const logical =
     process.platform === "darwin" && directory.startsWith("/private/")
       ? directory.slice("/private".length)
       : directory;
-  return SYSTEM_CONFIGURATION.test(logical);
+  // A certificate names one file, never its shared temporary root or any ancestor of that root.
+  // Count macOS's logical path depth, so /private cannot turn /tmp into a custom directory.
+  return (
+    depthBelowRoot(logical) < 2 ||
+    SYSTEM_CONFIGURATION.test(logical) ||
+    [tmpdir(), "/tmp", "/var/tmp"].some((temporary) => {
+      const root = resolvedPath(temporary);
+      return root !== undefined && insideOrEqual(directory, root);
+    })
+  );
 }
 
 function urlCarriesCredentials(value: string): boolean {
@@ -427,7 +437,7 @@ export function nativeBuildToolReadRoots(
       const value = env[name];
       const file = value === undefined ? undefined : resolvedPath(value);
       // A system certificate directory (`/etc/ssl`) holds `private/`: only a custom directory opens.
-      return file === undefined || isSystemCertificateDirectory(dirname(file))
+      return file === undefined || isDeniedCertificateDirectory(dirname(file))
         ? []
         : [dirname(file)];
     }),

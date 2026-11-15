@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -14,7 +14,7 @@ const result = (status, output) => ({ output, status, stderr: output, stdout: ""
 
 describe("npm audit retry", () => {
   it("starts Windows npm without a shell and preserves arguments and advisory exits", () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko audit & %PATH% ü "));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko audit & %PATH% ü ")));
     try {
       const bin = join(root, "node_modules", "npm", "bin");
       mkdirSync(bin, { recursive: true });

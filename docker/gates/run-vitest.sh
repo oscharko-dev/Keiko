@@ -14,7 +14,8 @@ if [[ $# -eq 0 ]]; then
   exit 64
 fi
 
-printf 'node %s, npm %s\n' "$(node --version)" "$(npm --version)"
+# The named image can predate a toolchain update; never qualify that stale runtime.
+node scripts/check-runtime-toolchain.mjs --exact
 if [[ ! -x node_modules/.bin/vitest ]]; then
   printf '▶ installing workspaces (first run in this container volume)\n'
   npm ci --ignore-scripts

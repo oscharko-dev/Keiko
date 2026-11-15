@@ -6,6 +6,7 @@ import {
   mkdirSync,
   writeFileSync,
   readFileSync,
+  realpathSync,
 } from "node:fs";
 import { Buffer } from "node:buffer";
 import { URL } from "node:url";
@@ -40,7 +41,7 @@ vi.mock("../../packages/keiko-server/dist/gateway-tool-calling-probe.js", () => 
 }));
 
 it("uses the paired product server with an empty provider catalog and no model probe", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "keiko-model-free-lab-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "keiko-model-free-lab-")));
   const session = {
     ...DEFAULT_LAB_CONNECTION,
     directory,
@@ -71,7 +72,7 @@ it("uses the paired product server with an empty provider catalog and no model p
 });
 
 it("admits all 439 native contracts through the production selected provider", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "keiko-model-free-selection-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "keiko-model-free-selection-")));
   const session = {
     ...DEFAULT_LAB_CONNECTION,
     directory,
@@ -164,7 +165,7 @@ it.each([
 ])(
   "dispatches successive model-free $actor turns through the real provider, authority and budget receipt",
   async ({ actor, administration, calls }) => {
-    const directory = mkdtempSync(join(tmpdir(), "keiko-model-free-dispatch-"));
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "keiko-model-free-dispatch-")));
     const session = {
       ...DEFAULT_LAB_CONNECTION,
       directory,
@@ -232,7 +233,7 @@ it.each([
 );
 
 it("settles one model-free native effect in the production mutation journal and receipt", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "keiko-model-free-mutation-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "keiko-model-free-mutation-")));
   const session = {
     ...DEFAULT_LAB_CONNECTION,
     directory,

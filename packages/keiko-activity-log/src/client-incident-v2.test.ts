@@ -180,7 +180,10 @@ describe("canonical client incident version compatibility and occurrence claims"
     setSupportIncidentTriggerForTests(true);
     const start = Date.now();
     const clock = vi.spyOn(Date, "now");
-    for (let index = 0; index < 24; index += 1) {
+    // Overflow the actual browser capacity twice, across several admission windows. More
+    // individually durable incident captures add filesystem latency without another boundary.
+    const browserAttempts = policy.browserCapacity * 2 + 1;
+    for (let index = 0; index < browserAttempts; index += 1) {
       clock.mockReturnValue(start + Math.floor(index / 2) * 61_000);
       writeFailure(FRAME, `browser-retention-${String(index)}`);
       drainSupportIncidentCandidates();
@@ -198,7 +201,7 @@ describe("canonical client incident version compatibility and occurrence claims"
       (record) => record.fingerprint.op === "coding-runtime.readiness.failed",
     );
     expect(server).not.toBeUndefined();
-    clock.mockReturnValue(start + 13 * 61_000);
+    clock.mockReturnValue(start + (Math.ceil(browserAttempts / 2) + 1) * 61_000);
     writeFailure(FRAME, "browser-after-server-retention");
     drainSupportIncidentCandidates();
     const after = listSupportIncidents(stateDir);
