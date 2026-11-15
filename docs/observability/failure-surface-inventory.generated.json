@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0754a5113ed47f1c350dcb9d0bf230a3646722c076bca4653bea36cac3296916"
+    "catalogDigest": "b4be0c315ef174f8de13e5541d519511971832a4a568f2d9923cbb8e27a716d3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1775,7 +1775,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"
     ],
     "coding-runtime.context-usage.observed.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.test.ts"
+      "packages/keiko-server/src/coding-runtime/codingRuntimeContextUsageObservation.test.ts"
     ],
     "coding-runtime.descendants.swept.emitted-line": [
       "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.test.ts"
@@ -1884,6 +1884,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
     "coding-runtime.native-policy.decided.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeCodeModeEffects.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeNativePolicyLinks.test.ts"
     ],
@@ -3216,6 +3217,7 @@
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "skills.library.operation.lifecycle": [
+      "packages/keiko-server/src/markdown-skill-jira-template-routes.test.ts",
       "packages/keiko-server/src/markdown-skill-routes.test.ts"
     ],
     "skills.workflow.attached.line": [
