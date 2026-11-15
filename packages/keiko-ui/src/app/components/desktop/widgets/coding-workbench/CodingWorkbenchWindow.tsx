@@ -166,7 +166,7 @@ import {
 import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
 import { useCodingWorkbenchRevert } from "@/lib/useCodingWorkbenchRevert";
 import { CodingWorkbenchInboxPanel } from "./CodingWorkbenchInboxPanel";
-import { LocationBindingNotices } from "./CodingWorkbenchLocationNotices";
+import { LocationBindingNotices, locationBlockerKey } from "./CodingWorkbenchLocationNotices";
 import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
 import { changesRefreshSignal } from "./codingWorkbenchChangesSignal";
 import { deliveredMessageSignal } from "./codingWorkbenchInboxSignal";
@@ -496,6 +496,16 @@ export interface CodingWorkbenchGitTarget {
   readonly descriptionReview?: WorkbenchDescriptionReviewTarget;
 }
 
+/**
+ * Opening Git from the repository control. Without a project the person is led straight to choosing
+ * a folder, and the choice returns to this window (#4371).
+ */
+function repositoryGitTarget(root: string | null): CodingWorkbenchGitTarget {
+  return root === null
+    ? { root, binding: "repository", repositoryDialog: "open" }
+    : { root, binding: "repository" };
+}
+
 function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
 function noopSelectRepository(_root: string): void {}
 
@@ -712,7 +722,7 @@ function WorkbenchContextControls({
       location={location}
       offeredLocations={offeredLocations}
       onSelectLocation={onSelectLocation}
-      onOpenGit={() => onOpenGit({ root: repositoryRoot, binding: "repository" })}
+      onOpenGit={() => onOpenGit(repositoryGitTarget(repositoryRoot))}
       placement={placement}
     />
   );
@@ -1061,6 +1071,7 @@ export function CodingWorkbenchWindow({
     activeInstance: activeWorkspace.activeInstance,
     branchLoading: branchInventory.loading,
     branchError: branchInventory.error !== null,
+    branchDenied: branchInventory.denied,
     workspaceLoading: locationSelectionPending(activeWorkspace, history, historySelection),
     workspaceError: activeWorkspace.error !== null,
     runIsActive,
@@ -1572,11 +1583,7 @@ function workbenchStartBlocker(
   locationState: WorkbenchExecutionLocationState,
 ): string | null {
   if (locationState.ready) return startBlockedReason(state, t, showSetup, authorityError);
-  return t(
-    locationState.error
-      ? "codingWorkbench.repository.locationError"
-      : "codingWorkbench.repository.locationBinding",
-  );
+  return t(locationBlockerKey(locationState));
 }
 
 function locationMutationPending(

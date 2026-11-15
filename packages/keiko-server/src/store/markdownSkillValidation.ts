@@ -4,6 +4,7 @@ import {
   type MarkdownSkillUpload,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  type JiraIssueTemplate,
   describeJiraTemplateParseErrors,
   isJiraIssueTemplateDocument,
   mentionsJiraIssueTemplateMarker,
@@ -69,7 +70,7 @@ function boundedDisplayName(value: string): string {
 }
 
 /** A document that declares itself a Jira issue template must be one: it becomes enforcement. */
-function assertValidJiraTemplate(body: string): void {
+function assertValidJiraTemplate(body: string): JiraIssueTemplate | undefined {
   if (!isJiraIssueTemplateDocument(body)) {
     // A marker line that is not in a front matter at the very top would silently govern nothing.
     if (mentionsJiraIssueTemplateMarker(body)) {
@@ -77,7 +78,7 @@ function assertValidJiraTemplate(body: string): void {
         "Jira issue template marker without a valid front matter: start the file with ---.",
       );
     }
-    return;
+    return undefined;
   }
   const parsed = parseJiraIssueTemplate(body);
   if (!parsed.ok) {
@@ -85,6 +86,7 @@ function assertValidJiraTemplate(body: string): void {
       `Jira issue template is invalid: ${describeJiraTemplateParseErrors(parsed.errors)}.`,
     );
   }
+  return parsed.template;
 }
 
 export function validateMarkdownSkillUpload(input: MarkdownSkillUpload): ValidatedMarkdownSkill {
@@ -96,8 +98,13 @@ export function validateMarkdownSkillUpload(input: MarkdownSkillUpload): Validat
   if (body.trim().length === 0 || /\p{Cc}/u.test(body.replace(/[\n\t]/gu, ""))) {
     throw invalidRequest("Skill file must contain nonempty Markdown text.");
   }
-  assertValidJiraTemplate(body);
+  const template = assertValidJiraTemplate(body);
   const heading = firstHeading(body);
-  const name = boundedDisplayName(heading ?? input.fileName.slice(0, -3));
+  // A template without a heading is named for what it governs, not for the file it was saved as.
+  const fallback =
+    template === undefined
+      ? input.fileName.slice(0, -3)
+      : `${template.project} · ${template.issueType}`;
+  const name = boundedDisplayName(heading ?? fallback);
   return { name, body, digest: markdownSkillDigest(body), byteCount: Buffer.byteLength(body) };
 }

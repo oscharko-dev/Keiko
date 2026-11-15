@@ -1,145 +1,44 @@
 import { spawn } from "node:child_process";
-import {
-  activityLogEvent,
-  defineActivityLogOperation,
-} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import {
-  emitSecurityLogEvent,
-  resolveWindowsPowerShellExecutable,
-  resolveWindowsSystemDirectory,
-  securityErrorKind,
-  type SecurityLogSink,
-  type WindowsBinaryExistsCheck,
-  type WindowsSystemDirectoryIdentityCheck,
-} from "@oscharko-dev/keiko-security";
-import { emitCliWindowsSystemFailure } from "./security-log.js";
 
 /**
  * A desktop double-click gives the portable launcher no terminal: every `io.err` line vanishes and
  * a failed first start looks like the app simply did nothing. This surfaced twice in the 0.3.0
  * beta on macOS — a Gatekeeper-blocked bundle and a refused runtime activation both died without
- * a visible word — and again on Windows when the console-backed Node child was hidden. When a
- * setup or launch command fails under a double-click, this notifier shows the recorded reason in a
- * native alert instead.
+ * a visible word. When a setup or launch command fails under a double-click on macOS, this
+ * notifier shows the recorded reason in a native alert instead.
+ *
+ * Windows has no notifier process (#4358): the native launcher outlives its `portable launch`
+ * child and shows the failure box itself, from the closed reason the CLI leaves in a note
+ * (launch-failure-note.ts). A PowerShell started for it from here ended with the CLI process on a
+ * slow machine, before it could show anything.
  *
  * The double-click is detected by `KEIKO_PORTABLE_UI_LAUNCH=1`, which only the native launcher
  * binary sets. A TTY heuristic is deliberately NOT used: it cannot tell a Finder launch from a
  * test runner or CI pipe, and the first version of this notifier proved it by raising real alert
  * dialogs on the desktop while the test suite exercised its failure paths.
  *
- * The alert runs detached and unreferenced: it waits for the human at its own pace, never blocks
- * or outlives-holds the CLI process, and is strictly best-effort — it must never turn a
- * diagnosable failure into a different one.
+ * The alert runs detached and unreferenced: it waits for the human at its own pace and never blocks
+ * the CLI process, and is strictly best-effort — it must never turn a diagnosable failure into a
+ * different one.
  */
 
 const MAX_ALERT_MESSAGE_LENGTH = 400;
 const OSASCRIPT_EXECUTABLE = "/usr/bin/osascript";
 
-const WINDOWS_ALERT_SPAWN_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "portable.windows-alert.spawn-failed",
-  category: "diagnostic",
-  owner: "keiko-cli",
-  emitter: "portable-launch-notifier.logWindowsAlertSpawnFailure",
-  fields: {
-    surface: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["portable-failure-alert", "portable-setup-notice"],
-    },
-    failureKind: {
-      type: "string",
-      dataClass: "error-kind",
-      required: true,
-      maxLength: 64,
-    },
-  },
-  causal: "none",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["windows-alert-spawn"],
-  proofIds: ["portable.windows-alert.spawn-failed.emitted-line"],
-  releaseImpact: "patch",
-});
-
-// The one informational use of the alert (#4358): a double-click on the downloaded Windows
-// launcher shows nothing for minutes while the managed installation is set up, so the launcher
-// says so once. The line records that the notice was requested, never its text; whether the box
-// reached the screen is not observable from here.
-const SETUP_NOTICE_REQUESTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "portable.setup-notice.requested",
-  category: "diagnostic",
-  owner: "keiko-cli",
-  emitter: "portable-launch-notifier.emitSetupNoticeRequested",
-  fields: {
-    surface: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["portable-setup-notice"],
-    },
-  },
-  causal: "none",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["windows-alert-spawn"],
-  proofIds: ["portable.setup-notice.requested.emitted-line"],
-  releaseImpact: "patch",
-});
-
-/** What the alert is for; it selects the box's title and icon and the surface a failure names. */
-type WindowsAlertKind = WindowsBox["kind"];
-
-const WINDOWS_ALERT_SURFACE = {
-  failure: "portable-failure-alert",
-  "setup-notice": "portable-setup-notice",
-} as const;
-
-/** What a box shows: the failure alert carries the recorded reason, the setup notice its fixed text. */
-export type WindowsBox =
-  { readonly kind: "failure"; readonly message: string } | { readonly kind: "setup-notice" };
-
-/**
- * Shown once when the Windows launcher begins a first installation under a double-click. It names
- * no percentage and no duration it cannot know: the setup copies and attests the whole
- * installation while the virus scanner reads every new file.
- */
-export const PORTABLE_SETUP_NOTICE =
-  "Keiko is being set up. The first start can take several minutes. Your browser opens when Keiko is ready.";
-
-/**
- * The same notice for a German Windows display language, in the product catalog's informal
- * address. It is the first thing Keiko shows a person, and the alert path has no catalog: the box's
- * own command picks one of these two fixed texts.
- */
-export const PORTABLE_SETUP_NOTICE_DE =
-  "Keiko wird eingerichtet. Der erste Start kann einige Minuten dauern. Dein Browser öffnet sich, sobald Keiko bereit ist.";
-
 export type PortableFailureNotifierFn = (message: string, env: EnvSource) => void;
-export type PortableSetupNoticeFn = (env: EnvSource) => void;
 
 export interface PortableFailureNotifierDeps {
   readonly platform?: (() => NodeJS.Platform) | undefined;
   readonly runAlert?: ((script: string) => void) | undefined;
-  readonly runWindowsAlert?: ((message: string, env: EnvSource) => void) | undefined;
-  readonly securityLogSink?: SecurityLogSink | undefined;
-  readonly windowsBinaryExists?: WindowsBinaryExistsCheck | undefined;
-  readonly windowsSystemDirectoryIdentity?: WindowsSystemDirectoryIdentityCheck | undefined;
   /**
    * Receives one fixed, content-free line when the alert itself cannot be shown. The CLI keeps
-   * this stderr fallback for the person who launched it; `securityLogSink` separately carries the
-   * correlated machine-reconstruction event for resolver and spawn failures.
+   * this stderr fallback for the person who launched it.
    */
   readonly reportAlertFailure?: ((line: string) => void) | undefined;
 }
 
 const ALERT_FAILURE_LINE = "keiko portable launch: the failure alert could not be shown\n";
-const NOTICE_FAILURE_LINE = "keiko portable launch: the setup notice could not be shown\n";
 
 /** Kept to displayable text: platform-quoted, control-free, bounded. */
 function displayableAlertMessage(message: string): string {
@@ -171,7 +70,6 @@ type DetachedAlertSpawn = (
     readonly env: NodeJS.ProcessEnv;
     readonly shell: false;
     readonly stdio: "ignore";
-    readonly windowsHide?: boolean;
   },
 ) => DetachedAlertChild;
 
@@ -196,228 +94,12 @@ export function runDetachedAlert(
   child.unref();
 }
 
-function powershellSingleQuoted(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-function windowsAlertCommand(box: WindowsBox): string {
-  if (box.kind === "setup-notice") return windowsSetupNoticeCommand();
-  const text = powershellSingleQuoted(displayableAlertMessage(box.message));
-  return [
-    "Add-Type -AssemblyName PresentationFramework",
-    `[System.Windows.MessageBox]::Show(${text}, 'Keiko could not start', 'OK', 'Error') | Out-Null`,
-  ].join("; ");
-}
-
-// The text follows the Windows display language, decided inside the box's own command: no second
-// process and no caller data. Both texts are fixed constants and pass the same quoting; the command
-// is one plain -Command argument, which Node hands to Windows as UTF-16, so the umlaut arrives
-// intact.
-function windowsSetupNoticeCommand(): string {
-  const german = powershellSingleQuoted(displayableAlertMessage(PORTABLE_SETUP_NOTICE_DE));
-  const english = powershellSingleQuoted(displayableAlertMessage(PORTABLE_SETUP_NOTICE));
-  return [
-    "Add-Type -AssemblyName PresentationFramework",
-    `$keikoText = if ((Get-UICulture).TwoLetterISOLanguageName -eq 'de') { ${german} } else { ${english} }`,
-    "[System.Windows.MessageBox]::Show($keikoText, 'Keiko', 'OK', 'Information') | Out-Null",
-  ].join("; ");
-}
-
-export function runDetachedWindowsAlert(
-  message: string,
-  env: EnvSource,
-  spawnFn: DetachedAlertSpawn = spawn,
-  reportAlertFailure: (line: string) => void = defaultAlertFailureReport,
-  identityCheck?: WindowsSystemDirectoryIdentityCheck,
-  securityLogSink?: SecurityLogSink,
-  existsAsFile?: WindowsBinaryExistsCheck,
-): void {
-  runDetachedWindowsBox({ kind: "failure", message }, env, {
-    spawnFn,
-    reportAlertFailure,
-    identityCheck,
-    securityLogSink,
-    existsAsFile,
-  });
-}
-
-export interface DetachedWindowsBoxOptions {
-  readonly spawnFn?: DetachedAlertSpawn | undefined;
-  readonly reportAlertFailure?: ((line: string) => void) | undefined;
-  readonly identityCheck?: WindowsSystemDirectoryIdentityCheck | undefined;
-  readonly securityLogSink?: SecurityLogSink | undefined;
-  readonly existsAsFile?: WindowsBinaryExistsCheck | undefined;
-}
-
-/**
- * The one detached Windows message box behind both uses: the failure alert and the setup notice.
- * Exported for its direct tests; production callers go through the two notify functions.
- */
-export function runDetachedWindowsBox(
-  box: WindowsBox,
-  env: EnvSource,
-  options: DetachedWindowsBoxOptions = {},
-): void {
-  const reportAlertFailure = options.reportAlertFailure ?? defaultAlertFailureReport;
-  const log: WindowsAlertLog = { kind: box.kind, sink: options.securityLogSink };
-  const system = resolveWindowsAlertSystem(env, options.identityCheck, options.existsAsFile, log);
-  const child = spawnWindowsAlertChild(box, env, system, options.spawnFn ?? spawn, log);
-  child.on("error", (error) => {
-    logWindowsAlertSpawnFailure(error, log);
-    reportAlertFailure(box.kind === "failure" ? ALERT_FAILURE_LINE : NOTICE_FAILURE_LINE);
-  });
-  child.unref();
-}
-
-interface WindowsAlertLog {
-  readonly kind: WindowsAlertKind;
-  readonly sink: SecurityLogSink | undefined;
-}
-
-interface WindowsAlertSystem {
-  readonly command: string;
-  readonly systemRoot: string;
-}
-
-function resolveWindowsAlertSystem(
-  env: EnvSource,
-  identityCheck: WindowsSystemDirectoryIdentityCheck | undefined,
-  existsAsFile: WindowsBinaryExistsCheck | undefined,
-  log: WindowsAlertLog,
-): WindowsAlertSystem {
-  try {
-    return {
-      systemRoot: resolveWindowsSystemDirectory(env, identityCheck),
-      command: resolveWindowsPowerShellExecutable(env, existsAsFile, identityCheck),
-    };
-  } catch (error) {
-    // The refusal belongs to the alert path both boxes share and keeps its security line; a setup
-    // notice adds its own line so the refusal can be told from a failed launch.
-    emitCliWindowsSystemFailure(error, log.sink, "portable-failure-alert");
-    if (log.kind === "setup-notice") logWindowsAlertSpawnFailure(error, log);
-    throw error;
-  }
-}
-
-function spawnWindowsAlertChild(
-  box: WindowsBox,
-  env: EnvSource,
-  system: WindowsAlertSystem,
-  spawnFn: DetachedAlertSpawn,
-  log: WindowsAlertLog,
-): DetachedAlertChild {
-  try {
-    return spawnFn(
-      system.command,
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-Sta",
-        "-WindowStyle",
-        "Hidden",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        windowsAlertCommand(box),
-      ],
-      {
-        detached: true,
-        env: {
-          SystemRoot: system.systemRoot,
-          WINDIR: system.systemRoot,
-          ...(env.TEMP === undefined ? {} : { TEMP: env.TEMP }),
-          ...(env.TMP === undefined ? {} : { TMP: env.TMP }),
-        },
-        shell: false,
-        stdio: "ignore",
-        windowsHide: true,
-      },
-    );
-  } catch (error) {
-    logWindowsAlertSpawnFailure(error, log);
-    throw error;
-  }
-}
-
-function logWindowsAlertSpawnFailure(error: unknown, log: WindowsAlertLog): void {
-  emitSecurityLogEvent(
-    log.sink,
-    activityLogEvent(
-      WINDOWS_ALERT_SPAWN_FAILED_OPERATION,
-      { level: "error", errorKind: "unavailable" },
-      { surface: WINDOWS_ALERT_SURFACE[log.kind], failureKind: securityErrorKind(error) },
-    ),
-  );
-}
-
-function emitSetupNoticeRequested(sink: SecurityLogSink | undefined): void {
-  emitSecurityLogEvent(
-    sink,
-    activityLogEvent(
-      SETUP_NOTICE_REQUESTED_OPERATION,
-      { level: "info" },
-      { surface: "portable-setup-notice" },
-    ),
-  );
-}
-
 function defaultAlertFailureReport(line: string): void {
   process.stderr.write(line);
 }
 
 function launchFailureMessage(message: string): string {
   return message.trim() === "" ? "The portable launch failed without a reason." : message;
-}
-
-function notifyMacosLaunchFailure(
-  text: string,
-  deps: PortableFailureNotifierDeps,
-  reportAlertFailure: (line: string) => void,
-): void {
-  const runAlert =
-    deps.runAlert ??
-    ((script: string): void => {
-      runDetachedAlert(script, undefined, reportAlertFailure);
-    });
-  runAlert(alertScript(text));
-}
-
-function notifyWindowsLaunchFailure(
-  text: string,
-  env: EnvSource,
-  deps: PortableFailureNotifierDeps,
-  reportAlertFailure: (line: string) => void,
-): void {
-  const runWindowsAlert =
-    deps.runWindowsAlert ??
-    ((alertMessage: string, notifyEnv: EnvSource): void => {
-      runDetachedWindowsAlert(
-        alertMessage,
-        notifyEnv,
-        undefined,
-        reportAlertFailure,
-        deps.windowsSystemDirectoryIdentity,
-        deps.securityLogSink,
-        deps.windowsBinaryExists,
-      );
-    });
-  runWindowsAlert(text, env);
-}
-
-function notifySupportedPlatformLaunchFailure(
-  hostPlatform: NodeJS.Platform,
-  text: string,
-  env: EnvSource,
-  deps: PortableFailureNotifierDeps,
-  reportAlertFailure: (line: string) => void,
-): void {
-  if (hostPlatform === "darwin") {
-    notifyMacosLaunchFailure(text, deps, reportAlertFailure);
-  }
-  if (hostPlatform === "win32") {
-    notifyWindowsLaunchFailure(text, env, deps, reportAlertFailure);
-  }
 }
 
 export function notifyPortableLaunchFailure(
@@ -427,57 +109,17 @@ export function notifyPortableLaunchFailure(
 ): void {
   if (env.KEIKO_PORTABLE_UI_LAUNCH !== "1") return;
   const platform = deps.platform ?? ((): NodeJS.Platform => process.platform);
-  const hostPlatform = platform();
-  if (hostPlatform !== "darwin" && hostPlatform !== "win32") return;
-  const text = launchFailureMessage(message);
+  if (platform() !== "darwin") return;
   const reportAlertFailure = deps.reportAlertFailure ?? defaultAlertFailureReport;
+  const runAlert =
+    deps.runAlert ??
+    ((script: string): void => {
+      runDetachedAlert(script, undefined, reportAlertFailure);
+    });
   try {
-    notifySupportedPlatformLaunchFailure(hostPlatform, text, env, deps, reportAlertFailure);
+    runAlert(alertScript(launchFailureMessage(message)));
   } catch {
     // Best-effort by contract — see runDetachedAlert; the fixed line below is the evidence.
     reportAlertFailure(ALERT_FAILURE_LINE);
-  }
-}
-
-function showWindowsSetupNotice(
-  env: EnvSource,
-  deps: PortableFailureNotifierDeps,
-  reportAlertFailure: (line: string) => void,
-): void {
-  const runWindowsAlert =
-    deps.runWindowsAlert ??
-    ((_english: string, notifyEnv: EnvSource): void => {
-      runDetachedWindowsBox({ kind: "setup-notice" }, notifyEnv, {
-        reportAlertFailure,
-        identityCheck: deps.windowsSystemDirectoryIdentity,
-        securityLogSink: deps.securityLogSink,
-        existsAsFile: deps.windowsBinaryExists,
-      });
-    });
-  // The seam receives the English text; the real box picks the language itself (see its command).
-  runWindowsAlert(PORTABLE_SETUP_NOTICE, env);
-}
-
-/**
- * Tells the person that a first installation has begun, for a Windows double-click only: the
- * launcher has no window there, and the setup runs for minutes before the browser opens. Other
- * platforms and a terminal launch are unchanged. Best-effort like the failure alert: a notice that
- * cannot be shown never fails or delays the setup; its own failure leaves the fixed line and the
- * resolver's or the spawn's body-free event.
- */
-export function notifyPortableSetupStarted(
-  env: EnvSource,
-  deps: PortableFailureNotifierDeps = {},
-): void {
-  if (env.KEIKO_PORTABLE_UI_LAUNCH !== "1") return;
-  const platform = deps.platform ?? ((): NodeJS.Platform => process.platform);
-  if (platform() !== "win32") return;
-  const reportAlertFailure = deps.reportAlertFailure ?? defaultAlertFailureReport;
-  try {
-    showWindowsSetupNotice(env, deps, reportAlertFailure);
-    emitSetupNoticeRequested(deps.securityLogSink);
-  } catch {
-    // Best-effort by contract — see runDetachedAlert; the fixed line below is the evidence.
-    reportAlertFailure(NOTICE_FAILURE_LINE);
   }
 }
