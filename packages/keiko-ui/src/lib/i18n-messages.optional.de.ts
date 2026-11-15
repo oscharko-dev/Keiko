@@ -2608,6 +2608,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.outcome.validation.invalid-operation":
     "Die gewünschte Feldänderung ist in Jira nicht möglich.",
   "chat.jira.outcome.validation.bounds-exceeded": "Die Änderung war zu groß für einen Schritt.",
+  "chat.jira.outcome.linksMissing":
+    "Dieser Vorgang wurde schon angelegt, aber nicht alle gewünschten Verknüpfungen sind daran. Es wurde nichts noch einmal gesendet. Ergänze die fehlenden Verknüpfungen in Jira oder bitte Keiko darum.",
+  "chat.jira.outcome.validation.named.required-field":
+    "Das Jira-Feld „{field}“ ist ein Pflichtfeld, aber es wurde kein Wert dafür angegeben.",
+  "chat.jira.outcome.validation.named.unsupported-field":
+    "Das Jira-Feld „{field}“ lässt sich von Keiko aus nicht ausfüllen.",
+  "chat.jira.outcome.validation.named.invalid-field":
+    "Der Wert für das Jira-Feld „{field}“ ist keiner, den Jira akzeptiert.",
+  "chat.jira.outcome.validation.named.invalid-operation":
+    "Diese Änderung ist für das Jira-Feld „{field}“ nicht möglich.",
   "chat.jira.outcome.nothingSent": "Es wurde nichts an Jira gesendet.",
   "chat.jira.outcome.rules": "Nicht erfüllte Vorlagenregeln",
   "chat.jira.outcome.rule.summary-too-short": "Die Zusammenfassung ist zu kurz.",

@@ -197,6 +197,7 @@ it.each(["summary", "customfield_10000"])(
       reason: "field-validation",
       detail: {
         fieldId: id,
+        fieldName: id,
         validation: "invalid-operation",
         messages: [FIELD_SENTENCES["invalid-operation"]],
       },
@@ -231,6 +232,7 @@ it("keeps selected routing references inside current metadata allowed values", a
     reason: "field-validation",
     detail: {
       fieldId: "issuetype",
+      fieldName: "issuetype",
       validation: "invalid-field",
       messages: [FIELD_SENTENCES["invalid-field"]],
     },
@@ -456,6 +458,8 @@ it.each(["jira.create", "jira.transition"] as const)(
       detail: {
         fieldId: "customfield_10000",
         validation: "required-field",
+        // The name Jira shows travels beside the id so a card can name the field (#4357 R08).
+        fieldName: "customfield_10000",
         messages: [FIELD_SENTENCES["required-field"]],
       },
     });
@@ -563,6 +567,7 @@ it("collects all create pages before validating a required field on a later page
     reason: "field-validation",
     detail: {
       fieldId: "customfield_10000",
+      fieldName: "customfield_10000",
       validation: "required-field",
       messages: [FIELD_SENTENCES["required-field"]],
     },
@@ -616,6 +621,7 @@ it("does not fabricate a required unsupported plugin field", async () => {
         ...FIELDS,
         {
           ...field("customfield_10001", "string", true),
+          name: "Plugin value",
           schema: { type: "string", custom: "unsupported:plugin" },
         },
       ],
@@ -636,6 +642,7 @@ it("does not fabricate a required unsupported plugin field", async () => {
     detail: {
       validation: "required-field",
       fieldId: "customfield_10001",
+      fieldName: "Plugin value",
       messages: [FIELD_SENTENCES["required-field"]],
     },
   });
@@ -647,13 +654,18 @@ it("revalidates metadata when edit operations change between actions", async () 
   const args = { issueKey: "SYN-1", fields: { summary: "Synthetic" } };
   expect((await f.run("jira.edit", args)).ok).toBe(true);
   f.http.mockResolvedValueOnce(
-    response({ fields: { summary: { ...field("summary", "string"), operations: [] } } }),
+    response({
+      fields: {
+        summary: { ...field("summary", "string"), name: "Summary line", operations: [] },
+      },
+    }),
   );
   expect(await f.run("jira.edit", args)).toEqual({
     ok: false,
     reason: "field-validation",
     detail: {
       fieldId: "summary",
+      fieldName: "Summary line",
       validation: "invalid-operation",
       messages: [FIELD_SENTENCES["invalid-operation"]],
     },
@@ -1927,4 +1939,30 @@ it("says a field of an unsupported type cannot be set, for an optional and a req
       ],
     },
   });
+});
+
+// #4357: the name Jira shows comes from the instance's own metadata. The metadata parser admits up to
+// 255 characters, more than a detail text takes, so the refusal bounds it instead of tripping a result
+// schema later.
+it("bounds a field name that is longer than a detail text to the detail bound", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, { ...field("customfield_10001", "string", true), name: "N".repeat(250) }],
+      start: 0,
+      size: 100,
+      last: true,
+    }),
+  );
+  const result = await f.run("jira.create", {
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Synthetic", customfield_10000: "Required" },
+  });
+  const name = result.ok
+    ? undefined
+    : (result.detail as { fieldName?: string } | undefined)?.fieldName;
+  expect(name).toBeDefined();
+  expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(200);
+  expect(name?.endsWith("…")).toBe(true);
 });

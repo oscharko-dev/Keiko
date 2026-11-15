@@ -843,6 +843,7 @@ export function jiraFailureDetailData(
   return {
     ...(detail.unchanged === true ? { unchanged: true } : {}),
     ...(detail.fieldId === undefined ? {} : { fieldId: detail.fieldId }),
+    ...(detail.fieldName === undefined ? {} : { fieldName: detail.fieldName }),
     ...(detail.validation === undefined ? {} : { validation: detail.validation }),
     ...(detail.fieldErrors === undefined
       ? {}

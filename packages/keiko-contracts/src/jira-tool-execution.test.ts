@@ -108,3 +108,24 @@ describe("sanitizeJiraMutationLinkAccount (#4176)", () => {
     expect(sanitizeJiraMutationLinkAccount(value)).toBeUndefined();
   });
 });
+
+describe("sanitizeJiraMutationFailureDetail field name (#4357)", () => {
+  it("keeps a plain name and replaces a control character with a space", () => {
+    expect(
+      sanitizeJiraMutationFailureDetail({ fieldId: "resolution", fieldName: "Resolution" }),
+    ).toEqual({ fieldId: "resolution", fieldName: "Resolution" });
+    expect(
+      sanitizeJiraMutationFailureDetail({ fieldId: "resolution", fieldName: "Reso\u0007lution" }),
+    ).toEqual({ fieldId: "resolution", fieldName: "Reso lution" });
+  });
+  it("bounds a long name and drops an empty one", () => {
+    const bounded = sanitizeJiraMutationFailureDetail({
+      fieldId: "resolution",
+      fieldName: "N".repeat(400),
+    });
+    expect(new TextEncoder().encode(bounded?.fieldName ?? "").length).toBeLessThanOrEqual(200);
+    expect(sanitizeJiraMutationFailureDetail({ fieldId: "resolution", fieldName: "   " })).toEqual({
+      fieldId: "resolution",
+    });
+  });
+});

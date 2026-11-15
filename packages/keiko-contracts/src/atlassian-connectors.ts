@@ -2141,6 +2141,7 @@ export {
   JIRA_ATTACHMENTS_AVAILABLE,
   JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
   JIRA_ATTACHMENT_OPERATIONS,
+  JIRA_EXISTING_LINKS_MISSING_MESSAGE,
   jiraOperationInReleaseScope,
   isJiraReleaseScopeRefusal,
   type JiraAttachmentOperation,

@@ -162,8 +162,10 @@ import {
 import { executeJiraWorklogDelete, isJiraWorklogDelete } from "./jira-managed-worklog-delete.js";
 import {
   JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
+  JIRA_EXISTING_LINKS_MISSING_MESSAGE,
   isSafeAtlassianIdentifier,
   jiraOperationInReleaseScope,
+  sanitizeJiraMutationFailureDetail,
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldValidationFailure,
   type JiraMutationAttempt,
@@ -188,6 +190,7 @@ import {
 import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
 import {
   validateJiraFieldChanges,
+  withJiraFieldName,
   prepareJiraDescriptionFields,
   type JiraFieldValidationResult,
 } from "./jira-field-metadata.js";
@@ -319,14 +322,17 @@ function validationFailure(
     (result.fieldId === "requirementIds"
       ? REFERENCES_PLACE
       : FIELD_VALIDATION_MESSAGES[result.reason]);
-  return {
-    ...INVALID,
-    detail: {
-      validation: result.reason,
-      ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
-      messages: [message],
-    },
+  const detail: JiraMutationFailureDetail = {
+    validation: result.reason,
+    ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
+    // The name Jira shows lets a person read which field is meant; the sentence below stays for the
+    // model (#4357). It comes from the instance's metadata, so it is bounded like every detail text.
+    ...(result.fieldId === undefined || result.fieldName === undefined
+      ? {}
+      : { fieldName: result.fieldName }),
+    messages: [message],
   };
+  return { ...INVALID, detail: sanitizeJiraMutationFailureDetail(detail) ?? detail };
 }
 type Validated = Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: true }>;
 function withDescriptionFormatting(
@@ -744,13 +750,21 @@ function createFieldState(
   create: CreateRequest,
   requireAll: boolean,
 ): ReturnType<typeof validateJiraFieldChanges> {
-  return validateJiraFieldChanges(
-    createContextFields(metadata),
-    { ...create.fields, project: { id: create.projectId }, issuetype: { id: create.issueTypeId } },
-    "create",
-    "data-center",
-    [],
-    requireAll,
+  const fields = createContextFields(metadata);
+  return withJiraFieldName(
+    fields,
+    validateJiraFieldChanges(
+      fields,
+      {
+        ...create.fields,
+        project: { id: create.projectId },
+        issuetype: { id: create.issueTypeId },
+      },
+      "create",
+      "data-center",
+      [],
+      requireAll,
+    ),
   );
 }
 function createTemplateGate(
@@ -900,12 +914,9 @@ function linkedFieldChanges(
   args: CatalogJsonObject,
   purpose: "edit" | "transition",
 ): LinkedFieldChanges {
-  const validated = validateJiraFieldChanges(
+  const validated = withJiraFieldName(
     fields,
-    args.fields ?? {},
-    purpose,
-    "data-center",
-    args.updates ?? [],
+    validateJiraFieldChanges(fields, args.fields ?? {}, purpose, "data-center", args.updates ?? []),
   );
   if (!validated.ok) return validationFailure(validated);
   return { ok: true, validated, links: parseJiraIssueLinks(args.links) ?? [] };
@@ -1382,8 +1393,6 @@ async function attachFile(
   });
 }
 
-const EXISTING_LINKS_MISSING =
-  "This issue already exists from this draft, but not every requested link is on it. Nothing was sent again; add only the missing links with jira.edit.";
 /**
  * An item reconciled to an issue it already created is complete only when that issue also carries
  * the relations the item asks for: a create followed by a failed further link leaves an issue the
@@ -1404,7 +1413,7 @@ async function existingItemWithLinks(
   return {
     ok: false,
     reason: current.ok ? "conflict" : current.reason,
-    detail: { messages: [EXISTING_LINKS_MISSING] },
+    detail: { messages: [JIRA_EXISTING_LINKS_MISSING_MESSAGE] },
     receipt: existing.receipt,
     links: account,
   };
@@ -1536,15 +1545,19 @@ function draftItemFieldFailure(
   if (!input.ok) return undefined;
   const prepared = draftItemCreateFields(item, input.fields, metadata, trace);
   if (!prepared.ok) return validationFailure(prepared).detail;
-  const validated = validateJiraFieldChanges(
-    createContextFields(metadata),
-    {
-      ...prepared.fields,
-      project: { id: item.projectId },
-      issuetype: { id: item.issueTypeId },
-    },
-    "create",
-    "data-center",
+  const fields = createContextFields(metadata);
+  const validated = withJiraFieldName(
+    fields,
+    validateJiraFieldChanges(
+      fields,
+      {
+        ...prepared.fields,
+        project: { id: item.projectId },
+        issuetype: { id: item.issueTypeId },
+      },
+      "create",
+      "data-center",
+    ),
   );
   return validated.ok ? undefined : validationFailure(validated).detail;
 }

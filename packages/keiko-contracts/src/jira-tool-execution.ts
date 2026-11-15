@@ -862,6 +862,8 @@ export interface JiraMutationFailureDetail {
    */
   readonly fromJira?: true;
   readonly fieldId?: string;
+  /** The name Jira shows for `fieldId` when Keiko's own check refused it: what a person reads (#4357). */
+  readonly fieldName?: string;
   readonly validation?: JiraFieldValidationFailure;
   readonly fieldErrors?: readonly JiraMutationFieldError[];
   readonly messages?: readonly string[];
@@ -945,6 +947,10 @@ function boundedDetailText(text: string): string {
 function detailFieldId(value: unknown): value is string {
   return typeof value === "string" && DETAIL_FIELD_ID.test(value);
 }
+function detailFieldName(value: unknown): { readonly fieldName: string } | undefined {
+  const fieldName = detailText(value);
+  return fieldName === undefined ? undefined : { fieldName };
+}
 function detailFieldErrors(value: unknown): readonly JiraMutationFieldError[] {
   if (!Array.isArray(value)) return [];
   const errors: JiraMutationFieldError[] = [];
@@ -979,6 +985,7 @@ export function sanitizeJiraMutationFailureDetail(
     ...(Reflect.get(value, "unchanged") === true ? { unchanged: true } : {}),
     ...(Reflect.get(value, "fromJira") === true ? { fromJira: true } : {}),
     ...(detailFieldId(fieldId) ? { fieldId } : {}),
+    ...detailFieldName(Reflect.get(value, "fieldName")),
     ...(VALIDATION_FAILURES.has(validation)
       ? { validation: validation as JiraFieldValidationFailure }
       : {}),
