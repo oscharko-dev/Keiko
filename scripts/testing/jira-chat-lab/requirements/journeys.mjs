@@ -18,7 +18,14 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { URLSearchParams } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { chatReadLogDirectory, jsonRequest, prepareChat, withLiveChat } from "../chat-read.mjs";
+import {
+  chatReadLogDirectory,
+  createLabPodId,
+  jsonRequest,
+  prepareChat,
+  requestStatus,
+  withLiveChat,
+} from "../chat-read.mjs";
 import { eachJourneyInLicenseWindow, ensureLicenseWindow } from "./license-window.mjs";
 import { LabOutageError, labJiraState } from "./lab-health.mjs";
 import { withWorkProjectLock } from "./work-project-lock.mjs";
@@ -32,6 +39,7 @@ import { JOURNEYS, JOURNEY_IDS } from "./journey-checks.mjs";
 import { COMPOSER_JOURNEYS } from "./composer.mjs";
 import { labSprintSetup } from "./field-correction.mjs";
 import { languageData } from "./language-names.mjs";
+import { templateContext } from "./template-binding.mjs";
 import { aggregateRuns } from "./repeat.mjs";
 import {
   classifyJourney,
@@ -605,6 +613,19 @@ function nativeReads(session, readAs) {
 }
 
 /** The live plumbing the journey checks are given (see journey-checks.mjs). */
+/** The Pod a template bind goes through: a verified Pod of the API account (the bind route needs a Pod id, not a Chat or a model). */
+const podOfLabChat = (ctx, session) => () => createLabPodId(ctx.origin, ctx.cookie, session);
+
+/** What the template binding needs from the live product and Jira: plain requests, the bind post, the Pod and the Pod account's profile. */
+const templateIo = (ctx, session) => ({
+  plain: (name, path, body, method) => api(ctx, name, path, body, method),
+  post: (path, body) => requestStatus(ctx.origin, ctx.cookie, path, body),
+  readPod: podOfLabChat(ctx, session),
+  readLocale: async () =>
+    (await checked(session, "api-locale", "GET", "/rest/api/2/myself", basicAuth(session, "api")))
+      .locale,
+});
+
 export function journeyContext(live, session, truth) {
   const ctx = {
     ...live,
@@ -638,7 +659,6 @@ export function journeyContext(live, session, truth) {
     readStoredMessages: async (chat) =>
       (await api(ctx, "read-stored-messages", messagesPath(ctx, chat), undefined, "GET")).messages,
     ...nativeReads(session, () => ctx.readAs),
-    http: (name, path, body, method = "POST") => api(ctx, name, path, body, method),
     deselectSkill: (chat) => deselectSkill(ctx, chat),
     comments: (key) => issueComments(session, key),
     exportReport: (chat, reportId, format) => exportReport(ctx, chat, reportId, format),
@@ -656,7 +676,8 @@ export function journeyContext(live, session, truth) {
       : {}),
     nativeCreate: (fields) => createNativeIssue(session, fields),
   };
-  return ctx;
+  // A saved template is bound the way its author's save would bind it (#4354); every other request is plain.
+  return Object.assign(ctx, templateContext(ctx, templateIo(ctx, session)));
 }
 
 /** Runs the selected journeys in one live Keiko session and returns checks keyed by scenario. */
@@ -824,8 +845,10 @@ async function prepareDocumentLane(ctx, session, modelId) {
     writeSpecificationAs(ctx, format);
     await indexPod(ctx, capsuleId);
   };
-  ctx.freshChat = async (toolMode) =>
-    (await freshBoundChat(ctx, session, modelId, capsuleId, toolMode)).chat;
+  ctx.freshChat = async (toolMode) => {
+    await ctx.ensureBaselineBound();
+    return (await freshBoundChat(ctx, session, modelId, capsuleId, toolMode)).chat;
+  };
   return capsuleId;
 }
 
@@ -842,7 +865,10 @@ async function runLane(live, options, checks) {
   const composer = options.set === "composer";
   const capsuleId = composer ? undefined : await prepareDocumentLane(ctx, session, modelId);
   if (composer) {
-    ctx.freshChat = async (toolMode) => (await composerChat(ctx, session, modelId, toolMode)).chat;
+    ctx.freshChat = async (toolMode) => {
+      await ctx.ensureBaselineBound();
+      return (await composerChat(ctx, session, modelId, toolMode)).chat;
+    };
     // The types and modes this run selected (`--types`, `--modes`); empty means all of them.
     ctx.composerSelection = options.composerSelection ?? {};
   }

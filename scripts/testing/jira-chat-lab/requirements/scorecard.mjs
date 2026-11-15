@@ -142,6 +142,8 @@ const report = {
   results: [],
 };
 let journeys = {};
+let journeysDone = false;
+let restoreFailed = false;
 if (values.model) {
   await ensureLicenseWindow(session, directory, 3_600);
   const truth = JSON.parse(
@@ -176,11 +178,31 @@ if (values.model) {
       );
   };
   // The Composer lane writes the work project; a field required in every project is lifted for the run.
-  await withComposerFieldLift(composer, session, runGroups);
+  // A restore that fails AFTER the journeys finished must not take their results with it: the report is
+  // still written, the failure is named and the exit code is 1 (the marker stays for the next bracket).
+  try {
+    await withComposerFieldLift(composer, session, async () => {
+      await runGroups();
+      journeysDone = true;
+    });
+  } catch (error) {
+    if (!journeysDone) throw error;
+    console.log(
+      JSON.stringify({
+        operation: "requirements-field-restore",
+        failed: true,
+        ...(typeof error?.reason === "string" ? { reason: error.reason } : {}),
+      }),
+    );
+    restoreFailed = true;
+  }
 }
 for (const scenario of scenarios) report.results.push(await runChecks(scenario, journeys));
 const output = composer
   ? join(session.directory, "composer-scorecard", reportDirectoryName(values.model))
   : join(session.directory, "requirements-scorecard");
 // A model run exits 0 only when every scenario is green; `--rehearse` exited above on its own rule.
-process.exitCode = finishRun({ report, output, modelRun: Boolean(values.model) });
+process.exitCode = Math.max(
+  finishRun({ report, output, modelRun: Boolean(values.model) }),
+  restoreFailed ? 1 : 0,
+);

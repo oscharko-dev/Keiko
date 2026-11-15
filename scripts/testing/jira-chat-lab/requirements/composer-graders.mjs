@@ -9,6 +9,7 @@ import {
   gradeTemplateRepair,
   succeededEdits,
   templateRefusals,
+  transitionRefusals,
   wroteIssue,
 } from "./templates.mjs";
 import { toolExchangeOf } from "./tool-exchanges.mjs";
@@ -162,6 +163,40 @@ export function gradeMultiCreate({
     created,
     listed: gradeKeysInCards(made, exchanges),
     answered: gradeKeysInAnswer(made, answer),
+  };
+}
+
+const plainText = (text) =>
+  String(text ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replaceAll(/\p{Diacritic}/gu, "");
+
+/**
+ * The first turn of an order whose request names no content for the sections a template requires
+ * (#4355, #4369): asking for it is the right outcome, so nothing may be created natively and no write may
+ * have succeeded (hard), and the answer names every missing section (soft: a model observation when it
+ * does not). A model that wrote the sections without any source is an observation too, never a red.
+ */
+export function gradeAskedBack({ made, exchanges, answer, sections }) {
+  const wrote = made.length > 0 || storedCreatedKeys(exchanges).length > 0;
+  if (wrote)
+    return {
+      status: "unverified",
+      observation: true,
+      detail: `model observation: the model wrote the sections without any source (${String(made.length)} created natively)`,
+    };
+  const text = plainText(answer);
+  const missing = sections.filter((name) => !text.includes(plainText(name)));
+  if (missing.length > 0)
+    return {
+      status: "unverified",
+      observation: true,
+      detail: `model observation: nothing was created, but the answer does not name ${String(missing.length)} of ${String(sections.length)} sections`,
+    };
+  return {
+    status: "green",
+    detail: `nothing was created natively and no write succeeded; the answer names all ${String(sections.length)} sections`,
   };
 }
 
@@ -614,4 +649,83 @@ export function gradeAttachmentWording(answer) {
       ? "the answer says that attachments are not part of this release"
       : "the answer does not say that attachments are not part of this release",
   );
+}
+
+// ---------- C11: a German user's write is CHECKED by a template an English author wrote ----------
+
+/** The closed rules that say the product did not check the write against the template at all. */
+const UNCHECKED_RULES = Object.freeze(["template-missing", "template-binding-unresolved"]);
+
+const refusalsOfWrite = (exchanges) => [
+  ...templateRefusals(exchanges),
+  ...editRefusals(exchanges),
+  ...transitionRefusals(exchanges),
+];
+
+/**
+ * A write must be checked by the template, never "template missing" and never "binding unresolved": the
+ * template is typed by an English author and the user sees German names, which the product binds by id.
+ * Returns a red verdict naming the rule when the product did not check it, else undefined.
+ */
+export function uncheckedWrite(exchanges) {
+  const unchecked = namesRule(refusalsOfWrite(exchanges), UNCHECKED_RULES);
+  if (unchecked.length === 0) return undefined;
+  return {
+    status: "red",
+    detail: `the write was not checked by the template: the product refused with ${ruleNames(unchecked)} (a binding that did not resolve)`,
+  };
+}
+
+/** The verdict of a checked write, unless the write was not checked at all, which is red whatever else holds. */
+export const checkedOrRed = (grade, exchanges) => uncheckedWrite(exchanges) ?? grade;
+
+const categoryOf = (issue) => issue?.fields?.status?.statusCategory?.key;
+
+/**
+ * A status change beside a template with a transition rule, graded natively (the status category before
+ * and after) and by the stored refusal. `mustPass`: the issue meets the rule, so it moves to Done and
+ * nothing refuses it. Otherwise it must stay where it was and a refusal names a content rule. An
+ * unchecked write (template missing, binding unresolved) is red; a turn that never tried is unverified.
+ */
+export function gradeCheckedTransition({ before, after, exchanges, mustPass }) {
+  const unchecked = uncheckedWrite(exchanges);
+  if (unchecked !== undefined) return unchecked;
+  const moved = categoryOf(before) !== categoryOf(after) && categoryOf(after) === "done";
+  const refused = transitionRefusals(exchanges);
+  const tried = (Array.isArray(exchanges) ? exchanges : []).some((exchange) =>
+    toolExchangeOf(exchange, "jira.transition"),
+  );
+  if (mustPass) return gradePassingTransition({ moved, refused, tried });
+  if (moved)
+    return {
+      status: "red",
+      detail:
+        "the issue moved to Done although it does not meet the template's transition rule: the write was not checked",
+    };
+  if (refused.length > 0)
+    return {
+      status: "green",
+      detail: `the transition was refused with the rule lines (${ruleNames(refused)}); the status is unchanged`,
+    };
+  return {
+    status: "unverified",
+    detail: tried
+      ? "the status is unchanged, but no traced refusal names a rule; the gate was not shown to be the cause"
+      : "the status is unchanged and no jira.transition call was made; the gate was not exercised",
+  };
+}
+
+function gradePassingTransition({ moved, refused, tried }) {
+  if (moved) return { status: "green", detail: "the issue meets the rule and moved to Done" };
+  if (refused.length > 0)
+    return {
+      status: "red",
+      detail: `the issue meets the template but the transition was refused (${ruleNames(refused)})`,
+    };
+  return {
+    status: "unverified",
+    detail: tried
+      ? "the status is unchanged without a traced refusal"
+      : "no jira.transition call was made; nothing is proven",
+  };
 }

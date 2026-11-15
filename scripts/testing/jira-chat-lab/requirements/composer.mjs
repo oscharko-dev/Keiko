@@ -34,6 +34,9 @@ import {
   gradeWatcher,
   composerRelation,
   ofType,
+  checkedOrRed,
+  gradeCheckedTransition,
+  gradeAskedBack,
   gradeKeysAfterReread,
   severalPath,
 } from "./composer-graders.mjs";
@@ -43,7 +46,7 @@ import {
   gradeTemplateRecognised,
   gradeUnrepairable,
 } from "./composer-refusals.mjs";
-import { isLocalized, typeLabel } from "./language-names.mjs";
+import { isLocalized, statusLabel, typeLabel } from "./language-names.mjs";
 import { withActorLocale } from "../seed-language.mjs";
 import { JOURNEYS } from "./journey-checks.mjs";
 import {
@@ -255,13 +258,25 @@ async function unrepairableRequest(ctx, fixture) {
   ];
 }
 
-/** The two ways a person asks for several Tasks: the lab's own wording and a plain one they would type. */
+/**
+ * The three ways a person asks for several Tasks: the lab's complete wording, the plain wording of tasks
+ * that each name what they are (the model writes the sections from them) and a bare wording that names
+ * nothing the sections could be written from (asking back is the right answer, then the content follows).
+ */
 const SEVERAL_PHRASINGS = Object.freeze([
   { key: "lab", label: "lab wording" },
-  { key: "plain", label: "plain wording" },
+  { key: "real", label: "plain wording, real tasks" },
+  { key: "bare", label: "plain wording, no content" },
+]);
+const REAL_TITLES = Object.freeze([
+  "Das Login-Formular sperrt nach drei Fehlversuchen die Anmeldung für fünf Minuten",
+  "Auf der Berichtsseite gibt es eine Schaltfläche zum Export als CSV-Datei",
+  "Die Fehlermeldung bei einer ungültigen IBAN nennt den erwarteten Aufbau der Nummer",
 ]);
 const severalTitles = (mode, phrasing) =>
-  ["A", "B", "C"].map((letter) => `Composer Teil ${letter} ${mode.key} ${phrasing.key}`);
+  phrasing.key === "real"
+    ? REAL_TITLES.map((title) => `${title} (${mode.key})`)
+    : ["A", "B", "C"].map((letter) => `Composer Teil ${letter} ${mode.key} ${phrasing.key}`);
 const quoted = (titles) => titles.map((title) => `„${title}“`).join(", ");
 
 function severalPrompt(phrasing, titles, fixture) {
@@ -270,10 +285,15 @@ function severalPrompt(phrasing, titles, fixture) {
     : `Lege in REQ drei Aufgaben an: ${quoted(titles)}. Sie gehören ins Epic ${fixture.epic}.`;
 }
 
+/** The message that follows a question for the missing content: the content of every section, for all three. */
+const contentFollowUp = () =>
+  `Hier sind die Inhalte für alle drei Aufgaben. ${contentRequest("Task", "jede")} Lege sie jetzt an und melde alle Vorgangsschlüssel.`;
+
 /**
  * The hard created-part of one run: the native verdict, the path the model took and the review cards
- * the person got. A stage that was never committed is red with its own reason; with the plain wording a
- * model that asked the person for the section content creates nothing at all, which is its observation.
+ * the person got. A stage that was never committed is red with its own reason; with the plain wording of
+ * real tasks a model that asked the person for the section content creates nothing at all, which is its
+ * observation.
  */
 function severalCreated({ grade, exchanges, phrasing, cards }) {
   const path = severalPath(exchanges);
@@ -281,22 +301,18 @@ function severalCreated({ grade, exchanges, phrasing, cards }) {
   if (grade.created.status === "green") return { ...grade.created, detail };
   if (path === "staged, not committed")
     return { status: "red", detail: `staged, not committed: ${detail}` };
-  if (path === "no write" && phrasing.key === "plain")
+  if (path === "no write" && phrasing.key === "real")
     return {
       status: "unverified",
       observation: true,
-      detail: `model observation: nothing was staged or created for the plain request (${detail})`,
+      detail: `model observation: nothing was staged or created although the tasks name what they are (${detail})`,
     };
   return { ...grade.created, detail };
 }
 
-/** One request, three Tasks under the named Epic, in one mode and one wording: created, listed, listed after a re-read. */
-async function createSeveralIn(ctx, fixture, mode, phrasing) {
-  const titles = severalTitles(mode, phrasing);
-  const { turn, issues, chat } = await composerTurn(ctx, fixture, {
-    mode: mode.mode,
-    prompt: severalPrompt(phrasing, titles, fixture),
-  });
+/** The four parts of one order that created issues: created, keys in the result, after a re-read, in the answer. */
+async function createdParts({ ctx, fixture, mode, phrasing, titles, run }) {
+  const { turn, issues, chat } = run;
   const grade = gradeMultiCreate({
     type: "Task",
     titles,
@@ -334,6 +350,36 @@ async function createSeveralIn(ctx, fixture, mode, phrasing) {
       part: part(`${where}: keys in the answer`, [id("answer-keys")], grade.answered),
     },
   ];
+}
+
+/**
+ * One request, three Tasks under the named Epic, in one mode and one wording. With the bare wording the
+ * first turn must ask for the content (nothing created) and the follow-up that supplies it must create all
+ * three: no dead end remains.
+ */
+async function createSeveralIn(ctx, fixture, mode, phrasing) {
+  const titles = severalTitles(mode, phrasing);
+  const ask = (extra) => composerTurn(ctx, fixture, { mode: mode.mode, ...extra });
+  const first = await ask({ prompt: severalPrompt(phrasing, titles, fixture) });
+  if (phrasing.key !== "bare")
+    return createdParts({ ctx, fixture, mode, phrasing, titles, run: first });
+  const asked = gradeAskedBack({
+    made: ofType(first.issues, "Task").created,
+    exchanges: first.turn.toolExchanges,
+    answer: first.turn.answer,
+    sections: requiredSections("Task"),
+  });
+  const askedPart = {
+    turn: first.turn,
+    part: part(
+      `several Tasks, ${mode.label}, ${phrasing.label}: asked for the content`,
+      [`multi-create-asked-back-${mode.key}-${phrasing.key}`],
+      asked,
+    ),
+  };
+  const wrote = ofType(first.issues, "Task").created.length > 0;
+  const run = wrote ? first : await ask({ chat: first.chat, prompt: contentFollowUp() });
+  return [askedPart, ...(await createdParts({ ctx, fixture, mode, phrasing, titles, run }))];
 }
 
 /** C01: several Tasks from one request in every selected mode, each in both wordings. */
@@ -775,6 +821,15 @@ const LOCALIZED_VARIANTS = [
   },
 ];
 
+/** The profile line of a result: which language the Pod's account showed when the template was bound and when the turn ran. */
+async function withProfile(ctx, grade, runProfile) {
+  const run = runProfile ?? (await ctx.apiLocale?.()) ?? "unknown";
+  return {
+    ...grade,
+    detail: `${grade.detail}; Pod account profile at bind time: ${ctx.lastBindProfile ?? "not bound by the lab"}, at run time: ${run}`,
+  };
+}
+
 async function localizedTemplates(ctx) {
   if (!isLocalized(ctx.language))
     return result(
@@ -785,6 +840,8 @@ async function localizedTemplates(ctx) {
     );
   const fixture = await composerFixture(ctx);
   await prepareTemplates(ctx, { types: ["Task"] });
+  // What a German project lead types: the templates named by the German type name are written by a German author.
+  ctx.authorLocale = "de_DE";
   const runs = await sequentially(LOCALIZED_VARIANTS, (variant) => {
     const label = (type) => typeLabel(ctx.language, type, variant.kind);
     const templates = templatesOf(fixture, { label }).filter((entry) => entry.issueType === "Task");
@@ -798,14 +855,141 @@ async function localizedTemplates(ctx) {
           exchanges: turn.toolExchanges,
           turn,
         });
-        return { turn, part: part(variant.label, [variant.id], grade) };
+        const noted = await withProfile(ctx, grade, variant.locale);
+        return { turn, part: part(variant.label, [variant.id], noted) };
       }),
     );
+  }).finally(() => {
+    delete ctx.authorLocale;
   });
   return parts(runs);
 }
 
 /** Every Composer journey but C07 reads the native state as the administrator: English names, in any session. */
+/**
+ * C11 (#4354, #4359 AC4): in the German-language Jira a German user's create and status change are CHECKED
+ * by a template an English author wrote (the type "Task", the field "Epic Link" and the transition target
+ * "Done" typed by their English names). The product binds the template by ids as the author's profile sees
+ * them; the user's write is then checked, never "template missing" and never unchecked.
+ */
+async function germanUserEnglishAuthor(ctx) {
+  if (!isLocalized(ctx.language))
+    return result(
+      "unverified",
+      NO_TURN,
+      "this session shows no localized issue type names; run seed-language.mjs <session> de",
+      [],
+    );
+  const fixture = await composerFixture(ctx);
+  const task = composerTemplates(PROJECT, "Epic Link", {
+    activateOn: ["create", "transition:Done"],
+  }).filter((entry) => entry.issueType === "Task");
+  await prepareTemplates(ctx, { types: ["Task"] });
+  ctx.authorLocale = "en_US";
+  try {
+    return await withTemplates(ctx.http, task, async () =>
+      parts([...(await germanCreates(ctx, fixture)), ...(await germanMoves(ctx, fixture))]),
+    );
+  } finally {
+    delete ctx.authorLocale;
+  }
+}
+
+/** The German user's two creates: one that meets the English template and one that violates it. */
+async function germanCreates(ctx, fixture) {
+  const conforms = composerConformity("Task", fixture);
+  const send = async (prompt) => composerTurn(ctx, fixture, { prompt });
+  const ok = await send(createPrompt("Task", "Composer Prüfung ok", fixture));
+  const bad = await send(violationPrompt("Task", "Composer Prüfung Verstoß", fixture));
+  const created = gradeComposerCreate({
+    type: "Task",
+    issues: ok.issues,
+    conforms,
+    related: composerRelation("Task", fixture),
+  });
+  const refused = gradeComposerRefusal({
+    type: "Task",
+    exchanges: bad.turn.toolExchanges,
+    created: bad.issues.created,
+    template: `${PROJECT}/Task`,
+    conforms,
+  });
+  return [
+    {
+      turn: ok.turn,
+      part: part(
+        "German user: a create that meets the English template",
+        ["german-create-checked-pass"],
+        await withProfile(ctx, checkedOrRed(created, ok.turn.toolExchanges)),
+      ),
+    },
+    {
+      turn: bad.turn,
+      part: part(
+        "German user: a create that violates the English template",
+        ["german-create-checked-refuse"],
+        await withProfile(ctx, checkedOrRed(refused, bad.turn.toolExchanges)),
+      ),
+    },
+  ];
+}
+
+/** One status change of a native Task to Done, asked in German, graded natively and by the stored refusal. */
+async function germanMove(ctx, fixture, { summary, sections, mustPass }) {
+  const key = await ctx.nativeCreate({
+    project: { key: PROJECT },
+    issuetype: { name: "Task" },
+    summary,
+    [fixture.epicLink]: fixture.epic,
+    description: SYNTHETIC_BODY(sections),
+  });
+  const read = async () =>
+    (await ctx.search(`key = ${key}`, `${composerFields(fixture.epicLink)},status`))[0];
+  const before = await read();
+  const done = statusLabel(ctx.language, "Done");
+  const { turn } = await composerTurn(ctx, fixture, {
+    prompt: `Setze den Vorgang ${key} im Jira-Projekt REQ auf den Status „${done}“. Melde das Ergebnis.`,
+  });
+  const after = await read();
+  return {
+    turn,
+    grade: gradeCheckedTransition({ before, after, exchanges: turn.toolExchanges, mustPass }),
+  };
+}
+
+/** The German user's two status changes: one that meets the transition rule and one that does not. */
+async function germanMoves(ctx, fixture) {
+  const sections = requiredSections("Task");
+  const passing = await germanMove(ctx, fixture, {
+    summary: "Composer Statuswechsel ok",
+    sections,
+    mustPass: true,
+  });
+  const failing = await germanMove(ctx, fixture, {
+    summary: "Composer Statuswechsel Verstoß",
+    sections: sections.slice(0, -1),
+    mustPass: false,
+  });
+  return [
+    {
+      turn: passing.turn,
+      part: part(
+        "German user: a status change that meets the transition rule",
+        ["german-transition-checked-pass"],
+        await withProfile(ctx, passing.grade),
+      ),
+    },
+    {
+      turn: failing.turn,
+      part: part(
+        "German user: a status change that violates the transition rule",
+        ["german-transition-checked-refuse"],
+        await withProfile(ctx, failing.grade),
+      ),
+    },
+  ];
+}
+
 const asAdministrator = (journey) => async (ctx, chat) => {
   ctx.readAs = "admin";
   try {
@@ -827,6 +1011,7 @@ export const COMPOSER_JOURNEYS = Object.freeze({
   C08: asAdministrator(watchAndComment),
   C09: asAdministrator(attachmentRefused),
   C10: asAdministrator(localizedTemplates),
+  C11: asAdministrator(germanUserEnglishAuthor),
 });
 export const COMPOSER_JOURNEY_IDS = Object.freeze(Object.keys(COMPOSER_JOURNEYS));
 /** Journeys that need a product started without the lab's baseline template set (#4369). */

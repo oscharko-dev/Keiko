@@ -45,6 +45,10 @@ function stage(operation, extra = {}) {
 }
 
 /** One free-form Chat turn; the request carries no tool name and no argument object. */
+/** The text of the turn's final assistant message (graded only where a request turns on a claim in it). */
+const assistantAnswer = (completed) =>
+  String(completed.messages?.findLast((message) => message.role === "assistant")?.content ?? "");
+
 async function selectionTurn(context, chat, content) {
   const controller = new globalThis.AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), TURN_LIMIT_MS);
@@ -69,7 +73,11 @@ async function selectionTurn(context, chat, content) {
       signal,
     );
     const user = completed.messages?.find((message) => message.role === "user");
-    return { fromMs, exchanges: user?.toolTranscript?.exchanges ?? [] };
+    return {
+      fromMs,
+      exchanges: user?.toolTranscript?.exchanges ?? [],
+      answer: assistantAnswer(completed),
+    };
   } catch (error) {
     return { fromMs, exchanges: [], failure: String(error?.message ?? error).slice(0, 160) };
   } finally {
@@ -200,8 +208,46 @@ async function writeAttempt(context, run, entry, turnFor) {
   return { turn, ...settled };
 }
 
+/**
+ * A request the product cannot fulfil: the issue is read before and after the turn, and anything the
+ * turn added is removed again. A failed native read makes the attempt invalid.
+ */
+async function unavailableAttempt(context, run, entry, turnFor) {
+  const { session } = context;
+  const invalid = (turn) => ({ turn, proof: { truthUnavailable: true } });
+  const nothing = { exchanges: [], gateway: { unrecovered: 0, circuit: 0 } };
+  let before;
+  try {
+    before = await entry.snapshot(session, run.fixture);
+  } catch (error) {
+    stage("snapshot-unavailable", { id: entry.id, errorType: errorName(error) });
+    return invalid(nothing);
+  }
+  const turn = await withGateway(session, await turnFor.send());
+  try {
+    const after = await entry.snapshot(session, run.fixture);
+    if (JSON.stringify(before) !== JSON.stringify(after))
+      await entry.restore(session, run.fixture, before, after);
+    return { turn, proof: { native: { before, after } } };
+  } catch (error) {
+    stage("snapshot-unavailable", { id: entry.id, errorType: errorName(error) });
+    return invalid(turn);
+  }
+}
+
 /** A failed native truth read is a lab error of this attempt; it never stops the other cases. */
 async function readAttempt(context, run, entry, turnFor) {
+  // A read may own an object it needs (the Sub-task that makes a restricted search tell apart); it is
+  // created before the turn and removed with the run's other owned issues.
+  try {
+    turnFor.subject = await entry.prepare?.(context.session, run.fixture, turnFor.tag);
+  } catch (error) {
+    stage("prepare-unavailable", { id: entry.id, errorType: errorName(error) });
+    return {
+      turn: { exchanges: [], gateway: { unrecovered: 0, circuit: 0 } },
+      proof: { truthUnavailable: true },
+    };
+  }
   const turn = await withGateway(context.session, await turnFor.send());
   try {
     const tokens = await selectionTruth(context.session, run.fixture, entry);
@@ -217,6 +263,7 @@ async function attempt(context, run, entry, round) {
   const tag = `${run.tag}-${round}-${entry.id}`;
   const marker = `Auswahl ${run.tag}-${round}`;
   const write = entry.effect === "write";
+  const unavailable = entry.effect === "unavailable";
   const chat = await prepareChat(
     context.origin,
     context.cookie,
@@ -224,7 +271,7 @@ async function attempt(context, run, entry, round) {
     context.projectPath,
     context.modelId,
     "api",
-    write ? "autonomous-delivery" : "governed-assist",
+    write || unavailable ? "autonomous-delivery" : "governed-assist",
   );
   const turnFor = {
     fixture: run.fixture,
@@ -234,7 +281,8 @@ async function attempt(context, run, entry, round) {
     send: () =>
       selectionTurn(context, chat, entry.prompt(run.fixture, marker, tag, turnFor.subject)),
   };
-  const attemptOf = () => (write ? writeAttempt : readAttempt)(context, run, entry, turnFor);
+  const attempts = { write: writeAttempt, unavailable: unavailableAttempt };
+  const attemptOf = () => (attempts[entry.effect] ?? readAttempt)(context, run, entry, turnFor);
   // A write into the shared work project holds the lock the journeys' reset takes (#4369).
   const outcome = entry.workProject
     ? await withWorkProjectLock(context.session.directory, `selection-${entry.id}`, attemptOf)
@@ -438,7 +486,7 @@ async function main() {
     throw new TypeError("A previous write attempt is pending; reconcile it natively first");
   await requireLicense(session);
   const fixture = JSON.parse(readFileSync(join(session.directory, "fixture.json"), "utf8"));
-  // The default selection is the 35 cases; a language case runs only when `--only` names it.
+  // The default selection is the 40 cases; a language case runs only when `--only` names it.
   const cases = (
     only === undefined ? SELECTION_CASES : [...SELECTION_CASES, ...LANGUAGE_SELECTION_CASES]
   ).filter((entry) => only === undefined || only.has(entry.id));

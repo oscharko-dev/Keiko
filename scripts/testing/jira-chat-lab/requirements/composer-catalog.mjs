@@ -7,12 +7,16 @@ import { COMPOSER_MODES } from "./composer.mjs";
 import { COMPOSER_TYPES, typeSlug } from "./composer-templates.mjs";
 
 const slugs = COMPOSER_TYPES.map(typeSlug);
-/** One set per mode and wording: created, keys in the result, keys after a re-read (hard), keys in the answer (soft). */
+/** One set per mode and wording: created, keys in the result, keys after a re-read (hard), keys in the answer (soft); the bare wording adds the question back. */
 const MULTI_CREATE_OBLIGATIONS = COMPOSER_MODES.flatMap((mode) =>
-  ["lab", "plain"].flatMap((phrasing) =>
-    ["all-created", "keys-listed", "keys-after-reread", "answer-keys"].map(
-      (part) => `multi-create-${part}-${mode.key}-${phrasing}`,
-    ),
+  ["lab", "real", "bare"].flatMap((phrasing) =>
+    [
+      ...(phrasing === "bare" ? ["asked-back"] : []),
+      "all-created",
+      "keys-listed",
+      "keys-after-reread",
+      "answer-keys",
+    ].map((part) => `multi-create-${part}-${mode.key}-${phrasing}`),
   ),
 );
 const obligationsOf = (id) => SCENARIOS.find((scenario) => scenario.id === id).obligations;
@@ -121,6 +125,19 @@ export const COMPOSER_SCENARIOS = Object.freeze([
       "localized-template-german-user-governs",
       "localized-template-english-user-governs",
       "id-template-english-user-governs",
+    ],
+  },
+  {
+    id: "C11",
+    requirement: "composer",
+    issue: 4354,
+    title:
+      "In the German-language Jira a German user's create and status change are checked by a template an English author wrote, never as a missing or unbound template",
+    obligations: [
+      "german-create-checked-pass",
+      "german-create-checked-refuse",
+      "german-transition-checked-pass",
+      "german-transition-checked-refuse",
     ],
   },
 ]);

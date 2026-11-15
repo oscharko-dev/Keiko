@@ -30,7 +30,9 @@ import {
   gradeRepeatReference,
   keysMissingInAnswer,
   keysMissingInCards,
+  gradeCheckedTransition,
   gradeKeysAfterReread,
+  uncheckedWrite,
   severalPath,
   stepProof,
 } from "../testing/jira-chat-lab/requirements/composer-graders.mjs";
@@ -213,7 +215,7 @@ describe("conformity of each type, as Jira holds it", () => {
 });
 
 describe("the catalog", () => {
-  it("adds C01-C10 beside S01-S20 and leaves those untouched", () => {
+  it("adds C01-C11 beside S01-S20 and leaves those untouched", () => {
     expect(COMPOSER_SCENARIOS.map((entry) => entry.id)).toEqual([
       "C01",
       "C02",
@@ -225,6 +227,7 @@ describe("the catalog", () => {
       "C08",
       "C09",
       "C10",
+      "C11",
     ]);
     expect(COMPOSER_JOURNEY_IDS).toEqual(COMPOSER_SCENARIOS.map((entry) => entry.id));
     const ids = SCENARIOS.map((entry) => entry.id);
@@ -1686,14 +1689,38 @@ const draftCard = (keys) => ({
   },
 });
 
+/** The section names the Task template requires, as the lab's own template writes them. */
+const taskSections = () =>
+  [
+    ...composerTemplates("REQ", LINK)
+      .find((entry) => entry.issueType === "Task")
+      .markdown.matchAll(/^## (.+)$/gmu),
+  ].map((match) => match[1].trim());
+
+/**
+ * The model of a person's several-Tasks order: it creates the quoted titles when the request gives the
+ * content, asks back naming the sections when it does not, and creates them on the follow-up.
+ */
+const severalAct = () => {
+  let titles = [];
+  return ({ content, add }) => {
+    const quotedTitles = [...content.matchAll(/„([^“]+)“/gu)].map((match) => match[1]);
+    if (quotedTitles.length > 0) titles = quotedTitles;
+    if (quotedTitles.length > 0 && / bare$/u.test(titles[0] ?? ""))
+      return {
+        answer: `Mir fehlt der Inhalt der Abschnitte ${taskSections().join(", ")}. Was soll hinein?`,
+      };
+    const keys = titles.map((title) => add("Task", {}, title).key);
+    return { answer: `Angelegt: ${keys.join(", ")}`, toolExchanges: [draftCard(keys)] };
+  };
+};
+
 describe("C01 creates every type, also several at once", () => {
   it("is green when every instruction creates a conformant issue and the several are listed", async () => {
+    const several = severalAct();
     const good = lane({
       act: ({ content, add }) => {
-        if (/drei Aufgaben/u.test(content)) {
-          const keys = severalFrom(content, add);
-          return { answer: `Angelegt: ${keys.join(", ")}`, toolExchanges: [draftCard(keys)] };
-        }
+        if (/drei Aufgaben/u.test(content)) return several({ content, add });
         if (/unter Story/u.test(content)) {
           const violations = [
             { ruleId: "parent-type-mismatch", subject: "parent: Task", template: "REQ/Sub-task" },
@@ -1723,9 +1750,11 @@ describe("C01 creates every type, also several at once", () => {
       expect.arrayContaining([
         "create-conformant-bug",
         "multi-create-all-created-ask-lab",
-        "multi-create-keys-listed-supervised-plain",
+        "multi-create-keys-listed-supervised-real",
+        "multi-create-asked-back-ask-bare",
+        "multi-create-all-created-full-access-bare",
         "multi-create-keys-after-reread-full-access-lab",
-        "multi-create-answer-keys-ask-plain",
+        "multi-create-answer-keys-ask-real",
         "unrepairable-refused-natively",
         "unrepairable-refused-by-gate",
         "unrepairable-answer-plain",
@@ -1782,28 +1811,32 @@ describe("C01 creates every type, also several at once", () => {
     });
   const severalDetail = (check) => check.detail;
 
-  it("asks for several Tasks in every mode, each in both wordings, each in a fresh Chat of its mode", async () => {
-    const ctx = onlyTasks(({ content, add }) => {
-      const keys = severalFrom(content, add);
-      return { answer: keys.join(" "), toolExchanges: [draftCard(keys)] };
-    });
+  it("asks for several Tasks in every mode, each in all three wordings, each in a fresh Chat of its mode", async () => {
+    const ctx = onlyTasks(severalAct());
     const check = await COMPOSER_JOURNEYS.C01(ctx, undefined);
-    // The single Task of the journey first (Full access), then both wordings in each mode in turn.
+    // The single Task of the journey first (Full access), then the three wordings in each mode in turn;
+    // the follow-up of the bare wording goes to the Chat that was asked.
     expect(ctx.calls.fresh).toEqual([
       "autonomous-delivery",
       ...["governed-assist", "supervised-coding", "autonomous-delivery"].flatMap((mode) => [
         mode,
         mode,
+        mode,
       ]),
     ]);
-    expect(check.covers.filter((id) => id.startsWith("multi-create-"))).toHaveLength(24);
-    // The lab's wording names the template content; the plain wording is what a person types.
-    const [lab, plain] = ctx.calls.turns
+    expect(check.covers.filter((id) => id.startsWith("multi-create-"))).toHaveLength(39);
+    // The lab's wording names the template content; the plain wordings are what a person types.
+    const orders = ctx.calls.turns
       .map((turn) => turn.content)
       .filter((content) => content.includes("drei Aufgaben"));
+    const [lab, real, bare, followUp] = orders;
     expect(lab).toContain("Synthetischer Inhalt");
-    expect(plain).toMatch(/^Lege in REQ drei Aufgaben an: „/u);
-    expect(plain).not.toContain("Synthetischer Inhalt");
+    expect(real).toMatch(/^Lege in REQ drei Aufgaben an: „Das Login-Formular/u);
+    expect(real).not.toContain("Synthetischer Inhalt");
+    expect(bare).toMatch(/^Lege in REQ drei Aufgaben an: „Composer Teil A ask bare/u);
+    expect(bare).not.toContain("Synthetischer Inhalt");
+    expect(followUp).toMatch(/^Hier sind die Inhalte für alle drei Aufgaben/u);
+    expect(followUp).toContain("Synthetischer Inhalt");
   });
 
   it("records the path the model took and how many review cards the person got", async () => {
@@ -1846,8 +1879,62 @@ describe("C01 creates every type, also several at once", () => {
         : { answer: "Welchen Inhalt sollen die Abschnitte haben?" },
     );
     const check = await COMPOSER_JOURNEYS.C01(asked, undefined);
-    expect(severalDetail(check)).toContain("Ask for approval, plain wording: created: unverified");
+    expect(severalDetail(check)).toContain(
+      "Ask for approval, plain wording, real tasks: created: unverified",
+    );
     expect(severalDetail(check)).toContain("Ask for approval, lab wording: created: red");
+    // The bare wording asked, but its follow-up (which names the content) created nothing: a dead end.
+    expect(severalDetail(check)).toContain(
+      "Ask for approval, plain wording, no content: created: red",
+    );
+  });
+
+  describe("the bare wording names no content the sections could be written from", () => {
+    const bareAct = (answerOf, creates = true) => {
+      const several = severalAct();
+      return onlyTasks((call) => {
+        const asking = / bare$/u.test(/„([^“]+)“/u.exec(call.content)?.[1] ?? "");
+        if (asking && answerOf !== undefined) return { answer: answerOf() };
+        return creates ? several(call) : undefined;
+      });
+    };
+    const detailOf = async (ctx) => (await COMPOSER_JOURNEYS.C01(ctx, undefined)).detail;
+
+    it("is green when it asks naming every section and the follow-up then creates all three", async () => {
+      const ctx = onlyTasks(severalAct());
+      const check = await COMPOSER_JOURNEYS.C01(ctx, undefined);
+      const detail = severalDetail(check);
+      expect(detail).toContain("no content: asked for the content: green");
+      expect(detail).toContain("no content: created: green");
+      expect(detail).toContain(
+        "no content: keys after the stored conversation was read again: green",
+      );
+    });
+
+    it("reads an answer that names no section as the model's observation, not red", async () => {
+      const detail = await detailOf(bareAct(() => "Gib mir mehr Informationen."));
+      expect(detail).toContain("no content: asked for the content: unverified");
+      expect(detail).toContain("does not name 3 of 3 sections");
+    });
+
+    it("reads a model that wrote the sections without any source as the model's observation", async () => {
+      const ctx = onlyTasks(({ content, add }) => {
+        const titles = [...content.matchAll(/„([^“]+)“/gu)].map((match) => match[1]);
+        const keys = titles.map((title) => add("Task", {}, title).key);
+        return { answer: keys.join(" "), toolExchanges: [draftCard(keys)] };
+      });
+      const detail = await detailOf(ctx);
+      expect(detail).toContain("no content: asked for the content: unverified");
+      expect(detail).toContain("wrote the sections without any source");
+    });
+
+    it("is red when the follow-up that gives the content still creates nothing", async () => {
+      const detail = await detailOf(
+        bareAct(() => `Mir fehlen ${taskSections().join(", ")}.`, false),
+      );
+      expect(detail).toContain("no content: asked for the content: green");
+      expect(detail).toContain("no content: created: red");
+    });
   });
 
   it("runs only the selected types", async () => {
@@ -2705,5 +2792,176 @@ describe("C08 watcher and comment, C09 attachment", () => {
 
   it("names the journeys that need a product without the baseline template set", () => {
     expect(COMPOSER_WITHOUT_BASELINE).toEqual(["C03", "C04", "C10"]);
+  });
+});
+
+describe("C11 a German user's write is checked by a template an English author wrote", () => {
+  const TYPES = [
+    { id: "10002", english: "Task", localized: "Aufgabe" },
+    { id: "10003", english: "Sub-task", localized: "Sub-Task" },
+    { id: "10001", english: "Story", localized: "Story" },
+    { id: "10000", english: "Epic", localized: "Epic" },
+    { id: "10004", english: "Bug", localized: "Bug" },
+  ];
+  const GERMAN_DATA = {
+    locale: "de_DE",
+    issueTypes: TYPES,
+    statuses: [{ id: "10001", english: "Done", localized: "Fertig" }],
+  };
+  const transition = (data, status = "failed") => ({
+    call: { id: "t", name: "jira_transition", arguments: {} },
+    result: {
+      toolRef: { canonicalId: canonicalToolId("jira.transition"), contractVersion: 3 },
+      status,
+      data,
+    },
+  });
+  const transitionRefusal = (ruleId = "section-missing") =>
+    transition({
+      outcome: "rejected",
+      reason: "field-validation",
+      violations: [{ ruleId, template: "REQ/Task" }],
+    });
+  const unresolved = (type) =>
+    createExchange(
+      {
+        outcome: "rejected",
+        reason: "field-validation",
+        violations: [
+          { ruleId: "template-binding-unresolved", subject: type, template: "REQ/Task" },
+        ],
+      },
+      "failed",
+    );
+  const moved = (ctx, key) => {
+    const issue = ctx.issues.find((entry) => entry.key === key);
+    issue.fields.status = { name: "Done", statusCategory: { key: "done" } };
+  };
+
+  /**
+   * A product that checks every write by the template: the violating create is refused with rule lines and
+   * repaired, a status change of an issue that misses a section is refused, one that meets it moves to Done.
+   * `broken` replaces one behaviour by the defect under test.
+   */
+  const status = (self, key) => {
+    const issue = self.issues.find((entry) => entry.key === key);
+    return { issue, meets: issue.fields.description.includes("Testhinweise") };
+  };
+  const moveTurn = (self, key, broken) => {
+    const { meets } = status(self, key);
+    if (!meets && broken.uncheckedMove) {
+      moved(self, key);
+      return { answer: "Erledigt." };
+    }
+    if (!meets || broken.refuseMeeting)
+      return { toolExchanges: [transitionRefusal()], answer: "Abgelehnt." };
+    moved(self, key);
+    return {
+      toolExchanges: [transition({ outcome: "succeeded" }, "completed")],
+      answer: "Fertig.",
+    };
+  };
+  const createTurn = (content, add, broken) => {
+    const title = content.includes("Composer Prüfung ok")
+      ? "Composer Prüfung ok"
+      : "Composer Prüfung Verstoß";
+    const refused = broken.unresolvedCreate ? unresolved("Task") : refusal("Task");
+    const created = success(add("Task", {}, title).key);
+    return {
+      toolExchanges:
+        title.endsWith("ok") && !broken.unresolvedCreate ? [created] : [refused, created],
+      answer: "Angelegt.",
+    };
+  };
+  const product = (broken = {}) => {
+    const ctx = lane({
+      selection: { types: ["task"] },
+      act: ({ content, add, ctx: self }) => {
+        const key = /(REQ-\d+) im Jira-Projekt REQ auf den Status/u.exec(content)?.[1];
+        if (key !== undefined) return moveTurn(self, key, broken);
+        return content.includes("Composer Prüfung")
+          ? createTurn(content, add, broken)
+          : { answer: "x" };
+      },
+    });
+    ctx.language = GERMAN_DATA;
+    ctx.session = {};
+    ctx.locales = [];
+    const http = ctx.http;
+    ctx.authorSeen = [];
+    ctx.http = async (name, ...rest) => {
+      if (name === "template-import") ctx.authorSeen.push(ctx.authorLocale);
+      return http(name, ...rest);
+    };
+    return ctx;
+  };
+
+  it("is green for a product that checks all four writes, and the English author's template is saved under the English profile", async () => {
+    const ctx = product();
+    ctx.apiLocale = async () => "de_DE";
+    ctx.lastBindProfile = "en_US";
+    const check = await COMPOSER_JOURNEYS.C11(ctx, undefined);
+    expect(check.status).toBe("green");
+    expect(check.detail).toContain("Pod account profile at bind time: en_US, at run time: de_DE");
+    expect(check.covers).toEqual([
+      "german-create-checked-pass",
+      "german-create-checked-refuse",
+      "german-transition-checked-pass",
+      "german-transition-checked-refuse",
+    ]);
+    // One template, typed by its English names, saved (and so bound) as the English author, then removed.
+    expect(ctx.authorSeen).toEqual(["en_US"]);
+    expect(ctx.authorLocale).toBeUndefined();
+    expect(ctx.calls.http.filter((name) => name === "template-delete")).toHaveLength(1);
+    const prompts = ctx.calls.turns.map((turn) => turn.content);
+    expect(prompts.some((text) => text.includes("auf den Status „Fertig“"))).toBe(true);
+  });
+
+  it("is RED when the product answers 'binding unresolved' to a German user's write (the template was not checked)", async () => {
+    const check = await COMPOSER_JOURNEYS.C11(product({ unresolvedCreate: true }), undefined);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("the write was not checked by the template");
+    expect(check.detail).toContain("template-binding-unresolved");
+  });
+
+  it("is RED when an issue that violates the transition rule moves to Done, and when one that meets it is refused", async () => {
+    const unchecked = await COMPOSER_JOURNEYS.C11(product({ uncheckedMove: true }), undefined);
+    expect(unchecked.status).toBe("red");
+    expect(unchecked.detail).toContain("moved to Done although it does not meet");
+    const refusing = await COMPOSER_JOURNEYS.C11(product({ refuseMeeting: true }), undefined);
+    expect(refusing.status).toBe("red");
+    expect(refusing.detail).toContain(
+      "the issue meets the template but the transition was refused",
+    );
+  });
+
+  it("is unverified, with no turn, in a session that shows no localized names", async () => {
+    const plain = lane({ act: () => ({ answer: "x" }) });
+    const check = await COMPOSER_JOURNEYS.C11(plain, undefined);
+    expect(check.status).toBe("unverified");
+    expect(plain.calls.turns).toHaveLength(0);
+  });
+
+  it("gradeCheckedTransition tells a refusal, an unchecked move and a missing attempt apart", () => {
+    const issue = (category) => ({ fields: { status: { statusCategory: { key: category } } } });
+    const grade = (after, exchanges, mustPass) =>
+      gradeCheckedTransition({ before: issue("new"), after: issue(after), exchanges, mustPass });
+    expect(grade("done", [], true).status).toBe("green");
+    expect(grade("new", [transitionRefusal("field-missing")], false)).toMatchObject({
+      status: "green",
+      detail: expect.stringContaining("field-missing"),
+    });
+    expect(grade("new", [], false).status).toBe("unverified");
+    expect(grade("new", [transition({ outcome: "failed" })], false).status).toBe("unverified");
+    expect(grade("new", [], true).status).toBe("unverified");
+    expect(
+      grade(
+        "new",
+        [transition({ outcome: "rejected", violations: [{ ruleId: "template-missing" }] })],
+        true,
+      ).status,
+    ).toBe("red");
+    expect(uncheckedWrite([transitionRefusal("template-missing")])?.status).toBe("red");
+    expect(uncheckedWrite([transitionRefusal("section-missing")])).toBeUndefined();
   });
 });

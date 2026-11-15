@@ -46,3 +46,12 @@ export function typeLabel(data, english, kind = "name") {
 /** Whether the session's actors see another name for at least one type than the administrator. */
 export const isLocalized = (data) =>
   data !== undefined && data.issueTypes.some((row) => row.localized !== row.english);
+
+/** The name of an English status as the session's actors see it (identity for an English or unrecorded session). */
+export function statusLabel(data, english) {
+  if (data === undefined) return english;
+  const row = data.statuses.find((entry) => entry.english === english);
+  if (row === undefined)
+    throw new TypeError(`The session's language data holds no status ${english}`);
+  return row.localized;
+}

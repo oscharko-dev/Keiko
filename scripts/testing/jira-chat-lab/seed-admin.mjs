@@ -5,11 +5,22 @@ import { readPrivateFile } from "./lab-client.mjs";
 
 /**
  * A step's own closed reason (a plain identifier, never page content) is preserved. Playwright
- * error details may contain filled values or CSRF-bearing URLs, so nothing else survives.
+ * error details may contain filled values or CSRF-bearing URLs, so nothing else survives except a closed
+ * class of the failure: a step that ran out of its ten seconds (a slow page after a long run), a
+ * navigation that did not complete, or anything else. Without it a failed restore of the fixture field
+ * could not be told apart (2026-11-14, a finished Gemma run lost its report to one of them).
  */
-function administrationError(error) {
+export function administrationError(error) {
   if (typeof error?.reason === "string" && /^[a-z][a-z-]*$/u.test(error.reason)) return error;
-  return new TypeError("Synthetic Jira administration failed");
+  const failure = new TypeError("Synthetic Jira administration failed");
+  failure.reason = failureClass(error);
+  return failure;
+}
+
+function failureClass(error) {
+  if (error?.name === "TimeoutError") return "step-timeout";
+  if (/\b(?:net::|ERR_[A-Z_]+)/u.test(String(error?.message ?? ""))) return "navigation-failed";
+  return "unclassified";
 }
 
 export async function withLabAdmin(session, run) {

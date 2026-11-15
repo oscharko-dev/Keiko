@@ -1,3 +1,4 @@
+import { URL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 const nativeReads = vi.hoisted(() => new Map());
@@ -30,7 +31,7 @@ import {
   LIFECYCLE_ATTEMPTS_MAX,
   turnRefusals,
 } from "../testing/jira-chat-lab/catalog-selection.mjs";
-import { actorDetails } from "../testing/jira-chat-lab/lab-client.mjs";
+import { actorDetails, labSessionConnection } from "../testing/jira-chat-lab/lab-client.mjs";
 import { LANGUAGE_SELECTION_CASES } from "../testing/jira-chat-lab/catalog-selection-cases.mjs";
 
 const FIXTURE = {
@@ -79,8 +80,9 @@ describe("catalog selection cases", () => {
     expect(kinds("discovery", "read")).toBeGreaterThanOrEqual(12);
     expect(kinds("base", "read")).toBeGreaterThanOrEqual(3);
     expect(kinds("discovery", "write")).toBeGreaterThanOrEqual(5);
+    const oracle = { write: "verify", unavailable: "snapshot" };
     for (const entry of SELECTION_CASES)
-      expect(entry.effect === "write" ? entry.verify : entry.truth).toBeTypeOf("function");
+      expect(entry[oracle[entry.effect] ?? "truth"]).toBeTypeOf("function");
   });
 });
 
@@ -941,6 +943,16 @@ describe("a read restricted to one type (search-by-type, #4369)", () => {
   const grade = (jql, keys) =>
     gradeSelection(entry, search(jql, keys), { tokens: ["KEIKO-1", "KEIKO-2"], restriction });
 
+  it("is a lab error, never a pass, when the fixture project holds no issue of another type", async () => {
+    // gpt-5.4 passed unrestricted on 2026-11-14 because all 34 issues of the project were Tasks.
+    nativeReads.set(
+      "/rest/api/2/search?jql=project%20%3D%20KEIKO%20AND%20issuetype%20!%3D%20Task%20ORDER%20BY%20key%20ASC&fields=summary&maxResults=100",
+      { total: 0, issues: [] },
+    );
+    nativeReads.set("/rest/api/2/issuetype", [{ id: "10002", name: "Task" }]);
+    await expect(entry.restriction({}, FIXTURE)).rejects.toThrow("no issue of another type");
+  });
+
   it("is wrong when the JQL names no type and the result carries the other types' keys too", () => {
     // gpt-5.4, de_DE, 2026-11-14: "project = KEIKO ORDER BY key ASC" listed all 36 issues.
     const verdict = grade("project = KEIKO ORDER BY key ASC", ["KEIKO-1", "KEIKO-2", "KEIKO-5"]);
@@ -974,5 +986,73 @@ describe("a read restricted to one type (search-by-type, #4369)", () => {
     const turn = { exchanges: [call("jira_priorities")], gateway: healthy };
     expect(gradeSelection(READ, turn, { tokens: ["High"], restriction }).status).toBe("selected");
     expect(gradeSelection(READ, turn, { tokens: ["High"] }).status).toBe("selected");
+  });
+});
+
+describe("whoami-instance: which Jira and as whom (#4369)", () => {
+  const entry = SELECTION_CASES.find((candidate) => candidate.id === "whoami-instance");
+
+  it("sits beside myself, names neither the tool nor an argument, and accepts the session read", () => {
+    expect(entry).toMatchObject({ tool: "jira.myself", alternatives: ["jira.current-session"] });
+    expect(entry.prompt()).toBe("Mit welchem Konto und welchem Jira bin ich verbunden?");
+    expect(SELECTION_CASES.findIndex((candidate) => candidate.id === "myself")).toBe(
+      SELECTION_CASES.indexOf(entry) - 1,
+    );
+  });
+
+  it("holds the account name and the host with its port of the Pod's base URL as truth", async () => {
+    nativeReads.set("/rest/api/2/myself", { name: "synthetic-api" });
+    const truth = await selectionTruth(undefined, FIXTURE, entry);
+    expect(truth).toEqual(["synthetic-api", new URL(labSessionConnection().httpsOrigin).host]);
+    expect(truth[1]).toMatch(/:\d+$/u);
+  });
+
+  it("is selected only when the result carries BOTH the account and the instance host", () => {
+    const tokens = ["synthetic-api", "127.0.0.1:18443"];
+    const read = (data) => ({ exchanges: [call("jira_myself", data)], gateway: healthy });
+    const both = {
+      outcome: "succeeded",
+      name: "synthetic-api",
+      instance: { host: "127.0.0.1:18443" },
+    };
+    expect(gradeSelection(entry, read(both), { tokens }).status).toBe("selected");
+    // The account alone, a host without its port, and another host are not the instance.
+    expect(
+      gradeSelection(entry, read({ outcome: "succeeded", name: "synthetic-api" }), { tokens })
+        .status,
+    ).toBe("wrong-result");
+    expect(
+      gradeSelection(entry, read({ ...both, instance: { host: "127.0.0.1" } }), { tokens }).status,
+    ).toBe("wrong-result");
+  });
+});
+
+describe("fields accepts the project's create and edit field lists as reviewed alternatives (#4369)", () => {
+  const entry = SELECTION_CASES.find((candidate) => candidate.id === "fields");
+  const listing = (name, ids) => ({
+    exchanges: [
+      call(name, {
+        outcome: "succeeded",
+        fields: ids.map((id) => ({ fieldId: id, name: "Keiko required text" })),
+      }),
+    ],
+    gateway: healthy,
+  });
+
+  it.each(["jira_create_fields", "jira_edit_fields"])(
+    "grades a correct answer read from %s as an alternative, never as a wrong tool",
+    (name) => {
+      const graded = gradeSelection(entry, listing(name, ["customfield_10112"]), {
+        tokens: ["customfield_10112"],
+      });
+      expect(graded.status).toBe("alternative");
+    },
+  );
+
+  it("still grades a list without the field id as a wrong tool", () => {
+    const graded = gradeSelection(entry, listing("jira_create_fields", ["summary"]), {
+      tokens: ["customfield_10112"],
+    });
+    expect(graded.status).toBe("wrong-tool");
   });
 });

@@ -101,6 +101,25 @@ export async function request(origin, cookie, name, path, body, method = "POST",
   }
   return response;
 }
+/**
+ * A JSON request whose status the caller decides on: a refusal the lab expects (a route an older build does
+ * not have, a binding the product refuses) is a value, not a stage failure. Anything else a caller treats
+ * as it treats `request`.
+ */
+export async function requestStatus(origin, cookie, path, body, method = "POST") {
+  const response = await globalThis.fetch(origin + path, {
+    method,
+    headers: {
+      Origin: origin,
+      "X-Keiko-CSRF": "1",
+      "Content-Type": "application/json",
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const value = await response.json().catch(() => ({}));
+  return { status: response.status, value };
+}
 function failedStage(_name, status, _failure) {
   console.log(
     JSON.stringify({
@@ -332,6 +351,11 @@ async function createVerifiedPod(origin, cookie, session, actor, administration 
   assert.equal(verification.status, "ok");
   return credential;
 }
+/** The id of a freshly created, verified Pod for the actor: what a template bind goes through (no Chat, no model). */
+export async function createLabPodId(origin, cookie, session, actor = "api") {
+  return (await createVerifiedPod(origin, cookie, session, actor)).livePod.podId;
+}
+
 /**
  * A new Chat's tool mode is Full access (owner decision 2026-11-02). A scenario that proves a write
  * approval passes its own mode, so the Chat asks exactly as the scenario expects.

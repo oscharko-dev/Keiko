@@ -62,6 +62,7 @@ describe("running the journeys", () => {
       "C08",
       "C09",
       "C10",
+      "C11",
     ]);
   });
 });

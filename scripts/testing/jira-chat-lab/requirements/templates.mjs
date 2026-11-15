@@ -374,6 +374,19 @@ export function editRefusals(exchanges) {
 }
 
 /**
+ * Every `jira.transition` the gate refused with template violations (the rule lines of a transition rule),
+ * the same structured rejection an edit carries. A transition that failed for another reason lists none.
+ */
+export function transitionRefusals(exchanges) {
+  return (Array.isArray(exchanges) ? exchanges : []).flatMap((exchange, index) => {
+    if (!toolExchangeOf(exchange, "jira.transition")) return [];
+    const data = exchange.result.data;
+    const violations = data?.outcome === "rejected" ? violationsIn(data.violations) : [];
+    return violations.length === 0 ? [] : [{ index, violations }];
+  });
+}
+
+/**
  * Every succeeded `jira.edit` with the template notices it carried: the rules an issue already
  * broke in fields the edit did not touch (the product's closed account, never its wording).
  */
@@ -396,6 +409,12 @@ export function wroteIssue(exchange) {
   );
 }
 
+/** The template a refusal names, lower case, without the " #n" the product appends when several templates govern one type. */
+const templateName = (name) =>
+  String(name ?? "")
+    .replace(/ #\d+$/u, "")
+    .toLowerCase();
+
 /**
  * Grades the repair of a template refusal. Detected: a refusal of the turn names a content rule
  * of `template` (the `PROJECT/Issue type` the violation reports). Repaired before write: no
@@ -413,7 +432,7 @@ export function gradeTemplateRepair({
   const violations = refusals.flatMap((refusal) => refusal.violations);
   const content = violations.filter(
     (item) =>
-      CONTENT_RULES.has(item.ruleId) && item.template?.toLowerCase() === template.toLowerCase(),
+      CONTENT_RULES.has(item.ruleId) && templateName(item.template) === template.toLowerCase(),
   );
   const first = refusals[0]?.index;
   const writtenAfter =
