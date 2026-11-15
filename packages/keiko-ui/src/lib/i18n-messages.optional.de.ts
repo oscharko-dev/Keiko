@@ -2805,6 +2805,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.checkFailed": "Konnte gerade nicht mit Jira abgeglichen werden.",
   "chat.skills.jira.notApplied": "Nicht angewendet: {reasons}",
   "chat.skills.jira.valid": "Passt zu Jira.",
+  "chat.skills.jira.shared":
+    "Für diesen Vorgangstyp gilt noch eine weitere Vorlage: Eine Änderung muss beide erfüllen.",
+  "chat.skills.jira.sharedMany":
+    "Für diesen Vorgangstyp gelten noch {count} weitere Vorlagen: Eine Änderung muss alle erfüllen.",
   "chat.skills.jira.partial": "Passt zu Jira; {checks} waren nicht lesbar.",
   "chat.skills.jira.check.project": "Projektangaben",
   "chat.skills.jira.check.fields": "Felder",

@@ -10,7 +10,12 @@ import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { Icons } from "../Icons";
 import { MarkdownEditor } from "../markdown-editor/MarkdownEditor";
 import { splitMarkdownDocument } from "../markdown-editor/markdown-document";
-import { JiraTemplateProposal, TemplateStatus, type JiraTemplates } from "./JiraTemplateTools";
+import {
+  JiraTemplateProposal,
+  TemplateStatus,
+  sharedTemplateCount,
+  type JiraTemplates,
+} from "./JiraTemplateTools";
 import { MarkdownSkillAuthor } from "./MarkdownSkillAuthor";
 import { templateKey } from "./useAutomaticTemplateChecks";
 import { skillTextFits } from "./useMarkdownSkillAuthor";
@@ -155,7 +160,11 @@ function OpenTemplateStatus({
   if (entry === undefined) return null;
   return (
     <div className={styles.cmpTemplateLine}>
-      <TemplateStatus entry={entry} check={jira.tools.checks.get(templateKey(entry))} />
+      <TemplateStatus
+        entry={entry}
+        check={jira.tools.checks.get(templateKey(entry))}
+        shared={sharedTemplateCount(jira.tools.templates, entry)}
+      />
     </div>
   );
 }

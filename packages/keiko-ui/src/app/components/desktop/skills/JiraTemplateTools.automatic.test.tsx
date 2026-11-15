@@ -151,3 +151,31 @@ describe("Jira templates are compared with the selected Jira without a click (#4
     );
   });
 });
+
+describe("templates that govern the same project and issue type say so (F06)", () => {
+  const SECOND = { ...RIGHT, id: "skill-task-2", name: "KER · Task (strict)" };
+  const THIRD = { ...RIGHT, id: "skill-task-3", name: "KER · Task (legacy)" };
+
+  it("tells each of two templates that another one also governs, and that a write must meet both", async () => {
+    vi.mocked(templates.fetchJiraTemplates).mockResolvedValue([RIGHT, SECOND]);
+    render(<Panel />);
+    for (const name of ["KER · Task", "KER · Task (strict)"]) {
+      const item = await row(name);
+      expect(
+        await within(item).findByText(/Another template also governs this issue type/u),
+      ).toHaveTextContent("a write must meet both");
+    }
+  });
+
+  it("counts the others when more than two govern, and says nothing for a template that stands alone", async () => {
+    vi.mocked(templates.fetchJiraTemplates).mockResolvedValue([RIGHT, SECOND, THIRD, WRONG]);
+    render(<Panel />);
+    const item = await row("KER · Task");
+    expect(await within(item).findByText(/2 other templates also govern/u)).toHaveTextContent(
+      "a write must meet all of them",
+    );
+    const alone = await row("KERNBANK · Epic");
+    await within(alone).findByText(/Project KERNBANK does not exist/u);
+    expect(within(alone).queryByText(/also govern/u)).toBeNull();
+  });
+});

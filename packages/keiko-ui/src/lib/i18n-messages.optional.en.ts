@@ -2650,6 +2650,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.checkFailed": "Could not be checked against Jira right now.",
   "chat.skills.jira.notApplied": "Not applied: {reasons}",
   "chat.skills.jira.valid": "Matches Jira.",
+  "chat.skills.jira.shared":
+    "Another template also governs this issue type: a write must meet both.",
+  "chat.skills.jira.sharedMany":
+    "{count} other templates also govern this issue type: a write must meet all of them.",
   "chat.skills.jira.partial": "Matches Jira; {checks} could not be read.",
   "chat.skills.jira.check.project": "project details",
   "chat.skills.jira.check.fields": "fields",

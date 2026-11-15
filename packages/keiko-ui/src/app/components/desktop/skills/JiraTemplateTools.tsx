@@ -255,6 +255,7 @@ export function PodSelect({ jira }: { readonly jira: JiraTemplates }): ReactNode
 
 function TemplateRow({
   entry,
+  shared,
   item,
   library,
   check,
@@ -263,6 +264,7 @@ function TemplateRow({
   chat,
 }: {
   readonly entry: JiraTemplateEntry;
+  readonly shared: number;
   readonly item: MarkdownSkillMetadata | undefined;
   readonly library: MarkdownSkillLibrary;
   readonly check: AutomaticTemplateCheck | undefined;
@@ -282,7 +284,7 @@ function TemplateRow({
         }}
       >
         <span className={styles.cmpItemName}>{entry.name}</span>
-        <TemplateStatus entry={entry} check={check} />
+        <TemplateStatus entry={entry} check={check} shared={shared} />
       </button>
       {item === undefined || chat === undefined ? null : (
         <SkillChatToggle
@@ -329,6 +331,7 @@ export function JiraTemplateList({
         <TemplateRow
           key={entry.id}
           entry={entry}
+          shared={sharedTemplateCount(tools.templates, entry)}
           item={library.skills.find((skill) => skill.id === entry.id)}
           library={library}
           check={tools.checks.get(templateKey(entry))}
@@ -384,17 +387,47 @@ function checkState(
   return check === "failed" || !check.valid || check.findings.length > 0 ? "mismatch" : "ok";
 }
 
+function scopeKey(entry: JiraTemplateEntry): string {
+  return `${(entry.project ?? "").trim().toLowerCase()}\u0000${(entry.issueType ?? "").trim().toLowerCase()}`;
+}
+
+/**
+ * How many other valid templates govern the same project and issue type. A write must meet every
+ * template that governs it, so a row that says only "matches Jira" would hide that second rule set.
+ */
+export function sharedTemplateCount(
+  entries: readonly JiraTemplateEntry[],
+  entry: JiraTemplateEntry,
+): number {
+  if (!entry.valid) return 0;
+  const key = scopeKey(entry);
+  return entries.filter((other) => other.valid && other.id !== entry.id && scopeKey(other) === key)
+    .length;
+}
+
+function sharedSentence(shared: number, t: Translate): string {
+  if (shared === 0) return "";
+  return shared === 1
+    ? ` ${t("chat.skills.jira.shared")}`
+    : ` ${t("chat.skills.jira.sharedMany", { count: String(shared) })}`;
+}
+
 /** One short line per template: which Jira project and issue type it governs, and whether it can. */
 export function TemplateStatus({
   entry,
   check,
+  shared = 0,
 }: {
   readonly entry: JiraTemplateEntry;
   readonly check: AutomaticTemplateCheck | undefined;
+  /** Other valid templates for the same project and issue type; see `sharedTemplateCount`. */
+  readonly shared?: number;
 }): ReactNode {
   const t = useTranslate();
   const state = checkState(entry, check);
-  const sentence = entry.valid ? checkSentence(check, t) : t("chat.skills.jira.invalid");
+  const sentence =
+    (entry.valid ? checkSentence(check, t) : t("chat.skills.jira.invalid")) +
+    sharedSentence(shared, t);
   const scope = entry.valid ? `${entry.project ?? ""} · ${entry.issueType ?? ""} — ` : "";
   return (
     <span className={styles.cmpStatus} data-state={state}>
