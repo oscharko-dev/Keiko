@@ -11,6 +11,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS,
   REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS,
   REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS,
   REVIEW_COUNTER_CHECK_DEFAULT_PROMPT_TOKENS,
@@ -72,6 +73,8 @@ export interface CounterCheckLimits {
   readonly maxReadCalls: number;
   readonly wallTimeMs: number;
   readonly promptTokens: number;
+  /** Output tokens one turn may take before the gateway's steered repair asks for the answer. */
+  readonly maxOutputTokens: number;
 }
 
 export const DEFAULT_COUNTER_CHECK_LIMITS: CounterCheckLimits = {
@@ -79,6 +82,7 @@ export const DEFAULT_COUNTER_CHECK_LIMITS: CounterCheckLimits = {
   maxReadCalls: REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS,
   wallTimeMs: REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS,
   promptTokens: REVIEW_COUNTER_CHECK_DEFAULT_PROMPT_TOKENS,
+  maxOutputTokens: REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS,
 };
 
 /** The run's shared counter-check prompt allowance. */
@@ -121,6 +125,8 @@ export interface CounterCheckOutcome {
   readonly durationMs: number;
   readonly promptTokens: number;
   readonly completionTokens: number;
+  /** Attempts the gateway discarded inside the session's turns: a repaired answer, a corrected tool call. */
+  readonly discardedAttemptCount: number;
 }
 
 interface SessionMeter {
@@ -128,6 +134,7 @@ interface SessionMeter {
   completionTokens: number;
   reserved: number;
   budgetRefused: boolean;
+  discardedAttempts: number;
 }
 
 function undecided(fingerprint: string, reasonCode: CounterCheckReasonCode): CounterCheckVerdict {
@@ -146,6 +153,69 @@ function reserver(
     }
     meter.reserved += promptTokens;
     return true;
+  };
+}
+
+type CounterCheckModelRequest = Parameters<ModelPort["call"]>[0];
+type CounterCheckModelResponse = Awaited<ReturnType<ModelPort["call"]>>;
+type CounterCheckModelChunk =
+  NonNullable<ModelPort["callStream"]> extends (...args: never[]) => AsyncIterable<infer Chunk>
+    ? Chunk
+    : never;
+
+/**
+ * The Counter-checker's model port for one session (#4130). Every turn gets the session's output
+ * budget and asks for the gateway's one steered repair, so a turn that spends its budget on
+ * reasoning is asked once more for the answer instead of failing the check. What the gateway
+ * discarded inside a turn (the repaired answer, a tool call it corrected) was processed by the
+ * provider: its tokens count in the session's totals and against the check's and the run's prompt
+ * allowance.
+ */
+function counterCheckModel(
+  model: ModelPort,
+  limits: CounterCheckLimits,
+  meter: SessionMeter,
+  reserve: (promptTokens: number) => boolean,
+): ModelPort {
+  const shaped = (request: CounterCheckModelRequest): CounterCheckModelRequest => ({
+    ...request,
+    maxOutputTokens: Math.min(
+      request.maxOutputTokens ?? limits.maxOutputTokens,
+      limits.maxOutputTokens,
+    ),
+    answerRepair: "steered",
+  });
+  const count = (response: CounterCheckModelResponse): void => {
+    const discarded = response.discardedAttemptUsage;
+    if (discarded === undefined) return;
+    meter.discardedAttempts += discarded.attemptCount;
+    meter.promptTokens += discarded.promptTokens;
+    meter.completionTokens += discarded.completionTokens;
+    reserve(discarded.promptTokens);
+  };
+  const stream = model.callStream;
+  async function* streamed(
+    source: NonNullable<ModelPort["callStream"]>,
+    request: CounterCheckModelRequest,
+    signal: AbortSignal,
+  ): AsyncIterable<CounterCheckModelChunk> {
+    for await (const chunk of source(shaped(request), signal)) {
+      if (chunk.type === "done") count(chunk.response);
+      yield chunk;
+    }
+  }
+  return {
+    call: async (request, signal): Promise<CounterCheckModelResponse> => {
+      const response = await model.call(shaped(request), signal);
+      count(response);
+      return response;
+    },
+    ...(stream === undefined
+      ? {}
+      : {
+          callStream: (request, signal): AsyncIterable<CounterCheckModelChunk> =>
+            streamed(stream, request, signal),
+        }),
   };
 }
 
@@ -267,6 +337,7 @@ function runSession(
   session: CounterCheckSession,
 ): Promise<ReadOnlySessionResult<ReadOnlyHarnessSessionOutcome>> {
   const { limits, meter } = session;
+  const reserve = reserver(limits, input.budget, meter);
   return runGovernedReadOnlySession(
     {
       allowedActionClasses: ["workspace-read"],
@@ -284,8 +355,8 @@ function runSession(
     },
     (gate, signal) =>
       runReadOnlyHarnessSession({
-        model,
-        reservePromptTokens: reserver(limits, input.budget, meter),
+        model: counterCheckModel(model, limits, meter, reserve),
+        reservePromptTokens: reserve,
         sessionId: session.correlationId,
         objective: renderCounterCheckTask(input.candidate.report, {
           rulesText: input.rulesText,
@@ -320,7 +391,13 @@ export async function counterCheckCandidate(
     limits,
     state: { verdict: undefined, invalidVerdicts: 0, toolCalls: 0 },
     readAllowance: createReviewReadAllowance(limits.maxReadCalls),
-    meter: { promptTokens: 0, completionTokens: 0, reserved: 0, budgetRefused: false },
+    meter: {
+      promptTokens: 0,
+      completionTokens: 0,
+      reserved: 0,
+      budgetRefused: false,
+      discardedAttempts: 0,
+    },
   };
   const fingerprint = input.candidate.fingerprint;
   const model = deps.modelPortFactory(input.modelId);
@@ -378,6 +455,7 @@ async function finish(
     durationMs: facts.durationMs,
     promptTokens: Math.max(meter.promptTokens, meter.reserved),
     completionTokens: meter.completionTokens,
+    discardedAttemptCount: meter.discardedAttempts,
   };
   logCounterCheckCompleted(deps.activityLog, facts, outcome);
   return outcome;

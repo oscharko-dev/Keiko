@@ -85,6 +85,7 @@ function confirmAll(input: CounterCheckInput): Promise<CounterCheckOutcome> {
     effect: "none",
     toolCallCount: 2,
     readCalls: { admitted: 1, refused: 0 },
+    discardedAttemptCount: 0,
     durationMs: 5,
     promptTokens: 300,
     completionTokens: 10,

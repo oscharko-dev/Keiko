@@ -326,6 +326,19 @@ that keeps calling the refused tools still ends on the tool ceiling. `review.cou
 records `admittedReadCallCount` and `refusedReadCallCount`, and `review.run.started` the allowance
 in force as `counterCheckMaxReadCalls`.
 
+A turn of a counter-check may take 4,096 output tokens (Issue #4130,
+`REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS`), and each turn asks for the gateway's one steered
+repair (`answerRepair: "steered"`, ADR-0003). The offline gate's Counter-checker writes about 12
+tokens per second, about 80 % of them reasoning, so the model's default of 8,192 tokens is 11
+minutes of one turn. A turn that spent them all on reasoning ended without a tool call, and the
+check failed `model-failed` after 684 seconds, 645 of them in that one turn: one such check made a
+probe review incomplete. Of the 955 Counter-checker turns of development iteration 7 half took at most 351
+tokens, 99 % at most 3,823, and 6 took more than 4,096. A turn that reaches the budget is asked once
+more for its answer; a second failure ends the check as before. What the gateway discarded inside a
+turn was processed by the provider, so its tokens count in the check's totals and against the
+check's and the run's prompt allowance, and `review.counter-check.completed` records
+`discardedAttemptCount`.
+
 The phase stops when the run already presents as many findings as it may (Issue #4130).
 Counter-checks run in the order the presentation rule ranks by, so once three checked candidates
 are presentable, every candidate that is still unchecked ranks after them and can never be

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { boundGatewayToolCatalog } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
+  REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS,
   REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS,
   type ReviewFindingReport,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
@@ -398,6 +399,64 @@ describe("counterCheckCandidate", () => {
       expect(allText(byDefault)).toContain(
         `You have ${String(REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS)} read, list and search calls in all.`,
       );
+    });
+  });
+
+  // #4130: a turn that spends the model's whole output budget on reasoning ends without a tool
+  // call, and the check failed `model-failed` after 645 seconds in that one turn. Each turn now has a
+  // smaller budget and asks for the gateway's one steered repair.
+  describe("the output budget of a turn", () => {
+    it("gives every turn the budget and asks for the gateway's steered repair", async () => {
+      const candidate = await candidateOf(report());
+      const read = { tool: TOOLS.read, args: { relativePath: "src/total.ts", startLine: 3 } };
+      const model = scripted([read, CONFIRM]);
+      await check(model, candidate);
+      expect(model.requests).toHaveLength(2);
+      for (const request of model.requests) {
+        expect(request.maxOutputTokens).toBe(REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS);
+        expect(request.answerRepair).toBe("steered");
+      }
+
+      const configured = scripted([CONFIRM]);
+      await check(configured, candidate, { limits: { maxOutputTokens: 1_000 } });
+      expect(configured.requests[0]?.maxOutputTokens).toBe(1_000);
+    });
+
+    it("counts what the gateway discarded inside a turn in the totals and against the allowance", async () => {
+      const candidate = await candidateOf(report());
+      const model = scripted([CONFIRM]);
+      const answer = model.call;
+      const reserved: number[] = [];
+      const repaired: ScriptedModel = {
+        ...model,
+        call: async (request, signal) => ({
+          ...(await answer(request, signal)),
+          discardedAttemptUsage: { attemptCount: 1, promptTokens: 700, completionTokens: 4_096 },
+        }),
+      };
+      const outcome = await check(repaired, candidate, {
+        reserve: (tokens) => {
+          reserved.push(tokens);
+          return true;
+        },
+      });
+
+      expect(outcome.verdict.verdict).toBe("confirmed");
+      expect(outcome.discardedAttemptCount).toBe(1);
+      // The answer's own 10 completion tokens and the discarded attempt's 4,096.
+      expect(outcome.completionTokens).toBe(4_106);
+      expect(outcome.promptTokens).toBeGreaterThanOrEqual(800);
+      // The turn's own reservation, then the discarded attempt's prompt tokens.
+      expect(reserved).toHaveLength(2);
+      expect(reserved[1]).toBe(700);
+      expect(completedLine()).toMatchObject({ extra: { discardedAttemptCount: 1 } });
+    });
+
+    it("reports no discarded attempt for a session without one", async () => {
+      const candidate = await candidateOf(report());
+      const outcome = await check(scripted([CONFIRM]), candidate);
+      expect(outcome.discardedAttemptCount).toBe(0);
+      expect(completedLine()).toMatchObject({ extra: { discardedAttemptCount: 0 } });
     });
   });
 

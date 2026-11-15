@@ -40392,6 +40392,12 @@
               "required": true
             },
             {
+              "name": "discardedAttemptCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "durationMs",
               "type": "integer",
               "dataClass": "duration",

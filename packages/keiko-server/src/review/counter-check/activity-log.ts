@@ -94,6 +94,9 @@ const REVIEW_COUNTER_CHECK_COMPLETED = defineActivityLogOperation({
     // #4130: the read, list and search calls the session's read allowance answered and refused.
     admittedReadCallCount: { type: "integer", dataClass: "count", required: true },
     refusedReadCallCount: { type: "integer", dataClass: "count", required: true },
+    // #4130: attempts the gateway discarded inside the session's turns (a repaired answer, a
+    // corrected tool call); their tokens are in `promptTokens` and `completionTokens`.
+    discardedAttemptCount: { type: "integer", dataClass: "count", required: true },
   },
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -163,6 +166,7 @@ export function logCounterCheckCompleted(
     readonly promptTokens: number;
     readonly completionTokens: number;
     readonly readCalls: { readonly admitted: number; readonly refused: number };
+    readonly discardedAttemptCount: number;
   },
 ): void {
   log.write(
@@ -183,6 +187,7 @@ export function logCounterCheckCompleted(
         completionTokens: outcome.completionTokens,
         admittedReadCallCount: outcome.readCalls.admitted,
         refusedReadCallCount: outcome.readCalls.refused,
+        discardedAttemptCount: outcome.discardedAttemptCount,
       },
     ),
   );

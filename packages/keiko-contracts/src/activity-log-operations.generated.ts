@@ -33561,6 +33561,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      discardedAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
     },
     causal: "parent-correlation",
     lifecycle: "end",

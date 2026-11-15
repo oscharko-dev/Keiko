@@ -60,6 +60,7 @@ describe("counter-check Activity Log proofs", () => {
         promptTokens: 900,
         completionTokens: 40,
         readCalls: { admitted: 8, refused: 3 },
+        discardedAttemptCount: 1,
       });
     });
     expect(line).not.toContain("src/secret.ts");
@@ -70,6 +71,7 @@ describe("counter-check Activity Log proofs", () => {
       // #4130: what the session's read allowance answered and refused.
       admittedReadCallCount: 8,
       refusedReadCallCount: 3,
+      discardedAttemptCount: 1,
     });
   });
 

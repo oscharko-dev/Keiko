@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fc3aca1711469fdd1e1d1577af01ed9f691a6185d5d497975ff697390703e206",
+    "catalogDigest": "87039ac320dab4ea813be83a48455659ce940fd85dabfab31d223c92059df06c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -35029,13 +35029,18 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "discardedAttemptCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
           }
         },
         "lifecycle": "end",
         "analyzerProjection": "timeline",
         "proofIds": ["review.counter-check.completed.line"],
         "registrationSite": "packages/keiko-server/src/review/counter-check/activity-log.ts:66",
-        "emitterSites": ["packages/keiko-server/src/review/counter-check/activity-log.ts:169"]
+        "emitterSites": ["packages/keiko-server/src/review/counter-check/activity-log.ts:173"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35105,8 +35110,8 @@
         "lifecycle": "failure",
         "analyzerProjection": "failure-cluster",
         "proofIds": ["review.counter-check.failed.line"],
-        "registrationSite": "packages/keiko-server/src/review/counter-check/activity-log.ts:103",
-        "emitterSites": ["packages/keiko-server/src/review/counter-check/activity-log.ts:207"]
+        "registrationSite": "packages/keiko-server/src/review/counter-check/activity-log.ts:106",
+        "emitterSites": ["packages/keiko-server/src/review/counter-check/activity-log.ts:212"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -99114,6 +99119,12 @@
                   "required": true
                 },
                 {
+                  "name": "discardedAttemptCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
                   "name": "durationMs",
                   "type": "integer",
                   "dataClass": "duration",
@@ -115585,7 +115596,7 @@
     {
       "op": "review.counter-check.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/review/counter-check/activity-log.ts:105",
+      "site": "packages/keiko-server/src/review/counter-check/activity-log.ts:108",
       "package": "keiko-server"
     },
     {

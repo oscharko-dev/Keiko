@@ -902,6 +902,16 @@ export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS = 32;
  * as a tool call, so 8 read calls cover every check that decided with up to 9 tool calls.
  */
 export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS = 8;
+/**
+ * Output tokens one turn of a counter-check may take (#4130). The Counter-checker of the offline
+ * gate writes about 12 tokens per second and about 80 % of them are reasoning, so the model's
+ * default of 8,192 tokens is 11 minutes of one turn. A turn that spends them all on reasoning ends
+ * without a tool call, and the check fails `model-failed` after most of its 900 seconds. Of the
+ * 955 Counter-checker turns of development iteration 7 half took at most 351 tokens, 99 % at most
+ * 3,823, and 6 took more than 4,096. A turn that reaches this budget gets the gateway's one
+ * steered repair, which asks for the answer without the reasoning.
+ */
+export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
 // #4138, #4130: 900 s, tuned on the development set. A local Gemma 4 31B 4-bit counter-checker
 // generates about 12 tokens per second: at 120 s it ended candidates undecided after 1 to 5
 // tool calls, and at 300 s 20 of 48 checks still ended undecided while the decided ones took up to

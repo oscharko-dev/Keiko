@@ -203,6 +203,7 @@ export function counterCheckBy(
       effect,
       toolCallCount: 3,
       readCalls: { admitted: 2, refused: 0 },
+      discardedAttemptCount: 0,
       durationMs: 10,
       promptTokens: 500,
       completionTokens: 20,

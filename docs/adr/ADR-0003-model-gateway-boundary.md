@@ -733,10 +733,13 @@ spent its whole output budget on reasoning, or whose tool call the budget cut of
 (normalization checks `length` before it parses tool-call JSON, buffered and streamed alike; the same
 cut call with any other finish reason stays a `MalformedToolCallError`) — is never retried as is. On a call that asks for it, it
 is not surfaced at once either: the explicit `GatewayCallRequest.answerRepair: "steered"` (local,
-never serialized) is set by the coding sidecar route and by every round of a Chat tool turn (S09 of
+never serialized) is set by the coding sidecar route, by every round of a Chat tool turn (S09 of
 epic #4173: Qwen ended a Jira turn after reasoning with three metadata reads settled and no write,
 and the turn ended; a multi-round task with settled work behind it must not die on one unusable
-round, and the repair counts against the turn's own model-call envelope), so every other call — the
+round, and the repair counts against the turn's own model-call envelope) and by every turn of a
+review counter-check (Issue #4130, ADR-0182 D5: a local Counter-checker spent a turn's whole output
+budget on reasoning, and the check failed after most of its wall time; the discarded attempt's
+tokens count against the check's and the run's prompt allowance), so every other call — the
 commit draft and plain interactive chat included — still surfaces such an answer at once and never
 makes a hidden second generation (#3873 review). The caller's `attemptAdmission` is told which
 admission corrects an unusable attempt (`correctsUnusableAttempt: true` on its input, once per steered
