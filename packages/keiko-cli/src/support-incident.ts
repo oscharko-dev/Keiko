@@ -18,6 +18,8 @@ import {
   supportIncidentPrivateProjection,
   supportIncidentPublicProjection,
   type SupportIncident,
+  type SupportIncidentPrivateProjection,
+  type SupportIncidentPublicProjection,
   type SupportIncidentRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -117,7 +119,10 @@ export {
 
 // ─── Rendering (the human forms are derived from the machine projections) ──────────────────────
 
-function renderFields(title: string, fields: object): string {
+function renderFields(
+  title: string,
+  fields: SupportIncidentPublicProjection | SupportIncidentPrivateProjection,
+): string {
   const rows = Object.entries(fields).map(
     ([key, value]: [string, unknown]) =>
       `  ${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`,
