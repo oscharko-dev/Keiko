@@ -17,7 +17,7 @@
 // payload is JSON-encoded into `payload_json` because storing it as a normalised table would
 // require a schema change every time a payload kind landed (#205 ships only two kinds today).
 
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 
 import {
   activityLogEvent,
@@ -335,6 +335,11 @@ interface WalCheckpointResult {
   readonly checkpointed: number;
 }
 
+/** The part of a SQLite connection that the WAL checkpoint flush calls. */
+export interface WalCheckpointConnection {
+  prepare(sql: string): Pick<StatementSync, "get">;
+}
+
 // Post-migration WAL flush: truncates the WAL so pages that held the now-re-encrypted
 // plaintext are reclaimed immediately instead of at the next natural close. The migration
 // transaction has already committed, so any failure here — a busy contending reader, an
@@ -347,10 +352,12 @@ interface WalCheckpointResult {
 // were not immediately reclaimed (#2906 KEIKO-0877).
 //
 // Exported so schema.test.ts can exercise the retry/report path directly without having
-// to reconstruct a real v1→v-current migration timeline. Not part of the public package
-// surface — consumed only by runMigrations above and by co-located tests.
+// to reconstruct a real v1→v-current migration timeline. It takes only the statement call the
+// flush makes, so a test fake implements that call instead of being cast to a DatabaseSync. Not
+// part of the public package surface — consumed only by runMigrations above and by co-located
+// tests.
 export function flushPlaintextResidueWithRetry(
-  db: DatabaseSync,
+  db: WalCheckpointConnection,
   sink: MemoryVaultLogSink | undefined,
 ): void {
   for (let attempt = 1; attempt <= WAL_CHECKPOINT_MAX_ATTEMPTS; attempt += 1) {
@@ -373,7 +380,7 @@ type WalCheckpointAttempt =
   // completed checkpoint.
   | { readonly kind: "malformed" };
 
-function attemptWalCheckpointTruncate(db: DatabaseSync): WalCheckpointAttempt {
+function attemptWalCheckpointTruncate(db: WalCheckpointConnection): WalCheckpointAttempt {
   try {
     const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
       Partial<WalCheckpointResult> | undefined;

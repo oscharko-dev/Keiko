@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5a4d0fa75bf1c3870f0faecf2b47a66094e17d619fa5cad770c76586bb41ada0",
+    "catalogDigest": "41b8900295fae539a73380a2258b9d732b65aa742f3f3a46f8792693f5f517ba",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -32884,7 +32884,7 @@
         "proofIds": ["memory-vault.store.encryption-checkpoint-degraded.state"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-memory-vault/src/schema.ts:69",
-        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:413"]
+        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:420"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -40525,7 +40525,7 @@
         "proofIds": ["store.encryption-migrated.scope"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-local-knowledge/src/store-content-encryption.ts:78",
-        "emitterSites": ["packages/keiko-local-knowledge/src/store-content-encryption.ts:491"]
+        "emitterSites": ["packages/keiko-local-knowledge/src/store-content-encryption.ts:497"]
       },
       {
         "contractKind": "activity-log-operation",

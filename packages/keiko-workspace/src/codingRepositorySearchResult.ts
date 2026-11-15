@@ -25,18 +25,18 @@ export function boundCodingRepositoryResult(
       hits.pop();
     return { ...result, hits, truncationReasons };
   }
-  let excerpt = { ...result.excerpt, snippetTruncated: true };
-  while (
-    outputBytes({ ...result, excerpt, truncationReasons }) > CODING_REPOSITORY_LIMITS.outputBytes
-  ) {
-    if (excerpt.snippet.length === 0) return { ok: false, reason: "failed" };
-    excerpt = {
-      ...excerpt,
-      snippet: clampToBytes(
-        excerpt.snippet,
-        Math.floor(new TextEncoder().encode(excerpt.snippet).length / 2),
-      ).excerpt,
-    };
+  let snippet = result.excerpt.snippet;
+  const bounded = (): CodingRepositoryResult => ({
+    ...result,
+    excerpt: { ...result.excerpt, snippet, snippetTruncated: true },
+    truncationReasons,
+  });
+  while (outputBytes(bounded()) > CODING_REPOSITORY_LIMITS.outputBytes) {
+    if (snippet.length === 0) return { ok: false, reason: "failed" };
+    snippet = clampToBytes(
+      snippet,
+      Math.floor(new TextEncoder().encode(snippet).length / 2),
+    ).excerpt;
   }
-  return { ...result, excerpt, truncationReasons };
+  return bounded();
 }
