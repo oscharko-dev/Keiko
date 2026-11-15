@@ -253,7 +253,7 @@ describe("browser notice authentication lifecycle", () => {
     });
     // The opener said "opened": the person is told what happened, not that Keiko failed (#4370).
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Keiko opened the connection in a new browser window or tab. If it opened in another browser or profile, continue there, or open Keiko in that browser and try again.",
+      "Keiko opened the connection in a new browser window or tab. If it opened in another browser or profile, continue there.",
     );
     expect(screen.getByRole("alert")).not.toHaveTextContent("reopen Keiko from its launcher");
     // It claims nothing about which browser the server chose, and gives no advice on the default.
