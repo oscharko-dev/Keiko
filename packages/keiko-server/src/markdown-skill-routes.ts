@@ -46,6 +46,7 @@ export async function withSkillAccess(
 ): Promise<RouteResult> {
   logMarkdownSkillOperation(ctx.correlationId, action, "started", 0);
   let result: RouteResult;
+  let refusalReason: string | undefined;
   try {
     if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) throw notFound("Skill");
     result = await operation();
@@ -54,9 +55,10 @@ export async function withSkillAccess(
       logMarkdownSkillOperation(ctx.correlationId, action, "failed", 500);
       throw error;
     }
+    refusalReason = error.refusal?.reason;
     result = {
       status: error.status,
-      body: errorBody(error.code, error.message, ctx.correlationId),
+      body: errorBody(error.code, error.message, ctx.correlationId, error.refusal),
     };
   }
   logMarkdownSkillOperation(
@@ -65,6 +67,7 @@ export async function withSkillAccess(
     outcomePhase(result.status),
     result.status,
     result.status === 200 ? accounting?.() : undefined,
+    refusalReason,
   );
   return { ...result, headers: { "Cache-Control": "no-store" } };
 }

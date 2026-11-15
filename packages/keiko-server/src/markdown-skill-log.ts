@@ -1,3 +1,4 @@
+import { isMarkdownSkillRefusalReason } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -40,6 +41,28 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
       values: ["started", "completed", "rejected", "failed"],
     },
     httpStatus: { type: "integer", dataClass: "count", required: true },
+    // Why a rejected save was refused: the closed reason the browser also receives, never text.
+    // Kept equal to MARKDOWN_SKILL_REFUSAL_REASONS by a route test (a registration must be literal).
+    refusalReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "template-marker-misplaced",
+        "template-not-a-template",
+        "template-front-matter-unterminated",
+        "template-malformed-line",
+        "template-unknown-key",
+        "template-duplicate-key",
+        "template-missing-key",
+        "template-invalid-value",
+        "template-limit-exceeded",
+        "template-unsafe-pattern",
+        "template-no-rules",
+        "text-empty",
+        "text-control-characters",
+      ],
+    },
     // A Jira template proposal accounts for every issue type of the project (#4354): the number of
     // types and of proposals, and the number without one per closed reason. Counts only.
     typeCount: OPTIONAL_COUNT_FIELD,
@@ -92,6 +115,7 @@ export function logMarkdownSkillOperation(
   phase: "started" | "completed" | "rejected" | "failed",
   status: number,
   accounting?: MarkdownSkillProposalAccounting,
+  refusalReason?: string,
 ): void {
   processServerLogSink().write(
     activityLogEvent(
@@ -102,6 +126,7 @@ export function logMarkdownSkillOperation(
         phase,
         httpStatus: status,
         ...accounting,
+        ...(isMarkdownSkillRefusalReason(refusalReason) ? { refusalReason } : {}),
         completeness: "complete",
         loss: "none",
       },

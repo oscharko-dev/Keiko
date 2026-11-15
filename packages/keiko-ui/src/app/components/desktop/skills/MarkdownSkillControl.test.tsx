@@ -23,6 +23,7 @@ import {
   expectedMarkdownSkillSelection,
 } from "../hooks/useChatMarkdownSkill";
 import { ApiError } from "@/lib/api";
+import { carryMarkdownSkillRefusal } from "@/lib/markdown-skill-refusal";
 import * as atlassian from "@/lib/atlassian-connectors-api";
 import * as jiraTemplates from "@/lib/jira-templates-api";
 import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
@@ -436,6 +437,96 @@ describe("Chat Markdown skill controls", () => {
     await waitFor(() => expect(hook.result.current.skills).toEqual([DOCUMENT]));
     expect(hook.result.current.error).toBeUndefined();
     expect(api.fetchMarkdownSkills).toHaveBeenCalledTimes(2);
+  });
+
+  // F31: a refused save said "Reload the selection and try again", which fails the same way and
+  // never says what to change. The sentence names the fix, the text stays, and no Reload is offered.
+  describe("a refused save", () => {
+    async function refuseSave(error: Error): Promise<HTMLElement> {
+      render(<Harness />);
+      vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
+      const dialog = await open();
+      await openSkill(dialog);
+      vi.mocked(api.saveMarkdownSkill).mockRejectedValue(error);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Markdown" }));
+      fireEvent.change(within(dialog).getByRole("textbox", { name: /· Markdown$/u }), {
+        target: { value: "\n---\nkeiko: jira-issue-template\n---\n# Story\nDraft I typed" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(api.saveMarkdownSkill).toHaveBeenCalledOnce());
+      return dialog;
+    }
+
+    it("says what is wrong and what to do, keeps the draft and offers no reload", async () => {
+      const refused = new ApiError("INVALID_REQUEST", "Jira issue template …", 400);
+      carryMarkdownSkillRefusal(refused, {
+        error: { code: "INVALID_REQUEST", message: "x", reason: "template-marker-misplaced" },
+      });
+      const dialog = await refuseSave(refused);
+      const alert = await within(dialog).findByRole("alert");
+      expect(alert).toHaveTextContent("not at the very top of the file");
+      expect(alert).toHaveTextContent("Your text is still in the editor.");
+      expect(alert).not.toHaveTextContent("Reload");
+      expect(within(dialog).queryByRole("button", { name: "Reload" })).toBeNull();
+      expect(within(dialog).getByRole("textbox", { name: /· Markdown$/u })).toHaveValue(
+        "\n---\nkeiko: jira-issue-template\n---\n# Story\nDraft I typed",
+      );
+    });
+
+    it("names the line when the server knows it", async () => {
+      const refused = new ApiError("INVALID_REQUEST", "x", 400);
+      carryMarkdownSkillRefusal(refused, {
+        error: { code: "INVALID_REQUEST", message: "x", reason: "template-unknown-key", line: 7 },
+      });
+      const dialog = await refuseSave(refused);
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("Look at line 7.");
+    });
+
+    it("names the limits the parser enforces when the template has too many entries", async () => {
+      const refused = new ApiError("INVALID_REQUEST", "x", 400);
+      carryMarkdownSkillRefusal(refused, {
+        error: { code: "INVALID_REQUEST", message: "x", reason: "template-limit-exceeded" },
+      });
+      const dialog = await refuseSave(refused);
+      const alert = await within(dialog).findByRole("alert");
+      expect(alert).toHaveTextContent(
+        /at most 50 entries \(20 for activateOn\).*at most 50 required/u,
+      );
+      expect(alert.textContent).not.toMatch(/\{\w+\}/u);
+    });
+
+    it("explains in plain words what an unsafe pattern is and what to do", async () => {
+      const refused = new ApiError("INVALID_REQUEST", "x", 400);
+      carryMarkdownSkillRefusal(refused, {
+        error: { code: "INVALID_REQUEST", message: "x", reason: "template-unsafe-pattern" },
+      });
+      const dialog = await refuseSave(refused);
+      const alert = await within(dialog).findByRole("alert");
+      expect(alert).toHaveTextContent("the search expression a rule matches a text against");
+      expect(alert).toHaveTextContent("Use a shorter, simpler pattern, or plain text");
+    });
+
+    // The early return for a refusal once hid a failed selection read; a person needs both.
+    it("keeps the alert of a failed selection read beside the refusal", async () => {
+      vi.mocked(api.fetchMarkdownSkillSelection).mockRejectedValue(new Error("offline"));
+      const refused = new ApiError("INVALID_REQUEST", "x", 400);
+      carryMarkdownSkillRefusal(refused, {
+        error: { code: "INVALID_REQUEST", message: "x", reason: "template-marker-misplaced" },
+      });
+      const dialog = await refuseSave(refused);
+      await waitFor(() => expect(within(dialog).getAllByRole("alert")).toHaveLength(2));
+      const [first, second] = within(dialog).getAllByRole("alert");
+      expect(first).toHaveTextContent("not at the very top of the file");
+      expect(second).toHaveTextContent("Skills could not be updated");
+      expect(within(dialog).getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    });
+
+    it("keeps the reload advice for a failure that is not a refusal of the text", async () => {
+      const dialog = await refuseSave(new ApiError("CONFLICT", "Skill changed", 409));
+      const alert = await within(dialog).findByRole("alert");
+      expect(alert).toHaveTextContent("Skills could not be updated");
+      expect(within(dialog).getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    });
   });
 
   it("hides the previous private library and preview when its authoritative refresh fails", async () => {

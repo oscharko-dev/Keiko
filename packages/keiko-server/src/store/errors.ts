@@ -12,15 +12,28 @@ export type UiStoreErrorCode =
   | "INVALID_REQUEST"
   | "INTERNAL";
 
+/** A closed, body-free reason a route may add to its error body beside the code (and a line number). */
+export interface UiStoreRefusal {
+  readonly reason: string;
+  readonly line?: number;
+}
+
 export class UiStoreError extends Error {
   public readonly code: UiStoreErrorCode;
   public readonly status: number;
+  public readonly refusal: UiStoreRefusal | undefined;
 
-  public constructor(code: UiStoreErrorCode, message: string, status: number) {
+  public constructor(
+    code: UiStoreErrorCode,
+    message: string,
+    status: number,
+    refusal?: UiStoreRefusal,
+  ) {
     super(message);
     this.name = "UiStoreError";
     this.code = code;
     this.status = status;
+    this.refusal = refusal;
   }
 }
 
@@ -40,8 +53,8 @@ export function notFound(entity: string): UiStoreError {
   return new UiStoreError("NOT_FOUND", `${entity} not found.`, 404);
 }
 
-export function invalidRequest(message: string): UiStoreError {
-  return new UiStoreError("INVALID_REQUEST", message, 400);
+export function invalidRequest(message: string, refusal?: UiStoreRefusal): UiStoreError {
+  return new UiStoreError("INVALID_REQUEST", message, 400, refusal);
 }
 
 export function projectExists(): UiStoreError {

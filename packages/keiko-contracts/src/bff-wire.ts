@@ -69,7 +69,11 @@ import {
   type ContextLaneId,
 } from "./context-engineering.js";
 
-export { MARKDOWN_SKILL_LIMITS } from "./markdown-skills.js";
+export {
+  isMarkdownSkillRefusalReason,
+  MARKDOWN_SKILL_LIMITS,
+  MARKDOWN_SKILL_REFUSAL_REASONS,
+} from "./markdown-skills.js";
 export type {
   MarkdownSkillReference,
   MarkdownSkillSelection,
@@ -77,6 +81,7 @@ export type {
   MarkdownSkillMetadata,
   MarkdownSkillDocument,
   MarkdownSkillUpload,
+  MarkdownSkillRefusalReason,
 } from "./markdown-skills.js";
 
 export interface Project {

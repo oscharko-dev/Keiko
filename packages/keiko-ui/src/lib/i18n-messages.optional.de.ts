@@ -2870,6 +2870,34 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Skills konnten nicht aktualisiert werden. Auswahl neu laden und erneut versuchen.",
   "chat.skills.upload": "Markdown hochladen (.md, bis 128 KiB)",
   "chat.skills.retry": "Neu laden",
+  "chat.skills.refusal.template-marker-misplaced":
+    "Die Einstellungen der Vorlage stehen nicht ganz oben in der Datei. Beginne die Datei mit einer Zeile, die nur --- enthält, und setze die Einstellungen direkt darunter.",
+  "chat.skills.refusal.template-not-a-template":
+    "Das ist keine gültige Jira-Vorlage. Setze ihre Einstellungen an den Anfang der Datei, zwischen zwei Zeilen, die nur --- enthalten.",
+  "chat.skills.refusal.template-front-matter-unterminated":
+    "Die Einstellungen am Dateianfang sind nicht abgeschlossen. Füge nach der letzten Einstellung eine Zeile ein, die nur --- enthält.",
+  "chat.skills.refusal.template-malformed-line":
+    "Eine Zeile bei den Einstellungen am Dateianfang ist nicht als „Name: Wert“ geschrieben, zum Beispiel „project: REQ“. Korrigiere diese Zeile.",
+  "chat.skills.refusal.template-unknown-key":
+    "Bei den Einstellungen am Dateianfang steht ein Name, den Keiko nicht kennt. Entferne die Zeile oder korrigiere den Namen.",
+  "chat.skills.refusal.template-duplicate-key":
+    "Dieselbe Einstellung steht zweimal am Dateianfang. Behalte nur eine der beiden Zeilen.",
+  "chat.skills.refusal.template-missing-key":
+    "Am Dateianfang fehlt eine Pflichteinstellung, zum Beispiel project oder issueType. Ergänze sie.",
+  "chat.skills.refusal.template-invalid-value":
+    "Eine Einstellung am Dateianfang hat einen Wert, den Keiko nicht verwenden kann, zum Beispiel eine falsche Zahl oder eine falsch geschriebene Option. Prüfe die Schreibweise.",
+  "chat.skills.refusal.template-limit-exceeded":
+    "Die Vorlage hat zu viele Einträge. Eine Liste darf höchstens {listItems} Einträge haben ({activations} bei activateOn), die Vorlage höchstens {sections} Pflichtabschnitte. Entferne einige.",
+  "chat.skills.refusal.template-unsafe-pattern":
+    "Ein Prüfmuster (der Suchausdruck, gegen den eine Regel einen Text prüft) ist zu kompliziert oder nutzt etwas, das Keiko nicht unterstützt. Nimm ein kürzeres, einfacheres Muster oder schreibe den Text ohne Muster.",
+  "chat.skills.refusal.template-no-rules":
+    "Die Vorlage verlangt noch nichts. Ergänze mindestens eine Regel, zum Beispiel einen Pflichtabschnitt.",
+  "chat.skills.refusal.text-empty":
+    "Die Datei enthält noch keinen Text. Schreibe etwas und speichere erneut.",
+  "chat.skills.refusal.text-control-characters":
+    "Der Text enthält Zeichen, die Keiko nicht speichern kann. Entferne sie und speichere erneut.",
+  "chat.skills.refusal.line": "Schau dir Zeile {line} an.",
+  "chat.skills.refusal.kept": "Dein Text bleibt im Editor erhalten.",
   "chat.skills.loading": "Skills werden geladen…",
   "chat.skills.empty": "Noch keine Chat-Skills.",
   "chat.skills.fileError": "Wähle eine nicht leere .md-Datei mit maximal 128 KiB.",
