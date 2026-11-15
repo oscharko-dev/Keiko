@@ -15,6 +15,7 @@ import { jiraEditAlreadyHeld } from "./jira-mutation-confirmation.js";
 
 import {
   field,
+  FIXTURE_PROJECT_ISSUE_TYPES,
   REQUIRED_CUSTOM,
   FIELDS,
   LINKS_FIELD,
@@ -1072,7 +1073,9 @@ it("forwards an opaque plugin value and returns Jira's field error when it refus
       total: FIELDS.length + 1,
     }),
   );
-  f.http.mockResolvedValueOnce(response({ id: "10000", key: "SYN" }));
+  f.http.mockResolvedValueOnce(
+    response({ id: "10000", key: "SYN", issueTypes: FIXTURE_PROJECT_ISSUE_TYPES }),
+  );
   f.http.mockResolvedValueOnce(response({ id: "10001", name: "Task" }));
   f.http.mockResolvedValueOnce({
     kind: "response",

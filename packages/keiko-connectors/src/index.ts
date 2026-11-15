@@ -362,6 +362,7 @@ export {
   type JiraTemplateInstanceMetadata,
   type JiraTemplateSubject,
 } from "./jira-issue-template-check.js";
+export { jiraInstanceIdentity } from "./jira-instance-identity.js";
 export {
   gateJiraMutationByTemplates,
   JIRA_TEMPLATE_SYSTEM_FIELDS,
@@ -381,6 +382,8 @@ export {
   proposeJiraIssueTemplates,
   readJiraTemplateInstanceMetadata,
   renderProposedJiraIssueTemplate,
+  resolveJiraTemplateBinding,
+  type JiraTemplateBindingResolution,
   type JiraTemplateInstanceRead,
   type JiraTemplateProposal,
   type JiraTemplateProposalPartial,

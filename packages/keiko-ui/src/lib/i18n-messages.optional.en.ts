@@ -2497,6 +2497,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "No template exists for the issue type “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save the template, then ask again.",
   "chat.jira.outcome.rule.template-not-activated":
     "Only rules for entering a status exist for “{subject}”, so nothing was created. Open Skills, choose “Propose from project”, review and save a template for creating, then ask again.",
+  "chat.jira.outcome.rule.template-binding-unresolved":
+    "The template “{subject}” names an issue type or a status that this Jira does not show you, so nothing was changed. Either open the template in Skills, write it as this Jira shows it to you and save it, or ask its author to check it against Jira. Then ask again.",
   "chat.jira.outcome.templateNotices":
     "The change was made. The issue already breaks these template rules in fields this change did not touch. Ask Keiko to repair them, or fix them in Jira.",
   "chat.jira.outcome.failure.releaseScope":
@@ -2682,7 +2684,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Several fields are named {subject}. Use the field id to be exact.",
   "chat.skills.jira.finding.unknown-link-type": "Link type {subject} does not exist.",
   "chat.skills.jira.finding.unknown-transition-target":
-    "{subject} is not a status of the project. A transition name or id cannot be checked here.",
+    "{subject} is not a status of the project. A transition name cannot be bound across languages: name the target status as this Jira shows it, and the rule then holds for everyone.",
   "chat.skills.jira.finding.wrong-parent-field":
     "The parent field does not link this issue type to its parent here: {subject}. Writes it governs cannot satisfy it.",
   "chat.skills.jira.projectKey": "Project key",
@@ -2777,6 +2779,21 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.useInChat": "Use in this chat",
   "chat.skills.jira.proposeDescription":
     "Keiko reads recent issues of a project and proposes one template per issue type. Each opens in the editor for review before you save it.",
+  "chat.skills.jira.bind": "Bind to this Jira",
+  "chat.skills.jira.binding": "Binding…",
+  "chat.skills.jira.bound": "Bound to the issue type “{issueType}” of this Jira.",
+  "chat.skills.jira.boundParents":
+    "Bound to the issue type “{issueType}” and {count} allowed parent types of this Jira.",
+  "chat.skills.jira.validBound": "Matches Jira and is bound to its issue types.",
+  "chat.skills.jira.bindOffer":
+    "Matches Jira by name only. Bind it so it also applies for colleagues who use Jira in another language.",
+  "chat.skills.jira.bindAmbiguous":
+    "More than one issue type is called “{subject}” in this Jira, so the template cannot be bound.",
+  "chat.skills.jira.bindFailed": "The template could not be bound right now. Try again.",
+  "chat.skills.jira.sharedType":
+    "Another template governs this issue type too: every write must meet both.",
+  "chat.skills.jira.bindDead":
+    "This template is bound to an issue type that no longer exists in this project (“{subject}”), so it governs nothing and blocks nothing. Change the issue type or delete the template.",
   "chat.skills.jira.openProposal": "Open in editor",
 
   "agentLauncher.agent": "Agent",

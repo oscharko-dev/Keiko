@@ -109,8 +109,27 @@ export type JiraTransitionMutationMetadata =
       readonly targetStatusId: string;
       readonly transitionName?: string;
       readonly targetStatusName?: string;
+      /** Every transition this issue offers now, for a rule that names one by its name or id. */
+      readonly availableTransitions: readonly AvailableTransition[];
     };
-function selectedTransitionMetadata(value: unknown): JiraTransitionMutationMetadata {
+export interface AvailableTransition {
+  readonly id: string;
+  readonly name?: string;
+}
+/** The id and, where Jira names it, the name of each transition the issue offers. */
+function availableTransitionsOf(transitions: readonly unknown[]): readonly AvailableTransition[] {
+  return transitions.flatMap((item): readonly AvailableTransition[] => {
+    const record = asRecord(item);
+    const id = record?.id;
+    const name = record?.name;
+    if (typeof id !== "string") return [];
+    return [typeof name === "string" ? { id, name } : { id }];
+  });
+}
+function selectedTransitionMetadata(
+  value: unknown,
+  available: readonly AvailableTransition[],
+): JiraTransitionMutationMetadata {
   const transition = asRecord(value);
   const target = asRecord(transition?.to);
   const targetStatusId = target?.id;
@@ -122,6 +141,7 @@ function selectedTransitionMetadata(value: unknown): JiraTransitionMutationMetad
   return {
     ...parsed,
     targetStatusId,
+    availableTransitions: available,
     ...(typeof transitionName === "string" ? { transitionName } : {}),
     ...(typeof targetStatusName === "string" ? { targetStatusName } : {}),
   };
@@ -150,7 +170,9 @@ export async function jiraTransitionMutationMetadata(
         ],
       },
     };
-  return matches.length === 1 ? selectedTransitionMetadata(matches[0]) : MALFORMED;
+  return matches.length === 1
+    ? selectedTransitionMetadata(matches[0], availableTransitionsOf(transitions))
+    : MALFORMED;
 }
 /** The bound on a known-target receipt that is journaled before any native request is sent. */
 export const JIRA_MUTATION_RECEIPT_MAX_BYTES = 16384;

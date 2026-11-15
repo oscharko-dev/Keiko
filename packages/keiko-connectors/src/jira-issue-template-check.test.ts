@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  JIRA_RESULT_GUIDANCE_MAX_CHARS,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -9,6 +10,7 @@ import {
   evaluateJiraTemplateChange,
   jiraTemplateValuePresent,
   jiraNoGoverningTemplateGuidance,
+  jiraTemplateGuidanceVariants,
   jiraTemplateValueText,
   jiraTemplateViolationGuidance,
   matchingJiraIssueTemplates,
@@ -88,6 +90,29 @@ describe("the hint when no template governs a write (#4354)", () => {
 });
 
 describe("formal admission guidance", () => {
+  it("says that several templates govern a type when a violation carries a place, and only then", () => {
+    const several = jiraTemplateViolationGuidance([
+      { ruleId: "label-missing", subject: "x", template: "SYN/Task #2" },
+    ]);
+    expect(several).toContain("several templates govern this type");
+    expect(
+      jiraTemplateViolationGuidance([
+        { ruleId: "label-missing", subject: "x", template: "SYN/Task" },
+      ]),
+    ).not.toContain("several templates");
+  });
+  it("tells the person, for an unresolved binding, which template and both ways out, within the guidance bound", () => {
+    const guidance = jiraTemplateViolationGuidance([
+      { ruleId: "template-binding-unresolved", subject: "SYN/Task", template: "SYN/Task" },
+    ]);
+    expect(guidance).toContain("an issue type or a status");
+    expect(guidance).toContain(
+      "write the issue type or status in the template as this Jira shows it",
+    );
+    expect(guidance).toContain("Check against Jira");
+    expect(guidance?.length).toBeLessThanOrEqual(JIRA_RESULT_GUIDANCE_MAX_CHARS);
+    expect(jiraTemplateGuidanceVariants()).toContain(guidance);
+  });
   it("asks for complete evidence rather than alleging a rule violation when native data is unreadable", () => {
     const guidance = jiraTemplateViolationGuidance([
       { ruleId: "template-unreadable", subject: "labels", template: "SYN/Task" },
@@ -546,6 +571,43 @@ describe("evaluating a change against its before-state and after-state (#4354)",
   });
 });
 
+// Part 2 (#4354): the required field a template typed in its author's language is judged by the id it
+// is bound to; without the binding the typed name finds no field of this Jira.
+describe("a required field typed in another language", () => {
+  const catalog: readonly JiraFieldCatalogEntry[] = [
+    { id: "customfield_10016", name: "Story Points" },
+  ];
+  const typed = parsed(["requiredFields: [Story Punkte]"], "# T");
+  const boundTo = (id: string): JiraIssueTemplate => ({
+    ...typed,
+    binding: { digest: "0".repeat(32), issueTypeId: "10001", requiredFieldIds: [id] },
+  });
+  const ruleIds = (template: JiraIssueTemplate, fields: Record<string, unknown>): string[] =>
+    checkJiraIssueTemplate(template, subject(fields), catalog).map((violation) => violation.ruleId);
+
+  it("is judged by its bound id: missing when empty, met when set", () => {
+    expect(ruleIds(boundTo("customfield_10016"), {})).toEqual(["field-missing"]);
+    expect(ruleIds(boundTo("customfield_10016"), { customfield_10016: 3 })).toEqual([]);
+  });
+
+  it("is unavailable where the name is not bound and no field carries it", () => {
+    expect(ruleIds(typed, {})).toEqual(["field-unavailable"]);
+  });
+
+  it("is unavailable, never satisfied, where the bound id is no field of this Jira", () => {
+    expect(ruleIds(boundTo("customfield_99999"), {})).toEqual(["field-unavailable"]);
+  });
+
+  it("falls back to the typed name for an entry nothing resolved ('none')", () => {
+    const byName = parsed(["requiredFields: [Story Points]"], "# T");
+    const none: JiraIssueTemplate = {
+      ...byName,
+      binding: { digest: "0".repeat(32), issueTypeId: "10001", requiredFieldIds: ["none"] },
+    };
+    expect(ruleIds(none, {})).toEqual(["field-missing"]);
+  });
+});
+
 describe("checkJiraIssueTemplates", () => {
   it("merges the violations of every governing template once and in a stable order", () => {
     const first = parsed(["summaryMinLength: 5"], "# T");
@@ -555,6 +617,40 @@ describe("checkJiraIssueTemplates", () => {
       "summary-too-short",
       "label-missing",
     ]);
+  });
+
+  // F07a (#4354): two templates of one type are told apart by their place, so the refusal can say that
+  // more than one template governs it; a rule both of them state is named once, by the first.
+  it("labels every template by its place when several govern, and not when one does", () => {
+    const first = parsed(["summaryMinLength: 5"], "# T");
+    const second = parsed(["summaryMinLength: 5", "requiredLabels: [x]"], "# T");
+    const result = checkJiraIssueTemplates([first, second], subject({ summary: "ab" }), CATALOG);
+    expect(result.map((violation) => violation.template)).toEqual(["ABC/Story #1", "ABC/Story #2"]);
+    expect(
+      jiraTemplateViolationGuidance([
+        { ruleId: "summary-too-short", subject: "x", template: "ABC/Story #1" },
+      ]),
+    ).toContain("a rule both require is named once");
+    const alone = checkJiraIssueTemplates([second], subject({ summary: "ab" }), CATALOG);
+    expect(alone.map((violation) => violation.template)).toEqual(["ABC/Story", "ABC/Story"]);
+  });
+
+  // The landing collision (#4354 x #4355): a second template that finds nothing wrong is nothing to
+  // tell apart, so the one that does keeps its plain label.
+  it("leaves the label alone when several templates govern but only one states a violation", () => {
+    const permissive = parsed(["summaryMinLength: 1"], "# T");
+    const strict = parsed(["requiredLabels: [x]"], "# T");
+    for (const order of [
+      [permissive, strict],
+      [strict, permissive],
+    ]) {
+      const result = checkJiraIssueTemplates(
+        order,
+        subject({ summary: "a long enough summary" }),
+        CATALOG,
+      );
+      expect(result.map((violation) => violation.template)).toEqual(["ABC/Story"]);
+    }
   });
 
   it("bounds the output", () => {

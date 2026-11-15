@@ -64,7 +64,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set(
     "accept action-approvals action-sheet actions activate active activity agent agent-runs " +
     "answer api app-session apply apply-description approval-review approvals approve " +
     "approve-description archive atlassian-connectors attachments audit authorization " +
-    "authorize autonomy-policy blame bootstrap branches breakpoints browser build cancel " +
+    "authorize autonomy-policy bind blame bootstrap branches breakpoints browser build cancel " +
     "capabilities capability capsule-sets capsules capture-from-conversation catalog " +
     "challenge channel chat chats check citation-preview cleanup client clone code " +
     "codex-subscription coding-sidecar coding-workbench commands commit compact completion " +

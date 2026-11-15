@@ -1,12 +1,22 @@
 import {
+  jiraTemplateIssueTypeMatches,
   normalizeJiraSectionHeading,
   parseJiraIssueTemplate,
   readJiraDescriptionSections,
   type AtlassianConnectorWriteFailureReason,
   type JiraIssueTemplate,
+  JIRA_BINDING_UNRESOLVED,
+  jiraTemplateBindingDigest,
+  jiraTemplateTransitionTargets,
+  type JiraTemplateBinding,
+  type JiraTemplateBindingIds,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
-import type { JiraTemplateInstanceMetadata } from "./jira-issue-template-check.js";
+import {
+  resolveJiraTemplateFieldIds,
+  type JiraFieldCatalogEntry,
+  type JiraTemplateInstanceMetadata,
+} from "./jira-issue-template-check.js";
 import {
   jiraCreateMutationMetadata,
   type JiraMutationRequest,
@@ -109,11 +119,16 @@ async function readLinkTypes(
   return { ok: true, linkTypes };
 }
 
+interface ProjectStatuses {
+  readonly names: readonly string[];
+  readonly refs: readonly { readonly id: string; readonly name: string }[];
+}
+
 async function readStatuses(
   request: JiraMutationRequest,
   template: JiraIssueTemplate,
   project: ProjectFacts,
-): Promise<readonly string[] | undefined> {
+): Promise<ProjectStatuses | undefined> {
   const response = await request(
     `project/${encodeURIComponent(project.key)}/statuses`,
     "GET",
@@ -122,26 +137,45 @@ async function readStatuses(
   );
   const types = response.ok ? response.items : undefined;
   if (types === undefined || types.length > 200) return undefined;
-  const wanted = project.issueTypes.find(
-    (type) =>
-      type.id === template.issueType ||
-      type.name.toLowerCase() === template.issueType.toLowerCase(),
-  );
-  return statusNames(types, wanted?.id);
+  const wanted = project.issueTypes.find((type) => jiraTemplateIssueTypeMatches(template, type));
+  return statusesOf(types, wanted?.id);
 }
 
-/** Status names of the wanted issue type's workflow, or of every type when it is unknown. */
-function statusNames(types: readonly unknown[], wantedId: string | undefined): readonly string[] {
+/** The id and name of one status entry; an entry without an id is no status a rule can be bound to. */
+function statusRef(value: unknown): { readonly id: string; readonly name: string } | undefined {
+  const entry = asRecord(value);
+  return typeof entry?.id === "string" && typeof entry.name === "string"
+    ? { id: entry.id, name: entry.name }
+    : undefined;
+}
+
+/** Names and id-bearing refs of the statuses of one issue type's workflow entry. */
+function statusesOfType(record: Record<string, unknown> | undefined): {
+  readonly names: readonly string[];
+  readonly refs: readonly { readonly id: string; readonly name: string }[];
+} {
+  const entries = asArray(record?.statuses) ?? [];
+  return {
+    names: entries.flatMap((status) => {
+      const name = asRecord(status)?.name;
+      return typeof name === "string" ? [name] : [];
+    }),
+    refs: entries.flatMap((status) => statusRef(status) ?? []),
+  };
+}
+
+/** Status names and ids of the wanted issue type's workflow, or of every type when it is unknown. */
+function statusesOf(types: readonly unknown[], wantedId: string | undefined): ProjectStatuses {
+  const refs = new Map<string, { id: string; name: string }>();
   const names = new Set<string>();
   for (const type of types) {
     const record = asRecord(type);
     if (wantedId !== undefined && record?.id !== wantedId) continue;
-    for (const status of asArray(record?.statuses) ?? []) {
-      const name = asRecord(status)?.name;
-      if (typeof name === "string") names.add(name);
-    }
+    const found = statusesOfType(record);
+    for (const name of found.names) names.add(name);
+    for (const ref of found.refs) refs.set(ref.id, ref);
   }
-  return [...names];
+  return { names: [...names], refs: [...refs.values()] };
 }
 
 async function readParentIssueTypes(request: JiraMutationRequest): Promise<
@@ -177,7 +211,7 @@ function readStatusesIfProject(
   request: JiraMutationRequest,
   template: JiraIssueTemplate,
   project: ProjectFacts | undefined,
-): Promise<readonly string[] | undefined> {
+): Promise<ProjectStatuses | undefined> {
   return project === undefined
     ? Promise.resolve(undefined)
     : readStatuses(request, template, project);
@@ -203,7 +237,7 @@ export async function readJiraTemplateInstanceMetadata(
     instance: {
       ...(fields === undefined ? {} : { fields }),
       ...(linkTypes === undefined ? {} : { linkTypes }),
-      ...(statuses === undefined ? {} : { statuses }),
+      ...(statuses === undefined ? {} : { statuses: statuses.names, statusRefs: statuses.refs }),
       ...(parentTypes === undefined ? {} : { parentIssueTypes: parentTypes.types }),
       ...(project === undefined
         ? {}
@@ -446,4 +480,189 @@ export async function proposeJiraIssueTemplates(
     ],
     typeCount: project.issueTypes.length,
   };
+}
+
+/** What the acting person's own view of the Jira says about one template's issue-type names. */
+export type JiraTemplateBindingResolution =
+  | { readonly state: "bound"; readonly issueType: string }
+  | {
+      readonly state: "bindable";
+      readonly issueType: string;
+      readonly binding: JiraTemplateBinding;
+    }
+  | { readonly state: "unresolved" | "ambiguous"; readonly subject: string }
+  /**
+   * Bound for this Jira, but its bound issue type is no type of the project any more and the typed
+   * name finds none either: the template governs nothing and blocks nothing (#4354).
+   */
+  | { readonly state: "dead"; readonly subject: string };
+
+function namedTypes<T extends { readonly id: string; readonly name: string }>(
+  types: readonly T[],
+  typed: string,
+): readonly T[] {
+  const wanted = typed.trim().toLowerCase();
+  return types.filter((type) => type.id === typed || type.name.trim().toLowerCase() === wanted);
+}
+
+type Pick1<T> =
+  { readonly found: T } | { readonly state: "unresolved" | "ambiguous"; readonly subject: string };
+function exactlyOne<T extends { readonly id: string; readonly name: string }>(
+  types: readonly T[],
+  typed: string,
+): Pick1<T> {
+  const found = namedTypes(types, typed);
+  const [only] = found;
+  if (found.length === 1 && only !== undefined) return { found: only };
+  return { state: found.length === 0 ? "unresolved" : "ambiguous", subject: typed.slice(0, 120) };
+}
+
+/**
+ * Resolves a template's typed issue type and parent types, in the view the metadata was read with, to
+ * ids. Exactly one type per name or no binding: none or two types of that name never bind (#4354). A
+ * template already bound for this Jira whose ids all still exist needs nothing.
+ */
+export function resolveJiraTemplateBinding(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+  instanceId: string,
+): JiraTemplateBindingResolution {
+  const types = instance.project?.issueTypes;
+  if (types === undefined) return { state: "unresolved", subject: template.project };
+  const current = currentBinding(template, types, instance);
+  if (current !== undefined) return { state: "bound", issueType: current };
+  // A binding that no longer finds its ids is resolved again from the typed names.
+  const own = exactlyOne(types, template.issueType);
+  if (!("found" in own)) return unresolvedOrDead(template, own);
+  const parents = parentTypeIds(template, instance.parentIssueTypes ?? []);
+  if ("state" in parents) return parents;
+  const ids: JiraTemplateBindingIds = {
+    issueTypeId: own.found.id,
+    ...(template.parent.issueTypes === undefined ? {} : { parentIssueTypeIds: parents }),
+    ...boundFieldIds(template, instance.fields),
+    ...boundStatusIds(template, instance.statusRefs),
+  };
+  return {
+    state: "bindable",
+    issueType: own.found.name,
+    binding: { digest: jiraTemplateBindingDigest(instanceId, template, ids), ...ids },
+  };
+}
+
+function oneFieldId(
+  catalog: readonly JiraFieldCatalogEntry[] | undefined,
+  reference: string,
+): string {
+  const ids = catalog === undefined ? [] : resolveJiraTemplateFieldIds(reference, catalog);
+  return ids.length === 1 && ids[0] !== undefined ? ids[0] : JIRA_BINDING_UNRESOLVED;
+}
+
+/** The field ids of the typed references in the author's view; a name that is not exactly one field stays `none`. */
+function boundFieldIds(
+  template: JiraIssueTemplate,
+  catalog: readonly JiraFieldCatalogEntry[] | undefined,
+): Pick<JiraTemplateBindingIds, "requiredFieldIds" | "parentFieldId"> {
+  return {
+    ...(template.requiredFields.length === 0
+      ? {}
+      : { requiredFieldIds: template.requiredFields.map((field) => oneFieldId(catalog, field)) }),
+    ...(template.parent.field === undefined
+      ? {}
+      : { parentFieldId: oneFieldId(catalog, template.parent.field) }),
+  };
+}
+
+/** The status id of each typed transition target that is a status name in the author's view. */
+function boundStatusIds(
+  template: JiraIssueTemplate,
+  statuses: readonly TypeRef[] | undefined,
+): Pick<JiraTemplateBindingIds, "transitionStatusIds"> {
+  const targets = jiraTemplateTransitionTargets(template);
+  if (targets.length === 0) return {};
+  return {
+    transitionStatusIds: targets.map((target) => {
+      const found = exactlyOne(statuses ?? [], target);
+      return "found" in found &&
+        found.found.name.trim().toLowerCase() === target.trim().toLowerCase()
+        ? found.found.id
+        : JIRA_BINDING_UNRESOLVED;
+    }),
+  };
+}
+
+/** A bound template whose typed name finds no type either is dead; any other miss is what it says. */
+function unresolvedOrDead(
+  template: JiraIssueTemplate,
+  own: Extract<JiraTemplateBindingResolution, { state: "unresolved" | "ambiguous" }>,
+): JiraTemplateBindingResolution {
+  return template.binding !== undefined && own.state === "unresolved"
+    ? { state: "dead", subject: own.subject }
+    : own;
+}
+
+interface TypeRef {
+  readonly id: string;
+  readonly name: string;
+}
+/** Whether every bound id of a list still exists in the view the metadata was read with (unread views confirm nothing wrong). */
+function allKnown(
+  bound: readonly string[] | undefined,
+  known: readonly string[] | undefined,
+): boolean {
+  return (
+    known === undefined ||
+    (bound ?? []).every((id) => id === JIRA_BINDING_UNRESOLVED || known.includes(id))
+  );
+}
+
+/** Whether the bound field and status ids still exist in this view. */
+function boundIdsExist(
+  bound: JiraTemplateBinding,
+  instance: JiraTemplateInstanceMetadata,
+): boolean {
+  const fieldIds = [
+    ...(bound.requiredFieldIds ?? []),
+    ...(bound.parentFieldId === undefined ? [] : [bound.parentFieldId]),
+  ];
+  return (
+    allKnown(
+      fieldIds,
+      instance.fields?.map((field) => field.id),
+    ) &&
+    allKnown(
+      bound.transitionStatusIds,
+      instance.statusRefs?.map((status) => status.id),
+    )
+  );
+}
+
+/** The name of the issue type a binding still finds, when every id it carries still exists. */
+function currentBinding(
+  template: JiraIssueTemplate,
+  types: readonly TypeRef[],
+  instance: JiraTemplateInstanceMetadata,
+): string | undefined {
+  const bound = template.binding;
+  if (bound === undefined) return undefined;
+  const type = types.find((candidate) => candidate.id === bound.issueTypeId);
+  const parents = instance.parentIssueTypes ?? [];
+  const parentsKnown = (bound.parentIssueTypeIds ?? []).every((id) =>
+    parents.some((parent) => parent.id === id),
+  );
+  return parentsKnown && boundIdsExist(bound, instance) ? type?.name : undefined;
+}
+/** The ids of the typed parent types, or the first name that is not exactly one type. */
+function parentTypeIds(
+  template: JiraIssueTemplate,
+  parents: readonly TypeRef[],
+):
+  | readonly string[]
+  | Extract<JiraTemplateBindingResolution, { state: "unresolved" | "ambiguous" }> {
+  const ids: string[] = [];
+  for (const typed of template.parent.issueTypes ?? []) {
+    const parent = exactlyOne(parents, typed);
+    if (!("found" in parent)) return parent;
+    ids.push(parent.found.id);
+  }
+  return ids;
 }

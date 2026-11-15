@@ -225,6 +225,7 @@ import {
   gateJiraMutationByTemplates,
   type JiraIssueTemplateSource,
   type JiraTemplateGateResult,
+  type JiraTemplateGateTransition,
 } from "./jira-managed-template-gate.js";
 import {
   jiraDraftDependencies,
@@ -925,11 +926,7 @@ interface FieldTarget {
   readonly purpose: "edit" | "transition";
   readonly issueKey: string;
   readonly targetStatusId?: string;
-  readonly transition?: {
-    readonly id: string;
-    readonly name?: string;
-    readonly targetStatusName?: string;
-  };
+  readonly transition?: JiraTemplateGateTransition;
 }
 /** The template gate in front of an edit or transition: the attempt that stops it, or the links to send. */
 type FieldAdmission =
@@ -1196,6 +1193,8 @@ async function transitionIssue(
         ...(metadata.targetStatusName === undefined
           ? {}
           : { targetStatusName: metadata.targetStatusName }),
+        targetStatusId: metadata.targetStatusId,
+        available: metadata.availableTransitions,
       },
     },
     policy,

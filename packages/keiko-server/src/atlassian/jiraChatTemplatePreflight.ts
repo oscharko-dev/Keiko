@@ -204,7 +204,7 @@ function dryRunTarget(
       baseUrl: current.credential.baseUrl,
       deployment: current.credential.deployment,
       http: factory(current.credential, context.correlationId, { beforeDispatch: allowed }),
-      issueTemplates: jiraIssueTemplateSource(ports.deps.store),
+      issueTemplates: jiraIssueTemplateSource(ports.deps.store, current.credential.baseUrl),
       emailTemplates: jiraChatEmailTemplateComposition(ports.deps, {
         chatId: context.chatId,
         correlationId: context.correlationId,

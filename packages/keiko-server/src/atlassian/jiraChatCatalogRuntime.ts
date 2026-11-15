@@ -486,7 +486,7 @@ export function jiraChatDraftConnection(
   return {
     baseUrl: credential.baseUrl,
     deployment: credential.deployment,
-    issueTemplates: jiraIssueTemplateSource(deps.store),
+    issueTemplates: jiraIssueTemplateSource(deps.store, credential.baseUrl),
   };
 }
 
@@ -596,7 +596,7 @@ function connection(
     http: credentials.httpBodyPortFactory(current.credential, context.correlationId, {
       beforeDispatch: () => context.beforeEffect(),
     }),
-    issueTemplates: jiraIssueTemplateSource(deps.store),
+    issueTemplates: jiraIssueTemplateSource(deps.store, current.credential.baseUrl),
     emailTemplates: jiraChatEmailTemplateComposition(deps, {
       chatId: context.chatId,
       correlationId: context.correlationId,

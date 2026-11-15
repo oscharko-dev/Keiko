@@ -96,6 +96,7 @@ import {
   recordJiraTemplateRefusal,
 } from "./jiraTemplateLog.js";
 
+const TEST_BASE_URL = "https://jira.example.invalid/context";
 const preflightAuthority = vi.hoisted<{ mode: CodingWorkbenchMode }>(() => ({
   mode: "autonomous-delivery",
 }));
@@ -502,6 +503,13 @@ describe("a refused write through the Chat mutation journal", () => {
       guidance: SECTION_GUIDANCE,
       violations: [VIOLATION],
     });
+    // The wording the model passes on, held by this full refusal and not by one assertion alone.
+    const { guidance } = result.data;
+    expect(guidance).toContain(
+      "Nothing was changed: Keiko's template check (not Jira) refused this",
+    );
+    expect(guidance).toContain("send it so");
+    expect(guidance).toContain("never quote the rule id or a field id as the explanation");
     expect(http).not.toHaveBeenCalled();
     expect(journal.find(intent.invocationId)).toMatchObject({ outcome: "rejected" });
     const events = sink.events.filter((event) => event.op === "jira.template.admission");
@@ -559,7 +567,7 @@ describe("the template source", () => {
       project: "SYN",
       issueType: "Story",
     });
-    expect(jiraIssueTemplateSource(store)()).toEqual({
+    expect(jiraIssueTemplateSource(store, TEST_BASE_URL)()).toEqual({
       templates: [expect.objectContaining({ project: "SYN", issueType: "Story" })],
       references: [
         expect.objectContaining({
@@ -578,7 +586,7 @@ describe("the template source", () => {
       "UPDATE markdown_skill_revisions SET body = ?, digest = ?, byte_count = ? WHERE body LIKE '%SYN%'",
     ).run(stale, createHash("sha256").update(stale).digest("hex"), Buffer.byteLength(stale));
     expect(parseJiraIssueTemplate(stale).ok).toBe(false);
-    expect(jiraIssueTemplateSource(store)()).toEqual({
+    expect(jiraIssueTemplateSource(store, TEST_BASE_URL)()).toEqual({
       templates: [],
       references: [],
       unreadable: 1,
@@ -612,7 +620,7 @@ describe("the template marker", () => {
   ])("lists and enforces a template whose marker is written %j", (marker) => {
     const store = libraryOf();
     importText(store, TEMPLATE.replace("keiko: jira-issue-template", marker));
-    expect(jiraIssueTemplateSource(store)().templates).toEqual([
+    expect(jiraIssueTemplateSource(store, TEST_BASE_URL)().templates).toEqual([
       expect.objectContaining({ project: "SYN", issueType: "Story" }),
     ]);
     expect(store.markdownSkills.jiraTemplates()).toHaveLength(1);
@@ -1623,12 +1631,12 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
     });
     const provider = createJiraProviderForCatalog<ManagedMcpInvocationContext>(
       () => ({
-        baseUrl: "https://jira.example.invalid/context",
+        baseUrl: TEST_BASE_URL,
         deployment: "data-center",
         http: (): ReturnType<AtlassianHttpBodyPort> => {
           throw new Error("A mutation must use the journal-owned HTTP port");
         },
-        issueTemplates: jiraIssueTemplateSource(store),
+        issueTemplates: jiraIssueTemplateSource(store, TEST_BASE_URL),
       }),
       ["jira.create"],
       (_operation, _args, _context, execute) =>

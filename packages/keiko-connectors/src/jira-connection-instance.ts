@@ -7,6 +7,7 @@ const HOST_MAX_CHARS = 255;
 
 /** The host of a connection's base URL as the person knows it, or nothing when it cannot be stated. */
 export function jiraConnectionHost(baseUrl: string): string | undefined {
+  // An unparsable base URL states no host; no exception is swallowed to find that out.
   if (!URL.canParse(baseUrl)) return undefined;
   const { host } = new URL(baseUrl);
   return host.length > 0 && host.length <= HOST_MAX_CHARS ? host : undefined;

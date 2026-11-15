@@ -1910,6 +1910,12 @@
               "required": false
             },
             {
+              "name": "templateBindingUnresolvedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "templateMissingCount",
               "type": "integer",
               "dataClass": "count",
@@ -2175,6 +2181,12 @@
             },
             {
               "name": "summaryTooShortCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "templateBindingUnresolvedCount",
               "type": "integer",
               "dataClass": "count",
               "required": false
@@ -40142,6 +40154,12 @@
           "causal": "correlation",
           "analyzerProjection": "timeline",
           "safeContextFields": [
+            {
+              "name": "gateFacts",
+              "type": "string-array",
+              "dataClass": "closed-enum",
+              "required": false
+            },
             {
               "name": "operation",
               "type": "string",
