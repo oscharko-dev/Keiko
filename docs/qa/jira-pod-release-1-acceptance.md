@@ -406,8 +406,13 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 ### W16 The result card after a reload
 
 - **Do:** after W09 and W14, reload the browser (and, once, restart Keiko) and open the same Chat.
-- **Expect:** the result cards and the report are still there and readable; **View Jira result** opens
-  the stored result; no write is repeated.
+- **Expect:** the result cards and the report are still there and readable, in the same form as
+  before the reload; no write is repeated. The cards have no "view result" control: **View Jira result**
+  exists only as the fallback of a result that has no readable presentation, which this walk does not
+  normally meet, so its absence is not a defect. After a browser reload, **Export Markdown** and
+  **Export CSV** on the report still work. After a Keiko restart they do not: Keiko keeps a finished
+  report in memory, bound to its Chat, so the export answers "The report could not be exported. Run it
+  again to export it." Record that as expected, not as a defect, and run the report again to export it.
 - **Jira:** the issue count is unchanged.
 - **Proves:** AC9, AC8; #4359 steps 7 and 8.
 
@@ -654,7 +659,7 @@ Approval used for this action: chat.jira.writeApproval.claimed (OPT)
 Action approval expired: chat.jira.writeApproval.expired (OPT)
 Created: chat.jira.outcome.state.created (OPT)
 Jira change confirmed: chat.jira.write.succeeded (OPT)
-View Jira result: chat.jira.details (OPT)
+View Jira result: chat.jira.details (OPT) [fallback only: shown for a result without a readable presentation]
 Attachments are not part of this release, ...: the Jira refusal text of child/4354-jira-write-path
   (packages/keiko-contracts/src/jira-release-scope.ts, JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE)
   [not a catalog label: the product's own refusal sentence, shown through Keiko's answer]
