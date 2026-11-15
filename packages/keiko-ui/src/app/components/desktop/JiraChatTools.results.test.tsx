@@ -31,6 +31,15 @@ function exchange(
   };
 }
 
+const RESULT_IDENTITY = {
+  schemaVersion: 1 as const,
+  invocationId: "invocation-1",
+  toolRef: null,
+  projectionDigest: null,
+  effectStarted: false,
+  metrics: { inputBytes: 10, outputBytes: 10, resultCount: 1, durationMs: 20 },
+};
+
 it.each([
   ["en", true],
   ["en", false],
@@ -1131,24 +1140,144 @@ describe.each(["en", "de"] as const)("local Jira catalog results in %s", (locale
       const { container } = show();
       const card = screen.getByRole("group", { name: title });
       expect(card).toHaveTextContent(title);
-      const rows = within(card).getByRole("list", {
-        name: locale === "en" ? "Jira actions" : "Jira-Aktionen",
-      });
-      expect(rows).toHaveTextContent(
-        locale === "en" ? "Read Jira projects" : "Jira-Projekte lesen",
+      // #4371: a lookup of Jira actions is one calm line, never the catalog's tools or a count.
+      expect(within(card).queryByRole("list")).toBeNull();
+      expect(card).toHaveTextContent(
+        discover
+          ? locale === "en"
+            ? "Keiko looked up which Jira actions fit."
+            : "Keiko hat nachgesehen, welche Jira-Aktionen passen."
+          : locale === "en"
+            ? "Action selection updated"
+            : "Aktionsauswahl aktualisiert",
       );
-      if (discover)
-        expect(rows).toHaveTextContent("List projects available to this Jira connection.");
-      else
-        expect(card).toHaveTextContent(
-          locale === "en" ? "Action selection updated" : "Aktionsauswahl aktualisiert",
-        );
+      expect(card).not.toHaveTextContent(
+        /Read Jira projects|Jira-Projekte lesen|Reads Jira|Liest Jira|List projects available|Partial|Teilweise|results returned|Ergebnisse/u,
+      );
       expect(container.textContent).toBe(previous);
       expect(container.textContent).not.toMatch(
         /schema-marker|unowned-marker|metadata\.example|A readable view|keine lesbare Ansicht/u,
       );
       expect(container.querySelector("pre, code, a, img, script")).toBeNull();
       expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+
+  it("does not call a page of the action catalog a partial Jira result (#4371)", () => {
+    const withPage: ChatToolExchange = {
+      call: { id: "find", name: "jira_discover", arguments: {} },
+      result: {
+        ...RESULT_IDENTITY,
+        status: "completed",
+        reason: "none",
+        page: { truncated: true, reason: "result-cap", cursor: null },
+        data: {
+          outcome: "succeeded",
+          items: Array.from({ length: 10 }, (_, index) => ({
+            identity: `GET /rest/api/2/thing/${String(index)}`,
+            tool: "jira_projects",
+            description: "Catalog entry.",
+            kind: "native",
+            effects: ["remote-read"],
+          })),
+          startAt: 0,
+          total: 188,
+        },
+      },
+    };
+    const { container } = render(
+      <I18nProvider>
+        <JiraChatTools
+          transcript={{ schemaVersion: 1, exchanges: [withPage] }}
+          turnState="completed"
+        />
+      </I18nProvider>,
+    );
+    expect(container).toHaveTextContent(
+      locale === "en"
+        ? "Keiko looked up which Jira actions fit."
+        : "Keiko hat nachgesehen, welche Jira-Aktionen passen.",
+    );
+    expect(container).not.toHaveTextContent(
+      /Partial|Teilweise|of 188|von 188|Reads Jira|Liest Jira|Catalog entry/u,
+    );
+    // The progress steps are list items; the catalog's own tool rows are not.
+    expect(screen.queryByRole("list", { name: /Jira actions|Jira-Aktionen/u })).toBeNull();
+  });
+
+  // The lookup's calm line and "Completed" belong to a succeeded lookup only (#4371).
+  it.each(["jira_discover", "jira_describe"] as const)(
+    "never reports %s as completed or looked up unless it succeeded",
+    (name) => {
+      const calm =
+        locale === "en"
+          ? "Keiko looked up which Jira actions fit."
+          : "Keiko hat nachgesehen, welche Jira-Aktionen passen.";
+      // The turn's own summary may say "Completed with issues"; only the lookup's state matters here.
+      const completed = /(Completed|Abgeschlossen)(?! (with|mit))/u;
+      const withData = (data: CatalogJsonObject): ChatToolExchange =>
+        exchange("failed", { call: { id: name, name, arguments: {} }, data });
+      const failedResult = (): ChatToolExchange => ({
+        call: { id: name, name, arguments: {} },
+        result: {
+          ...RESULT_IDENTITY,
+          status: "failed",
+          reason: "provider-reported-error",
+          page: null,
+          data: { outcome: "failed", reason: "unavailable", items: [] },
+        },
+      });
+      const cases: readonly {
+        readonly label: string;
+        readonly exchange: ChatToolExchange;
+        readonly turnState: "pending" | "completed" | "cancelled";
+        readonly expected: string;
+      }[] = [
+        {
+          label: "failed",
+          exchange: withData({ outcome: "failed", reason: "unavailable", items: [] }),
+          turnState: "completed",
+          expected: locale === "en" ? "Could not complete" : "Konnte nicht abgeschlossen werden",
+        },
+        {
+          label: "failed result",
+          exchange: failedResult(),
+          turnState: "completed",
+          expected: locale === "en" ? "Could not complete" : "Konnte nicht abgeschlossen werden",
+        },
+        {
+          label: "refused",
+          exchange: withData({ outcome: "failed", reason: "invalid-arguments", items: [] }),
+          turnState: "completed",
+          expected: locale === "en" ? "Could not complete" : "Konnte nicht abgeschlossen werden",
+        },
+        {
+          label: "cancelled",
+          exchange: { call: { id: name, name, arguments: {} } },
+          turnState: "cancelled",
+          expected: locale === "en" ? "Result unavailable" : "Ergebnis nicht verfügbar",
+        },
+        {
+          label: "running",
+          exchange: { call: { id: name, name, arguments: {} } },
+          turnState: "pending",
+          expected: locale === "en" ? "In progress" : "In Bearbeitung",
+        },
+      ];
+      for (const entry of cases) {
+        const { container, unmount } = render(
+          <I18nProvider>
+            <JiraChatTools
+              transcript={{ schemaVersion: 1, exchanges: [entry.exchange] }}
+              turnState={entry.turnState}
+            />
+          </I18nProvider>,
+        );
+        expect(container, entry.label).toHaveTextContent(entry.expected);
+        expect(container, entry.label).not.toHaveTextContent(calm);
+        expect(container, entry.label).not.toHaveTextContent(completed);
+        unmount();
+      }
     },
   );
 

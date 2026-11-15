@@ -459,6 +459,34 @@ function FolderNotice({
   );
 }
 
+// No project yet (nothing was chosen, and nothing refused is offered as a default): one plain
+// sentence and one button that leads to choosing a folder (#4371).
+function GitEscape({
+  noProject,
+  onOpenGit,
+  t,
+}: {
+  readonly noProject: boolean;
+  readonly onOpenGit: () => void;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <button type="button" className={styles.cmpRepositorySelectorGit} onClick={onOpenGit}>
+      {t(
+        noProject ? "codingWorkbench.repository.chooseFolder" : "codingWorkbench.repository.manage",
+      )}
+    </button>
+  );
+}
+
+function NoProjectNotice({ t }: { readonly t: CodingWorkbenchTranslate }): ReactNode {
+  return (
+    <p className={styles.cmpRepositorySelectorNotice} data-testid="coding-workbench-no-project">
+      {t("codingWorkbench.repository.noProject")}
+    </p>
+  );
+}
+
 // The way back when the catalog failed, the repository left Git, or a registered folder never
 // was a Git repository (#B review): open Git from the setup form, and say what happened.
 function SelectorRecovery({
@@ -486,15 +514,13 @@ function SelectorRecovery({
   readonly onRetryCatalog: () => void;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const noProject = placement === "setup" && root === null && !catalogError;
   const showGit =
     placement === "setup" && (root === null || unavailable || branchUnavailable || catalogError);
   return (
     <>
-      {showGit ? (
-        <button type="button" className={styles.cmpRepositorySelectorGit} onClick={onOpenGit}>
-          {t("codingWorkbench.repository.manage")}
-        </button>
-      ) : null}
+      {showGit ? <GitEscape noProject={noProject} onOpenGit={onOpenGit} t={t} /> : null}
+      {noProject ? <NoProjectNotice t={t} /> : null}
       <SelectorNotice
         unavailable={unavailable}
         branchUnavailable={branchUnavailable}

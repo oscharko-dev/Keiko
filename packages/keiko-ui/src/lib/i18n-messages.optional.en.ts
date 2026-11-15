@@ -931,7 +931,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.saveToken": "Save token",
   "atlassianConnectors.live.saving": "Saving changes…",
   "atlassianConnectors.live.rotateHint":
-    "The Pod and its Chat connections stay. Replacing the token stops current access and pending actions; verify the connection again afterwards.",
+    "The Pod and its Chat connections stay. Replacing the token stops current access and pending actions; Keiko verifies the new token right away.",
   "atlassianConnectors.live.operationFailed":
     "The operation could not be confirmed. Refresh the Pod status before making another change.",
   "atlassianConnectors.live.refresh": "Refresh status",
@@ -940,6 +940,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.state.ready": "Ready",
   "atlassianConnectors.live.refreshRequired": "Refresh the status before using this Pod.",
   "atlassianConnectors.live.verifyRequired": "Verify the connection before using this Pod.",
+  "atlassianConnectors.live.tlsFailed.wayOut":
+    "Until it verifies, this Pod stays saved but cannot be used; you can also remove it.",
   "atlassianConnectors.live.remove": "Remove Pod",
   "atlassianConnectors.live.keep": "Keep Pod",
   "atlassianConnectors.live.removeConfirm":
@@ -2488,10 +2490,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.tool": "Jira action",
   "chat.jira.catalog.discover": "Find Jira actions",
   "chat.jira.catalog.describe": "Select Jira actions",
-  "chat.jira.catalog.actions": "Jira actions",
-  "chat.jira.catalog.read": "Reads Jira",
-  "chat.jira.catalog.write": "Changes Jira",
-  "chat.jira.catalog.local": "Local preparation",
+  "chat.jira.catalog.found": "Keiko looked up which Jira actions fit.",
   "chat.jira.catalog.selected": "Action selection updated",
   "chat.jira.catalog.invalidArguments":
     "The Jira action selection was invalid. Find available actions and select them again.",
@@ -4520,12 +4519,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The selected model did not answer its check, so nothing was sent. Pick another model, or check it in Settings > Models and try again.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "chat.error.memoryUpdate": "Unable to update memory.",
-  "chat.grounding.dataLabel": "Data sources",
-  "chat.grounding.noDataSources": "No Data sources",
-  "chat.grounding.dataCatalogEmpty": "No ready Data Pods or Pod Sets are available.",
   "chat.grounding.label": "Sources",
   "chat.grounding.mode": "Grounding mode",
   "chat.grounding.strategy": "Strategy",
+  "chat.grounding.jiraOnly": "Jira Pod only",
   "chat.grounding.modelOnly": "Model only",
   "chat.grounding.liveFiles": "Live Files context",
   "chat.grounding.liveFilesUnavailableHint":

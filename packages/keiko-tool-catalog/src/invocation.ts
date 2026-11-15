@@ -21,7 +21,7 @@ import {
   catalogObject,
   catalogString,
   copyCatalogJson,
-  copyCatalogEnvelope,
+  copyCatalogBinding,
   exactCatalogKeys,
 } from "./json.js";
 import { requireCatalog } from "./errors.js";
@@ -132,7 +132,7 @@ function captureBinding(input: ToolInvocationBinding): ToolInvocationBinding {
     const offered = captureOffer(dataValue(input, "offered"), known.projection);
     return deepFreeze({ ...known, offered });
   }
-  const object = catalogObject(copyCatalogEnvelope(input));
+  const object = catalogObject(copyCatalogBinding(input));
   exactCatalogKeys(object, ["catalog", "projection", "offered"]);
   const catalog = verifyToolCatalogSnapshot(object.catalog);
   const supplied = catalogObject(object.projection);

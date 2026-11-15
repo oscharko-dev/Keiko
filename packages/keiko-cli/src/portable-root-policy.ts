@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, win32 } from "node:path";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { isSystemManagedPortableRoot } from "@oscharko-dev/keiko-security/portable-root-policy";
 import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
@@ -32,7 +32,29 @@ function pathInsideRepository(root: string, normalized: string): boolean {
   }
 }
 
+function withoutTrailingSeparators(path: string): string {
+  let end = path.length;
+  while (end > 0 && (path[end - 1] === "\\" || path[end - 1] === "/")) end -= 1;
+  return path.slice(0, end);
+}
+
+// An install root is a directory below a volume or share root, never the root itself: the uninstall
+// removes the root's whole tree, and a drive (`C:\`) or a bare share (`\\server\share`, whose
+// resolved form has no trailing separator) must never be one (#4358). Windows spellings are read
+// with the Windows path rules whatever the host is.
+function isVolumeRoot(path: string, target: PortableTarget): boolean {
+  if (target === "windows-x64") {
+    const full = win32.resolve(path);
+    return withoutTrailingSeparators(full) === withoutTrailingSeparators(win32.parse(full).root);
+  }
+  const full = resolve(path);
+  return dirname(full) === full;
+}
+
 function assertPathAllowed(path: string, target: PortableTarget): void {
+  if (isVolumeRoot(path, target)) {
+    throw new Error("managed install root must be a directory below a drive or share root");
+  }
   const normalized = normalizedPath(path);
   if (pathTouchesRuntimeState(normalized)) {
     throw new Error("managed install root must be separate from .keiko runtime state");

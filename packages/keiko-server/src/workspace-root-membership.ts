@@ -8,6 +8,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { containsPath } from "@oscharko-dev/keiko-git";
+import { pathIsDenied } from "./files-deny.js";
 import { isProjectAvailable, type Project, type UiStore } from "./store/index.js";
 import { parseWorkspaceManifestRecord } from "./workspace-manifests.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
@@ -156,6 +157,11 @@ export function hasCurrentWorkspaceRootMembership(store: UiStore, rootInput: str
   }
 }
 
+/** Whether the Files and Git routes would read this folder; the project is listed either way. */
+export function projectReadable(project: Project): boolean {
+  return !pathIsDenied(project.path);
+}
+
 export function projectWithWorkspaceAvailability(
   store: UiStore,
   project: Project,
@@ -163,6 +169,7 @@ export function projectWithWorkspaceAvailability(
   return {
     ...project,
     available: isProjectAvailable(project),
+    readable: projectReadable(project),
     workspaceAvailable: hasCurrentWorkspaceRootMembership(store, project.path),
   };
 }
@@ -178,12 +185,18 @@ export function projectsWithWorkspaceAvailability(
     return projects.map((project): ProjectWithAvailability => ({
       ...project,
       available: isProjectAvailable(project),
+      readable: projectReadable(project),
       workspaceAvailable: false,
     }));
   }
   return projects.map((project): ProjectWithAvailability => {
     const workspaceAvailable = hasMembershipInSnapshot(project.path, snapshot);
-    return { ...project, available: isProjectAvailable(project), workspaceAvailable };
+    return {
+      ...project,
+      available: isProjectAvailable(project),
+      readable: projectReadable(project),
+      workspaceAvailable,
+    };
   });
 }
 

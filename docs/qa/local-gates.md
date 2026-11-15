@@ -56,6 +56,33 @@ yet `debug-launch-policy.test.ts` asserts the exact pair: outside CI it skips it
 and names the reason, and with `CI=true` it never skips, so run `node scripts/check-runtime-toolchain.mjs --exact`
 to see whether your host qualifies (#4111).
 
+## Optional Node 26 lane
+
+The default lane is Node.js 24.18.0. The customer runs Node 26, and CI's "Node 26 compatibility"
+job (`node-version: "26.8.1"` in `.github/workflows/ci.yml`, with npm 11.19.0, the second governed
+pair of `scripts/check-runtime-toolchain.mjs`) can fail where Node 24 passes. To reproduce such a
+failure without leaving the container rule, the compose file carries a second service,
+`gates-node26`: the same Dockerfile built with `NODE_VERSION=26.8.1`, so it has the same pinned git
+and iproute2, the same unprivileged `node` user, the same security options and the same checkout
+bind mount. Its `node_modules` and npm cache are volumes of their own
+(`gates-node26-node-modules`, `gates-node26-npm-cache`), so the installs of the two Node versions
+never mix; the Playwright browsers do not depend on Node and stay shared.
+
+The one command that runs a narrow vitest file on Node 26 (it installs and builds first when the
+lane's volumes are empty, which takes a few minutes once):
+
+```bash
+docker compose -f docker/gates/docker-compose.yml run --rm gates-node26 \
+  ./docker/gates/run-vitest.sh packages/keiko-activity-log/src/log-level.test.ts
+```
+
+Any vitest file or filter may follow `run-vitest.sh`. The lane is for reproducing a Node 26-only
+failure and for narrow runs; the aggregate `gates:local*` scripts stay on the default Node 24 lane.
+When CI's Node 26 pin moves, change `NODE_VERSION` of the service in `docker/gates/docker-compose.yml`
+(and keep it equal to the workflow's `node-version`). The Dockerfile is scanned by SonarCloud's
+Docker rules, which no local gate sees: keep downloads HTTPS-only and long commands broken across
+lines.
+
 ## Test worker count
 
 Vitest is capped (GEN-TEST-FLAKE-001/002): the integration tests start servers, parse PDFs and build

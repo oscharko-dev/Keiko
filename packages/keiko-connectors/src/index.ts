@@ -336,6 +336,10 @@ export {
 } from "./jira-managed-mutations.js";
 export { jiraBrowseUrl } from "./jira-browse-url.js";
 export {
+  readJiraProjectIdentity,
+  type JiraProjectIdentityResult,
+} from "./jira-project-identity.js";
+export {
   JIRA_TEMPLATE_FINDING_CODES,
   checkJiraIssueTemplate,
   checkJiraIssueTemplates,

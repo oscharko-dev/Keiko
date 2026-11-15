@@ -404,3 +404,46 @@ it("records a refused draft deselection as an invalid write approval without nam
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+describe("the projects a Jira write approval names are display data only (F09)", () => {
+  const identity = (
+    entry: ChatWriteApprovalEntry,
+  ): Parameters<AtlassianActionApprovalRegistry["claimChatWriteApproval"]>[3] => ({
+    invocationId: entry.approval.invocationId,
+    operation: entry.approval.operation,
+    actionDigest: entry.approval.actionDigest,
+  });
+  const variants = [
+    undefined,
+    [{ ref: "10000", key: "SYN", name: "Synthetic Project" }],
+    [{ ref: "10000", key: "SYN", name: "Renamed since the review" }],
+    [{ ref: "10000" }],
+  ] as const;
+  it.each(variants)(
+    "accepts and claims exactly one approval with the identity alone, whatever names it carries (%j)",
+    (projects) => {
+      const registry = new AtlassianActionApprovalRegistry(() => NOW);
+      const base = pending();
+      const entry: ChatWriteApprovalEntry = {
+        ...base,
+        approval: { ...base.approval, ...(projects === undefined ? {} : { projects }) },
+      };
+      expect(registry.createChatWriteApproval(entry).ok).toBe(true);
+      // The browser sees them; the action identity never carried them.
+      expect(projectChatWriteApproval(entry)).toEqual(entry.approval);
+      expect(registry.getChatWriteApproval(entry.approval.approvalId)?.approval).toEqual(
+        entry.approval,
+      );
+      accept(registry, entry);
+      const claimed = registry.claimChatWriteApproval(
+        entry.approval.approvalId,
+        entry.subject,
+        entry.authority,
+        identity(entry),
+      );
+      expect(claimed.ok).toBe(true);
+      // The digest is the one of the action, the same for every variant.
+      expect(entry.approval.actionDigest).toBe(base.approval.actionDigest);
+    },
+  );
+});

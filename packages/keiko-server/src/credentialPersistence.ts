@@ -13,7 +13,9 @@
 // overwrite), while `keiko repair` flags the lingering plaintext as an incomplete migration.
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { LocalVaultKeychainAccess } from "@oscharko-dev/keiko-security/secret-vault";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
@@ -24,6 +26,7 @@ import {
   hasPlaintextGatewayCredentials,
   prepareSealedProviderApiKeys,
   pruneProviderCredentialVault,
+  secretRefsOfConfig,
 } from "./credentialVault.js";
 import { figmaTokenStoreFor } from "./qualityIntelligence/figmaSnapshotOrchestration.js";
 import type { FigmaKeychainAccess } from "./qualityIntelligence/figma/index.js";
@@ -39,6 +42,8 @@ export interface SealGatewayConfigContext {
   // Optional activity-log seam (ADR-0019); the deps.ts/gateway-setup.ts composition roots supply
   // `processServerLogSink()`.
   readonly securityLogSink?: SecurityLogSink | undefined;
+  // Optional operator-diagnostic sink (ADR-0173); falls back to the default sink when omitted.
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -72,6 +77,53 @@ function stripAndStoreFigmaToken(
   return withoutFigma;
 }
 
+// What a seal may prune: the references the previous version of this config file named (still on
+// disk, about to be replaced) minus every reference another config file in the same directory
+// names, because references are `cred:<modelId>` and two configs that name one model share one vault
+// entry. Anything it cannot read, the previous file or a neighbour, leaves it unable to prove what
+// is its own: it prunes nothing, and says so once (closed class, no path).
+const NEIGHBOUR_CONFIGS_MAX = 64;
+const NEIGHBOUR_CONFIG_BYTES_MAX = 1024 * 1024;
+
+function neighbourSecretRefs(storagePath: string): ReadonlySet<string> {
+  const self = basename(storagePath);
+  const dir = dirname(storagePath);
+  const names = readdirSync(dir).filter((name) => name.endsWith(".json") && name !== self);
+  if (names.length > NEIGHBOUR_CONFIGS_MAX) throw new RangeError("too many neighbouring configs");
+  return new Set(
+    [...names].sort(compareStrings).flatMap((name) => {
+      const path = join(dir, name);
+      const info = statSync(path);
+      if (!info.isFile()) return [];
+      if (info.size > NEIGHBOUR_CONFIG_BYTES_MAX)
+        throw new RangeError("neighbouring config too large");
+      return secretRefsOfConfig(JSON.parse(readFileSync(path, "utf8")));
+    }),
+  );
+}
+
+function prunableSecretRefs(ctx: SealGatewayConfigContext): readonly string[] {
+  try {
+    const previous = existsSync(ctx.storagePath)
+      ? secretRefsOfConfig(JSON.parse(readFileSync(ctx.storagePath, "utf8")))
+      : [];
+    if (previous.length === 0) return [];
+    const neighbours = neighbourSecretRefs(ctx.storagePath);
+    return previous.filter((reference) => !neighbours.has(reference));
+  } catch (error) {
+    emitServerDiagnostic(ctx.diagnostics, {
+      correlationId: randomUUID(),
+      timestamp: new Date().toISOString(),
+      operation: "credential.previous-config-unreadable",
+      source: "credentialPersistence.prunableSecretRefs",
+      errorClass: contentFreeErrorClass(error),
+      message:
+        "The gateway configs in this folder could not all be read; no stored credential is pruned.",
+    });
+    return [];
+  }
+}
+
 // Seals provider apiKeys + the Figma PAT into their vaults, then atomically writes a credential-free
 // keiko.config.json. The in-memory GatewayConfig the caller activates still carries the resolved
 // secrets; only the persisted file is stripped to references + non-secret metadata.
@@ -92,6 +144,8 @@ export function persistSealedGatewayConfig(
       ? withSealedProviders
       : { ...withSealedProviders, reranker: sealedProviders.reranker };
   const sealed = stripAndStoreFigmaToken(withSealedCredentials, ctx);
+  // Read before the rewrite replaces it: what this config named is what it may give up.
+  const previousRefs = prunableSecretRefs(ctx);
   savePrivateJson(ctx.storagePath, sealed);
   pruneProviderCredentialVault(
     {
@@ -101,6 +155,7 @@ export function persistSealedGatewayConfig(
       securityLogSink: ctx.securityLogSink,
     },
     sealedProviders.activeSecretRefs,
+    previousRefs,
   );
 }
 
@@ -148,6 +203,7 @@ export function migrateLocalConfigCredentials(
         ? { figmaKeychainAccess: options.figmaKeychainAccess }
         : {}),
       securityLogSink: options.securityLogSink,
+      diagnostics: options.diagnostics,
     });
     return { migrated: true };
   } catch (error) {

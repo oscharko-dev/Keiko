@@ -76,7 +76,7 @@ function participation(description: string): JiraNativeDefinition {
 }
 export const JIRA_PARTICIPATION_WRITE_DEFINITIONS = {
   "jira.watch": participation(
-    "Start watching the issue as the connected Jira user; confirms isWatching=true and writes nothing when already watching. Other users cannot be selected.",
+    "Start watching the issue as the connected Jira user only; confirms isWatching=true and writes nothing when already watching. Adding another person as a watcher is not available yet: say so in one sentence, offer to watch the issue for the user instead, and do not search for another tool.",
   ),
   "jira.unwatch": participation(
     "Stop watching the issue as the connected Jira user; confirms isWatching=false. Other users cannot be selected.",

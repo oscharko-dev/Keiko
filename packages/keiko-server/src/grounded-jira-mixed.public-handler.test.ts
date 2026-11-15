@@ -4,6 +4,10 @@ import {
   persistedActivityLogLines,
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
+import {
+  largestBindingSelection,
+  selectionBinds,
+} from "../../../tests/support/jira-binding-probe.js";
 import type { MemoryId, ProjectId, UserId } from "@oscharko-dev/keiko-contracts/memory";
 import { randomBytes, randomUUID } from "node:crypto";
 import { handleUpdateChat } from "./store-handlers.js";
@@ -19,6 +23,7 @@ import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js"
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import { createJiraChatCatalogRuntime } from "./atlassian/jiraChatCatalogRuntime.js";
 import { jiraOperationDefinitions } from "./atlassian/jiraOperationRegistry.js";
+import { jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
 import { projectChatReadGrant } from "./atlassian/chatReadGrantState.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -65,6 +70,8 @@ import {
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import * as groundedOrchestrator from "./grounded-orchestrator.js";
 import * as gatewayWindow from "./gateway-context-window.js";
 import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
@@ -899,10 +906,17 @@ function isToolStep(body: string, step: ProviderStep): boolean {
   return (
     step === "repair-write" ||
     (body.includes('"tools":') &&
-      (step === "describe" || step === "tool" || step === "write" || step === "malformed"))
+      (step === "describe" ||
+        step === "describe-many" ||
+        step === "tool" ||
+        step === "write" ||
+        step === "malformed"))
   );
 }
+/** The identities the "describe-many" step selects: set by the test that walks the selection. */
+let describeManyIdentities: readonly string[] = [];
 function toolArguments(step: ProviderStep, commentBody: string): string {
+  if (step === "describe-many") return JSON.stringify({ identities: describeManyIdentities });
   if (step === "describe")
     return JSON.stringify({ identities: ["GET /rest/agile/1.0/board/{boardId}/configuration"] });
   if (step === "repair-write")
@@ -928,6 +942,7 @@ function finalContent(step: ProviderStep, steps: readonly ProviderStep[]): strin
 }
 type ProviderStep =
   | "describe"
+  | "describe-many"
   | "tool"
   | "write"
   | "repair-write"
@@ -1054,9 +1069,73 @@ function provider(
 }
 
 function providerToolName(step: ProviderStep): string {
-  if (step === "describe") return "jira_describe";
+  if (step === "describe" || step === "describe-many") return "jira_describe";
   return step === "write" || step === "repair-write" ? "jira_comment" : "jira_projects";
 }
+
+// #4355: the base round holds the draft run beside staging. The bridge captures the whole advertisement
+// of a round (catalog, projection and offer, of every provider the turn merges) under one byte ceiling,
+// and a mixed turn (a connected folder beside Jira) carries more tools than a Jira-only Chat. A real
+// describe that selects more natives than the merged round can carry must be refused at the selecting
+// tool with the closed reason and keep the earlier selection, and the turn goes on: never
+// GATEWAY_MALFORMED_TOOL_CALL or a 502 reaching the person. Walked here with real identities, one
+// size after the other, through the real describe round.
+/** One turn that selects `count` natives through a real describe, as one closed outcome string. */
+async function walkedMixedOutcome(natives: readonly string[], count: number): Promise<string> {
+  const f = runtime(false, {}, true);
+  describeManyIdentities = natives.slice(0, count);
+  const requests = provider(["describe-many", "tool", "answer"]);
+  const result = await askFeatureAndProjects(f);
+  const exchange = f.deps.store
+    .listMessages(f.chatId)[0]
+    ?.toolTranscript?.exchanges.find((entry) => entry.call.name === "jira_describe");
+  const refused = JSON.stringify(exchange?.result?.data ?? {}).includes("selection-too-large");
+  return `${String(count)}:${String(result.status)}:${String(exchange?.result?.status)}:${refused ? "too-large" : "-"}:${String(requests.length)}`;
+}
+
+it("walks a real describe in a mixed turn to the ceiling: every size ends the turn, a size that does not fit is refused, no 502", async () => {
+  const probe = runtime(false, {}, true);
+  const curated = new Set(
+    (probe.deps.jiraChatCatalog?.toolDefinitions({ knowledgeScoped: false }) ?? []).map(
+      (tool) => tool.name,
+    ),
+  );
+  const natives = jiraOperationDefinitions()
+    .filter(
+      (definition) =>
+        definition.kind === "native" &&
+        definition.method === "GET" &&
+        definition.apiRoot === "/rest/api/2" &&
+        !curated.has(definition.tool.replace(/[.-]/gu, "_")),
+    )
+    // The heaviest first: the walk reaches the ceiling with the fewest natives, the worst case.
+    .sort(
+      (left, right) =>
+        JSON.stringify(jiraOperationForTool(right.tool)?.declaration.descriptor).length -
+        JSON.stringify(jiraOperationForTool(left.tool)?.declaration.descriptor).length,
+    )
+    .slice(0, 60)
+    .map((definition) => definition.identity);
+  if (probe.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
+  // The boundary is not written here: it is found with the production capture the gateway binds
+  // with and the selection is admitted with, so a change to the base, a descriptor or the bound
+  // moves the test with it. At every size the turn reaches all three provider rounds: an admitted
+  // selection always binds. While the gateway bounded the three parts together, selections past the
+  // real bound were admitted and the round after them died with a 502 the stream carried after its
+  // 200, so only one provider request was seen.
+  const lastFitting = await largestBindingSelection(probe.deps.jiraChatCatalog, natives, {
+    knowledgeScoped: false,
+  });
+  expect(lastFitting, "the walk needs natives that fit").toBeGreaterThan(0);
+  const counts = [0, lastFitting - 1, lastFitting, lastFitting + 1, natives.length];
+  for (const count of counts) {
+    expect(await walkedMixedOutcome(natives, count), `${String(count)} natives`).toBe(
+      count <= lastFitting
+        ? `${String(count)}:200:completed:-:3`
+        : `${String(count)}:200:failed:too-large:3`,
+    );
+  }
+});
 
 it("offers curated Jira projects and discovers an additional schema while retaining mixed grounding and its read grant", async () => {
   const f = runtime(false, {}, true);
@@ -1224,6 +1303,7 @@ async function startDeadlineMixedTurn(): Promise<{
   readonly requests: string[];
   readonly pending: Promise<RouteResult>;
   readonly startedAt: number;
+  readonly request: RouteContext;
 }> {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
@@ -1267,14 +1347,12 @@ async function startDeadlineMixedTurn(): Promise<{
       );
     });
   });
-  const pending = handleGroundedAsk(
-    context({
-      chatId: f.chatId,
-      modelId: MODEL,
-      content: "Explain src/Feature.ts and list the Jira projects.",
-    }),
-    f.deps,
-  );
+  const request = context({
+    chatId: f.chatId,
+    modelId: MODEL,
+    content: "Explain src/Feature.ts and list the Jira projects.",
+  });
+  const pending = handleGroundedAsk(request, f.deps);
   void pending.catch(() => undefined);
   await vi.waitFor(
     () => {
@@ -1288,7 +1366,7 @@ async function startDeadlineMixedTurn(): Promise<{
   expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
     { result: { status: "timeout" } },
   ]);
-  return { f, requests, pending, startedAt };
+  return { f, requests, pending, startedAt, request };
 }
 
 it("answers mixed synthesis from its transcript at the accepted turn deadline after time spent before its first tool dispatch", async () => {
@@ -1305,6 +1383,123 @@ it("answers mixed synthesis from its transcript at the accepted turn deadline af
     expect(f.jiraRequests).toEqual([]);
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300000);
     expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
+
+// #4355: CI run 43596154016 told the person "Request failed ... CANCELLED" for a turn whose write Jira
+// had accepted. Which signal fired decides, never the wall clock re-read inside the timer's callback.
+it("answers from its transcript when the deadline signal fires 1 ms before the wall clock reaches it", async () => {
+  const { f, requests, pending } = await startDeadlineMixedTurn();
+  try {
+    // The clock reads a millisecond short at the instant the deadline's timer fires.
+    vi.setSystemTime(Date.now() - 1);
+    await vi.advanceTimersByTimeAsync(1001);
+    const result = await pending;
+    expect(result.status).toBe(200);
+    expect(JSON.stringify(result.body)).toContain("this turn reached its time limit");
+    expect(requests).toHaveLength(2);
+    expect(f.jiraRequests).toEqual([]);
+    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
+      { result: { status: "timeout" } },
+    ]);
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
+
+it("answers from its transcript when the stored transcript cannot be read inside the deadline listener", async () => {
+  const { f, pending } = await startDeadlineMixedTurn();
+  try {
+    // The abort listeners run synchronously inside the timer advance: a turn that holds a settled
+    // exchange in memory needs no store read to know it answers at the deadline.
+    const read = vi.spyOn(f.deps.store, "findMessageById").mockImplementation(() => {
+      throw new Error("database is not open");
+    });
+    try {
+      vi.advanceTimersByTime(1001);
+    } finally {
+      read.mockRestore();
+    }
+    const result = await pending;
+    expect(result.status).toBe(200);
+    expect(JSON.stringify(result.body)).toContain("this turn reached its time limit");
+    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
+
+it.each(["deadline-first", "abort-first"] as const)(
+  "keeps the settled exchange and repeats nothing when the deadline and a request abort share a tick (%s)",
+  async (order) => {
+    const { f, requests, pending, request } = await startDeadlineMixedTurn();
+    try {
+      if (order === "deadline-first") {
+        vi.advanceTimersByTime(1001);
+        request.req.emit("aborted");
+      } else {
+        request.req.emit("aborted");
+        vi.advanceTimersByTime(1001);
+      }
+      const result = await pending;
+      // The request is gone either way; what the person kept is the receipt of what settled.
+      expect(result).toMatchObject({ status: 499, body: { error: { code: "CANCELLED" } } });
+      expect(requests).toHaveLength(2);
+      expect(f.jiraRequests).toEqual([]);
+      expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
+        { result: { status: "timeout" } },
+      ]);
+    } finally {
+      interruptChatGenerations(f.deps, f.chatId);
+      await pending;
+    }
+  },
+);
+
+// One chat.tool-turn.ended line per turn, whichever of the deadline and the request abort came first.
+it.each(["deadline-first", "abort-first"] as const)(
+  "records exactly one ending when the deadline and a request abort share a tick (%s)",
+  async (order) => {
+    const sink = createBufferedServerLogSink();
+    const { f, pending, request } = await startDeadlineMixedTurn();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      if (order === "deadline-first") {
+        vi.advanceTimersByTime(1001);
+        request.req.emit("aborted");
+      } else {
+        request.req.emit("aborted");
+        vi.advanceTimersByTime(1001);
+      }
+      await pending;
+      const endings = sink.events.filter((event) => event.op === "chat.tool-turn.ended");
+      // The request is gone, so no deadline answer was delivered: the one line names the request abort.
+      expect(endings.map((event) => event.extra?.reason)).toEqual(["request-aborted"]);
+    } finally {
+      interruptChatGenerations(f.deps, f.chatId);
+      await pending;
+    }
+  },
+);
+
+it("records no ending for a request abort that arrives after the turn completed normally", async () => {
+  const sink = createBufferedServerLogSink();
+  const { f, pending, request } = await startDeadlineMixedTurn();
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  try {
+    await vi.advanceTimersByTimeAsync(1001);
+    const result = await pending;
+    expect(result.status).toBe(200);
+    const before = sink.events.filter((event) => event.op === "chat.tool-turn.ended").length;
+    request.req.emit("aborted");
+    expect(sink.events.filter((event) => event.op === "chat.tool-turn.ended")).toHaveLength(before);
+    expect(sink.events.some((event) => event.extra?.reason === "request-aborted")).toBe(false);
   } finally {
     interruptChatGenerations(f.deps, f.chatId);
     await pending;
@@ -1974,14 +2169,44 @@ it.each(["answer", "uncited"] as const)(
   },
 );
 
+/**
+ * The most of `candidates`, taken from the front, that the production capture the gateway binds with
+ * accepts beside the Knowledge-scoped base, and proof that this selection binds. The base grows with
+ * the tools every Chat offers, so the count follows the bound and is never written in a test.
+ */
+async function bindableFixtureNatives(
+  catalog: NonNullable<UiHandlerDeps["jiraChatCatalog"]>,
+  candidates: readonly string[],
+): Promise<string[]> {
+  const operations = jiraOperationDefinitions();
+  const identitiesOf = (tools: readonly string[]): string[] =>
+    operations.filter((entry) => tools.includes(entry.tool)).map((entry) => entry.identity);
+  const scope = { knowledgeScoped: true };
+  const baseNames = new Set(catalog.toolDefinitions(scope).map((entry) => entry.name));
+  const base = operations
+    .filter((entry) => baseNames.has(entry.tool.replace(/[.-]/gu, "_")))
+    .map((entry) => entry.identity);
+  const chosen = (await selectionBinds(catalog, [...base, ...identitiesOf(candidates)], scope))
+    ? [...candidates]
+    : candidates.slice(
+        0,
+        await largestBindingSelection(catalog, identitiesOf(candidates), scope, base),
+      );
+  expect(chosen.length, "the pin needs at least one preselected native").toBeGreaterThan(0);
+  expect(
+    await selectionBinds(catalog, [...base, ...identitiesOf(chosen)], scope),
+    "the preselected natives must bind",
+  ).toBe(true);
+  return chosen;
+}
+
 it("settles a committed mutation when the adopted window cannot fit the current tool catalog", async () => {
   const f = runtime(true);
-  // A bounded native selection still fits the catalog's compound byte ceiling while its full
-  // physical prompt exceeds the adopted window (the base alone already does; see below).
-  // The selection is eight natives: the base grew by jira.myself, jira.watch and jira.unwatch
-  // (#4357, +8,123 catalog bytes), and the ten natives that filled the ceiling before no longer fit
-  // beside it. Every assertion below still holds: the selection fits, its prompt exceeds the window.
-  preselectKnownFixtureTools(f.deps.jiraChatCatalog, undefined, [
+  // A bounded native selection still fits the gateway's binding bound while its full physical prompt
+  // exceeds the adopted window (the base alone already does; see below). This fixture preselects
+  // around the selection admission, so it proves its own premise instead of restating a count.
+  if (f.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
+  const chosen = await bindableFixtureNatives(f.deps.jiraChatCatalog, [
     "jira.project",
     "jira.project-permissions",
     "jira.project-statuses",
@@ -1991,6 +2216,7 @@ it("settles a committed mutation when the adopted window cannot fit the current 
     "jira.project-category",
     "jira.project-version-page",
   ]);
+  preselectKnownFixtureTools(f.deps.jiraChatCatalog, undefined, chosen);
   const requests = provider(["write", "overflow", "answer"]);
   const body = {
     chatId: f.chatId,
@@ -2017,7 +2243,7 @@ it("settles a committed mutation when the adopted window cannot fit the current 
   // catalog's byte ceiling for the turn to reach it (#4357).
   const baseFloor = countGatewayPromptTokens({
     messages: [],
-    tools: f.deps.jiraChatCatalog?.toolDefinitions({ knowledgeScoped: true }) ?? [],
+    tools: f.deps.jiraChatCatalog.toolDefinitions({ knowledgeScoped: true }),
   });
   expect(baseFloor).toBeGreaterThan(refused.inputBudget);
   const messages = f.deps.store.listMessages(f.chatId);

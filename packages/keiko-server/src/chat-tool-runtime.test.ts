@@ -1065,7 +1065,8 @@ it("keeps external MCP tools available while Jira typed schemas are selected bet
   const [first, second] = f.calls.map((call) => call.toolCatalog);
   if (first?.kind !== "bound" || second?.kind !== "bound")
     throw new TypeError("Expected round catalogs");
-  // This Chat has no Knowledge scope: only the batch and its draft companion are absent. The base
+  // This Chat has no Knowledge scope: only the batch is absent; the draft run that commits a staged
+  // draft is offered with staging (#4355). The base
   // set also carries jira_myself, jira_watch and jira_unwatch: a model asked who it is, or to follow
   // or stop following an issue, found no tool for it among the 19 and either said it could not or
   // answered with another tool's result (#4357), so these three are offered from the first round.
@@ -1092,6 +1093,7 @@ it("keeps external MCP tools available while Jira typed schemas are selected bet
       "jira_assign",
       "jira_comment",
       "jira_transition",
+      "jira_draft",
       "jira_discover",
       "jira_describe",
       "jira_myself",
@@ -1504,6 +1506,39 @@ describe("combined Jira review admission parity", () => {
       }
     },
   );
+  it("names the project by key and name on the first approval of a fresh Chat (F09)", async () => {
+    const f = fixture({
+      jiraAction: {
+        canonicalId: "keiko.jira.draft",
+        arguments: () => ({
+          items: [
+            {
+              ref: "story",
+              projectId: "10000",
+              issueTypeId: "10001",
+              fields: { summary: "Reviewed Story", description: "## Context\nKnown context." },
+            },
+          ],
+        }),
+      },
+    });
+    const jira = useDraftRemote(f);
+    const pending = send(f);
+    void pending.catch(() => undefined);
+    try {
+      const exchange = await observedJiraExchange(f);
+      // The Chat read no project before: the name can only come from the server's own read.
+      expect(exchange.approval).toMatchObject({
+        kind: "jira-chat-write",
+        operation: "jira.draft",
+        state: "pending",
+        projects: [{ ref: "10000", key: "SYN", name: "Synthetic Project" }],
+      });
+      expect(jira.posts()).toEqual([]);
+    } finally {
+      await settlePendingJira(f, pending);
+    }
+  });
   it("refuses an invalid saved template before any combined-path Jira write approval", async () => {
     const f = fixture({
       jiraAction: {

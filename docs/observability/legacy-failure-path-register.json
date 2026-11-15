@@ -386,12 +386,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-cli/src/portable.ts",
-      "owner": "upgradeManagedWhileLocked",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-cli/src/process-guards.ts",
       "owner": "boundedSinkWrite",
       "kind": "unregistered-catch",

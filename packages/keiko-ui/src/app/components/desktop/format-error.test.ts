@@ -83,6 +83,18 @@ describe("formatUserError", () => {
       resetLoadedMessageCatalogs();
     }
   });
+  // Whole-word match, so the check cannot pass by accident on a substring of another word and can
+  // be shown to bite: it finds the control name in a wrong next step.
+  const namesControl = (text: string, name: string): boolean =>
+    new RegExp(
+      `(^|[^\\p{L}])${name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}($|[^\\p{L}])`,
+      "u",
+    ).test(text);
+  it("tells a next step that names the picker above the conversation from the right one", () => {
+    expect(namesControl("Open the Sources menu, then try again.", "Sources")).toBe(true);
+    expect(namesControl("Choose the Jira Pod in Connectors.", "Sources")).toBe(false);
+    expect(namesControl("Wähle es unter Wissensquellen aus.", "Wissensquellen")).toBe(true);
+  });
   // The next step of a Jira Pod refusal names the control where the Pod is switched on. The name
   // comes from that control's own catalog entry, so a rename fails here instead of leaving a clerk
   // looking for a menu that no longer exists under that name (#4371).
@@ -101,7 +113,11 @@ describe("formatUserError", () => {
       const notice = toUserErrorNotice(new ApiError(code, "Server text", 409), "Could not send.");
 
       expect(notice.remediation).toContain(controlName);
-      expect(notice.remediation).not.toContain(optional["chat.grounding.dataLabel"]);
+      // The picker above the conversation is "Sources"; the refusal must not send the clerk there.
+      const groundingLabel = optional["chat.grounding.label"];
+      if (groundingLabel === undefined) throw new TypeError("Missing the picker's label");
+      if (notice.remediation === undefined) throw new TypeError("Missing the next step");
+      expect(namesControl(notice.remediation, groundingLabel)).toBe(false);
     } finally {
       window.localStorage.removeItem(I18N_STORAGE_KEY);
       resetLoadedMessageCatalogs();

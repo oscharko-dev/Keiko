@@ -3654,6 +3654,63 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.acknowledgeRecovery).toHaveBeenCalledOnce();
   });
 
+  // F30: after an outcome-unknown Jira write the window stuck on "Recovery required" with no
+  // control left. Every recovery state names a way forward: acknowledge, retry with a description
+  // or leave with a new task, and nothing is sent again by itself.
+  describe("the way out of Recovery required (F30)", () => {
+    const recoveryState = (acknowledged: boolean): ReturnType<typeof liveState> =>
+      liveState({
+        canStart: acknowledged,
+        canRetry: acknowledged,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "recovery-required",
+            runId: "run-1",
+            failureCode: "recovery-required",
+            ...(acknowledged ? { recoveryAcknowledged: true } : {}),
+          }),
+        },
+      });
+
+    it("says plainly that Keiko does not know whether the change went through", () => {
+      renderWorkbench(recoveryState(false));
+      expect(screen.getByText(/does not know whether the last action went through/)).toBeVisible();
+    });
+
+    it("offers a new task before the recovery is acknowledged", async () => {
+      const user = userEvent.setup();
+      const newTask = vi.fn(() => Promise.resolve());
+      taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), newTask });
+      const liveActions = renderWorkbench(recoveryState(false));
+      await user.click(screen.getByRole("button", { name: "Start a new task" }));
+      expect(newTask).toHaveBeenCalledOnce();
+      expect(liveActions.acknowledgeRecovery).not.toHaveBeenCalled();
+      expect(liveActions.retry).not.toHaveBeenCalled();
+    });
+
+    it("explains why Retry waits and still offers a new task once acknowledged", async () => {
+      const user = userEvent.setup();
+      const newTask = vi.fn(() => Promise.resolve());
+      taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), newTask });
+      const liveActions = renderWorkbench(recoveryState(true));
+      expect(screen.getByRole("button", { name: "Retry as a fresh run" })).toBeDisabled();
+      expect(screen.getByText(/describe it in the box below/)).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Start a new task" }));
+      expect(newTask).toHaveBeenCalledOnce();
+      expect(liveActions.retry).not.toHaveBeenCalled();
+    });
+
+    it("retries only with the person's own description", async () => {
+      const user = userEvent.setup();
+      const liveActions = renderWorkbench(recoveryState(true));
+      await user.type(screen.getByLabelText("Task instructions"), "Try again");
+      await user.click(screen.getByRole("button", { name: "Retry as a fresh run" }));
+      expect(liveActions.retry).toHaveBeenCalledWith("Try again");
+    });
+  });
+
   // #3390: after a server restart the operator's actual control was the composer's single "Start
   // coding run" action, not the recovery panel's separate Retry button. Once the live-state guard
   // reports the acknowledged predecessor as startable (`canStart: true`), that primary action must
