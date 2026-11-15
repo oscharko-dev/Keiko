@@ -2688,7 +2688,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "browserApproval.launchFailed":
     "Keiko konnte diesen Browser nicht verbinden. Versuche es erneut oder öffne Keiko über den Starter.",
   "browserApproval.launchOpenedElsewhere":
-    "Keiko hat die Verbindung im Standardbrowser deines Systems geöffnet. Mach dort weiter oder lege diesen Browser als Standardbrowser fest und versuche es erneut.",
+    "Keiko hat die Verbindung in einem neuen Browserfenster oder Tab geöffnet. Falls sie in einem anderen Browser oder Profil erschienen ist, mach dort weiter oder öffne Keiko in diesem Browser und versuche es erneut.",
   "browserApproval.open": "Browser verbinden",
   "browserApproval.description":
     "Gib diesen Browser über einen Browser frei, der bereits mit dieser Keiko-Installation verbunden ist.",
