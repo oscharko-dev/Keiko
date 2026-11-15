@@ -90,14 +90,18 @@ describe.each<AddMode>(["open", "clone"])("AddRepositoryDialog lifecycle: %s", (
     expect(view.onAdded).toHaveBeenCalledExactlyOnceWith(PROJECT);
     expect(view.onClose).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Adding…" })).not.toBeInTheDocument();
-    const correlationId = diagnostic.mock.calls[0]?.[1]?.correlationId;
+    // Modal stages use their own correlation ids on the same diagnostic sink.
+    const operations = diagnostic.mock.calls.filter(
+      ([, meta]) => meta?.gitClientOperation !== undefined,
+    );
+    const correlationId = operations[0]?.[1]?.correlationId;
     expect(correlationId).toEqual(expect.any(String));
     expect(request).toHaveBeenCalledWith(expect.any(Object), correlationId);
-    expect(diagnostic.mock.calls.map((call) => call[1]?.gitClientOperation?.outcome)).toEqual([
+    expect(operations.map((call) => call[1]?.gitClientOperation?.outcome)).toEqual([
       "started",
       "succeeded",
     ]);
-    expect(diagnostic.mock.calls[1]?.[1]?.correlationId).toBe(correlationId);
+    expect(operations[1]?.[1]?.correlationId).toBe(correlationId);
     expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(PROJECT.path);
     expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("example.test");
     expect(diagnostic).not.toHaveBeenCalledWith(
@@ -124,8 +128,15 @@ describe.each<AddMode>(["open", "clone"])("AddRepositoryDialog lifecycle: %s", (
     expect(screen.queryByRole("button", { name: "Adding…" })).not.toBeInTheDocument();
     expect(view.onAdded).not.toHaveBeenCalled();
     expect(view.onClose).not.toHaveBeenCalled();
-    expect(diagnostic.mock.calls[1]?.[1]).toMatchObject({
-      correlationId: diagnostic.mock.calls[0]?.[1]?.correlationId,
+    const operations = diagnostic.mock.calls.filter(
+      ([, meta]) => meta?.gitClientOperation !== undefined,
+    );
+    expect(operations.map((call) => call[1]?.gitClientOperation?.outcome)).toEqual([
+      "started",
+      "failed",
+    ]);
+    expect(operations[1]?.[1]).toMatchObject({
+      correlationId: operations[0]?.[1]?.correlationId,
       gitClientOperation: { outcome: "failed" },
       errorKind: "internal",
       errorEvidence: { errorClass: "ApiError" },

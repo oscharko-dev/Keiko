@@ -94,17 +94,19 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
     });
 
     expect(onAdded).not.toHaveBeenCalled();
-    expect(diagnostics).toHaveLength(2);
-    expect(diagnostics[0]?.meta?.gitClientOperation).toEqual({
+    // Modal stages share this sink; only Git events belong to the request's settlement sequence.
+    const operations = diagnostics.filter(({ meta }) => meta?.gitClientOperation !== undefined);
+    expect(operations).toHaveLength(2);
+    expect(operations[0]?.meta?.gitClientOperation).toEqual({
       operation: "repository-clone",
       outcome: "started",
     });
-    expect(diagnostics[1]?.meta).toMatchObject({
+    expect(operations[1]?.meta).toMatchObject({
       kind: "other",
       correlationId: "server-echoed-clone-1",
       gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
     });
-    expect(diagnostics[1]?.meta?.errorKind).toBeUndefined();
+    expect(operations[1]?.meta?.errorKind).toBeUndefined();
     const serialized = JSON.stringify(diagnostics);
     expect(serialized).not.toContain("private-repo");
     expect(serialized).not.toContain("private-destination");
@@ -137,9 +139,10 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
       await clonePromise;
     });
 
-    expect(diagnostics).toHaveLength(2);
-    expect(diagnostics[0]?.meta?.correlationId).toEqual(expect.any(String));
-    expect(diagnostics[1]?.meta?.correlationId).toBe(diagnostics[0]?.meta?.correlationId);
+    const operations = diagnostics.filter(({ meta }) => meta?.gitClientOperation !== undefined);
+    expect(operations).toHaveLength(2);
+    expect(operations[0]?.meta?.correlationId).toEqual(expect.any(String));
+    expect(operations[1]?.meta?.correlationId).toBe(operations[0]?.meta?.correlationId);
   });
 
   it("reports a discarded-failed register settlement with correlation id, error kind and error evidence, never silently", async () => {
@@ -175,12 +178,13 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
 
     expect(onAdded).not.toHaveBeenCalled();
     // Before this fix a discarded failure returned silently — this is the regression pin.
-    expect(diagnostics).toHaveLength(2);
-    expect(diagnostics[0]?.meta?.gitClientOperation).toEqual({
+    const operations = diagnostics.filter(({ meta }) => meta?.gitClientOperation !== undefined);
+    expect(operations).toHaveLength(2);
+    expect(operations[0]?.meta?.gitClientOperation).toEqual({
       operation: "repository-register",
       outcome: "started",
     });
-    expect(diagnostics[1]?.meta).toMatchObject({
+    expect(operations[1]?.meta).toMatchObject({
       kind: "other",
       correlationId: "corr-register-discard-1",
       errorKind: "internal",
@@ -188,7 +192,7 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
     });
     // Structured, body-free error evidence (PR #3625 review): the closed error class and its
     // (empty, in this fixture) dist-anchored frames and cause chain — never the error's message.
-    expect(diagnostics[1]?.meta?.errorEvidence).toEqual({
+    expect(operations[1]?.meta?.errorEvidence).toEqual({
       errorClass: "ApiError",
       frames: [],
       causeChain: [],
