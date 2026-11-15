@@ -4182,6 +4182,8 @@ it.each([
   ["markdown copy feedback", "settled", "markdown-copy-feedback"],
   ["transcript navigation", "started", "transcript-navigation"],
   ["transcript navigation", "settled", "transcript-navigation"],
+  ["modal focus restoration", "started", "modal-focus-restoration"],
+  ["modal focus restoration", "settled", "modal-focus-restoration"],
   ["knowledge pod selection", "started", "knowledge-pod-selection"],
   ["knowledge pod selection", "settled", "knowledge-pod-selection"],
   ["chat connector selection", "started", "chat-connector-selection"],
@@ -4202,6 +4204,9 @@ it.each([
       ...(phase === "settled" && stage.startsWith("chat connector")
         ? { navigationOutcome: "stale" }
         : {}),
+      ...(phase === "settled" && stage === "modal focus restoration"
+        ? { navigationOutcome: "applied" }
+        : {}),
     };
     expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
     const events = clientStageEvents(sink, `client.stage.${phase}`);
@@ -4213,6 +4218,9 @@ it.each([
       level: "info",
       correlationId: body.correlationId,
       stage: activityStage,
+      ...(body.navigationOutcome === undefined
+        ? {}
+        : { navigationOutcome: body.navigationOutcome }),
       completeness: "complete",
       loss: "none",
     });

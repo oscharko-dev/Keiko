@@ -1843,6 +1843,35 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     await waitFor(() => expect(screen.getByRole("button", { name: "New branch" })).toHaveFocus());
   });
 
+  it("restores new-branch focus after an asynchronous branch-list refresh", async () => {
+    const user = userEvent.setup();
+    const listBranches = vi.fn<GitClientSeam["listBranches"]>(async () => makeBranchList());
+    const client = makeClient({ listBranches });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    const trigger = await screen.findByRole("button", { name: "New branch" });
+    await waitFor(() => expect(trigger).toBeEnabled());
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "New branch" });
+    await user.type(within(dialog).getByLabelText("Branch name"), "feature/deferred-refresh");
+    const pending: Array<(branches: GitBranchListResponse) => void> = [];
+    listBranches.mockImplementation(
+      () => new Promise<GitBranchListResponse>((resolve) => pending.push(resolve)),
+    );
+
+    await user.click(within(dialog).getByRole("button", { name: "Create branch" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(trigger).toBeDisabled();
+    expect(pending.length).toBeGreaterThan(0);
+    // The first restoration attempt must actually encounter the disabled trigger.
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    await act(async () => {
+      for (const complete of pending) complete(makeBranchList());
+    });
+
+    await waitFor(() => expect(trigger).toBeEnabled());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
   it("keeps the new-branch dialog open and shows the reason when the create-then-switch is blocked", async () => {
     const user = userEvent.setup();
     const client = makeClient({

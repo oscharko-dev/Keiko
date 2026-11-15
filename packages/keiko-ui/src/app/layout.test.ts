@@ -1,7 +1,10 @@
 import vm from "node:vm";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APP_BOOT_RECOVERY_BOOTSTRAP, LOCALE_BOOTSTRAP } from "./layout";
+import { WorkspacePersistenceBoundary } from "./components/desktop/WorkspacePersistenceBoundary";
 
 const RECOVERY_KEY = "keiko.app-boot-recovery-reload-count";
 
@@ -48,9 +51,11 @@ function bootDocument(options: {
   readonly hasWorkspace: boolean;
   readonly hasBootShell: boolean;
   readonly locale?: "de" | "en";
+  readonly prerenderedBody?: string;
 }): Document {
   document.body.replaceChildren();
   document.documentElement.lang = options.locale ?? "en";
+  if (options.prerenderedBody !== undefined) document.body.innerHTML = options.prerenderedBody;
   if (options.hasWorkspace) {
     const workspace = document.createElement("main");
     workspace.className = "workspace";
@@ -73,6 +78,7 @@ function runBootRecoveryScript(options: {
   readonly hasBootShell: boolean;
   readonly locale?: "de" | "en";
   readonly storage?: ScriptStorage;
+  readonly prerenderedBody?: string;
 }): {
   readonly document: Document;
   readonly reload: ReturnType<typeof vi.fn>;
@@ -104,6 +110,32 @@ describe("APP_BOOT_RECOVERY_BOOTSTRAP", () => {
     document.documentElement.lang = "en";
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("recovers the actual workspace ownership prerender when hydration never starts", () => {
+    const prerenderedBody = renderToStaticMarkup(
+      createElement(
+        WorkspacePersistenceBoundary,
+        null,
+        createElement("main", { className: "workspace" }, "Owned workspace"),
+      ),
+    );
+    const { document: recoveryDocument, reload } = runBootRecoveryScript({
+      hasWorkspace: false,
+      hasBootShell: false,
+      prerenderedBody,
+      storage: makeStorage({ [RECOVERY_KEY]: "2" }),
+    });
+    expect(recoveryDocument.querySelector("main.workspace")).toBeNull();
+
+    vi.advanceTimersByTime(8000);
+
+    const alert = recoveryDocument.querySelector(".app:not([aria-hidden]) [role='alert']");
+    expect(alert).not.toBeNull();
+    expect(alert).toHaveTextContent("Keiko could not reach the local service.");
+    expect(alert?.querySelector("button")).toBe(recoveryDocument.activeElement);
+    expect(recoveryDocument.querySelector("main.workspace")).toBeNull();
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it("reloads when the prerender boot shell remains stranded", () => {

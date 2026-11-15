@@ -6214,6 +6214,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: [
           "run",
+          "readiness",
           "model-reasoning",
           "tool",
           "activity-group",
@@ -7815,6 +7816,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "model-selection-availability",
           "markdown-copy-feedback",
           "transcript-navigation",
+          "modal-focus-restoration",
           "browser-approval",
           "knowledge-pod-selection",
           "jira-human-input",
@@ -8009,6 +8011,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "model-selection-availability",
           "markdown-copy-feedback",
           "transcript-navigation",
+          "modal-focus-restoration",
           "browser-approval",
           "knowledge-pod-selection",
           "jira-human-input",

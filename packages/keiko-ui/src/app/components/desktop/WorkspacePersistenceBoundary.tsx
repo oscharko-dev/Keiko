@@ -6,10 +6,11 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { WorkspaceStorageScopeContext } from "./hooks/workspace-storage";
+import { AppBootPlaceholder } from "./AppBootPlaceholder";
 import styles from "./AppShellBoundary.module.css";
 
 type RestoreState =
-  | { readonly kind: "loading" }
+  | { readonly kind: "booting" | "loading" }
   | { readonly kind: "failed" }
   | { readonly kind: "ready"; readonly storageId: string };
 
@@ -35,9 +36,10 @@ async function readWorkspaceStorageId(signal: AbortSignal): Promise<string> {
 }
 
 function useWorkspaceRestoration(): { readonly state: RestoreState; readonly retry: () => void } {
-  const [state, setState] = useState<RestoreState>({ kind: "loading" });
+  const [state, setState] = useState<RestoreState>({ kind: "booting" });
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
+    setState({ kind: "loading" });
     const controller = new AbortController();
     let stopped = false;
     const timer = setTimeout(() => controller.abort(), 10_000);
@@ -77,6 +79,9 @@ export function WorkspacePersistenceBoundary({
   readonly children: ReactNode;
 }): ReactNode {
   const { state, retry } = useWorkspaceRestoration();
+  // Before hydration, only the inline watchdog can recover a missing client bundle. Keep its
+  // existing static target until this boundary mounts; store ownership still gates every child.
+  if (state.kind === "booting") return <AppBootPlaceholder />;
   if (state.kind === "ready") {
     return (
       <WorkspaceStorageScopeContext value={state.storageId}>
