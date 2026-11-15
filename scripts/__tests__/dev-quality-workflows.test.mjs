@@ -337,10 +337,15 @@ describe("dev quality workflows", () => {
   });
 
   it("isolates local rule analysis from mutable coverage while retaining CI coverage inputs", () => {
-    const scannerInvocation = localSonar.slice(
-      localSonar.indexOf('"${compose[@]}" run --rm --no-deps scanner'),
-      localSonar.indexOf("# SonarQube Community carries no shell analyzer"),
+    // The scanner invocation starts at the compose `run --rm --no-deps` call that carries the token.
+    // A moved or reworded line must fail here, never turn into an empty or wrong slice.
+    const start = localSonar.indexOf(
+      'KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm --no-deps',
     );
+    const end = localSonar.indexOf("# SonarQube Community carries no shell analyzer");
+    expect(start, "the local scanner invocation was not found").toBeGreaterThanOrEqual(0);
+    expect(end, "the end of the scanner invocation was not found").toBeGreaterThan(start);
+    const scannerInvocation = localSonar.slice(start, end);
     expect(scannerInvocation).toContain('-Dsonar.javascript.lcov.reportPaths=""');
     const properties = readFileSync(resolve(root, "sonar-project.properties"), "utf8");
     expect(properties).toMatch(/^sonar\.javascript\.lcov\.reportPaths=.+$/mu);
@@ -380,7 +385,9 @@ describe("dev quality workflows", () => {
       'empty_test_inclusion=".keiko/local-sonar-empty-test-${checkout_id}"',
     );
     expect(localSonar).not.toContain('"-Dsonar.test.inclusions=${inclusions}"');
-    expect(localSonar).toContain('"${compose[@]}" run --rm --no-deps scanner');
+    // `--no-deps` keeps the scanner on the already verified server; the optional node_modules volume
+    // arguments sit between that flag and the service name.
+    expect(localSonar).toMatch(/"\$\{compose\[@\]\}" run --rm --no-deps \\\n[^\n]*scanner \\\n/u);
     expect(localSonar).not.toContain('"${compose[@]}" run --rm scanner');
     expect(localSonarCompose).toContain('"127.0.0.1:${KEIKO_LOCAL_SONAR_PORT:-9234}:9000"');
     expect(localSonarCompose).toContain('SONAR_SCANNER_OPTS: "-Xmx768m"');
