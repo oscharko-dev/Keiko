@@ -703,3 +703,13 @@ arm64 gates container (Node 24.18.0, `KEIKO_WRITE_TRACKED_EVIDENCE=1`): all nine
 records were taken from this run; its fallback-font captures were discarded and the 14 committed
 captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling changed. This
 remains updater fixture evidence.
+
+## Jira discovery card and Chat picker wording — 2026-11-14 (#4371)
+
+The Jira discovery card and the Chat source picker changed their wording, so the optional English
+and German message catalogs changed and the freshness gate rejected the two catalog digests again.
+The complete original nine-case producer ran in the Linux arm64 gates container (Node 24.18.0,
+`KEIKO_WRITE_TRACKED_EVIDENCE=1`): all nine passed. Only the source digests and `generatedAt` in
+the three records were taken from this run; its fallback-font captures were discarded and the 14
+committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
+changed. This remains updater fixture evidence.

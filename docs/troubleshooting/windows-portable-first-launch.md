@@ -24,14 +24,39 @@ installed version, either nothing else happens at all, or one of four native dia
 A related report: the setup companion stays alive as a background process after the CLI phase is
 aborted.
 
-Not a failure: on the first installation, a double-click shows one information box titled `Keiko`
-("Keiko is being set up. The first start can take several minutes. Your browser opens when Keiko is
-ready."; with a German Windows display language: "Keiko wird eingerichtet. Der erste Start kann
-einige Minuten dauern. Dein Browser öffnet sich, sobald Keiko bereit ist."). The launcher has no window of its own, and the setup copies and attests the whole
-installation while the virus scanner reads every new file, so minutes can pass before the browser
-opens. The box appears once, when that first installation begins; it does not appear for a start of
-the installed copy or for an upgrade, and it never updates. A setup that fails afterwards shows one
-of the dialogs above. The Activity Log records the request as `portable.setup-notice.requested`.
+Not a failure: a double-click on the launcher shows one information box titled `Keiko` when the
+start is still running after about two seconds ("Keiko is being set up. The first start can take
+several minutes. Your browser opens when Keiko is ready." plus a sentence that the message may be
+closed; with a German Windows display language: "Keiko wird eingerichtet. Der erste Start kann einige
+Minuten dauern. Dein Browser öffnet sich, sobald Keiko bereit ist."). The launcher itself shows it,
+before Node loads, so it appears even while the virus scanner still reads the installation's first
+files. The setup copies and attests the whole installation, so minutes can pass before the browser
+opens. Closing the box does not stop Keiko; it closes by itself when the start has ended, and a closed
+box does not return. A second double-click on the same launcher while the first one is still starting
+brings that box to the front and starts nothing; if the box is not showing (not yet shown, already
+closed, or the first start hangs), the second double-click shows one short message ("Keiko is already
+starting. Your browser opens when it is ready."; German: "Keiko startet bereits. Dein Browser öffnet
+sich, sobald Keiko bereit ist.") and also starts nothing. If every double-click only answers that
+message and no browser opens, the first start is stuck: end the `Keiko.exe` and `node.exe` processes
+in Task Manager and start it again. A start from a terminal shows the CLI's
+own output instead and no box. This box leaves no Activity Log line: the native launcher cannot write
+the log, and the CLI cannot observe it.
+
+A start that ends without a running Keiko shows one error message titled `Keiko`, from the launcher
+itself: "Keiko is still starting or took too long to start. Wait a moment and open Keiko again. …" (a
+start that did not answer in time), "… its port is already in use …", "… already being set up or
+updated …", or a generic "Keiko could not start. Start Keiko again. …" for every other cause, and for a
+start that crashed or was killed and left no reason. German Windows shows the German texts. The box
+stays until you close it and never blocks a later start. The Activity Log records every such end as
+`portable.launch.failed` with a closed reason (`port-in-use`, `health-timeout`, `process-exited`,
+`setup-busy`, `pid-publication`, `launch-error`, …) and whether the launcher's note was written; read it
+with `keiko support export` and `keiko support analyze`. A first start gives up when its UI process
+shows no progress for 20 seconds or is still not healthy after 15 minutes; the installation itself has
+no time limit, so a slow first setup that takes many minutes is not cut off. The launcher shows a box
+only on a visible desktop: started by a scheduled task, a service or an automation step without one,
+it shows nothing and ends with the same exit code at once (the log line stays). A start that finds
+another start, stop or update of the same Keiko running says so ("Keiko is just being started, stopped
+or updated. Wait a moment and open Keiko again.") and does not claim that Keiko could not start.
 
 **Root Cause**
 

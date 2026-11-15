@@ -320,6 +320,19 @@ describe("unsaved text is never lost silently", () => {
     expect(within(dialog).queryByText("Unsaved changes")).toBeNull();
   });
 
+  it("withdraws the discard question when the person saves instead of answering it (#4371)", async () => {
+    const dialog = await dirtyDraft();
+    fireEvent.click(item(dialog, "Release plan"));
+    expect(within(dialog).getByRole("alertdialog")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitForVersion(dialog, "v1");
+    expect(within(dialog).queryByRole("alertdialog")).toBeNull();
+    expect(within(dialog).queryByText(/unsaved changes/iu)).toBeNull();
+    // The withdrawn question leaves nothing behind: the next edit asks nothing until a guarded leave.
+    writeMarkdown(dialog, "# Draft in progress\n\nMore.\n");
+    expect(within(dialog).queryByRole("alertdialog")).toBeNull();
+  });
+
   it("guards the other ways of leaving the file: a new skill, drafting with AI and importing", async () => {
     const dialog = await dirtyDraft();
     newSkill(dialog);

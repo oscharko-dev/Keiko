@@ -507,6 +507,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.noBranch": "No branch",
   "codingWorkbench.repository.loading": "Loading repositories…",
   "codingWorkbench.repository.none": "Select a repository",
+  "codingWorkbench.repository.noProject": "No project chosen yet: choose a folder.",
+  "codingWorkbench.repository.chooseFolder": "Choose folder",
   "codingWorkbench.repository.unavailable": "unavailable",
   "codingWorkbench.repository.unavailableHelp":
     "This repository is no longer available in Git. Choose another repository or reconnect it in Git.",
@@ -518,6 +520,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "On this installation, Keiko runs a coding task only in a new worktree of a Git repository, so it cannot work in this folder. Choose a Git repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
+  "codingWorkbench.repository.deniedBlocker":
+    "Keiko may not read this folder. Choose a repository in another location.",
   "codingWorkbench.repository.loadError":
     "Repositories could not be loaded. Refresh the list and try again.",
   "codingWorkbench.repository.retryLoad": "Retry",

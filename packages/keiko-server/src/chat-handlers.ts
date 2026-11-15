@@ -290,7 +290,7 @@ import {
   RequestBodyCancelledError,
   RequestBodyTooLargeError,
 } from "./bounded-request-body.js";
-import { userFacingProjects } from "./workspace-root-membership.js";
+import { projectReadable, userFacingProjects } from "./workspace-root-membership.js";
 import {
   buildChatCompactionContextText,
   selectGatewayPromptAssembly,
@@ -497,6 +497,7 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
     (item) => ({
       ...item,
       available: isProjectAvailable(item),
+      readable: projectReadable(item),
     }),
   );
   const chats = deps.store.listChats(project.path, CHAT_SIDEBAR_LIST_LIMIT);
@@ -504,7 +505,11 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
     .listMessages(chat.id, CHAT_HISTORY_READ_LIMIT)
     .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
   return {
-    project: { ...project, available: isProjectAvailable(project) },
+    project: {
+      ...project,
+      available: isProjectAvailable(project),
+      readable: projectReadable(project),
+    },
     chat,
     messages: browserChatMessages(messages),
     projects,

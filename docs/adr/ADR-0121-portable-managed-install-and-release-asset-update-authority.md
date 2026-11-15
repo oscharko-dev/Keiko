@@ -120,6 +120,78 @@ They may locate, start, and relaunch the managed install, but they do not introd
 Tauri, or a native wrapper runtime in this wave. Wrapper ownership remains deferred until a later
 decision creates a real need for it.
 
+The Windows launcher answers a start without a console itself (#4358). Before the CLI is
+loaded it shows one message box titled `Keiko`, in German or English by the Windows user interface
+language, with the setup wording and a sentence that the box may be closed, only when the start is
+still running after about two seconds; the box lives on its own thread, never keeps the launcher
+alive, and is closed when the `portable launch` child has ended. A named mutex per installation root
+(`Local\KeikoPortableLauncher-<hash of the folded root>`) lets a second double-click bring the first
+box to the front and exit 0 without starting a second setup. When no such box is showing (not yet
+shown, closed by the person, or a first launcher that hangs), the second start shows its own short
+"Keiko is already starting" message in the same two languages and exits 0, so a hung first launcher
+cannot make every later double-click silent; it still starts nothing. A start from a terminal shows the CLI's output and neither
+the box nor the guard. The PowerShell notice the CLI showed for the same purpose is removed: one
+mechanism. The native box cannot write the Activity Log; its proof is a measurement on Windows, and
+the wording, delay, close and single-instance promises are pinned structurally from the C source in
+`portable-launcher-feedback.test.ts`.
+
+The same launcher shows the failure box (#4358, head B). When the `portable launch` child ended with
+a non-zero code and there is no console, the launcher shows one error message titled `Keiko`, after
+it has released the mutex, so a box left open never blocks a later start. The CLI used to start a
+PowerShell for it; the measured start of such a helper on the Windows guest took up to 31 seconds and
+an attached child ends with the process that started it, so on a slow machine the person saw nothing,
+and a crash or a kill left no box at all. The launcher outlives its child and sees every non-zero exit.
+The CLI leaves only a closed reason token (`launch-failure-note.ts`, the same vocabulary as the log
+line) in a file named by `KEIKO_PORTABLE_FAILURE_NOTE`, created exclusively with the launcher's own
+file-name shape; the launcher removes any earlier file before it starts the child, reads at most 31
+bytes of lowercase letters and hyphens and shows its own fixed German or English text for the reasons
+it knows (a start that took too long, a port in use, a busy setup) and a generic text for every other
+reason and for a child that left nothing. The file's text is never displayed. On Windows the CLI
+starts no notifier process; macOS keeps its alert.
+
+Every non-zero exit of `portable launch` leaves one registered line, `portable.launch.failed`, with
+the closed reason and whether the note was written. The reason is recorded where the failure arises
+(the start's exit sites in `lifecycle.ts`, the launch's catch in `portable.ts`); the first recorded
+reason wins. The command's runner flushes the deferred Windows security collector before the process
+ends, on a normal return and on a throw. Two ways still lose it: a process that is killed, and the
+fatal handler, which writes its own `process.fatal` line directly and leaves the note first, without
+the classifier. For a start the launcher began, that handler waits up to 30 seconds for the
+classifier instead of 2, because a slow machine needs it; after that bound only the note and stderr
+remain. A start that gives up because its UI process did not answer says in one sentence that Keiko
+is still starting or took too long and what to do, before the technical outcome. A failed upgrade
+whose previous install starts again ends with exit code 0: Keiko runs.
+
+The first-start bound on a slow machine: the start waits while the UI process makes progress, and a
+start that records none for 20 seconds, or that is still not healthy after 15 minutes in total, gives
+up with that sentence. The installation itself (copying and attesting the tree) has no time bound and
+a 26-minute setup passes; the 15 minutes apply to the UI's first answer after the installation, which
+was measured at up to 239 seconds on emulated x64. An explicit, longer `--start-timeout` raises both.
+
+None of the launcher's boxes can block a start that nobody watches (head C). Every box goes through one
+function that shows it only when the process's window station is visible (`WSF_VISIBLE`, the
+interactive desktop) and the session is not shutting down; a start without a console and without a
+visible desktop (a scheduled task, a service, an automation step) shows nothing and returns the exit
+code at once, and the activity-log line and the note stay. The launcher's callers were checked: the
+CLI starts the installed launcher detached and never waits for it, the update handoff starts
+`Keiko.exe --coordinate-update`, a separate branch of `wmain` that never reaches a box, the native
+quality check and the launcher tests call the launcher's internal functions only, and no CI step or
+end-to-end test starts the default path. A child that ended on purpose gets no failure box: a logoff
+or Ctrl+C ends a console child with `STATUS_CONTROL_C_EXIT`, and a session that is shutting down shows
+nothing; `keiko stop`, the uninstall and the update end the UI process, never the short-lived
+`portable launch` child the launcher waits for. A start that met another start, stop or update (the
+lifecycle guard) gets its own informational box, not "could not start". A kill by the person
+(taskkill) is an ordinary non-zero code and shows the generic box. The CLI honors the note path only
+directly inside the temporary directory the launcher names, and the launcher clears an externally set
+value of the variable before it names its own, with a console too. The two sides resolve that
+directory differently (GetTempPathW takes TMP, then TEMP; `os.tmpdir()` takes TEMP, then TMP), so the
+CLI accepts the real path of TMP, of TEMP or of `os.tmpdir()`; the launcher's folder is always one of
+them. Remaining limit: a visible but unattended session (a scheduled task that runs "only when the
+user is logged on") has a visible window station, so its box waits for a person; only a start without
+a visible desktop returns at once. A failed upgrade whose previous install starts again ends with
+exit 0 and leaves one `portable.launch.failed` line (`upgrade-failed`); if that relaunch fails too, the
+command's reason, in the box and the final line, is the relaunch's: Keiko does not run at all, which is
+what the person must act on.
+
 Native launcher integrity is part of portable installability and is established by the signed
 manifest's digest and provenance bindings. Native platform signatures, notarization, and publisher
 chains are verified and recorded when present, but their absence does not make a release or
@@ -833,6 +905,106 @@ Before this, a real payload's `app/LICENSE`, `NOTICE`, `README.md`, `TRADEMARKS.
 `scripts/lib/local-state-audit.mjs` were unknown entries, so `keiko uninstall` and the upgrade
 precondition refused every real installation.
 
+`keiko uninstall` never leaves a half-removed installation (#4358). Windows does not let a running
+program, or a native file it loaded, be removed, and the installed copy's own command runs from
+inside the installation it removes: the file-by-file removal stopped at the first refused file and
+left the install folder, the registration and the Start-menu entry behind. Three rules now hold on
+every platform. First, the removal keeps going past an entry that is held open (a refusal with
+`EPERM`, `EBUSY`, `EACCES` or a folder that still holds something) and reports exactly what remains;
+any other error still stops it. Second, the files a later run needs to find and judge the
+installation are removed last, and only when nothing else is left: the runtime record and
+`app/package.json`, which inspection reads, then the launcher the registration binds, then the setup
+manifest. Third, the registration, the Start-menu entry and the state directory stay until the
+installation is gone, so a run that did not finish leaves a registered, resumable installation and
+says so, and a second `keiko uninstall` completes it. A journal written to the state directory
+before the first deletion (`portable-uninstall-journal.json`: a platform label and the digests the
+registration already records, no path) lets that second run find an installation whose tree
+attestation can no longer succeed; it still inspects every entry against the payload rules, so a
+foreign entry stays refused, and it needs the registration to carry the same digests.
+
+On Windows, when the command's own executable, script or working directory lies inside the
+installation, it first starts a helper outside it, before the first deletion: the trusted System32
+PowerShell, started attached with a hidden window through the one visible-helper start the browser
+opener and the launcher's message boxes use (a detached PowerShell showed no browser and no box on
+the Windows guest, #4358). That start gives every helper an explicit working directory, the system
+directory, so a helper never holds a folder of the installation. libuv ends every attached child
+with the process that started it (all of them join one job object that is closed with the parent;
+confirmed on the Windows guest: such a PowerShell is gone three seconds after its Node process ends),
+and the uninstall helper must outlive that process. It therefore starts in two stages: the attached,
+hidden first PowerShell only starts the real helper as its own process (a hidden window) and ends, and
+the real helper, a grandchild outside the job, survives (confirmed on the guest, also for a message
+box). The helper's text, flags and inputs reach it through its environment, so nothing of it is ever
+quoted. The browser opener needs no second stage, because the browser is already a grandchild. The real helper reports ready by writing its own process id into a file (and a refusal of
+its own start check into another), which the command reads before it ends and probes again when it
+commits. The ready wait is two minutes, measured at up to 58 seconds for the two stages beside other
+work; after a few seconds the command says once that it is preparing the removal. If the helper does
+not report, nothing is removed and the person is told to run the uninstall from the
+downloaded release package, whose runtime lies outside the installation. The command then removes
+what it can and commits the remainder, as a list written atomically; a helper that has already ended
+is not handed a list, and the run reports the residue and keeps the installation registered. That is
+read at the moment of the commit by probing the helper's process id, because the exit code of a child
+is set only when the event loop processes its exit, and the removal before the commit is synchronous.
+
+The helper acts in three phases, in this order: it waits for the committed list (generously: this
+process removes thousands of files first; it ends, deleting nothing, if this process ends without
+committing one), then for this process to end (a short bound, after which it deletes nothing), and
+only then deletes. It removes files and folders by path, a folder only if it is empty, entries of the
+installation only under its root, never through a link, and never a file kind it did not expect. The
+registration entries (the Start-menu entry, the registration, the journal and the state directory) are
+exactly the paths the command named when it started the helper, passed as one string split at `|`
+(a character no Windows path holds) with their count: Windows PowerShell 5.1, which is what runs on
+Windows, does not enumerate a parsed JSON array as PowerShell 7 does, so the helper reads no JSON. It
+checks that it got exactly that many rooted paths before it reports ready and ends without reporting
+otherwise, so the command refuses before its first deletion. A process id that has been reused since
+the command started names a younger process and is not waited for. A file the helper cannot see (a
+path over 260 characters on 5.1) is skipped, but its folder then is not empty, the folder and the
+root cannot be removed, and the run fails closed: the registration stays. Measured on Windows PowerShell
+5.1: the helper leaves such a path after its retries, removes the entries before and after it, and still
+cleans its own folder. The command's closing sentence tells the person that the installation then stays
+registered and that `keiko uninstall`, run again from the downloaded release package, names what is
+left; that second run removes the path through Node, which uses the extended-length form for it (not
+yet confirmed on Windows).
+The order of the files is chosen so that an interrupted removal (a logoff, a restart) leaves a copy whose
+own `keiko uninstall` still runs: every payload file the command does not need to run again goes first;
+then the run set, the Node runtime, the CLI entry and the packages it loads (`app/dist`,
+`app/node_modules`, `runtime/node`); then the identity files (the runtime record, `app/package.json`,
+the launcher, the setup manifest); then the folders and the registration entries. The command touches
+the run set only when nothing before it was held open, and hands it, with the identity files, to the
+helper when it runs from inside the installation. An interruption inside the run set itself leaves a
+copy whose command may no longer run; the uninstall from the downloaded release package, whose runtime
+lies outside the installation, finishes it from the journal and the registration. The run set is
+named, not inferred: the command does not load `runtime/native`, `runtime/sidecars`,
+`runtime/licenses`, the package's notices, `release-impact.catalog.json` or `scripts/`, and a test
+classifies every file of the real package and runtime payload as run set, identity or not needed, so a
+new top-level entry is classified deliberately; that the closure is complete is measured on Windows.
+The helper never follows a link at any component: before it deletes a file or folder of the
+installation it checks every folder from the entry's parent up to the root for a reparse point and counts
+the entry as not removed when one is a link (confirmed on the Windows guest: without that check a file
+listed through a junction in the middle of the path was deleted; the scan refuses links, so such an
+entry needs one put in place after it). The exact registration paths named at start lie outside the
+installation and are not walked.
+An install root is a directory below a drive or share root, never the root itself: the managed-root
+policy refuses a volume or share root, and the helper refuses it again (also the bare
+`\\server\share` and the `\\?\UNC\` spelling, through `GetPathRoot`). The helper reads
+its own start inputs defensively: a root that is not an absolute path equal to its own full path, or
+that is a drive or share root, and a path it cannot normalise, are refusals or failed entries, never a crash
+that skips its cleanup; a ready file that is empty or not yet complete is "not yet", not a refusal. Any entry that cannot
+be removed marks the run as failed, and a failed run leaves every identity file and every
+registration entry: the installation stays registered and resumable. A state directory that still holds
+an entry that is not Keiko's is kept on purpose and is not a failure.
+
+A second `keiko uninstall` finds an installation that an interrupted run left: through the journal
+and the registration it recognises one that still has files (attested by its setup manifest), and one
+whose setup manifest or whole root is gone, which it finishes by removing the empty folders, then the
+Start-menu entry, the registration, the journal and the state. A file in such a tree is a foreign
+entry and refuses the removal. The closed `resumeState` of `cli.uninstall.handoff` (`none`,
+`files-remaining`, `installation-gone`) says which; a journal that is still present when a run starts
+means the earlier helper did not finish, and a finished removal leaves neither journal nor
+registration. macOS and Linux remove a running program's files, so they start no helper; the other
+rules apply to them unchanged. Which of this a unit test cannot show, and only a Windows run can, is
+recorded in the delivery of the change: that the helper survives the end of the command, that it
+removes the loaded native files, the real refusal semantics of a held file, and the Start-menu entry.
+
 One coordinator owns receipt policy, phase classification, deadlines, forward/restore/cleanup and
 semantic acknowledgment. Compile-selected platform adapters supply secure filesystem operations,
 KHT1 walking, process/port checks and existing supervisor transport. Windows reuses the existing
@@ -1158,3 +1330,9 @@ Security review for implementation under this ADR must cover:
   push whose version is approved. Its attestations name `refs/heads/dev`, its bundle cannot reach
   the publisher, and the publisher and the operator guide verify attestations bound to the
   `portable-assets` workflow and the stable tag.
+- **2026-11-14 — Issue #4358:** Amended D2. The Windows launcher itself shows the first-start
+  message and keeps one launcher per installation, replacing the CLI's PowerShell notice; the
+  uninstall and its helper paragraphs under D5 state how the removal completes from inside the
+  installation. The launcher also shows the failure box of a start that ended non-zero, from a
+  closed reason note, every such end leaves one `portable.launch.failed` line, and the first-start
+  bound is stated.

@@ -1,4 +1,7 @@
 import { jiraDeclarationForTool, jiraOperationForTool } from "./jiraManagedProvider.js";
+import { largestBindingSelection } from "../../../../tests/support/jira-binding-probe.js";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { processServerLogSink } from "../process-log-sink.js";
 import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { invalidateJiraPodChats } from "./jiraPodLifecycle.js";
@@ -1665,12 +1668,16 @@ it("discovers the five governed mutations through the ordinary Chat-owned MCP ca
 
 // A write turn reads first. The server accepts that read grant itself, without a read-consent part;
 // the write then waits for its concrete approval where the mode requires one.
+// A condition is awaited for as long as the test itself may run. A shorter deadline of its own makes
+// the outcome depend on how fast the machine is: the 1,200-item draft stages and approves slowly on a
+// CPU-capped runner and passed alone, so only the test's own timeout may end the wait.
+const CONDITION_TIMEOUT_MS = 180_000;
 async function awaitReadGrantedForWrite(f: ReturnType<typeof fixture>): Promise<void> {
   await vi.waitFor(
     () => {
       expect(f.acceptedReadGrants.length).toBeGreaterThan(0);
     },
-    { timeout: 5000 },
+    { timeout: CONDITION_TIMEOUT_MS },
   );
   expect(acceptedReadGrant(f).grant.state).toBe("granted");
   expect(readConsentPart(f)).toMatchObject({ state: "granted" });
@@ -2400,11 +2407,14 @@ it.each([false, true])(
 async function pendingWriteApproval(
   f: ReturnType<typeof fixture>,
 ): Promise<ChatToolWriteApprovalView> {
-  await vi.waitFor(() => {
-    expect(
-      f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state,
-    ).toBe("pending");
-  });
+  await vi.waitFor(
+    () => {
+      expect(
+        f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state,
+      ).toBe("pending");
+    },
+    { timeout: CONDITION_TIMEOUT_MS },
+  );
   expect(f.writes()).toBe(0);
   const approval = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval;
   if (approval === undefined) throw new Error("Missing exact write approval");
@@ -4595,6 +4605,162 @@ describe("four-item Epic and Task template fullchain", () => {
       });
     },
   );
+
+  // #4355 (UI walk on a default installation): a person ordered three Tasks in one message in a Chat
+  // without Knowledge scopes. The model could stage them but the draft run that commits a staged draft
+  // was not offered, so nothing was created and the person was asked to write "create now". A Chat
+  // without Knowledge scopes offers the draft run with staging: one turn stages and commits the draft,
+  // with one review in Ask for approval and none in Full access, each item through the template gate.
+  describe("several issues ordered in one message in a Chat without Knowledge scopes (#4355)", () => {
+    function taskTemplate(f: ReturnType<typeof fixture>): void {
+      f.deps.store.markdownSkills.import({
+        fileName: "task-three.md",
+        contentBase64: Buffer.from(
+          [
+            "---",
+            "keiko: jira-issue-template",
+            "version: 1",
+            "project: SYN",
+            "issueType: Task",
+            "activateOn: [create]",
+            "requiredFields: [Description]",
+            "---",
+            "# Task template",
+            ...TASK_SECTIONS.map((section) => `## ${section}`),
+          ].join("\n"),
+        ).toString("base64"),
+      });
+    }
+    function threeTasks(sections: readonly string[] = TASK_SECTIONS): {
+      items: BacklogFixtureItem[];
+    } {
+      return {
+        items: [1, 2, 3].map((number) => ({
+          ref: `task${String(number)}`,
+          projectId: "10000",
+          issueTypeId: TASK_TYPE,
+          fields: {
+            summary: `Task ${String(number)}`,
+            description: description(number === 2 ? sections : TASK_SECTIONS, String(number)),
+          },
+        })),
+      };
+    }
+    /** Round one stages the draft, round two commits exactly what was staged, then the turn ends. */
+    function nextStep(
+      f: ReturnType<typeof fixture>,
+      round: number,
+      args: { items: BacklogFixtureItem[] },
+    ): { readonly alias: string; readonly args: Record<string, unknown> } | undefined {
+      if (round === 1) return { alias: "jira_draft_stage", args: { ...args } };
+      const staged = journeyExchanges(f).find((entry) => entry.call.name === "jira_draft_stage");
+      return round === 2 && staged?.result?.status === "completed"
+        ? { alias: "jira_draft", args: journeyReference(f) }
+        : undefined;
+    }
+    function stageThenCommit(
+      f: ReturnType<typeof fixture>,
+      args: { items: BacklogFixtureItem[] },
+    ): void {
+      if (f.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
+      vi.mocked(f.deps.jiraChatCatalog.get).mockRestore();
+      let round = 0;
+      const call: ModelPort["call"] = (request) => {
+        f.calls.push(request);
+        round += 1;
+        const admission = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 500 });
+        const response: NormalizedResponse = {
+          modelId: MODEL,
+          content: "The Tasks are created.",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: `stage-commit-${String(round)}`,
+            promptTokens: 100,
+            completionTokens: 10,
+            latencyMs: 1,
+            costClass: "low",
+          },
+        };
+        admission?.settle(response.usage, true, "observed");
+        const step = nextStep(f, round, args);
+        if (request.toolCatalog?.kind !== "bound" || step === undefined)
+          return Promise.resolve(response);
+        const tool = request.toolCatalog.projection.tools.find(
+          (entry) => entry.alias === step.alias,
+        );
+        if (tool === undefined) throw new TypeError(`Missing offered ${step.alias}`);
+        const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+        return Promise.resolve({
+          ...response,
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            bridge.bind({
+              id: `stage-commit-call-${String(round)}`,
+              name: step.alias,
+              arguments: step.args,
+            }),
+          ],
+        });
+      };
+      Object.assign(f.model, {
+        call,
+        callStream: (
+          request: GatewayCallRequest,
+          signal: AbortSignal,
+        ): AsyncIterable<GatewayStreamChunk> => syntheticStream(call(request, signal)),
+      });
+    }
+
+    it("stages and commits three Tasks in one turn behind one review card in Ask for approval", async () => {
+      const f = fixture(true, undefined, true, false, true);
+      taskTemplate(f);
+      typedJira(f);
+      stageThenCommit(f, threeTasks());
+      const pending = sendBatch(f, "three-tasks-ask");
+      void pending.catch(() => undefined);
+      await awaitReadGrantedForWrite(f);
+      const approval = await pendingApproval(f);
+      expect(f.writes()).toBe(0);
+      expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+      expect((await pending).status).toBe(200);
+      expect(f.jira.issues).toHaveLength(3);
+      expect(journeyExchanges(f).filter((entry) => entry.approval !== undefined)).toHaveLength(1);
+      const committed = journeyData(f, "jira_draft");
+      expect(committed).toMatchObject({ outcome: "succeeded", createdCount: 3 });
+      expect(journeyItems(committed).map((item) => item.issueKey)).toEqual(
+        f.jira.issues.map((issue) => issue.key),
+      );
+    });
+
+    it("creates the three Tasks in Full access without a review card", async () => {
+      const f = fixture(true, undefined, true, false, true);
+      f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
+      taskTemplate(f);
+      typedJira(f);
+      stageThenCommit(f, threeTasks());
+      expect((await sendBatch(f, "three-tasks-full")).status).toBe(200);
+      expect(f.jira.issues).toHaveLength(3);
+      expect(journeyExchanges(f).filter((entry) => entry.approval !== undefined)).toHaveLength(0);
+      expect(journeyData(f, "jira_draft")).toMatchObject({ outcome: "succeeded", createdCount: 3 });
+    });
+
+    it("passes every item through the template gate: a Task without a required section is refused, nothing is created", async () => {
+      const f = fixture(true, undefined, true, false, true);
+      f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
+      taskTemplate(f);
+      typedJira(f);
+      stageThenCommit(f, threeTasks(TASK_SECTIONS.slice(0, -1)));
+      expect((await sendBatch(f, "three-tasks-gate")).status).toBe(200);
+      expect(f.jira.issues).toHaveLength(0);
+      expect(
+        JSON.stringify(journeyExchanges(f).find((entry) => entry.call.name === "jira_draft_stage")),
+      ).toContain("section-missing");
+      expect(journeyExchanges(f).some((entry) => entry.call.name === "jira_draft")).toBe(false);
+    });
+  });
 });
 
 function aliasCorrectionModel(badRounds: number, calls: GatewayCallRequest[]): ModelPort {
@@ -4762,6 +4928,123 @@ function demandSelectedModel(
   });
 }
 
+// #4355: the gateway binds every round by capturing catalog, projection and offer with one function,
+// and a selection is admitted only when that same capture accepts it: one native more than fits gets
+// a closed refusal at the selecting tool, names the reason and keeps its earlier selection, and the
+// turn goes on; it never reaches GATEWAY_MALFORMED_TOOL_CALL or a 502 from the bridge. The boundary is
+// not written here: it is found with the production capture (largestBindingSelection), so a change to
+// the base, a descriptor or the bound moves the test with it, and the walk then goes through the real
+// describe round and the next round of a Chat without Knowledge scopes at the sizes around it.
+it("walks the selection to the catalog's ceiling: the last fitting size works, the next is refused, no 502", async () => {
+  // Reads of the ordinary API root outside the curated base, in registry order: real, selectable
+  // identities, so a refusal can only be the budget.
+  const curated = fixtureOperationTools();
+  const natives = jiraOperationDefinitions()
+    .filter(
+      (definition) =>
+        definition.kind === "native" &&
+        definition.method === "GET" &&
+        definition.apiRoot === "/rest/api/2" &&
+        !curated.has(definition.tool) &&
+        definition.identity !== "GET /rest/api/2/project",
+    )
+    .map((definition) => definition.identity);
+  const probe = fixture(false, undefined, true, false, false, undefined, true);
+  if (probe.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
+  const project = ["GET /rest/api/2/project"];
+  const lastFitting = await largestBindingSelection(
+    probe.deps.jiraChatCatalog,
+    natives,
+    { knowledgeScoped: false },
+    project,
+  );
+  expect(lastFitting, "the walk needs natives that fit").toBeGreaterThan(0);
+  const outcomes: string[] = [];
+  for (const count of [0, lastFitting - 1, lastFitting, lastFitting + 1, natives.length]) {
+    const f = fixture(false, undefined, true, false, false, undefined, true);
+    configure(f.deps, true, 32768);
+    demandSelectedModel(f, false, undefined, natives.slice(0, count));
+    const log = vi.spyOn(processServerLogSink(), "write");
+    const response = await handleSendDesktopChat(
+      sendContext(f, `ceiling-${String(count)}`),
+      f.deps,
+    );
+    const refusals = log.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.op === "jira.catalog.selection-refused");
+    log.mockRestore();
+    const describe = demandExchanges(f).find((entry) => entry.call.name === "jira_describe");
+    expect(response.status, `${String(count)} natives`).toBe(200);
+    expect(JSON.stringify(response.body)).not.toContain("GATEWAY_MALFORMED_TOOL_CALL");
+    const refused = JSON.stringify(describe?.result?.data ?? {}).includes("selection-too-large");
+    outcomes.push(
+      `${String(count)}:${String(describe?.result?.status)}:${refused ? "too-large" : "-"}`,
+    );
+    // The refusal leaves its counts on the Activity Log, and a selection that fits leaves none.
+    if (count <= lastFitting) expect(refusals).toEqual([]);
+    else
+      expect(refusals.map((event) => event.extra)).toEqual([
+        expect.objectContaining({
+          surface: "chat",
+          requestedCount: count + project.length,
+          boundBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
+        }),
+      ]);
+  }
+  const counts = [0, lastFitting - 1, lastFitting, lastFitting + 1, natives.length];
+  outcomes.forEach((outcome, index) => {
+    const count = counts[index] ?? 0;
+    expect(outcome, `${String(count)} natives`).toBe(
+      count <= lastFitting ? `${String(count)}:completed:-` : `${String(count)}:failed:too-large`,
+    );
+  });
+}, 180_000);
+
+// The byte bound of the gateway's binding is a safety ceiling; the limit that governs what a model can
+// take is its context window. A selection that binds is refused in a small window by the existing
+// context admission, with its own closed reason and not the byte one, and taken in a large one.
+it("refuses a selection that fits the bytes but not the context window, with its own closed reason", async () => {
+  const curated = fixtureOperationTools();
+  const natives = jiraOperationDefinitions()
+    .filter(
+      (definition) =>
+        definition.kind === "native" &&
+        definition.method === "GET" &&
+        definition.apiRoot === "/rest/api/2" &&
+        !curated.has(definition.tool) &&
+        definition.identity !== "GET /rest/api/2/project",
+    )
+    .map((definition) => definition.identity);
+  const probe = fixture(false, undefined, true, false, false, undefined, true);
+  if (probe.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
+  const project = ["GET /rest/api/2/project"];
+  const count = Math.min(
+    30,
+    await largestBindingSelection(
+      probe.deps.jiraChatCatalog,
+      natives,
+      { knowledgeScoped: false },
+      project,
+    ),
+  );
+  expect(count, "the selection must bind").toBeGreaterThan(8);
+  const outcomes: string[] = [];
+  for (const window of [8192, 20480, 131072]) {
+    const f = fixture(false, undefined, true, false, false, undefined, true);
+    configure(f.deps, true, window);
+    demandSelectedModel(f, false, undefined, natives.slice(0, count));
+    await handleSendDesktopChat(sendContext(f, `window-${String(window)}`), f.deps);
+    const describe = demandExchanges(f).find((entry) => entry.call.name === "jira_describe");
+    const data = describe?.result?.data as { readonly reason?: string } | undefined;
+    outcomes.push(`${String(window)}:${String(describe?.result?.status)}:${data?.reason ?? "-"}`);
+  }
+  expect(outcomes).toEqual([
+    "8192:failed:budget-exhausted",
+    "20480:failed:budget-exhausted",
+    "131072:completed:-",
+  ]);
+}, 180_000);
+
 it("extends the curated Jira base after a settled describe round and preserves every original binding", async () => {
   const f = fixture(false, undefined, true, false, false, undefined, true);
   configure(f.deps, true, 32768);
@@ -4778,9 +5061,7 @@ it("extends the curated Jira base after a settled describe round and preserves e
   const firstAliases = first.projection.tools.map((tool) => tool.alias);
   expect(firstAliases.filter((alias) => alias.startsWith("jira_")).sort()).toEqual(
     [
-      ...[...fixtureOperationTools()]
-        .filter((tool) => tool !== "jira.draft")
-        .map((tool) => tool.replace(/[.-]/gu, "_")),
+      ...[...fixtureOperationTools()].map((tool) => tool.replace(/[.-]/gu, "_")),
       "jira_discover",
       "jira_describe",
     ].sort(),

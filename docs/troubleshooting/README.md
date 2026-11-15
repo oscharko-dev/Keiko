@@ -1049,7 +1049,9 @@ live Jira read, or performing a governed write action are documented separately.
 (`auth-failed`, `forbidden`, `unreachable`, `timeout`) and degradation reason (`permission-denied`,
 `rate-limited`, `unavailable`, `scope-exceeded`, `bounds-exceeded`, `cancelled`, `malformed-payload`,
 `conflict`, `invalid-transition`, and the scope/authority denials), including the
-`NODE_EXTRA_CA_CERTS` guidance for enterprise proxy and CA failures.
+`NODE_EXTRA_CA_CERTS` guidance for enterprise proxy and CA failures. Jira Pods that disappear from
+the list after the configuration file moved are covered in
+[Jira Pods are gone after the configuration file moved](./jira-pods-gone-after-configuration-moved.md).
 
 ---
 
@@ -1064,6 +1066,7 @@ live Jira read, or performing a governed write action are documented separately.
 - [Keiko Editor troubleshooting](../keiko-editor/troubleshooting.md) — Monaco workers, CSP, unsupported files, completion, and verification failures.
 - [HTML Manual Knowledge Pod refresh runbook](./html-manual-pod-refresh.md) — refresh-specific troubleshooting and operational guidance.
 - [Atlassian connector troubleshooting runbook](./atlassian-connector.md) — verify statuses, sync and write degradation reasons, and enterprise proxy/CA failures for the Atlassian connector.
+- [Jira Pods are gone after the configuration file moved](./jira-pods-gone-after-configuration-moved.md) — an empty Jira Pod list because the credential custody lives beside the configuration file in use.
 - [Native OS file/folder dialog runbook](./native-file-dialog.md) — unsupported platforms, macOS privacy (TCC) read limits, and Windows interactive-session requirements for Browse.
 - [macOS portable first-launch runbook](./macos-portable-first-launch.md) — the "damaged" Gatekeeper verdict, silent double-click exits, and same-path adoption for hand-moved bundles.
 - [Windows portable first-launch runbook](./windows-portable-first-launch.md) — the console flash-and-exit, the three native bootstrap dialogs, and the detached UI server that outlives the setup companion.

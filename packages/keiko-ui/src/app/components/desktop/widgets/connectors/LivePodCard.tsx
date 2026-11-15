@@ -111,18 +111,42 @@ function useCheckedStatus(state: LivePodState): AtlassianConnectorVerifyStatus |
   return checked;
 }
 
-// The one live region of the card: a check's outcome is announced as its label and guidance,
-// also when it succeeded, while the visible card keeps only the chip and, on failure, one line.
+// The one live region of the card. It exists before a check and announces only the CURRENT state:
+// the previous result is dropped the moment a new check runs, not one render later. A check run in
+// this view that ended well is also shown, not only announced: the person who just connected a Pod
+// must see that it is connected, in the words of the connection page (#4371). Every other outcome
+// stays announced only, with its guidance; the visible card keeps its chip and one failure line.
 export function VerifyAnnouncement({ state }: { readonly state: LivePodState }): ReactNode {
   const t = useTranslate();
   const checked = useCheckedStatus(state);
-  // The previous result is dropped the moment a new check runs, not one render later.
   const status = state.kind === "verifying" ? undefined : checked;
   const guidance = useFailureGuidance(status ?? "ok");
+  const shown = status === "ok";
   return (
-    <output className="sr-only" data-status={status} data-testid="acx-verify-status">
-      {status === undefined ? null : `${t(verifyStatusLabelKey(status))}. ${guidance}`}
+    <output
+      className={shown ? "acx-notice" : "sr-only"}
+      data-tone={shown ? verifyStatusTone("ok") : undefined}
+      data-status={status}
+      data-testid="acx-verify-status"
+    >
+      {verifyAnnouncementContent(status, guidance, shown, t)}
     </output>
+  );
+}
+
+function verifyAnnouncementContent(
+  status: AtlassianConnectorVerifyStatus | undefined,
+  guidance: string,
+  shown: boolean,
+  t: ReturnType<typeof useTranslate>,
+): ReactNode {
+  if (status === undefined) return null;
+  if (!shown) return `${t(verifyStatusLabelKey(status))}. ${guidance}`;
+  return (
+    <>
+      <span className="acx-notice-label">{t(verifyStatusLabelKey(status))}</span>
+      <span>{guidance}</span>
+    </>
   );
 }
 

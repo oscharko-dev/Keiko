@@ -533,6 +533,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.noBranch": "Kein Branch",
   "codingWorkbench.repository.loading": "Repositories werden geladen…",
   "codingWorkbench.repository.none": "Repository auswählen",
+  "codingWorkbench.repository.noProject": "Noch kein Projekt gewählt: Wähle einen Ordner.",
+  "codingWorkbench.repository.chooseFolder": "Ordner wählen",
   "codingWorkbench.repository.unavailable": "nicht verfügbar",
   "codingWorkbench.repository.unavailableHelp":
     "Dieses Repository ist in Git nicht mehr verfügbar. Wähle ein anderes Repository oder verbinde es in Git erneut.",
@@ -544,6 +546,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Auf dieser Installation führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree eines Git-Repositorys aus und kann daher nicht in diesem Ordner arbeiten. Wähle ein Git-Repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
+  "codingWorkbench.repository.deniedBlocker":
+    "Keiko darf diesen Ordner nicht lesen. Wähle ein Repository an einem anderen Ort.",
   "codingWorkbench.repository.loadError":
     "Repositories konnten nicht geladen werden. Aktualisiere die Liste und versuche es erneut.",
   "codingWorkbench.repository.retryLoad": "Erneut versuchen",
