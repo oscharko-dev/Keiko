@@ -34,11 +34,11 @@ rules:
       # no ignore list at all.
       # USearch runtime: coverage-packages, coverage-ui, coverage-scripts
       - ci.yml:616
-      - ci.yml:715
-      - ci.yml:791
+      - ci.yml:722
+      - ci.yml:798
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
-      - ci.yml:918
-      - ci.yml:1040
+      - ci.yml:925
+      - ci.yml:1047
   dangerous-triggers:
     ignore:
       # ADR-0161: the infrastructure-signature observer must see runs that have already completed, and

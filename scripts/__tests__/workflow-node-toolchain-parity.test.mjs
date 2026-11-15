@@ -208,7 +208,8 @@ describe("workflow Node toolchain parity", () => {
     // coding-runtime package publisher (#3898 AC8, coding-runtime-publish.yml) adds one more.
     // The owner-dispatched published-install matrix on Windows x64 and Intel macOS (#4068 W3)
     // adds one more.
-    expect(withSetupNode).toHaveLength(38);
+    // The sole Node 26 baseline retires one duplicate compatibility-job setup.
+    expect(withSetupNode).toHaveLength(37);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

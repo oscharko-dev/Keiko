@@ -231,10 +231,16 @@ If workspace manager, layout, gate tooling, or stub strategy changes materially,
 | 1.1 | 2026-06-03 | D3 clarification: root tsconfig uses direct `packages/*/src/**/*.ts` include rather than `references` entries to avoid TS6305 under `tsc -p ... --noEmit`. Same one-pass typecheck intent; project references remain inside each package and become load-bearing when the build migrates to `tsc -b`. |
 | 1.2 | 2026-06-03 | D6 script-topology table updated to match D3's direct-include strategy (drift caught in review). No behaviour change. |
 
-## Node 26 package-manager compatibility clarification (2026-09-04)
+## Node 26 package-manager compatibility clarification (2026-09-04, updated 2026-11-15)
 
-Node 26 does not bundle Corepack. Its compatibility lane therefore copies the `npm ci`-verified,
+Node 26 does not bundle Corepack. Every install-smoke lane therefore copies the `npm ci`-verified,
 lockfile-pinned Corepack package tree into the Node runtime trust root and creates its fixed
 executable shim there before provisioning the existing digest-pinned Yarn smoke. This preserves
 the trusted-executable boundary and does not widen the network, registry, or package-manager
 authority of the install smoke.
+
+Node 26 is the sole baseline as of 2026-11-15, so the separate compatibility matrix is retired.
+The required package-coverage jobs execute the complete root test inventory in four shards;
+Editor fast-path PRs run the same test shards without coverage instrumentation. Existing core and
+cross-platform jobs retain typecheck, UI builds and native optional install smokes. The exact
+runtime verification and all coverage floors remain required.

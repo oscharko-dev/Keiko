@@ -632,6 +632,13 @@ jobs:
         # success. Provisioned in every coverage job so each suite executes in exactly the
         # environment it did when the three ran in one job.
         run: npm run provision:usearch
+      # Node 26 is the sole runtime. These four shards replace the duplicate compatibility
+      # matrix. Editor fast-path PRs skip coverage instrumentation, but still owe every test.
+      - name: Run complete test shard for editor fast-path PRs
+        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor' }}
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: npm test -- --shard=${{ matrix.shard }}/4
       - name: Measure package coverage shard
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # `--reporter` on the command line REPLACES the reporter list, and vitest only auto-appends
@@ -1176,7 +1183,7 @@ jobs:
       - core-quality
       - coverage-sonar
       - cross-platform-smoke
-      - runtime-qualification
+      - firefox-smoke
       - portable-secure-read
       - secret-scan
       - semantic-duplication
@@ -1194,7 +1201,7 @@ jobs:
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
           EDITOR_FAST_PR: ${{ github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor' }}
-          RUNTIME_QUALIFICATION_RESULT: ${{ needs.runtime-qualification.result }}
+          FIREFOX_RESULT: ${{ needs.firefox-smoke.result }}
           PORTABLE_SECURE_READ_RESULT: ${{ needs.portable-secure-read.result }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
@@ -1232,7 +1239,8 @@ jobs:
                          "CORE_QUALITY:${CORE_QUALITY_RESULT:-}" "COVERAGE_SONAR:${COVERAGE_SONAR_RESULT:-}" \
                          "SECRET_SCAN:${SECRET_SCAN_RESULT:-}" "SEMANTIC_DUPLICATION:${SEMANTIC_DUPLICATION_RESULT:-}" \
                          "UI:${UI_RESULT:-}" "BUILD_SCAN_SBOM_SMOKE:${BUILD_SCAN_SBOM_SMOKE_RESULT:-}" \
-                         "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" "NODE_26:${RUNTIME_QUALIFICATION_RESULT:-}" \
+                         "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" \
+                         "FIREFOX:${FIREFOX_RESULT:-}" \
                          "PORTABLE_SECURE_READ:${PORTABLE_SECURE_READ_RESULT:-}" \
                          "SBOM_PROVENANCE:${SBOM_PROVENANCE_RESULT:-}"; do
               state="${named#*:}"
@@ -1267,6 +1275,17 @@ jobs:
             echo "Required CI dependency did not succeed: $BUILD_SCAN_SBOM_SMOKE_RESULT"
             exit 1
           fi
+          # Firefox and the other UI engines run independently. Join their verdicts here instead
+          # of making the entire UI job wait for Firefox before it starts any work.
+          if [ "$FIREFOX_RESULT" = "skipped" ]; then
+            if [ "$EDITOR_FAST_PR" != "true" ]; then
+              echo "Firefox smoke was skipped outside an editor fast-path PR."
+              exit 1
+            fi
+          elif [ "$FIREFOX_RESULT" != "success" ]; then
+            echo "Both required Firefox smoke shards must succeed: $FIREFOX_RESULT"
+            exit 1
+          fi
           # The cross-platform matrix is the only dependency allowed to be skipped, and only when the
           # change-scope job classified this change set as documentation-only. Any other skip — a
           # cancellation, a dependency failure, a mistaken condition — still fails closed.
@@ -1278,16 +1297,6 @@ jobs:
             echo "Cross-platform smoke skipped: documentation-only change set."
           elif [ "$CROSS_PLATFORM_RESULT" != "success" ]; then
             echo "Required CI dependency did not succeed: $CROSS_PLATFORM_RESULT"
-            exit 1
-          fi
-          if [ "$RUNTIME_QUALIFICATION_RESULT" = "skipped" ]; then
-            if [ "$DOCUMENTATION_ONLY" != "true" ]; then
-              echo "Runtime qualification was skipped without a documentation-only change set."
-              exit 1
-            fi
-            echo "Runtime qualification skipped: documentation-only change set."
-          elif [ "$RUNTIME_QUALIFICATION_RESULT" != "success" ]; then
-            echo "Required CI dependency did not succeed: $RUNTIME_QUALIFICATION_RESULT"
             exit 1
           fi
           # Portable helper qualification uses the same smoke fixture as the staged artifacts.
@@ -1354,6 +1363,10 @@ jobs:
       - name: Installable-package smoke (Issue #169 AC2)
         run: npm run smoke:install
       - name: Installable-package smoke with optional dependencies
+        # The preceding required smoke already ran the complete prepack gate on this checkout.
+        # Repack its unchanged built payload; retain all optional-dependency install assertions.
+        env:
+          KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
         run: npm run smoke:install:optional
       - name: Installable memory smoke (Issue #216)
         run: npm run smoke:install:memory
@@ -1564,65 +1577,6 @@ jobs:
         timeout-minutes: 20
         run: node scripts/__tests__/windows-setup-bootstrap-smoke.mjs
 
-  runtime-qualification:
-    name: Runtime qualification (shard ${{ matrix.shard }}/4)
-    needs: [change-scope, verified-tree]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60 # Four test shards keep each shard well inside the limit; retain time for UI and package smokes.
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # The full test suite compares support registries with immutable release commits.
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ github.sha }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "26.13.1"
-          package-manager-cache: false
-      - name: Verify pull-request merge candidate consistency
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ci-merge-candidate.mjs
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - run: npm ci --ignore-scripts
-      - name: Provision the approved USearch native runtime
-        run: npm run provision:usearch
-      - name: Setup Linux sandbox isolation
-        uses: ./.github/actions/setup-sandbox-isolation
-      - name: Typecheck the complete package graph
-        run: npm run typecheck
-      - name: Run this shard of the complete hermetic test suite
-        run: npm test -- --shard=${{ matrix.shard }}/4
-      - name: Prepare packaged CLI
-        run: npm run prepare:bin
-      - name: Build UI (static export)
-        run: npm run build:ui
-      - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130/#3134)
-        # The optional install smoke consumes the same seeded, bounded registry as every other
-        # installable-package lane. Node 26 no longer bundles Corepack, so copy the lockfile-
-        # verified package into the Node runtime trust root and expose its fixed shim there.
-        timeout-minutes: 10
-        run: |
-          COREPACK_BIN="$(node scripts/prepare-trusted-corepack.mjs)"
-          printf '%s\n' "$COREPACK_BIN" >> "$GITHUB_PATH"
-          export PATH="$COREPACK_BIN:$PATH"
-          npm run provision:smoke
-      - name: Installable-package smoke with native optional dependencies
-        env:
-          KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
-        run: npm run smoke:install:optional
-
   firefox-smoke:
     name: Firefox smoke (shard ${{ matrix.shard }}/2)
     needs: verified-tree
@@ -1676,25 +1630,20 @@ jobs:
 
   ui:
     name: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ui' || 'inactive PR - ui' }}
-    needs: [verified-tree, firefox-smoke]
+    # Both browser verdicts join in required `ci`; Firefox is not an input to this job's work.
+    needs: [verified-tree]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Verify required Firefox smoke shards
+      - name: Require verified-tree resolution
         env:
           VERIFIED_TREE_RESULT: ${{ needs.verified-tree.result }}
-          FIREFOX_RESULT: ${{ needs.firefox-smoke.result }}
-          FIREFOX_REQUIRED: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: |
           if [ "$VERIFIED_TREE_RESULT" != "success" ]; then
             echo "Verified-tree resolution did not succeed."
-            exit 1
-          fi
-          if [ "$FIREFOX_REQUIRED" = "true" ] && [ "$FIREFOX_RESULT" != "success" ]; then
-            echo "Both required Firefox smoke shards must succeed."
             exit 1
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -753,15 +753,16 @@ function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
 
 export function packRoot() {
   // BEHAVIOURAL BRANCH (env-gated, opt-in): default behaviour is unchanged — the gating Linux
-  // `build-scan-sbom-smoke` job leaves the flag unset and packs with the full `prepack` chain
-  // (clean + build + every release gate). ONLY the cross-platform runtime smoke (#284 AC4) opts in
-  // by setting KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1, which packs the
+  // `build-scan-sbom-smoke` job's first smoke leaves the flag unset and packs with the full
+  // `prepack` chain (clean + build + every release gate). Its following optional-dependency
+  // smoke and the cross-platform runtime smoke (#284 AC4) opt in with
+  // KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1, which packs the
   // ALREADY-BUILT dist (assembled by the job's explicit build / prepare:bin / build:ui steps)
   // WITHOUT re-running that chain: the prepack gates (arch-check, package-surface, supply-chain)
   // are the Linux publish gate — they run on the gating `build-scan-sbom-smoke` job and several
   // shell out to `npx`/`npm` in ways that are not Windows-portable, which is a separate concern from
   // verifying that the PACKED ARTIFACT runs cross-platform. On Linux the gate keeps the full
-  // prepack pack (flag unset), so its coverage is unchanged.
+  // first prepack pack (flag unset), so its coverage is unchanged.
   if (process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS !== "1") {
     const gateResult = run("npm", ["run", "prepack"], { cwd: repoRoot });
     if (gateResult.status !== 0) {

@@ -67,3 +67,12 @@ Publishing release assets remains a separate action.
 Use a reviewed revert or forward fix; never rewrite Git history. Restoring an older runtime line
 requires a deliberate support-policy decision and coordinated manifests, exact pins, archive
 approvals and qualification. A local PATH change alone never changes the product's runtime policy.
+
+## Retired compatibility matrix
+
+Node 26 is now the main runtime, so the separate four-shard Node 26 compatibility job is
+removed. The required package-coverage matrix collects the complete root test inventory;
+Editor fast-path PRs use the same four jobs to run the complete suite without coverage
+instrumentation. Typecheck, UI builds and native optional install smokes remain in the
+required core and cross-platform jobs. Exact Node/npm verification remains in every setup
+lane, and verified-tree reuse requires every package and script shard to have succeeded.

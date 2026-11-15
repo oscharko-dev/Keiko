@@ -240,7 +240,7 @@ describe("CI test/gate wiring guard", () => {
 
   it("runs the portable handoff protocol fixture suite on a genuine Windows host", () => {
     const windowsJobStart = ci.indexOf("  cross-platform-smoke:");
-    const windowsJobEnd = ci.indexOf("\n  runtime-qualification:", windowsJobStart);
+    const windowsJobEnd = ci.indexOf("\n  firefox-smoke:", windowsJobStart);
     const windowsJob = ci.slice(windowsJobStart, windowsJobEnd);
     const buildStep = ci.indexOf("      - name: Build", windowsJobStart);
     const fixtureStep = ci.indexOf(
@@ -492,15 +492,16 @@ describe("CI test/gate wiring guard", () => {
     // It uses the same pinned Node 26 setup and toolchain verification before staging the package.
     // The portable secure-read matrix adds one governed Node 26 lane for all four native targets.
     // Firefox's isolated smoke matrix retains its own pinned setup and verification.
-    expect(nodeSetupCount).toBe(34);
+    // The Node 26-only baseline retires the duplicate compatibility matrix.
+    expect(nodeSetupCount).toBe(33);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "(?:22|24)\./u);
-    expect(ci).toContain("RUNTIME_QUALIFICATION_RESULT");
+    expect(ci).not.toContain("RUNTIME_QUALIFICATION_RESULT");
   });
 
   it("executes typecheck, build, and install smokes on Linux, macOS, and Windows", () => {
     const start = ci.indexOf("  cross-platform-smoke:");
-    const end = ci.indexOf("\n  runtime-qualification:", start);
+    const end = ci.indexOf("\n  firefox-smoke:", start);
     const crossPlatform = ci.slice(start, end);
     expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(crossPlatform).toContain("Typecheck the complete package graph");
@@ -513,7 +514,7 @@ describe("CI test/gate wiring guard", () => {
 
   it("keeps Windows in the full cross-platform proof instead of a slim side job", () => {
     const start = ci.indexOf("  cross-platform-smoke:");
-    const end = ci.indexOf("\n  runtime-qualification:", start);
+    const end = ci.indexOf("\n  firefox-smoke:", start);
     const crossPlatform = ci.slice(start, end);
     expect(ci).not.toContain("windows-cross-platform-smoke");
     expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
@@ -615,7 +616,7 @@ describe("CI test/gate wiring guard", () => {
 describe("native host regression coverage", () => {
   it("runs the environment-sensitive suites in the existing cross-platform matrix", () => {
     const start = ci.indexOf("\n  cross-platform-smoke:");
-    const end = ci.indexOf("\n  runtime-qualification:", start);
+    const end = ci.indexOf("\n  firefox-smoke:", start);
     const job = ci.slice(start, end);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);

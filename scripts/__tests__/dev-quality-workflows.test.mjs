@@ -43,9 +43,9 @@ function runCiAggregate(overrides = {}) {
       CORE_QUALITY_RESULT: "success",
       COVERAGE_SONAR_RESULT: "success",
       CROSS_PLATFORM_RESULT: "success",
+      FIREFOX_RESULT: "success",
       DOCUMENTATION_ONLY: "false",
       EDITOR_FAST_PR: "false",
-      RUNTIME_QUALIFICATION_RESULT: "success",
       PORTABLE_SECURE_READ_RESULT: "success",
       PROTECTED_BRANCH_RESULT: "success",
       SECRET_SCAN_RESULT: "success",
@@ -716,6 +716,21 @@ describe("dev quality workflows", () => {
     expect(compositeAction).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
   });
 
+  it("reuses the successful prepack only for the immediately following optional install smoke", () => {
+    const job = ciWorkflow.jobs["build-scan-sbom-smoke"];
+    const ordinaryAt = job.steps.findIndex((step) => step.run === "npm run smoke:install");
+    const optionalAt = job.steps.findIndex((step) => step.run === "npm run smoke:install:optional");
+    expect(ordinaryAt).toBeGreaterThan(-1);
+    expect(optionalAt).toBe(ordinaryAt + 1);
+    expect(job.env?.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS).toBeUndefined();
+    expect(job.steps[ordinaryAt].env?.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS).toBeUndefined();
+    expect(job.steps[optionalAt].env?.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS).toBe("1");
+    for (const index of [ordinaryAt, optionalAt]) {
+      expect(job.steps[index].if).toBeUndefined();
+      expect(job.steps[index]["continue-on-error"]).toBeUndefined();
+    }
+  });
+
   it("aggregates required CI fail closed", () => {
     // Sliced to the NEXT top-level key rather than to the `actionlint:` job, which ADR-0159 moved
     // into the `workflow hygiene` context. Same idiom as the coverage-suite test above, and it can
@@ -729,13 +744,15 @@ describe("dev quality workflows", () => {
     expect(aggregateJob).toContain("- build-scan-sbom-smoke");
     expect(aggregateJob).toContain("- coverage-sonar");
     expect(aggregateJob).toContain("- cross-platform-smoke");
-    expect(aggregateJob).toContain("- runtime-qualification");
+    expect(aggregateJob).toContain("- firefox-smoke");
+    expect(aggregateJob).toContain("FIREFOX_RESULT");
+    expect(aggregateJob).not.toContain("- runtime-qualification");
     expect(aggregateJob).toContain("- ui");
     expect(aggregateJob).toContain("BUILD_SCAN_SBOM_SMOKE_RESULT");
     expect(aggregateJob).toContain("CHANGE_SCOPE_RESULT");
     expect(aggregateJob).toContain("CROSS_PLATFORM_RESULT");
     expect(aggregateJob).toContain("EDITOR_FAST_PR");
-    expect(aggregateJob).toContain("RUNTIME_QUALIFICATION_RESULT");
+    expect(aggregateJob).not.toContain("RUNTIME_QUALIFICATION_RESULT");
     expect(aggregateJob).toContain("UI_RESULT");
     expect(aggregateJob).toContain('if [ "$result" != "success" ]');
   });
@@ -801,7 +818,7 @@ describe("dev quality workflows", () => {
 
   it("runs native compensation on its owning platforms and aggregates it fail closed", () => {
     const crossPlatform = ci.match(
-      / {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}runtime-qualification:\n)/u,
+      / {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}firefox-smoke:\n)/u,
     )?.[0];
     expect(crossPlatform).toBeDefined();
     expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
