@@ -1542,6 +1542,7 @@
           "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
+          "jira.catalog.selection-refused",
           "jira.citation.markers",
           "jira.field.admission",
           "jira.operation.avatars",
@@ -1589,6 +1590,10 @@
         },
         {
           "op": "jira.catalog.selection",
+          "mode": "correlation"
+        },
+        {
+          "op": "jira.catalog.selection-refused",
           "mode": "correlation"
         },
         {
@@ -1661,6 +1666,7 @@
         "jira.approval.project",
         "jira.attachment.source",
         "jira.catalog.selection",
+        "jira.catalog.selection-refused",
         "jira.citation.markers",
         "jira.field.admission",
         "jira.operation.avatars",
@@ -2538,6 +2544,66 @@
             "causeChain": false
           },
           "proofIds": ["jira.catalog.selection.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "jira.catalog.selection-refused",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "boundBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "catalogBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "exceeded",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "offeredBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "projectionBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "requestedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["jira.catalog.selection-refused.line"],
           "replayReferences": [],
           "missingObligations": []
         },

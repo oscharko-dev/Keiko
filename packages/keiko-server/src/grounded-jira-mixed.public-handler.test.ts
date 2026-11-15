@@ -4,6 +4,10 @@ import {
   persistedActivityLogLines,
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
+import {
+  largestBindingSelection,
+  selectionBinds,
+} from "../../../tests/support/jira-binding-probe.js";
 import type { MemoryId, ProjectId, UserId } from "@oscharko-dev/keiko-contracts/memory";
 import { randomBytes, randomUUID } from "node:crypto";
 import { handleUpdateChat } from "./store-handlers.js";
@@ -1112,25 +1116,25 @@ it("walks a real describe in a mixed turn to the ceiling: every size ends the tu
     )
     .slice(0, 60)
     .map((definition) => definition.identity);
-  const outcomes: string[] = [];
-  for (const count of [0, 1, 2, 8, 22, 23, 48])
-    outcomes.push(await walkedMixedOutcome(natives, count));
-  // Measured on 2026-11-14 with the heaviest descriptors first: 22 natives fit beside the base of a
-  // mixed turn, 23 do not. The gateway bounds the catalog, the projection and the offer each by the
-  // envelope limit and the selection is admitted with that same capture, so the size that does not fit
-  // is refused with the closed reason and the turn continues on its earlier selection. Every size
-  // reaches all three provider rounds: an admitted selection always binds. While the gateway bounded
-  // the three together, two to twenty natives were admitted and the round after them died with a 502
-  // the stream carried after its 200, so only one provider request was seen.
-  const sizes = [0, 1, 2, 8, 22, 23, 48];
-  outcomes.forEach((outcome, index) => {
-    const count = sizes[index] ?? 0;
-    expect(outcome, `${String(count)} natives`).toBe(
-      count <= 22
+  if (probe.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
+  // The boundary is not written here: it is found with the production capture the gateway binds
+  // with and the selection is admitted with, so a change to the base, a descriptor or the bound
+  // moves the test with it. At every size the turn reaches all three provider rounds: an admitted
+  // selection always binds. While the gateway bounded the three parts together, selections past the
+  // real bound were admitted and the round after them died with a 502 the stream carried after its
+  // 200, so only one provider request was seen.
+  const lastFitting = await largestBindingSelection(probe.deps.jiraChatCatalog, natives, {
+    knowledgeScoped: false,
+  });
+  expect(lastFitting, "the walk needs natives that fit").toBeGreaterThan(0);
+  const counts = [0, lastFitting - 1, lastFitting, lastFitting + 1, natives.length];
+  for (const count of counts) {
+    expect(await walkedMixedOutcome(natives, count), `${String(count)} natives`).toBe(
+      count <= lastFitting
         ? `${String(count)}:200:completed:-:3`
         : `${String(count)}:200:failed:too-large:3`,
     );
-  });
+  }
 });
 
 it("offers curated Jira projects and discovers an additional schema while retaining mixed grounding and its read grant", async () => {
@@ -2165,23 +2169,54 @@ it.each(["answer", "uncited"] as const)(
   },
 );
 
+/**
+ * The most of `candidates`, taken from the front, that the production capture the gateway binds with
+ * accepts beside the Knowledge-scoped base, and proof that this selection binds. The base grows with
+ * the tools every Chat offers, so the count follows the bound and is never written in a test.
+ */
+async function bindableFixtureNatives(
+  catalog: NonNullable<UiHandlerDeps["jiraChatCatalog"]>,
+  candidates: readonly string[],
+): Promise<string[]> {
+  const operations = jiraOperationDefinitions();
+  const identitiesOf = (tools: readonly string[]): string[] =>
+    operations.filter((entry) => tools.includes(entry.tool)).map((entry) => entry.identity);
+  const scope = { knowledgeScoped: true };
+  const baseNames = new Set(catalog.toolDefinitions(scope).map((entry) => entry.name));
+  const base = operations
+    .filter((entry) => baseNames.has(entry.tool.replace(/[.-]/gu, "_")))
+    .map((entry) => entry.identity);
+  const chosen = (await selectionBinds(catalog, [...base, ...identitiesOf(candidates)], scope))
+    ? [...candidates]
+    : candidates.slice(
+        0,
+        await largestBindingSelection(catalog, identitiesOf(candidates), scope, base),
+      );
+  expect(chosen.length, "the pin needs at least one preselected native").toBeGreaterThan(0);
+  expect(
+    await selectionBinds(catalog, [...base, ...identitiesOf(chosen)], scope),
+    "the preselected natives must bind",
+  ).toBe(true);
+  return chosen;
+}
+
 it("settles a committed mutation when the adopted window cannot fit the current tool catalog", async () => {
   const f = runtime(true);
-  // A bounded native selection still fits the catalog's compound byte ceiling while its full
-  // physical prompt exceeds the adopted window (the base alone already does; see below).
-  // The ceiling is the gateway's one envelope budget for catalog, projection and offer together
-  // (262,144 bytes). This fixture preselects around the selection admission, so it must itself stay
-  // within it: the base grew by jira.myself, jira.watch and jira.unwatch (#4357) and by the draft run
-  // that every Chat now offers (#4355), and measured on 2026-11-14 five of these natives fit
-  // (261,013 bytes) while six do not (266,649). Every assertion below still holds: the selection
-  // fits, its prompt exceeds the window.
-  preselectKnownFixtureTools(f.deps.jiraChatCatalog, undefined, [
+  // A bounded native selection still fits the gateway's binding bound while its full physical prompt
+  // exceeds the adopted window (the base alone already does; see below). This fixture preselects
+  // around the selection admission, so it proves its own premise instead of restating a count.
+  if (f.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
+  const chosen = await bindableFixtureNatives(f.deps.jiraChatCatalog, [
     "jira.project",
     "jira.project-permissions",
     "jira.project-statuses",
     "jira.project-types",
     "jira.project-type",
+    "jira.project-categories",
+    "jira.project-category",
+    "jira.project-version-page",
   ]);
+  preselectKnownFixtureTools(f.deps.jiraChatCatalog, undefined, chosen);
   const requests = provider(["write", "overflow", "answer"]);
   const body = {
     chatId: f.chatId,
@@ -2208,7 +2243,7 @@ it("settles a committed mutation when the adopted window cannot fit the current 
   // catalog's byte ceiling for the turn to reach it (#4357).
   const baseFloor = countGatewayPromptTokens({
     messages: [],
-    tools: f.deps.jiraChatCatalog?.toolDefinitions({ knowledgeScoped: true }) ?? [],
+    tools: f.deps.jiraChatCatalog.toolDefinitions({ knowledgeScoped: true }),
   });
   expect(baseFloor).toBeGreaterThan(refused.inputBudget);
   const messages = f.deps.store.listMessages(f.chatId);

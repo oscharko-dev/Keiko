@@ -2,7 +2,11 @@ import { KNOWLEDGE_DOCUMENTS_TOOL_ID } from "@oscharko-dev/keiko-contracts/runti
 import { chatToolSelectionFits, offeredDefinitions } from "./chat-tool-schema-selection.js";
 import { JIRA_MUTATION_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
-import { captureCatalogBinding, gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  captureCatalogBinding,
+  gatewayToolDefinitions,
+  ToolCatalogError,
+} from "@oscharko-dev/keiko-tool-catalog";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { chatKnowledgeScopes } from "./requirement-inventory.js";
 import { randomUUID } from "node:crypto";
@@ -11,7 +15,11 @@ import { createCodingToolInvocationRegistry } from "./coding-runtime/codingToolI
 import type { CodingToolInvocationRegistry } from "./coding-runtime/codingToolInvocationRegistry.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { processServerLogSink } from "./process-log-sink.js";
-import { recordJiraCatalogSelection } from "./atlassian/jiraCatalogSelectionActivity.js";
+import {
+  recordJiraCatalogSelection,
+  recordJiraCatalogSelectionRefused,
+  type RefusedSelectionParts,
+} from "./atlassian/jiraCatalogSelectionActivity.js";
 import {
   defaultServerDiagnosticSink,
   emitServerDiagnostic,
@@ -42,6 +50,7 @@ import type {
   CatalogToolBudgetPort,
   CatalogConsumer,
   CatalogToolBinder,
+  OfferedToolSet,
 } from "./tool-catalog/catalogToolPorts.js";
 import { gatewayMessagesForToolExchange } from "./conversation-gateway.js";
 import { jiraDraftCondensedRows } from "./atlassian/jiraDraftModelData.js";
@@ -635,19 +644,15 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       "failed",
       "handler-unavailable",
     );
-    const selection = await this.options.selectTools(identities);
+    const selection = await this.options.selectTools(identities).catch((error: unknown) => {
+      this.noteRefusedSelection(error, identities);
+      throw error;
+    });
     try {
       this.context.signal.throwIfAborted();
       const binder = selection.bind(this.context, this.budget.port, this.invocationRegistry);
       const offered = binder.offer();
-      // The gateway binds every round by capturing catalog, projection and offer with one function.
-      // Run that same capture here, so a selection the gateway could not bind is refused with its
-      // closed reason and the earlier selection is kept, instead of failing the next round.
-      captureCatalogBinding({
-        catalog: selection.managed.catalog,
-        projection: selection.managed.projection,
-        offered,
-      });
+      this.admitBinding(selection.managed, offered, identities);
       const definitions = gatewayToolDefinitions(
         selection.managed.catalog,
         selection.managed.projection.profile,
@@ -660,6 +665,45 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       await selection.close();
       throw error;
     }
+  }
+  /**
+   * The gateway binds every round by capturing catalog, projection and offer with one function.
+   * Run that same capture here, so a selection the gateway could not bind is refused with its
+   * closed reason and the earlier selection is kept, instead of failing the next round.
+   */
+  private admitBinding(
+    managed: ChatRoundCatalog,
+    offered: OfferedToolSet,
+    identities: readonly string[],
+  ): void {
+    try {
+      captureCatalogBinding({
+        catalog: managed.catalog,
+        projection: managed.projection,
+        offered,
+      });
+    } catch (error) {
+      this.noteRefusedSelection(error, identities, {
+        catalog: managed.catalog,
+        projection: managed.projection,
+        offered,
+      });
+      throw error;
+    }
+  }
+  /** A selection refused for its size leaves its counts on the Activity Log; nothing else does. */
+  private noteRefusedSelection(
+    error: unknown,
+    identities: readonly string[],
+    parts?: RefusedSelectionParts,
+  ): void {
+    if (!(error instanceof ToolCatalogError) || error.reason !== "input-bound") return;
+    recordJiraCatalogSelectionRefused(processServerLogSink(), {
+      correlationId: this.options.correlationId,
+      surface: "chat",
+      requestedCount: new Set(identities).size,
+      ...(parts === undefined ? {} : { parts }),
+    });
   }
   private selectionFits(
     request: GatewayCallRequest,

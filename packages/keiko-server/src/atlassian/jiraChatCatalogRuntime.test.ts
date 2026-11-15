@@ -29,6 +29,7 @@ import { isCoreMutationTool } from "./jiraManagedMutationDescriptors.js";
 import { jiraOperationForTool } from "./jiraManagedProvider.js";
 import { JIRA_CATALOG_DISCOVERY_TOOLS } from "./jiraCatalogDiscovery.js";
 import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
+import { selectionBinds } from "../../../../tests/support/jira-binding-probe.js";
 import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
 
 const CURATED_JIRA_ALIASES = [
@@ -270,6 +271,24 @@ describe("application-owned Jira catalog initialization", () => {
       await f.runtime.close();
     }
   });
+
+  // The base is not admitted by a selection: the gateway binds it as it is. It must bind in every
+  // scope, with room left for a selection, or no Chat could start.
+  it.each([{ knowledgeScoped: true }, { knowledgeScoped: false }])(
+    "binds the base of every Chat with room left for a selection (knowledgeScoped=$knowledgeScoped)",
+    async (scope) => {
+      const f = fixture();
+      try {
+        expect(await selectionBinds(f.runtime, [], scope)).toBe(true);
+        const base = await f.runtime.get(scope);
+        const bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value));
+        const largest = Math.max(bytes(base.catalog), bytes(base.projection));
+        expect(largest).toBeLessThan(TOOL_CATALOG_LIMITS.maxArgumentBytes / 2);
+      } finally {
+        await f.runtime.close();
+      }
+    },
+  );
 
   // No staging tool is ever offered without its commit, and the commit never without the stage: a
   // staged draft that cannot be committed is a dead end for the person who ordered the issues.
