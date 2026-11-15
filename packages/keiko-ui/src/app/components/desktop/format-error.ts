@@ -336,12 +336,11 @@ export const CHAT_ERROR_CODE_TABLE: Readonly<Record<ChatPathErrorCode, ErrorCode
   GATEWAY_CANCELLED: { neverShown: "the person's own stop: nothing failed" },
 };
 
-function groupKeys(group: ErrorGroup): GatewayErrorKeys {
-  return {
-    title: `chat.error.group.${group}.title`,
-    message: `chat.error.group.${group}.message`,
-    remediation: `chat.error.group.${group}.remediation`,
-  };
+function groupKeyOf(group: ErrorGroup, part: keyof GatewayErrorKeys): MessageKey | undefined {
+  // The generic group words only the title and the remedy: its message stays the server's own
+  // sentence (or the caller's fallback), the one text that says what this particular request got.
+  if (group === "other") return part === "message" ? undefined : `chat.error.group.other.${part}`;
+  return `chat.error.group.${group}.${part}`;
 }
 
 function groupKeysForCode(
@@ -352,11 +351,7 @@ function groupKeysForCode(
   const entry = (CHAT_ERROR_CODE_TABLE as Readonly<Record<string, ErrorCodeEntry | undefined>>)[
     code
   ];
-  if (entry === undefined || !("group" in entry)) return undefined;
-  // The generic group words only the title and the remedy: its message stays the server's own
-  // sentence (or the caller's fallback), the one text that says what this particular request got.
-  if (entry.group === "other" && part === "message") return undefined;
-  return groupKeys(entry.group)[part];
+  return entry !== undefined && "group" in entry ? groupKeyOf(entry.group, part) : undefined;
 }
 
 // This module is not a component, so it cannot take the translate hook; it resolves the selected
