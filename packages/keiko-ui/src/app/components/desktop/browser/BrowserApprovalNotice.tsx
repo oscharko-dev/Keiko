@@ -16,11 +16,14 @@ interface BrowserConnection {
   readonly inventory: ReturnType<typeof useBrowserApprovalInventory>;
   readonly working: boolean;
   readonly launchFailed: boolean;
+  /** The opener answered "opened" but this browser was not connected: the system browser got it. */
+  readonly launchOpened: boolean;
   readonly connect: () => Promise<void>;
 }
 function useBrowserConnection(): BrowserConnection {
   const [working, setWorking] = useState(false);
   const [launchFailed, setLaunchFailed] = useState(false);
+  const [launchOpened, setLaunchOpened] = useState(false);
   const inventory = useBrowserApprovalInventory(working);
   useEffect(() => {
     if (!working) return;
@@ -42,8 +45,10 @@ function useBrowserConnection(): BrowserConnection {
   const connect = async (): Promise<void> => {
     setWorking(true);
     setLaunchFailed(false);
+    setLaunchOpened(false);
     try {
       await openLauncherBrowser();
+      setLaunchOpened(true);
       inventory.refresh();
     } catch (error) {
       setWorking(false);
@@ -54,7 +59,7 @@ function useBrowserConnection(): BrowserConnection {
       });
     }
   };
-  return { inventory, working, launchFailed, connect };
+  return { inventory, working, launchFailed, launchOpened, connect };
 }
 
 function useSessionAvailabilityChange(state: string | undefined): void {
@@ -111,7 +116,7 @@ export function BrowserApprovalNotice({
 }: {
   readonly compact?: boolean;
 }): ReactNode {
-  const { inventory, working, launchFailed, connect } = useBrowserConnection();
+  const { inventory, working, launchFailed, launchOpened, connect } = useBrowserConnection();
   useSessionAvailabilityChange(inventory.result?.state);
   const restarted = useServerRestarted(inventory.result);
   const unavailable = inventory.result?.state === "unavailable";
@@ -123,6 +128,7 @@ export function BrowserApprovalNotice({
           failed={inventory.failed}
           working={working}
           launchFailed={launchFailed}
+          launchOpened={launchOpened}
           restarted={restarted}
           onRetry={inventory.refresh}
           onOpen={(event): void => {
@@ -140,6 +146,7 @@ interface BannerProps {
   readonly failed: boolean;
   readonly working: boolean;
   readonly launchFailed: boolean;
+  readonly launchOpened: boolean;
   readonly restarted: boolean;
   readonly onRetry: () => void;
   readonly onOpen: MouseEventHandler<HTMLButtonElement>;
@@ -149,13 +156,17 @@ type NoticeMessageKey =
   | "browserApproval.launchNotice"
   | "browserApproval.restarted"
   | "browserApproval.failed"
-  | "browserApproval.launchFailed";
+  | "browserApproval.launchFailed"
+  | "browserApproval.launchOpenedElsewhere";
 
 function noticeMessageKey(state: {
   readonly failed: boolean;
   readonly launchFailed: boolean;
+  readonly launchOpened: boolean;
   readonly restarted: boolean;
 }): NoticeMessageKey {
+  // The opener said "opened": what happened is that the system's default browser got the connection.
+  if (state.launchFailed && state.launchOpened) return "browserApproval.launchOpenedElsewhere";
   if (state.launchFailed) return "browserApproval.launchFailed";
   if (state.failed) return "browserApproval.failed";
   return state.restarted ? "browserApproval.restarted" : "browserApproval.launchNotice";
@@ -196,12 +207,13 @@ function BrowserApprovalBanner({
   failed,
   working,
   launchFailed,
+  launchOpened,
   restarted,
   onRetry,
   onOpen,
 }: BannerProps): ReactNode {
   const t = useTranslate();
-  const messageKey = noticeMessageKey({ failed, launchFailed, restarted });
+  const messageKey = noticeMessageKey({ failed, launchFailed, launchOpened, restarted });
   const message = t(messageKey);
   let buttonKey: "browserApproval.retry" | "browserApproval.open" | "browserApproval.working" =
     failed || launchFailed ? "browserApproval.retry" : "browserApproval.open";
