@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "109837d4e8a5c09f8558673bc830f4dfe037d5fa8d116849fc3e1e02df0c3510",
+    "catalogDigest": "0156ae2cb25bf6a9045a864c1b544242fc60fb7602631cad1903e5c35b800338",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1441,6 +1441,11 @@
             "dataClass": "count",
             "required": false
           },
+          "templateBindingUnresolvedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "settledCount": {
             "type": "integer",
             "dataClass": "count",
@@ -1691,6 +1696,11 @@
             "required": false
           },
           "templateNotActivatedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "templateBindingUnresolvedCount": {
             "type": "integer",
             "dataClass": "count",
             "required": false
@@ -34839,8 +34849,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["jira.field.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:244",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:440"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:264",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:464"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36635,9 +36645,17 @@
               "parent-type-mismatch",
               "template-unreadable",
               "template-missing",
-              "template-not-activated"
+              "template-not-activated",
+              "template-binding-unresolved"
             ],
             "maxItems": 25
+          },
+          "gateFacts": {
+            "type": "string-array",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["type-list-unavailable", "status-list-unavailable"],
+            "maxItems": 4
           }
         },
         "causal": "correlation",
@@ -36646,8 +36664,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:147",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:374"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:157",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:395"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36694,8 +36712,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.metadata.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:107",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:137"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:117",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:147"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45993,7 +46011,8 @@
               "selection-change",
               "jira-template-list",
               "jira-template-validate",
-              "jira-template-propose"
+              "jira-template-propose",
+              "jira-template-bind"
             ]
           },
           "phase": {
@@ -46050,7 +46069,7 @@
         "proofIds": ["skills.library.operation.lifecycle"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:9",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:97"]
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:99"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -46117,8 +46136,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["skills.workflow.attached.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:112",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:167"]
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:114",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:169"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -64799,6 +64818,12 @@
                   "required": false
                 },
                 {
+                  "name": "templateBindingUnresolvedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "templateMissingCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -65064,6 +65089,12 @@
                 },
                 {
                   "name": "summaryTooShortCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "templateBindingUnresolvedCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -103236,6 +103267,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "gateFacts",
+                  "type": "string-array",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "operation",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -123130,7 +123167,7 @@
     {
       "op": "jira.field.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:247",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:267",
       "package": "keiko-server"
     },
     {
@@ -123235,13 +123272,13 @@
     {
       "op": "jira.template.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:150",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:160",
       "package": "keiko-server"
     },
     {
       "op": "jira.template.metadata",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:110",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:120",
       "package": "keiko-server"
     },
     {
@@ -123972,7 +124009,7 @@
     {
       "op": "skills.workflow.attached",
       "category": "gateway",
-      "site": "packages/keiko-server/src/markdown-skill-log.ts:115",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:117",
       "package": "keiko-server"
     },
     {

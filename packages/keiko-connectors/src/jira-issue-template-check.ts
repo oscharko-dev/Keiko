@@ -331,8 +331,10 @@ export function checkJiraIssueTemplate(
 
 /**
  * All violations of every governing template; bounded so a refusal stays small. When more than one
- * template governs the write, every one of them must be met (#4354, F07a): the second one's violations
- * carry its place in the label (`SYN/Task #2`), so a refusal that results from it can say so.
+ * template governs the write AND more than one of them states a violation, every one of them must be
+ * met (#4354, F07a): the violations carry the template's place in the label (`SYN/Task #2`), so a
+ * refusal that results from it can say so. A second template that finds nothing wrong leaves the
+ * label as it is: there is nothing to tell apart.
  */
 export function checkJiraIssueTemplates(
   templates: readonly JiraIssueTemplate[],
@@ -341,15 +343,18 @@ export function checkJiraIssueTemplates(
 ): readonly JiraTemplateViolation[] {
   const seen = new Set<string>();
   const violations: JiraTemplateViolation[] = [];
-  const governing = matchingJiraIssueTemplates(templates, subject);
-  for (const [index, template] of governing.entries()) {
-    for (const violation of checkJiraIssueTemplate(template, subject, catalog)) {
+  const found = matchingJiraIssueTemplates(templates, subject).map((template) =>
+    checkJiraIssueTemplate(template, subject, catalog),
+  );
+  const several = found.filter((own) => own.length > 0).length > 1;
+  for (const [index, own] of found.entries()) {
+    for (const violation of own) {
       // The same rule met by two templates is one thing to repair: the first template names it.
       const id = `${violation.template}|${violation.ruleId}|${violation.subject}`;
       if (seen.has(id)) continue;
       seen.add(id);
       violations.push(
-        governing.length > 1
+        several
           ? { ...violation, template: `${violation.template} #${String(index + 1)}` }
           : violation,
       );

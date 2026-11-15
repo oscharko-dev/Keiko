@@ -635,6 +635,24 @@ describe("checkJiraIssueTemplates", () => {
     expect(alone.map((violation) => violation.template)).toEqual(["ABC/Story", "ABC/Story"]);
   });
 
+  // The landing collision (#4354 x #4355): a second template that finds nothing wrong is nothing to
+  // tell apart, so the one that does keeps its plain label.
+  it("leaves the label alone when several templates govern but only one states a violation", () => {
+    const permissive = parsed(["summaryMinLength: 1"], "# T");
+    const strict = parsed(["requiredLabels: [x]"], "# T");
+    for (const order of [
+      [permissive, strict],
+      [strict, permissive],
+    ]) {
+      const result = checkJiraIssueTemplates(
+        order,
+        subject({ summary: "a long enough summary" }),
+        CATALOG,
+      );
+      expect(result.map((violation) => violation.template)).toEqual(["ABC/Story"]);
+    }
+  });
+
   it("bounds the output", () => {
     const sections = Array.from({ length: 40 }, (_, index) => `## S${String(index)}`).join("\n");
     const big = parsed([], sections);
