@@ -56,6 +56,7 @@ FROM node:${NODE_VERSION}-bookworm
 # Bubblewrap backs the mandatory network:none sandbox the egress proof and the #2215 verification
 # E2E exercise. Without it those suites assert their fallback instead of the real boundary.
 # The Playwright system dependencies mirror what `playwright install --with-deps chromium` pulls.
+# Lifecycle tests observe listeners with lsof; portable signing fixtures create archives with zip.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bubblewrap \
@@ -83,7 +84,9 @@ RUN apt-get update \
         libxfixes3 \
         libxkbcommon0 \
         libxrandr2 \
+        lsof \
         unzip \
+        zip \
     && rm -rf /var/lib/apt/lists/*
 
 # The newer git, ahead of the distribution's in PATH (/usr/local/bin precedes /usr/bin). The

@@ -58,9 +58,9 @@ function isAlive(pid) {
   }
 }
 
-function listeningPorts(pid) {
+function listeningPortsForPid(pid, observe = execFileSync) {
   try {
-    const output = execFileSync(
+    const output = observe(
       "lsof",
       ["-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN", "-Fn", "-P"],
       {
@@ -68,8 +68,14 @@ function listeningPorts(pid) {
       },
     );
     return [...output.matchAll(/^n.*:(\d+)$/gmu)].map((match) => Number(match[1]));
-  } catch {
-    return [];
+  } catch (error) {
+    if (
+      error?.status === 1 &&
+      String(error.stdout ?? "").trim() === "" &&
+      String(error.stderr ?? "").trim() === ""
+    )
+      return [];
+    throw new Error("lsof lifecycle observer failed", { cause: error });
   }
 }
 
@@ -95,6 +101,14 @@ async function until(condition, what) {
 }
 
 function startRunner(root, ids, execArgv = []) {
+  // Refuse missing/broken observation before creating any process that would need cleanup.
+  try {
+    execFileSync("lsof", ["-v"], { stdio: "pipe" });
+  } catch (error) {
+    throw new Error("Lifecycle tests require a working lsof observer before runner startup", {
+      cause: error,
+    });
+  }
   const scenarios = join(root, "scenarios");
   mkdirSync(scenarios);
   for (const id of ids)
@@ -143,7 +157,7 @@ function instanceOf(runner) {
 // The instance has started when a process below the runner listens on a port.
 function listeningInstance(runner) {
   for (const row of descendantsOf(runner.child.pid)) {
-    const ports = listeningPorts(row.pid);
+    const ports = listeningPortsForPid(row.pid);
     if (ports.length > 0) return { pid: row.pid, ports };
   }
   return undefined;
@@ -160,6 +174,30 @@ async function expectNothingLeft(runner, tree, ports) {
   expect(left, `state directories; the runner said: ${runner.output}`).toEqual([]);
   expect(existsSync(join(runner.out, "state")), "state root").toBe(false);
 }
+
+describe("lsof lifecycle observer", () => {
+  it("treats exit 1 as no listening port", () => {
+    expect(
+      listeningPortsForPid(123, () => {
+        throw Object.assign(new Error("no listener"), { status: 1, stdout: "", stderr: "" });
+      }),
+    ).toEqual([]);
+  });
+
+  it.each([
+    { code: "ENOENT" },
+    { code: "EACCES" },
+    { status: 2 },
+    { status: 1, stdout: "", stderr: "lsof: permission denied\n" },
+    { status: 1, stdout: "p123\nn127.0.0.1:1983\n", stderr: "" },
+  ])("reports an unavailable observer instead of an empty observation: %j", (failure) => {
+    expect(() =>
+      listeningPortsForPid(123, () => {
+        throw Object.assign(new Error("observer unavailable"), failure);
+      }),
+    ).toThrow("lsof lifecycle observer failed");
+  });
+});
 
 describe.skipIf(process.platform === "win32")("what a run leaves behind", () => {
   let root;

@@ -1,8 +1,31 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, URL } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const scanFixture = vi.hoisted(() => ({
+  directories: new Map(),
+  files: new Map(),
+  reads: [],
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    readdirSync: (path, ...args) =>
+      scanFixture.directories.get(path) ?? actual.readdirSync(path, ...args),
+    readFileSync: (path, ...args) => {
+      if (!scanFixture.files.has(path)) return actual.readFileSync(path, ...args);
+      scanFixture.reads.push(path);
+      const contents = scanFixture.files.get(path);
+      if (contents instanceof Error) throw contents;
+      return contents;
+    },
+  };
+});
 
 import {
   asPattern,
@@ -159,9 +182,29 @@ describe("main", () => {
     process.exitCode = undefined;
   }
 
+  function useScanFixture(files) {
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    scanFixture.directories.set(join(root, ".github", "workflows"), ["release.yml", "ci.yml"]);
+    for (const directory of ["scripts", "tests", "packages"]) {
+      scanFixture.directories.set(join(root, directory), []);
+    }
+    scanFixture.directories.set(
+      join(root, "scripts"),
+      files.map(([name]) => ({ name, isDirectory: () => false })),
+    );
+    return files.map(([name, contents]) => {
+      const path = join(root, "scripts", name);
+      scanFixture.files.set(path, contents);
+      return path;
+    });
+  }
+
   afterEach(() => {
     restore?.();
     restore = undefined;
+    scanFixture.directories.clear();
+    scanFixture.files.clear();
+    scanFixture.reads.length = 0;
   });
 
   it("reports ci.yml by default, with the gate list and its repair command", () => {
@@ -183,6 +226,65 @@ describe("main", () => {
     main();
     const headings = out.filter((line) => line.includes("consumer(s)"));
     expect(headings).toHaveLength(availableWorkflows().length);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("reads each source once for all selected workflows while preserving sorted consumers", () => {
+    capture(["release.yml", "ci.yml"]);
+    const paths = useScanFixture([
+      ["z-ci.mjs", 'read(".github/workflows/ci.yml");'],
+      ["a-shared.mjs", 'read(".github/workflows/ci.yml"); read(".github/workflows/release.yml");'],
+    ]);
+
+    main();
+
+    expect(scanFixture.reads).toEqual(paths);
+    expect(out.filter((line) => line.includes("consumer(s)"))).toEqual([
+      "\nci.yml — 2 consumer(s)\n",
+      "\nrelease.yml — 1 consumer(s)\n",
+    ]);
+    expect(out.filter((line) => line.startsWith("  scripts/"))).toEqual([
+      "  scripts/a-shared.mjs",
+      "  scripts/z-ci.mjs",
+      "  scripts/a-shared.mjs",
+    ]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("reports unreadable sources once and ignores absent files without hiding valid consumers", () => {
+    capture(["--all"]);
+    const paths = useScanFixture([
+      ["absent.mjs", Object.assign(new Error("fixture absent"), { code: "ENOENT" })],
+      ["unreadable.mjs", Object.assign(new Error("fixture unreadable"), { code: "EACCES" })],
+      ["shared.mjs", 'read(".github/workflows/ci.yml"); read(".github/workflows/release.yml");'],
+    ]);
+
+    main();
+
+    expect(scanFixture.reads).toEqual(paths);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("unreadable.mjs (EACCES)");
+    expect(out.filter((line) => line.includes("consumer(s)"))).toEqual([
+      "\nci.yml — 1 consumer(s)\n",
+      "\nrelease.yml — 1 consumer(s)\n",
+    ]);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("reads changed sources again on the next invocation", () => {
+    capture(["--all"]);
+    const [path] = useScanFixture([["consumer.mjs", 'read(".github/workflows/ci.yml");']]);
+    main();
+    out.length = 0;
+    scanFixture.files.set(path, 'read(".github/workflows/release.yml");');
+
+    main();
+
+    expect(scanFixture.reads).toEqual([path, path]);
+    expect(out.filter((line) => line.includes("consumer(s)"))).toEqual([
+      "\nci.yml — 0 consumer(s)\n",
+      "\nrelease.yml — 1 consumer(s)\n",
+    ]);
     expect(process.exitCode).toBeUndefined();
   });
 
