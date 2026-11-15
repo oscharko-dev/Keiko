@@ -128,25 +128,91 @@ describe("pathological hunks", () => {
     expect(where).toEqual([...where].sort((left, right) => left - right));
   });
 
-  it("shows the leading windows of such a hunk when the parts run out", async () => {
+  // #4134's rule holds unchanged for a package of one part: no part is unopened, so nothing is
+  // split and the file is left out.
+  it("never splits a single hunk larger than the whole budget of a single part", async () => {
     const base = fixture.commit([{ path: "one.ts", content: numbered(10) }]);
     const head = fixture.commit([{ path: "one.ts", content: numbered(3_000, "replaced") }]);
-    const full = await packaged(fixture, base, head, { budgetTokens: 1_000_000 });
-
     const result = await packaged(fixture, base, head, { budgetTokens: 2_000 });
+    expect(result.text).toBe("");
+    expect(result.windowedHunks).toBe(0);
+    expect(result.coverage.unprocessed).toMatchObject([{ path: "one.ts", reason: "budget" }]);
+  });
+
+  // R4130-063, R4130-064: a hunk is split only when its file fits the windows the unopened parts
+  // can hold. A file larger than that is left out whole, as before the split existed.
+  it("leaves a hunk out that is larger than the parts that are left, and shows no window of it", async () => {
+    const base = fixture.commit([{ path: "one.ts", content: numbered(10) }]);
+    const head = fixture.commit([{ path: "one.ts", content: numbered(3_000, "replaced") }]);
+    const result = await packaged(fixture, base, head, { budgetTokens: 2_000, maxParts: 3 });
+    expect(result.text).toBe("");
+    expect(result.parts).toEqual([]);
+    expect(result.windowedHunks).toBe(0);
+    expect(result.coverage.unprocessed).toMatchObject([{ path: "one.ts", reason: "budget" }]);
+  });
+
+  const SMALL = ["s1.ts", "s2.ts", "s3.ts"];
+  function withSmallFiles(bigLines: number): { readonly base: string; readonly head: string } {
+    const small = (text: string): { path: string; content: string }[] =>
+      SMALL.map((path) => ({ path, content: `export const value = "${text}";\n` }));
+    const base = fixture.commit([{ path: "big.ts", content: numbered(10) }, ...small("before")]);
+    const head = fixture.commit([
+      { path: "big.ts", content: numbered(bigLines, "replaced") },
+      ...small("after"),
+    ]);
+    return { base, head };
+  }
+
+  // R4130-064: larger changes sort first, so before this rule the big file's windows took the
+  // parts and the small files that fit were left out.
+  it("places a file with an oversized hunk after the files that fit, although it sorts first", async () => {
+    const { base, head } = withSmallFiles(600);
+    const result = await packaged(fixture, base, head, { budgetTokens: 2_000, maxParts: 12 });
+
+    expect(result.files.map((file) => file.coverage.path)).toEqual([...SMALL, "big.ts"]);
+    expect(result.coverage.unprocessed).toEqual([]);
+    expect(result.coverage.included.every((file) => !file.partial)).toBe(true);
+    expect(result.windowedHunks).toBe(1);
+    for (const path of SMALL) expect(result.parts[0]?.text).toContain(path);
+  });
+
+  it("leaves a file larger than all parts out and still shows the files that fit whole", async () => {
+    const { base, head } = withSmallFiles(8_000);
+    const result = await packaged(fixture, base, head, { budgetTokens: 2_000, maxParts: 12 });
 
     expect(result.parts).toHaveLength(1);
-    const shown = numberedBody(result.files[0]?.hunks ?? []);
-    const all = numberedBody(full.files[0]?.hunks ?? []);
-    expect(shown.length).toBeGreaterThan(0);
-    expect(shown).toEqual(all.slice(0, shown.length));
-    expect(result.windowedHunks).toBe(1);
-    expect(result.coverage.included).toMatchObject([{ path: "one.ts", partial: true }]);
-    expect(reviewDiffCoverageSettlement(result.coverage)).toEqual({
-      kind: "incomplete",
-      reason: "files-unprocessed",
-    });
+    expect(result.files.map((file) => file.coverage.path)).toEqual(SMALL);
+    expect(result.coverage.included.every((file) => !file.partial)).toBe(true);
+    expect(result.coverage.unprocessed).toMatchObject([{ path: "big.ts", reason: "budget" }]);
+    expect(result.windowedHunks).toBe(0);
   });
+
+  // R4130-063: four files of about 1.8 MB each. Splitting them took 37 s on one thread, for windows
+  // that no part could take. They are measured once and left out; the bound is the large
+  // fixture's, which this fixture stays far below.
+  it("splits nothing of files far larger than the parts, within the measured bound", async () => {
+    const line = (index: number): string => `const v${String(index)} = "${"x".repeat(170)}";`;
+    const large = (salt: string): string =>
+      Array.from({ length: 9_500 }, (_, index) => `${line(index)} // ${salt}`).join("\n") + "\n";
+    const names = ["a1.ts", "a2.ts", "a3.ts", "a4.ts"];
+    const base = fixture.commit([
+      ...names.map((path) => ({ path, content: large("before") })),
+      { path: "s1.ts", content: "export const value = 1;\n" },
+    ]);
+    const head = fixture.commit([
+      ...names.map((path) => ({ path, content: large("after") })),
+      { path: "s1.ts", content: "export const value = 2;\n" },
+    ]);
+
+    const started = performance.now();
+    const result = await packaged(fixture, base, head, { budgetTokens: 13_832, maxParts: 12 });
+    const elapsed = performance.now() - started;
+
+    expect(elapsed).toBeLessThan(LARGE_FIXTURE_BOUND_MS);
+    expect(result.windowedHunks).toBe(0);
+    expect(result.files.map((file) => file.coverage.path)).toEqual(["s1.ts"]);
+    expect(result.coverage.unprocessed.map((file) => file.path).sort()).toEqual(names);
+  }, 120_000);
 
   it("keeps a hunk whole that fits one part beside its file header", async () => {
     const base = fixture.commit([{ path: "one.ts", content: numbered(10) }]);

@@ -10,6 +10,10 @@
 // `MAX_BUDGET_MISSES` files in a row did not fit whole, every later file is unprocessed for the
 // budget without being read, so a change set far beyond the budget costs a bounded number of Git
 // processes. Such files are reported exactly like any other file that did not fit.
+//
+// A file with a hunk larger than one part is placed after the files that fit (Issue #4130), in the
+// same order, and only when its whole diff fits the windows the unopened parts can hold. Otherwise
+// it is unprocessed for the budget, so it never takes a part from a file that fits.
 
 import type { PatchHunk, ReviewDiffLanguage } from "@oscharko-dev/keiko-contracts";
 import type { ReviewDiffChangedFile } from "./classify.js";
@@ -68,6 +72,13 @@ interface Offered extends Windowed {
   readonly file: ReviewDiffChangedFile;
 }
 
+/** A file with a hunk larger than one part, held back until the files that fit are placed. */
+interface Deferred {
+  readonly index: number;
+  readonly file: ReviewDiffChangedFile;
+  readonly hunks: readonly PatchHunk[];
+}
+
 /** How many split Git hunks the first `kept` offered hunks belong to. */
 function windowedHunksOf(entry: Windowed, kept: number): number {
   const origins = new Set<number>();
@@ -105,6 +116,7 @@ function headerOf(file: ReviewDiffChangedFile): string {
 class PackingRun {
   private readonly packer: ReviewDiffPartPacker;
   private readonly offered = new Map<number, Offered>();
+  private readonly deferred: Deferred[] = [];
   private patchBytes = 0;
   private budgetMisses = 0;
 
@@ -133,6 +145,7 @@ class PackingRun {
         this.offer(start + offset, file, contents[offset]);
       });
     }
+    this.placeDeferred();
   }
 
   private offer(
@@ -151,29 +164,67 @@ class PackingRun {
     this.patchBytes += content.bytes;
     if (this.patchBytes > this.options.maxTotalPatchBytes) throw tooLarge("patch-bytes");
     const header = headerOf(file);
-    const windowed = this.windowed(header, content.hunks);
-    const section = { header, hunks: windowed.hunks.map(renderReviewHunk) };
-    const placed = this.packer.place(index, section);
-    if (placed === undefined) {
-      this.missedBudget(file);
+    if (content.hunks.some((hunk) => !this.fitsPart(header, hunk))) {
+      this.deferred.push({ index, file, hunks: content.hunks });
       return;
     }
+    const whole = { hunks: content.hunks, windowOf: content.hunks.map(() => undefined) };
+    if (!this.place(index, file, header, whole)) this.missedBudget(file);
+  }
+
+  /** Whether one part can hold the hunk beside its file header. */
+  private fitsPart(header: string, hunk: PatchHunk): boolean {
+    return this.options.count(header + renderReviewHunk(hunk)) <= this.options.budgetTokens;
+  }
+
+  /** Places a file's offered hunks; `false` when not even the first found room. */
+  private place(
+    index: number,
+    file: ReviewDiffChangedFile,
+    header: string,
+    windowed: Windowed,
+  ): boolean {
+    const section = { header, hunks: windowed.hunks.map(renderReviewHunk) };
+    const placed = this.packer.place(index, section);
+    if (placed === undefined) return false;
     this.budgetMisses = placed < section.hunks.length ? this.budgetMisses + 1 : 0;
     this.offered.set(index, { file, ...windowed });
+    return true;
+  }
+
+  /**
+   * The files with a hunk larger than one part, after every file that fits is placed (R4130-064),
+   * in the same order. Such a file is shown in windows only when its whole diff fits the windows
+   * the unopened parts can hold, two per part; otherwise it is left out as before this change
+   * (`unprocessed`, `budget`) and nothing of it is split (R4130-063). So a file larger than the
+   * parts that are left takes no part from a file that fits, and the work of splitting is bounded
+   * by the parts, not by the size of the change.
+   */
+  private placeDeferred(): void {
+    const { budgetTokens, count, coverage } = this.options;
+    const windowBudget = Math.floor((budgetTokens * REVIEW_HUNK_WINDOW_BUDGET_PERCENT) / 100);
+    for (const { index, file, hunks } of this.deferred) {
+      throwIfReviewDiffStopped(this.read.abort);
+      const header = headerOf(file);
+      const capacity = this.packer.unopenedParts() * 2 * windowBudget;
+      const fits = capacity > 0 && count(header + hunks.map(renderReviewHunk).join("")) <= capacity;
+      if (!fits || !this.place(index, file, header, this.windowed(header, hunks, windowBudget))) {
+        coverage.addUnprocessed(file, "budget");
+      }
+    }
   }
 
   /**
    * The file's hunks, each hunk that no part can hold as consecutive windows (Issue #4130). A hunk
    * that fits a part beside its file header stays whole.
    */
-  private windowed(header: string, hunks: readonly PatchHunk[]): Windowed {
-    const { budgetTokens, count } = this.options;
-    const windowBudget = Math.floor((budgetTokens * REVIEW_HUNK_WINDOW_BUDGET_PERCENT) / 100);
+  private windowed(header: string, hunks: readonly PatchHunk[], windowBudget: number): Windowed {
+    const { count } = this.options;
     const offered: PatchHunk[] = [];
     const windowOf: (number | undefined)[] = [];
     hunks.forEach((hunk, index) => {
       const windows = splitReviewHunk(hunk, {
-        whole: (candidate) => count(header + renderReviewHunk(candidate)) <= budgetTokens,
+        whole: (candidate) => this.fitsPart(header, candidate),
         window: (candidate) => count(renderReviewHunk(candidate)) <= windowBudget,
       });
       for (const window of windows) {

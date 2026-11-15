@@ -140,14 +140,31 @@ export interface ReviewHunkSplitFit {
   readonly window: (hunk: PatchHunk) => boolean;
 }
 
-/** The last line a window starting at `start` may end on: the longest that fits, at least one line. */
+/**
+ * The last line a window starting at `start` may end on: the longest that fits, at least one line.
+ *
+ * The search grows the window by doubling while it fits and then halves inside the last step, so
+ * no probe measures much more than twice a window (R4130-063). A search over the whole rest of the
+ * hunk measured half of it on its first probes, for every window: one hunk of 4 MiB took 9.5 s.
+ */
 function windowEnd(
   lines: readonly BodyLine[],
   start: number,
   fits: ReviewHunkSplitFit["window"],
 ): number {
+  const last = lines.length - 1;
   let low = start;
-  let high = lines.length - 1;
+  let high = last;
+  let step = 1;
+  while (low < last) {
+    const probe = Math.min(last, low + step);
+    if (!fits(emitHunk(lines, start, probe))) {
+      high = probe - 1;
+      break;
+    }
+    low = probe;
+    step *= 2;
+  }
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
     if (fits(emitHunk(lines, start, middle))) low = middle;

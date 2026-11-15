@@ -167,6 +167,11 @@ export class ReviewDiffPartPacker {
     return this.parts.length < this.maxParts;
   }
 
+  /** The parts that are not open yet (Issue #4130): the room a windowed file is measured against. */
+  public unopenedParts(): number {
+    return this.maxParts - this.parts.length;
+  }
+
   /** Whether the smallest part of a section could still find room in this or a later part. */
   public mightFit(header: string): boolean {
     return this.canOpenPart() || this.part.packer.mightFit(header);

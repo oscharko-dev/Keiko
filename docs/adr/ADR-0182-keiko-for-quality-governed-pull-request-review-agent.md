@@ -519,8 +519,18 @@ that fits a part; for a larger one the rule is about lines: none is dropped, rep
 Before, such a hunk could not be shown at all and its file stayed `unprocessed`. A large new file is
 one hunk, and in development iteration 7 five of 30 reviews left seven such files unprocessed (13,500
 to 19,500 tokens each as a plain Git diff), which alone makes a review incomplete. A sixth needed
-more than 12 parts, which this does not change. The `reviewing` line of
-`review.run.phase` counts the Git hunks shown this way as `windowedHunks`. PR-Agent applies its extra lines (five before, one after) on top of the
+more than 12 parts, which this does not change. Two rules bound what a split may cost (R4130-063,
+R4130-064). A file with such a hunk is placed after every file that fits, in the same order
+(language rank, larger change first, path bytes), so it takes no part from a file that fits. And it
+is shown in windows only when its whole diff fits the windows the parts not yet opened can hold,
+two per part; a larger file is left out whole (`unprocessed`, `budget`) as before the split
+existed, and nothing of it is split. A package of one part therefore never splits a hunk, and the
+rule of #4134 holds there unchanged. Without these rules one file larger than all 12 parts took
+every part, showed about a tenth of itself and left small files unreviewed, and splitting four
+files of 3.8 MB each held the server's one thread for 37 seconds. The search for a window's end
+grows from the window's start, so its cost follows the window and not the hunk. `hunkCount` and
+`includedHunkCount` of an included file count package hunks, one for each window. The `reviewing`
+line of `review.run.phase` counts the Git hunks shown in windows as `windowedHunks`. PR-Agent applies its extra lines (five before, one after) on top of the
 provider's three default context lines; Keiko applies its own counts exactly. Child 8 measurement
 changed the lines after a change from one to three (Issue #4130): with one line, a guard two lines
 below a changed condition lay outside the hunk, and the Reviewer reported the value that guard

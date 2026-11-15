@@ -169,4 +169,42 @@ describe("splitReviewHunk", () => {
     expect(windows).toHaveLength(8);
     expect(numberedBody(windows)).toEqual(numberedBody([replaced]));
   });
+
+  // R4130-063: a search over the whole rest of the hunk measured half of it on its first probes,
+  // for every window, so the work grew with the square of the hunk. The search now grows from the
+  // window's start, and what it measures depends on the window, not on the hunk.
+  it("measures no candidate larger than twice a window, whatever the size of the hunk", () => {
+    const WINDOW = 100;
+    const LINES = 20_000;
+    const large: PatchHunk = {
+      oldStart: 0,
+      oldLines: 0,
+      newStart: 1,
+      newLines: LINES,
+      lines: Array.from({ length: LINES }, (_, index) => `+line ${String(index + 1)}`),
+    };
+    let probes = 0;
+    let largest = 0;
+    const windows = splitReviewHunk(large, {
+      whole: () => false,
+      window: (hunk) => {
+        probes += 1;
+        largest = Math.max(largest, hunk.lines.length);
+        return hunk.lines.length <= WINDOW;
+      },
+    });
+
+    expect(windows).toHaveLength(LINES / WINDOW);
+    expect(windows.every((window) => window.lines.length === WINDOW)).toBe(true);
+    expect(largest).toBeLessThanOrEqual(2 * WINDOW);
+    // Doubling to the window and halving back: about 2 x log2(100) probes for each window.
+    expect(probes).toBeLessThanOrEqual(windows.length * 16);
+    expect(numberedBody(windows)).toEqual(numberedBody([large]));
+  });
+
+  it("returns the longest window when the rest of the hunk is shorter than a doubling step", () => {
+    const windows = splitReviewHunk(replaced, { whole: () => false, window: atMost(5) });
+    expect(windows.map((window) => window.lines.length)).toEqual([5, 3]);
+    expect(numberedBody(windows)).toEqual(numberedBody([replaced]));
+  });
 });

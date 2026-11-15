@@ -66,6 +66,12 @@ describe("diff package parts (Issue #4130)", () => {
           const shown = numberedBody(file.hunks);
           expect(shown, label).toEqual(all.slice(0, shown.length));
           expect(file.coverage.partial, label).toBe(shown.length < all.length);
+          // Without a split hunk the #4134 rule holds as it was: whole hunks only, the same hunks
+          // the unbounded package has.
+          if (result.windowedHunks === 0) {
+            const whole = fullHunks.get(file.coverage.path) ?? [];
+            expect(file.hunks, label).toEqual(whole.slice(0, file.hunks.length));
+          }
           // Each included hunk is in exactly one part, and in order across the parts.
           const where = file.hunks.map((hunk) =>
             result.parts.findIndex((part) => part.text.includes(renderReviewHunk(hunk))),

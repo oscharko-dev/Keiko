@@ -603,6 +603,11 @@ export interface ReviewDiffFileRef {
 
 /** A packaged file. `partial` files lost trailing hunks to the budget and make a run incomplete. */
 export interface ReviewDiffIncludedFile extends ReviewDiffFileRef {
+  /**
+   * The hunks the package offered for the file and those it shows. These are package hunks: a Git
+   * hunk larger than one diff package part counts once for each of its windows (Issue #4130), so
+   * neither number is comparable with a count of Git hunks.
+   */
   readonly hunkCount: number;
   readonly includedHunkCount: number;
   readonly partial: boolean;
