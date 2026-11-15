@@ -181,6 +181,28 @@ function repairInput(
 }
 
 describe("grounded synthesis with offered tools (#4179)", () => {
+  it("retains observed prompt totals without consuming the next request's input window", async () => {
+    const promptTokens = countGatewayPromptTokens(REQUEST, undefined);
+    const input = {
+      model: MODEL,
+      request: REQUEST,
+      signal: new AbortController().signal,
+      budget: createGroundedSynthesisCallBudget(),
+      grants: { ...GRANTS, inputTokensMax: promptTokens },
+      accounting: undefined,
+    };
+    await expect(callPluralGroundedSynthesis(input)).resolves.toEqual(ANSWER);
+    await expect(callPluralGroundedSynthesis(input)).resolves.toEqual(ANSWER);
+    expect(input.budget.pendingUsage()).toEqual({
+      promptTokens: promptTokens * 2,
+      completionTokens: ANSWER.usage.completionTokens * 2,
+    });
+    expect(input.budget.remaining()).toBe(0);
+    await expect(callPluralGroundedSynthesis(input)).rejects.toBeInstanceOf(
+      CallerAttemptAdmissionError,
+    );
+  });
+
   it("tells the model that the evidence is ranked excerpts and complete reads need a tool", async () => {
     const seen: GatewayCallRequest[] = [];
     const controller = new AbortController();
@@ -263,7 +285,7 @@ describe("citation-only plural synthesis (#4321)", () => {
     });
   });
 
-  it("counts projected results before checking the remaining input grant or dispatching a model", async () => {
+  it("counts projected results before checking the current input grant or dispatching a model", async () => {
     const events: string[] = [];
     const toolCalls: GatewayCallRequest[] = [];
     const projected = vi.fn((request: GatewayCallRequest): GatewayCallRequest => {
@@ -287,17 +309,13 @@ describe("citation-only plural synthesis (#4321)", () => {
     const input = repairInput(capturingTurn(toolCalls, projected), { call });
     input.budget.recordUsage({ promptTokens: 13, completionTokens: 0 });
     const pendingUsage = input.budget.pendingUsage;
-    vi.spyOn(input.budget, "pendingUsage").mockImplementation(() => {
-      events.push("grant-check");
-      return pendingUsage();
-    });
     expect(countGatewayPromptTokens(input.request, undefined)).toBeLessThan(1011);
 
     await expect(
       callPluralGroundedSynthesis({ ...input, grants: { ...GRANTS, inputTokensMax: 1024 } }),
     ).rejects.toBeInstanceOf(CallerAttemptAdmissionError);
 
-    expect(events).toEqual(["projection", "grant-check"]);
+    expect(events).toEqual(["projection"]);
     expect(projected).toHaveBeenCalledTimes(1);
     expect(call).not.toHaveBeenCalled();
     expect(toolCalls).toEqual([]);

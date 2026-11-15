@@ -294,8 +294,8 @@ the acknowledged writes with their issue keys, unconfirmed writes separately, ca
 but never settled (one may have reached Jira before bookkeeping failed), and the counts of reads and
 refused calls; a human stop is not replaced. `chat.tool-turn.ended` records the closed reason, those
 counts (including `unsettledCount`) and the envelope bounds. A backlog draft contributes each
-item's key and state. An attempt refusal by the turn's own envelope (for example its cumulative
-prompt tokens) ends the turn as `budget-exhausted` with that answer; a cap the caller supplied keeps
+item's key and state. An attempt refusal by the turn's own envelope (for example exhaustion of its
+tool-call budget) ends the turn as `budget-exhausted` with that answer; a cap the caller supplied keeps
 its nonretryable 403. A deadline answer is delivered on the streamed and the grounded path too: it is already built
 from the stored transcript and admits no further tool or model work. The grounded route cancels on a human stop or an
 authority revocation at once, and on the deadline only while no exchange has settled; once one has, the deadline stops

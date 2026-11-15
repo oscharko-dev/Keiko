@@ -1086,11 +1086,7 @@ function multiSourceRemainingPromptOptions(
         ? undefined
         : ctx.deps.store.markdownSkills.forTurn(ctx.answerOptions.userMessageId),
     ownAssessmentPolicy: currentOwnAssessmentPolicy(ctx.deps),
-    callerInputTokensMax: Math.max(
-      0,
-      multiSourceSynthesisGrants(ctx, packs).inputTokensMax -
-        ctx.synthesisBudget.pendingUsage().promptTokens,
-    ),
+    callerInputTokensMax: multiSourceSynthesisGrants(ctx, packs).inputTokensMax,
   };
 }
 

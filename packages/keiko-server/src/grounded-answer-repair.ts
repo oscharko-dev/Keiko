@@ -105,7 +105,7 @@ function repairBudgetExhausted(ctx: GroundedRepairContext): boolean {
   const usage = repairExistingUsage(ctx);
   return (
     (ctx.deadlineAtMs !== undefined && ctx.nowMs() >= ctx.deadlineAtMs) ||
-    budget.modelInputTokensMax <= usage.promptTokens ||
+    budget.modelInputTokensMax <= (ctx.pack?.usage.modelInputTokens ?? 0) ||
     budget.modelOutputTokensMax <= usage.completionTokens
   );
 }
@@ -177,10 +177,7 @@ function repairOptions(ctx: GroundedRepairContext): GroundedAnswerOptions {
   if (budget === undefined)
     throw new TypeError("Citation repair requires the original turn budget");
   return {
-    modelInputTokensMax:
-      budget.modelInputTokensMax -
-      (ctx.pack?.usage.modelInputTokens ?? 0) -
-      ctx.answer.usage.promptTokens,
+    modelInputTokensMax: budget.modelInputTokensMax - (ctx.pack?.usage.modelInputTokens ?? 0),
     modelOutputTokensMax:
       budget.modelOutputTokensMax -
       (ctx.pack?.usage.modelOutputTokens ?? 0) -

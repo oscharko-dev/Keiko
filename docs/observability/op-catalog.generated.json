@@ -120211,7 +120211,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa-multi-source.ts:2224",
+      "site": "packages/keiko-server/src/grounded-qa-multi-source.ts:2220",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -120225,7 +120225,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3395",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3392",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -123476,7 +123476,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3818",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3815",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -124242,7 +124242,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2624",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2622",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

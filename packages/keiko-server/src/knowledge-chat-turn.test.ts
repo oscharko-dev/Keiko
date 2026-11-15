@@ -912,12 +912,9 @@ it.each([
     });
     // Synthesis has its own pending usage; the turn registry above accounts for every tool round.
     const pendingSynthesis = budget.pendingUsage();
-    const remainingInput = 1000 - pendingSynthesis.promptTokens;
     const remainingOutput = 1000 - pendingSynthesis.completionTokens;
-    expect(
-      tracker.admission({ promptTokens: remainingInput + 1, maxOutputTokens: 25 }),
-    ).toBeUndefined();
-    const finalGrant = tracker.admission({ promptTokens: remainingInput, maxOutputTokens: 25 });
+    expect(tracker.admission({ promptTokens: 1001, maxOutputTokens: 25 })).toBeUndefined();
+    const finalGrant = tracker.admission({ promptTokens: 1000, maxOutputTokens: 25 });
     expect(finalGrant?.maxOutputTokens).toBe(Math.min(25, remainingOutput));
     expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
     expect(budget.takeUsage()).toEqual({

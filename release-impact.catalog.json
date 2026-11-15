@@ -4382,6 +4382,7 @@
       "releaseNoteBullets": [
         "Jira Pods support governed project planning and collaboration, readable structure templates, batch drafts and reports, with stronger checks on localized fields and repeated writes. (#4385, #4288, #4292)",
         "Sub-task templates resolve Jira’s localized parent field, and delayed Chat responses no longer replace a newer access-mode selection. (#4390)",
+        "Fixed premature failures during source-backed Chat retries and citation repairs when each request fits the model context. (#4390)",
         "Clear requests to remember or forget act immediately. Keiko learns routine private facts from new conversations, replaces corrected facts and maintains a standing profile; older messages are not retrospectively enrolled. (#4349, #4285, #4273)",
         "Document parsing preserves requirement inventories more reliably, and managed MCP retrieval can ground Jira drafts in connected knowledge. (#4238, #4276)",
         "Chat keeps context more reliably across longer conversations and restarts, including qualified reasoning-model tool continuations. (#4267, #4270)",

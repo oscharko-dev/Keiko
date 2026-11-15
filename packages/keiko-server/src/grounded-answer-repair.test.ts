@@ -20,6 +20,41 @@ function context(content: string, numeric = false): GroundedRepairContext {
 }
 
 describe("citation repair dispatch eligibility", () => {
+  it.each([17, 34])(
+    "does not consume the repair input window with %i observed prompt tokens",
+    async (promptTokens) => {
+      const ctx = context("Feature is true.", true);
+      const repair = vi.fn((): Promise<GroundedAnswerPayload> =>
+        Promise.resolve({
+          content: JSON.stringify({ insertions: [{ after: "Feature is true.", marker: "[1]" }] }),
+          usage: { promptTokens: 11, completionTokens: 5 },
+        }),
+      );
+      const result = await repairGroundedAnswer({
+        ...ctx,
+        budget: {
+          ...DEFAULT_EXPLORATION_BUDGET,
+          modelInputTokensMax: 17,
+          modelOutputTokensMax: 20,
+        },
+        answer: { ...ctx.answer, usage: { promptTokens, completionTokens: 7 } },
+        invokeRepair: repair,
+      });
+      expect(repair).toHaveBeenCalledWith(
+        ctx.answer.content,
+        expect.objectContaining({
+          modelInputTokensMax: 17,
+          modelOutputTokensMax: 13,
+        }),
+      );
+      expect(result.disposition).toBe("applied");
+      expect(result.answer.usage).toEqual({
+        promptTokens: promptTokens + 11,
+        completionTokens: 12,
+      });
+    },
+  );
+
   it.each([
     "```java\nclass ExampleTest {}\n```",
     " \n```tsx\nrender(<Example />);\n```\n ",

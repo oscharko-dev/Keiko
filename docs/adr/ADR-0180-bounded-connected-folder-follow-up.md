@@ -52,14 +52,17 @@ purpose-specific admission and settlement and cannot grant another synthesis att
 [ADR-0144](ADR-0144-grounded-entailment-stage.md) remains responsible for claim support, and marker
 membership alone never establishes entailment.
 
-The follow-up uses the same connected scope and original authority. Retrieval, selection and prompt
-assembly consume the remaining search-call, read, excerpt-byte, model-input-token and elapsed
-budgets. Gateway spend, circuit, concurrency and cancellation admission still apply. High budget
+The follow-up uses the same connected scope and original authority. Retrieval and selection consume
+the remaining search-call, read, excerpt-byte and elapsed budgets; separate exploration and embedding
+input limits remain binding. Prompt assembly fits each current request within its model and caller
+input caps; earlier synthesis prompts never consume that capacity (owner decision 2026-11-11,
+ADR-0137 D2). Gateway spend, circuit, concurrency and cancellation admission still apply. High budget
 pressure or insufficient remaining resources refuses the pass rather than resetting a budget.
 
-Every physical synthesis attempt is admitted against the original cumulative input/output grants
-before spend reservation and provider dispatch. Charged input is the greater of the canonical sent
-prompt estimate and reported provider usage. Reported partial output remains charged after a
+Every physical synthesis attempt must fit its current input caps and the original cumulative output
+grant before spend reservation and provider dispatch. Recorded input is the greater of the canonical
+sent prompt estimate and reported provider usage; these totals remain observable without a cumulative
+prompt-token allowance. Reported partial output remains charged after a
 discarded attempt. When a dispatched stream fails without measured output, the requested output cap
 remains reserved; exhausted remaining output refuses a retry. A definite provider rejection or
 context overflow without partial usage contributes no generated output, so a transient rejection

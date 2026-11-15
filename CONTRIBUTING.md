@@ -621,18 +621,21 @@ reasons emit INFO. Inspection evidence remains body-free.
 declaration counts, repair disposition, and actual follow-up trigger, pass/admission counts,
 outcome and configuration disposition. Technical failures retain the existing closed error header,
 reduced frames and causes. Initial synthesis, marker repair, follow-up and their gateway transport or
-context-window retries share at most two physical adapter attempts and the original cumulative
-input/output and remaining elapsed grants. Admission occurs before each actual dispatch and spend
-reservation. Charged input retains the greater of the canonical sent prompt estimate and reported
-usage; measured partial output survives a discarded attempt, while uncertain failed stream output
-retains its requested cap. These conservative charges are distinct from provider-measured usage.
+context-window retries share at most two physical adapter attempts, the original cumulative output
+grant and the remaining elapsed grant. Each prompt must fit the current model and caller input caps;
+previous prompts never consume those caps (owner decision 2026-11-11, ADR-0137 D2).
+Admission occurs before each actual dispatch and spend reservation. Recorded input retains the
+greater of the canonical sent prompt estimate and reported usage, including discarded attempts.
+Measured partial output survives a discarded attempt, while uncertain failed stream output retains
+its requested cap. These conservative output charges are distinct from provider-measured usage.
 Caller attempt/cap refusals use nonretryable `GATEWAY_ATTEMPT_ADMISSION_DENIED` and HTTP 403;
 streamed notices retain the same code. The localized request-limit notice distinguishes those
 refusals from `GATEWAY_CONTEXT_OVERFLOW` without asserting exact unknown output consumption.
-Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
+Prompt fitting retains separate model and caller input caps for each request. Mandatory overhead that
 fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
 the model retains context-overflow handling. Best-effort citation repair keeps the completed
-answer when its remaining input allowance or synthesis attempt slots cannot fund the repair. Citation
+answer when its current prompt does not fit, its cumulative output grant is exhausted, or no
+synthesis attempt slot remains. Citation
 repair only inserts markers through the same admitted, turn-metered model port, without offering
 a catalog or entering the tool loop. Unexpected tool-call output is refused and charged; current
 readiness, authority, cancellation and synthesis/spend grants remain binding. The existing
@@ -771,8 +774,8 @@ and, when a repair ran, `repairOutcome` (`recovered`, `exhausted-again`, `empty-
 naming how the repaired attempt ended) — a line written before the gateway call settled (a byte cut,
 a cancellation) omits both, because it cannot know; a repaired turn that failed the same way again
 is final for the coding runtime (`runtimeRetry=refused`). The provider usage of the attempts a call
-discarded (a repair's first answer, a rejected tool call) counts against the run's prompt
-allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
+discarded (a repair's first answer, a rejected tool call) remains in the run's cumulative usage
+roll-up without a prompt-token allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
 `discardedPromptTokens`, `discardedCompletionTokens`). The correction the model receives is one fixed
 sentence, and the failed answer's reasoning is never recorded. For default and shared-history profiles, runtime reasoning fields are
 never forwarded directly: the coding sidecar drops echoed reasoning fields and reasoning-only assistant

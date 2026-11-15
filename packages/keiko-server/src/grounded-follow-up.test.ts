@@ -36,6 +36,36 @@ async function scriptedTurn(
 }
 
 describe("one server-owned follow-up under the original turn budgets", () => {
+  it("keeps the next request's input window after a full-window first synthesis", async () => {
+    const inputWindows: (number | undefined)[] = [];
+    const result = await runConnectedRetrievalEval({
+      files,
+      query: "Explain src/Feature.ts",
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, followUpPassesMax: 1 },
+      answerer: {
+        answer: async (_question, _pack, options) => {
+          await Promise.resolve();
+          inputWindows.push(options?.modelInputTokensMax);
+          return {
+            content: inputWindows.length === 1 ? first : "Companion is 42 [lib/Companion.ts:1].",
+            usage: {
+              promptTokens: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+              completionTokens: 7,
+            },
+          };
+        },
+      },
+    });
+    expect(inputWindows).toEqual([
+      DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+      DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+    ]);
+    expect(result.answer).toMatchObject({ followUp: { passCount: 1, outcome: "answered" } });
+    expect(
+      result.pack.uncertainty.some((marker) => marker.claim.includes("modelInputTokens")),
+    ).toBe(false);
+  });
+
   it("reads a genuinely unselected in-scope declaration and returns only the second answer", async () => {
     const { result, received } = await scriptedTurn(1);
     expect(received[0]).not.toContain("lib/Companion.ts");

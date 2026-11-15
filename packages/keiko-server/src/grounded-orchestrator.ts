@@ -12626,9 +12626,6 @@ function exhaustedAnswerBudgetDimensions(
   elapsedMs: number,
 ): readonly string[] {
   return [
-    ...(pack.usage.modelInputTokens + answer.usage.promptTokens > pack.budget.modelInputTokensMax
-      ? ["modelInputTokens"]
-      : []),
     ...(pack.usage.modelOutputTokens + answer.usage.completionTokens >
     pack.budget.modelOutputTokensMax
       ? ["modelOutputTokens"]

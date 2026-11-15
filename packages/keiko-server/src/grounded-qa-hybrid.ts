@@ -3010,17 +3010,10 @@ async function hybridAnswerAttempt(
 ): Promise<FittedHybridAnswer> {
   const budget = ctx.originalSynthesisBudget ?? modelWindowAwareBudget(ctx.deps, ctx.modelId);
   const usage = hybridRetrievalUsage(ctx);
-  const pending = answerer.answer.pendingSynthesisUsage?.() ?? {
-    promptTokens: 0,
-    completionTokens: 0,
-  };
   const promptCtx = hybridContextWithinWindow(
     {
       ...ctx,
-      synthesisInputTokensMax: Math.max(
-        0,
-        budget.modelInputTokensMax - usage.promptTokens - pending.promptTokens,
-      ),
+      synthesisInputTokensMax: Math.max(0, budget.modelInputTokensMax - usage.promptTokens),
     },
     selected,
   );
