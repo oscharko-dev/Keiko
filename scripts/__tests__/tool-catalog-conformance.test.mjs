@@ -500,8 +500,7 @@ describe("compiler measurements reuse the existing sample and percentile convent
       nodeVersion: "v26.13.1",
       logicalCores: 16,
       totalMemoryBytes: 24_000_000_000,
-      containerImage:
-        "node:26.13.1-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
+      containerImage: TOOL_CATALOG_REFERENCE_IMAGE,
     };
     const calibration = buildToolCatalogPerformanceDocument(calibrationRaw, {
       role: "calibration",
