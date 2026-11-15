@@ -526,7 +526,7 @@ describe("Jira backlog draft approval (#4178)", () => {
 
     it.each([
       ["target project", { projectId: "10001" }, "Project 10001"],
-      ["issue type", { issueTypeId: "10003" }, "Issue type 10003"],
+      ["issue type", { issueTypeId: "10003" }, "Issue type ID 10003"],
       [
         "relation field",
         { parent: { fieldId: "customfield_10100", issueKey: "SYN-7" } },
@@ -552,7 +552,7 @@ describe("Jira backlog draft approval (#4178)", () => {
     ])("renders drafts that differ only in the %s differently", (_name, change, shown) => {
       const original = review(base);
       const changed = review({ ...base, ...change });
-      expect(original).toContain("Project 10000 · Issue type 10002");
+      expect(original).toContain("Project 10000 · Issue type ID 10002");
       expect(original).toContain("Parent (parent): SYN-7");
       expect(original).toContain("Same description");
       expect(changed).not.toBe(original);

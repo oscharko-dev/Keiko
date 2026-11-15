@@ -17,6 +17,8 @@ import {
   JIRA_MUTATION_OPERATIONS,
   JIRA_MANAGED_ACTION_TYPES,
   type JiraApprovalProject,
+  type JiraApprovalNamedId,
+  type JiraApprovalTransition,
   type JiraAttachmentPreview,
   type JiraManagedReadToolName,
   type JiraMutationOperation,
@@ -334,6 +336,17 @@ export interface JiraChatAdmissionOptions {
   readonly projectPreview?: (
     action: JiraChatCatalogAction,
   ) => Promise<readonly JiraApprovalProject[] | undefined>;
+  /**
+   * The status change a `jira.transition` approval covers, by the transition's name and target status
+   * as Jira answers now. Absent or undefined for any other write.
+   */
+  readonly transitionPreview?: (
+    action: JiraChatCatalogAction,
+  ) => Promise<JiraApprovalTransition | undefined>;
+  /** The names Jira gives the fields this write carries, read when the approval is requested. */
+  readonly fieldNamesPreview?: (
+    action: JiraChatCatalogAction,
+  ) => Promise<readonly JiraApprovalNamedId[] | undefined>;
 }
 type AdmissionPorts = Pick<
   CatalogToolBinderInput<JiraChatCatalogConsumer>,

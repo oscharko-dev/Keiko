@@ -167,7 +167,7 @@ describe("Jira approval names stay with their metadata binding", () => {
       const view = review([
         source === "another Pod" ? metadata : { schemaVersion: 1, exchanges: metadata.exchanges },
       ]);
-      expect(view.container).toHaveTextContent("Project 10000 · Issue type 10002");
+      expect(view.container).toHaveTextContent("Project 10000 · Issue type ID 10002");
       expect(screen.getByText("Priority")).toBeVisible();
       expect(screen.queryByText("priority", { exact: true })).toBeNull();
       expect(screen.getByText("1", { exact: true })).toBeVisible();

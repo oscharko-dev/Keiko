@@ -11,7 +11,15 @@ import {
   type JiraDraftField,
   type JiraDraftValue,
 } from "./jiraDraftTree";
-import { jiraNamed, jiraNameOf, NO_JIRA_NAMES, restatesTarget, type JiraNames } from "./jiraNames";
+import {
+  jiraCardField,
+  jiraIdLabel,
+  jiraNameOf,
+  jiraTransitionLabel,
+  NO_JIRA_NAMES,
+  restatesTarget,
+  type JiraNames,
+} from "./jiraNames";
 import { jiraAgileArgumentLabel } from "./jira-agile-presentation";
 import { jiraProjectMetadataArgumentLabel } from "./jira-project-metadata-presentation";
 import { jiraScreenTabArgumentLabel } from "./jira-administration-presentation";
@@ -408,17 +416,34 @@ function managedFacts(
   names: JiraNames,
 ): readonly Fact[] {
   const family = key === "projectId" ? "projects" : "issueTypes";
-  const known =
-    (key === "projectId" || key === "issueTypeId") && typeof value === "string"
-      ? jiraNameOf(names, family, value)
-      : undefined;
-  return jiraFacts(key, known ?? value, t)
+  const known = knownName(key, value, names, family, t);
+  return jiraFacts(key, known ?? unnamedId(key, value, t) ?? value, t)
     .filter(
       (fact) =>
         key !== "fields" ||
         !restatesTarget(fact, stringOf(raw.projectId), stringOf(raw.issueTypeId)),
     )
-    .map((fact) => (key === "fields" ? jiraNamed(fact, names, raw, t) : fact));
+    .map((fact) => (key === "fields" ? jiraCardField(fact, names, raw, t) : fact));
+}
+/** Jira's own name for an id the approval or this Chat's reads called, when one is known. */
+function knownName(
+  key: string,
+  value: unknown,
+  names: JiraNames,
+  family: "projects" | "issueTypes",
+  t: OptionalWidgetTranslate,
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  if (key === "transitionId") return jiraTransitionLabel(names, value, t);
+  return key === "projectId" || key === "issueTypeId"
+    ? jiraNameOf(names, family, value)
+    : undefined;
+}
+/** An issue type id Jira did not name is said so in words, with the id as the detail. */
+function unnamedId(key: string, value: unknown, t: OptionalWidgetTranslate): string | undefined {
+  return key === "issueTypeId" && typeof value === "string"
+    ? t("chat.jira.fact.idUnnamed", { id: jiraIdLabel(value, t) })
+    : undefined;
 }
 function stringOf(value: unknown): string {
   return typeof value === "string" ? value : "";

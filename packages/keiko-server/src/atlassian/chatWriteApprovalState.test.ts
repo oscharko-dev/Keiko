@@ -405,6 +405,43 @@ it("records a refused draft deselection as an invalid write approval without nam
   }
 });
 
+describe("the names a Jira write approval carries are display data only (R04)", () => {
+  const variants = [
+    {},
+    { fields: [{ id: "customfield_10112", name: "Geschätzte Punkte" }] },
+    { fields: [{ id: "customfield_10112", name: "Renamed since the review" }] },
+    {
+      projects: [{ ref: "10000", key: "SYN", issueTypes: [{ id: "10002", name: "Aufgabe" }] }],
+    },
+  ] as const;
+  it.each(variants)(
+    "claims the one approval with the identity alone, whatever it names (%j)",
+    (names) => {
+      const registry = new AtlassianActionApprovalRegistry(() => NOW);
+      const base = pending();
+      const entry: ChatWriteApprovalEntry = {
+        ...base,
+        approval: { ...base.approval, ...names },
+      };
+      expect(registry.createChatWriteApproval(entry).ok).toBe(true);
+      expect(projectChatWriteApproval(entry)).toEqual(entry.approval);
+      accept(registry, entry);
+      const claimed = registry.claimChatWriteApproval(
+        entry.approval.approvalId,
+        entry.subject,
+        entry.authority,
+        {
+          invocationId: entry.approval.invocationId,
+          operation: entry.approval.operation,
+          actionDigest: entry.approval.actionDigest,
+        },
+      );
+      expect(claimed.ok).toBe(true);
+      expect(entry.approval.actionDigest).toBe(base.approval.actionDigest);
+    },
+  );
+});
+
 describe("the projects a Jira write approval names are display data only (F09)", () => {
   const identity = (
     entry: ChatWriteApprovalEntry,
