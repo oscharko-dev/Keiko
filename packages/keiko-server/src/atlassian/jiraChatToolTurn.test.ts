@@ -2816,6 +2816,7 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
   // R04 (b): the staged draft's issue type is named by the same project read that names the project.
   it("names the issue types of a staged draft's approval from the project's own answer", async () => {
     const { f } = stagedFixture();
+    f.jira.issueTypes = [{ id: "10001", name: "Story" }];
     const pending = handleSendDesktopChat(sendContext(f, "staged-type-names"), f.deps);
     void pending.catch(() => undefined);
     await awaitReadGrantedForWrite(f);

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f617d49e733e16e658f38662985d024474b0b0a406340e119194956b6e112348",
+    "catalogDigest": "31ded332cdde0be050347cddc57730baf7b8a196129337bc07f37484ffb25b33",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1441,6 +1441,11 @@
             "dataClass": "count",
             "required": false
           },
+          "templateBindingUnresolvedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "settledCount": {
             "type": "integer",
             "dataClass": "count",
@@ -1691,6 +1696,11 @@
             "required": false
           },
           "templateNotActivatedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "templateBindingUnresolvedCount": {
             "type": "integer",
             "dataClass": "count",
             "required": false
@@ -27134,8 +27144,8 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.call-bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:170",
-        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:692"]
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:171",
+        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:699"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27178,10 +27188,10 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.native-passthrough.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:149",
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:150",
         "emitterSites": [
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:649",
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:666"
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:656",
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:673"
         ]
       },
       {
@@ -27231,10 +27241,10 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.projected.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:189",
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:190",
         "emitterSites": [
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:847",
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:860"
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:854",
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:867"
         ]
       },
       {
@@ -27367,8 +27377,8 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.rejected.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:47",
-        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:546"]
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:48",
+        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:553"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34692,8 +34702,73 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["jira.catalog.selection.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:14",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:57"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:15",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:58"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "jira.catalog.selection-refused",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "atlassian.jiraCatalogSelectionActivity.recordJiraCatalogSelectionRefused",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "surface": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["chat", "coding"]
+          },
+          "requestedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "catalogBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "projectionBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "offeredBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "boundBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "exceeded": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["catalog", "projection", "offered", "none", "not-built"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["atlassian-action-execution"],
+        "proofIds": ["jira.catalog.selection-refused.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:83",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:152"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34847,8 +34922,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["jira.field.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:244",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:440"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:264",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:464"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36643,9 +36718,17 @@
               "parent-type-mismatch",
               "template-unreadable",
               "template-missing",
-              "template-not-activated"
+              "template-not-activated",
+              "template-binding-unresolved"
             ],
             "maxItems": 25
+          },
+          "gateFacts": {
+            "type": "string-array",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["type-list-unavailable", "status-list-unavailable"],
+            "maxItems": 4
           }
         },
         "causal": "correlation",
@@ -36654,8 +36737,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.admission.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:147",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:374"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:157",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:395"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36702,8 +36785,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["jira.template.metadata.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:107",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:137"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:117",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:147"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -46001,7 +46084,8 @@
               "selection-change",
               "jira-template-list",
               "jira-template-validate",
-              "jira-template-propose"
+              "jira-template-propose",
+              "jira-template-bind"
             ]
           },
           "phase": {
@@ -46058,7 +46142,7 @@
         "proofIds": ["skills.library.operation.lifecycle"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:9",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:97"]
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:99"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -46125,8 +46209,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["skills.workflow.attached.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:112",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:167"]
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:114",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:169"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -51280,6 +51364,7 @@
             "jira.approval.project",
             "jira.attachment.source",
             "jira.catalog.selection",
+            "jira.catalog.selection-refused",
             "jira.citation.markers",
             "jira.field.admission",
             "jira.operation.avatars",
@@ -51309,6 +51394,7 @@
           "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
+          "jira.catalog.selection-refused",
           "jira.citation.markers",
           "jira.field.admission",
           "jira.operation.avatars",
@@ -51335,6 +51421,7 @@
           "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
+          "jira.catalog.selection-refused",
           "jira.citation.markers",
           "jira.field.admission",
           "jira.operation.avatars",
@@ -51361,6 +51448,7 @@
           "jira.approval.project",
           "jira.attachment.source",
           "jira.catalog.selection",
+          "jira.catalog.selection-refused",
           "jira.citation.markers",
           "jira.field.admission",
           "jira.operation.avatars",
@@ -64440,6 +64528,7 @@
               "jira.approval.project",
               "jira.attachment.source",
               "jira.catalog.selection",
+              "jira.catalog.selection-refused",
               "jira.citation.markers",
               "jira.field.admission",
               "jira.operation.avatars",
@@ -64491,6 +64580,10 @@
             },
             {
               "op": "jira.catalog.selection",
+              "mode": "correlation"
+            },
+            {
+              "op": "jira.catalog.selection-refused",
               "mode": "correlation"
             },
             {
@@ -64564,6 +64657,7 @@
             "jira.approval.project",
             "jira.attachment.source",
             "jira.catalog.selection",
+            "jira.catalog.selection-refused",
             "jira.citation.markers",
             "jira.field.admission",
             "jira.operation.avatars",
@@ -64802,6 +64896,12 @@
                 },
                 {
                   "name": "summaryTooShortCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "templateBindingUnresolvedCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -65072,6 +65172,12 @@
                 },
                 {
                   "name": "summaryTooShortCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "templateBindingUnresolvedCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -65501,6 +65607,66 @@
                 "causeChain": false
               },
               "proofIds": ["jira.catalog.selection.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "jira.catalog.selection-refused",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "boundBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "catalogBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "exceeded",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "offeredBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "projectionBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "requestedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "surface",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["jira.catalog.selection-refused.line"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -103238,6 +103404,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "gateFacts",
+                  "type": "string-array",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "operation",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -119176,25 +119348,25 @@
     {
       "op": "gateway.tool-catalog.call-bound",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:173",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:174",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.native-passthrough",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:152",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:153",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.projected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:192",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:193",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:50",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:51",
       "package": "keiko-model-gateway"
     },
     {
@@ -119552,7 +119724,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:427",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:436",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -123134,7 +123306,13 @@
     {
       "op": "jira.catalog.selection",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:17",
+      "site": "packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:18",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.catalog.selection-refused",
+      "category": "process",
+      "site": "packages/keiko-server/src/atlassian/jiraCatalogSelectionActivity.ts:86",
       "package": "keiko-server"
     },
     {
@@ -123146,7 +123324,7 @@
     {
       "op": "jira.field.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:247",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:267",
       "package": "keiko-server"
     },
     {
@@ -123251,13 +123429,13 @@
     {
       "op": "jira.template.admission",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:150",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:160",
       "package": "keiko-server"
     },
     {
       "op": "jira.template.metadata",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:110",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:120",
       "package": "keiko-server"
     },
     {
@@ -123988,7 +124166,7 @@
     {
       "op": "skills.workflow.attached",
       "category": "gateway",
-      "site": "packages/keiko-server/src/markdown-skill-log.ts:115",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:117",
       "package": "keiko-server"
     },
     {
@@ -125165,6 +125343,7 @@
     "jira.attachment.source-log-failed",
     "jira.attachment.source-read-failed",
     "jira.catalog.selection",
+    "jira.catalog.selection-refused",
     "jira.citation.markers",
     "jira.field.admission",
     "jira.mutation-execution-failed",
