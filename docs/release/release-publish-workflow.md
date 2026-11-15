@@ -298,8 +298,10 @@ never overwritten.
 For example, prepare and independently recheck each private 1.1.4 candidate:
 
 ```sh
+node scripts/build-coding-runtime-npm-package.mjs macos-arm64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-arm64
 node scripts/build-coding-runtime-npm-package.mjs --pack macos-arm64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-arm64 /tmp/keiko-runtime-1.1.4/artifacts-arm64
 node scripts/build-coding-runtime-npm-package.mjs --verify macos-arm64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-arm64 /tmp/keiko-runtime-1.1.4/artifacts-arm64
+node scripts/build-coding-runtime-npm-package.mjs macos-x64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-x64
 node scripts/build-coding-runtime-npm-package.mjs --pack macos-x64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-x64 /tmp/keiko-runtime-1.1.4/artifacts-x64
 node scripts/build-coding-runtime-npm-package.mjs --verify macos-x64 1.1.4 /tmp/keiko-runtime-1.1.4/macos-x64 /tmp/keiko-runtime-1.1.4/artifacts-x64
 ```
@@ -359,7 +361,8 @@ publishes only reviewed bytes.
    from the `--pack` receipt. Only a change merged to `dev` extends this file. The publisher refuses a
    tarball whose verified receipt names another OpenCode than its pin.
 2. Attach the bytes. Create the GitHub prerelease `coding-runtime-<version>` (never marked latest)
-   and upload both tarballs and their receipts, each receipt renamed to `<tarball>.receipt.json`.
+   and upload both tarballs and their receipts, each receipt renamed to
+   `<tarball without .tgz>.receipt.json` (the name the publisher's `receiptAssetName` resolves).
    The prerelease is a transport only and grants no trust.
 3. Bind each package to the workflow once. The package owner runs, logged in to npm:
 
@@ -384,6 +387,22 @@ reports `missing` on `coding-runtime.ripgrep.resolved`, and a clean npm installa
 search from the republished packages. Republish both with the pinned ripgrep, then change the pins
 as in step 3; the customer-shape qualifier drops its `KEIKO_RIPGREP_BINARY_PATH` hand-off in that
 same change.
+
+The 1.1.5 runtime packages (#4359) carry OpenCode 2.2.5, the one OpenCode every Keiko channel runs.
+Their reviewed entry is in `docs/release/coding-runtime-npm-packages.json` for `macos-arm64` and
+`macos-x64`; `win32-x64` stays `firstPublication: "pending"`, because its package is built on a
+Windows host and Windows customers use the portable archive, which already carries 2.2.5. Build each
+target as above at 1.1.5 from a clean `dev` checkout: first the three-argument build, which writes
+the package directory (`node scripts/build-coding-runtime-npm-package.mjs <target> 1.1.5 <package dir>`),
+then `--pack`, then `--verify`; `--pack` and `--verify` only inspect an existing package directory.
+A fresh clone must `git fetch origin <helperSourceCommit>` first (the commit named by `helperSourceCommit` in
+`NPM_LANE_RUNTIME_APPROVALS`): `--pack` compares `native/secure-workspace-read` with it and stops with
+a bare exit 128 when the object is missing. The prerelease `coding-runtime-1.1.5` carries each
+tarball under its pinned name and each `receipt.json` renamed `<tarball without .tgz>.receipt.json`.
+The root manifest and lockfile stay on 1.1.4 until npm serves both 1.1.5 packages and the workflow's
+verification is green, and `release-publish.mjs` refuses a product release while a root runtime pin
+carries another OpenCode than `portable-runtime-approvals.json` approves, so 1.1.4 (OpenCode 2.1.4)
+cannot ship by accident in the meantime.
 
 The 1.1.4 runtime packages carry OpenCode 2.1.4 and address F18's one-MiB secure-read helper.
 `coding-runtime-publish.yml` published both on 2026-10-26 (#3898 AC8), and the root optional
