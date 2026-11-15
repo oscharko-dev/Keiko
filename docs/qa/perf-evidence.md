@@ -172,7 +172,7 @@ npm run perf:evidence:regen:tool-catalog:portable -- --baseline origin/dev
 
 Start from an installed checkout with `npm run build:packages` completed so the producer's workspace
 imports exist. Commit the implementation first and fetch the intended baseline before this command.
-It requires a clean checkout, a baseline that is an ancestor of HEAD, Node 24.18.0, npm 11.16.0,
+It requires a clean checkout, a baseline that is an ancestor of HEAD, Node 26.13.1, npm 11.20.0,
 and a dedicated Linux, macOS or Windows x64/arm64 host with at least 14 logical cores. It archives
 the baseline into a separate directory, installs both lockfiles with `npm ci --ignore-scripts`,
 and builds both package trees. Two fresh Node processes then measure the baseline and candidate
@@ -267,7 +267,7 @@ copies both documents back — review and commit them as your final commit (the 
 subject paths, so committing them does not invalidate what they bind).
 
 On macOS/Windows the command fails closed and prints the pinned container invocation
-(`node:24.18.0-bookworm`, `--privileged` for Bubblewrap, Playwright Chromium). A bind mount
+(`node:26.13.1-bookworm`, `--privileged` for Bubblewrap, Playwright Chromium). A bind mount
 installs Linux binaries into the mounted repo's `node_modules` — irrelevant with the recommended
 throwaway clone below; only after mounting your working checkout directly re-run `npm install`.
 
@@ -281,7 +281,7 @@ throwaway clone below; only after mounting your working checkout directly re-run
   independent evidence checker are. Name the clone directory `*.noindex` so Spotlight does not
   index-storm the host during the run.
 - **Single occupancy.** Measurement is exclusive: before starting, check
-  `docker ps` for any other `node:24*` measurement container (other agents measure too) and do
+  `docker ps` for any other `node:26*` measurement container (other agents measure too) and do
   not run builds/tests/gates on the host for the duration. A budget verdict measured on a loaded
   host is an environment verdict, not a product regression — fix the load, not the code. Since
   ADR-0156 D5 the run still completes and writes its document, so you can read the numbers and
@@ -404,7 +404,7 @@ npm run perf:evidence:coding-runtime
 npm run check:perf-evidence:coding-runtime -- --enforce-source-freshness
 ```
 
-Use the pinned Node 24.18.0/npm 11.16.0 installation. Staging uses the existing approved-payload
+Use the pinned official Node 26.13.1/npm 11.20.0 installation. Staging uses the existing approved-payload
 downloader/verifier and builds the secure-read helper; production discovery checks their integrity
 again for the measurement. The producer compiles the existing test-only production-composition
 support before collecting samples. Source, ruler and environment stamps must remain equal before
@@ -438,6 +438,14 @@ npm run perf:evidence:coding-runtime -- --recalibrate
 npm run perf:evidence:coding-runtime
 npm run check:perf-evidence:coding-runtime -- --enforce-source-freshness
 ```
+
+The 2026-11-15 owner decision retires Node 24. For that exact toolchain migration,
+`--recalibrate-toolchain` accepts only the newly governed Node/npm pair while requiring every other
+recorded host, Git, OpenCode payload and helper identity to match the previous calibration. It uses
+the same non-widening budget ratchet as ordinary recalibration. Then record an independent candidate
+measurement. The tool-catalog paired producer validates historical documents with the baseline
+revision's checker and measures both revisions under Node 26 with the candidate's ruler; its six
+ceilings remain unchanged. D12 and workspace measurements use the Node 26 reference container.
 
 `--recalibrate` requires the exact existing reference environment and a valid existing calibration
 and budget. It derives ceilings from the new samples but writes the minimum of each new ceiling and

@@ -48,29 +48,7 @@ services:
       - gates-playwright:/opt/playwright
       - gates-npm-cache:/opt/npm-cache
 
-  # The optional Node 26 lane: the same Dockerfile built with the Node version CI's "Node 26
-  # compatibility" job runs, so a failure that only Node 26 shows can be reproduced here instead of
-  # on the host. Everything else is inherited (the pinned git and iproute2, the unprivileged `node`
-  # user, the security options, the checkout bind mount). The two volumes that hold Node-version
-  # specific content are its own, so the node_modules of the two Node versions never mix; the
-  # Playwright browsers do not depend on Node and stay shared. docs/qa/local-gates.md.
-  gates-node26:
-    extends:
-      service: gates
-    build:
-      context: ../..
-      dockerfile: docker/gates/Dockerfile
-      args:
-        NODE_VERSION: "26.8.1"
-    volumes:
-      - ../..:/repo
-      - gates-node26-node-modules:/repo/node_modules
-      - gates-playwright:/opt/playwright
-      - gates-node26-npm-cache:/opt/npm-cache
-
 volumes:
   gates-node-modules:
   gates-playwright:
   gates-npm-cache:
-  gates-node26-node-modules:
-  gates-node26-npm-cache:

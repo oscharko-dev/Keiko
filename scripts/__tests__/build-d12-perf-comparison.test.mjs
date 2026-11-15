@@ -129,8 +129,8 @@ function bundleEvidence(revision) {
     producerCommit: CANDIDATE_COMMIT,
     runtime: {
       architecture: "arm64",
-      nodeVersion: "24.18.0",
-      npmVersion: "11.16.0",
+      nodeVersion: "26.13.1",
+      npmVersion: "11.20.0",
       osRelease: "6.8.0-test",
       platform: "linux",
       zlibVersion: "1.3.1",
@@ -196,8 +196,8 @@ function provenance(revision) {
     platform: "linux",
     architecture: "arm64",
     osRelease: "6.8.0-test",
-    nodeVersion: "24.18.0",
-    npmVersion: "11.16.0",
+    nodeVersion: "26.13.1",
+    npmVersion: "11.20.0",
     lockfileSha256: LOCKFILE_SHA_256_BY_REVISION[revision],
     playwrightVersion: "1.61.1",
     zlibVersion: "1.3.1",
@@ -693,8 +693,8 @@ describe("D12 performance comparison builder", () => {
 
   it.each([
     ["non-Linux provenance", (value) => (value.platform = "darwin"), /must be linux/u],
-    ["Node.js drift", (value) => (value.nodeVersion = "24.17.0"), /must be 24\.18\.0/u],
-    ["npm drift", (value) => (value.npmVersion = "11.15.0"), /must be 11\.16\.0/u],
+    ["Node.js drift", (value) => (value.nodeVersion = "24.17.0"), /must be 26\.13\.1/u],
+    ["npm drift", (value) => (value.npmVersion = "11.15.0"), /must be 11\.20\.0/u],
     ["missing zlib identity", (value) => (value.zlibVersion = ""), /zlibVersion/u],
     [
       "lockfile drift",

@@ -1,7 +1,7 @@
 // Test-only fixtures for the requirement inventory tool and trace (#4179): real Knowledge Pods in
 // a temporary state directory and the deps that open them, as production does. Not production code.
 
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -161,7 +161,7 @@ export async function podFixture(
   pods: readonly PodSpec[],
   options: { readonly redactor?: (value: unknown) => unknown; readonly bindPods?: boolean } = {},
 ): Promise<PodFixture> {
-  const runtimeDir = mkdtempSync(join(tmpdir(), "keiko-requirements-"));
+  const runtimeDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-requirements-")));
   const uiDbPath = join(runtimeDir, "ui.db");
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: dirname(uiDbPath) });
   mkdirSync(dirname(dbPath), { recursive: true });

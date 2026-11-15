@@ -148,10 +148,10 @@ describe("candidateProvedEveryReusedJob", () => {
     "Coverage suite (keiko-ui)",
     "Coverage and SonarCloud",
     "Build, scan, SBOM, smoke",
-    "Node 26 compatibility (shard 1/4)",
-    "Node 26 compatibility (shard 2/4)",
-    "Node 26 compatibility (shard 3/4)",
-    "Node 26 compatibility (shard 4/4)",
+    "Runtime qualification (shard 1/4)",
+    "Runtime qualification (shard 2/4)",
+    "Runtime qualification (shard 3/4)",
+    "Runtime qualification (shard 4/4)",
     "Portable secure-read smoke (linux-x64)",
     "Portable secure-read smoke (windows-x64)",
     "Portable secure-read smoke (macos-arm64)",
@@ -186,7 +186,7 @@ describe("candidateProvedEveryReusedJob", () => {
   it.each([1, 2, 3, 4])(
     "requires successful exact evidence for Node 26 shard %s",
     async (shard) => {
-      const name = `Node 26 compatibility (shard ${shard}/4)`;
+      const name = `Runtime qualification (shard ${shard}/4)`;
       const missing = everyJob.filter((job) => job.name !== name);
       for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
         const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
@@ -197,8 +197,8 @@ describe("candidateProvedEveryReusedJob", () => {
   );
 
   it("refuses legacy single-job Node 26 evidence", async () => {
-    const jobs = everyJob.filter((job) => !job.name.startsWith("Node 26 compatibility"));
-    jobs.push({ name: "Node 26 compatibility", conclusion: "success" });
+    const jobs = everyJob.filter((job) => !job.name.startsWith("Runtime qualification"));
+    jobs.push({ name: "Runtime qualification", conclusion: "success" });
     stubFetch({ "/jobs": { body: { jobs } } });
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
   });

@@ -336,6 +336,16 @@ export const NATIVE_BUILD_ENV_NAMES: readonly string[] = Object.freeze([
 const SYSTEM_CONFIGURATION = /(^|\/)(etc|private)(\/|$)/u;
 const BUILD_OPTION_SECRET = /(password|passwd|secret|token|api[-_]?key|credential|\bauth)/iu;
 
+function isSystemCertificateDirectory(directory: string): boolean {
+  // macOS resolves /var and /tmp below the filesystem's /private prefix. That prefix is not
+  // an SSL private-key directory. /private/etc and any nested etc/private component stay denied.
+  const logical =
+    process.platform === "darwin" && directory.startsWith("/private/")
+      ? directory.slice("/private".length)
+      : directory;
+  return SYSTEM_CONFIGURATION.test(logical);
+}
+
 function urlCarriesCredentials(value: string): boolean {
   // A proxy value may lack a scheme; only a parseable URL can carry user-info, and a value that
   // does not parse fails closed (it does not reach the child).
@@ -417,7 +427,9 @@ export function nativeBuildToolReadRoots(
       const value = env[name];
       const file = value === undefined ? undefined : resolvedPath(value);
       // A system certificate directory (`/etc/ssl`) holds `private/`: only a custom directory opens.
-      return file === undefined || SYSTEM_CONFIGURATION.test(dirname(file)) ? [] : [dirname(file)];
+      return file === undefined || isSystemCertificateDirectory(dirname(file))
+        ? []
+        : [dirname(file)];
     }),
   ];
   return [...new Set(candidates.filter((root) => admissible(root, resolvedHome)))]

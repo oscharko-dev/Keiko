@@ -467,6 +467,88 @@ const SET = (...templates: JiraIssueTemplate[]): JiraIssueTemplateSet => ({
   unreadable: 0,
 });
 
+describe("localized Sub-task parent enforcement (#4390)", () => {
+  it.each([
+    [undefined, "Übergeordnet"],
+    ["none", "Übergeordnet"],
+    ["parent", "Parent"],
+  ] as const)(
+    "checks a parent rule with binding %s under field name %s",
+    async (boundId, nativeName) => {
+      const typed = template(
+        ["activateOn: [create]", "requiredFields: [Übergeordnet]"],
+        "# Sub-task",
+        "Sub-task",
+      );
+      const rule =
+        boundId === undefined
+          ? typed
+          : {
+              ...typed,
+              binding: {
+                digest: "0".repeat(32),
+                issueTypeId: "10001",
+                requiredFieldIds: [boundId],
+              },
+            };
+      const remote: Remote = {
+        issue: {
+          project: { key: "SYN", id: "10000" },
+          issuetype: { id: "10001", name: "Sub-task" },
+          ...CREATE.fields,
+          parent: { key: "SYN-2" },
+        },
+        fieldCatalog: false,
+        issueTypeName: "Sub-task",
+        createFields: CREATE_FIELDS.map((entry: Record<string, unknown>) =>
+          entry.fieldId === "parent" ? { ...entry, name: nativeName } : entry,
+        ),
+      };
+      const blocked = fixture(SET(rule), remote);
+      for (const check of [blocked.check, blocked.run]) {
+        expect(await check("jira.create", CREATE)).toMatchObject({
+          ok: false,
+          reason: "field-validation",
+          violations: [{ ruleId: "field-missing" }],
+        });
+      }
+      expect(blocked.writes()).toEqual([]);
+      const allowed = fixture(SET(rule), remote);
+      expect(
+        await allowed.run("jira.create", {
+          ...CREATE,
+          fields: { ...CREATE.fields, parent: { key: "SYN-2" } },
+        }),
+      ).toMatchObject({ ok: true });
+      expect(allowed.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+    },
+  );
+
+  it("refuses an actually unresolved field even when the Sub-task has a parent", async () => {
+    const rule = template(
+      ["activateOn: [create]", "requiredFields: [Unknown Parent]"],
+      "# Sub-task",
+      "Sub-task",
+    );
+    const blocked = fixture(SET(rule), {
+      issue: {},
+      fieldCatalog: true,
+      issueTypeName: "Sub-task",
+    });
+    expect(
+      await blocked.run("jira.create", {
+        ...CREATE,
+        fields: { ...CREATE.fields, parent: { key: "SYN-2" } },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      violations: [{ ruleId: "field-unavailable" }],
+    });
+    expect(blocked.writes()).toEqual([]);
+  });
+});
+
 // #4354 (the first customer's Jira runs in German): a name is localized per user, an id is not. A
 // template the product bound to the issue type's id governs in every profile language; one it could
 // not bind that names a type this Jira does not offer the acting user is refused, never passed unchecked.

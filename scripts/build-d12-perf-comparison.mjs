@@ -243,8 +243,9 @@ function validateProvenance(value, warmUp) {
   const provenance = object(value, "provenance");
   if (provenance.platform !== "linux") fail("provenance platform must be linux");
   if (provenance.nodeVersion !== EXPECTED_NODE_BASELINE)
-    fail("provenance Node.js version must be 24.18.0");
-  if (provenance.npmVersion !== EXPECTED_NPM_ENGINE) fail("provenance npm version must be 11.16.0");
+    fail(`provenance Node.js version must be ${EXPECTED_NODE_BASELINE}`);
+  if (provenance.npmVersion !== EXPECTED_NPM_ENGINE)
+    fail(`provenance npm version must be ${EXPECTED_NPM_ENGINE}`);
   if (!SHA_256.test(provenance.lockfileSha256 ?? "")) {
     fail("provenance lockfileSha256 must be a lowercase SHA-256 digest");
   }
@@ -282,10 +283,10 @@ function validateBundleRuntime(value, label) {
   );
   if (runtime.platform !== "linux") fail(`${label} bundle runtime platform must be linux`);
   if (runtime.nodeVersion !== EXPECTED_NODE_BASELINE) {
-    fail(`${label} bundle runtime Node.js version must be 24.18.0`);
+    fail(`${label} bundle runtime Node.js version must be ${EXPECTED_NODE_BASELINE}`);
   }
   if (runtime.npmVersion !== EXPECTED_NPM_ENGINE) {
-    fail(`${label} bundle runtime npm version must be 11.16.0`);
+    fail(`${label} bundle runtime npm version must be ${EXPECTED_NPM_ENGINE}`);
   }
   return {
     architecture: requiredString(runtime.architecture, `${label} bundle runtime architecture`),

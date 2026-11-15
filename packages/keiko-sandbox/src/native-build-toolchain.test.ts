@@ -96,6 +96,17 @@ describe("native build-tool environment and roots (#4271)", () => {
     ).toEqual([join(root, "certs")]);
   });
 
+  it.each(["etc", "private", "certs/private", "etc/ssl"])(
+    "keeps the certificate directory %s closed, including below macOS's /private prefix",
+    (directory) => {
+      const root = tree();
+      const bundle = join(root, directory, "ca.pem");
+      mkdirSync(join(root, directory), { recursive: true });
+      writeFileSync(bundle, "");
+      expect(nativeBuildToolReadRoots({ SSL_CERT_FILE: bundle }, join(root, "home"))).toEqual([]);
+    },
+  );
+
   // The directory alone opens nothing: the bundle's own `*.pem` name is denied by the final
   // credential-name rule unless the profile names the exact file (#4271 lab).
   it("names the exact certificate files the operator points the run's TLS clients at", () => {

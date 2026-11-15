@@ -25,7 +25,7 @@ const EVIDENCE_FILES = [
   "docs/release/1209-bundle-evidence.json",
 ];
 
-export const CONTAINER_IMAGE = "node:24.18.0-bookworm";
+export const CONTAINER_IMAGE = "node:26.13.1-bookworm";
 // Must equal the version `package-lock.json` resolves for `@playwright/test`: the container
 // installs browser binaries with this pin and then drives them with the locked test runner, so a
 // drift here pairs one version's browsers with another's driver.

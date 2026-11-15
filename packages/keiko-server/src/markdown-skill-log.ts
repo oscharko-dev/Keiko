@@ -74,6 +74,10 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
     beyondLimitCount: OPTIONAL_COUNT_FIELD,
     // Proposals kept although one of their two Jira reads was not answered (#4354).
     partialProposalCount: OPTIONAL_COUNT_FIELD,
+    // Template validation/binding results: missing checkedFieldCount means the catalog was unreadable.
+    checkedFieldCount: OPTIONAL_COUNT_FIELD,
+    validationFindingCount: OPTIONAL_COUNT_FIELD,
+    bindingUpdateCount: OPTIONAL_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -111,12 +115,20 @@ export interface MarkdownSkillProposalAccounting {
   readonly partialProposalCount: number;
 }
 
+export interface MarkdownSkillTemplateAccounting {
+  readonly checkedFieldCount?: number;
+  readonly validationFindingCount?: number;
+  readonly bindingUpdateCount?: number;
+}
+export type MarkdownSkillOperationAccounting =
+  MarkdownSkillProposalAccounting | MarkdownSkillTemplateAccounting;
+
 export function logMarkdownSkillOperation(
   correlationId: string | undefined,
   action: MarkdownSkillAction,
   phase: "started" | "completed" | "rejected" | "failed",
   status: number,
-  accounting?: MarkdownSkillProposalAccounting,
+  accounting?: MarkdownSkillOperationAccounting,
   refusalReason?: string,
 ): void {
   processServerLogSink().write(

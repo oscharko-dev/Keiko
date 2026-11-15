@@ -36,7 +36,7 @@ const GATED_JOBS = Object.freeze([
   "coverage-sonar",
   "build-scan-sbom-smoke",
   "cross-platform-smoke",
-  "node-26-compatibility",
+  "runtime-qualification",
   "portable-secure-read",
   "firefox-smoke",
   "ui",
@@ -55,7 +55,7 @@ const AGGREGATOR_DEFAULTS = Object.freeze({
   UI_RESULT: "success",
   BUILD_SCAN_SBOM_SMOKE_RESULT: "success",
   CROSS_PLATFORM_RESULT: "success",
-  NODE_26_COMPATIBILITY_RESULT: "success",
+  RUNTIME_QUALIFICATION_RESULT: "success",
   PORTABLE_SECURE_READ_RESULT: "success",
   SBOM_PROVENANCE_RESULT: "skipped",
   DOCUMENTATION_ONLY: "false",
@@ -79,7 +79,7 @@ const REUSING = Object.freeze({
   UI_RESULT: "skipped",
   BUILD_SCAN_SBOM_SMOKE_RESULT: "skipped",
   CROSS_PLATFORM_RESULT: "skipped",
-  NODE_26_COMPATIBILITY_RESULT: "skipped",
+  RUNTIME_QUALIFICATION_RESULT: "skipped",
   PORTABLE_SECURE_READ_RESULT: "skipped",
 });
 
@@ -154,7 +154,7 @@ const EXPECTED_CONDITIONS = Object.freeze({
   "coverage-sonar": COND_OR_DEV_PUSH(),
   "build-scan-sbom-smoke": COND(EDITOR_CLAUSE),
   "cross-platform-smoke": COND(DOC_ONLY_CLAUSE),
-  "node-26-compatibility": COND(DOC_ONLY_CLAUSE),
+  "runtime-qualification": COND(DOC_ONLY_CLAUSE),
   "portable-secure-read": COND(DOC_ONLY_CLAUSE),
   "firefox-smoke": COND(EDITOR_CLAUSE),
   ui: COND(),
@@ -368,7 +368,7 @@ describe("complete Firefox smoke shards", () => {
 
 describe("complete Node 26 qualification shards", () => {
   it("retains all four mandatory shards, limits and every qualification step", () => {
-    const job = jobs["node-26-compatibility"];
+    const job = jobs["runtime-qualification"];
     expect(job.strategy).toEqual({ "fail-fast": false, matrix: { shard: [1, 2, 3, 4] } });
     expect(job["timeout-minutes"]).toBe(60);
     expect(job["continue-on-error"]).toBeUndefined();
@@ -400,11 +400,11 @@ describe("complete Node 26 qualification shards", () => {
     const testScript = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).scripts
       .test;
     expect(testScript).toMatch(/&& vitest run$/u);
-    expect(gatedDisplayNames("node-26-compatibility")).toEqual([
-      "Node 26 compatibility (shard 1/4)",
-      "Node 26 compatibility (shard 2/4)",
-      "Node 26 compatibility (shard 3/4)",
-      "Node 26 compatibility (shard 4/4)",
+    expect(gatedDisplayNames("runtime-qualification")).toEqual([
+      "Runtime qualification (shard 1/4)",
+      "Runtime qualification (shard 2/4)",
+      "Runtime qualification (shard 3/4)",
+      "Runtime qualification (shard 4/4)",
     ]);
   });
 
@@ -416,7 +416,7 @@ describe("complete Node 26 qualification shards", () => {
         const specs = await ctx.globTestSpecifications();
         const Sequencer = ctx.config.sequence.sequencer;
         const shards = [];
-        for (const index of ${JSON.stringify(jobs["node-26-compatibility"].strategy.matrix.shard)}) {
+        for (const index of ${JSON.stringify(jobs["runtime-qualification"].strategy.matrix.shard)}) {
           const cli = parseCLI("vitest run --shard=" + index + "/4");
           if (cli.options.shard !== index + "/4") throw new Error("Shard forwarding failed");
           ctx.config.shard = { index, count: 4 };
@@ -449,9 +449,9 @@ describe("the aggregator still fails closed", () => {
   it.each(["failure", "cancelled", "skipped", "", "unknown"])(
     "rejects unsuccessful Node 26 qualification result %s for a code change",
     (result) => {
-      expect(runAggregator({ NODE_26_COMPATIBILITY_RESULT: result })).toBe(1);
+      expect(runAggregator({ RUNTIME_QUALIFICATION_RESULT: result })).toBe(1);
       if (result !== "skipped") {
-        expect(runAggregator({ ...REUSING, NODE_26_COMPATIBILITY_RESULT: result })).toBe(1);
+        expect(runAggregator({ ...REUSING, RUNTIME_QUALIFICATION_RESULT: result })).toBe(1);
       }
     },
   );
@@ -531,7 +531,7 @@ describe("the aggregator still fails closed", () => {
       "cross-platform skipped for a documentation-only change",
       {
         CROSS_PLATFORM_RESULT: "skipped",
-        NODE_26_COMPATIBILITY_RESULT: "skipped",
+        RUNTIME_QUALIFICATION_RESULT: "skipped",
         DOCUMENTATION_ONLY: "true",
       },
       0,

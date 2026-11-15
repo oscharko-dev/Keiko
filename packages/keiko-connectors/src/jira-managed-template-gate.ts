@@ -341,7 +341,7 @@ function subjectOf(
 }
 
 /** One entry per field id; a later list describes the instance more exactly and wins. */
-function mergedCatalog(
+export function mergeJiraTemplateFieldCatalogs(
   ...lists: readonly (readonly JiraFieldCatalogEntry[])[]
 ): readonly JiraFieldCatalogEntry[] {
   const known = new Map<string, JiraFieldCatalogEntry>();
@@ -357,7 +357,7 @@ function mergedCatalog(
 }
 
 function metadataCatalog(metadata: readonly JiraFieldMetadata[]): readonly JiraFieldCatalogEntry[] {
-  return mergedCatalog(JIRA_TEMPLATE_SYSTEM_FIELDS, metadata);
+  return mergeJiraTemplateFieldCatalogs(JIRA_TEMPLATE_SYSTEM_FIELDS, metadata);
 }
 
 /** A field reference of a template, with the template whose binding says what it names (#4354). */
@@ -391,7 +391,7 @@ export async function readJiraFieldCatalog(
   return items === undefined ? undefined : systemAndInstanceFields(items);
 }
 function systemAndInstanceFields(items: readonly unknown[]): readonly JiraFieldCatalogEntry[] {
-  return mergedCatalog(JIRA_TEMPLATE_SYSTEM_FIELDS, fieldCatalogValues(items));
+  return mergeJiraTemplateFieldCatalogs(JIRA_TEMPLATE_SYSTEM_FIELDS, fieldCatalogValues(items));
 }
 async function readFieldCatalogValues(
   request: JiraMutationRequest,
@@ -651,7 +651,7 @@ async function completeCatalog(
   const unresolved = references(templates).some((entry) => idsOf(entry, local).length === 0);
   if (!unresolved) return local;
   const remote = await readJiraFieldCatalog(input.request);
-  return remote === undefined ? local : mergedCatalog(remote, local);
+  return remote === undefined ? local : mergeJiraTemplateFieldCatalogs(remote, local);
 }
 
 async function completeIdentity(

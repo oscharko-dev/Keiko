@@ -631,6 +631,8 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "browser-approval",
   "knowledge-pod-selection",
   "jira-human-input",
+  "chat-connector-selection",
+  "chat-connector-refresh",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -656,6 +658,8 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "browser approval": "browser-approval",
   "knowledge pod selection": "knowledge-pod-selection",
   "jira human input": "jira-human-input",
+  "chat connector selection": "chat-connector-selection",
+  "chat connector refresh": "chat-connector-refresh",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its

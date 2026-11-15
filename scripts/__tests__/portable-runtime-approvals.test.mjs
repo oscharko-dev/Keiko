@@ -236,7 +236,7 @@ describe("portable runtime approvals validation", () => {
 
   it("accepts the committed approvals file", () => {
     const approvals = loadPortableRuntimeApprovals(repoRoot);
-    expect(approvals.node.version).toBe("24.18.0");
+    expect(approvals.node.version).toBe("26.13.1");
     expect(approvals.sidecarRuntimes.map((runtime) => runtime.name)).toContain(
       "opencode-compatible",
     );
@@ -255,7 +255,7 @@ describe("portable runtime approvals validation", () => {
   it("rejects non-https and unapproved hosts", () => {
     const approvals = approvedFixture();
     approvals.node.archives["windows-x64"].url =
-      "http://nodejs.org/dist/v24.18.0/node-v24.18.0-win-x64.zip";
+      "http://nodejs.org/dist/v26.13.1/node-v26.13.1-win-x64.zip";
     expect(() => validatePortableRuntimeApprovals(approvals)).toThrow(/must use https/u);
     const hostile = approvedFixture();
     hostile.sidecarRuntimes[0].archives["windows-x64"].url =
@@ -272,7 +272,7 @@ describe("portable runtime approvals validation", () => {
     expect(() => validatePortableRuntimeApprovals(badDigest)).toThrow(/sha256/u);
     const credentials = approvedFixture();
     credentials.node.archives["macos-x64"].url =
-      "https://user:pass@nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-x64.tar.gz";
+      "https://user:pass@nodejs.org/dist/v26.13.1/node-v26.13.1-darwin-x64.tar.gz";
     expect(() => validatePortableRuntimeApprovals(credentials)).toThrow(/embed credentials/u);
   });
 

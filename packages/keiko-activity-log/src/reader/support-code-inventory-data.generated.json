@@ -2734,6 +2734,7 @@
     "keiko-ui/app/components/desktop/browser/BrowserApprovalSettings",
     "keiko-ui/app/components/desktop/browser/useBrowserApproval",
     "keiko-ui/app/components/desktop/browser/useBrowserApprovalInventory",
+    "keiko-ui/app/components/desktop/chat-connector-evidence",
     "keiko-ui/app/components/desktop/chat-processing-pipeline",
     "keiko-ui/app/components/desktop/chatRepositoryReference",
     "keiko-ui/app/components/desktop/composer/ComposerShell",

@@ -5,6 +5,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   nativeBuildCertificateFiles,
+  nativeBuildToolReadRoots,
   type NativeBuildCertificateFiles,
 } from "@oscharko-dev/keiko-sandbox";
 
@@ -26,6 +27,7 @@ const NATIVE_CERTIFICATES_OPERATION = defineActivityLogOperation({
     namedCount: { type: "integer", dataClass: "count", required: true },
     admittedCount: { type: "integer", dataClass: "count", required: true },
     fileCount: { type: "integer", dataClass: "count", required: true },
+    directoryCount: { type: "integer", dataClass: "count", required: true },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -39,6 +41,7 @@ function recordNativeCertificatesAdmitted(
   sink: ServerLogSink,
   runId: string,
   certificates: NativeBuildCertificateFiles,
+  directoryCount: number,
 ): void {
   sink.write(
     activityLogEvent(
@@ -48,6 +51,7 @@ function recordNativeCertificatesAdmitted(
         namedCount: certificates.namedCount,
         admittedCount: certificates.admittedCount,
         fileCount: certificates.files.length,
+        directoryCount,
       },
     ),
   );
@@ -61,6 +65,10 @@ export function nativeCertificateReadFilesField(
   home: string,
 ): { readonly certificateReadFiles?: readonly string[] } {
   const certificates = nativeBuildCertificateFiles(env, home);
-  recordNativeCertificatesAdmitted(sink, runId, certificates);
+  const directoryCount = nativeBuildToolReadRoots(
+    { SSL_CERT_FILE: env.SSL_CERT_FILE, NODE_EXTRA_CA_CERTS: env.NODE_EXTRA_CA_CERTS },
+    home,
+  ).length;
+  recordNativeCertificatesAdmitted(sink, runId, certificates, directoryCount);
   return certificates.files.length === 0 ? {} : { certificateReadFiles: certificates.files };
 }

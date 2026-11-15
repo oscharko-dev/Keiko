@@ -31,7 +31,7 @@ function expectWrapped(command: WrappedCommand | undefined): WrappedCommand {
 
 describe("buildWrappedCommand", () => {
   it("pins the default container backend to the governed Node.js 24 LTS patch", () => {
-    expect(DEFAULT_CONTAINER_IMAGE).toBe("node:24.18.0-slim");
+    expect(DEFAULT_CONTAINER_IMAGE).toBe("node:26.13.1-slim");
   });
 
   it("bubblewrap preserves compatibility mode for network-only runs", () => {

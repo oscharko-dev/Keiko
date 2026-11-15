@@ -45,7 +45,7 @@ function runCiAggregate(overrides = {}) {
       CROSS_PLATFORM_RESULT: "success",
       DOCUMENTATION_ONLY: "false",
       EDITOR_FAST_PR: "false",
-      NODE_26_COMPATIBILITY_RESULT: "success",
+      RUNTIME_QUALIFICATION_RESULT: "success",
       PORTABLE_SECURE_READ_RESULT: "success",
       PROTECTED_BRANCH_RESULT: "success",
       SECRET_SCAN_RESULT: "success",
@@ -105,7 +105,7 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain("timeout-minutes: 180");
     expect(mutation).toContain("group: mutation-security-full");
     expect(mutation).toContain("cancel-in-progress: false");
-    expect(mutation).toContain('node-version: "24.18.0"');
+    expect(mutation).toContain('node-version: "26.13.1"');
     expect(mutation).toContain("node scripts/check-runtime-toolchain.mjs --exact");
     expect(mutation).toContain("npm run test:mutation:security");
     expect(mutation).toContain("second-order mutation proof");
@@ -729,13 +729,13 @@ describe("dev quality workflows", () => {
     expect(aggregateJob).toContain("- build-scan-sbom-smoke");
     expect(aggregateJob).toContain("- coverage-sonar");
     expect(aggregateJob).toContain("- cross-platform-smoke");
-    expect(aggregateJob).toContain("- node-26-compatibility");
+    expect(aggregateJob).toContain("- runtime-qualification");
     expect(aggregateJob).toContain("- ui");
     expect(aggregateJob).toContain("BUILD_SCAN_SBOM_SMOKE_RESULT");
     expect(aggregateJob).toContain("CHANGE_SCOPE_RESULT");
     expect(aggregateJob).toContain("CROSS_PLATFORM_RESULT");
     expect(aggregateJob).toContain("EDITOR_FAST_PR");
-    expect(aggregateJob).toContain("NODE_26_COMPATIBILITY_RESULT");
+    expect(aggregateJob).toContain("RUNTIME_QUALIFICATION_RESULT");
     expect(aggregateJob).toContain("UI_RESULT");
     expect(aggregateJob).toContain('if [ "$result" != "success" ]');
   });
@@ -801,7 +801,7 @@ describe("dev quality workflows", () => {
 
   it("runs native compensation on its owning platforms and aggregates it fail closed", () => {
     const crossPlatform = ci.match(
-      / {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}node-26-compatibility:\n)/u,
+      / {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}runtime-qualification:\n)/u,
     )?.[0];
     expect(crossPlatform).toBeDefined();
     expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");

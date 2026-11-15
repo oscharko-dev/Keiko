@@ -58,7 +58,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
@@ -103,7 +103,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
@@ -132,7 +132,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
@@ -188,7 +188,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
           registry-url: "https://registry.npmjs.org"
       - name: Verify governed Node.js and npm toolchain
@@ -201,7 +201,7 @@ jobs:
         # that same constant, so any other version here kills every publish from the tag that
         # freezes it (the 0.3.1 outage). scripts/__tests__/release-workflow-npm-pin.test.mjs holds
         # the two in lockstep.
-        run: npm install --global --ignore-scripts npm@11.16.0
+        run: npm install --global --ignore-scripts npm@11.20.0
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Build workspace packages for publisher imports

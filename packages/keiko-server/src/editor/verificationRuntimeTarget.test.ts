@@ -473,14 +473,16 @@ function probeWith(nodeVersion: string | undefined): void {
 it("resolves the real runtime when the parent environment exports NODE_VERSION", async () => {
   const workspace = fixture();
   if (!probeNetworkIsolation(workspace.root).available) return;
-  // The value the official Node image exports, which is also a substring of process.version.
-  vi.stubEnv("NODE_VERSION", process.version.slice(1));
   probeWith(undefined);
-  const target = await resolveVerificationRuntimeTarget({
+  const input = {
     workspace,
     signal: new AbortController().signal,
-  });
-  expect(target.nodeVersion).toBe(process.version);
+  };
+  // The isolated backend can use a different runtime from this host. Its actual fingerprint
+  // must survive an ordinary environment value equal to its version, including in a container.
+  const before = await resolveVerificationRuntimeTarget(input);
+  vi.stubEnv("NODE_VERSION", before.nodeVersion.slice(1));
+  expect(await resolveVerificationRuntimeTarget(input)).toEqual(before);
 }, 20_000);
 
 it("still scrubs a credential-named value and then refuses the target", async () => {

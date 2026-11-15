@@ -48,40 +48,23 @@ other.
 
 ## Pinned toolchain for a local `npm test`
 
-Run `npm test` under the governed pair that `scripts/check-runtime-toolchain.mjs` approves for exact
-runs: **Node.js 24.18.0 with npm 11.16.0** (the compatibility baseline Node.js 26.8.1 with npm 11.19.0
-is also approved). Required CI provisions exactly that pair. A host inside the supported engine
-range but on another patch, such as Node.js 24.22.0 with npm 11.19.1, is supported for development,
-yet `debug-launch-policy.test.ts` asserts the exact pair: outside CI it skips its npm-policy proof
-and names the reason, and with `CI=true` it never skips, so run `node scripts/check-runtime-toolchain.mjs --exact`
-to see whether your host qualifies (#4111).
+Run `npm test` under **Node.js 26.13.1 with npm 11.20.0**, the sole approved exact pair.
+Development accepts Node `>=26.13.1 <27` and npm `>=11.20.0 <12`; CI, portable artifacts and
+measurements use the exact pair. Run `node scripts/check-runtime-toolchain.mjs --exact` before
+qualification. Node 24 is no longer supported (owner decision, 2026-11-15).
 
-## Optional Node 26 lane
-
-The default lane is Node.js 24.18.0. The customer runs Node 26, and CI's "Node 26 compatibility"
-job (`node-version: "26.8.1"` in `.github/workflows/ci.yml`, with npm 11.19.0, the second governed
-pair of `scripts/check-runtime-toolchain.mjs`) can fail where Node 24 passes. To reproduce such a
-failure without leaving the container rule, the compose file carries a second service,
-`gates-node26`: the same Dockerfile built with `NODE_VERSION=26.8.1`, so it has the same pinned git
-and iproute2, the same unprivileged `node` user, the same security options and the same checkout
-bind mount. Its `node_modules` and npm cache are volumes of their own
-(`gates-node26-node-modules`, `gates-node26-npm-cache`), so the installs of the two Node versions
-never mix; the Playwright browsers do not depend on Node and stay shared.
-
-The one command that runs a narrow vitest file on Node 26 (it installs and builds first when the
-lane's volumes are empty, which takes a few minutes once):
+The default `gates` service now uses Node 26. The former `gates-node26` compatibility service is
+retired. A narrow Linux test selection installs and builds first when its volumes are empty:
 
 ```bash
-docker compose -f docker/gates/docker-compose.yml run --rm gates-node26 \
+docker compose -f docker/gates/docker-compose.yml run --rm gates \
   ./docker/gates/run-vitest.sh packages/keiko-activity-log/src/log-level.test.ts
 ```
 
-Any vitest file or filter may follow `run-vitest.sh`. The lane is for reproducing a Node 26-only
-failure and for narrow runs; the aggregate `gates:local*` scripts stay on the default Node 24 lane.
-When CI's Node 26 pin moves, change `NODE_VERSION` of the service in `docker/gates/docker-compose.yml`
-(and keep it equal to the workflow's `node-version`). The Dockerfile is scanned by SonarCloud's
-Docker rules, which no local gate sees: keep downloads HTTPS-only and long commands broken across
-lines.
+Any Vitest file or filter may follow `run-vitest.sh`. Native macOS and Windows checks still run on
+those operating systems. Their CI smoke lane also runs the path, timezone, certificate and runtime
+regressions that a Linux-only complete suite cannot qualify. Test fixtures resolve temporary-root
+aliases and state their group assumptions explicitly; no global `TMPDIR` override is required.
 
 ## Test worker count
 
@@ -148,7 +131,7 @@ each ruler answers is in [`coverage-truth-model.md`](coverage-truth-model.md).
 
 - **D12 wall-clock performance evidence — not because it cannot be produced here, but because it is
   produced somewhere else.** The declared reference environment for those budgets is the pinned
-  `node:24.18.0-bookworm` container on a developer machine: linux/arm64, >=14 logical cores. Every
+  `node:26.13.1-bookworm` container on a developer machine: linux/arm64, >=14 logical cores. Every
   committed evidence document was measured there, and no hosted runner matches it. Use
   `npm run perf:evidence:regen` (which refuses to run outside that container and prints the exact
   `docker run` line), not this suite, and not a `workflow_dispatch` of the scheduled lane — that lane
@@ -222,7 +205,7 @@ Run them where they run, in about two seconds once the image is warm:
 
 ```bash
 git clone --no-local --no-hardlinks . /tmp/keiko-dap
-docker run --rm -v /tmp/keiko-dap:/repo -w /repo node:24.18.0-bookworm bash -lc '
+docker run --rm -v /tmp/keiko-dap:/repo -w /repo node:26.13.1-bookworm bash -lc '
   git config --global --add safe.directory "*"
   apt-get update -qq && apt-get install -y -qq bubblewrap
   npm ci --no-audit --no-fund && npm run build:packages

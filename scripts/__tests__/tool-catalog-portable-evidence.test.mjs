@@ -34,7 +34,7 @@ const environment = {
   kind: "paired-host-v1",
   platform: "win32",
   architecture: "x64",
-  nodeVersion: "v24.18.0",
+  nodeVersion: "v26.13.1",
   logicalCores: 24,
   totalMemoryBytes: 64_000_000_000,
   osRelease: "10.0.26200",
@@ -76,6 +76,32 @@ function pairDependencies(overrides = {}) {
 }
 
 describe("portable tool-catalog reference", () => {
+  it("refuses a toolchain migration when the baseline ruler rejects the historical evidence", async () => {
+    const scratch = realpathSync(mkdtempSync(join(tmpdir(), "keiko-historical-catalog-")));
+    mkdirSync(join(scratch, "scripts"));
+    writeFileSync(
+      join(scratch, "scripts/check-tool-catalog-performance.mjs"),
+      'export function evaluateToolCatalogPerformanceEvidence() { return { defects: ["historical-evidence-invalid"], verdicts: [] }; }\n',
+    );
+    const deps = pairDependencies({
+      read: (_root, path) => {
+        const document = structuredClone(
+          previous[Object.keys(FILES).find((key) => FILES[key] === path)],
+        );
+        if (path === FILES.calibration) document.environment.nodeVersion = "v24.18.0";
+        return document;
+      },
+    });
+    try {
+      await expect(
+        measurePortableToolCatalogPair({ ...context, baselineRoot: scratch }, deps),
+      ).rejects.toThrow("historical-evidence-invalid");
+      expect(deps.measure).not.toHaveBeenCalled();
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the ruler workspace while loading a separate producer root in a real child", async () => {
     const scratch = realpathSync(mkdtempSync(join(tmpdir(), "keiko-portable-child-test-")));
     const harness = join(scratch, "harness");
@@ -284,12 +310,12 @@ function orchestration(overrides = {}) {
     write: vi.fn(),
     log: vi.fn(),
     measure: vi.fn(() => Promise.resolve(documents)),
-    nodeVersion: "v24.18.0",
+    nodeVersion: "v26.13.1",
     npmCli: "/npm/bin/npm-cli.js",
     run: vi.fn((command, args) => {
       if (command === "git" && args[0] === "rev-parse")
         return args.includes("HEAD") ? context.candidateCommit : context.baselineCommit;
-      if (args.includes("--version")) return "11.16.0";
+      if (args.includes("--version")) return "11.20.0";
       return "";
     }),
     ...overrides,

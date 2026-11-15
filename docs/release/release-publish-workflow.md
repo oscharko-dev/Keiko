@@ -631,8 +631,8 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
   governed `EXPECTED_PACKAGE_MANAGER` constant in `scripts/check-runtime-toolchain.mjs`
   (`scripts/__tests__/release-workflow-npm-pin.test.mjs` compares the workflow line against
   that constant, so the two cannot drift; this document deliberately does not restate the
-  number and become a third copy). Node 24.18.0 already
-  bundles npm 11.16.0, so the pin is not about clearing that floor: it holds the publish npm at
+  number and become a third copy). The approved Node 26 archive already
+  bundles the governed npm version, so the pin is not about clearing that floor: it holds the publish npm at
   the exact governed version, because a drifted hand-maintained pin is what broke the 0.3.1
   publish and a tag freezes whatever it captured.
 - **The one-time npmjs.com setup is done (issue #3088).** The package's Settings → Trusted

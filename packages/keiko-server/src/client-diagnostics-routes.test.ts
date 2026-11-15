@@ -4184,6 +4184,10 @@ it.each([
   ["transcript navigation", "settled", "transcript-navigation"],
   ["knowledge pod selection", "started", "knowledge-pod-selection"],
   ["knowledge pod selection", "settled", "knowledge-pod-selection"],
+  ["chat connector selection", "started", "chat-connector-selection"],
+  ["chat connector selection", "settled", "chat-connector-selection"],
+  ["chat connector refresh", "started", "chat-connector-refresh"],
+  ["chat connector refresh", "settled", "chat-connector-refresh"],
 ] as const)(
   "persists %s %s through the existing activity log",
   async (stage, phase, activityStage) => {
@@ -4195,6 +4199,9 @@ it.each([
       ordinal: 1,
       correlationId: "copy-feedback-123",
       ...(phase === "settled" ? { durationMs: 1500 } : {}),
+      ...(phase === "settled" && stage.startsWith("chat connector")
+        ? { navigationOutcome: "stale" }
+        : {}),
     };
     expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
     const events = clientStageEvents(sink, `client.stage.${phase}`);

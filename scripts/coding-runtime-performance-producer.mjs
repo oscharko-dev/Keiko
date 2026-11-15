@@ -146,6 +146,15 @@ export function assertCodingPerformanceReference(previous, current, mode) {
       payloadSha256: current.payloadSha256,
     };
   }
+  if (mode === "recalibrate-toolchain") {
+    if (
+      current.nodeVersion !== EXPECTED_NODE_BASELINE ||
+      current.npmVersion !== EXPECTED_NPM_ENGINE ||
+      (current.nodeVersion === previous.nodeVersion && current.npmVersion === previous.npmVersion)
+    )
+      throw new Error("approved-toolchain-transition-required");
+    expected = { ...previous, nodeVersion: current.nodeVersion, npmVersion: current.npmVersion };
+  }
   if (!isDeepStrictEqual(current, expected))
     throw new Error("recalibration-reference-environment-differs");
 }
@@ -161,7 +170,7 @@ function readRecalibrationState(root, environment, mode) {
 
 function writeCalibration(root, document, mode, previous) {
   const budget =
-    mode === "recalibrate" || mode === "recalibrate-runtime"
+    mode === "recalibrate" || mode === "recalibrate-runtime" || mode === "recalibrate-toolchain"
       ? ratchetCodingPerformanceBudgets(document, previous.budget)
       : calibrationBudgets(document);
   writeDocument(root, CODING_PERFORMANCE_FILES.calibration, document);
@@ -208,12 +217,20 @@ export async function produceCodingPerformanceEvidence({ mode = "measurement" } 
   const root = ROOT;
   let stage = "inputs";
   try {
-    if (!new Set(["measurement", "calibrate", "recalibrate", "recalibrate-runtime"]).has(mode))
+    if (
+      !new Set([
+        "measurement",
+        "calibrate",
+        "recalibrate",
+        "recalibrate-runtime",
+        "recalibrate-toolchain",
+      ]).has(mode)
+    )
       throw new Error("invalid-performance-evidence-mode");
     assertOutputOwnership(root, mode);
     const inputs = measurementInputs(root);
     const previous =
-      mode === "recalibrate" || mode === "recalibrate-runtime"
+      mode === "recalibrate" || mode === "recalibrate-runtime" || mode === "recalibrate-toolchain"
         ? readRecalibrationState(root, inputs.environment, mode)
         : {};
     stage = "compilation";
@@ -251,10 +268,15 @@ if (isMainModule(import.meta.url)) {
   if (
     args.length > 1 ||
     (args.length === 1 &&
-      !new Set(["--calibrate", "--recalibrate", "--recalibrate-runtime"]).has(flag))
+      !new Set([
+        "--calibrate",
+        "--recalibrate",
+        "--recalibrate-runtime",
+        "--recalibrate-toolchain",
+      ]).has(flag))
   ) {
     process.stderr.write(
-      "usage: coding-runtime-performance-producer.mjs [--calibrate | --recalibrate | --recalibrate-runtime]\n",
+      "usage: coding-runtime-performance-producer.mjs [--calibrate | --recalibrate | --recalibrate-runtime | --recalibrate-toolchain]\n",
     );
     process.exitCode = 2;
   } else {
@@ -263,6 +285,7 @@ if (isMainModule(import.meta.url)) {
       if (flag === "--calibrate") mode = "calibrate";
       if (flag === "--recalibrate") mode = "recalibrate";
       if (flag === "--recalibrate-runtime") mode = "recalibrate-runtime";
+      if (flag === "--recalibrate-toolchain") mode = "recalibrate-toolchain";
       await produceCodingPerformanceEvidence({ mode });
       process.stdout.write("coding-runtime performance evidence: WRITTEN\n");
     } catch (error) {

@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -133,7 +134,14 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
     const bin = temporary("keiko-git-executable-bin-");
     writeGit(bin);
     chmodSync(bin, 0o775);
-    expect(resolveGitExecutable({ PATH: bin }, workspace)).toEqual({
+    expect(
+      resolveGitExecutable(
+        { PATH: bin },
+        workspace,
+        process.platform,
+        new Set([statSync(bin).gid]),
+      ),
+    ).toEqual({
       ok: false,
       reason: "untrusted-location",
     });
@@ -197,7 +205,14 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
     const linkBin = temporary("keiko-git-executable-link-");
     symlinkSync(target, join(linkBin, "git"));
 
-    expect(resolveGitExecutable({ PATH: linkBin }, workspace)).toEqual({
+    expect(
+      resolveGitExecutable(
+        { PATH: linkBin },
+        workspace,
+        process.platform,
+        new Set([statSync(targetBin).gid]),
+      ),
+    ).toEqual({
       ok: false,
       reason: "untrusted-location",
     });
@@ -209,7 +224,14 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
     // Directory: trusted (0o755). File itself: group-writable (0o775). The protectedPaths list
     // has to include `real` for this check to bite — dropping it would silently ship this class.
     chmodSync(executable, 0o775);
-    expect(resolveGitExecutable({ PATH: bin }, workspace)).toEqual({
+    expect(
+      resolveGitExecutable(
+        { PATH: bin },
+        workspace,
+        process.platform,
+        new Set([statSync(executable).gid]),
+      ),
+    ).toEqual({
       ok: false,
       reason: "untrusted-location",
     });

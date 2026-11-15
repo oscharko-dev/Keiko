@@ -7818,6 +7818,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "browser-approval",
           "knowledge-pod-selection",
           "jira-human-input",
+          "chat-connector-selection",
+          "chat-connector-refresh",
         ],
       },
       ordinal: {
@@ -8010,6 +8012,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "browser-approval",
           "knowledge-pod-selection",
           "jira-human-input",
+          "chat-connector-selection",
+          "chat-connector-refresh",
         ],
       },
       ordinal: {
@@ -12640,6 +12644,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       fileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      directoryCount: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -44494,6 +44503,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       partialProposalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      checkedFieldCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      validationFindingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      bindingUpdateCount: {
         type: "integer",
         dataClass: "count",
         required: false,

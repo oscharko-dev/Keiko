@@ -26,7 +26,10 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { findOwnedJiraPod, isReadyJiraPod, listOwnedJiraPods } from "./atlassian/jiraPodAccess.js";
 import { readMutation, withSkillAccess } from "./markdown-skill-routes.js";
-import type { MarkdownSkillProposalAccounting } from "./markdown-skill-log.js";
+import type {
+  MarkdownSkillProposalAccounting,
+  MarkdownSkillTemplateAccounting,
+} from "./markdown-skill-log.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { invalidRequest, notFound, UiStoreError } from "./store/errors.js";
 
@@ -166,35 +169,49 @@ export function handleValidateJiraTemplate(
   ctx: RouteContext,
   deps: TemplateRouteDeps,
 ): Promise<RouteResult> {
-  return withSkillAccess(ctx, deps, "jira-template-validate", async () => {
-    const body = await readMutation(ctx, deps, BODY_BYTES);
-    if (body.kind === "rejected") return body.response;
-    const { markdown, podId } = body.value;
-    if (typeof markdown !== "string") throw invalidRequest("Provide the template Markdown.");
-    const parsed = parseJiraIssueTemplate(markdown);
-    if (!parsed.ok) return { status: 200, body: { valid: false, errors: parsed.errors } };
-    const pod = readyPod(deps, podId);
-    const instanceId = jiraInstanceIdentity(pod.baseUrl);
-    // A binding made for another Jira means nothing here: the typed names are what this Jira sees.
-    const template = jiraTemplateForInstance(parsed.template, instanceId);
-    const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
-    if (!read.ok) throw jiraReadFailure(read.reason);
-    return {
-      status: 200,
-      body: {
-        valid: true,
-        template: templateSummary(template),
-        binding: resolveJiraTemplateBinding(template, read.instance, instanceId),
-        findings: validateJiraIssueTemplateAgainstInstance(template, read.instance),
-        checked: {
-          project: read.instance.project !== undefined,
-          fields: read.instance.fields !== undefined,
-          linkTypes: read.instance.linkTypes !== undefined,
-          transitions: read.instance.statuses !== undefined,
+  let accounting: MarkdownSkillTemplateAccounting | undefined;
+  return withSkillAccess(
+    ctx,
+    deps,
+    "jira-template-validate",
+    async () => {
+      const body = await readMutation(ctx, deps, BODY_BYTES);
+      if (body.kind === "rejected") return body.response;
+      const { markdown, podId } = body.value;
+      if (typeof markdown !== "string") throw invalidRequest("Provide the template Markdown.");
+      const parsed = parseJiraIssueTemplate(markdown);
+      if (!parsed.ok) return { status: 200, body: { valid: false, errors: parsed.errors } };
+      const pod = readyPod(deps, podId);
+      const instanceId = jiraInstanceIdentity(pod.baseUrl);
+      // A binding made for another Jira means nothing here: the typed names are what this Jira sees.
+      const template = jiraTemplateForInstance(parsed.template, instanceId);
+      const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
+      if (!read.ok) throw jiraReadFailure(read.reason);
+      const findings = validateJiraIssueTemplateAgainstInstance(template, read.instance);
+      accounting = {
+        ...(read.instance.fields === undefined
+          ? {}
+          : { checkedFieldCount: read.instance.fields.length }),
+        validationFindingCount: findings.length,
+      };
+      return {
+        status: 200,
+        body: {
+          valid: true,
+          template: templateSummary(template),
+          binding: resolveJiraTemplateBinding(template, read.instance, instanceId),
+          findings,
+          checked: {
+            project: read.instance.project !== undefined,
+            fields: read.instance.fields !== undefined,
+            linkTypes: read.instance.linkTypes !== undefined,
+            transitions: read.instance.statuses !== undefined,
+          },
         },
-      },
-    };
-  });
+      };
+    },
+    () => accounting,
+  );
 }
 
 /** Counts per closed reason of a proposal run: what the closing log line carries, never a type name. */
@@ -326,30 +343,44 @@ export function handleBindJiraTemplate(
   ctx: RouteContext,
   deps: TemplateRouteDeps,
 ): Promise<RouteResult> {
-  return withSkillAccess(ctx, deps, "jira-template-bind", async () => {
-    const body = await readMutation(ctx, deps, BIND_BODY_BYTES);
-    if (body.kind === "rejected") return body.response;
-    const { skill, template: stored } = bindTarget(deps, body.value.skillId, body.value.revision);
-    const pod = readyPod(deps, body.value.podId);
-    const instanceId = jiraInstanceIdentity(pod.baseUrl);
-    const template = jiraTemplateForInstance(stored, instanceId);
-    const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
-    if (!read.ok) throw jiraReadFailure(read.reason);
-    const resolution = resolveJiraTemplateBinding(template, read.instance, instanceId);
-    if (resolution.state === "bound")
-      return { status: 200, body: { changed: false, issueType: resolution.issueType } };
-    if (resolution.state === "dead")
-      return { status: 200, body: { changed: false, dead: true, issueType: resolution.subject } };
-    if (resolution.state !== "bindable") throw refusedBinding(template, resolution);
-    const saved = saveBinding(deps, skill, resolution.binding);
-    return {
-      status: 200,
-      body: {
-        changed: true,
-        issueType: resolution.issueType,
-        parentTypeCount: resolution.binding.parentIssueTypeIds?.length ?? 0,
-        skill: { id: saved.id, revision: saved.revision },
-      },
-    };
-  });
+  let accounting: MarkdownSkillTemplateAccounting | undefined;
+  return withSkillAccess(
+    ctx,
+    deps,
+    "jira-template-bind",
+    async () => {
+      const body = await readMutation(ctx, deps, BIND_BODY_BYTES);
+      if (body.kind === "rejected") return body.response;
+      const { skill, template: stored } = bindTarget(deps, body.value.skillId, body.value.revision);
+      const pod = readyPod(deps, body.value.podId);
+      const instanceId = jiraInstanceIdentity(pod.baseUrl);
+      const template = jiraTemplateForInstance(stored, instanceId);
+      const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
+      if (!read.ok) throw jiraReadFailure(read.reason);
+      const resolution = resolveJiraTemplateBinding(template, read.instance, instanceId);
+      accounting = {
+        ...(read.instance.fields === undefined
+          ? {}
+          : { checkedFieldCount: read.instance.fields.length }),
+        bindingUpdateCount: 0,
+      };
+      if (resolution.state === "bound")
+        return { status: 200, body: { changed: false, issueType: resolution.issueType } };
+      if (resolution.state === "dead")
+        return { status: 200, body: { changed: false, dead: true, issueType: resolution.subject } };
+      if (resolution.state !== "bindable") throw refusedBinding(template, resolution);
+      const saved = saveBinding(deps, skill, resolution.binding);
+      accounting = { ...accounting, bindingUpdateCount: 1 };
+      return {
+        status: 200,
+        body: {
+          changed: true,
+          issueType: resolution.issueType,
+          parentTypeCount: resolution.binding.parentIssueTypeIds?.length ?? 0,
+          skill: { id: saved.id, revision: saved.revision },
+        },
+      };
+    },
+    () => accounting,
+  );
 }

@@ -3076,20 +3076,21 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
-  it("copies locked Corepack into the Node 26 runtime trust root", () => {
-    const job = ciJobs().find((candidate) => candidate.name === "node-26-compatibility");
-    expect(job).toBeDefined();
-    if (job === undefined) throw new Error("node-26-compatibility job is missing");
+  it("prepares locked Corepack before every install-smoke job on Node 26", () => {
     const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
     expect(manifest.devDependencies.corepack).toMatch(/^\d+\.\d+\.\d+$/u);
-    const prepareBinAt = job.text.indexOf("npm run prepare:bin");
-    const buildAt = job.text.indexOf("npm run build:ui");
-    const shimAt = job.text.indexOf("node scripts/prepare-trusted-corepack.mjs");
-    const provisionAt = job.text.indexOf("npm run provision:smoke");
-    expect(job.text).not.toContain("npm install --global");
-    expect(buildAt).toBeGreaterThan(prepareBinAt);
-    expect(shimAt).toBeGreaterThan(buildAt);
-    expect(provisionAt).toBeGreaterThan(shimAt);
+    const jobs = ciJobs().filter((job) => SMOKE_INVOCATION.test(job.text));
+    expect(jobs.length).toBeGreaterThan(0);
+    for (const job of jobs) {
+      const installAt = job.text.indexOf("npm ci");
+      const shimAt = job.text.indexOf("node scripts/prepare-trusted-corepack.mjs");
+      const provisionAt = job.text.indexOf("npm run provision:smoke");
+      expect(shimAt, `${job.name}: locked Corepack must follow npm ci`).toBeGreaterThan(installAt);
+      expect(provisionAt, `${job.name}: prepare Corepack before the smoke seed`).toBeGreaterThan(
+        shimAt,
+      );
+      expect(job.text).toContain("GITHUB_PATH");
+    }
   });
 
   it("prepares an executable Corepack copy inside the supplied runtime root", () => {

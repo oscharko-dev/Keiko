@@ -212,7 +212,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
@@ -245,7 +245,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
@@ -288,7 +288,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
@@ -374,7 +374,7 @@ jobs:
           ref: ${{ github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify pull-request merge candidate consistency
         if: ${{ github.event_name == 'pull_request' }}
@@ -531,6 +531,9 @@ jobs:
           npm run check:editor-bundle-size -- --require-static-export
           npm run check:editor-release-evidence
           npm run check:update-ui-evidence
+      - name: Prepare trusted Corepack from the locked dependency tree
+        shell: bash
+        run: node scripts/prepare-trusted-corepack.mjs >> "$GITHUB_PATH"
       - name: Package surface and installable smoke
         timeout-minutes: 45
         run: |
@@ -578,7 +581,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify pull-request merge candidate consistency
         if: ${{ github.event_name == 'pull_request' }}
@@ -603,7 +606,7 @@ jobs:
           # npm never prunes `_cacache`, so the entry would grow until it evicted itself out of the
           # repository cache budget. A miss simply reproduces today's cold install.
           path: ~/.npm
-          key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
+          key: npm-cache-${{ runner.os }}-node26.13.1-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
       # Coverage executes the same live isolation proofs as the core test job. Ubuntu 24.04
       # otherwise exposes bubblewrap while AppArmor prevents it from creating the namespace.
@@ -689,7 +692,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify pull-request merge candidate consistency
         if: ${{ github.event_name == 'pull_request' }}
@@ -704,7 +707,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
-          key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
+          key: npm-cache-${{ runner.os }}-node26.13.1-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
       - name: Setup Linux sandbox isolation
         uses: ./.github/actions/setup-sandbox-isolation
@@ -765,7 +768,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify pull-request merge candidate consistency
         if: ${{ github.event_name == 'pull_request' }}
@@ -780,7 +783,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
-          key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
+          key: npm-cache-${{ runner.os }}-node26.13.1-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
       - name: Setup Linux sandbox isolation
         uses: ./.github/actions/setup-sandbox-isolation
@@ -899,7 +902,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify pull-request merge candidate consistency
         if: ${{ github.event_name == 'pull_request' }}
@@ -915,7 +918,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
-          key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
+          key: npm-cache-${{ runner.os }}-node26.13.1-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
       # Reassembly happens before ANY evaluation, and the `needs:` edges above make that ordering
       # structural rather than a convention: a per-file floor read off one shard's partial summary
@@ -1145,7 +1148,7 @@ jobs:
           ref: ${{ github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify pull-request merge candidate consistency
         if: ${{ github.event_name == 'pull_request' }}
@@ -1173,7 +1176,7 @@ jobs:
       - core-quality
       - coverage-sonar
       - cross-platform-smoke
-      - node-26-compatibility
+      - runtime-qualification
       - portable-secure-read
       - secret-scan
       - semantic-duplication
@@ -1191,7 +1194,7 @@ jobs:
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
           EDITOR_FAST_PR: ${{ github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor' }}
-          NODE_26_COMPATIBILITY_RESULT: ${{ needs.node-26-compatibility.result }}
+          RUNTIME_QUALIFICATION_RESULT: ${{ needs.runtime-qualification.result }}
           PORTABLE_SECURE_READ_RESULT: ${{ needs.portable-secure-read.result }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
@@ -1229,7 +1232,7 @@ jobs:
                          "CORE_QUALITY:${CORE_QUALITY_RESULT:-}" "COVERAGE_SONAR:${COVERAGE_SONAR_RESULT:-}" \
                          "SECRET_SCAN:${SECRET_SCAN_RESULT:-}" "SEMANTIC_DUPLICATION:${SEMANTIC_DUPLICATION_RESULT:-}" \
                          "UI:${UI_RESULT:-}" "BUILD_SCAN_SBOM_SMOKE:${BUILD_SCAN_SBOM_SMOKE_RESULT:-}" \
-                         "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" "NODE_26:${NODE_26_COMPATIBILITY_RESULT:-}" \
+                         "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" "NODE_26:${RUNTIME_QUALIFICATION_RESULT:-}" \
                          "PORTABLE_SECURE_READ:${PORTABLE_SECURE_READ_RESULT:-}" \
                          "SBOM_PROVENANCE:${SBOM_PROVENANCE_RESULT:-}"; do
               state="${named#*:}"
@@ -1277,14 +1280,14 @@ jobs:
             echo "Required CI dependency did not succeed: $CROSS_PLATFORM_RESULT"
             exit 1
           fi
-          if [ "$NODE_26_COMPATIBILITY_RESULT" = "skipped" ]; then
+          if [ "$RUNTIME_QUALIFICATION_RESULT" = "skipped" ]; then
             if [ "$DOCUMENTATION_ONLY" != "true" ]; then
-              echo "Node 26 compatibility was skipped without a documentation-only change set."
+              echo "Runtime qualification was skipped without a documentation-only change set."
               exit 1
             fi
-            echo "Node 26 compatibility skipped: documentation-only change set."
-          elif [ "$NODE_26_COMPATIBILITY_RESULT" != "success" ]; then
-            echo "Required CI dependency did not succeed: $NODE_26_COMPATIBILITY_RESULT"
+            echo "Runtime qualification skipped: documentation-only change set."
+          elif [ "$RUNTIME_QUALIFICATION_RESULT" != "success" ]; then
+            echo "Required CI dependency did not succeed: $RUNTIME_QUALIFICATION_RESULT"
             exit 1
           fi
           # Portable helper qualification uses the same smoke fixture as the staged artifacts.
@@ -1322,7 +1325,7 @@ jobs:
           ref: ${{ github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify pull-request merge candidate consistency
         if: ${{ github.event_name == 'pull_request' }}
@@ -1340,6 +1343,9 @@ jobs:
           npm run prepare:bin
           npm run build:ui
           npm run check:editor-release-evidence
+      - name: Prepare trusted Corepack from the locked dependency tree
+        shell: bash
+        run: node scripts/prepare-trusted-corepack.mjs >> "$GITHUB_PATH"
       - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130/#3134)
         # The only step in the smoke flow that may reach the package-manager host. The child call
         # is already bounded inside the script; this bounds anything outside it.
@@ -1369,7 +1375,7 @@ jobs:
         # stall rather than a download; without it the job's own limit is the only ceiling.
         timeout-minutes: 1
         # .npmrc's strict-allow-scripts already fails `npm ci` closed on an unapproved script, but
-        # only for what resolves on THIS runner, and npm 11.16.0 ignores a pinned name@version key
+        # only for what resolves on THIS runner, and npm 11.20.0 ignores a pinned name@version key
         # for unrs-resolver so its approval has to be unpinned — which would bless any future
         # version. This reads package-lock.json instead: every platform's tree, exact versions.
         run: npm run check:install-script-approvals
@@ -1426,7 +1432,7 @@ jobs:
           ref: ${{ github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify pull-request merge candidate consistency
         if: ${{ github.event_name == 'pull_request' }}
@@ -1445,6 +1451,22 @@ jobs:
         uses: ./.github/actions/setup-sandbox-isolation
       - name: Typecheck the complete package graph
         run: npm run typecheck
+      - name: Provision the approved USearch native runtime
+        run: npm run provision:usearch
+      - name: Verify local paths, timezone and runtime selection on this OS
+        env:
+          TZ: Europe/Berlin
+        run: >-
+          node node_modules/vitest/vitest.mjs run
+          packages/keiko-server/src/knowledge-chat-turn.test.ts
+          packages/keiko-server/src/editor/verificationRuntimeTarget.test.ts
+          packages/keiko-memory-capture/src/salience.test.ts
+          packages/keiko-memory-capture/src/stated-validity.test.ts
+          packages/keiko-git/src/git-executable.test.ts
+          packages/keiko-sandbox/src/native-build-toolchain.test.ts
+          scripts/__tests__/host-executable.test.mjs
+          scripts/__tests__/host-npm-invocation.test.mjs
+          scripts/__tests__/check-activity-log.test.mjs
       - name: Build
         run: npm run build
       # Two separate steps (not one multi-line run): on the Windows runner the default shell is
@@ -1454,6 +1476,9 @@ jobs:
         run: npm run prepare:bin
       - name: Build UI (static export)
         run: npm run build:ui
+      - name: Prepare trusted Corepack from the locked dependency tree
+        shell: bash
+        run: node scripts/prepare-trusted-corepack.mjs >> "$GITHUB_PATH"
       - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130)
         # The only step in the smoke flow that may reach the package-manager host. The child call
         # is already bounded inside the script; this bounds anything outside it.
@@ -1539,8 +1564,8 @@ jobs:
         timeout-minutes: 20
         run: node scripts/__tests__/windows-setup-bootstrap-smoke.mjs
 
-  node-26-compatibility:
-    name: Node 26 compatibility (shard ${{ matrix.shard }}/4)
+  runtime-qualification:
+    name: Runtime qualification (shard ${{ matrix.shard }}/4)
     needs: [change-scope, verified-tree]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
@@ -1560,7 +1585,7 @@ jobs:
           ref: ${{ github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "26.8.1"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify pull-request merge candidate consistency
         if: ${{ github.event_name == 'pull_request' }}
@@ -1617,7 +1642,7 @@ jobs:
           ref: ${{ github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify pull-request merge candidate consistency
         if: ${{ github.event_name == 'pull_request' }}
@@ -1681,7 +1706,7 @@ jobs:
           ref: ${{ github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.18.0"
+          node-version: "26.13.1"
           package-manager-cache: false
       - name: Verify pull-request merge candidate consistency
         if: ${{ github.event_name == 'pull_request' }}

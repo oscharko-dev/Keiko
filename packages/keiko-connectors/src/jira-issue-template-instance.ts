@@ -21,7 +21,10 @@ import {
   jiraCreateMutationMetadata,
   type JiraMutationRequest,
 } from "./jira-managed-mutation-metadata.js";
-import { readJiraFieldCatalog } from "./jira-managed-template-gate.js";
+import {
+  mergeJiraTemplateFieldCatalogs,
+  readJiraFieldCatalog,
+} from "./jira-managed-template-gate.js";
 import { jiraTemplateNativeIssueType } from "./jira-template-parent-types.js";
 
 /**
@@ -217,6 +220,37 @@ function readStatusesIfProject(
     : readStatuses(request, template, project);
 }
 
+/** Resolve names missing from GET field against the selected type's create metadata, just as the
+ * write gate does. Data Center exposes the localized parent name only there (#4390). A failed
+ * supplemental read cannot prove that a field does not exist. */
+async function readTemplateFields(
+  request: JiraMutationRequest,
+  template: JiraIssueTemplate,
+  project: ProjectFacts | undefined,
+): Promise<readonly JiraFieldCatalogEntry[] | undefined> {
+  const fields = await readJiraFieldCatalog(request);
+  if (fields === undefined || project === undefined) return fields;
+  const references = [
+    ...template.requiredFields,
+    ...(template.parent.field === undefined ? [] : [template.parent.field]),
+  ];
+  if (
+    references.every(
+      (reference) => resolveJiraTemplateFieldIds(reference, fields, template).length > 0,
+    )
+  )
+    return fields;
+  const types = project.issueTypes.filter((type) => jiraTemplateIssueTypeMatches(template, type));
+  const [type] = types;
+  if (types.length !== 1 || type === undefined) return fields;
+  const metadata = await jiraCreateMutationMetadata(
+    request,
+    encodeURIComponent(project.id),
+    encodeURIComponent(type.id),
+  );
+  return metadata.ok ? mergeJiraTemplateFieldCatalogs(fields, metadata.fields) : undefined;
+}
+
 /** The live facts one template is validated against; unreadable parts are left out, not guessed. */
 export async function readJiraTemplateInstanceMetadata(
   request: JiraMutationRequest,
@@ -227,7 +261,7 @@ export async function readJiraTemplateInstanceMetadata(
   const { project } = read;
   const parentTypes = await readParentTypesIfRequired(request, template);
   if (parentTypes !== undefined && !parentTypes.ok) return parentTypes;
-  const fields = await readJiraFieldCatalog(request);
+  const fields = await readTemplateFields(request, template, project);
   const links = await readLinkTypes(request);
   if (!links.ok) return links;
   const { linkTypes } = links;
@@ -530,7 +564,12 @@ export function resolveJiraTemplateBinding(
   const types = instance.project?.issueTypes;
   if (types === undefined) return { state: "unresolved", subject: template.project };
   const current = currentBinding(template, types, instance);
-  if (current !== undefined) return { state: "bound", issueType: current };
+  if (current !== undefined) {
+    const binding = completedFieldBinding(template, instance.fields, instanceId);
+    return binding === undefined
+      ? { state: "bound", issueType: current }
+      : { state: "bindable", issueType: current, binding };
+  }
   // A binding that no longer finds its ids is resolved again from the typed names.
   const own = exactlyOne(types, template.issueType);
   if (!("found" in own)) return unresolvedOrDead(template, own);
@@ -555,6 +594,41 @@ function oneFieldId(
 ): string {
   const ids = catalog === undefined ? [] : resolveJiraTemplateFieldIds(reference, catalog);
   return ids.length === 1 && ids[0] !== undefined ? ids[0] : JIRA_BINDING_UNRESOLVED;
+}
+
+/** Fill previously unresolved field slots without rebinding an existing id by a translated name. */
+function completedFieldBinding(
+  template: JiraIssueTemplate,
+  catalog: readonly JiraFieldCatalogEntry[] | undefined,
+  instanceId: string,
+): JiraTemplateBinding | undefined {
+  const bound = template.binding;
+  if (bound === undefined || catalog === undefined) return undefined;
+  const complete = (reference: string, existing: string | undefined): string => {
+    if (existing !== undefined && existing !== JIRA_BINDING_UNRESOLVED) return existing;
+    return oneFieldId(catalog, reference);
+  };
+  const ids: JiraTemplateBindingIds = {
+    ...bound,
+    ...(template.requiredFields.length === 0
+      ? {}
+      : {
+          requiredFieldIds: template.requiredFields.map((field, index) =>
+            complete(field, bound.requiredFieldIds?.[index]),
+          ),
+        }),
+    ...(template.parent.field === undefined
+      ? {}
+      : {
+          parentFieldId: complete(template.parent.field, bound.parentFieldId),
+        }),
+  };
+  const changed =
+    ids.parentFieldId !== bound.parentFieldId ||
+    ids.requiredFieldIds?.some((id, index) => id !== bound.requiredFieldIds?.[index]) === true;
+  return changed
+    ? { ...ids, digest: jiraTemplateBindingDigest(instanceId, template, ids) }
+    : undefined;
 }
 
 /** The field ids of the typed references in the author's view; a name that is not exactly one field stays `none`. */

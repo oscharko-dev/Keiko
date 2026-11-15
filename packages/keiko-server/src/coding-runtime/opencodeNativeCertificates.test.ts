@@ -54,6 +54,7 @@ describe("nativeCertificateReadFilesField (#4271)", () => {
       namedCount: 2,
       admittedCount: 1,
       fileCount: 1,
+      directoryCount: 1,
     });
   });
 
@@ -66,7 +67,7 @@ describe("nativeCertificateReadFilesField (#4271)", () => {
     expect(log.events[0]).toMatchObject({
       op: "coding-runtime.native-certificates.admitted",
       correlationId: "run-certs-0002",
-      extra: { namedCount: 0, admittedCount: 0, fileCount: 0 },
+      extra: { namedCount: 0, admittedCount: 0, fileCount: 0, directoryCount: 0 },
     });
   });
 });

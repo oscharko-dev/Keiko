@@ -11,7 +11,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import {
   logMarkdownSkillOperation,
   type MarkdownSkillAction,
-  type MarkdownSkillProposalAccounting,
+  type MarkdownSkillOperationAccounting,
 } from "./markdown-skill-log.js";
 import { errorBody } from "./route-error.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -42,7 +42,7 @@ export async function withSkillAccess(
   action: MarkdownSkillAction,
   operation: () => RouteResult | Promise<RouteResult>,
   /** Counts the operation wants on its closing line; read after it ran, never a body. */
-  accounting?: () => MarkdownSkillProposalAccounting | undefined,
+  accounting?: () => MarkdownSkillOperationAccounting | undefined,
 ): Promise<RouteResult> {
   logMarkdownSkillOperation(ctx.correlationId, action, "started", 0);
   let result: RouteResult;
