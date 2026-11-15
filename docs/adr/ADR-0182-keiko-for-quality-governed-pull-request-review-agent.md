@@ -334,10 +334,13 @@ minutes of one turn. A turn that spent them all on reasoning ended without a too
 check failed `model-failed` after 684 seconds, 645 of them in that one turn: one such check made a
 probe review incomplete. Of the 955 Counter-checker turns of development iteration 7 half took at most 351
 tokens, 99 % at most 3,823, and 6 took more than 4,096. A turn that reaches the budget is asked once
-more for its answer; a second failure ends the check as before. What the gateway discarded inside a
-turn was processed by the provider, so its tokens count in the check's totals and against the
-check's and the run's prompt allowance, and `review.counter-check.completed` records
-`discardedAttemptCount`.
+more for its answer; a second failure ends the check as before. A turn never asks for more output
+than the model's configuration declares as its limit, because the gateway refuses such a request
+(R4130-067). What the gateway discarded inside a turn was processed by the provider, so its tokens
+count in the check's totals and are charged to the check's and the run's prompt allowance whatever
+is left of them (R4130-066): a check or a run that is over its allowance afterwards refuses the next
+turn, and a verdict that came with the answer is still recorded. `review.counter-check.completed`
+records `discardedAttemptCount`.
 
 The phase stops when the run already presents as many findings as it may (Issue #4130).
 Counter-checks run in the order the presentation rule ranks by, so once three checked candidates

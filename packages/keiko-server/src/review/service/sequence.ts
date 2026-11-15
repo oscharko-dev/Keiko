@@ -612,6 +612,11 @@ function runBudget(limit: number): RunCounterCheckBudget {
       used += promptTokens;
       return true;
     },
+    // R4130-066: tokens the provider already processed count beyond the allowance as well.
+    charge: (promptTokens): void => {
+      used += promptTokens;
+      if (used > limit) refused = true;
+    },
     exhausted: () => refused,
   };
 }

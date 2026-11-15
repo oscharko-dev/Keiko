@@ -187,9 +187,15 @@ function check(
     readonly limits?: CounterCheckDeps["limits"];
     readonly signal?: AbortSignal;
     readonly reserve?: (tokens: number) => boolean;
+    readonly charge?: (tokens: number) => void;
+    readonly declaredMaxOutputTokens?: CounterCheckDeps["declaredMaxOutputTokens"];
   } = {},
 ): Promise<CounterCheckOutcome> {
-  return counterCheckCandidate(deps(model, options.limits), {
+  const checkDeps = {
+    ...deps(model, options.limits),
+    declaredMaxOutputTokens: options.declaredMaxOutputTokens,
+  };
+  return counterCheckCandidate(checkDeps, {
     candidate,
     modelId: "checker",
     worktreeRoot: repo,
@@ -199,7 +205,10 @@ function check(
       headSha,
       runner: createGitReviewProcessRunner(),
     }),
-    budget: { reserve: options.reserve ?? ((): boolean => true) },
+    budget: {
+      reserve: options.reserve ?? ((): boolean => true),
+      charge: options.charge ?? ((): void => undefined),
+    },
     signal: options.signal ?? new AbortController().signal,
     runCorrelationId: "review-run-correlation",
   });
@@ -422,34 +431,116 @@ describe("counterCheckCandidate", () => {
       expect(configured.requests[0]?.maxOutputTokens).toBe(1_000);
     });
 
+    /** The scripted model with one discarded attempt reported on its first answer. */
+    function repairedOnce(steps: readonly Step[]): ScriptedModel {
+      const model = scripted(steps);
+      const answer = model.call;
+      let first = true;
+      return {
+        ...model,
+        call: async (request, signal): Promise<NormalizedResponse> => {
+          const response = await answer(request, signal);
+          if (!first) return response;
+          first = false;
+          return {
+            ...response,
+            discardedAttemptUsage: { attemptCount: 1, promptTokens: 700, completionTokens: 4_096 },
+          };
+        },
+      };
+    }
+
     it("counts what the gateway discarded inside a turn in the totals and against the allowance", async () => {
       const candidate = await candidateOf(report());
-      const model = scripted([CONFIRM]);
-      const answer = model.call;
       const reserved: number[] = [];
-      const repaired: ScriptedModel = {
-        ...model,
-        call: async (request, signal) => ({
-          ...(await answer(request, signal)),
-          discardedAttemptUsage: { attemptCount: 1, promptTokens: 700, completionTokens: 4_096 },
-        }),
-      };
-      const outcome = await check(repaired, candidate, {
+      const charged: number[] = [];
+      const outcome = await check(repairedOnce([CONFIRM]), candidate, {
         reserve: (tokens) => {
           reserved.push(tokens);
           return true;
         },
+        charge: (tokens) => void charged.push(tokens),
       });
 
       expect(outcome.verdict.verdict).toBe("confirmed");
       expect(outcome.discardedAttemptCount).toBe(1);
       // The answer's own 10 completion tokens and the discarded attempt's 4,096.
       expect(outcome.completionTokens).toBe(4_106);
-      expect(outcome.promptTokens).toBeGreaterThanOrEqual(800);
-      // The turn's own reservation, then the discarded attempt's prompt tokens.
-      expect(reserved).toHaveLength(2);
-      expect(reserved[1]).toBe(700);
+      // The turn's own reservation, and the discarded attempt's prompt tokens charged to the run.
+      expect(reserved).toHaveLength(1);
+      expect(charged).toEqual([700]);
+      expect(outcome.promptTokens).toBe((reserved[0] ?? 0) + 700);
       expect(completedLine()).toMatchObject({ extra: { discardedAttemptCount: 1 } });
+    });
+
+    // R4130-066: the provider processed the discarded attempt, so its tokens count even when they
+    // go beyond the check's allowance. The next turn is then refused and the session ends.
+    it("charges a discarded attempt beyond the allowance and starts no further turn", async () => {
+      const candidate = await candidateOf(report());
+      const read = { tool: TOOLS.read, args: { relativePath: "src/total.ts", startLine: 3 } };
+      const model = repairedOnce([read, read, CONFIRM]);
+      const reserved: number[] = [];
+      const charged: number[] = [];
+      const first = await check(scripted([CONFIRM]), candidate, {
+        reserve: (tokens) => {
+          reserved.push(tokens);
+          return true;
+        },
+      });
+      expect(first.verdict.verdict).toBe("confirmed");
+      const oneTurn = reserved[0] ?? 0;
+
+      // An allowance that holds the first turn and the discarded attempt, but no second turn.
+      const outcome = await check(model, candidate, {
+        limits: { promptTokens: oneTurn + 700 },
+        charge: (tokens) => void charged.push(tokens),
+      });
+
+      expect(charged).toEqual([700]);
+      expect(model.requests).toHaveLength(1);
+      expect(outcome).toMatchObject({
+        verdict: { verdict: "undecided", reasonCode: "out-of-budget" },
+        effect: "budget-exhausted",
+        discardedAttemptCount: 1,
+      });
+      expect(outcome.promptTokens).toBe(oneTurn + 700);
+    });
+
+    it("still records a verdict that came with the answer whose attempt was discarded", async () => {
+      const candidate = await candidateOf(report());
+      const reserved: number[] = [];
+      await check(scripted([CONFIRM]), candidate, {
+        reserve: (tokens) => {
+          reserved.push(tokens);
+          return true;
+        },
+      });
+      // The allowance holds the one turn; the discarded attempt's 700 tokens go beyond it.
+      const outcome = await check(repairedOnce([CONFIRM]), candidate, {
+        limits: { promptTokens: (reserved[0] ?? 0) + 100 },
+      });
+      expect(outcome).toMatchObject({ verdict: { verdict: "confirmed" }, effect: "none" });
+      expect(outcome.promptTokens).toBe((reserved[0] ?? 0) + 700);
+    });
+
+    // R4130-067: the gateway refuses a request that asks for more output than the model declares.
+    it.each([
+      [2_048, 2_048],
+      [8_192, REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS],
+      [0, REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS],
+      [undefined, REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS],
+    ])("asks for no more output than the model declares (%s)", async (declared, expected) => {
+      const candidate = await candidateOf(report());
+      const model = scripted([CONFIRM]);
+      const asked: string[] = [];
+      await check(model, candidate, {
+        declaredMaxOutputTokens: (modelId) => {
+          asked.push(modelId);
+          return declared;
+        },
+      });
+      expect(asked).toEqual(["checker"]);
+      expect(model.requests[0]?.maxOutputTokens).toBe(expected);
     });
 
     it("reports no discarded attempt for a session without one", async () => {

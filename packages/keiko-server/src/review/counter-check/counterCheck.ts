@@ -88,6 +88,12 @@ export const DEFAULT_COUNTER_CHECK_LIMITS: CounterCheckLimits = {
 /** The run's shared counter-check prompt allowance. */
 export interface CounterCheckRunBudget {
   reserve(promptTokens: number): boolean;
+  /**
+   * Counts prompt tokens the provider has already processed (R4130-066): an attempt the gateway
+   * discarded inside a turn. It always counts them, also beyond the allowance, and the allowance
+   * then refuses the next reservation.
+   */
+  charge(promptTokens: number): void;
 }
 
 export interface CounterCheckDeps {
@@ -95,6 +101,11 @@ export interface CounterCheckDeps {
   readonly runner: () => GitProcessRunner;
   readonly activityLog: ServerLogSink;
   readonly limits?: Partial<CounterCheckLimits> | undefined;
+  /**
+   * The output tokens the model's configuration declares as its limit, when it declares one
+   * (R4130-067). A turn never asks for more: the gateway refuses a request above it.
+   */
+  readonly declaredMaxOutputTokens?: ((modelId: string) => number | undefined) | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -158,10 +169,24 @@ function reserver(
 
 type CounterCheckModelRequest = Parameters<ModelPort["call"]>[0];
 type CounterCheckModelResponse = Awaited<ReturnType<ModelPort["call"]>>;
-type CounterCheckModelChunk =
-  NonNullable<ModelPort["callStream"]> extends (...args: never[]) => AsyncIterable<infer Chunk>
-    ? Chunk
-    : never;
+
+/**
+ * Charges what a discarded attempt cost (R4130-066). The provider has processed these tokens, so
+ * they count whatever the allowance says: against the check's own limit and against the run's. A
+ * check or a run that is over its allowance afterwards refuses the next turn's reservation, which
+ * ends the session `budget-exhausted`; a verdict in the current answer is still recorded.
+ */
+function chargeDiscarded(
+  budget: CounterCheckRunBudget,
+  meter: SessionMeter,
+  discarded: NonNullable<CounterCheckModelResponse["discardedAttemptUsage"]>,
+): void {
+  meter.discardedAttempts += discarded.attemptCount;
+  meter.promptTokens += discarded.promptTokens;
+  meter.completionTokens += discarded.completionTokens;
+  meter.reserved += discarded.promptTokens;
+  budget.charge(discarded.promptTokens);
+}
 
 /**
  * The Counter-checker's model port for one session (#4130). Every turn gets the session's output
@@ -169,53 +194,29 @@ type CounterCheckModelChunk =
  * reasoning is asked once more for the answer instead of failing the check. What the gateway
  * discarded inside a turn (the repaired answer, a tool call it corrected) was processed by the
  * provider: its tokens count in the session's totals and against the check's and the run's prompt
- * allowance.
+ * allowance. The read-only harness calls `call` only, so the port has no streaming variant.
  */
 function counterCheckModel(
   model: ModelPort,
   limits: CounterCheckLimits,
   meter: SessionMeter,
-  reserve: (promptTokens: number) => boolean,
+  budget: CounterCheckRunBudget,
 ): ModelPort {
-  const shaped = (request: CounterCheckModelRequest): CounterCheckModelRequest => ({
-    ...request,
-    maxOutputTokens: Math.min(
-      request.maxOutputTokens ?? limits.maxOutputTokens,
-      limits.maxOutputTokens,
-    ),
-    answerRepair: "steered",
-  });
-  const count = (response: CounterCheckModelResponse): void => {
-    const discarded = response.discardedAttemptUsage;
-    if (discarded === undefined) return;
-    meter.discardedAttempts += discarded.attemptCount;
-    meter.promptTokens += discarded.promptTokens;
-    meter.completionTokens += discarded.completionTokens;
-    reserve(discarded.promptTokens);
-  };
-  const stream = model.callStream;
-  async function* streamed(
-    source: NonNullable<ModelPort["callStream"]>,
-    request: CounterCheckModelRequest,
-    signal: AbortSignal,
-  ): AsyncIterable<CounterCheckModelChunk> {
-    for await (const chunk of source(shaped(request), signal)) {
-      if (chunk.type === "done") count(chunk.response);
-      yield chunk;
-    }
-  }
   return {
     call: async (request, signal): Promise<CounterCheckModelResponse> => {
-      const response = await model.call(shaped(request), signal);
-      count(response);
+      const shaped: CounterCheckModelRequest = {
+        ...request,
+        maxOutputTokens: Math.min(
+          request.maxOutputTokens ?? limits.maxOutputTokens,
+          limits.maxOutputTokens,
+        ),
+        answerRepair: "steered",
+      };
+      const response = await model.call(shaped, signal);
+      const discarded = response.discardedAttemptUsage;
+      if (discarded !== undefined) chargeDiscarded(budget, meter, discarded);
       return response;
     },
-    ...(stream === undefined
-      ? {}
-      : {
-          callStream: (request, signal): AsyncIterable<CounterCheckModelChunk> =>
-            streamed(stream, request, signal),
-        }),
   };
 }
 
@@ -355,7 +356,7 @@ function runSession(
     },
     (gate, signal) =>
       runReadOnlyHarnessSession({
-        model: counterCheckModel(model, limits, meter, reserve),
+        model: counterCheckModel(model, limits, meter, input.budget),
         reservePromptTokens: reserve,
         sessionId: session.correlationId,
         objective: renderCounterCheckTask(input.candidate.report, {
@@ -377,13 +378,25 @@ function runSession(
   );
 }
 
+/**
+ * The session's limits: the configured ones over the defaults, with the output budget of a turn
+ * lowered to what the model declares (R4130-067). A model that declares no limit, or 0, keeps the
+ * configured budget.
+ */
+function sessionLimits(deps: CounterCheckDeps, modelId: string): CounterCheckLimits {
+  const limits = { ...DEFAULT_COUNTER_CHECK_LIMITS, ...deps.limits };
+  const declared = deps.declaredMaxOutputTokens?.(modelId);
+  if (declared === undefined || !Number.isSafeInteger(declared) || declared <= 0) return limits;
+  return { ...limits, maxOutputTokens: Math.min(limits.maxOutputTokens, declared) };
+}
+
 /** Runs one counter-check session and logs its outcome; never throws for a session failure. */
 export async function counterCheckCandidate(
   deps: CounterCheckDeps,
   input: CounterCheckInput,
 ): Promise<CounterCheckOutcome> {
   const now = deps.now ?? Date.now;
-  const limits = { ...DEFAULT_COUNTER_CHECK_LIMITS, ...deps.limits };
+  const limits = sessionLimits(deps, input.modelId);
   const session: CounterCheckSession = {
     correlationId: `review-counter-check-${randomUUID()}`,
     startedAt: now(),

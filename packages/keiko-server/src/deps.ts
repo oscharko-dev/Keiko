@@ -5349,6 +5349,13 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
           modelPortFactory: deps.modelPortFactory,
           runner: () => reviewServices.reviewRunner(input.runCorrelationId),
           activityLog,
+          // R4130-067: a counter-check turn never asks for more output than the model declares.
+          declaredMaxOutputTokens: (modelId) => {
+            const config = deps.gatewayConfig?.current();
+            return config === undefined
+              ? undefined
+              : findConfiguredCapability(config, modelId)?.maxOutputTokens;
+          },
         },
         input,
       ),

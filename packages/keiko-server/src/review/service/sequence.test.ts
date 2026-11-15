@@ -217,6 +217,29 @@ describe("the counter-check phase's wall-time limit (Issue #4130)", () => {
     expect(state.uncheckedCandidates).toBe(2);
     expect(state.uncheckedReason).toBe("budget-exhausted");
   });
+
+  // R4130-066: tokens the provider already processed are charged beyond the allowance, and the
+  // run's allowance is then used up like after a refused reservation.
+  it("starts no further check once a charge took the run over its allowance", async () => {
+    const { state } = await runPhase({
+      reports: THREE,
+      onCheck: (input) => {
+        input.budget.charge(RUN_ALLOWANCE + 1);
+      },
+    });
+    expect(state.uncheckedCandidates).toBe(2);
+    expect(state.uncheckedReason).toBe("budget-exhausted");
+  });
+
+  it("goes on after a charge that stays inside the run's allowance", async () => {
+    const { state } = await runPhase({
+      reports: THREE,
+      onCheck: (input) => {
+        input.budget.charge(1);
+      },
+    });
+    expect(state.uncheckedCandidates).toBe(0);
+  });
 });
 
 // #4130: counter-checks run in presentation order and a run presents at most three findings, so a
