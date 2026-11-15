@@ -2684,6 +2684,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Keiko wurde neu gestartet. Verbinde erneut; Chat und Entwurf bleiben erhalten.",
   "browserApproval.launchFailed":
     "Keiko konnte diesen Browser nicht verbinden. Versuche es erneut oder öffne Keiko über den Starter.",
+  "browserApproval.launchOpenedElsewhere":
+    "Keiko hat die Verbindung in einem neuen Browserfenster oder Tab geöffnet. Falls sie in einem anderen Browser oder Profil erschienen ist, mach dort weiter.",
   "browserApproval.open": "Browser verbinden",
   "browserApproval.description":
     "Gib diesen Browser über einen Browser frei, der bereits mit dieser Keiko-Installation verbunden ist.",

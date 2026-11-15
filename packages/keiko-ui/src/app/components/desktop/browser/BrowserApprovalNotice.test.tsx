@@ -251,9 +251,27 @@ describe("browser notice authentication lifecycle", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15_000);
     });
-    expect(screen.getByRole("alert")).toHaveTextContent("reopen Keiko from its launcher");
+    // The opener said "opened": the person is told what happened, not that Keiko failed (#4370).
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Keiko opened the connection in a new browser window or tab. If it opened in another browser or profile, continue there.",
+    );
+    expect(screen.getByRole("alert")).not.toHaveTextContent("reopen Keiko from its launcher");
+    // It claims nothing about which browser the server chose, and gives no advice on the default.
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/default browser|your default/u);
+    expect(screen.getByRole("alert").textContent).not.toMatch(/Chrome|Safari|Firefox|Edge|Arc/u);
     expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps the launcher text when the opener itself failed, and names no browser", async () => {
+    active = false;
+    vi.mocked(openLauncherBrowser).mockRejectedValueOnce(new TypeError("unavailable"));
+    render(<BrowserApprovalNotice compact />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect browser" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("reopen Keiko from its launcher");
+    expect(alert).not.toHaveTextContent("new browser window");
+    expect(alert.textContent).not.toMatch(/Chrome|Safari|Firefox|Edge|Arc/u);
   });
 
   it("keeps compact inventory retry read-only", async () => {

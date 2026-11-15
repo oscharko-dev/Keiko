@@ -2536,6 +2536,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Keiko was restarted. Connect again; your chat and draft are kept.",
   "browserApproval.launchFailed":
     "Keiko could not connect this browser. Try again or reopen Keiko from its launcher.",
+  "browserApproval.launchOpenedElsewhere":
+    "Keiko opened the connection in a new browser window or tab. If it opened in another browser or profile, continue there.",
   "browserApproval.open": "Connect browser",
   "browserApproval.description":
     "Approve this browser from a browser already connected to this Keiko installation.",
