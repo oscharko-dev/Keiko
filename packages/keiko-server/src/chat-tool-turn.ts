@@ -63,6 +63,7 @@ import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/ru
 import { chatToolTurnLimits } from "./chat-tool-turn-budget.js";
 import { chatTurnDeadlineSignal, isChatTurnDeadlineReason } from "./chat-tool-turn-deadline.js";
 import {
+  chatToolTurnEnd,
   chatToolTurnEndReason,
   chatToolTurnHoldsWrite,
   chatToolTurnPartialAnswer,
@@ -124,6 +125,7 @@ import {
   type ChatClaimNotice,
   type ChatToolBatchProgress,
   type ChatToolExchange,
+  type ChatToolTurnEnd,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolConsumerContext } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
@@ -427,6 +429,7 @@ function reportTurnFailure(
     | "chat.tool-turn.batch-progress"
     | "chat.tool-turn.selection-release"
     | "chat.tool-turn.claim-notice"
+    | "chat.tool-turn.turn-end"
     | "chat.tool-turn.state-unreadable"
     | "chat.tool-turn.finalize" = "chat.tool-turn.batch-progress",
 ): void {
@@ -1377,12 +1380,30 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
    * written as text, since the person acts on whether an issue exists; a created receipt in the
    * turn never leaves a create claim standing.
    */
-  private settleClaimNotice(answer: NormalizedResponse): void {
+  private settleClaimNotice(answer: NormalizedResponse, end?: ChatToolTurnEnd): void {
     const still = this.claimedKinds.filter((kind) => this.stillClaims(kind, answer.content));
     let notice: ChatClaimNotice | undefined;
     if (still.includes("announced-create")) notice = "no-jira-create";
     else if (still.length > 0) notice = "tool-call-not-executed";
     this.storeClaimNotice(notice);
+    this.storeTurnEnd(end);
+  }
+
+  /**
+   * The ending describes the turn's FINAL answer too: an early end states it, and any other final
+   * answer clears what an earlier leg of the same turn stored, so the Chat never words an answer
+   * as an ending it is not (#4355).
+   */
+  private storeTurnEnd(end: ChatToolTurnEnd | undefined): void {
+    const { deps, message, correlationId } = this.options;
+    try {
+      const stored = deps.store.findMessageById(message.id)?.toolTranscript?.turnEnd;
+      if (JSON.stringify(stored) === JSON.stringify(end)) return;
+      deps.store.updateChatToolTranscript(message.id, { kind: "turn-end", end }, correlationId);
+    } catch (error: unknown) {
+      // The English answer is stored regardless; the missing record only costs the translation.
+      reportTurnFailure(this.options, error, "chat.tool-turn.turn-end");
+    }
   }
 
   private storeClaimNotice(notice: ChatClaimNotice | undefined): void {
@@ -1450,7 +1471,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         costClass: "low",
       },
     };
-    this.settleClaimNotice(this.endedAnswer);
+    this.settleClaimNotice(this.endedAnswer, chatToolTurnEnd(exchanges, reason));
     return this.endedAnswer;
   }
 

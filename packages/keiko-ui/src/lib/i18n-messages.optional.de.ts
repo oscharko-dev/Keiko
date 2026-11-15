@@ -3195,6 +3195,41 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.claimNotice.noJiraCreate": "In diesem Durchgang wurde kein Jira-Vorgang angelegt.",
   "chat.claimNotice.toolCallNotExecuted":
     "Ein als Text geschriebener Tool-Aufruf in dieser Antwort wurde nicht ausgeführt.",
+  "chat.turnEnd.lead": "Diese Anfrage wurde nicht abgeschlossen.",
+  "chat.turnEnd.reason.budgetExhausted":
+    "In diesem Durchgang wurde das Limit für Aktionen erreicht.",
+  "chat.turnEnd.reason.deadline": "Die Zeit für diesen Durchgang ist abgelaufen.",
+  "chat.turnEnd.reason.authorityInvalid":
+    "Der Modus, die Quellen oder die Verbindung des Chats haben sich geändert.",
+  "chat.turnEnd.reason.authenticationFailed":
+    "Die Anmeldung bei Jira ist fehlgeschlagen. Das Zugangs-Token ist möglicherweise abgelaufen oder wurde widerrufen. Öffne das Fenster Lokales Wissen, ersetze das Token am Jira Pod und verifiziere die Verbindung.",
+  "chat.turnEnd.reason.toolFailure": "Eine Aktion konnte nicht abgeschlossen werden.",
+  "chat.turnEnd.reason.outputExhausted": "Das Modell hat sein Ausgabelimit erreicht.",
+  "chat.turnEnd.reason.contextOverflow":
+    "Die Unterhaltung passt nicht mehr in das Kontextfenster des Modells.",
+  "chat.turnEnd.reason.toolNotOffered":
+    "Das Modell hat eine Aktion angefordert, die in diesem Chat nicht verfügbar ist. Frag noch einmal oder nenne die gewünschte Aktion.",
+  "chat.turnEnd.reason.modelFailure": "Die Anfrage an das Modell ist fehlgeschlagen.",
+  "chat.turnEnd.completed": "In diesem Durchgang erledigt:",
+  "chat.turnEnd.unconfirmed":
+    "Gesendet, aber nicht bestätigt — prüfe das in Jira, bevor du es erneut versuchst:",
+  "chat.turnEnd.unsettled":
+    "Gestartet, aber nicht abgeschlossen — prüfe das in Jira, bevor du es erneut versuchst:",
+  "chat.turnEnd.notDone":
+    "Nicht erledigt — von Jira abgelehnt, durch einen früheren Eintrag blockiert oder nicht rechtzeitig gestartet:",
+  "chat.turnEnd.itemWithoutKey": "(Eintrag {item}, ohne Schlüssel)",
+  "chat.turnEnd.state.created": "angelegt",
+  "chat.turnEnd.state.existing": "vorhanden",
+  "chat.turnEnd.state.failed": "fehlgeschlagen",
+  "chat.turnEnd.state.uncertain": "unsicher",
+  "chat.turnEnd.state.skipped": "übersprungen",
+  "chat.turnEnd.state.excluded": "ausgeschlossen",
+  "chat.turnEnd.state.pending": "ausstehend",
+  "chat.turnEnd.more": "…und {count} weitere.",
+  "chat.turnEnd.counts":
+    "Lesezugriffe abgeschlossen: {reads}. Abgelehnte oder fehlgeschlagene Aktionen: {refused}.",
+  "chat.turnEnd.footer":
+    "Der Rest der Anfrage wurde nicht erledigt. Schick eine weitere Nachricht, um hier weiterzumachen; abgeschlossene Schreibvorgänge werden nicht wiederholt, außer du verlangst sie erneut.",
   "chat.contextWindow.label": "Hinweis zum Kontextfenster",
   "chat.contextWindow.notice":
     "Der sichtbare Verlauf enthält {count} Beiträge. Kontext jenseits der Grenze von 48 Beiträgen kann komprimiert werden.",

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CHAT_TOOL_TURN_END_REASONS,
+  CHAT_TURN_END_RECEIPTS_MAX,
+  isChatToolTurnEnd,
+  chatTurnEndAnswerFingerprint,
+  type ChatToolExchange,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   CallerAttemptAdmissionError,
@@ -10,10 +16,12 @@ import {
   TimeoutError,
 } from "@oscharko-dev/keiko-model-gateway";
 import { ProviderOutputExhaustedError } from "@oscharko-dev/keiko-security";
+import { activityLogOperationSchema } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import {
   withToolResultsAsSource,
+  chatToolTurnEnd,
   chatToolTurnEndReason,
   chatToolTurnPartialAnswer,
   recordChatToolTurnContextFitted,
@@ -230,6 +238,101 @@ describe("chatToolTurnPartialAnswer", () => {
     expect(answer).not.toContain("not confirmed");
     expect(answer).not.toContain("not settled");
     expect(answer).toContain("no longer fits the model's context window");
+  });
+});
+
+describe("chatToolTurnEnd (#4355)", () => {
+  // The registry needs a closed literal, so the two registrations repeat the vocabulary; this pin
+  // keeps them equal to the one list the Chat's catalog walk and the server share (the log also
+  // records the two closed words of a turn that gave no answer, which the Chat never words).
+  it.each(["chat.tool-turn.ended", "chat.tool-transcript.updated"])(
+    "keeps the %s registration equal to the shared reason vocabulary",
+    (op) => {
+      const fields = activityLogOperationSchema(op)?.fields as
+        Record<string, { readonly values?: readonly string[] }> | undefined;
+      const values = fields?.[op === "chat.tool-turn.ended" ? "reason" : "turnEndReason"]?.values;
+      const logOnly =
+        op === "chat.tool-turn.ended" ? ["deadline-cancelled", "request-aborted"] : [];
+      expect([...(values ?? [])].sort()).toEqual(
+        [...CHAT_TOOL_TURN_END_REASONS, ...logOnly].sort(),
+      );
+    },
+  );
+
+  it("states the reason and the receipts as closed facts, in the order the answer lists them", () => {
+    const end = chatToolTurnEnd(TRANSCRIPT, "deadline");
+    expect(end).toEqual({
+      reason: "deadline",
+      // Bound to the English ending the same tally and reason produce.
+      answer: chatTurnEndAnswerFingerprint(chatToolTurnPartialAnswer(TRANSCRIPT, "deadline")),
+      completed: [
+        { tool: "jira_create", key: "REQ-12" },
+        { tool: "jira_create", key: "REQ-13" },
+        { tool: "jira_comment" },
+      ],
+      unconfirmed: [{ tool: "jira_edit", key: "REQ-4" }],
+      unsettled: [{ tool: "jira_transition" }],
+      notDone: [],
+      moreCount: 0,
+      readCount: 1,
+      refusedCount: 1,
+    });
+    expect(isChatToolTurnEnd(end)).toBe(true);
+    // A key that is not a Jira issue key never becomes a receipt key.
+    expect(JSON.stringify(end)).not.toContain("Ignore this");
+  });
+
+  it("names a keyless draft item by its position and carries the item's state", () => {
+    const end = chatToolTurnEnd(
+      [
+        draftExchange(
+          {
+            outcome: "unknown",
+            items: [
+              { ref: "epic", state: "created", issueKey: "REQ-21" },
+              { ref: "task", state: "uncertain" },
+              { ref: "bug", state: "skipped" },
+              { ref: "spike", state: "excluded" },
+            ],
+          },
+          "unknown",
+        ),
+      ],
+      "deadline",
+    );
+    expect(end.completed).toEqual([{ tool: "jira_draft", key: "REQ-21", state: "created" }]);
+    expect(end.unconfirmed).toEqual([{ tool: "jira_draft", item: 2, state: "uncertain" }]);
+    expect(end.notDone).toEqual([{ tool: "jira_draft", item: 3, state: "skipped" }]);
+  });
+
+  it("carries the same receipts the English answer lists, whatever the reason", () => {
+    for (const reason of CHAT_TOOL_TURN_END_REASONS) {
+      const end = chatToolTurnEnd(TRANSCRIPT, reason);
+      const answer = chatToolTurnPartialAnswer(TRANSCRIPT, reason);
+      expect(end.reason).toBe(reason);
+      expect(end.answer).toBe(
+        chatTurnEndAnswerFingerprint(chatToolTurnPartialAnswer(TRANSCRIPT, reason)),
+      );
+      const listed = answer.split("\n").filter((line) => line.startsWith("- "));
+      expect(listed).toHaveLength(
+        end.completed.length + end.unconfirmed.length + end.unsettled.length + end.notDone.length,
+      );
+    }
+  });
+
+  it("bounds every list and counts what it left out", () => {
+    const items = Array.from({ length: CHAT_TURN_END_RECEIPTS_MAX + 5 }, (_unused, index) => ({
+      ref: `item-${String(index)}`,
+      state: "created",
+      issueKey: `REQ-${String(index + 1)}`,
+    }));
+    const end = chatToolTurnEnd(
+      [draftExchange({ outcome: "succeeded", items }, "succeeded")],
+      "deadline",
+    );
+    expect(end.completed).toHaveLength(CHAT_TURN_END_RECEIPTS_MAX);
+    expect(end.moreCount).toBe(5);
+    expect(isChatToolTurnEnd(end)).toBe(true);
   });
 });
 

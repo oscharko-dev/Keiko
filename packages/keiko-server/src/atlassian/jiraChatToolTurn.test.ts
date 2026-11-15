@@ -25,7 +25,10 @@ import { jiraOperationInReleaseScope } from "@oscharko-dev/keiko-contracts/runti
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createJiraDraftBatchExecutor, type JiraDraftBatchContext } from "./jiraDraftBatchTool.js";
 import { draftTool } from "./jiraChatCatalogRuntime.js";
-import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  chatTurnEndAnswerFingerprint,
+  type ChatToolBatchProgress,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 import { findMessageById as readStoredMessage } from "../store/messages.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -87,7 +90,7 @@ import {
   unsupportedIssueKeys,
 } from "../chat-tool-report-coverage.js";
 import { chatToolDraftReceipts } from "../chat-tool-receipts.js";
-import { recordChatToolTurnCorrected } from "../chat-tool-turn-ending.js";
+import { recordChatToolTurnCorrected, recordChatToolTurnEnded } from "../chat-tool-turn-ending.js";
 import { conversationModelNotReadyResult } from "../conversation-readiness-admission.js";
 import type { ToolCallingReadinessReason } from "../conversation-readiness-error.js";
 import { updateCapsuleState } from "@oscharko-dev/keiko-local-knowledge";
@@ -141,6 +144,7 @@ vi.mock("../chat-tool-turn-ending.js", async (importOriginal) => {
   return {
     ...actual,
     recordChatToolTurnCorrected: vi.fn(actual.recordChatToolTurnCorrected),
+    recordChatToolTurnEnded: vi.fn(actual.recordChatToolTurnEnded),
   };
 });
 
@@ -4919,6 +4923,36 @@ it("tells the person a true sentence when the model names an unoffered action tw
   expect(answer).toContain("Ask again, or name the action you want");
   expect(answer).not.toContain("the model request failed");
   expect(f.writes()).toBe(0);
+});
+
+// #4355: the ending the Chat words in the person's language is stored from the very value the log
+// line records, so the two can never differ, and the English answer lists the same receipts.
+it("stores the ending's closed facts from the same reason the log line records", async () => {
+  vi.mocked(recordChatToolTurnEnded).mockClear();
+  const f = fixture();
+  const calls: GatewayCallRequest[] = [];
+  await handleSendDesktopChat(sendContext(f, "unoffered-turn-end"), {
+    ...f.deps,
+    modelPortFactory: () => unofferedAfterReadModel(calls),
+  });
+  const [user, assistant] = f.deps.store.listMessages(f.chatId);
+  const end = user?.toolTranscript?.turnEnd;
+  expect(end).toEqual({
+    reason: "tool-not-offered",
+    // Bound to the exact English ending the turn stored as its answer.
+    answer: chatTurnEndAnswerFingerprint(assistant?.content ?? ""),
+    completed: [],
+    unconfirmed: [],
+    unsettled: [],
+    notDone: [],
+    moreCount: 0,
+    readCount: 1,
+    refusedCount: 0,
+  });
+  const logged = vi.mocked(recordChatToolTurnEnded).mock.calls.map(([, input]) => input.reason);
+  expect(logged).toEqual([end?.reason]);
+  // The stored English answer stays the fallback and says the same thing.
+  expect(assistant?.content).toContain("Reads completed: 1. Refused or failed tool calls: 0.");
 });
 
 function demandExchanges(f: ReturnType<typeof fixture>): readonly ChatToolExchange[] {

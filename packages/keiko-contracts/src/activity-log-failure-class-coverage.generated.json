@@ -5120,6 +5120,7 @@
         "start": [],
         "state": [
           "chat.tool-mutation.projected",
+          "chat.tool-transcript.marker-omitted",
           "chat.tool-transcript.updated",
           "chat.tool-turn.batch-draft-offer",
           "chat.tool-turn.context-fitted",
@@ -5134,6 +5135,10 @@
       "causalEdges": [
         {
           "op": "chat.tool-mutation.projected",
+          "mode": "correlation"
+        },
+        {
+          "op": "chat.tool-transcript.marker-omitted",
           "mode": "correlation"
         },
         {
@@ -5164,6 +5169,7 @@
       "lossSignals": [],
       "resourceSignals": [
         "chat.tool-mutation.projected",
+        "chat.tool-transcript.marker-omitted",
         "chat.tool-transcript.updated",
         "chat.tool-turn.batch-draft-offer",
         "chat.tool-turn.context-fitted",
@@ -5200,6 +5206,30 @@
             "causeChain": false
           },
           "proofIds": ["chat.tool-mutation.projected.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.tool-transcript.marker-omitted",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "marker",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.tool-transcript.marker-omitted.line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -5264,6 +5294,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "turnEndReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             }
           ],
           "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],

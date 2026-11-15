@@ -8,6 +8,7 @@ import {
 } from "./connector-windows-context";
 import { JiraChatTools } from "./JiraChatTools";
 import { ClaimNoticeLine, useClaimNoticeText } from "./ClaimNoticeLine";
+import { useTurnEndText } from "./turnEndText";
 import { ChatJiraNames } from "./jiraNames";
 import { ChatDraftStatus } from "./ChatDraftStatus";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
@@ -54,6 +55,8 @@ import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   type ChatClaimNotice,
+  type ChatToolTranscript,
+  type ChatToolTurnEnd,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   citationMarkerIndices,
@@ -567,20 +570,48 @@ const AssessedAnswerBody = dynamic(
 );
 
 /**
- * The stored claim marker of the turn an assistant answer closes (#4355): the closest earlier user
- * message's. Only the turn's first answer carries it; a regenerated one never does.
+ * The stored transcript of the turn an assistant answer closes (#4355): the closest earlier user
+ * message's. Only the turn's first answer closes it; a regenerated one never does.
  */
-export function claimNoticeOfAnswer(
+function transcriptOfAnswer(
   messages: readonly ChatMessage[],
   answer: ChatMessage | undefined,
-): ChatClaimNotice | undefined {
+): ChatToolTranscript | undefined {
   if (answer === undefined || (answer.responseVersion ?? 1) !== 1) return undefined;
   const at = messages.findIndex((message) => message.id === answer.id);
   for (let index = at - 1; index >= 0; index -= 1) {
     const earlier = messages[index];
-    if (earlier?.role === "user") return earlier.toolTranscript?.claimNotice;
+    if (earlier?.role === "user") return earlier.toolTranscript;
   }
   return undefined;
+}
+
+/** The stored claim marker of the turn an assistant answer closes (#4355). */
+export function claimNoticeOfAnswer(
+  messages: readonly ChatMessage[],
+  answer: ChatMessage | undefined,
+): ChatClaimNotice | undefined {
+  return transcriptOfAnswer(messages, answer)?.claimNotice;
+}
+
+/** The stored ending of the turn an assistant answer closes, when it ended early (#4355). */
+export function turnEndOfAnswer(
+  messages: readonly ChatMessage[],
+  answer: ChatMessage | undefined,
+): ChatToolTurnEnd | undefined {
+  return transcriptOfAnswer(messages, answer)?.turnEnd;
+}
+
+/** The stored facts of the turn only its closing answer carries: the claim marker and the ending. */
+function turnClosingProps(
+  userMessage: ChatMessage | null | undefined,
+  closing: boolean,
+): { readonly claimNotice?: ChatClaimNotice; readonly turnEnd?: ChatToolTurnEnd } {
+  const transcript = closing ? userMessage?.toolTranscript : undefined;
+  return {
+    ...(transcript?.claimNotice === undefined ? {} : { claimNotice: transcript.claimNotice }),
+    ...(transcript?.turnEnd === undefined ? {} : { turnEnd: transcript.turnEnd }),
+  };
 }
 
 /** What is read aloud: the answer, then Keiko's note when the turn carries one, as a copy does. */
@@ -1097,10 +1128,13 @@ function ChatBubbleImpl({
   waitingForDecision = false,
   layout = "stack",
   claimNotice,
+  turnEnd,
 }: {
   readonly message: ChatMessage;
   /** The stored turn's marker; only the first answer of the turn carries it, never a regeneration. */
   readonly claimNotice?: ChatClaimNotice | undefined;
+  /** The stored ending of a turn that ended early; the answer is then worded from it (#4355). */
+  readonly turnEnd?: ChatToolTurnEnd | undefined;
   readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
   readonly onRegenerate?: (assistantMessageId: string) => Promise<void>;
   readonly onCancelRegenerate?: () => void;
@@ -1134,7 +1168,14 @@ function ChatBubbleImpl({
     responseSelection.currentVersion === message.responseVersion
       ? responseSelection.selectedVersion
       : undefined;
-  const displayedMessage = messageForSelectedResponseVersion(message, selectedResponseVersion);
+  const selectedMessage = messageForSelectedResponseVersion(message, selectedResponseVersion);
+  const endText = useTurnEndText(
+    message.role !== "user" && (selectedMessage.responseVersion ?? 1) === 1 ? turnEnd : undefined,
+    selectedMessage.content,
+  );
+  // The stored English answer stays the fallback; the ending is worded from its closed facts.
+  const displayedMessage =
+    endText === undefined ? selectedMessage : { ...selectedMessage, content: endText };
   const evidence = useConnectedEvidenceReferences(displayedMessage.groundedAnswer, repositoryRoots);
   const isRunSummary = isRunSummaryMessage(message);
   const isUser = message.role === "user";
@@ -1425,11 +1466,7 @@ function ConversationThreadImpl({
                   previewWindows={previewWindows}
                   windowId={windowId}
                   layout="turn"
-                  claimNotice={
-                    index === turn.responses.length - 1
-                      ? userMessage?.toolTranscript?.claimNotice
-                      : undefined
-                  }
+                  {...turnClosingProps(userMessage, index === turn.responses.length - 1)}
                   onRegenerate={onRegenerate}
                   onCancelRegenerate={onCancelRegenerate}
                   showRegenerate={showRegenerateControls && latestAssistantId === response.id}
@@ -3572,6 +3609,10 @@ function ComposerCoreImpl({
             message.role === "assistant",
         );
   const voiceClaimNoticeText = useClaimNoticeText(claimNoticeOfAnswer(messages, voiceAnswer));
+  const voiceTurnEndText = useTurnEndText(
+    turnEndOfAnswer(messages, voiceAnswer),
+    voiceAnswer?.content ?? "",
+  );
   const playback = useAssistantSpeech({
     profile: voiceCapability?.profile ?? "none",
     // Only the canonical assistant answer produced after a spoken user turn is eligible. Typed chat and
@@ -3581,7 +3622,10 @@ function ComposerCoreImpl({
     text:
       voiceAnswer === undefined
         ? undefined
-        : speechTextWithNote(speakableAnswerText(voiceAnswer), voiceClaimNoticeText),
+        : speechTextWithNote(
+            voiceTurnEndText ?? speakableAnswerText(voiceAnswer),
+            voiceClaimNoticeText,
+          ),
     preparation: voiceAnswer === undefined ? undefined : speechPreparationEvidence(voiceAnswer),
     messageId: voiceAnswer?.id,
     persona: voiceDialog.persona,

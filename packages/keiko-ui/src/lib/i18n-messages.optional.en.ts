@@ -3031,6 +3031,36 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.claimNotice.noJiraCreate": "No Jira issue was created in this turn.",
   "chat.claimNotice.toolCallNotExecuted":
     "A tool call written as text in this answer was not executed.",
+  "chat.turnEnd.lead": "This request was not finished.",
+  "chat.turnEnd.reason.budgetExhausted": "This turn used up its tool-call budget.",
+  "chat.turnEnd.reason.deadline": "This turn reached its time limit.",
+  "chat.turnEnd.reason.authorityInvalid": "The Chat's mode, sources or connection changed.",
+  "chat.turnEnd.reason.authenticationFailed":
+    "Jira authentication failed. The access token may have expired or been revoked. Open the Local Knowledge window, replace the token on the Jira Pod and verify the connection.",
+  "chat.turnEnd.reason.toolFailure": "An action could not be settled.",
+  "chat.turnEnd.reason.outputExhausted": "The model ran out of output budget.",
+  "chat.turnEnd.reason.contextOverflow":
+    "The conversation no longer fits the model's context window.",
+  "chat.turnEnd.reason.toolNotOffered":
+    "The model asked for an action that is not available in this chat. Ask again, or name the action you want.",
+  "chat.turnEnd.reason.modelFailure": "The model request failed.",
+  "chat.turnEnd.completed": "Completed in this turn:",
+  "chat.turnEnd.unconfirmed": "Sent but not confirmed — check these in Jira before retrying:",
+  "chat.turnEnd.unsettled": "Started but not settled — check these in Jira before retrying:",
+  "chat.turnEnd.notDone":
+    "Not done — refused by Jira, blocked by an earlier item, or not started in time:",
+  "chat.turnEnd.itemWithoutKey": "(item {item}, no key)",
+  "chat.turnEnd.state.created": "created",
+  "chat.turnEnd.state.existing": "existing",
+  "chat.turnEnd.state.failed": "failed",
+  "chat.turnEnd.state.uncertain": "uncertain",
+  "chat.turnEnd.state.skipped": "skipped",
+  "chat.turnEnd.state.excluded": "excluded",
+  "chat.turnEnd.state.pending": "pending",
+  "chat.turnEnd.more": "…and {count} more.",
+  "chat.turnEnd.counts": "Reads completed: {reads}. Refused or failed actions: {refused}.",
+  "chat.turnEnd.footer":
+    "The rest of the request was not done. Send a follow-up message to continue from here; completed writes are not repeated unless you ask for them again.",
   "chat.contextWindow.label": "Context window notice",
   "chat.contextWindow.notice":
     "This transcript shows {count} turns. Context beyond the 48-turn boundary may be compacted.",
