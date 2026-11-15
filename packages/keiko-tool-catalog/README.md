@@ -12,11 +12,12 @@ metadata. The conformance gate compares this wire output with the existing legac
 until that consumer migrates. No H1 search, research, skill, or child-agent handler is advertised.
 
 The five dialects implement a deliberately closed JSON Schema core. Unsupported keywords are
-rejected. The OpenCode 1.18.30 input projection additionally requires all declared arguments and
-can omit `additionalProperties` only when its explicit source value is `true`, which preserves
-the keyword's default semantics. Closed objects or schema-valued additional properties cannot
-survive that runtime's removal of the keyword and are rejected. Binding owners remain responsible
-for validating actual input and retaining hard denials; the catalog does not grant permission.
+rejected. The managed runtime dialect binds the current OpenCode 2.2.5 pin. Its V2 input projection
+requires all declared object arguments and preserves `additionalProperties: false`; open objects
+and schema-valued additional properties are refused because the runtime's closed boundary cannot
+represent them without narrowing their semantics. The same checks apply to nested objects and
+array items. Binding owners remain responsible for validating actual input and retaining hard
+denials; the catalog does not grant permission.
 
 `createToolCatalog` checks descriptor version progression and any explicitly declared directional
 identity compatibility against the actual previous and current descriptors. Compatibility binds

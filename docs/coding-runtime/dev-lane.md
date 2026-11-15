@@ -27,7 +27,8 @@ activation, not a platform qualification:
   node dist/cli/index.js gateway-service install --dev-lane
   ```
 
-  Windows asks for approval through UAC, and the command needs Node 24. Until the broker is ready,
+  Windows asks for approval through UAC, and the command needs Node 26.13.1 or later within the
+  supported Node 26 line. Until the broker is ready,
   the lane activates and the rest of the dev UI works. Readiness then reports the broker's
   `gateway-service-*` state, the Workbench offers no Start, and `dev:start` prints
   `coding runs unavailable` with the command to run. After `npm run dev:coding-runtime:stage`
@@ -85,13 +86,13 @@ standalone staging command remains available for deliberate pre-provisioning.
 
 Staging writes `.portable-sidecar-payloads/<target>/`:
 
-| Path                                             | Content                                                                                     |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `opencode-compatible/payload/bin/opencode[.exe]` | The pinned OpenCode 1.18.30 executable, tree-digest-verified against the approvals catalog. |
-| `opencode-compatible/payload/evidence/`          | License and freshly generated SBOM, each digest-pinned by the catalog.                      |
-| `native/keiko-secure-workspace-read[.exe]`       | The locally built KSR1/KSS1 secure-read helper.                                             |
-| `native/keiko-runtime-supervisor.exe`            | Windows native Job Object supervisor.                                                       |
-| `dev-lane-manifest.json`                         | Digest, size, source commit, and source-tree digest of staged helpers.                      |
+| Path                                             | Content                                                                                   |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `opencode-compatible/payload/bin/opencode[.exe]` | The pinned OpenCode 2.2.5 executable, tree-digest-verified against the approvals catalog. |
+| `opencode-compatible/payload/evidence/`          | License and freshly generated SBOM, each digest-pinned by the catalog.                    |
+| `native/keiko-secure-workspace-read[.exe]`       | The locally built KSR1/KSS1 secure-read helper.                                           |
+| `native/keiko-runtime-supervisor.exe`            | Windows native Job Object supervisor.                                                     |
+| `dev-lane-manifest.json`                         | Digest, size, source commit, and source-tree digest of staged helpers.                    |
 
 At server start, discovery re-verifies everything fail-closed: catalog approval, executable tree
 digest, license digest, helper digest/size, and helper source-tree freshness (a rebuilt or edited

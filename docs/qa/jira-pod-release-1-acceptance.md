@@ -145,8 +145,8 @@ so step W21 is macOS only; run commands in PowerShell, one per line.
 - **Do:** macOS: unzip `keiko-macos-arm64.zip` (or `keiko-macos-x64.zip`), open `Keiko.app`; if macOS
   refuses, **System Settings → Privacy & Security → Open Anyway**. Windows: run the setup or open
   `Keiko.exe` from the extracted ZIP. Note how long the first start takes.
-  The npm route (a Node.js `>=24.18.0 <25 || >=26.3.0 <27` is required; the desktop packages bring
-  their own) is not the release artifact, but if you use it, run the lines one at a time. Windows
+  The npm route requires Node.js `>=26.13.1 <27` and npm `>=11.20.0 <12`; the desktop packages bring
+  their own runtime. It is not the release artifact, but if you use it, run the lines one at a time. Windows
   PowerShell 5.1 does not accept `&&`:
 
   ```powershell
