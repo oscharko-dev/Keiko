@@ -694,10 +694,11 @@ export function jiraTemplateViolationGuidance(
   const sections = violations.some((violation) => SECTION_RULES.has(violation.ruleId))
     ? " A section is a line of its own, h2. Title, with its text below; subject is its title." +
       " Write the section text yourself from the request, the issue and the Chat's sources;" +
-      " ask the user only for a fact neither provides."
+      " ask the user only for a fact neither provides." +
+      " Name a section to the person by its title and the content it needs, never by this syntax."
     : "";
   return (
-    "Nothing was changed: this breaks the issue template of the project. " +
+    "Keiko's template check (not Jira) refused this; nothing was changed. It breaks the issue template of the project. " +
     `Correct what violations name (ruleId, subject), then send it again.${parents}${sections}${ruleHints(violations)}` +
     " When you explain a refusal to the person, say in plain words what is wrong and what to change; never quote the rule id or a field id as the explanation."
   );

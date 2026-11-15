@@ -88,6 +88,36 @@ describe("the hint when no template governs a write (#4354)", () => {
 });
 
 describe("formal admission guidance", () => {
+  it("names Keiko's template check as the refuser, never Jira, for every refusal that names rules (F12)", () => {
+    for (const ruleId of [
+      "summary-too-short",
+      "section-missing",
+      "section-empty",
+      "label-pattern",
+    ] as const) {
+      const guidance = jiraTemplateViolationGuidance([
+        { ruleId, subject: "x", template: "SYN/Task" },
+      ]);
+      expect(guidance, ruleId).toContain("Keiko's template check (not Jira) refused this");
+      expect(guidance, ruleId).not.toMatch(/Jira refused/u);
+    }
+  });
+
+  it("tells the model to name a section by its title and content, never by its markup, to the person (F08)", () => {
+    const guidance = jiraTemplateViolationGuidance([
+      { ruleId: "section-missing", subject: "Akzeptanzkriterien", template: "SYN/Task" },
+    ]);
+    expect(guidance).toContain(
+      "Name a section to the person by its title and the content it needs, never by this syntax.",
+    );
+    // A refusal that is not about sections does not talk about headings at all.
+    expect(
+      jiraTemplateViolationGuidance([
+        { ruleId: "summary-too-short", subject: "summary", template: "SYN/Task" },
+      ]),
+    ).not.toMatch(/section|h2\./u);
+  });
+
   it("asks for complete evidence rather than alleging a rule violation when native data is unreadable", () => {
     const guidance = jiraTemplateViolationGuidance([
       { ruleId: "template-unreadable", subject: "labels", template: "SYN/Task" },

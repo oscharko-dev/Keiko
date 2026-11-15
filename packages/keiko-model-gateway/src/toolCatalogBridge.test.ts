@@ -849,7 +849,10 @@ describe("frozen bound advertisements (#4173)", () => {
       ),
     );
     expect(Object.isFrozen(oversized)).toBe(true);
-    const input = Object.freeze({ ...advertisement(), catalog: oversized });
+    const input = Object.freeze({
+      ...advertisement(),
+      catalog: oversized,
+    }) as unknown as GatewayToolCatalogAdvertisement;
     expect(() =>
       createGatewayToolCatalogBridge({ ...request(), toolCatalog: input }, (): number => NOW),
     ).toThrow(GatewayToolCatalogError);
