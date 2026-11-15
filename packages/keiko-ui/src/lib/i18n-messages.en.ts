@@ -587,6 +587,50 @@ export const EN_MESSAGES = {
   "chat.error.attemptAdmission.remediation":
     "Check the model gateway before sending a new request.",
   "chat.error.attachmentOversized.message": "Attached content is too large. Shorten or remove it.",
+  "chat.error.group.retry.title": "Please try again",
+  "chat.error.group.retry.message": "That did not go through just now. This is usually temporary.",
+  "chat.error.group.retry.remediation":
+    "Send your message again in a moment. If it keeps happening, give the Support ID to whoever runs Keiko.",
+  "chat.error.group.gatewaySignIn.title": "The model gateway refused the sign-in",
+  "chat.error.group.gatewaySignIn.message":
+    "Keiko's access key for the model gateway was not accepted.",
+  "chat.error.group.gatewaySignIn.remediation":
+    "Only the person who runs the model gateway can fix this: the sign-in (API key) has to be renewed in Settings.",
+  "chat.error.group.gatewayProxy.title": "The proxy blocks the model gateway",
+  "chat.error.group.gatewayProxy.message":
+    "Keiko cannot reach the model gateway through the proxy: the proxy is unreachable, asks for a sign-in, or blocks the connection.",
+  "chat.error.group.gatewayProxy.remediation":
+    "Ask the person who runs the network or the model gateway to check the proxy settings.",
+  "chat.error.group.gatewayCertificate.title": "The gateway's certificate is not trusted",
+  "chat.error.group.gatewayCertificate.message":
+    "The secure connection to the model gateway failed because its certificate is not accepted.",
+  "chat.error.group.gatewayCertificate.remediation":
+    "Ask the person who runs the model gateway to add the right certificate authority in the gateway settings.",
+  "chat.error.group.gatewayConfig.title": "The model gateway settings do not fit",
+  "chat.error.group.gatewayConfig.message":
+    "The model gateway configuration is invalid or changed, or the chosen model is not known there.",
+  "chat.error.group.gatewayConfig.remediation":
+    "Check the gateway and model in Settings, or ask the person who runs the model gateway.",
+  "chat.error.group.tooLarge.title": "The request is too large",
+  "chat.error.group.tooLarge.message": "The request is larger than Keiko can send.",
+  "chat.error.group.tooLarge.remediation":
+    "Reduce the selected scope or remove large attachments, then send it again.",
+  "chat.error.group.unsupported.title": "That cannot be used here",
+  "chat.error.group.unsupported.message":
+    "The selected model or this chat does not support this kind of file or content.",
+  "chat.error.group.unsupported.remediation":
+    "Remove the attachment, or choose a model that supports it.",
+  "chat.error.group.invalidPath.title": "The folder or file cannot be used",
+  "chat.error.group.invalidPath.message":
+    "The chosen path does not exist, is not a folder, or is not allowed.",
+  "chat.error.group.invalidPath.remediation": "Choose another folder or file in Files.",
+  "chat.error.group.reload.title": "The state changed — reload",
+  "chat.error.group.reload.message":
+    "The chat, the project or a selection changed while you were working.",
+  "chat.error.group.reload.remediation": "Reload the chat view and send your message again.",
+  "chat.error.group.other.title": "That did not work",
+  "chat.error.group.other.remediation":
+    "Try again. If it keeps happening, give the Support ID to whoever runs Keiko.",
 
   // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
   // workspace shell does not preload editor-only translations. Issue #2120 added the localized

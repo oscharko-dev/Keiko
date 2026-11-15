@@ -603,6 +603,53 @@ export const DE_MESSAGES = {
     "Prüfe das Modell-Gateway, bevor du eine neue Anfrage sendest.",
   "chat.error.attachmentOversized.message":
     "Angehängte Inhalte sind zu groß. Kürze oder entferne sie.",
+  "chat.error.group.retry.title": "Bitte versuche es noch einmal",
+  "chat.error.group.retry.message":
+    "Das hat gerade nicht geklappt. Das ist meistens nur vorübergehend.",
+  "chat.error.group.retry.remediation":
+    "Sende deine Nachricht gleich noch einmal. Tritt es wiederholt auf, gib die Support-ID an die Person weiter, die Keiko betreibt.",
+  "chat.error.group.gatewaySignIn.title": "Das Modell-Gateway hat die Anmeldung abgelehnt",
+  "chat.error.group.gatewaySignIn.message":
+    "Der Zugangsschlüssel, mit dem sich Keiko beim Modell-Gateway anmeldet, wurde nicht akzeptiert.",
+  "chat.error.group.gatewaySignIn.remediation":
+    "Das kann nur die Person beheben, die das Modell-Gateway betreibt: Die Anmeldung (API-Schlüssel) muss in den Einstellungen erneuert werden.",
+  "chat.error.group.gatewayProxy.title": "Der Proxy hält das Modell-Gateway auf",
+  "chat.error.group.gatewayProxy.message":
+    "Keiko erreicht das Modell-Gateway nicht über den Proxy: Der Proxy ist nicht erreichbar, verlangt eine Anmeldung oder blockiert die Verbindung.",
+  "chat.error.group.gatewayProxy.remediation":
+    "Bitte die Person, die das Netzwerk oder das Modell-Gateway betreibt, die Proxy-Einstellungen zu prüfen.",
+  "chat.error.group.gatewayCertificate.title": "Dem Zertifikat des Gateways wird nicht vertraut",
+  "chat.error.group.gatewayCertificate.message":
+    "Die gesicherte Verbindung zum Modell-Gateway ist gescheitert, weil sein Zertifikat nicht akzeptiert wird.",
+  "chat.error.group.gatewayCertificate.remediation":
+    "Bitte die Person, die das Modell-Gateway betreibt, die passende Zertifizierungsstelle in den Gateway-Einstellungen zu hinterlegen.",
+  "chat.error.group.gatewayConfig.title": "Die Einstellungen des Modell-Gateways passen nicht",
+  "chat.error.group.gatewayConfig.message":
+    "Die Konfiguration des Modell-Gateways ist ungültig oder hat sich geändert, oder das gewählte Modell ist dort nicht bekannt.",
+  "chat.error.group.gatewayConfig.remediation":
+    "Prüfe Gateway und Modell in den Einstellungen oder frag die Person, die das Modell-Gateway betreibt.",
+  "chat.error.group.tooLarge.title": "Die Anfrage ist zu groß",
+  "chat.error.group.tooLarge.message": "Die Anfrage ist größer, als Keiko sie senden kann.",
+  "chat.error.group.tooLarge.remediation":
+    "Verkleinere den gewählten Bereich oder entferne große Anhänge und sende sie dann erneut.",
+  "chat.error.group.unsupported.title": "Das lässt sich hier nicht verwenden",
+  "chat.error.group.unsupported.message":
+    "Das gewählte Modell oder dieser Chat unterstützt diese Art von Datei oder Inhalt nicht.",
+  "chat.error.group.unsupported.remediation":
+    "Entferne den Anhang oder wähle ein Modell, das ihn unterstützt.",
+  "chat.error.group.invalidPath.title": "Der Ordner oder die Datei lässt sich nicht verwenden",
+  "chat.error.group.invalidPath.message":
+    "Der gewählte Pfad existiert nicht, ist kein Ordner oder ist nicht erlaubt.",
+  "chat.error.group.invalidPath.remediation":
+    "Wähle in Dateien einen anderen Ordner oder eine andere Datei.",
+  "chat.error.group.reload.title": "Der Stand hat sich geändert – lade neu",
+  "chat.error.group.reload.message":
+    "Der Chat, das Projekt oder eine Auswahl hat sich geändert, während du gearbeitet hast.",
+  "chat.error.group.reload.remediation":
+    "Lade die Chat-Ansicht neu und sende deine Nachricht dann erneut.",
+  "chat.error.group.other.title": "Das hat nicht geklappt",
+  "chat.error.group.other.remediation":
+    "Versuche es noch einmal. Tritt es wiederholt auf, gib die Support-ID an die Person weiter, die Keiko betreibt.",
 
   // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
   // workspace shell does not preload editor-only translations. Issue #2120 added the localized

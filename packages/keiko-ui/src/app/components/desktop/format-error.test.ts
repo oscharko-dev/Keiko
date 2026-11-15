@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CHAT_PATH_ERROR_CODES } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError } from "@/lib/api";
 import {
   I18N_STORAGE_KEY,
@@ -8,7 +9,15 @@ import {
 } from "@/lib/i18n";
 import { OPTIONAL_WIDGET_DE_MESSAGES } from "@/lib/i18n-messages.optional.de";
 import { OPTIONAL_WIDGET_EN_MESSAGES } from "@/lib/i18n-messages.optional.en";
-import { formatUserError, toUserErrorNotice } from "./format-error";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
+import {
+  CHAT_ERROR_CODE_TABLE,
+  CODE_MESSAGE_KEYS,
+  GATEWAY_ERROR_KEYS,
+  formatUserError,
+  toUserErrorNotice,
+  type ErrorGroup,
+} from "./format-error";
 
 describe("formatUserError", () => {
   it.each(["en", "de"] as const)(
@@ -707,5 +716,125 @@ describe("formatUserError", () => {
     expect(notice.message).toBe(
       "Model timed out (GATEWAY_UPSTREAM_FAILURE) Support ID: req-visible-999",
     );
+  });
+});
+
+// #4355: every code a person can reach on the Chat path has text, in both languages, by what the
+// person can do about it. A code with neither a group, a notice of its own nor an explicit
+// "never shown" reason fails here (and, through the table's type, the build).
+describe("the Chat error code table", () => {
+  const GROUPS: readonly ErrorGroup[] = [
+    "retry",
+    "gatewaySignIn",
+    "gatewayProxy",
+    "gatewayCertificate",
+    "gatewayConfig",
+    "tooLarge",
+    "unsupported",
+    "invalidPath",
+    "reload",
+    "other",
+  ];
+  const PARTS = ["title", "message", "remediation"] as const;
+  const placeholders = (text: string): string[] => text.match(/\{\w+\}/gu)?.sort() ?? [];
+
+  it("gives every reachable code a group, an own notice or a stated reason, and nothing else", () => {
+    expect(Object.keys(CHAT_ERROR_CODE_TABLE).sort()).toEqual([...CHAT_PATH_ERROR_CODES].sort());
+    for (const code of CHAT_PATH_ERROR_CODES) {
+      const entry = CHAT_ERROR_CODE_TABLE[code];
+      if ("group" in entry) expect(GROUPS, code).toContain(entry.group);
+      else if ("neverShown" in entry) expect(entry.neverShown.length, code).toBeGreaterThan(10);
+      else {
+        // `own`: the code really has a notice of its own.
+        const hasOwn =
+          code in GATEWAY_ERROR_KEYS ||
+          code in CODE_MESSAGE_KEYS ||
+          code === "CLARIFICATION_NEEDED";
+        expect(hasOwn, `${code} claims an own notice but has none`).toBe(true);
+      }
+    }
+  });
+
+  // The generic group words its title and remedy only; its message is the server's own sentence.
+  const partsOf = (group: ErrorGroup): readonly (typeof PARTS)[number][] =>
+    group === "other" ? ["title", "remediation"] : PARTS;
+
+  it.each(["en", "de"] as const)("has every text of every group in %s", async (locale) => {
+    await loadLocaleMessages(locale);
+    for (const group of GROUPS) {
+      for (const part of partsOf(group)) {
+        const key = `chat.error.group.${group}.${part}` as Parameters<typeof translate>[1];
+        const text = translate(locale, key);
+        expect(text, key).not.toBe(key);
+        expect(text.length, key).toBeGreaterThan(8);
+      }
+    }
+  });
+
+  it("words German with the same placeholders and not as English", async () => {
+    await Promise.all([loadLocaleMessages("en"), loadLocaleMessages("de")]);
+    for (const group of GROUPS) {
+      for (const part of partsOf(group)) {
+        const key = `chat.error.group.${group}.${part}` as Parameters<typeof translate>[1];
+        expect(translate("de", key), key).not.toBe(translate("en", key));
+        expect(placeholders(translate("de", key)), key).toEqual(placeholders(translate("en", key)));
+      }
+    }
+  });
+
+  it.each([
+    ["GATEWAY_RATE_LIMIT", "retry"],
+    ["GATEWAY_CIRCUIT_OPEN", "retry"],
+    ["CHAT_TURN_IN_PROGRESS", "retry"],
+    ["GATEWAY_AUTHENTICATION", "gatewaySignIn"],
+    ["GATEWAY_PROXY_UNREACHABLE", "gatewayProxy"],
+    ["GATEWAY_PROXY_BLOCKED_BY_POLICY", "gatewayProxy"],
+    ["GATEWAY_TLS_CA_FAILURE", "gatewayCertificate"],
+    ["GATEWAY_UNKNOWN_MODEL", "gatewayConfig"],
+    ["PAYLOAD_TOO_LARGE", "tooLarge"],
+    ["CONVERSATION_UNSUPPORTED_FILE_TYPE", "unsupported"],
+    ["INVALID_PATH", "invalidPath"],
+    ["SKILL_SELECTION_CHANGED", "reload"],
+    ["INTERNAL", "other"],
+  ] as const)(
+    "shows %s as the %s notice in German, with its code and support ID kept",
+    async (code, group) => {
+      await loadLocaleMessages("de");
+      window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+      try {
+        const error = new ApiError(code, "Private English provider detail", 502);
+        error.correlationId = "group-proof";
+        const notice = toUserErrorNotice(error, "fallback");
+        expect(notice.title).toBe(translate("de", `chat.error.group.${group}.title`));
+        expect(notice.remediation).toBe(translate("de", `chat.error.group.${group}.remediation`));
+        if (group === "other") {
+          // The generic group keeps the server's own sentence as the message.
+          expect(notice.message).toBe("Private English provider detail");
+        } else {
+          expect(notice.message).toBe(translate("de", `chat.error.group.${group}.message`));
+          expect(notice.message).not.toContain("Private English provider detail");
+        }
+        expect(notice.code).toBe(code);
+        expect(notice.correlationId).toBe("group-proof");
+        // The saved string a surface keeps restores the same notice.
+        expect(toUserErrorNotice(formatUserError(error, "fallback"), "fallback")).toEqual(notice);
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+      }
+    },
+  );
+
+  it("names the kind of gateway fault in plain words, so the operator can act", async () => {
+    await loadLocaleMessages("de");
+    expect(translate("de", "chat.error.group.gatewaySignIn.title")).toContain("Anmeldung");
+    expect(translate("de", "chat.error.group.gatewayProxy.message")).toContain("Proxy");
+    expect(translate("de", "chat.error.group.gatewayCertificate.message")).toContain("Zertifikat");
+  });
+
+  it("keeps the server's text for a code the Chat does not know", async () => {
+    await loadOptionalWidgetMessages("de");
+    const notice = toUserErrorNotice(new ApiError("SOME_NEW_CODE", "Server detail", 500), "x");
+    expect(notice.message).toBe("Server detail");
+    expect(notice.code).toBe("SOME_NEW_CODE");
   });
 });

@@ -8,6 +8,7 @@
 // identify the failure (same pattern as local-knowledge/format-error and
 // memoriaviva/components/format-error).
 
+import type { ChatPathErrorCode } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError } from "@/lib/api";
 import { readStoredLocale, translate, type I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
@@ -151,7 +152,7 @@ interface GatewayErrorKeys {
   readonly remediation: MessageKey;
 }
 
-const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
+export const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
   JIRA_AUTHENTICATION_FAILED: {
     title: "chat.error.jiraAuthentication.title",
     message: "chat.error.jiraAuthentication.message",
@@ -231,6 +232,133 @@ const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
   },
 };
 
+// What a person can do about a failure decides its text (#4355), not the code's spelling. Every
+// code reachable on the Chat path maps in this ONE table to a group (one notice per group, in both
+// languages), to its own notice above (`own`), or to an explicit "never shown" reason. The table's
+// type is the closed vocabulary in keiko-contracts, so a code added there without a row here fails
+// the build, and a test walks the table against both catalogs.
+export type ErrorGroup =
+  | "retry"
+  | "gatewaySignIn"
+  | "gatewayProxy"
+  | "gatewayCertificate"
+  | "gatewayConfig"
+  | "tooLarge"
+  | "unsupported"
+  | "invalidPath"
+  | "reload"
+  | "other";
+export type ErrorCodeEntry =
+  { readonly group: ErrorGroup } | { readonly own: true } | { readonly neverShown: string };
+
+const RETRY = { group: "retry" } as const;
+const RELOAD = { group: "reload" } as const;
+const OTHER = { group: "other" } as const;
+const OWN = { own: true } as const;
+export const CHAT_ERROR_CODE_TABLE: Readonly<Record<ChatPathErrorCode, ErrorCodeEntry>> = {
+  // (a) Try again: transient, or the turn is still running.
+  GATEWAY_TRANSPORT: RETRY,
+  GATEWAY_RATE_LIMIT: RETRY,
+  GATEWAY_CIRCUIT_OPEN: RETRY,
+  GATEWAY_PROVIDER_ERROR: RETRY,
+  GATEWAY_MODEL_REFUSAL: RETRY,
+  GATEWAY_MALFORMED_TOOL_CALL: RETRY,
+  CHAT_TOOL_TIMEOUT: RETRY,
+  CHAT_TOOL_UNAVAILABLE: RETRY,
+  CHAT_TURN_IN_PROGRESS: RETRY,
+  TOO_MANY_STREAMS: RETRY,
+  UNAVAILABLE: RETRY,
+  STARTUP_RECOVERY_PENDING: RETRY,
+  // (b) The model gateway needs its operator; the notice names the kind in plain words.
+  GATEWAY_AUTHENTICATION: { group: "gatewaySignIn" },
+  GATEWAY_PROXY_AUTH_REQUIRED: { group: "gatewayProxy" },
+  GATEWAY_PROXY_UNREACHABLE: { group: "gatewayProxy" },
+  GATEWAY_PROXY_EGRESS_FAILED: { group: "gatewayProxy" },
+  GATEWAY_PROXY_BLOCKED_BY_POLICY: { group: "gatewayProxy" },
+  GATEWAY_TLS_CA_FAILURE: { group: "gatewayCertificate" },
+  GATEWAY_CONFIG_INVALID: { group: "gatewayConfig" },
+  GATEWAY_CONFIG_CHANGED: { group: "gatewayConfig" },
+  GATEWAY_UNKNOWN_MODEL: { group: "gatewayConfig" },
+  NO_MODEL: { group: "gatewayConfig" },
+  // (c) The request cannot be sent as it is.
+  PAYLOAD_TOO_LARGE: { group: "tooLarge" },
+  CONVERSATION_UNSUPPORTED_MODALITY: { group: "unsupported" },
+  CONVERSATION_UNSUPPORTED_FILE_TYPE: { group: "unsupported" },
+  INVALID_PATH: { group: "invalidPath" },
+  PATH_NOT_FOUND: { group: "invalidPath" },
+  PATH_NOT_DIRECTORY: { group: "invalidPath" },
+  // (d) The state changed: reload.
+  SKILL_SELECTION_CHANGED: RELOAD,
+  PROJECT_IDENTITY_CHANGED: RELOAD,
+  CHAT_TURN_IDEMPOTENCY_CONFLICT: RELOAD,
+  CHAT_CLOSED: RELOAD,
+  NOT_APPLIABLE: RELOAD,
+  // (e) Everything else: one honest sentence with the support ID.
+  INTERNAL: OTHER,
+  BAD_REQUEST: OTHER,
+  INVALID_REQUEST: OTHER,
+  NOT_FOUND: OTHER,
+  FORBIDDEN: OTHER,
+  CONFLICT: OTHER,
+  FORBIDDEN_HOST: OTHER,
+  FORBIDDEN_CSRF: OTHER,
+  UNSUPPORTED_MEDIA_TYPE: OTHER,
+  METHOD_NOT_ALLOWED: OTHER,
+  // The Jira cards word these through their own surface until each gets its own text.
+  CHAT_WRITE_APPROVAL_UNAVAILABLE: OTHER,
+  VALIDATION_FAILED: OTHER,
+  JIRA_DRAFT_UNAVAILABLE: OTHER,
+  JIRA_HUMAN_INPUT_UNAVAILABLE: OTHER,
+  APPROVAL_NOT_FOUND: OTHER,
+  CREDENTIAL_NOT_FOUND: OTHER,
+  ATLASSIAN_CONNECTORS_UNAVAILABLE: OTHER,
+  // A notice of its own (GATEWAY_ERROR_KEYS above, CODE_MESSAGE_KEYS, or the clarification title).
+  GATEWAY_CONTEXT_OVERFLOW: OWN,
+  GATEWAY_ATTEMPT_ADMISSION_DENIED: OWN,
+  GATEWAY_TIMEOUT: OWN,
+  GATEWAY_OUTPUT_EXHAUSTED: OWN,
+  DESKTOP_CHAT_STREAM_STALLED: OWN,
+  CONVERSATION_OVERSIZED_CONTEXT: OWN,
+  CONVERSATION_UNAVAILABLE_MODEL: OWN,
+  CONVERSATION_MODEL_NOT_READY: OWN,
+  JIRA_AUTHENTICATION_FAILED: OWN,
+  JIRA_POD_UNAVAILABLE: OWN,
+  JIRA_POD_VERIFICATION_REQUIRED: OWN,
+  JIRA_POD_CONNECTION_CHANGED: OWN,
+  KNOWLEDGE_POD_UNAVAILABLE: OWN,
+  KNOWLEDGE_STORE_UNAVAILABLE: OWN,
+  GROUNDING_SCOPE_CHANGED: OWN,
+  CLARIFICATION_NEEDED: OWN,
+  // Never shown to a person, each for its stated reason.
+  STREAMING_UNSUPPORTED: { neverShown: "the client falls back to the buffered request" },
+  REQUEST_CANCELLED: { neverShown: "the person's own stop: nothing failed" },
+  CANCELLED: { neverShown: "the person's own stop: nothing failed" },
+  GATEWAY_CANCELLED: { neverShown: "the person's own stop: nothing failed" },
+};
+
+function groupKeys(group: ErrorGroup): GatewayErrorKeys {
+  return {
+    title: `chat.error.group.${group}.title`,
+    message: `chat.error.group.${group}.message`,
+    remediation: `chat.error.group.${group}.remediation`,
+  };
+}
+
+function groupKeysForCode(
+  code: string | undefined,
+  part: keyof GatewayErrorKeys,
+): MessageKey | undefined {
+  if (code === undefined) return undefined;
+  const entry = (CHAT_ERROR_CODE_TABLE as Readonly<Record<string, ErrorCodeEntry | undefined>>)[
+    code
+  ];
+  if (entry === undefined || !("group" in entry)) return undefined;
+  // The generic group words only the title and the remedy: its message stays the server's own
+  // sentence (or the caller's fallback), the one text that says what this particular request got.
+  if (entry.group === "other" && part === "message") return undefined;
+  return groupKeys(entry.group)[part];
+}
+
 // This module is not a component, so it cannot take the translate hook; it resolves the selected
 // locale itself and translates through the same pure entry point the provider uses.
 const translateForSelectedLocale: I18nTranslate = (key, values) =>
@@ -238,7 +366,7 @@ const translateForSelectedLocale: I18nTranslate = (key, values) =>
 
 // Codes whose server text is English-only but whose notice needs no separate title or remediation:
 // the localized message already names the remedy.
-const CODE_MESSAGE_KEYS: Readonly<Record<string, MessageKey>> = {
+export const CODE_MESSAGE_KEYS: Readonly<Record<string, MessageKey>> = {
   CONVERSATION_OVERSIZED_CONTEXT: "chat.error.attachmentOversized.message",
 };
 
@@ -246,8 +374,9 @@ function gatewayErrorText(
   code: string | undefined,
   part: keyof GatewayErrorKeys,
 ): string | undefined {
-  const keys = code === undefined ? undefined : GATEWAY_ERROR_KEYS[code];
-  if (keys !== undefined) return translateForSelectedLocale(keys[part]);
+  const own = code === undefined ? undefined : GATEWAY_ERROR_KEYS[code]?.[part];
+  const key = own ?? groupKeysForCode(code, part);
+  if (key !== undefined) return translateForSelectedLocale(key);
   const messageKey = part === "message" && code !== undefined ? CODE_MESSAGE_KEYS[code] : undefined;
   return messageKey === undefined ? undefined : translateForSelectedLocale(messageKey);
 }
@@ -271,8 +400,6 @@ function titleForError(message: string, code: string | undefined): string {
   }
   const gateway = gatewayErrorText(code, "title");
   if (gateway !== undefined) return gateway;
-  if (code === "PAYLOAD_TOO_LARGE") return "Request is too large";
-  if (code === "NO_MODEL") return "No model is available";
   if (code !== undefined) return "Request failed";
   return "Something went wrong";
 }
@@ -286,9 +413,6 @@ function remediationForError(message: string, code: string | undefined): string 
   }
   const gateway = gatewayErrorText(code, "remediation");
   if (gateway !== undefined) return gateway;
-  if (code === "PAYLOAD_TOO_LARGE") {
-    return "Reduce the selected scope or remove large attachments before retrying.";
-  }
   return undefined;
 }
 
