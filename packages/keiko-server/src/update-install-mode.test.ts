@@ -415,16 +415,31 @@ describe("detectUpdateInstallMode", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps managed Windows schema 1 updates unavailable without recommending setup (#4400): %s",
-    (updateEligible) => {
+  it.each([
+    { updateEligible: false, digestMismatch: undefined },
+    { updateEligible: true, digestMismatch: undefined },
+    { updateEligible: true, digestMismatch: "setupManifestSha256" },
+    { updateEligible: true, digestMismatch: "installRootIdentitySha256" },
+    { updateEligible: true, digestMismatch: "launcherIdentitySha256" },
+  ])(
+    "recognizes only a disk-bound managed Windows schema 1 receipt (#4400): $updateEligible $digestMismatch",
+    ({ updateEligible, digestMismatch }) => {
       const installRoot = "/Users/alice/Applications/Keiko";
       const packageRoot = `${installRoot}/app`;
+      const layout = portablePackageLayout("windows-x64", packageRoot);
+      if (layout === undefined) throw new TypeError("Expected Windows fixture layout");
+      const manifest = portableManifest("windows-x64");
+      const launcher = "synthetic Windows managed launcher";
       const detectorFs = fakeFiles({
-        [`${installRoot}/.portable/setup-manifest.json`]: portableManifest("windows-x64"),
+        [`${installRoot}/.portable/setup-manifest.json`]: manifest,
+        [layout.rootLauncherPath]: launcher,
         [`${PORTABLE_STATE_DIR}/portable-install-state.json`]: managedRegistration({
           platformTarget: "windows-x64",
           updateEligible,
+          setupManifestSha256: sha256(manifest),
+          installRootIdentitySha256: sha256(installRoot),
+          launcherIdentitySha256: sha256(launcher),
+          ...(digestMismatch === undefined ? {} : { [digestMismatch]: "a".repeat(64) }),
         }),
       });
       const mode = detectUpdateInstallMode(
@@ -438,6 +453,14 @@ describe("detectUpdateInstallMode", () => {
         detectorFs,
       );
 
+      if (digestMismatch !== undefined) {
+        expect(mode).toMatchObject({
+          status: "unsupported",
+          reason: "portable-registration-invalid",
+          portable: { status: "bootstrap", target: "windows-x64", updateEligible: false },
+        });
+        return;
+      }
       expect(mode).toMatchObject({
         status: "unsupported",
         installKind: "portable-managed",

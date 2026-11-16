@@ -110,6 +110,7 @@ interface RemediationProjection {
 const COPY_PRESSED_RESET_MS = 240;
 const COPY_FEEDBACK_RESET_MS = 900;
 const POLL_DELAYS_MS = [2_500, 5_000, 10_000, 20_000] as const;
+const KEIKO_RELEASES_PAGE_URL = "https://github.com/oscharko-dev/Keiko/releases";
 
 const DEFAULT_API: UpdateWindowApi = {
   fetchPreflight: fetchStartupUpdatePreflight,
@@ -1242,7 +1243,9 @@ function portableInstallModePath(
   session: UpdateSessionStatus,
 ): ReactNode {
   if (isPortableExternallyManaged(report, session)) return <PortableExternallyManagedPath />;
-  if (isPortableUpdateUnavailable(report, session)) return <PortableUpdateUnavailablePath />;
+  if (isPortableUpdateUnavailable(report, session)) {
+    return <PortableUpdateUnavailablePath releaseUrl={report.release?.url} />;
+  }
   if (isPortableBootstrapSetupRequired(report, session)) return <PortableSetupRequiredPath />;
   return undefined;
 }
@@ -1374,7 +1377,11 @@ function PortableVolumePath({
   );
 }
 
-function PortableUpdateUnavailablePath(): ReactNode {
+function PortableUpdateUnavailablePath({
+  releaseUrl,
+}: {
+  readonly releaseUrl: string | undefined;
+}): ReactNode {
   const t = useTranslate();
   return (
     <section className="upd-panel upd-manual" aria-labelledby="updates-portable-unavailable-title">
@@ -1386,7 +1393,8 @@ function PortableUpdateUnavailablePath(): ReactNode {
       </div>
       <p>{t("updates.portableUpdateUnavailable.guidance")}</p>
       <a
-        href="https://github.com/oscharko-dev/Keiko/releases"
+        className="upd-link"
+        href={releaseUrl ?? KEIKO_RELEASES_PAGE_URL}
         target="_blank"
         rel="noopener noreferrer"
       >

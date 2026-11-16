@@ -579,8 +579,7 @@ function registrationMatchesManifest(
   if (manifest.binding === undefined) {
     return (
       registration.raw.windowsGeneration === undefined &&
-      (manifest.summary.target === "windows-x64" ||
-        registrationDiskMatches(registration.raw, manifest, fs))
+      registrationDiskMatches(registration.raw, manifest, fs)
     );
   }
 
@@ -612,7 +611,7 @@ function registrationDiskMatches(
   manifest: PortableManifestSummary,
   fs: PortableDetectorFs,
 ): boolean {
-  if (manifest.summary.target !== "windows-x64") {
+  if (manifest.binding === undefined) {
     if (
       hasSymlinkAncestor(manifest.layout.appRoot, fs) ||
       !fs.existsSync(manifest.layout.rootLauncherPath)

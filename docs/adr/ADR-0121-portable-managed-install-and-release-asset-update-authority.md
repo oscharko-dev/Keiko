@@ -795,14 +795,14 @@ launcher digest, package version, target, stable managed eligibility, root ident
 must agree with disk. Flat Windows schema 1 stays readable for launch/manual setup and cannot
 become one-click eligible through automatic migration. Mac schema 1 is unchanged.
 
-A matching historical Windows schema 1 managed receipt remains managed presentation metadata
-(#4400), not update authority or a new disk attestation. The detector forces `updateEligible=false`
-and reports the closed `portable-update-unavailable` reason. Startup and Updates explain that
-this package cannot update itself and point to the Windows release instructions; repeating the
-same setup is not a remedy for an unavailable capability. A missing receipt still takes the
-bootstrap setup path. Generation 2 receipt, signature, digest and ownership validation stays
-unchanged. The existing install-mode and startup-notice Activity Log operations carry the closed
-reason without receipt contents or installation paths.
+A historical Windows schema 1 receipt supports managed presentation when its setup-manifest,
+canonical install-root and launcher digests match the current instance (#4400). The detector
+forces `updateEligible=false`. Organization- or machine-managed installations report
+`portable-it-managed`. Other bound stable installs report `portable-update-unavailable`.
+Startup and Updates explain the package's update capability and link to the Windows release
+instructions. A missing receipt takes the bootstrap setup path. Generation 2 eligibility still
+requires its full signature, digest and ownership validation. The existing Activity Log operations
+carry the closed install-mode and startup-notice reasons.
 
 Keep the server parser/resolver internal and CLI authority parsing within its existing boundary.
 Shared frozen fixtures prevent boundary-local parser drift. KHT1 has one reviewed TypeScript
