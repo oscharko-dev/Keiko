@@ -159,7 +159,11 @@ profile or with any layer missing. Hard denials stay mode-independent. Proven by
 
 As implemented (#4135): layer 1 is the `review` tool profile's generated configuration (`*: deny`,
 then exactly the four tools allowed, for the configuration and for the review agent, written again
-as the server-owned `OPENCODE_CONFIG_CONTENT`); layer 2 is the generated plugin set, exactly the
+as the server-owned `OPENCODE_CONFIG_CONTENT`; it also withholds every built-in plugin and closes
+every experimental switch that the governed profile does, because a built-in plugin of the
+OpenCode 2.2.5 producer brings its own tool and permission rule (#4271): a review run without the
+removals was offered a fifth tool, and the gateway refused its session as tool-contract drift);
+layer 2 is the generated plugin set, exactly the
 governed-tools plugin (which registers exactly the four tools) and the context plugin, and the
 gateway's `hasExactOpenCodeVisibleToolContract(tools, "review")`, which pins their projected schemas
 by digest; layer 3 is the review authority (`workspace-read` alone, `governed-assist`, review
