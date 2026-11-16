@@ -764,7 +764,7 @@ async function waitForCodexTerminal(
   while (!signal.aborted) {
     const status = control.terminalStatus(runId, turnId);
     if (status !== undefined) return terminalOutcome(status);
-    await pollDelay(signal);
+    await pollDelay(signal); // NOSONAR typescript:S9382 -- a poll: the next status read follows this delay
   }
   return "cancelled";
 }

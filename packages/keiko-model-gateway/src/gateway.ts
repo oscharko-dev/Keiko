@@ -2439,7 +2439,7 @@ export class Gateway {
     try {
       let first = await iterator.next();
       while (!first.done && first.value.type === "delta" && first.value.token.length === 0) {
-        first = await iterator.next();
+        first = await iterator.next(); // NOSONAR typescript:S9382 -- a stream is read in order: the next chunk is asked for only after an empty one arrived
       }
       if (first.done) throw new TransportError("provider stream ended without an answer");
       return { first: first.value, iterator };

@@ -626,7 +626,7 @@ async function reconcileImpl(
       reconciled.push(...group.map(carriedForward));
       continue;
     }
-    reconciled.push(...(await reconcileRepositoryGroup(ctx, adapter, group, correlationId)));
+    reconciled.push(...(await reconcileRepositoryGroup(ctx, adapter, group, correlationId))); // NOSONAR typescript:S9382 -- one repository at a time, so a pass never runs git in every repository at once
   }
   return buildReport(ctx, reconciled, ctx.deps.now(), true);
 }
@@ -701,13 +701,8 @@ async function reconcileRepositoryGroup(
     // its whole operation and re-enters reconcileSingleInstance inside it (locking there would
     // self-deadlock), and that path already fetches its worktree list fresh immediately before use with
     // no intervening await, so it has no equivalent staleness gap to close.
-    const result = await reconcileOneOrCarryForward(
-      ctx,
-      adapter,
-      reachability,
-      instance,
-      correlationId,
-    );
+    const pending = reconcileOneOrCarryForward(ctx, adapter, reachability, instance, correlationId);
+    const result = await pending; // NOSONAR typescript:S9382 -- rows reconcile in order: an earlier row can mark the repository unreachable for the rest
     if (result !== undefined) reconciled.push(result);
   }
   return reconciled;
