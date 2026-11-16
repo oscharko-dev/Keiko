@@ -8,7 +8,7 @@ import { detectWorkspace } from "@oscharko-dev/keiko-workspace";
 import * as verification from "@oscharko-dev/keiko-verification";
 import * as tools from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
-import { planIsolatedRun } from "@oscharko-dev/keiko-sandbox";
+import * as sandbox from "@oscharko-dev/keiko-sandbox";
 import { resolveVerificationRuntimeTarget } from "./verificationRuntimeTarget.js";
 import { createActivityLogSink, closeFileServerLogSinks } from "../observability/index.js";
 import {
@@ -100,7 +100,7 @@ function metadata(): Record<string, string> {
 }
 
 function result(workspace: ReturnType<typeof detectWorkspace>): tools.CommandResult {
-  const planned = planIsolatedRun(
+  const planned = sandbox.planIsolatedRun(
     {
       command: "node",
       args: [],
@@ -140,7 +140,10 @@ const probeStderrPatterns = [
   ],
   [/manifest unknown|pull access denied for/iu, "image-unavailable"],
   [/invalid mount config for type|invalid volume specification|mounts denied:/iu, "mount-refused"],
-  [/invalid option: Windows does not support/iu, "engine-option-unsupported"],
+  [
+    /invalid option: Windows does not support|invalid option: read-only mode is not supported for Windows containers/iu,
+    "engine-option-unsupported",
+  ],
   [/cannot connect to the Docker daemon|error during connect:/iu, "daemon-connection-failed"],
   [/unable to find image [^\r\n]+ locally/iu, "image-not-cached"],
 ] as const;
@@ -173,6 +176,149 @@ function closedProbeResult(
     stderrSha256: createHash("sha256").update(output.stderr).digest("hex"),
   };
 }
+
+function dockerEngineFromResult(output: tools.CommandResult): "linux" | "windows" {
+  const engine = output.stdout.trim();
+  if (
+    output.exitCode !== 0 ||
+    output.signal !== null ||
+    output.timedOut ||
+    output.truncated ||
+    output.outputRedacted === true ||
+    output.stderr.length !== 0 ||
+    (engine !== "linux" && engine !== "windows")
+  ) {
+    throw new TypeError(
+      `DOCKER_ENGINE_QUALIFICATION_UNAVAILABLE ${JSON.stringify(closedProbeResult(output))}`,
+    );
+  }
+  return engine;
+}
+
+// The binary/endpoint probe does not promise a functioning Linux container engine. Read only the
+// selected, validated local daemon's closed OS field, through the existing bounded command owner.
+async function realDockerEngine(
+  workspace: ReturnType<typeof detectWorkspace>,
+  probe: ReturnType<typeof probeNetworkIsolation>,
+): Promise<"not-docker" | "linux" | "windows"> {
+  if (!probe.available || probe.backend !== "container-docker") return "not-docker";
+  const endpoint = sandbox.resolveLocalDockerEndpoint(process.env, workspace.root);
+  if (endpoint.kind !== "available") throw new TypeError("DOCKER_ENGINE_QUALIFICATION_UNAVAILABLE");
+  const [outcome] = await Promise.allSettled([
+    tools.runCommand(
+      {
+        command: "docker",
+        args: ["--host", endpoint.host, "info", "--format", "{{.OSType}}"],
+        cwd: undefined,
+        timeoutMs: 5_000,
+        signal: new AbortController().signal,
+      },
+      {
+        workspace,
+        policy: { ...tools.DEFAULT_SANDBOX_POLICY, maxOutputBytes: 1_024 },
+        commandRules: [
+          {
+            executable: "docker",
+            requiredLeadingFlags: ["--host", endpoint.host],
+            valueFlags: ["--host"],
+            allowedSubcommands: ["info"],
+          },
+        ],
+        spawn: nodeSpawnFn,
+        processEnv: process.env,
+        now: Date.now,
+      },
+    ),
+  ]);
+  if (outcome.status !== "fulfilled")
+    throw new TypeError("DOCKER_ENGINE_QUALIFICATION_UNAVAILABLE");
+  return dockerEngineFromResult(outcome.value);
+}
+
+it.each(["linux", "windows"] as const)(
+  "recognizes only the actual closed Docker engine OS %s",
+  (engine) => {
+    expect(dockerEngineFromResult({ ...result(fixture()), stdout: `${engine}\r\n` })).toBe(engine);
+  },
+);
+
+it.each([
+  { exitCode: 125 },
+  { signal: "SIGTERM" },
+  { timedOut: true },
+  { truncated: true },
+  { outputRedacted: true },
+  { stderr: "PRIVATE_ENGINE_DIAGNOSTIC" },
+  { stdout: "PRIVATE_ENGINE_DIAGNOSTIC" },
+  { stdout: "" },
+] as const)(
+  "refuses an unproven Docker engine instead of skipping a real qualification: %j",
+  (change) => {
+    const output = { ...result(fixture()), stdout: "windows\n", ...change };
+    expect(() => dockerEngineFromResult(output)).toThrow("DOCKER_ENGINE_QUALIFICATION_UNAVAILABLE");
+    try {
+      dockerEngineFromResult(output);
+    } catch (error) {
+      expect(String(error)).not.toContain("PRIVATE_ENGINE_DIAGNOSTIC");
+    }
+  },
+);
+
+it("reads the engine only through the validated local endpoint and fixed bounded query", async () => {
+  const workspace = fixture();
+  const host = "npipe:////./pipe/docker_engine";
+  vi.spyOn(sandbox, "resolveLocalDockerEndpoint").mockReturnValue({ kind: "available", host });
+  const run = vi
+    .spyOn(tools, "runCommand")
+    .mockResolvedValue({ ...result(workspace), stdout: "windows\n" });
+  expect(await realDockerEngine(workspace, { available: true, backend: "container-docker" })).toBe(
+    "windows",
+  );
+  expect(run).toHaveBeenCalledOnce();
+  expect(run.mock.calls[0]?.[0]).toMatchObject({
+    command: "docker",
+    args: ["--host", host, "info", "--format", "{{.OSType}}"],
+    timeoutMs: 5_000,
+  });
+  expect(run.mock.calls[0]?.[1].policy.maxOutputBytes).toBe(1_024);
+  expect(run.mock.calls[0]?.[1].policy.outputScrub).toBeUndefined();
+  run.mockClear();
+  expect(await realDockerEngine(workspace, { available: false, backend: "container-docker" })).toBe(
+    "not-docker",
+  );
+  expect(await realDockerEngine(workspace, { available: true, backend: "bubblewrap" })).toBe(
+    "not-docker",
+  );
+  expect(run).not.toHaveBeenCalled();
+});
+
+it("keeps failed engine reads red and does not expose their error bodies", async () => {
+  const workspace = fixture();
+  vi.spyOn(sandbox, "resolveLocalDockerEndpoint").mockReturnValue({
+    kind: "available",
+    host: "npipe:////./pipe/docker_engine",
+  });
+  vi.spyOn(tools, "runCommand").mockRejectedValue(new Error("PRIVATE_ENGINE_DIAGNOSTIC"));
+  await expect(
+    realDockerEngine(workspace, { available: true, backend: "container-docker" }),
+  ).rejects.toThrow(/^DOCKER_ENGINE_QUALIFICATION_UNAVAILABLE$/u);
+});
+
+it.each(["docker-local-context-unavailable", "docker-context-unsupported"] as const)(
+  "refuses an unavailable validated endpoint before any engine query: %s",
+  async (reason) => {
+    const workspace = fixture();
+    vi.spyOn(sandbox, "resolveLocalDockerEndpoint").mockReturnValue({
+      kind: "unavailable",
+      reason,
+    });
+    const run = vi.spyOn(tools, "runCommand");
+    await expect(
+      realDockerEngine(workspace, { available: true, backend: "container-docker" }),
+    ).rejects.toThrow(/^DOCKER_ENGINE_QUALIFICATION_UNAVAILABLE$/u);
+    expect(run).not.toHaveBeenCalled();
+  },
+);
 
 // Preserve the real command and all admission assertions. A failed live probe must identify which
 // closed output guard refused it without printing command arguments, paths, environment or bodies.
@@ -269,6 +415,10 @@ it.each([
   ["invalid volume specification: PRIVATE_PROBE_CONTENT", "mount-refused"],
   ["Mounts denied: PRIVATE_PROBE_CONTENT", "mount-refused"],
   ["invalid option: Windows does not support PRIVATE_PROBE_CONTENT", "engine-option-unsupported"],
+  [
+    "invalid option: read-only mode is not supported for Windows containers",
+    "engine-option-unsupported",
+  ],
   ["Cannot connect to the Docker daemon at PRIVATE_PROBE_CONTENT", "daemon-connection-failed"],
   ["error during connect: PRIVATE_PROBE_CONTENT", "daemon-connection-failed"],
   ["PRIVATE_PROBE_CONTENT", "other"],
@@ -429,8 +579,13 @@ it("logs only measured target digest within actual held workspace admission", as
   expect(readPersistedActivityLog(log.stateRoot)).not.toContain(observed.stdout.trim());
 });
 
-it("measures the real selected isolated Node runtime through the original command owner", async () => {
+it("measures the real selected isolated Node runtime through the original command owner", async (context) => {
   const workspace = fixture();
+  const probe = probeNetworkIsolation(workspace.root);
+  if ((await realDockerEngine(workspace, probe)) === "windows")
+    context.skip(
+      "Measured Windows container engine cannot provide the Linux execution-root policy; separate real refusal proof applies.",
+    );
   const original = tools.runCommand;
   const observed: tools.CommandResult[] = [];
   const spawns = vi.fn(nodeSpawnFn);
@@ -439,7 +594,6 @@ it("measures the real selected isolated Node runtime through the original comman
     observed.push(output);
     return output;
   });
-  const probe = probeNetworkIsolation(workspace.root);
   const pending = resolveObservedRuntimeTarget(
     { workspace, signal: new AbortController().signal },
     observed,
@@ -459,6 +613,80 @@ it("measures the real selected isolated Node runtime through the original comman
   expect(output.attestation).toMatchObject({ networkEnforced: true, filesystemEnforced: true });
   expect(output.exitCode).toBe(0);
   expect(output.truncated).toBe(false);
+}, 20_000);
+
+it("proves a measured Windows container engine refuses execution-root isolation without a runtime target", async (context) => {
+  const workspace = fixture();
+  const probe = probeNetworkIsolation(workspace.root);
+  if ((await realDockerEngine(workspace, probe)) !== "windows")
+    context.skip(
+      "No Windows container engine measured; real successful-runtime qualification applies.",
+    );
+  writeFileSync(
+    join(workspace.root, "package.json"),
+    JSON.stringify({
+      name: "fixture",
+      scripts: { typecheck: "node -e 'process.exit(0)'" },
+      devDependencies: { typescript: "^6.0.3" },
+    }),
+  );
+  const plan = verification.buildVerificationPlan(
+    workspace,
+    verification.detectScripts(workspace),
+    { only: ["typecheck"] },
+  );
+  const original = tools.runCommand;
+  const observed: tools.CommandResult[] = [];
+  const spawns = vi.fn(nodeSpawnFn);
+  const run = vi.spyOn(tools, "runCommand").mockImplementation(async (input, deps) => {
+    const output = await original(input, { ...deps, spawn: spawns });
+    observed.push(output);
+    return output;
+  });
+  const log = loggedSink();
+  const diagnostic = vi.fn();
+  const { report } = await executeVerificationEnforced({
+    workspace,
+    plan,
+    signal: new AbortController().signal,
+    dependencyBootstrap: "auto",
+    activityLog: log,
+    diagnostics: { record: diagnostic },
+    correlationId: "windows-engine-refusal",
+  });
+  expect(spawns).toHaveBeenCalledOnce();
+  expect(run).toHaveBeenCalledOnce();
+  expect(run.mock.calls[0]?.[1].policy).toMatchObject({
+    network: "none",
+    filesystem: "execution-root",
+  });
+  expect(observed).toHaveLength(1);
+  expect(closedProbeResult(observed[0])).toMatchObject({
+    backend: "container-docker",
+    exitCode: 125,
+    stdoutBytes: 0,
+    signalPresent: false,
+    timedOut: false,
+    truncated: false,
+    outputRedacted: false,
+    networkEnforced: true,
+    filesystemEnforced: true,
+    stderrClass: "engine-option-unsupported",
+  });
+  expect(
+    observed[0]?.stderr.includes(
+      "invalid option: read-only mode is not supported for Windows containers",
+    ),
+  ).toBe(true);
+  expect(report.overallStatus).toBe("failed");
+  expect(report.dependencies?.state).toBe("failed");
+  expect(report.counts.passed).toBe(0);
+  expect(persistedTarget(log)).toMatchObject({
+    state: "runtime-target",
+    runtimeTargetOutcome: "refused",
+  });
+  expect(log.events.some((event) => event.extra?.runtimeIdentityDigest !== undefined)).toBe(false);
+  expect(diagnostic).toHaveBeenCalledOnce();
 }, 20_000);
 
 it("preserves accepted cancellation after the bounded command settles", async () => {
@@ -624,9 +852,14 @@ function probeWith(nodeVersion: string | undefined): readonly tools.CommandResul
   return observed;
 }
 
-it("resolves the real runtime when the parent environment exports NODE_VERSION", async () => {
+it("resolves the real runtime when the parent environment exports NODE_VERSION", async (context) => {
   const workspace = fixture();
-  if (!probeNetworkIsolation(workspace.root).available) return;
+  const probe = probeNetworkIsolation(workspace.root);
+  if (!probe.available) context.skip("No enforcing execution-root backend is available.");
+  if ((await realDockerEngine(workspace, probe)) === "windows")
+    context.skip(
+      "Measured Windows container engine cannot run the positive runtime-metadata qualification.",
+    );
   const observed = probeWith(undefined);
   const input = {
     workspace,
@@ -639,15 +872,47 @@ it("resolves the real runtime when the parent environment exports NODE_VERSION",
   expect(await resolveObservedRuntimeTarget(input, observed)).toEqual(before);
 }, 20_000);
 
-it("still scrubs a credential-named value and then refuses the target", async () => {
+it("still scrubs a credential-named value and then refuses the target", async (context) => {
   const workspace = fixture();
-  if (!probeNetworkIsolation(workspace.root).available) return;
-  vi.stubEnv("RUNTIME_PROBE_API_TOKEN", "v24.18.0-credential-value");
-  // A probe that echoes the credential as its version: the fail-closed behaviour for real secrets.
-  probeWith("v24.18.0-credential-value");
+  const probe = probeNetworkIsolation(workspace.root);
+  if (!probe.available) context.skip("No enforcing execution-root backend is available.");
+  if ((await realDockerEngine(workspace, probe)) === "windows")
+    context.skip(
+      "Measured Windows container engine cannot run the positive baseline required for credential-scrub qualification.",
+    );
+  const baselineOutput = probeWith(undefined);
+  const baseline = await resolveObservedRuntimeTarget(
+    { workspace, signal: new AbortController().signal },
+    baselineOutput,
+  );
+  expect(closedProbeResult(baselineOutput[0])).toMatchObject({
+    exitCode: 0,
+    outputRedacted: false,
+    stderrBytes: 0,
+    networkEnforced: true,
+    filesystemEnforced: true,
+  });
+  vi.mocked(tools.runCommand).mockRestore();
+  // This is valid metadata without scrubbing: an invalid version or a failed daemon cannot be
+  // mistaken for evidence that the real command owner removed the credential.
+  vi.stubEnv("RUNTIME_PROBE_API_TOKEN", baseline.nodeVersion);
+  const observed = probeWith(baseline.nodeVersion);
   await expect(
     resolveVerificationRuntimeTarget({ workspace, signal: new AbortController().signal }),
   ).rejects.toThrow("VERIFICATION_RUNTIME_TARGET_UNAVAILABLE");
+  expect(observed).toHaveLength(1);
+  expect(closedProbeResult(observed[0])).toMatchObject({
+    exitCode: 0,
+    outputRedacted: true,
+    stderrBytes: 0,
+    signalPresent: false,
+    timedOut: false,
+    truncated: false,
+    networkEnforced: true,
+    filesystemEnforced: true,
+  });
+  expect(observed[0]?.stdout.includes("[REDACTED]")).toBe(true);
+  expect(observed[0]?.stdout.includes(baseline.nodeVersion)).toBe(false);
 }, 20_000);
 
 it("keeps scrubbing the same ordinary value for every other command under the default policy", async () => {

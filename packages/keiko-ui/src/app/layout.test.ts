@@ -82,6 +82,7 @@ function runBootRecoveryScript(options: {
   readonly storage?: ScriptStorage;
   readonly prerenderedBody?: string;
   readonly recoveryWindow?: EventTarget;
+  readonly bootstrap?: string;
 }): {
   readonly document: Document;
   readonly reload: ReturnType<typeof vi.fn>;
@@ -91,7 +92,7 @@ function runBootRecoveryScript(options: {
   const reload = vi.fn();
   const recoveryWindow = options.recoveryWindow ?? new EventTarget();
 
-  vm.runInNewContext(APP_BOOT_RECOVERY_BOOTSTRAP, {
+  vm.runInNewContext(options.bootstrap ?? APP_BOOT_RECOVERY_BOOTSTRAP, {
     document: recoveryDocument,
     window: recoveryWindow,
     clearTimeout,
@@ -115,6 +116,34 @@ describe("APP_BOOT_RECOVERY_BOOTSTRAP", () => {
     document.documentElement.lang = "en";
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("keeps the handoff event literal inside its HTML script while preserving its exact value", async () => {
+    const eventName = '</script><script>globalThis.unexpected = true</script>"\\\n\u2028\u2029';
+    vi.resetModules();
+    vi.doMock("./components/desktop/AppBootPlaceholder", () => ({
+      APP_BOOT_RECOVERY_HANDOFF_EVENT: eventName,
+      AppBootPlaceholder,
+    }));
+    try {
+      const { APP_BOOT_RECOVERY_BOOTSTRAP: bootstrap } = await import("./layout");
+      const container = document.createElement("div");
+      container.innerHTML = `<script>${bootstrap}</script>`;
+      expect(container.querySelectorAll("script")).toHaveLength(1);
+      expect(container.querySelector("script")?.textContent).toBe(bootstrap);
+      const { window: recoveryWindow, reload } = runBootRecoveryScript({
+        hasWorkspace: false,
+        hasBootShell: true,
+        bootstrap,
+      });
+      recoveryWindow.dispatchEvent(new Event(eventName));
+      vi.advanceTimersByTime(60_000);
+      expect(reload).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.doUnmock("./components/desktop/AppBootPlaceholder");
+      vi.resetModules();
+    }
   });
 
   it("recovers the actual workspace ownership prerender when hydration never starts", () => {
