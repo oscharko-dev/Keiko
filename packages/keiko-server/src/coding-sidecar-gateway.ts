@@ -3893,8 +3893,7 @@ async function executeBufferedGatewayChat(
   dispatch: GatewayChatDispatchContext,
   stream: BufferedOpenAiStreamSession | undefined,
 ): Promise<RouteResult | typeof STREAMING> {
-  const { deps, binding, modelAlias, request, runId, cancellation, promptTokenReservation } =
-    dispatch;
+  const { deps, binding, modelAlias, request, promptTokenReservation } = dispatch;
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
   const promptSettlement = settlePromptTokenReservation(
     deps,
