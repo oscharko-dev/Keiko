@@ -50,6 +50,7 @@ import type {
 import {
   conversationReadinessAgeMs,
   currentConversationReadinessObservation,
+  currentConversationReadinessPresentation,
   currentConversationReady,
   currentGatewayConfig,
   recordExplicitModelUse,
@@ -2422,15 +2423,29 @@ function recordFailedReadinessObservation(
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
 ): void {
-  if (preserveUnexecutedCapabilityObservation(deps, report, observedGeneration)) return;
+  const chat = report.probes.find((probe) => probe.name === "chat");
+  const failure =
+    chat?.status === "failed" && busySignal(chat.warning) !== undefined ? "transient" : undefined;
+  if (preserveUnexecutedCapabilityObservation(deps, report, observedGeneration, failure)) return;
   if (preserveVerifiedToolCallingObservation(deps, report, observedGeneration)) return;
   deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration);
+  if (failure !== undefined)
+    deps.gatewayConfig?.recordVerifiedCapability(
+      report.modelId,
+      { conversationReady: false },
+      report.checkedAt,
+      observedGeneration,
+      undefined,
+      undefined,
+      failure,
+    );
 }
 
 function preserveUnexecutedCapabilityObservation(
   deps: UiHandlerDeps,
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
+  conversationReadinessFailure: "transient" | undefined,
 ): boolean {
   if (executedCategoricalFeatureProbe(report.probes)) return false;
   const previous = deps.gatewayConfig?.verifiedCapability(report.modelId);
@@ -2443,6 +2458,8 @@ function preserveUnexecutedCapabilityObservation(
     previous.checkedAt,
     observedGeneration,
     report.checkedAt,
+    undefined,
+    conversationReadinessFailure,
   );
   return true;
 }
@@ -3697,6 +3714,18 @@ interface SelectionCheck {
   readonly settled: Promise<void>;
 }
 
+function selectionNeedsRecheck(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+): boolean {
+  return (
+    conversationQueue(holder).inconclusive.has(modelId) ||
+    (currentConversationReadinessObservation(deps, modelId) === false &&
+      currentConversationReadinessPresentation(deps, modelId) === undefined)
+  );
+}
+
 /**
  * The start of a person's pick, with its outcome (`started`, `joined`, `already-answered`,
  * `unknown-model`) recorded under the pick's correlation id. A model whose latest check ended
@@ -3721,7 +3750,7 @@ export function startSelectedConversationCheck(
     return settled("unknown-model");
   const key = `${String(holder.generation())}:${modelId}`;
   const joined = readinessProbesFor(holder).has(key);
-  const recheck = conversationQueue(holder).inconclusive.has(modelId);
+  const recheck = selectionNeedsRecheck(deps, holder, modelId);
   const check = startConversationCheck(deps, holder, config, modelId, id, recheck, "selection");
   if (check === undefined) return settled("already-answered");
   // A check was due but the existing not-ready cooldown withheld it: nothing was sent.

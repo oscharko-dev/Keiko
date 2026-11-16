@@ -96,7 +96,14 @@ restore or opening a Chat; the first Send or Start on a model without a current 
 first use that checks it and goes ahead when it answers, and a window opening reads the Workbench
 profile with `check=use` (it dispatches nothing) while a pick or Start reads with `check=1`. A check
 without a verdict may be repeated by a pick or the next Send after the not-ready cooldown has passed; an
-explicit Settings verification that answers definitively ends the walk's pause. Gateway Setup keeps
+explicit Settings verification that answers definitively ends the walk's pause. Chat keeps
+the model selectable after a basic-chat timeout or transient overload: the existing generation-bound
+observation retains `conversationReady: false` plus a closed transient failure marker, while
+`/api/models` omits the readiness flag for that presentation only (#4415). The existing explicit
+pick or first Send may check it once after the same cooldown; passive reads start no work. Definitive
+refusals, including HTTP 401/403/404, remain observed not-ready. The marker follows unchanged
+connections and disappears with a changed connection or a later definitive observation; it is never
+persisted as provider configuration or accepted by inference admission. Gateway Setup keeps
 the full round for explicitly named deployments; for a discovered listing a candidate the walk
 rejects is dropped, a wildcard route pattern is dropped by its shape (a listing of nothing else fails
 with its own reason), a default without a verdict from a gateway that answers (a timeout of its

@@ -131,6 +131,7 @@ interface GatewayDouble {
   readonly rejectChat: Set<string>;
   /** Models whose chat requests answer another status: 503 is no verdict, 401 a refused credential. */
   readonly chatStatus: Map<string, number>;
+  readonly chatErrors: Map<string, Error>;
   /** Embedding aliases that cannot embed. */
   readonly rejectEmbedding: Set<string>;
 }
@@ -139,6 +140,7 @@ function gatewayDouble(): GatewayDouble {
   const requests: string[] = [];
   const rejectChat = new Set<string>();
   const chatStatus = new Map<string, number>();
+  const chatErrors = new Map<string, Error>();
   const rejectEmbedding = new Set<string>();
   vi.stubGlobal(
     "fetch",
@@ -156,6 +158,8 @@ function gatewayDouble(): GatewayDouble {
             : Response.json({ data: [{ embedding: [3, 4] }], model }),
         );
       const status = chatStatus.get(model);
+      const error = chatErrors.get(model);
+      if (error !== undefined) return Promise.reject(error);
       if (status !== undefined) return Promise.resolve(new Response("", { status }));
       if (rejectChat.has(model))
         return Promise.resolve(new Response("model rejected", { status: 400 }));
@@ -172,9 +176,97 @@ function gatewayDouble(): GatewayDouble {
       requests.filter((line) => line.endsWith(`:${modelId}`)).length,
     rejectChat,
     chatStatus,
+    chatErrors,
     rejectEmbedding,
   };
 }
+
+function singleChatConfig(): GatewayConfig {
+  const configured = config();
+  return {
+    ...configured,
+    providers: configured.providers.filter((provider) => provider.modelId === CHAT_A),
+    capabilities: configured.capabilities.filter((capability) => capability.id === CHAT_A),
+  };
+}
+
+function listedConversationReady(deps: UiHandlerDeps): boolean | undefined {
+  const body = handleModels({ url: new URL("http://127.0.0.1/api/models") } as RouteContext, deps)
+    .body as { readonly models: readonly ModelCapability[] };
+  expect(body.models).toHaveLength(1);
+  return body.models[0]?.conversationReady;
+}
+
+it.each(["503", "timeout"])(
+  "keeps a sole cold Chat selectable after transient %s without granting inference",
+  async (failure) => {
+    const gateway = gatewayDouble();
+    if (failure === "503") gateway.chatStatus.set(CHAT_A, 503);
+    else gateway.chatErrors.set(CHAT_A, new DOMException("synthetic timeout", "TimeoutError"));
+    const deps = composition();
+    deps.gatewayConfig?.set(singleChatConfig(), true, "cold-transient");
+    await vi.waitFor(() => {
+      expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
+    });
+    await awaitInitializedConversationReadiness(deps, CHAT_A, "cold-transient");
+    expect(currentConversationReady(deps, CHAT_A)).toBe(false);
+    expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
+    expect(listedConversationReady(deps)).toBeUndefined();
+    const before = gateway.requestsFor(CHAT_A);
+    const base = Date.now();
+    let offset = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => base + offset);
+    const early = await handleGatewaySelectionCheck(selectionRequest({ modelId: CHAT_A }), deps);
+    expect(early).toMatchObject({ status: 200, body: { outcome: "cooldown" } });
+    for (let read = 0; read < 3; read++) {
+      expect(listedConversationReady(deps)).toBeUndefined();
+      initializeConfiguredConversationReadiness(deps, "cold-passive");
+    }
+    await awaitInitializedConversationReadiness(deps, CHAT_A, "cold-passive");
+    expect(gateway.requestsFor(CHAT_A)).toBe(before);
+    offset = 31_000;
+    gateway.chatStatus.delete(CHAT_A);
+    gateway.chatErrors.delete(CHAT_A);
+    const retry = await handleGatewaySelectionCheck(selectionRequest({ modelId: CHAT_A }), deps);
+    expect(retry).toMatchObject({ status: 200, body: { outcome: "started" } });
+    await awaitInitializedConversationReadiness(deps, CHAT_A, "cold-picked");
+    expect(gateway.requestsFor(CHAT_A)).toBe(before + 1);
+    expect(currentConversationReady(deps, CHAT_A)).toBe(true);
+    expect(listedConversationReady(deps)).toBe(true);
+  },
+);
+
+it.each([400, 401, 403, 404, 501])(
+  "keeps a sole cold Chat's definitive HTTP %s failure visible as not ready",
+  async (status) => {
+    const gateway = gatewayDouble();
+    gateway.chatStatus.set(CHAT_A, status);
+    const deps = composition();
+    deps.gatewayConfig?.set(singleChatConfig(), true, "cold-definitive");
+    await vi.waitFor(() => {
+      expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
+    });
+    await awaitInitializedConversationReadiness(deps, CHAT_A, "cold-definitive");
+    expect(currentConversationReady(deps, CHAT_A)).toBe(false);
+    expect(listedConversationReady(deps)).toBe(false);
+  },
+);
+
+it("clears transient Chat presentation after a later definitive credential refusal", async () => {
+  const gateway = gatewayDouble();
+  gateway.chatStatus.set(CHAT_A, 503);
+  const deps = composition();
+  deps.gatewayConfig?.set(singleChatConfig(), true, "cold-transient-then-refused");
+  await vi.waitFor(() => {
+    expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
+  });
+  expect(listedConversationReady(deps)).toBeUndefined();
+  gateway.chatStatus.set(CHAT_A, 403);
+  const verified = await handleGatewayReadiness(selectionRequest({ modelId: CHAT_A }), deps);
+  expect(verified.status).toBe(200);
+  expect(currentConversationReady(deps, CHAT_A)).toBe(false);
+  expect(listedConversationReady(deps)).toBe(false);
+});
 
 async function started(
   deps: UiHandlerDeps,
