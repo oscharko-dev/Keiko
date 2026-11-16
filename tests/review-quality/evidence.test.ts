@@ -12,6 +12,7 @@ import {
   CONFIGURATION_PATHS,
   FIXED_COMPOSITION_PATHS,
   gateConfiguration,
+  readLimitCounts,
   renderGateCost,
   renderReplayCoverage,
   reuseKeyOf,
@@ -78,7 +79,14 @@ function args(variant: string): ReturnType<typeof parseGateArguments> {
   ]);
 }
 
-function record(wallTimeMs: number, settlement: GateReviewRecord["settlement"]): GateReviewRecord {
+function record(
+  wallTimeMs: number,
+  settlement: GateReviewRecord["settlement"],
+  readLimits: { readonly limited: number | null; readonly silent: number | null } = {
+    limited: 0,
+    silent: 0,
+  },
+): GateReviewRecord {
   return {
     caseKey: `pr-${String(wallTimeMs)}`,
     runId: "review",
@@ -87,6 +95,8 @@ function record(wallTimeMs: number, settlement: GateReviewRecord["settlement"]):
     candidateCount: 1,
     presentedCount: 1,
     runtimeCleanup: "unproven",
+    readLimitedParts: readLimits.limited,
+    readLimitedPartsWithoutReport: readLimits.silent,
     reviewer: { promptTokens: 1_000, completionTokens: 100, durationMs: wallTimeMs / 2 },
     counterChecker: { promptTokens: 500, completionTokens: 50, durationMs: wallTimeMs / 4 },
     wallTimeMs,
@@ -265,5 +275,37 @@ describe("renderGateCost", () => {
     const text = renderGateCost(summarizeGateCost([]), {});
     expect(text).toContain("| Reviewer | — | — | — | 0 |");
     expect(text).toContain("Median wall time per review: —.");
+  });
+
+  // #4130: a complete review whose Reviewer reached its read allowance and then reported nothing
+  // counts as complete, and the gate must not let it pass as clean.
+  it("names the complete reviews with a read-limited part, and those with a silent one", () => {
+    const records = [
+      record(1_000, { kind: "complete" }),
+      record(2_000, { kind: "complete" }, { limited: 2, silent: 0 }),
+      record(3_000, { kind: "complete" }, { limited: 1, silent: 1 }),
+      record(4_000, { kind: "complete" }, { limited: null, silent: null }),
+      record(5_000, { kind: "incomplete", reason: "model-failed" }, { limited: 3, silent: 2 }),
+    ];
+    expect(readLimitCounts(records)).toEqual({
+      complete: 4,
+      completeWithLimitedPart: 2,
+      completeWithSilentPart: 1,
+    });
+    const text = renderGateCost(
+      summarizeGateCost(records),
+      settlementCounts(records),
+      readLimitCounts(records),
+    );
+    expect(text).toContain(
+      "Complete reviews with a part whose Reviewer reached its read allowance: 2 of 4.",
+    );
+    expect(text).toContain("Of them, with such a part that then reported nothing: 1.");
+    expect(text).toContain("complete and not clean");
+  });
+
+  it("leaves the read-limit lines out when no counts are given", () => {
+    const text = renderGateCost(summarizeGateCost([]), {});
+    expect(text).not.toContain("read allowance");
   });
 });

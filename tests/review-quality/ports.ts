@@ -34,6 +34,13 @@ export interface GateReviewRecord {
   readonly candidateCount: number;
   readonly presentedCount: number;
   readonly runtimeCleanup: string | null;
+  /**
+   * Parts whose Reviewer session reached its read allowance, and those of them that then reported
+   * nothing (#4130). Such a part counts as reviewed, so the settlement does not show it; the gate
+   * reports it beside the settlements. `null` when the Reviewer never ran.
+   */
+  readonly readLimitedParts: number | null;
+  readonly readLimitedPartsWithoutReport: number | null;
   readonly reviewer: RoleCost;
   readonly counterChecker: RoleCost;
   readonly wallTimeMs: number;
@@ -86,6 +93,8 @@ function recordOf(caseKey: string, view: ReviewRunView, wallTimeMs: number): Gat
     candidateCount: view.candidateCount,
     presentedCount: view.presentedFindings.length,
     runtimeCleanup: view.runtimeCleanup ?? null,
+    readLimitedParts: view.coverage?.readLimitedParts ?? null,
+    readLimitedPartsWithoutReport: view.coverage?.readLimitedPartsWithoutReport ?? null,
     reviewer: view.totals.reviewer,
     counterChecker: view.totals.counterChecker,
     wallTimeMs,
@@ -102,6 +111,8 @@ function refusedRecord(caseKey: string, refusal: string, wallTimeMs: number): Ga
     candidateCount: 0,
     presentedCount: 0,
     runtimeCleanup: null,
+    readLimitedParts: null,
+    readLimitedPartsWithoutReport: null,
     reviewer: NO_COST,
     counterChecker: NO_COST,
     wallTimeMs,

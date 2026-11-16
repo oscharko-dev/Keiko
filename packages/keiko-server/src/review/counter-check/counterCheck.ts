@@ -11,6 +11,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS,
   REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS,
   REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS,
   REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS,
@@ -70,12 +71,15 @@ export interface CounterCheckLimits {
   /** Read, list and search calls the session's tools answer; the verdict tool is not counted. */
   readonly maxReadCalls: number;
   readonly wallTimeMs: number;
+  /** Output tokens one turn may take before the gateway's steered repair asks for the answer. */
+  readonly maxOutputTokens: number;
 }
 
 export const DEFAULT_COUNTER_CHECK_LIMITS: CounterCheckLimits = {
   maxToolCalls: REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS,
   maxReadCalls: REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS,
   wallTimeMs: REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS,
+  maxOutputTokens: REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS,
 };
 
 export interface CounterCheckDeps {
@@ -83,6 +87,11 @@ export interface CounterCheckDeps {
   readonly runner: () => GitProcessRunner;
   readonly activityLog: ServerLogSink;
   readonly limits?: Partial<CounterCheckLimits> | undefined;
+  /**
+   * The output tokens the model's configuration declares as its limit, when it declares one
+   * (R4130-067). A turn never asks for more: the gateway refuses a request above it.
+   */
+  readonly declaredMaxOutputTokens?: ((modelId: string) => number | undefined) | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -98,6 +107,8 @@ export interface CounterCheckInput {
   readonly runCorrelationId: string;
   /** The review rules text the Reviewer received; absent when the repository has none. */
   readonly rulesText?: string | undefined;
+  /** Only on a candidate's second session, after the first ended on a model failure (#4130). */
+  readonly attempt?: number | undefined;
 }
 
 export interface CounterCheckOutcome {
@@ -106,22 +117,78 @@ export interface CounterCheckOutcome {
   readonly evidenceInHead: boolean;
   /** What the session's ending means for the run's settlement. */
   readonly effect: CounterCheckEffect;
+  /**
+   * Whether a fresh session may end differently (#4130): this one ended without a verdict on a
+   * model failure or on its own wall-time limit. A model that does not exist, a session out of
+   * prompt tokens and a cancelled one are not.
+   */
+  readonly retryable: boolean;
   readonly toolCallCount: number;
   /** The read, list and search calls the session's read allowance answered and refused (#4130). */
   readonly readCalls: ReviewReadCallCounts;
   readonly durationMs: number;
   readonly promptTokens: number;
   readonly completionTokens: number;
+  /** Attempts the gateway discarded inside the session's turns: a repaired answer, a corrected tool call. */
+  readonly discardedAttemptCount: number;
 }
 
 /** The provider-reported token use of one session; counts only, never a limit (#4346). */
 interface SessionMeter {
   promptTokens: number;
   completionTokens: number;
+  discardedAttempts: number;
 }
 
 function undecided(fingerprint: string, reasonCode: CounterCheckReasonCode): CounterCheckVerdict {
   return { findingFingerprint: fingerprint, verdict: "undecided", evidence: [], reasonCode };
+}
+
+type CounterCheckModelRequest = Parameters<ModelPort["call"]>[0];
+type CounterCheckModelResponse = Awaited<ReturnType<ModelPort["call"]>>;
+
+/**
+ * Counts what a discarded attempt cost. The provider has processed these tokens, so they belong to
+ * the session's totals; Keiko does not limit tokens (#4346), so nothing is charged against a limit.
+ */
+function countDiscarded(
+  meter: SessionMeter,
+  discarded: NonNullable<CounterCheckModelResponse["discardedAttemptUsage"]>,
+): void {
+  meter.discardedAttempts += discarded.attemptCount;
+  meter.promptTokens += discarded.promptTokens;
+  meter.completionTokens += discarded.completionTokens;
+}
+
+/**
+ * The Counter-checker's model port for one session (#4130). Every turn gets the session's output
+ * budget and asks for the gateway's one steered repair, so a turn that spends its budget on
+ * reasoning is asked once more for the answer instead of failing the check. What the gateway
+ * discarded inside a turn (the repaired answer, a tool call it corrected) was processed by the
+ * provider: its tokens count in the session's totals. The read-only harness calls `call` only, so
+ * the port has no streaming variant.
+ */
+function counterCheckModel(
+  model: ModelPort,
+  limits: CounterCheckLimits,
+  meter: SessionMeter,
+): ModelPort {
+  return {
+    call: async (request, signal): Promise<CounterCheckModelResponse> => {
+      const shaped: CounterCheckModelRequest = {
+        ...request,
+        maxOutputTokens: Math.min(
+          request.maxOutputTokens ?? limits.maxOutputTokens,
+          limits.maxOutputTokens,
+        ),
+        answerRepair: "steered",
+      };
+      const response = await model.call(shaped, signal);
+      const discarded = response.discardedAttemptUsage;
+      if (discarded !== undefined) countDiscarded(meter, discarded);
+      return response;
+    },
+  };
 }
 
 /** Whether every evidence range names a readable head file and lies inside it. */
@@ -204,6 +271,7 @@ function sessionFacts(
     fingerprint: input.candidate.fingerprint,
     toolCallCount: session.state.toolCalls,
     durationMs: session.now() - session.startedAt,
+    ...(input.attempt === undefined ? {} : { attempt: input.attempt }),
   };
 }
 
@@ -256,7 +324,7 @@ function runSession(
     },
     (gate, signal) =>
       runReadOnlyHarnessSession({
-        model,
+        model: counterCheckModel(model, limits, meter),
         // Nothing is left to refuse a model call for: the governed session cancels the harness
         // on a stop or at its deadline, and no token allowance exists (#4346).
         admitModelCall: () => true,
@@ -280,13 +348,25 @@ function runSession(
   );
 }
 
+/**
+ * The session's limits: the configured ones over the defaults, with the output budget of a turn
+ * lowered to what the model declares (R4130-067). A model that declares no limit, or 0, keeps the
+ * configured budget.
+ */
+function sessionLimits(deps: CounterCheckDeps, modelId: string): CounterCheckLimits {
+  const limits = { ...DEFAULT_COUNTER_CHECK_LIMITS, ...deps.limits };
+  const declared = deps.declaredMaxOutputTokens?.(modelId);
+  if (declared === undefined || !Number.isSafeInteger(declared) || declared <= 0) return limits;
+  return { ...limits, maxOutputTokens: Math.min(limits.maxOutputTokens, declared) };
+}
+
 /** Runs one counter-check session and logs its outcome; never throws for a session failure. */
 export async function counterCheckCandidate(
   deps: CounterCheckDeps,
   input: CounterCheckInput,
 ): Promise<CounterCheckOutcome> {
   const now = deps.now ?? Date.now;
-  const limits = { ...DEFAULT_COUNTER_CHECK_LIMITS, ...deps.limits };
+  const limits = sessionLimits(deps, input.modelId);
   const session: CounterCheckSession = {
     correlationId: `review-counter-check-${randomUUID()}`,
     startedAt: now(),
@@ -294,7 +374,7 @@ export async function counterCheckCandidate(
     limits,
     state: { verdict: undefined, invalidVerdicts: 0, toolCalls: 0 },
     readAllowance: createReviewReadAllowance(limits.maxReadCalls),
-    meter: { promptTokens: 0, completionTokens: 0 },
+    meter: { promptTokens: 0, completionTokens: 0, discardedAttempts: 0 },
   };
   const fingerprint = input.candidate.fingerprint;
   const model = deps.modelPortFactory(input.modelId);
@@ -306,7 +386,7 @@ export async function counterCheckCandidate(
       undefined,
     );
     const verdict = undecided(fingerprint, "insufficient-context");
-    return finish(deps, input, session, verdict, "model-failed");
+    return finish(deps, input, session, verdict, { effect: "model-failed", retryable: false });
   }
   const ended = await runSession(deps, input, model, session);
   const classified = classify(ended);
@@ -323,7 +403,8 @@ export async function counterCheckCandidate(
   const recorded = session.state.verdict;
   const verdict = recorded ?? undecided(fingerprint, classified.fallbackReason);
   const effect = recorded === undefined ? classified.effect : nonFailureEffect(classified);
-  return finish(deps, input, session, verdict, effect);
+  const retryable = effect === "model-failed" || effect === "deadline-exceeded";
+  return finish(deps, input, session, verdict, { effect, retryable });
 }
 
 /** A recorded verdict survives a later bound; only a cancellation still abandons the run. */
@@ -336,7 +417,7 @@ async function finish(
   input: CounterCheckInput,
   session: CounterCheckSession,
   verdict: CounterCheckVerdict,
-  effect: CounterCheckEffect,
+  ending: Pick<CounterCheckOutcome, "effect" | "retryable">,
 ): Promise<CounterCheckOutcome> {
   const facts = sessionFacts(session, input);
   const meter = session.meter;
@@ -346,12 +427,13 @@ async function finish(
   const outcome: CounterCheckOutcome = {
     verdict,
     evidenceInHead,
-    effect,
+    ...ending,
     toolCallCount: facts.toolCallCount,
     readCalls: session.readAllowance.counts(),
     durationMs: facts.durationMs,
     promptTokens: meter.promptTokens,
     completionTokens: meter.completionTokens,
+    discardedAttemptCount: meter.discardedAttempts,
   };
   logCounterCheckCompleted(deps.activityLog, facts, outcome);
   return outcome;

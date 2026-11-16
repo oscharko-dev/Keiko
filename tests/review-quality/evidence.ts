@@ -277,6 +277,37 @@ export function settlementCounts(
   return counts;
 }
 
+/**
+ * How many complete reviews had a part whose Reviewer reached its read allowance, and how many of
+ * them had such a part that then reported nothing (#4130). A complete review with a silent part is
+ * not a clean review, so the gate names the number beside the settlements.
+ */
+export interface ReadLimitCounts {
+  readonly complete: number;
+  readonly completeWithLimitedPart: number;
+  readonly completeWithSilentPart: number;
+}
+
+export function readLimitCounts(records: readonly GateReviewRecord[]): ReadLimitCounts {
+  const complete = records.filter((record) => record.settlement.kind === "complete");
+  return {
+    complete: complete.length,
+    completeWithLimitedPart: complete.filter((record) => (record.readLimitedParts ?? 0) > 0).length,
+    completeWithSilentPart: complete.filter(
+      (record) => (record.readLimitedPartsWithoutReport ?? 0) > 0,
+    ).length,
+  };
+}
+
+function readLimitLines(counts: ReadLimitCounts | undefined): string[] {
+  if (counts === undefined) return [];
+  return [
+    `Complete reviews with a part whose Reviewer reached its read allowance: ${String(counts.completeWithLimitedPart)} of ${String(counts.complete)}.`,
+    `Of them, with such a part that then reported nothing: ${String(counts.completeWithSilentPart)}. These reviews are complete and not clean: their Reviewer wanted to read more.`,
+    "",
+  ];
+}
+
 function costRow(role: string, summary: RoleCostSummary): string {
   const mean = summary.meanPerReview;
   const cells =
@@ -296,6 +327,7 @@ function costRow(role: string, summary: RoleCostSummary): string {
 export function renderGateCost(
   cost: GateCostSummary,
   settlements: Readonly<Record<string, number>>,
+  readLimits?: ReadLimitCounts,
 ): string {
   const median = cost.wallTimeMs.median;
   return [
@@ -316,5 +348,6 @@ export function renderGateCost(
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, count]) => `| ${key} | ${String(count)} |`),
     "",
+    ...readLimitLines(readLimits),
   ].join("\n");
 }

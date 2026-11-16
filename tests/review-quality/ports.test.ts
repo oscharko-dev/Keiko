@@ -21,6 +21,7 @@ function view(): ReviewRunView {
     candidateCount: 2,
     presentedFindings: [{ report: { file: "src/a.ts", startLine: 3, endLine: 4, title: "t" } }],
     runtimeCleanup: "unproven",
+    coverage: { readLimitedParts: 2, readLimitedPartsWithoutReport: 1 },
     stale: false,
     totals: {
       reviewer: { promptTokens: 1_000, completionTokens: 200, durationMs: 5_000 },
@@ -76,6 +77,8 @@ describe("createGateReviewer", () => {
       candidateCount: 2,
       presentedCount: 1,
       runtimeCleanup: "unproven",
+      readLimitedParts: 2,
+      readLimitedPartsWithoutReport: 1,
       reviewer: { promptTokens: 1_000, completionTokens: 200 },
       counterChecker: { promptTokens: 400, completionTokens: 50 },
     });

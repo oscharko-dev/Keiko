@@ -93,24 +93,26 @@ export function reviewerFailureReason(failureCode: string | undefined): ReviewIn
 
 type StartedReviewerRun = Extract<ReviewRuntimeRunResult, { readonly ok: true }>;
 
+/** How a Reviewer session met its read allowance (ADR-0184 D1, D6). */
+export type ReviewerReadLimit = "none" | "reported" | "silent";
+
 /**
- * A session the read allowance stopped before it filed one accepted report (R4130-054). Keiko cut
- * its reading short and nothing shows what it examined, so its part is not a reviewed part. A
- * session that reported after the cut keeps its completed outcome.
+ * Whether the read allowance refused a call of this session, and whether the session then filed an
+ * accepted report (R4130-054, owner decision of 2026-11-16). A session that was refused a read saw
+ * every hunk of its part and the code it had read until then, so its part counts as reviewed. What
+ * must not happen is that such a part passes unseen: a `silent` part reported nothing although its
+ * Reviewer wanted to read more, and the run's result says how many parts that applies to.
  */
-function stoppedByReadAllowanceWithoutReport(result: StartedReviewerRun): boolean {
-  return (result.readCalls?.refused ?? 0) > 0 && result.candidates.length === 0;
+export function reviewerReadLimit(result: StartedReviewerRun): ReviewerReadLimit {
+  if ((result.readCalls?.refused ?? 0) === 0) return "none";
+  return result.candidates.length === 0 ? "silent" : "reported";
 }
 
 /** The Reviewer's outcome as the settlement reads it; a run the runtime never started is skipped. */
 export function reviewerOutcomeFact(
   result: StartedReviewerRun,
 ): ReviewerSettlementFact | PreparationSettlement {
-  if (result.outcome === "completed") {
-    return stoppedByReadAllowanceWithoutReport(result)
-      ? { outcome: "failed", reason: "budget-exhausted" }
-      : { outcome: "completed" };
-  }
+  if (result.outcome === "completed") return { outcome: "completed" };
   if (result.outcome === "cancelled") return { outcome: "cancelled" };
   if (result.outcome === "refused") return { kind: "skipped", reason: "model-unavailable" };
   return { outcome: "failed", reason: reviewerFailureReason(result.failureCode) };

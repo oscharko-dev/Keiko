@@ -326,6 +326,14 @@ export class ReviewRunStore {
     });
   }
 
+  /**
+   * Replaces the run's coverage summary and leaves its coverage entries as they are: the Reviewer
+   * phase adds what only it knows, the parts whose session reached its read allowance (#4130).
+   */
+  public setCoverageSummary(runId: string, summary: ReviewDiffCoverageSummary): void {
+    this.db.prepare(SQL_COVERAGE).run(JSON.stringify(summary), runId);
+  }
+
   /** Records every candidate finding and settles the run, in one transaction. */
   public settle(
     runId: string,

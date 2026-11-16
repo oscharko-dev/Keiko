@@ -244,6 +244,57 @@ describe("review run Activity Log proofs", () => {
     expect(JSON.parse(settled(undefined))).not.toHaveProperty("surplusCandidateCount");
   });
 
+  // #4130: a part whose Reviewer reached its read allowance counts as reviewed. The settled line
+  // counts such parts, and a silent one makes the line a warning although the run is complete.
+  it("proves review.run.settled with its read-limited parts, a warning when one was silent", () => {
+    const settledWith = (silent: number | undefined): ReturnType<typeof captureActivityLog> => {
+      const capture = captureActivityLog();
+      logReviewRunSettled(capture.sink, CORRELATION, {
+        runId: "review-run-1",
+        settlement: { kind: "complete" },
+        coverage: {
+          changedFiles: 3,
+          reviewedFiles: 3,
+          partiallyReviewedFiles: 0,
+          unprocessedFiles: 0,
+          addedLines: 10,
+          removedLines: 2,
+          budgetTokens: 13_832,
+          usedTokens: 900,
+          ...(silent === undefined
+            ? {}
+            : { readLimitedParts: 2, readLimitedPartsWithoutReport: silent }),
+        },
+        verdicts: { candidates: 0, confirmed: 0, refuted: 0, undecided: 0, presented: 0 },
+        reviewer: TOTALS,
+        counterChecker: TOTALS,
+        durationMs: 9_000,
+        stale: false,
+      });
+      return capture;
+    };
+    const [silent] = settledWith(1).events;
+    if (silent === undefined) throw new TypeError("expected one event");
+    expect(silent.level).toBe("warn");
+    expect(
+      expectActivityLogProof("review.run.settled.line", formatActivityLogProofLine(silent)),
+    ).toMatchObject({
+      settlement: "complete",
+      readLimitedPartCount: 2,
+      readLimitedSilentPartCount: 1,
+    });
+    const [reported] = settledWith(0).events;
+    expect(reported?.level).toBe("info");
+    expect(reported?.extra).toMatchObject({
+      readLimitedPartCount: 2,
+      readLimitedSilentPartCount: 0,
+    });
+    // A run whose Reviewer never ran carries neither count.
+    const [absent] = settledWith(undefined).events;
+    expect(absent?.extra).not.toHaveProperty("readLimitedPartCount");
+    expect(absent?.extra).not.toHaveProperty("readLimitedSilentPartCount");
+  });
+
   // #4136: a review that settled on its coverage while the Reviewer runtime's end stayed unproven
   // (a macOS gateway-profile run) records the cleanup beside the settlement, at warn.
   it("proves review.run.settled with an unproven runtime cleanup as a warning", () => {

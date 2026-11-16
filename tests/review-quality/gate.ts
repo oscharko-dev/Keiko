@@ -25,6 +25,7 @@ import { type GateArguments, parseGateArguments } from "./cli.js";
 import {
   gateConfiguration,
   type GateConfiguration,
+  readLimitCounts,
   renderGateCost,
   renderReplayCoverage,
   settlementCounts,
@@ -225,6 +226,7 @@ function writeEvidence(
             reusedReviews: records.filter((record) => record.resumed).length,
           },
     settlements: settlementCounts(records),
+    readLimits: readLimitCounts(records),
     cost: summarizeGateCost(records),
     reviews: records,
     ...result,
@@ -234,7 +236,7 @@ function writeEvidence(
     join(dir, "summary.md"),
     [
       typeof result.markdown === "string" ? result.markdown : "",
-      renderGateCost(evidence.cost, evidence.settlements),
+      renderGateCost(evidence.cost, evidence.settlements, evidence.readLimits),
     ].join("\n"),
   );
   return dir;
