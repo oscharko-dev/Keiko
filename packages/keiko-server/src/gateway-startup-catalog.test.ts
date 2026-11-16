@@ -15,16 +15,21 @@ import {
   parseModelDiscovery,
   rawConfigFromCurrent,
 } from "./gateway-setup.js";
-import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
+import {
+  codingSidecarDisabledByPolicy,
+  handleCodingSidecarGatewayProfile,
+} from "./coding-sidecar-gateway.js";
 import {
   isCodingWorkbenchProbePending,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   ensureCodingWorkbenchContextWindows,
-  initializeLiteLlmCodingReadiness,
   runGatewayReadiness,
   awaitPendingConversationReadiness,
   resetCodingWorkbenchContextWindowProbesForTests,
   withReadinessParentCorrelation,
+  initializeConfiguredConversationReadiness,
+  settleStartupConversationReadiness,
+  isConversationReadinessCheckRunning,
 } from "./gateway-readiness.js";
 import {
   expectActivityLogProof,
@@ -106,6 +111,29 @@ function startupDeps(
   });
   compositions.push(deps);
   return deps;
+}
+
+// Startup checks no model (ADR-0171 D2, amended 2026-11-16). These tests reproduce what the person
+// does next: activate the configured chat model in Settings > Models once startup discovery has
+// settled, after which the Workbench's own check proves tool calling for the activated model.
+async function activateChatModels(
+  deps: UiHandlerDeps,
+  correlationId = "corr-settings-activation",
+): Promise<void> {
+  await deps.waitForStartupGatewayCatalog?.();
+  initializeConfiguredConversationReadiness(deps, correlationId, true);
+  await settleStartupConversationReadiness(deps);
+}
+
+function activateAfterStartup(
+  deps: UiHandlerDeps,
+  correlationId = "corr-settings-activation",
+): void {
+  void (async (): Promise<void> => {
+    await activateChatModels(deps, correlationId);
+    if (codingSidecarDisabledByPolicy(deps.env)) return;
+    await ensureCodingWorkbenchContextWindows(deps, undefined, correlationId, true);
+  })().catch((): undefined => undefined);
 }
 
 function catalogCompletions(events: readonly ServerLogEvent[]): readonly ServerLogEvent[] {
@@ -373,7 +401,8 @@ it("cancels pending catalog discovery at disposal and rejects its late result", 
   expect(before?.providers.map((provider) => provider.modelId)).not.toContain("late-chat");
 });
 
-it("reports background verification as pending while a fresh model has not proved tool calling", async () => {
+// The Workbench names a running activation check as pending, never as an unavailable model.
+it("reports verification as pending while the activation check of a fresh model runs", async () => {
   const response = deferredValue<boolean>();
   vi.stubGlobal(
     "fetch",
@@ -384,9 +413,10 @@ it("reports background verification as pending while a fresh model has not prove
   );
   const deps = startupDeps(() => Promise.resolve(discoveredCatalog()));
   deps.gatewayConfig?.set(startupConfig(), true);
+  activateAfterStartup(deps);
   try {
     await vi.waitFor(() => {
-      expect(liteLlmCodingProbeRunning(deps)).toBe(true);
+      expect(isConversationReadinessCheckRunning(deps, "chat-model")).toBe(true);
     });
     const result = await handleCodingSidecarGatewayProfile(
       {
@@ -446,10 +476,17 @@ it("verifies configured LiteLLM models without adding or probing unselected disc
     })),
   };
   deps.gatewayConfig?.set(config, true, "corr-startup-catalog");
-  await vi.waitFor(() => {
-    expect(startupProviderIds(deps)).toEqual(["chat-model"]);
-    expect(startupModels(deps).find((model) => model.id === "chat-model")?.toolCalling).toBe(true);
-  });
+  activateAfterStartup(deps);
+  // Activation runs discovery, the chat check and the tool proof in turn: allow for a loaded runner.
+  await vi.waitFor(
+    () => {
+      expect(startupProviderIds(deps)).toEqual(["chat-model"]);
+      expect(startupModels(deps).find((model) => model.id === "chat-model")?.toolCalling).toBe(
+        true,
+      );
+    },
+    { timeout: 5_000 },
+  );
   expect(discovery).toHaveBeenCalledTimes(1);
   expect(deps.gatewayConfig?.current()?.providers[0]?.baseUrl).toBe(config.providers[0]?.baseUrl);
   expect(deps.gatewayConfig?.verifiedCapability("chat-model")?.fields.conversationReady).toBe(true);
@@ -508,6 +545,7 @@ it("reproves an unready LiteLLM model when its successful proof became stale", a
   const deps = startupDeps(() => Promise.resolve(discoveredCatalog()));
   const config = startupConfig();
   deps.gatewayConfig?.set(config, true);
+  activateAfterStartup(deps);
   await vi.waitFor(() => {
     expect(toolCalls).toBe(1);
   });
@@ -523,11 +561,13 @@ it("reproves an unready LiteLLM model when its successful proof became stale", a
     },
     true,
   );
+  // A configuration replacement deactivates the model; activating it again proves it again at once,
+  // without waiting for a timer or a later read (customer 1.3.4).
+  activateAfterStartup(deps, "corr-reactivation");
   blocked.resolve(true);
-  // The configuration change that made the proof stale is the trigger: the model is proved again at
-  // once, without waiting for a timer or a later read (customer 1.3.4).
-  await vi.advanceTimersByTimeAsync(0);
-  expect(startupModels(deps)[0]?.toolCallingVerification?.status).toBe("verified");
+  await vi.waitFor(() => {
+    expect(startupModels(deps)[0]?.toolCallingVerification?.status).toBe("verified");
+  });
   expect(toolCalls).toBe(2);
   expect(liteLlmCodingProbeRunning(deps)).toBe(false);
 });
@@ -1230,13 +1270,21 @@ function configuredAliasKey(deps: UiHandlerDeps): string | undefined {
     ?.providers.find((provider) => provider.modelId === "new-chat")?.apiKey;
 }
 
-// #4351: a discovered alias is listed at startup and proven when a person picks it. The pick is the
-// Workbench's own `check=1` profile read for that model, so these scenarios reach the state they
-// always asserted (an alias proven ready) through the path that now owns it.
+// #4351: a discovered alias is listed at startup and proven when a person picks it. Since
+// 2026-11-16 the person first activates it in Settings > Models; the Workbench's own `check=1`
+// profile read for that model then proves tool calling, so these scenarios reach the state they
+// always asserted (an alias proven ready) through the paths that now own it.
 async function expectReadyAlias(deps: UiHandlerDeps): Promise<void> {
   await vi.waitFor(() => {
     expect(startupModels(deps).find((model) => model.id === "new-chat")).toBeDefined();
   });
+  await deps.waitForStartupGatewayCatalog?.();
+  await runGatewayReadiness(
+    { modelId: "new-chat", options: { probes: ["chat"] } },
+    deps,
+    "corr-activate-new-chat",
+    "settings",
+  );
   await handleCodingSidecarGatewayProfile(
     {
       correlationId: "corr-pick-new-chat",
@@ -1357,6 +1405,7 @@ it("aborts a request-owned Workbench probe joined by startup and waits for its p
   const events: ServerLogEvent[] = [];
   const deps = startupDeps(() => Promise.resolve(discoveredCatalog()), events, env);
   deps.gatewayConfig?.set(requestOwnedCodingConfig(), true);
+  await activateChatModels(deps);
   const request = ensureCodingWorkbenchContextWindows(
     deps,
     "chat-model",
@@ -1531,6 +1580,7 @@ it("checks an unanswered tool-only startup once and recovers in Settings without
   const events: ServerLogEvent[] = [];
   const deps = startupDeps(() => Promise.resolve(discoveredCatalog()), events);
   deps.gatewayConfig?.set(startupConfig(), true, "corr-startup-burst");
+  activateAfterStartup(deps);
   await vi.advanceTimersByTimeAsync(0);
   expect(toolCalls).toBe(1);
   await vi.advanceTimersByTimeAsync(3_600_000);
@@ -1975,6 +2025,7 @@ it("withdraws a tool proof when the same alias is re-pointed to another deployme
   const events: ServerLogEvent[] = [];
   const deps = startupDeps(rediscoveredOn(DEPLOYMENT_AFTER), events);
   deps.gatewayConfig?.set(provenOnDeploymentConfig(DEPLOYMENT_BEFORE), true);
+  activateAfterStartup(deps);
   expect(onlyModel(deps).toolCalling).toBe(true);
   try {
     await vi.waitFor(() => {
@@ -2111,6 +2162,7 @@ it("never lets a catalog declaration grant tool calling before the live probe pr
     }),
   );
   deps.gatewayConfig?.set(startupConfig(), true);
+  activateAfterStartup(deps);
   try {
     await vi.waitFor(() => {
       expect(probe.toolCalls()).toBe(1);
@@ -2153,6 +2205,7 @@ it("keeps a declared tool-calling model unproven when the live probe is refused"
     events,
   );
   deps.gatewayConfig?.set(startupConfig(), true);
+  activateAfterStartup(deps);
   await vi.waitFor(() => {
     expect(catalogCompletions(events).length).toBeGreaterThan(0);
     expect(toolRequests).toBeGreaterThanOrEqual(1);
@@ -2237,6 +2290,7 @@ it("keeps a newly discovered embedding model out of the Chat and Coding pickers"
     events,
   );
   deps.gatewayConfig?.set(managedStartupConfig("discovered"), true);
+  activateAfterStartup(deps);
   await vi.waitFor(() => {
     expect(startupProviderIds(deps)).toContain("text-embedding-house");
   });
@@ -2288,12 +2342,15 @@ it("re-probes a re-pointed alias even inside the cooldown of the earlier deploym
     },
     true,
   );
+  activateAfterStartup(deps);
   await vi.waitFor(() => {
     expect(onlyModel(deps).toolCalling).toBe(true);
   });
   expect(probe.toolCalls()).toBe(1);
   await explicitlyRefreshStartupCatalog(deps, requiredStartupProvider(unproven));
-  await initializeLiteLlmCodingReadiness(deps, "corr-explicit-settings");
+  // The re-pointed deployment is a changed connection: the person activates it again.
+  await activateChatModels(deps, "corr-explicit-settings");
+  await ensureCodingWorkbenchContextWindows(deps, undefined, "corr-explicit-settings", true);
   await vi.waitFor(() => {
     expect(probe.toolCalls()).toBe(2);
   });
@@ -2341,6 +2398,7 @@ it("flags a renewing tool proof on the models wire only while its verification i
   const probe = stubToolProbe(gate.promise);
   const deps = startupDeps(() => Promise.resolve(discoveredCatalog()));
   deps.gatewayConfig?.set(provenOnDeploymentConfig(DEPLOYMENT_BEFORE), true);
+  activateAfterStartup(deps);
   expect(modelsWire(deps)).not.toHaveProperty("toolCallingRenewalPending");
   deps.gatewayConfig?.set(lapsedProofConfig(true), true);
   try {
@@ -2380,6 +2438,7 @@ it("does not flag a proof the server will not renew or has refuted", async () =>
   );
   const refuted = startupDeps(() => Promise.resolve(discoveredCatalog()));
   refuted.gatewayConfig?.set(lapsedProofConfig(true), true);
+  activateAfterStartup(refuted);
   await vi.waitFor(() => {
     expect(onlyModel(refuted).toolCallingVerification?.status).toBe("unsupported");
   });
@@ -2396,6 +2455,7 @@ it("adopts startup readiness in one passive settlement read without another prov
   const discovery = vi.fn(() => Promise.resolve(discoveredCatalog()));
   const deps = startupDeps(discovery, undefined, { KEIKO_CODING_SIDECAR_DISABLED: "1" });
   deps.gatewayConfig?.set(startupConfig(), true);
+  activateAfterStartup(deps);
   const route = matchRoute("GET", "/api/models");
   if (route === undefined || route === "method-not-allowed")
     throw new TypeError("Expected model route.");
@@ -2445,6 +2505,7 @@ it("cancels a disconnected metadata wait without cancelling the startup probe", 
     KEIKO_CODING_SIDECAR_DISABLED: "1",
   });
   deps.gatewayConfig?.set(startupConfig(), true);
+  activateAfterStartup(deps);
   const route = matchRoute("GET", "/api/models");
   if (route === undefined || route === "method-not-allowed")
     throw new TypeError("Expected model route.");
@@ -2491,6 +2552,7 @@ it("waits for the replacement generation instead of adopting a superseded startu
   });
   const initial = startupConfig();
   deps.gatewayConfig?.set(initial, true);
+  activateAfterStartup(deps);
   const route = matchRoute("GET", "/api/models");
   if (route === undefined || route === "method-not-allowed")
     throw new TypeError("Expected model route.");
@@ -2519,6 +2581,7 @@ it("waits for the replacement generation instead of adopting a superseded startu
       },
       true,
     );
+    activateAfterStartup(deps, "corr-replacement-activation");
     await vi.waitFor(() => {
       expect(calls).toBe(2);
     });

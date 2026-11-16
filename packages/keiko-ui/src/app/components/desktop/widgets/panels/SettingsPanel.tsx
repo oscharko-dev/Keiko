@@ -922,6 +922,60 @@ function ReadinessSummary({
   );
 }
 
+// Chat models start inactive in every server process: the person activates each one here, and
+// that activation is the readiness check (ADR-0171 D2, amended 2026-11-16).
+function primaryReadinessLabel(
+  readiness: ReadinessRunState | undefined,
+  conversationReady: boolean | undefined,
+  t: I18nTranslate,
+): string {
+  if (readiness?.status === "running") return t("settings.models.activating");
+  return chatReadinessPassed(readiness, conversationReady)
+    ? t("settings.models.runReadiness")
+    : t("settings.models.activate");
+}
+
+function inactiveChatModelIds(
+  models: readonly ModelCapability[],
+  readiness: Record<string, ReadinessRunState>,
+): readonly string[] {
+  return models
+    .filter(
+      (model) =>
+        isConversationEligibleModel(model) &&
+        readiness[model.id]?.status !== "running" &&
+        !chatReadinessPassed(readiness[model.id], model.conversationReady),
+    )
+    .map((model) => model.id);
+}
+
+function ModelActivationBar({
+  models,
+  readiness,
+  onActivateAll,
+}: {
+  readonly models: readonly ModelCapability[];
+  readonly readiness: Record<string, ReadinessRunState>;
+  readonly onActivateAll: (modelIds: readonly string[]) => void;
+}): ReactNode {
+  const t = useTranslate();
+  if (!models.some(isConversationEligibleModel)) return null;
+  const inactive = inactiveChatModelIds(models, readiness);
+  return (
+    <div className="set-sec-h" data-testid="model-activation-bar">
+      <div className="set-sec-d">{t("settings.models.activationHint")}</div>
+      {inactive.length > 1 ? (
+        <div className="set-sec-actions">
+          <button type="button" className="ml-check" onClick={() => onActivateAll(inactive)}>
+            <ActivityIcon size={13} />
+            {t("settings.models.activateAll")}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // #2723 (S3358): the row status title was a nested ternary (conversationEligible ? … :
 // embeddingReady ? … : voiceReady ? … : …); extracted to a named if/else-if chain.
 function modelStatusTitle(
@@ -938,7 +992,7 @@ function modelStatusTitle(
   if (conversationEligible && chatReadinessPassed(readiness, model.conversationReady)) {
     return t("settings.models.statusConversationEligible");
   }
-  if (conversationEligible) return t("settings.models.statusNotVerified");
+  if (conversationEligible) return t("settings.models.statusNotActivated");
   if (embeddingReady) return t("settings.models.statusEmbedding");
   const voiceIssue = voiceSetupIssue(model);
   if (voiceReady && voiceIssue !== undefined) return t(voiceIssue);
@@ -1037,7 +1091,7 @@ function ModelCapabilityRow({
             onClick={() => onRunReadiness(model.id, false)}
           >
             <ActivityIcon size={13} />
-            {t("settings.models.runReadiness")}
+            {primaryReadinessLabel(readiness, model.conversationReady, t)}
           </button>
           <button
             type="button"
@@ -1702,6 +1756,7 @@ interface ModelsTabContentProps {
   readonly onCloseSetup: () => void;
   readonly onRetry: () => void;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
+  readonly onActivateAll: (modelIds: readonly string[]) => void;
   readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
 }
 
@@ -1773,6 +1828,7 @@ function ModelsTabContent({
   onCloseSetup,
   onRetry,
   onRunReadiness,
+  onActivateAll,
   onCapabilityApplied,
 }: ModelsTabContentProps): ReactNode {
   const t = useTranslate();
@@ -1849,6 +1905,8 @@ function ModelsTabContent({
           </button>
         </div>
       ) : null}
+
+      <ModelActivationBar models={models} readiness={readiness} onActivateAll={onActivateAll} />
 
       {/* uiux-fix C285: loading -> result transition is announced */}
       {renderModelsListBody({
@@ -2022,6 +2080,16 @@ export function SettingsPanel({
     await runModelReadinessCheck(modelId, deep, configGeneration, setReadinessLedger, t);
   }
 
+  // One model after another: an activation that persists a tool-calling proof advances the server
+  // generation, and a check started under the superseded generation would be discarded as stale.
+  async function handleActivateAll(modelIds: readonly string[]): Promise<void> {
+    const generation = configGenerationRef.current;
+    for (const modelId of modelIds) {
+      if (configGenerationRef.current !== generation) return;
+      await runModelReadinessCheck(modelId, false, generation, setReadinessLedger, t);
+    }
+  }
+
   return (
     <div className="set">
       <div className="set-tabs">
@@ -2072,6 +2140,9 @@ export function SettingsPanel({
             onRetry={() => setReloadTick((tick) => tick + 1)}
             onRunReadiness={(modelId, deep) => {
               void handleRunReadiness(modelId, deep);
+            }}
+            onActivateAll={(modelIds) => {
+              void handleActivateAll(modelIds);
             }}
             onCapabilityApplied={(updatedModel, observedGeneration) => {
               if (configGenerationRef.current !== observedGeneration) return;

@@ -48,8 +48,8 @@
     "de": "Gateway-Prüfung fehlgeschlagen"
   },
   "settings.models.detailNotVerified": {
-    "en": "Models are configured. Keiko verifies the capabilities required by the Coding Workbench automatically when they are first needed; the checks below remain available for diagnostics.",
-    "de": "Modelle sind konfiguriert. Keiko verifiziert die von der Coding Workbench benötigten Fähigkeiten beim ersten Bedarf automatisch; die Prüfungen unten bleiben für Diagnosen verfügbar."
+    "en": "Models are configured but not activated. Activate a model below: activation runs its readiness check, after which the model can be used in Chat and the Coding Workbench.",
+    "de": "Modelle sind konfiguriert, aber nicht aktiviert. Aktiviere unten ein Modell: Die Aktivierung führt seine Bereitschaftsprüfung aus, danach ist es im Chat und in der Coding Workbench nutzbar."
   },
   "settings.models.detailProbeFailed": {
     "en": "The last readiness check could not confirm this gateway. Model and agent features that need it stay unavailable until a check succeeds.",
@@ -72,16 +72,20 @@
     "de": "Einrichtung erforderlich"
   },
   "settings.models.statusNotVerified": {
-    "en": "gateway configured; automatic verification pending",
-    "de": "Gateway konfiguriert; automatische Verifizierung ausstehend"
+    "en": "gateway configured; activate models to check them",
+    "de": "Gateway konfiguriert; Modelle zur Prüfung aktivieren"
+  },
+  "settings.models.statusNotActivated": {
+    "en": "not activated; activate to run the readiness check",
+    "de": "nicht aktiviert; Aktivieren startet die Bereitschaftsprüfung"
   },
   "settings.models.statusProbeFailed": {
     "en": "gateway check failed",
     "de": "Gateway-Prüfung fehlgeschlagen"
   },
   "settings.models.statusConversationEligible": {
-    "en": "conversation-eligible",
-    "de": "konversationsfähig"
+    "en": "activated; conversation-eligible",
+    "de": "aktiviert; konversationsfähig"
   },
   "settings.models.statusEmbedding": {
     "en": "available for embeddings",
@@ -112,12 +116,12 @@
     "de": "Noch sind keine Modelle konfiguriert. Verbinde das Gateway, um konfigurierte Modellfähigkeiten zu laden."
   },
   "settings.models.eligibilityOk": {
-    "en": "Conversation-eligible",
-    "de": "Konversationsfähig"
+    "en": "Activated",
+    "de": "Aktiviert"
   },
   "settings.models.modelNotVerified": {
-    "en": "Chat model — not verified",
-    "de": "Chat-Modell — nicht verifiziert"
+    "en": "Chat model — not activated",
+    "de": "Chat-Modell — nicht aktiviert"
   },
   "settings.models.modelProbeFailed": {
     "en": "Chat unavailable — check failed",
@@ -314,6 +318,22 @@
   "settings.models.runReadiness": {
     "en": "Run readiness check",
     "de": "Bereitschaft prüfen"
+  },
+  "settings.models.activate": {
+    "en": "Activate",
+    "de": "Aktivieren"
+  },
+  "settings.models.activating": {
+    "en": "Checking readiness…",
+    "de": "Bereitschaft wird geprüft…"
+  },
+  "settings.models.activateAll": {
+    "en": "Activate all",
+    "de": "Alle aktivieren"
+  },
+  "settings.models.activationHint": {
+    "en": "Models are inactive after every start. Activate a model to run its readiness check; once it passes, the model can be used in Chat and the Coding Workbench.",
+    "de": "Modelle sind nach jedem Start inaktiv. Aktiviere ein Modell, um seine Bereitschaftsprüfung auszuführen; danach ist es im Chat und in der Coding Workbench nutzbar."
   },
   "settings.models.deepProbes": {
     "en": "Deep probes",

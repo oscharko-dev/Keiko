@@ -21,7 +21,7 @@ import {
   handleGatewayReadiness,
   handleGatewaySelectionCheck,
   initializeConfiguredConversationReadiness,
-  conversationModelForStartupProof,
+  runGatewayReadiness,
 } from "./gateway-readiness.js";
 import { handleCreateDesktopChat } from "./chat-handlers.js";
 import {
@@ -202,7 +202,6 @@ function selectedChatConfig(modelIds: readonly string[] = [CHAT_A]): GatewayConf
 async function conversationElections(deps: UiHandlerDeps): Promise<{
   readonly server: string | undefined;
   readonly wire: string | undefined;
-  readonly startupProof: string | undefined;
 }> {
   if (deps.uiDbPath === undefined) throw new TypeError("Missing fixture database path");
   const created = await handleCreateDesktopChat(
@@ -216,7 +215,6 @@ async function conversationElections(deps: UiHandlerDeps): Promise<{
   return {
     server: body.chat.selectedModel,
     wire: electConversationDefault(listed.models, (model) => model.conversationReady)?.id,
-    startupProof: conversationModelForStartupProof(deps),
   };
 }
 
@@ -229,6 +227,7 @@ it.each(["503", "timeout", "401"] as const)(
     else gateway.chatStatus.set(CHAT_A, Number(failure));
     const deps = composition();
     deps.gatewayConfig?.set(selectedChatConfig([CHAT_A, CHAT_B]), true, "cold-election");
+    initializeConfiguredConversationReadiness(deps, "cold-election");
     await vi.waitFor(() => {
       expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
     });
@@ -237,7 +236,6 @@ it.each(["503", "timeout", "401"] as const)(
     expect(await conversationElections(deps)).toEqual({
       server: expected,
       wire: expected,
-      startupProof: failure === "401" ? undefined : CHAT_A,
     });
     expect(captureConversationReadinessAdmission(deps, CHAT_A)).toMatchObject({ status: 400 });
     const call = vi.fn((): Promise<never> =>
@@ -273,6 +271,7 @@ it.each(["503", "timeout"])(
     else gateway.chatErrors.set(CHAT_A, new DOMException("synthetic timeout", "TimeoutError"));
     const deps = composition();
     deps.gatewayConfig?.set(selectedChatConfig(), true, "cold-transient");
+    initializeConfiguredConversationReadiness(deps, "cold-transient");
     await vi.waitFor(() => {
       expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
     });
@@ -311,6 +310,7 @@ it.each([400, 401, 403, 404, 501])(
     gateway.chatStatus.set(CHAT_A, status);
     const deps = composition();
     deps.gatewayConfig?.set(selectedChatConfig(), true, "cold-definitive");
+    initializeConfiguredConversationReadiness(deps, "cold-definitive");
     await vi.waitFor(() => {
       expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
     });
@@ -325,6 +325,7 @@ it("clears transient Chat presentation after a later definitive credential refus
   gateway.chatStatus.set(CHAT_A, 503);
   const deps = composition();
   deps.gatewayConfig?.set(selectedChatConfig(), true, "cold-transient-then-refused");
+    initializeConfiguredConversationReadiness(deps, "cold-transient-then-refused");
   await vi.waitFor(() => {
     expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
   });
@@ -336,6 +337,8 @@ it("clears transient Chat presentation after a later definitive credential refus
   expect(listedConversationReady(deps)).toBe(false);
 });
 
+// A server start followed by the person's activation (ADR-0171 D2, amended 2026-11-16): startup
+// checks only the embedding model in use; the chat model in use is checked once it is activated.
 async function started(
   deps: UiHandlerDeps,
   gateway: GatewayDouble,
@@ -343,19 +346,27 @@ async function started(
 ): Promise<void> {
   deps.gatewayConfig?.set(config(), true, correlationId);
   await vi.waitFor(() => {
-    expect(currentConversationReady(deps, CHAT_A) || gateway.requestsFor(CHAT_A) > 0).toBe(true);
-  });
-  await vi.waitFor(() => {
     expect(gateway.requestsFor(EMBEDDING_A)).toBeGreaterThan(0);
+  });
+  initializeConfiguredConversationReadiness(deps, correlationId);
+  await vi.waitFor(() => {
+    expect(currentConversationReady(deps, CHAT_A) || gateway.requestsFor(CHAT_A) > 0).toBe(true);
   });
   await awaitInitializedConversationReadiness(deps, CHAT_A, correlationId);
   // A late request to an unselected model would land after this settle point.
   await new Promise<void>((resolve) => setTimeout(resolve, 50));
 }
 
-it("sends inference requests only to the chat and embedding model in use at server start", async () => {
+it("sends no chat request at server start, and only to the chat model in use once activated", async () => {
   const gateway = gatewayDouble();
   const deps = composition();
+  deps.gatewayConfig?.set(config(), true, "corr-server-start");
+  await vi.waitFor(() => {
+    expect(gateway.requestsFor(EMBEDDING_A)).toBeGreaterThan(0);
+  });
+  await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  expect([CHAT_A, CHAT_B, CHAT_C].map(gateway.requestsFor)).toEqual([0, 0, 0]);
+  expect(currentConversationReady(deps, CHAT_A)).toBe(false);
   await started(deps, gateway);
   expect(gateway.requestsFor(CHAT_A)).toBe(1);
   expect(gateway.requestsFor(EMBEDDING_A)).toBeGreaterThan(0);
@@ -468,6 +479,8 @@ it("walks the election order one model at a time when the default fails, and sto
   gateway.rejectChat.add(CHAT_A);
   const deps = composition();
   deps.gatewayConfig?.set(config(), true, "corr-fallback");
+  // The person activates the chat model in use (ADR-0171 D2, amended 2026-11-16).
+  initializeConfiguredConversationReadiness(deps, "corr-fallback");
   await vi.waitFor(() => {
     expect(currentConversationReady(deps, CHAT_B)).toBe(true);
   });
@@ -583,6 +596,17 @@ function linesOf(
   op: string,
 ): readonly ServerLogEvent[] {
   return sink.events.filter((event) => event.op === op);
+}
+
+// The person activates one model in Settings > Models: its basic-chat readiness check, nothing else.
+async function activate(deps: UiHandlerDeps, modelId: string): Promise<void> {
+  await runGatewayReadiness(
+    { modelId, options: { probes: ["chat"] } },
+    deps,
+    `corr-activate-${modelId}`,
+    "settings",
+  );
+  expect(currentConversationReady(deps, modelId)).toBe(true);
 }
 
 function profileRequest(search: string): RouteContext {
@@ -714,6 +738,8 @@ it("elects the startup model like Chat: a mode-declared model ahead of listed or
   const gateway = gatewayDouble();
   const deps = composition();
   deps.gatewayConfig?.set(config({ declaredChat: CHAT_B }), true, "corr-election");
+  // The person activates the chat model in use (ADR-0171 D2, amended 2026-11-16).
+  initializeConfiguredConversationReadiness(deps, "corr-election");
   await vi.waitFor(() => {
     expect(currentConversationReady(deps, CHAT_B)).toBe(true);
   });
@@ -727,6 +753,8 @@ it("stops the startup walk at a refused credential instead of sweeping the catal
   gateway.chatStatus.set(CHAT_A, 401);
   const deps = composition();
   deps.gatewayConfig?.set(config(), true, "corr-credential");
+  // The person activates the chat model in use (ADR-0171 D2, amended 2026-11-16).
+  initializeConfiguredConversationReadiness(deps, "corr-credential");
   await vi.waitFor(() => {
     expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
   });
@@ -740,6 +768,8 @@ it("moves no further on a check without a verdict, until an explicit verificatio
   gateway.chatStatus.set(CHAT_A, 503);
   const deps = composition();
   deps.gatewayConfig?.set(config(), true, "corr-busy");
+  // The person activates the chat model in use (ADR-0171 D2, amended 2026-11-16).
+  initializeConfiguredConversationReadiness(deps, "corr-busy");
   await vi.waitFor(() => {
     expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
   });
@@ -770,6 +800,8 @@ it("lets a pick check a model again after a no-verdict result, but never after a
   gateway.chatStatus.set(CHAT_A, 503);
   const deps = composition();
   deps.gatewayConfig?.set(config(), true, "corr-no-dead-end");
+  // The person activates the chat model in use (ADR-0171 D2, amended 2026-11-16).
+  initializeConfiguredConversationReadiness(deps, "corr-no-dead-end");
   await vi.waitFor(() => {
     expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
   });
@@ -802,6 +834,8 @@ it("sends no tool-calling request to a model nobody picked when the default ends
   gateway.chatStatus.set(CHAT_A, 503);
   const deps = composition();
   deps.gatewayConfig?.set(config({ litellm: true }), true, "corr-startup-no-verdict");
+  // The person activates the chat model in use (ADR-0171 D2, amended 2026-11-16).
+  initializeConfiguredConversationReadiness(deps, "corr-startup-no-verdict");
   await vi.waitFor(() => {
     expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
   });
@@ -827,9 +861,15 @@ it("reads the Workbench profile of a restored selection passively, and of an exp
   await handleCodingSidecarGatewayProfile(profileRequest("check=use"), deps);
   expect(gateway.requestsFor(CHAT_B)).toBe(before);
   expect(gateway.requestsFor(CHAT_C)).toBe(0);
-  // An explicit pick checks exactly that model.
+  // A pick of a model nobody activated sends nothing either (ADR-0171 D2, amended 2026-11-16).
   await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-b&check=1"), deps);
-  expect(gateway.requestsFor(CHAT_B)).toBeGreaterThan(before);
+  await settle();
+  expect(gateway.requestsFor(CHAT_B)).toBe(before);
+  // Once the person activated it in Settings > Models, an explicit pick proves exactly that model.
+  await activate(deps, CHAT_B);
+  const activated = gateway.requestsFor(CHAT_B);
+  await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-b&check=1"), deps);
+  expect(gateway.requestsFor(CHAT_B)).toBeGreaterThan(activated);
   expect(gateway.requestsFor(CHAT_C)).toBe(0);
 });
 
@@ -867,6 +907,8 @@ it("opens the Workbench after a default without a verdict without a single reque
     true,
     "corr-open-no-verdict",
   );
+  // The person activates the chat model in use (ADR-0171 D2, amended 2026-11-16).
+  initializeConfiguredConversationReadiness(deps, "corr-open-no-verdict");
   await vi.waitFor(() => {
     expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
   });
@@ -886,6 +928,7 @@ it("dispatches no tool-calling proof for a window opening, and labels a pick's p
   gatewayDouble();
   const deps = composition();
   deps.gatewayConfig?.set(config({ toolCapable: true }), true, "corr-tool-scope");
+  initializeConfiguredConversationReadiness(deps, "corr-tool-scope");
   await vi.waitFor(() => {
     expect(currentConversationReady(deps, CHAT_A)).toBe(true);
   });
@@ -899,7 +942,8 @@ it("dispatches no tool-calling proof for a window opening, and labels a pick's p
   await handleCodingSidecarGatewayProfile(profileRequest("check=use"), deps);
   await codingWorkbenchProbesSettledForTests();
   expect(toolScopes()).toEqual([]);
-  // A pick of a model is the selection kind.
+  // A pick of an activated model is the selection kind.
+  await activate(deps, CHAT_B);
   await handleCodingSidecarGatewayProfile(profileRequest("modelId=chat-b&check=1"), deps);
   await codingWorkbenchProbesSettledForTests();
   expect(toolScopes()).toEqual(["selection"]);
@@ -910,6 +954,8 @@ it("dispatches nothing when a window opens on a model in use whose check ended w
   gateway.chatStatus.set(CHAT_A, 503);
   const deps = composition();
   deps.gatewayConfig?.set(config({ toolCapable: true }), true, "corr-window-inconclusive");
+  // The person activates the chat model in use (ADR-0171 D2, amended 2026-11-16).
+  initializeConfiguredConversationReadiness(deps, "corr-window-inconclusive");
   await vi.waitFor(() => {
     expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
   });
@@ -941,6 +987,8 @@ it("names a recheck the cooldown withheld with its own closed outcome", async ()
   gateway.chatStatus.set(CHAT_A, 503);
   const deps = composition();
   deps.gatewayConfig?.set(config(), true, "corr-cooldown-outcome");
+  // The person activates the chat model in use (ADR-0171 D2, amended 2026-11-16).
+  initializeConfiguredConversationReadiness(deps, "corr-cooldown-outcome");
   await vi.waitFor(() => {
     expect(gateway.requestsFor(CHAT_A)).toBeGreaterThan(0);
   });

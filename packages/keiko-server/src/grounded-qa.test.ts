@@ -2496,7 +2496,7 @@ describe("handleGroundedAsk", () => {
           error: {
             code: "CONVERSATION_MODEL_NOT_READY",
             message:
-              "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
+              "The selected model is not activated or failed its readiness check. Open Settings > Models and activate the model.",
           },
         },
       });
@@ -2572,7 +2572,7 @@ describe("handleGroundedAsk", () => {
           error: {
             code: "CONVERSATION_MODEL_NOT_READY",
             message:
-              "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
+              "The selected model is not activated or failed its readiness check. Open Settings > Models and activate the model.",
           },
         },
       });

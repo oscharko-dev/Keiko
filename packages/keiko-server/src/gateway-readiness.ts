@@ -51,6 +51,7 @@ import {
   conversationReadinessAgeMs,
   currentConversationReadinessObservation,
   currentConversationReadinessPresentation,
+  preferActivatedModels,
   currentConversationReady,
   currentGatewayConfig,
   recordExplicitModelUse,
@@ -2762,62 +2763,13 @@ function workbenchContextProbes(capability: ModelCapability): readonly GatewayRe
   return shortWindow ? ["long_context"] : [];
 }
 
-/**
- * Fresh LiteLLM models need a live tool proof before they can appear in the Coding picker. This is
- * the process-start entry of the one Workbench verification: it asks for exactly the targets a
- * profile read would, limited to the recognised LiteLLM connections, whose local lab gateways Keiko
- * verifies without anyone opening the Workbench.
- */
-export async function initializeLiteLlmCodingReadiness(
-  deps: UiHandlerDeps,
-  correlationId: string,
-): Promise<void> {
-  const config = deps.gatewayConfig?.current();
-  if (config === undefined) return;
-  // Only the chat model in use: the tool-calling proof of every other listed model is renewed when a
-  // person picks it (#4351), never in the background for the whole catalog.
-  const inUse = conversationModelForStartupProof(deps);
-  const targets = liteLlmWorkbenchProbeTargets(config).filter((target) => target.modelId === inUse);
-  await Promise.all(
-    targets.map((target) =>
-      enqueueWorkbenchProbe(deps, config, target, correlationId, "startup", {
-        retryUnanswered: true,
-      }),
-    ),
-  );
-}
-
 // The chat model the product uses now: the election the Chat default makes, with the same
 // observations. At startup, after the walk concluded, it is the model that proved ready.
 function inUseConversationModelId(deps: UiHandlerDeps, config: GatewayConfig): string | undefined {
-  return electConversationDefault(configuredChatModels(config), (model) =>
-    currentConversationReadinessPresentation(deps, model.id),
+  return electConversationDefault(
+    preferActivatedModels(deps, configuredChatModels(config)),
+    (model) => currentConversationReadinessPresentation(deps, model.id),
   )?.id;
-}
-
-/**
- * The chat model whose tool-calling proof startup may renew (#4351): the model in use, but never a
- * model nobody checked once the walk has refused, or got no verdict from, another one. Such a model
- * waits for a person's pick; startup sends it nothing.
- */
-export function conversationModelForStartupProof(deps: UiHandlerDeps): string | undefined {
-  const config = currentGatewayConfig(deps);
-  if (config === undefined) return undefined;
-  const inUse = inUseConversationModelId(deps, config);
-  if (inUse === undefined || currentConversationReadinessPresentation(deps, inUse) !== undefined)
-    return inUse;
-  const moved = configuredChatModels(config).some(
-    (model) => currentConversationReadinessPresentation(deps, model.id) === false,
-  );
-  return moved ? undefined : inUse;
-}
-
-function liteLlmWorkbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTarget[] {
-  return workbenchProbeTargets(config).filter(
-    (target) =>
-      config.providers.find((candidate) => candidate.modelId === target.modelId)?.tokenCounter ===
-      "litellm",
-  );
 }
 
 interface WorkbenchProbeTarget extends WorkbenchProbeNeed {
@@ -3153,6 +3105,7 @@ function requeueStaleWorkbenchProbe(
       ? undefined
       : workbenchProbeTargets(config).find((candidate) => candidate.modelId === modelId);
   if (config === undefined || target === undefined) return;
+  if (!currentConversationReady(deps, modelId)) return;
   void enqueueWorkbenchProbe(deps, config, target, correlationId, trigger);
 }
 
@@ -3225,10 +3178,11 @@ export async function ensureCodingWorkbenchContextWindows(
 ): Promise<void> {
   const config = deps.gatewayConfig?.current();
   if (config === undefined) return;
-  // Only the model the Workbench would elect, or a person just picked, is proven (#4351): the other
-  // listed models receive no request until someone picks them. Without a name the model startup
-  // would prove is the only one a read may ask for.
-  const subject = electedModelId ?? conversationModelForStartupProof(deps);
+  // Only the model the Workbench would elect, or a person just picked, is proven (#4351), and only
+  // once the person activated it in Settings > Models (2026-11-16): a model nobody activated in this
+  // process receives no request from the Workbench.
+  const subject = electedModelId ?? inUseConversationModelId(deps, config);
+  if (subject === undefined || !currentConversationReady(deps, subject)) return;
   const target = workbenchProbeTargets(config).find((candidate) => candidate.modelId === subject);
   if (target === undefined) return;
   const id = correlationId ?? newCorrelationId();

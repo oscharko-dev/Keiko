@@ -22,6 +22,7 @@ import {
 } from "./gateway-spend-budget.js";
 import {
   handleGatewayReadiness,
+  initializeConfiguredConversationReadiness,
   initializeConfiguredEmbeddingReadiness,
 } from "./gateway-readiness.js";
 import { createEmbeddingAdapter } from "./local-knowledge-grounded-qa.js";
@@ -274,6 +275,8 @@ it("does not charge an enabled spend ledger for warm cache hits or joined initia
   };
   deps.gatewayConfig?.set(priced, true, "embedding-spend-initial");
   await initializeConfiguredEmbeddingReadiness(deps, "embedding-spend-join");
+  // Startup checks no chat model; the person activates it in Settings > Models.
+  initializeConfiguredConversationReadiness(deps, "embedding-spend-activation");
   await vi.waitFor(() => {
     expect(currentConversationReady(deps, "startup-chat")).toBe(true);
   });

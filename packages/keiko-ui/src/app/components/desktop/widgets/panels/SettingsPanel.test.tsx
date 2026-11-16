@@ -68,6 +68,10 @@ import {
   requestGatewaySetup,
 } from "../shared/gatewaySetupBus";
 
+// The per-model readiness action reads "Activate" until the model passed its check in this
+// process, "Run readiness check" afterwards and "Checking readiness…" while a check runs.
+const READINESS_ACTION = /^(Activate|Run readiness check|Checking readiness…)$/;
+
 const fetchConfigMock = vi.fn();
 const fetchModelsMock = vi.fn();
 const runGatewayReadinessMock = vi.fn();
@@ -268,7 +272,7 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     primeFetches([chatCapability("test-chat-1")]);
     render(<SettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/chat model — not verified/i);
+      expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/chat model — not activated/i);
     });
     expect(screen.getByTestId("conv-elig-ok").className).toContain("ml-type");
   });
@@ -293,7 +297,7 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     await waitFor(() => {
       expect(screen.getByText("Gateway connected")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/conversation-eligible/i);
+    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/^Activated$/);
     expect(screen.getByTestId("conv-elig-ok").className).toContain("ml-elig-ok");
     expect(screen.getByTestId("model-status-test-chat-ready").className).toContain("connected");
   });
@@ -310,7 +314,7 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
   });
 
   it.each([
-    [true, "Gateway connected", "connected", /conversation-eligible/i],
+    [true, "Gateway connected", "connected", /^Activated$/],
     [false, "Gateway check failed", "error", /check failed/i],
   ] as const)(
     "preserves server-observed conversationReady=%s while a local probe is running",
@@ -321,7 +325,7 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
       render(<SettingsPanel />);
 
       await screen.findByText(gatewayLabel);
-      fireEvent.click(screen.getByRole("button", { name: "Run readiness check" }));
+      fireEvent.click(screen.getByRole("button", { name: READINESS_ACTION }));
 
       expect(await screen.findByText(/checking basic readiness/i)).toBeInTheDocument();
       expect(screen.getByText(gatewayLabel)).toBeInTheDocument();
@@ -606,13 +610,11 @@ describe("SettingsPanel gateway summary semantics", () => {
       expect(screen.getByText("Gateway configured")).toBeInTheDocument();
     });
     expect(screen.queryByText("Gateway connected")).toBeNull();
-    expect(
-      screen.getByText(/verifies the capabilities required by the Coding Workbench automatically/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Models are configured but not activated/i)).toBeInTheDocument();
     // Scoped to the gateway summary row's own dot: the per-model dot answers a different question
     // (is this model conversation-eligible by capability), and is not a health claim.
     const summaryDot = container.querySelector(
-      '.ml-status[title="gateway configured; automatic verification pending"]',
+      '.ml-status[title="gateway configured; activate models to check them"]',
     );
     expect(summaryDot).not.toBeNull();
     expect(summaryDot?.className).toContain("untested");
@@ -631,7 +633,7 @@ describe("SettingsPanel gateway summary semantics", () => {
       verifiedCapabilities: {},
     });
     const { container } = render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
 
     await waitFor(() => {
       expect(screen.getByText("Gateway connected")).toBeInTheDocument();
@@ -648,7 +650,7 @@ describe("SettingsPanel gateway summary semantics", () => {
       ],
       verifiedCapabilities: {},
     });
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
 
     await waitFor(() => {
       expect(screen.getByText("Gateway check failed")).toBeInTheDocument();
@@ -665,7 +667,7 @@ describe("SettingsPanel gateway summary semantics", () => {
     primeFetches([chatCapability("test-chat-1")]);
     runGatewayReadinessMock.mockRejectedValue(new Error("readiness transport failed"));
     render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
 
     await waitFor(() => {
       expect(screen.getByText("Gateway check failed")).toBeInTheDocument();
@@ -690,7 +692,7 @@ describe("SettingsPanel readiness evidence is scoped to the configuration it mea
       .mockResolvedValue({ models: [chatCapability("test-chat-1")] });
     runGatewayReadinessMock.mockResolvedValue(readyReport());
     render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
 
     expect(await screen.findByText("Working today")).toBeInTheDocument();
     expect(screen.getByText("Gateway connected")).toBeInTheDocument();
@@ -705,9 +707,7 @@ describe("SettingsPanel readiness evidence is scoped to the configuration it mea
       expect(screen.getByText("Gateway configured")).toBeInTheDocument();
     });
     expect(screen.queryByText("Gateway connected")).toBeNull();
-    expect(
-      screen.getByText(/verifies the capabilities required by the Coding Workbench automatically/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Models are configured but not activated/i)).toBeInTheDocument();
     // Finding 2: the per-model readiness block must not outlive the configuration either — its
     // verified-capability badges and its copyable report describe the replaced gateway.
     expect(screen.queryByLabelText("Verified capabilities")).toBeNull();
@@ -718,7 +718,7 @@ describe("SettingsPanel readiness evidence is scoped to the configuration it mea
     primeFetches([chatCapability("test-chat-1")]);
     runGatewayReadinessMock.mockResolvedValue(readyReport());
     render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
     await waitFor(() => {
       expect(screen.getByText("Gateway connected")).toBeInTheDocument();
     });
@@ -731,7 +731,7 @@ describe("SettingsPanel readiness evidence is scoped to the configuration it mea
     });
 
     runGatewayReadinessMock.mockResolvedValue(readyReport("2026-07-30T10:00:00.000Z"));
-    fireEvent.click(screen.getByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(screen.getByRole("button", { name: READINESS_ACTION }));
 
     await waitFor(() => {
       expect(screen.getByText("Gateway connected")).toBeInTheDocument();
@@ -752,7 +752,7 @@ describe("SettingsPanel readiness evidence is scoped to the configuration it mea
       )
       .mockResolvedValue(readyReport("2026-07-30T10:00:00.000Z"));
     render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
     expect(screen.getByText(/checking basic readiness/i)).toBeInTheDocument();
 
     act(() => {
@@ -762,7 +762,7 @@ describe("SettingsPanel readiness evidence is scoped to the configuration it mea
     // gateway's story either.
     expect(screen.queryByText(/checking basic readiness/i)).toBeNull();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
     await waitFor(() => {
       expect(screen.getByText("Gateway connected")).toBeInTheDocument();
     });
@@ -787,7 +787,7 @@ describe("SettingsPanel readiness evidence is scoped to the configuration it mea
         <SettingsPanel />
       </I18nProvider>,
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
     await waitFor(() => {
       expect(screen.getByText("Gateway connected")).toBeInTheDocument();
     });
@@ -818,7 +818,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     await waitFor(() => {
       expect(screen.getByTestId("conv-elig-ok")).toBeInTheDocument();
     });
-    expect(screen.getAllByRole("button", { name: "Run readiness check" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: READINESS_ACTION })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Deep probes" })).toHaveLength(1);
   });
 
@@ -840,13 +840,13 @@ describe("SettingsPanel gateway readiness checks", () => {
     const catalogRefresh = vi.fn();
     window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, catalogRefresh);
     render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
 
     expect(screen.getByText(/checking basic readiness/i)).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText("Working today")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/conversation-eligible/i);
+    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/^Activated$/);
     expect(screen.getByTestId("conv-elig-ok").className).toContain("ml-elig-ok");
     expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Streaming");
     expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Tools");
@@ -893,7 +893,7 @@ describe("SettingsPanel gateway readiness checks", () => {
       primeFetches([chatCapability("test-chat-1")]);
       runGatewayReadinessMock.mockResolvedValue(outcomeReport(outcome));
       render(<SettingsPanel />);
-      fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+      fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
       const sentence = await screen.findByText(settingsMessages[outcomeKey(outcome)].en);
       expect(sentence).toBeInTheDocument();
       expect(screen.queryByText(`server evidence for ${outcome}`)).toBeNull();
@@ -912,7 +912,9 @@ describe("SettingsPanel gateway readiness checks", () => {
         <SettingsPanel />
       </I18nProvider>,
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Bereitschaft prüfen" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^(Aktivieren|Bereitschaft prüfen)$/ }),
+    );
     expect(await screen.findByText(settingsMessages[outcomeKey(outcome)].de)).toBeInTheDocument();
   });
 
@@ -920,7 +922,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     primeFetches([chatCapability("test-chat-1")]);
     runGatewayReadinessMock.mockResolvedValue(outcomeReport("called-only-forced"));
     render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
     await screen.findByText(settingsMessages["settings.models.toolOutcome.called-only-forced"].en);
     expect(screen.getByText("Working today")).toBeInTheDocument();
     expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Tools");
@@ -946,7 +948,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     });
 
     render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
 
     await waitFor(() => {
       expect(screen.getByText("Working today")).toBeInTheDocument();
@@ -969,7 +971,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     });
 
     render(<SettingsPanel />);
-    const buttons = await screen.findAllByRole("button", { name: "Run readiness check" });
+    const buttons = await screen.findAllByRole("button", { name: READINESS_ACTION });
     fireEvent.click(buttons[0] as HTMLButtonElement);
 
     expect(await screen.findByText("Working today")).toBeInTheDocument();
@@ -983,7 +985,7 @@ describe("SettingsPanel gateway readiness checks", () => {
       .mockImplementationOnce(() => new Promise(() => undefined));
 
     render(<SettingsPanel />);
-    const button = await screen.findByRole("button", { name: "Run readiness check" });
+    const button = await screen.findByRole("button", { name: READINESS_ACTION });
     fireEvent.click(button);
     expect(await screen.findByText("Gateway check failed")).toBeInTheDocument();
 
@@ -1076,7 +1078,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     applyGatewayVerifiedCapabilitiesMock.mockResolvedValue({ ok: true, model: updated });
 
     const view = render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
 
     expect(await screen.findByTestId("capability-disagreements")).toHaveTextContent(
       /Tools: configured yes; verified no/i,
@@ -1088,10 +1090,10 @@ describe("SettingsPanel gateway readiness checks", () => {
     expect(
       await screen.findByRole("alertdialog", { name: "Apply verified model capabilities?" }),
     ).toBeInTheDocument();
-    const readinessButton = screen.getByRole("button", { name: "Run readiness check" });
+    const readinessButton = screen.getByRole("button", { name: READINESS_ACTION });
     readinessButton.focus();
     view.rerender(<SettingsPanel />);
-    expect(screen.getByRole("button", { name: "Run readiness check" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: READINESS_ACTION })).toHaveFocus();
     resolveCatalogRefresh?.({ models: [configured] });
     fetchModelsMock.mockResolvedValue({ models: [updated] });
     fireEvent.click(await screen.findByRole("button", { name: "Apply values" }));
@@ -1128,7 +1130,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     });
 
     render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
 
     expect(await screen.findByTestId("capability-disagreements")).toHaveTextContent(
       /Tools: configured no; verified yes/i,
@@ -1162,7 +1164,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     });
 
     render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
     fireEvent.click(await screen.findByRole("button", { name: "Apply verified values" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -1193,7 +1195,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     );
 
     render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
     fireEvent.click(await screen.findByRole("button", { name: "Apply verified values" }));
     fireEvent.click(await screen.findByRole("button", { name: "Apply values" }));
 
@@ -1226,7 +1228,9 @@ describe("SettingsPanel gateway readiness checks", () => {
           <SettingsPanel />
         </I18nProvider>,
       );
-      fireEvent.click(await screen.findByRole("button", { name: "Bereitschaft prüfen" }));
+      fireEvent.click(
+        await screen.findByRole("button", { name: /^(Aktivieren|Bereitschaft prüfen)$/ }),
+      );
       fireEvent.click(await screen.findByRole("button", { name: "Bericht kopieren" }));
       await waitFor(() => {
         expect(writeText).toHaveBeenCalledWith(
@@ -1274,7 +1278,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     runGatewayReadinessMock.mockResolvedValue(report);
 
     render(<SettingsPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: READINESS_ACTION }));
     fireEvent.click(await screen.findByRole("button", { name: "Copy report" }));
 
     await waitFor(() => {
@@ -1595,9 +1599,65 @@ it("returns an already open Settings panel to model verification without automat
   );
   runGatewayReadinessMock.mockImplementationOnce(() => new Promise(() => undefined));
   view.rerender(<SettingsPanel initialTab="models" onInitialTabHandled={handled} />);
-  const verify = await screen.findByRole("button", { name: "Run readiness check" });
+  const verify = await screen.findByRole("button", { name: READINESS_ACTION });
   expect(screen.getByRole("button", { name: "Models" })).toHaveAttribute("aria-pressed", "true");
   expect(runGatewayReadinessMock).not.toHaveBeenCalled();
   fireEvent.click(verify);
   expect(runGatewayReadinessMock).toHaveBeenCalledWith("test-chat-failed", undefined);
+});
+
+// 2026-11-16: every model starts inactive in each server process. The person activates it here;
+// the activation is the readiness check, and only afterwards is the model offered for use.
+describe("SettingsPanel manual model activation", () => {
+  it("offers Activate for a model nobody activated and switches to a re-check once it passed", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue(readyReport());
+    render(<SettingsPanel />);
+    expect(await screen.findByTestId("model-activation-bar")).toHaveTextContent(
+      /Models are inactive after every start/i,
+    );
+    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/chat model — not activated/i);
+    expect(screen.getByTestId("model-status-test-chat-1")).toHaveAttribute(
+      "title",
+      "not activated; activate to run the readiness check",
+    );
+    expect(runGatewayReadinessMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Activate" }));
+    expect(runGatewayReadinessMock).toHaveBeenCalledWith("test-chat-1", undefined);
+    expect(await screen.findByRole("button", { name: "Run readiness check" })).toBeInTheDocument();
+    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/^Activated$/);
+    expect(screen.queryByRole("button", { name: "Activate all" })).toBeNull();
+  });
+
+  it("activates every inactive chat model one after another", async () => {
+    primeFetches([
+      chatCapability("first-chat"),
+      { ...chatCapability("second-chat"), conversationReady: true },
+      chatCapability("third-chat"),
+      embeddingCapability(),
+    ]);
+    const pending: ((report: GatewayReadinessReport) => void)[] = [];
+    runGatewayReadinessMock.mockImplementation(
+      () =>
+        new Promise<GatewayReadinessReport>((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Activate all" }));
+    await waitFor(() => {
+      expect(runGatewayReadinessMock).toHaveBeenCalledTimes(1);
+    });
+    expect(runGatewayReadinessMock).toHaveBeenLastCalledWith("first-chat", undefined);
+    pending.shift()?.({ ...readyReport(), modelId: "first-chat" });
+    await waitFor(() => {
+      expect(runGatewayReadinessMock).toHaveBeenCalledTimes(2);
+    });
+    expect(runGatewayReadinessMock).toHaveBeenLastCalledWith("third-chat", undefined);
+    pending.shift()?.({ ...readyReport(), modelId: "third-chat" });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Activate all" })).toBeNull();
+    });
+    expect(runGatewayReadinessMock).toHaveBeenCalledTimes(2);
+  });
 });

@@ -792,7 +792,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-verification-pending":
     "Keiko is still checking this model with the gateway. The Workbench updates by itself when the check is done.",
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
-    "The latest chat check could not use this model. Open the Workbench or the model list again to check it once more, or choose another ready model.",
+    "This model is not activated or did not pass its readiness check. Activate it in Settings > Models, or choose another activated model.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
     "The gateway has not confirmed yet that this model can call tools. Open the Workbench or the model list again in a minute to check it once more, or choose another ready model.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
