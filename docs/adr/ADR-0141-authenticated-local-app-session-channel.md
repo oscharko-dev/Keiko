@@ -689,6 +689,10 @@ before the UI directs the person to **Connect browser** (#4407). This recovery h
 changes the selected skill, and reconnection triggers the existing selection refresh. Initially
 unpaired no-skill Chat retains its server-checked no-selection precondition. The existing
 `client.composer.activity` operation records only the closed `skill-connection-unavailable` state.
+The inspection API and its response validators load only after the concealed read, keeping their
+Workbench dependencies outside the initial desktop bundle. The failed selection remains protected
+while the module loads; a superseded Chat/read cannot start the inspection or adopt its result.
+Module-load failures use the existing body-free selection diagnostic and grant no access.
 
 The governed unit-test-generation and bug-investigation workflows take an explicitly selected
 skill on `POST /api/runs` (#4025 AC1): the request names only its identity, revision and digest,

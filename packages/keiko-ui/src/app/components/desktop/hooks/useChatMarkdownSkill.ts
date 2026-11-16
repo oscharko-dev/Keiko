@@ -10,7 +10,6 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
 import { ApiError } from "@/lib/api";
-import { inspectBrowserApprovals } from "@/lib/browser-approval-api";
 import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 
 export interface ChatMarkdownSkill {
@@ -86,6 +85,9 @@ async function recordSelectionReadFailure(
   setState((previous) => failedSelectionRead(previous, chatId, accessUnavailable));
   if (!accessUnavailable) return;
   try {
+    // The approval codecs are needed only to explain a concealed private read, not at first paint.
+    const { inspectBrowserApprovals } = await import("@/lib/browser-approval-api");
+    if (!ownsResult()) return;
     const connection = await inspectBrowserApprovals(undefined, correlationIdOf(error));
     if (!ownsResult()) return;
     const connectionRequired = connection.state === "unavailable";
