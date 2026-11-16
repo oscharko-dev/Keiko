@@ -664,8 +664,13 @@ function createReviewOpenCodeV2Config(
     },
     providers: fixedOpenCodeV2Provider(contextGeometry, { image: false, pdf: false }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
+    // The built-in plugins and experimental switches every governed profile withholds (#4271). A
+    // review run without them was offered a fifth tool by the OpenCode 2.2.5 producer, and the
+    // gateway refused its session as tool-contract drift.
+    plugins: OPENCODE_PLUGIN_REMOVALS,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    experimental: OPENCODE_CLOSED_EXPERIMENTS,
     mcp: NO_MCP_SERVERS,
     references: {},
     instructions: [],

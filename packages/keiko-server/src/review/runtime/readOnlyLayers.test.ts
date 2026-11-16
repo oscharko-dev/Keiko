@@ -23,6 +23,7 @@ import type { CodingToolActionRequest } from "../../coding-runtime/codingToolIpc
 import { createCodingToolInvocationRegistry } from "../../coding-runtime/codingToolInvocationRegistry.js";
 import {
   createFixedOpenCodeV2Config,
+  OPENCODE_WITHHELD_BUILT_IN_PLUGINS,
   openCodeReviewPermissionRules,
 } from "../../coding-runtime/opencodeLaunchProfile.js";
 import { createGeneratedOpenCodeV2Plugins } from "../../coding-runtime/opencodeRuntimeAdapter.js";
@@ -106,6 +107,30 @@ describe("layer 1 -- the generated configuration denies everything but the four 
     const agentRules = agents["keiko-reviewer"]?.permissions ?? [];
     for (const tool of DENIED_TOOLS) {
       expect(permissionFor([...rules, ...agentRules], tool)).toBe("deny");
+    }
+  });
+
+  // The OpenCode 2.2.5 producer loads built-in plugins that bring their own tools and permission
+  // rules (#4271). A review run without the removals was offered a fifth tool, and the gateway
+  // refused its session as tool-contract drift (lab smoke of 2026-11-16 on the synced tree).
+  it("withholds every built-in plugin and closes every experiment, as the governed profile does", () => {
+    const governed = createFixedOpenCodeV2Config(GEOMETRY, undefined, "direct");
+    expect(review.plugins).toEqual(OPENCODE_WITHHELD_BUILT_IN_PLUGINS.map((name) => `-${name}`));
+    expect(review.plugins).toEqual(governed.plugins);
+    expect(review.experimental).toEqual(governed.experimental);
+    for (const value of Object.values(review.experimental as Readonly<Record<string, unknown>>)) {
+      expect(value).toBe(false);
+    }
+  });
+
+  // R4130-074: the review configuration is a hand-written sibling of the governed one, and the
+  // self-check compares a run with this same generator. A key dev adds to the governed profile
+  // therefore fails here until someone decides whether the review profile carries or replaces it.
+  it("carries every key the governed profile sets, except the agent and its rules", () => {
+    const governed = createFixedOpenCodeV2Config(GEOMETRY, undefined, "direct");
+    for (const [key, value] of Object.entries(governed)) {
+      if (key === "default_agent" || key === "permissions") continue;
+      expect(review[key], key).toEqual(value);
     }
   });
 
