@@ -48,8 +48,8 @@ export async function materializeReviewSeedTree(
   const written: string[] = [];
   for (const entry of planReviewSeedTree(files)) {
     const target = posix.join(root, entry.path);
-    await writer.makeDirectory(posix.dirname(target));
-    await writer.writeFile(target, entry.content);
+    await writer.makeDirectory(posix.dirname(target)); // NOSONAR typescript:S9382 -- the file below needs its directory first
+    await writer.writeFile(target, entry.content); // NOSONAR typescript:S9382 -- the writer is called in the plan's path order and stops at the first failure
     written.push(target);
   }
   return written;

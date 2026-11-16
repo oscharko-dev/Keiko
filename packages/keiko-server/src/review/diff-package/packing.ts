@@ -152,7 +152,7 @@ class PackingRun {
   public async run(ordered: readonly ReviewDiffChangedFile[]): Promise<void> {
     for (let start = 0; start < ordered.length; start += READ_CONCURRENCY) {
       const batch = ordered.slice(start, start + READ_CONCURRENCY);
-      const contents = await Promise.all(batch.map((file) => this.fetch(file)));
+      const contents = await Promise.all(batch.map((file) => this.fetch(file))); // NOSONAR typescript:S9382 -- one bounded batch of reads; what its offers leave of the budget decides which later files are read
       throwIfReviewDiffStopped(this.read.abort);
       batch.forEach((file, offset) => {
         this.offer(start + offset, file, contents[offset]);

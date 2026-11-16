@@ -212,7 +212,7 @@ class PairQualificationServiceImpl implements PairQualificationService {
     try {
       for (const [index, state] of live.cases.entries()) {
         if (live.controller.signal.aborted) break;
-        await this.runCase(live, index, state);
+        await this.runCase(live, index, state); // NOSONAR typescript:S9382 -- one case at a time: each is a full review run on the pair, and a stop ends the remaining cases
         this.emit(live, this.progress(live));
       }
     } catch (error) {

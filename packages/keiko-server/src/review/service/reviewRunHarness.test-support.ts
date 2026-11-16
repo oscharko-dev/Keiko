@@ -135,7 +135,7 @@ export function reviewerFiling(
       runner: createGitReviewProcessRunner(),
       activityLog: harness.log.sink,
     });
-    for (const report of reports) await intake.submit(report);
+    for (const report of reports) await intake.submit(report); // NOSONAR typescript:S9382 -- a reviewer files one report at a time; the intake keeps candidates in acceptance order
     return {
       ok: true,
       outcome,

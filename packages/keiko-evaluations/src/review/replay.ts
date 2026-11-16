@@ -193,7 +193,7 @@ export async function runReviewReplay(options: ReviewReplayOptions): Promise<Rev
   const selected = selectPullRequests(options);
   const signal = options.signal ?? new AbortController().signal;
   const results: ReviewReplayPullRequestResult[] = [];
-  for (const pullRequest of selected) results.push(await replayOne(pullRequest, options, signal));
+  for (const pullRequest of selected) results.push(await replayOne(pullRequest, options, signal)); // NOSONAR typescript:S9382 -- one pull request at a time, in ascending order: each review is a model session measured alone
   return {
     schemaVersion: REVIEW_EVAL_SCHEMA_VERSION,
     datasetDigest: options.dataset.digest,

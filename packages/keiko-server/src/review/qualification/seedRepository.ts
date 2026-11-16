@@ -45,8 +45,8 @@ async function git(
 async function writeTree(root: string, files: Readonly<Record<string, string>>): Promise<void> {
   for (const entry of planReviewSeedTree(files)) {
     const target = join(root, ...entry.path.split("/"));
-    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-    await writeFile(target, entry.content, { encoding: "utf8", mode: 0o600 });
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 }); // NOSONAR typescript:S9382 -- the file below needs its directory first
+    await writeFile(target, entry.content, { encoding: "utf8", mode: 0o600 }); // NOSONAR typescript:S9382 -- one open file at a time, in the plan's path order; the first failure ends the tree
   }
 }
 
@@ -56,7 +56,7 @@ async function removeAbsent(
   head: Readonly<Record<string, string>>,
 ): Promise<void> {
   for (const entry of planReviewSeedTree(base)) {
-    if (!Object.hasOwn(head, entry.path)) await rm(join(root, ...entry.path.split("/")));
+    if (!Object.hasOwn(head, entry.path)) await rm(join(root, ...entry.path.split("/"))); // NOSONAR typescript:S9382 -- one removal at a time; the first failure ends the step before the head tree is written
   }
 }
 

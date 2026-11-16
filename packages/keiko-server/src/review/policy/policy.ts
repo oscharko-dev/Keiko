@@ -126,7 +126,7 @@ async function renewEachLapsedProof(
   for (const modelId of new Set(named)) {
     if (!isAllowedReviewModel(ctx.operator, modelId)) continue;
     if (!toolProofLapsed(ctx.capability(modelId), ctx.nowMs)) continue;
-    await renewOnce(services, renew, modelId, correlationId);
+    await renewOnce(services, renew, modelId, correlationId); // NOSONAR typescript:S9382 -- a renewal is a model call: the role models are asked one after the other, so two calls never meet on a single-slot provider
   }
 }
 

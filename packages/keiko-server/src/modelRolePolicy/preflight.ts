@@ -9,6 +9,6 @@ export async function preflightRoles<Role extends string, Result>(
   check: (role: Role) => Promise<Result> | Result,
 ): Promise<ReadonlyMap<Role, Result>> {
   const results = new Map<Role, Result>();
-  for (const role of roles) results.set(role, await check(role));
+  for (const role of roles) results.set(role, await check(role)); // NOSONAR typescript:S9382 -- roles are checked one after the other, in the policy's order
   return results;
 }

@@ -78,7 +78,7 @@ export async function resolveSizedFiles(
   const sizes = await readGitReviewObjectSizes(read.ctx, { cwd: read.cwd, oids });
   if (!sizes.ok) throw reviewDiffStepFailure(sizes.result, read.abort, "listing-bytes");
   for (const file of files) {
-    verdicts.set(file, await sizedFileVerdict(read, file, sizes.value, blobLimitBytes));
+    verdicts.set(file, await sizedFileVerdict(read, file, sizes.value, blobLimitBytes)); // NOSONAR typescript:S9382 -- one file's blob reads at a time, never a git process per oversized file at once; the first failure ends the listing
   }
   return verdicts;
 }
@@ -97,7 +97,7 @@ async function sizedFileVerdict(
     if (info.size > blobLimitBytes) large.push(oid);
   }
   let binary = large.length === 0;
-  for (const oid of large) if (!binary) binary = await hasNulPrefix(read, oid);
+  for (const oid of large) if (!binary) binary = await hasNulPrefix(read, oid); // NOSONAR typescript:S9382 -- the first blob with a NUL byte settles the verdict and skips the remaining reads
   return binary ? "binary" : "too-large";
 }
 

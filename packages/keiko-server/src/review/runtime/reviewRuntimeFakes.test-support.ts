@@ -66,11 +66,13 @@ async function fileReports(
   reports: readonly unknown[],
 ): Promise<void> {
   for (const report of reports) {
-    await port?.execute(
-      { action: "review-report", actionId: "a", idempotencyKey: "k", report: report as never },
-      undefined,
-      { check: () => true },
-    );
+    const request = {
+      action: "review-report",
+      actionId: "a",
+      idempotencyKey: "k",
+      report: report as never,
+    } as const;
+    await port?.execute(request, undefined, { check: () => true }); // NOSONAR typescript:S9382 -- the scripted model files its reports in order, one tool call at a time
   }
 }
 

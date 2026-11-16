@@ -134,7 +134,7 @@ export async function requestGraphql(context, query, variables) {
       if (!isRetryable(error) || attempt >= MAX_ATTEMPTS) throw error;
       const waitMs = waitAfterFailure(error, attempt, state, io);
       io.log(`${error.kind} answer (attempt ${String(attempt)}), retrying in ${String(waitMs)} ms`);
-      await io.sleep(waitMs);
+      await io.sleep(waitMs); // NOSONAR javascript:S9382 -- a retry: the next request follows this wait
     }
   }
 }
@@ -143,10 +143,8 @@ async function completeConnection(context, kind, nodeId, connection) {
   const nodes = [...connection.nodes];
   let pageInfo = connection.pageInfo;
   while (pageInfo.hasNextPage) {
-    const data = await requestGraphql(context, CONNECTION_QUERIES[kind], {
-      id: nodeId,
-      after: pageInfo.endCursor,
-    });
+    const variables = { id: nodeId, after: pageInfo.endCursor };
+    const data = await requestGraphql(context, CONNECTION_QUERIES[kind], variables); // NOSONAR javascript:S9382 -- each page is asked for with the cursor the previous page returned
     const next = data.node[kind];
     nodes.push(...next.nodes);
     pageInfo = next.pageInfo;
@@ -170,7 +168,7 @@ async function completePullRequest(context, pullRequest) {
     pullRequest.reviewThreads,
   );
   const completedThreads = [];
-  for (const thread of threads.nodes) completedThreads.push(await completeThread(context, thread));
+  for (const thread of threads.nodes) completedThreads.push(await completeThread(context, thread)); // NOSONAR javascript:S9382 -- every answer's rate limit paces the next request, so threads are completed one at a time
   return {
     ...pullRequest,
     reviews: await completeConnection(context, "reviews", pullRequest.id, pullRequest.reviews),
@@ -222,7 +220,7 @@ async function harvestPage(context, checkpoint) {
   });
   const page = data.repository.pullRequests;
   const completed = [];
-  for (const raw of page.nodes) completed.push(await completePullRequest(context, raw));
+  for (const raw of page.nodes) completed.push(await completePullRequest(context, raw)); // NOSONAR javascript:S9382 -- pull requests are completed one at a time under the same rate-limit pacing
   context.probe.prepare?.(pageCommits(completed));
   const pullRequests = [...checkpoint.pullRequests];
   let excludedNoticeThreads = checkpoint.excludedNoticeThreads;
@@ -259,7 +257,7 @@ export async function harvestReviewThreads(options) {
   };
   let checkpoint = resumeCheckpoint(store, repository);
   while (!checkpoint.complete) {
-    checkpoint = await harvestPage(context, checkpoint);
+    checkpoint = await harvestPage(context, checkpoint); // NOSONAR javascript:S9382 -- each page starts at the cursor of the checkpoint the previous page saved
     store.save(checkpoint);
     options.io.log(`harvested ${String(checkpoint.pullRequests.length)} pull requests`);
   }

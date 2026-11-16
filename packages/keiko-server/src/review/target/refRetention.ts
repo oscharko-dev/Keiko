@@ -108,7 +108,7 @@ async function sweepRepository(
   const deleted: string[] = [];
   let failed = 0;
   for (const ref of listed.value.filter((candidate) => reviewRefExpired(candidate, facts))) {
-    const outcome = await deleteGitReviewRef(ctx, { cwd: repositoryRoot, ref });
+    const outcome = await deleteGitReviewRef(ctx, { cwd: repositoryRoot, ref }); // NOSONAR typescript:S9382 -- deletions in one repository contend for git's ref lock, so they run one after the other
     if (outcome.ok) deleted.push(ref);
     else failed += 1;
   }
@@ -138,7 +138,7 @@ export async function sweepReviewRefs(
   let failed = 0;
   for (const repositoryRoot of repositories) {
     const records = snapshot.refs.filter((record) => record.repositoryRoot === repositoryRoot);
-    const result = await sweepRepository(deps, repositoryRoot, records, correlationId);
+    const result = await sweepRepository(deps, repositoryRoot, records, correlationId); // NOSONAR typescript:S9382 -- one repository at a time: each sweep runs git and a provider read, and the registry may name any number of repositories
     for (const ref of result.dropped) removedRecords.add(`${repositoryRoot}\n${ref}`);
     deleted += result.deleted;
     retained += result.retained;

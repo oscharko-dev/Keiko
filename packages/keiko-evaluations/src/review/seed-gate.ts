@@ -273,7 +273,7 @@ export async function runReviewSeedGate(
   const stale = planted.flatMap((entry) => (entry.kind === "stale" ? [entry] : []));
   const signal = options.signal ?? new AbortController().signal;
   const runs: SeedRun[] = [];
-  for (const fixture of fixtures) runs.push(await runFixture(fixture, options, signal));
+  for (const fixture of fixtures) runs.push(await runFixture(fixture, options, signal)); // NOSONAR typescript:S9382 -- one seed review at a time: each is a model session measured alone, and the runs keep the fixture order
   const score = scoreReviewSeedRun(
     fixtures.map((fixture) => fixture.seed),
     runs.map((run) => run.result),

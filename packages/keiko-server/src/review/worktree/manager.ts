@@ -491,7 +491,7 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
     correlationId?: string,
   ): Promise<void> {
     // Removal deletes from the map; a Map iterator tolerates that and skips removed entries.
-    for (const runId of this.live.keys()) await this.remove(runId, trigger, correlationId);
+    for (const runId of this.live.keys()) await this.remove(runId, trigger, correlationId); // NOSONAR typescript:S9382 -- each removal runs git and deletes its own entry from the map this loop walks
   }
 
   public async sweepOrphans(
@@ -505,7 +505,7 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
     for (const entry of [...snapshot.worktrees, ...snapshot.refs])
       repositories.add(entry.repositoryRoot);
     for (const repositoryRoot of repositories) {
-      outcomes.push(...(await this.sweepListedEntries(repositoryRoot, correlationId)));
+      outcomes.push(...(await this.sweepListedEntries(repositoryRoot, correlationId))); // NOSONAR typescript:S9382 -- one repository's worktree listing and removals at a time; the outcomes keep the registry's order
     }
     outcomes.push(...(await this.sweepUnregisteredDirectories(correlationId)));
     const removed = outcomes.filter(Boolean).length;
@@ -522,8 +522,8 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
     for (const record of records) {
       if (this.owned(record.leaf)) continue;
       const path = join(this.deps.reviewRoot, record.leaf);
-      const removed = await this.removeOrReport(record.repositoryRoot, path, correlationId);
-      if (removed) await this.unregister(record.leaf);
+      const removed = await this.removeOrReport(record.repositoryRoot, path, correlationId); // NOSONAR typescript:S9382 -- ownership is checked right before each removal, and git removes one worktree at a time
+      if (removed) await this.unregister(record.leaf); // NOSONAR typescript:S9382 -- the record is dropped only after its worktree is gone
       outcomes.push(removed);
     }
     return outcomes;
@@ -546,7 +546,7 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
         dirname(entry.path) === this.deps.reviewRoot &&
         REVIEW_RUN_LEAF_PATTERN.test(leaf);
       if (!ours || this.owned(leaf)) continue;
-      results.push(await this.removeOrReport(repositoryRoot, entry.path, correlationId));
+      results.push(await this.removeOrReport(repositoryRoot, entry.path, correlationId)); // NOSONAR typescript:S9382 -- ownership is checked right before each removal; removals in one repository do not overlap
     }
     return results;
   }
@@ -572,7 +572,7 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
       if (!entry.isDirectory() || !REVIEW_RUN_LEAF_PATTERN.test(entry.name)) continue;
       if (this.owned(entry.name)) continue;
       results.push(
-        await this.deleteOrReport(join(this.deps.reviewRoot, entry.name), correlationId),
+        await this.deleteOrReport(join(this.deps.reviewRoot, entry.name), correlationId), // NOSONAR typescript:S9382 -- ownership is checked right before each delete, and one recursive delete runs at a time
       );
     }
     return results;
