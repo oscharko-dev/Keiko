@@ -138,6 +138,18 @@ never spreads `...process.env`. `DEFAULT_ENV_ALLOWLIST` contains `PATH`, `LANG`,
 `AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `DATABASE_URL`, etc. — is ever
 forwarded to a child process.
 
+On Windows, the shared command environment lookup matches names without regard to case, including
+plain copies of `process.env` (#4408). Duplicate casing variants use Node's lexicographically first
+key, so executable lookup and the child environment select the same value; no ambient PATH fallback
+is added. POSIX names remain case-sensitive. Pinned values replace inherited aliases. The allowlist
+is unchanged, and credential scrubbing includes every casing variant, including shadowed values.
+The same security-owned lookup supplies the trusted Windows system-directory decision and the
+termination reservation's captured root. An explicitly malformed alias therefore fails the existing
+shape and OS-identity checks instead of falling back to another Windows directory.
+The managed-worktree adapter reuses this boundary and preserves command failures as causes for the
+existing body-free Activity Log evidence; environment values and command error messages are not
+added to that evidence.
+
 `HOME` and `USERPROFILE` are deliberately NOT in the allowlist (C5). Forwarding the developer's real
 home would let an allowed subprocess (`npm`/`git`) read `~/.npmrc` (npm tokens),
 `~/.git-credentials`, and `~/.aws/…` via standard home-directory lookup — bypassing the env
