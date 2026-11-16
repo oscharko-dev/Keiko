@@ -1618,28 +1618,34 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     }
   });
 
-  it("clears workspace selection with Escape from the focused surface", () => {
-    const clearSelection = vi.fn();
-    const wins = [appWindow({ id: "agents-1", type: "agents" })];
-    render(
-      <Workspace
-        ws={workspace({
-          wins,
-          selection: { focusedWindowId: "agents-1", selectedWindowIds: ["agents-1"] },
-          api: api({ clearSelection }),
-        })}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
-      />,
-    );
-    const surface = screen.getByRole("main", { name: "Workspace surface" });
-    const escape = createEvent.keyDown(surface, { key: "Escape" });
+  it.each(["surface", "control"] as const)(
+    "clears workspace selection with Escape from the focused %s",
+    (target) => {
+      const clearSelection = vi.fn();
+      const wins = [appWindow({ id: "agents-1", type: "agents" })];
+      render(
+        <Workspace
+          ws={workspace({
+            wins,
+            selection: { focusedWindowId: "agents-1", selectedWindowIds: ["agents-1"] },
+            api: api({ clearSelection }),
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      const surface =
+        target === "surface"
+          ? screen.getByRole("main", { name: "Workspace surface" })
+          : screen.getByRole("button", { name: "New window" });
+      const escape = createEvent.keyDown(surface, { key: "Escape" });
 
-    fireEvent(surface, escape);
+      fireEvent(surface, escape);
 
-    expect(clearSelection).toHaveBeenCalledTimes(1);
-    expect(escape.defaultPrevented).toBe(true);
-  });
+      expect(clearSelection).toHaveBeenCalledTimes(1);
+      expect(escape.defaultPrevented).toBe(true);
+    },
+  );
 
   it("stops an acted-on Escape but preserves an unhandled Escape", () => {
     const clearSelection = vi.fn();
