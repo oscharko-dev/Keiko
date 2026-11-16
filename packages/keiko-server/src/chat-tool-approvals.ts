@@ -193,10 +193,9 @@ export function hasJiraApprovalClaimContext(
   previous: ChatMessage | undefined,
 ): boolean {
   if (/\bjira\b/iu.test(request)) return true;
-  const draftFollowUp =
-    /\b(?:entwurf|draft)\b/iu.test(request) &&
-    /\b(?:zeig(?:e)? (?:mir )?die freigabekarte|show (?:me )?the approval card)\b/iu.test(request);
-  if (!draftFollowUp || previous === undefined) return false;
+  const approvalFollowUp = /\b(?:freigabe(?:n|karten?|anfragen?)?|approvals?)\b/iu.test(request);
+  const otherGitHost = /\b(?:github|gitlab|bitbucket)\b/iu.test(request);
+  if (!approvalFollowUp || otherGitHost || previous === undefined) return false;
   return (
     /\bjira\b/iu.test(previous.content) ||
     (previous.toolTranscript?.exchanges.some((exchange) =>

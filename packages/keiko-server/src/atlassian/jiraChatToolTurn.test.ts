@@ -2140,30 +2140,38 @@ describe.each([false, true])(
       }
     });
 
-    it("recognizes a draft-card follow-up from the preceding Jira tool turn", async () => {
-      const f = fixture();
-      await handleSendDesktopChat(sendContext(f, `prior-jira-${String(stream)}`), f.deps);
-      Object.assign(f.model, syntheticModel(f.calls, false, 0, false));
-      const callsBefore = f.calls.length;
-      const requestsBefore = f.requests();
-      scriptedFinalAnswer.next = "Die Freigabekarte ist bereit.";
-      try {
-        const ctx = context({
-          ...sendBody(f, `implicit-approval-${String(stream)}`),
-          content: "Ich sehe nur den Entwurf, zeig die Freigabekarte.",
-        });
-        await (stream
-          ? handleSendDesktopChatStream(ctx, f.deps)
-          : handleSendDesktopChat(ctx, f.deps));
-        expect(f.calls).toHaveLength(callsBefore + 2);
-        expect(f.calls.at(-1)?.toolCatalog).toBeUndefined();
-        expect(f.requests()).toBe(requestsBefore);
-        expect(f.writes()).toBe(0);
-      } finally {
-        scriptedFinalAnswer.next = undefined;
-        scriptedFinalAnswer.after = undefined;
-      }
-    });
+    it.each([
+      "Ich sehe nur den Entwurf, zeig die Freigabekarte.",
+      "Ich sehe nur den gespeicherten Entwurf. Bitte erstelle jetzt die echte Freigabekarte.",
+      "Wo ist die Freigabekarte?",
+      "I only see the saved draft. Please give me the real approval card.",
+    ])(
+      "recognizes an approval-card follow-up from the preceding Jira tool turn: %s",
+      async (content) => {
+        const f = fixture();
+        await handleSendDesktopChat(sendContext(f, `prior-jira-${String(stream)}`), f.deps);
+        Object.assign(f.model, syntheticModel(f.calls, false, 0, false));
+        const callsBefore = f.calls.length;
+        const requestsBefore = f.requests();
+        scriptedFinalAnswer.next = "Die Freigabekarte ist bereit.";
+        try {
+          const ctx = context({
+            ...sendBody(f, `implicit-approval-${String(stream)}`),
+            content,
+          });
+          await (stream
+            ? handleSendDesktopChatStream(ctx, f.deps)
+            : handleSendDesktopChat(ctx, f.deps));
+          expect(f.calls).toHaveLength(callsBefore + 2);
+          expect(f.calls.at(-1)?.toolCatalog).toBeUndefined();
+          expect(f.requests()).toBe(requestsBefore);
+          expect(f.writes()).toBe(0);
+        } finally {
+          scriptedFinalAnswer.next = undefined;
+          scriptedFinalAnswer.after = undefined;
+        }
+      },
+    );
 
     it("corrects an explicit Jira approval follow-up with no tool call in this turn", async () => {
       vi.mocked(recordChatToolTurnCorrected).mockClear();

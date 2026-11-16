@@ -1649,7 +1649,9 @@ The same truthfulness correction covers a claim that a Jira approval card is rea
 metadata reads or draft staging (#4401, 2026-11-16). A pending, unexpired Jira approval bound to its
 own invocation is the evidence; staging is preparation alone. A turn with the existing Jira Pod
 binding is checked even if it called no tool when its request names Jira or follows the preceding
-Jira turn's draft with a request to show its card. The Pod binding alone is not a topic signal.
+Jira turn with a request about its approval or card. The wording need not name the saved draft or
+use a fixed verb; an explicitly different Git-hosting context remains separate.
+The Pod binding alone is not a topic signal.
 The check reuses the UI's bounded history limit and caches that history within the turn.
 An earlier visible card exempts the claim only while
 the existing approval registry still holds its matching pending invocation/action and current

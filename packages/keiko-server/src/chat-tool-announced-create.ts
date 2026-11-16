@@ -320,24 +320,26 @@ export function correctionRoundOffersTools(kinds: readonly string[]): boolean {
 }
 
 const APPROVAL_CLAIMS = [
-  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+(?:is ready|is prepared|has been prepared)\b/giu,
-  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+ist (?:(?:erneut|jetzt|bereits|schon) )?(?:bereit|vorbereitet)\b/giu,
-  /\b(?:freigabekarte|freigabeanfrage|freigabe)\s+steht bereit\b/giu,
-  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+wurde vorbereitet\b/giu,
+  /\bapproval (?:card|request)\s+is (?:(?:now|already) )?(?:ready|prepared)\b/giu,
+  /\bapproval (?:card|request)\s+has (?:(?:now|already) )?been prepared\b/giu,
+  /\b(?:freigabekarte|freigabeanfrage|freigabe)\s+ist (?:(?:erneut|jetzt|bereits|schon) )?(?:für dich )?(?:bereit|vorbereitet)\b/giu,
+  /\b(?:freigabekarte|freigabeanfrage|freigabe)\s+(?:steht|liegt) (?:(?:erneut|jetzt|bereits|schon) )?bereit\b/giu,
+  /\b(?:freigabekarte|freigabeanfrage|freigabe)\s+wurde (?:(?:erneut|jetzt|bereits|schon) )?vorbereitet\b/giu,
   /\bi(?: have|'ve)? prepared\s+(?:(?:a|an|the)\s+)?approval (?:card|request)(?=$|[,.!?])/giu,
   /\bi(?: have|'ve)? prepared\s+(?:(?:a|an|the)\s+)?approval (?:card|request)\s+(?:for|and|so|which|that)\b/giu,
-  /\bich habe\s+(?:(?:die|eine)\s+)?(?:freigabekarte|freigabeanfrage)\s+(?:(?:jetzt|bereits|schon)\s+)?(?:vorbereitet|erstellt)\b/giu,
+  /\bich habe\s+(?:(?:die|eine)\s+)?(?:freigabekarte|freigabeanfrage|freigabe)\s+(?:(?:jetzt|bereits|schon)\s+)?(?:vorbereitet|erstellt)\b/giu,
   /\bplease approve\b[^.!?\n]{0,60}\bin the card\b/giu,
   /\bbitte (?:bestätige|bestätigen|genehmige|genehmigen)\b[^.!?\n]{0,60}\b(?:in der karte|(?:die|der) freigabekarte)\b/giu,
   /\bbitte (?:die )?freigabe in der karte (?:erteilen|bestätigen|genehmigen)\b/giu,
-  /\bdu kannst\b[^.!?,;\n]{0,60}\bjetzt in der freigabekarte genehmigen\b/giu,
+  /\bdu kannst\b[^.!?,;\n]{0,60}\b(?:jetzt |bereits |schon )?in der (?:freigabe)?karte (?:genehmigen|freigeben)\b/giu,
 ] as const;
 const APPROVAL_PREFIX_CONTEXT =
-  /\b(?:not|no|kein\w*|nicht|wenn|falls|once|when|if|will|werde|zuvor|earlier|previous|abgelehnt|declined)\b/iu;
+  /\b(?:not|no|kein\w*|nicht|will|werde|zuvor|earlier|previous|abgelehnt|declined)\b/iu;
+const APPROVAL_CONDITIONAL_CONTEXT = /\b(?:if|when|once|falls|wenn|sobald|as soon as)\b/iu;
 const APPROVAL_LEADING_CONDITION =
-  /^\s*(?:if|when|once|falls|wenn)\b[^,;.!?\n]{0,160},\s*(?:the |die )?$/iu;
+  /^\s*(?:if|when|once|falls|wenn|sobald|as soon as)\b[^,;.!?\n]{0,160},\s*(?:the |die )?$/iu;
 const APPROVAL_DEFERRED_SUFFIX =
-  /^,?\s+(?:(?:but|aber)\s+)?(?:(?:only|nur)\s+)?(?:if|when|once|falls|wenn)\b/iu;
+  /^,?\s+(?:(?:but|aber)\s+)?(?:(?:only|nur)\s+)?(?:if|when|once|falls|wenn|sobald|as soon as)\b/iu;
 const APPROVAL_DECLINED_SUFFIX = /^\s+(?:and|und)\s+(?:was )?(?:declined|abgelehnt)\b/iu;
 const APPROVAL_QUOTES: Readonly<Record<string, string>> = {
   '"': '"',
@@ -389,6 +391,7 @@ function assertsApproval(sentence: string): boolean {
       const clause = prefix.split(/[,;]|\b(?:and|but|und|aber)\b/iu).at(-1) ?? "";
       return (
         !APPROVAL_PREFIX_CONTEXT.test(clause + match[0]) &&
+        !APPROVAL_CONDITIONAL_CONTEXT.test(clause + match[0]) &&
         !APPROVAL_LEADING_CONDITION.test(prefix) &&
         !APPROVAL_DEFERRED_SUFFIX.test(sentence.slice(end)) &&
         !APPROVAL_DECLINED_SUFFIX.test(sentence.slice(end))

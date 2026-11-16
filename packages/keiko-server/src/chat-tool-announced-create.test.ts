@@ -228,6 +228,14 @@ describe("unsupportedApprovalClaimCount (#4401)", () => {
     "No Jira issues were created and the approval card is ready.",
     "Es wurden keine Jira-Aufgaben erstellt und die Freigabekarte ist bereit.",
     "Die Freigabekarte steht bereit.",
+    "The approval card is now ready.",
+    "The approval request is already prepared.",
+    "Die Freigabekarte steht jetzt bereit.",
+    "Die Freigabekarte steht bereits bereit.",
+    "Die Freigabekarte liegt bereit.",
+    "Die Freigabe ist jetzt für dich bereit.",
+    "Ich habe die Freigabe vorbereitet.",
+    "Du kannst die Aufgaben jetzt in der Karte freigeben.",
     "Du kannst die drei Aufgaben jetzt in der Freigabekarte genehmigen.",
     "The approval card is ready. Please confirm the card.",
     "Die **Freigabekarte** wurde vorbereitet.",
@@ -260,6 +268,10 @@ describe("unsupportedApprovalClaimCount (#4401)", () => {
     "If the approval card is ready, approve it when convenient.",
     "Wenn die Freigabekarte bereit ist, kannst du sie genehmigen.",
     "Die Freigabekarte ist bereit, falls die Anfrage gelingt.",
+    "Die Freigabekarte ist bereit, sobald du den Entwurf bestätigst.",
+    "The approval card is ready as soon as you confirm the draft.",
+    "Sobald die Freigabekarte bereit ist, kannst du sie prüfen.",
+    "As soon as the request succeeds, the approval card is ready.",
     "The approval card is ready and was declined.",
     'The guide says: "The approval card is ready and will create three tasks."',
     "Die Anleitung sagt: „Die Freigabekarte steht bereit.“",
@@ -301,6 +313,7 @@ describe("unsupportedApprovalClaimCount (#4401)", () => {
       runs: 64,
       generate: (random) => ({
         english: random.chance(0.5),
+        adverb: random.pick(["", "now", "already"] as const),
         suffix: random.pick([0, 1, 2] as const),
         quote: random.pick([
           ['"', '"'],
@@ -308,8 +321,12 @@ describe("unsupportedApprovalClaimCount (#4401)", () => {
           ["`", "`"],
         ] as const),
       }),
-      property: ({ english, suffix, quote }) => {
-        const assertion = english ? "The approval card is ready" : "Die Freigabekarte ist bereit";
+      property: ({ english, adverb, suffix, quote }) => {
+        const modifier = english ? adverb : { "": "", now: "jetzt", already: "bereits" }[adverb];
+        const slot = modifier === "" ? "" : `${modifier} `;
+        const assertion = english
+          ? `The approval card is ${slot}ready`
+          : `Die Freigabekarte ist ${slot}bereit`;
         const tails = english
           ? ([
               ", approve it when everything is correct.",

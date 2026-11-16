@@ -24,10 +24,54 @@ import {
   ATLASSIAN_ACTION_APPROVAL_TTL_MS,
 } from "./actionApprovals.js";
 import { projectChatWriteApproval, type ChatWriteApprovalEntry } from "./chatWriteApprovalState.js";
-import { hasPendingJiraApproval } from "../chat-tool-approvals.js";
-import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { hasJiraApprovalClaimContext, hasPendingJiraApproval } from "../chat-tool-approvals.js";
+import type { ChatMessage, ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 const NOW = 1700000000000;
+
+describe("ordinary Jira approval follow-up context", () => {
+  const previous: ChatMessage = {
+    id: "previous-user",
+    chatId: "jira-chat",
+    role: "user",
+    content: "Lege in Jira drei Aufgaben für das Projekt an.",
+    timestamp: NOW,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  };
+
+  it.each([
+    "Ich sehe nur den gespeicherten Entwurf. Bitte erstelle jetzt die echte Freigabekarte.",
+    "Ich sehe nur den gespeicherten Entwurf, keine Freigabekarte. Wo ist sie?",
+    "I only see the saved draft. Please give me the real approval card.",
+    "Zeig mir die Freigabekarte.",
+    "Wo ist die Freigabekarte?",
+    "Bitte fordere die Freigabe an.",
+    "Please request approval.",
+    "Wo sind die Freigabekarten?",
+    "Where are the approvals?",
+    "Zeig mir die Freigabekarte für den Entwurf.",
+    "Show me the approval card for the draft.",
+  ])("recognizes the card request after Jira work: %s", (request) => {
+    expect(hasJiraApprovalClaimContext(request, previous)).toBe(true);
+    expect(hasJiraApprovalClaimContext(request, undefined)).toBe(false);
+    expect(
+      hasJiraApprovalClaimContext(request, { ...previous, content: "Summarize the notes." }),
+    ).toBe(false);
+  });
+
+  it.each([
+    "Explain how the GitHub approval card looks once it is ready.",
+    "Zeig mir die Freigabekarte für den GitHub-Entwurf.",
+    "Summarize the meeting notes.",
+  ])("keeps an unrelated topic outside the Jira follow-up: %s", (request) => {
+    expect(hasJiraApprovalClaimContext(request, previous)).toBe(false);
+  });
+});
+
 type JiraWriteFixture = ChatWriteApprovalEntry & {
   readonly subject: JiraChatToolAuthoritySubject;
   readonly approval: JiraChatToolWriteApprovalView;

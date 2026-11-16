@@ -363,10 +363,10 @@ const REPORT_DOWNLOAD_ACTION = /\b(?:download\w*|export\w*|herunterladen|herunte
 const REPORT_DIRECT_DOWNLOAD_NEGATION =
   /\b(?:not|never|don['’]t|nicht|keinesfalls)(?:\s+(?:to|please|bitte|als|as|in|csv|markdown)){0,3}\s*$/iu;
 const REPORT_DOWNLOAD_PREFIX_LIMIT = 64;
-const REPORT_SEPARATED_DOWNLOAD = /\blade[nt]?\b[^.!?\n]{0,240}\bherunter\b/iu;
+const REPORT_SEPARATED_DOWNLOAD = /\blad(?:e[nt]?)?\b[^.!?\n]{0,240}\bherunter\b/iu;
 const REPORT_DOWNLOAD_FORMAT = /\b(?:csv|markdown)\b/iu;
-const REPORT_EXAMPLE_REQUEST =
-  /\b(?:example|beispiel|sample|how (?:can|do|to)|wie (?:kann|geht|lade)|no download|kein(?:en)? download)\b/iu;
+const REPORT_EXAMPLE_REQUEST = /\b(?:example|beispiel|sample|no download|kein(?:en)? download)\b/iu;
+const REPORT_HOWTO_REQUEST = /\b(?:how (?:can|do|to)|wie (?:kann|geht|lad(?:e[nt]?)?))\b/iu;
 // Indentation never consumes a line break: multiline retries must not rescan whole blank runs.
 const EXPORT_CODE_BLOCK = /^[^\S\r\n\u2028\u2029]*```(?:csv|markdown|md)\b/imu;
 const REPORT_ID = new RegExp(JIRA_REPORT_ID_PATTERN, "u");
@@ -425,6 +425,7 @@ export function reportDownloadMissing(
     requestsDownload(currentRequest) &&
     REPORT_DOWNLOAD_FORMAT.test(currentRequest) &&
     !REPORT_EXAMPLE_REQUEST.test(currentRequest) &&
+    !REPORT_HOWTO_REQUEST.test(currentRequest) &&
     EXPORT_CODE_BLOCK.test(answer) &&
     !explainsDownloadLimitation(answer) &&
     !exchanges.some(completedReportExport)

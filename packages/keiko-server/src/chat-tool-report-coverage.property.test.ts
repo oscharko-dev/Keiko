@@ -25,19 +25,24 @@ describe("Jira report download fence boundaries", () => {
           "Jira-Bericht",
         ]),
         format: random.pick(["CSV", "Markdown", "Markdown und CSV"]),
+        imperative: random.pick(["Lad", "Lade", "Ladet"]),
         action: random.pick(["separated", "export", "plural"]),
       }),
-      property: ({ report, format, action }) => {
+      property: ({ report, format, imperative, action }) => {
         const request =
           action === "separated"
-            ? `Lade den ${report} für SYN-1 als ${format} herunter.`
+            ? `${imperative} den ${report} für SYN-1 als ${format} herunter.`
             : action === "export"
               ? `Exportiere den ${report} für SYN-1 als ${format}.`
               : `Give me downloadable reports for SYN-1 as ${format}.`;
         expect(reportDownloadMissing([], request, FENCE)).toBe(true);
         expect(reportDownloadMissing([], `Example: ${request}`, FENCE)).toBe(false);
         expect(
-          reportDownloadMissing([], `Lade den ${report} nicht als ${format} herunter.`, FENCE),
+          reportDownloadMissing(
+            [],
+            `${imperative} den ${report} nicht als ${format} herunter.`,
+            FENCE,
+          ),
         ).toBe(false);
         expect(
           reportDownloadMissing([], request, "The report export is unavailable.\n" + FENCE),

@@ -36,6 +36,7 @@ describe("reportDownloadMissing (#4402)", () => {
 
   it.each([
     "Lade den Bericht für diese drei Keys als Markdown und CSV herunter.",
+    "Lad den Bericht für diese drei Keys als Markdown und CSV herunter.",
     "Erstelle einen Statusbericht für diese drei Keys und stelle ihn als Markdown und CSV zum Download bereit.",
     "Give me downloadable reports for these keys as CSV.",
     "Bitte den Abschlussbericht als CSV exportieren.",
@@ -54,6 +55,8 @@ describe("reportDownloadMissing (#4402)", () => {
     "Fasse die Jira-Vorgänge zusammen.",
     "Wie lade ich den Statusbericht als CSV herunter?",
     "Lade den Statusbericht nicht als CSV herunter.",
+    "Lad den Statusbericht nicht als CSV herunter.",
+    "Wie lad ich den Statusbericht als CSV herunter?",
     "Bitte den Abschlussbericht als CSV nicht exportieren.",
     "Erstelle den Bericht in Markdown, aber bitte nicht herunterladen.",
     "Do not export the Jira report as CSV.",
