@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { expect, it } from "vitest";
 
 // Provisioning and the MSVC bootstrap load this source before npm install/build. A bundled or
