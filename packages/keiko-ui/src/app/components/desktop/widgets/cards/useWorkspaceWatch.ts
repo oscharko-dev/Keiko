@@ -93,7 +93,14 @@ export function useWorkspaceWatch(
       stateRef.current =
         parsed.event !== undefined && parsed.event.sequence <= current.sequence
           ? current
-          : parsed.state;
+          : {
+              ...parsed.state,
+              // An incremental event cannot fill an earlier gap. Only a fresh snapshot or
+              // the reader's current acknowledgement proves that recovery completed.
+              snapshotRequired:
+                parsed.state.snapshotRequired ||
+                (parsed.event !== undefined && current.snapshotRequired),
+            };
       setState(stateRef.current);
       if (parsed.event !== undefined) onEventRef.current(parsed.event);
     });

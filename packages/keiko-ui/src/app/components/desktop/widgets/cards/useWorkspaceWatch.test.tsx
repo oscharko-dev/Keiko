@@ -210,6 +210,47 @@ it("does not acknowledge a newer sequence with a stale snapshot callback", () =>
   expect(result.current.snapshotRequired).toBe(false);
 });
 
+it.each(["acknowledgement", "fresh snapshot"])(
+  "keeps a snapshot gap through ordinary changes until %s",
+  (recovery) => {
+    const onEvent = vi.fn();
+    const { result } = renderHook(() => useWorkspaceWatch("/repo", onEvent));
+    act(() =>
+      FakeEventSource.instances[0]?.emit(
+        "editor-watch:snapshot-required",
+        watchSnapshot("healthy"),
+      ),
+    );
+    const staleAcknowledge = result.current.acknowledgeSnapshot;
+    act(() =>
+      FakeEventSource.instances[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 10,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        metadataHash: "0123456789abcdef",
+      }),
+    );
+    expect(result.current).toMatchObject({ sequence: 10, snapshotRequired: true });
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ sequence: 10, kind: "changed" }),
+    );
+    act(() => expect(staleAcknowledge()).toBe(false));
+    expect(result.current.snapshotRequired).toBe(true);
+    if (recovery === "acknowledgement") {
+      act(() => expect(result.current.acknowledgeSnapshot()).toBe(true));
+    } else {
+      act(() =>
+        FakeEventSource.instances[0]?.emit("editor-watch:snapshot", {
+          ...watchSnapshot("healthy"),
+          sequence: 10,
+        }),
+      );
+    }
+    expect(result.current).toMatchObject({ sequence: 10, snapshotRequired: false });
+  },
+);
+
 it("does not acknowledge a replacement root even when its sequence matches", () => {
   const { result, rerender } = renderHook(({ root }) => useWorkspaceWatch(root, vi.fn()), {
     initialProps: { root: "/old" },

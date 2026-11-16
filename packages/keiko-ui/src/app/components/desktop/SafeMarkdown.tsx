@@ -970,10 +970,7 @@ function parsedRepositoryText(
   const cached = textReferences.get(node);
   if (cached?.knownPaths === knownPaths) return cached;
   const text = sanitizeRepositoryEvidenceText(node.text ?? "", knownPaths);
-  const parts =
-    knownPaths.length === 0
-      ? repositoryReferenceTextParts(text)
-      : repositoryReferenceTextParts(text, knownPaths);
+  const parts = repositoryReferenceTextParts(text, knownPaths);
   const parsed = { text, parts, knownPaths };
   textReferences.set(node, parsed);
   return parsed;

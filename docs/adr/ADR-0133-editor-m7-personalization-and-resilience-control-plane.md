@@ -104,8 +104,9 @@ not raw `.git` internals.
 
 The manual Editor acknowledges a missing watch snapshot only after an uncached file read succeeds
 for the same root and exact snapshot (#4403). A failed read or a replacement gap keeps the recovery
-notice, even if a restarted watch session reuses its sequence number;
-dirty-buffer reload still requires the existing discard decision. Refreshing content does not
+notice, even if a restarted watch session reuses its sequence number. A gap stays visible through
+ordinary incremental events. The current acknowledgement or a fresh full watch snapshot clears it.
+Reloading a dirty buffer still requires the existing discard decision. Refreshing content does not
 reconnect a healthy watch stream, and snapshot acknowledgement never clears degraded watcher health.
 The existing Activity Log stage lifecycle records this recovery with closed outcomes only.
 

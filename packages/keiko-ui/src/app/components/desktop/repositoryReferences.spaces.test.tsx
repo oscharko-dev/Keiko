@@ -36,6 +36,125 @@ function evidenceFor(path: string): Parameters<typeof SafeMarkdown>[0]["reposito
 }
 
 describe("complete prose source filenames (#4406)", () => {
+  it.each([
+    ["The entry point — src/index.ts — wires the server.", "src/index.ts"],
+    ["Geändert – src/index.ts:12", "src/index.ts"],
+    ["Fixed the parser - src/parser.ts", "src/parser.ts"],
+  ])("keeps a structured path after ordinary prose punctuation: %s", (source, path) => {
+    for (const knownPaths of [[], [path]]) {
+      expect(
+        repositoryReferenceTextParts(source, knownPaths).flatMap((part) =>
+          part.reference === undefined ? [] : [part.reference.path],
+        ),
+      ).toEqual([path]);
+    }
+    const open = vi.fn(() => ({ ok: true as const, windowId: "editor" }));
+    render(<SafeMarkdown source={source} repositoryRoots={roots} openRepositoryReference={open} />);
+    fireEvent.click(screen.getByRole("button"));
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ root: scope.root, path }));
+  });
+
+  it.each([
+    [String.raw`docs\Release Notes.md`, "docs/Release Notes.md"],
+    ["docs/Release Notes.md", String.raw`docs\Release Notes.md`],
+    ["docs/Release Notes.md", "./docs/Release Notes.md"],
+    ["./docs/Release Notes.md", "docs/Release Notes.md"],
+    [String.raw`.\docs\Release Notes.md`, String.raw`.\docs\Release Notes.md`],
+  ])("opens the complete canonical spelling %s from evidence %s", (source, knownPath) => {
+    const path = "docs/Release Notes.md";
+    expect(repositoryReferenceTextParts(source, [knownPath])).toEqual([
+      { kind: "reference", reference: { label: source, path } },
+    ]);
+    const open = vi.fn(() => ({ ok: true as const, windowId: "editor" }));
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    render(
+      <SafeMarkdown
+        source={`See ${source} for details.`}
+        repositoryRoots={roots}
+        repositoryEvidence={evidenceFor(knownPath)}
+        openRepositoryReference={open}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(open).toHaveBeenCalledExactlyOnceWith({ root: scope.root, path });
+    expect(diagnostic).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        citationActivation: { reason: "matched", outcome: "opened", rootCount: 1, matchCount: 1 },
+      }),
+    );
+  });
+
+  it.each([
+    "See DOCS/Release Notes.md for details.",
+    "See docs/release Notes.md for details.",
+    "See docs/Release notes.md for details.",
+  ])("never substitutes a guessed basename for a differently cased known path: %s", (source) => {
+    const knownPaths = ["docs/Release Notes.md"];
+    const sanitized = sanitizeRepositoryEvidenceText(source, knownPaths);
+    expect(
+      repositoryReferenceTextParts(sanitized, knownPaths).filter(
+        (part) => part.kind === "reference",
+      ),
+    ).toEqual([]);
+    render(
+      <SafeMarkdown
+        source={source}
+        repositoryRoots={roots}
+        repositoryEvidence={evidenceFor("docs/Release Notes.md")}
+        openRepositoryReference={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(document.body).toHaveTextContent(source);
+  });
+
+  it.each(["Notes.md", "notes.md", "Release Notes.md", String.raw`private\Notes.md`])(
+    "keeps a proper fragment of a known spaced path inert: %s",
+    (fragment) => {
+      const source = `See ${fragment} for details.`;
+      const knownPaths = ["./docs/Release Notes.md"];
+      expect(
+        repositoryReferenceTextParts(source, knownPaths).filter(
+          (part) => part.kind === "reference",
+        ),
+      ).toEqual([]);
+      render(
+        <SafeMarkdown
+          source={source}
+          repositoryRoots={roots}
+          repositoryEvidence={evidenceFor(knownPaths[0] ?? "")}
+          openRepositoryReference={vi.fn()}
+        />,
+      );
+      expect(screen.queryByRole("button")).toBeNull();
+    },
+  );
+
+  it("keeps exact known simple paths and explicit whole expressions selectable", () => {
+    const knownPaths = ["docs/Release Notes.md", "Notes.md"];
+    expect(repositoryReferenceTextParts("Fixed the parser - Notes.md", knownPaths)).toContainEqual({
+      kind: "reference",
+      reference: { label: "Notes.md", path: "Notes.md" },
+    });
+    expect(repositoryReferenceTextParts("See [Notes.md]", [knownPaths[0] ?? ""])).toContainEqual({
+      kind: "reference",
+      reference: { label: "Notes.md", path: "Notes.md" },
+    });
+    expect(repositoryReferenceTextParts("See @Notes.md", [knownPaths[0] ?? ""])).toContainEqual({
+      kind: "reference",
+      reference: { label: "@Notes.md", path: "Notes.md" },
+    });
+  });
+
+  it("prefers the exact known spelling when differently cased evidence also exists", () => {
+    const path = "docs/Release Notes.md";
+    expect(repositoryReferenceTextParts(path, ["docs/release Notes.md", path])).toEqual([
+      { kind: "reference", reference: { label: path, path } },
+    ]);
+  });
+
   it.each(["Pruefdaten - Gruesse.txt", "Prüfdaten  Grüße.txt", "docs/Release Notes.md"])(
     "opens the entire known source %s and records the existing attributed activation",
     (path) => {
@@ -62,10 +181,18 @@ describe("complete prose source filenames (#4406)", () => {
     },
   );
 
-  it("keeps an unresolved dashed filename inert rather than inventing its suffix", () => {
-    expect(repositoryReferenceTextParts("[1] Pruefdaten - Gruesse.txt")).toEqual([
-      { kind: "text", text: "[1] Pruefdaten - Gruesse.txt" },
-    ]);
+  it("keeps legacy prose boundaries when no complete path is known", () => {
+    for (const source of ["Fixed the parser - parser.ts", "See Release Notes.md for details."]) {
+      const path = source.includes("parser") ? "parser.ts" : "Notes.md";
+      expect(repositoryReferenceTextParts(source)).toContainEqual({
+        kind: "reference",
+        reference: { label: path, path },
+      });
+    }
+    expect(repositoryReferenceTextParts("See [Release Notes.md] for details.")).toContainEqual({
+      kind: "reference",
+      reference: { label: "Release Notes.md", path: "Release Notes.md" },
+    });
   });
 
   it("keeps inline commands unchanged when evidence contains a spaced filename", () => {
@@ -86,7 +213,7 @@ describe("complete prose source filenames (#4406)", () => {
     const source = "[1] Pruefdaten - Gruesse.txt";
     const props = { source, repositoryRoots: roots, openRepositoryReference: open };
     const view = render(<SafeMarkdown {...props} />);
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByRole("button", { name: /Open Gruesse.txt in editor/ })).toBeInTheDocument();
     view.rerender(
       <SafeMarkdown {...props} repositoryEvidence={evidenceFor("Pruefdaten - Gruesse.txt")} />,
     );
