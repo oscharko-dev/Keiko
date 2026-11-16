@@ -143,7 +143,7 @@ plain copies of `process.env` (#4408). Duplicate casing variants use Node's lexi
 key, so executable lookup and the child environment select the same value; no ambient PATH fallback
 is added. POSIX names remain case-sensitive. Pinned values replace inherited aliases. The allowlist
 is unchanged, and credential scrubbing includes every casing variant, including shadowed values.
-The same security-owned lookup supplies the trusted Windows system-directory decision and the
+The same contracts-owned lookup (re-exported by security) supplies the trusted Windows system-directory decision and the
 termination reservation's captured root. An explicitly malformed alias therefore fails the existing
 shape and OS-identity checks instead of falling back to another Windows directory.
 The managed-worktree adapter reuses this boundary and preserves command failures as causes for the

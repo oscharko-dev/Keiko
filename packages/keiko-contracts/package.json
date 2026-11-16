@@ -223,6 +223,10 @@
       "types": "./dist/knowledge-turn-coverage.d.ts",
       "import": "./dist/knowledge-turn-coverage.js"
     },
+    "./runtime/process-environment": {
+      "types": "./dist/process-environment.d.ts",
+      "import": "./dist/process-environment.js"
+    },
     "./runtime/comparators": {
       "types": "./dist/comparators.d.ts",
       "import": "./dist/comparators.js"
