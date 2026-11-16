@@ -172,6 +172,19 @@ The Windows 11 ARM64 QA VM checked out that exact commit with x64 Node.js 26.13.
 11.20.0. Dependency, USearch and ripgrep provisioning succeeded. The normal Dev launch
 rebuilt the native runtime and started the loopback application.
 
+Record the fixture contents, expected file diff, terminal state, remote SHAs, selected
+model and citation target before each applicable journey. Record blocked or partial
+results with the observed reason.
+
+| Surface          | Expected result / native proof                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Jira Pod         | With a verified QA Pod, all three starters are selectable. Disconnecting disables them and verified reconnection enables them again. The saved template revision survives reopening and restart without a stale **Checking against Jira** label. The native Jira issue count is equal before and after the starter and denied-change journeys. The separate approved QA write produces exactly one intended issue or update with matching fields and receipt. |
+| Coding Workbench | An admitted task reaches `succeeded` with exactly the declared fixture diff. The named terminal state and native `git diff` agree with Changes and History. A denied edit preserves the starting bytes. Verify runtime refusal by the exact visible message and Activity Log reason. Refused verification shows **Not run** with zero started test processes (#4404, #4068).                                                                                  |
+| Git              | Local `HEAD` and the upstream tracking ref start at H0, with the controlled remote at H2. Fetch leaves `HEAD` at H0 and advances upstream to H2. Pull advances both to H2 and the local files match H2. Record the actual SHAs before and after each action. The UI ahead/behind counts of 0/2 and 0/0 match `git rev-list --left-right --count HEAD...@{upstream}`.                                                                                          |
+| Chat             | One short response arrives on the explicitly selected model. The same Chat, model and exact saved unsent draft return after reload. The provider or gateway request count is equal before and after transcript restoration.                                                                                                                                                                                                                                   |
+| Knowledge Pod    | The index contains the two declared fixtures, one PDF and one text file, each with a positive chunk count and zero failed documents. The answer matches their known facts and cites the declared fixtures from the selected Pod.                                                                                                                                                                                                                              |
+| Citation         | PDF activation opens the declared file and page in the viewer, with the expected title and content. The related `client.citation.activated` event has `outcome: opened`. The text-file reference opens its complete filename and exact fixture contents in Editor.                                                                                                                                                                                            |
+
 ### Coding Workbench
 
 - Run a bounded task in a tiny Git worktree. Approve one local edit, deny another and
@@ -181,9 +194,10 @@ rebuilt the native runtime and started the loopback application.
   lands at the expected position in the editable prompt and waits for Send. Cancel a
   recording and exercise microphone permission refusal and transcription failure.
 - Exercise batch submission through the message queue with multiple distinct follow-ups.
-  Compare the Inbox order and each delivered turn. Pause the run at a controllable
-  boundary and check that it blocks new tool mutations. Reload the window and resume the
-  same run. Check for duplicate messages, tool actions or file edits.
+  Compare the Inbox order and each delivered turn. Cancel one queued message and send a
+  different one now. Pause the run at a controllable boundary and check that it blocks
+  new tool mutations. Reload the window and resume the same run. Check for duplicate
+  messages, tool actions or file edits.
 - Stop a separate run during streaming or while approval is pending. Reopen its history
   after restart and start the next bounded task. Check retained drafts and changes, the
   interrupted run's terminal state and the new task's workspace identity.
@@ -241,6 +255,9 @@ rebuilt the native runtime and started the loopback application.
 - Expand the answer evidence and open the PDF citation at the expected page. Compare the
   title, file and quoted content to the fixture. Verify that a full text filename opens
   the correct editor document and preserves the complete name.
+- Use a small multi-page PDF to verify the cited page, next and previous controls,
+  out-of-range page input, zoom and fit to width. Reopen a different citation into
+  the same viewer and check the selected page and focus.
 - Use duplicate basenames in distinct roots and verify the source choice reaches the
   selected root. Exercise an unavailable or removed source and verify the visible error
   and a successful return to the conversation.
