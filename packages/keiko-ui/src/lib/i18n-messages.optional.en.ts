@@ -2618,6 +2618,16 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The remembered connection was removed from this browser profile. The current session and server approval are unchanged.",
   "updates.notice.aria": "Keiko update notification",
   "updates.status.portableSetupRequired": "Portable setup required",
+  "updates.status.portableUpdateUnavailable": "In-app updates unavailable",
+  "updates.versionPortableUpdateUnavailable":
+    "Current {current}; this installation does not support in-app updates.",
+  "updates.portableUpdateUnavailable.body":
+    "This Windows package cannot update itself. You can keep using Keiko; repeating setup will not enable in-app updates.",
+  "updates.portableUpdateUnavailable.guidance":
+    "Keep using this version. Review the Windows instructions for a newer release before updating.",
+  "updates.portableUpdateUnavailable.releases": "View official releases",
+  "updates.check.portableUpdateUnavailable":
+    "Checked just now. This Windows package still cannot update itself; repeating setup will not enable in-app updates.",
   "updates.status.portableExternallyManaged": "Updates managed by your organization",
   "updates.notice.title": "Update available",
   "updates.notice.criticalTitle": "Critical update available",

@@ -579,6 +579,7 @@ export const CLIENT_UPDATE_NOTICE_KINDS = [
   "update-available",
   "critical-update-available",
   "portable-setup-required",
+  "portable-update-unavailable",
   "externally-managed",
   "check-unavailable",
   "action-required",

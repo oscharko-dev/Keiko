@@ -2769,6 +2769,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die gespeicherte Verbindung wurde aus diesem Browserprofil entfernt. Die aktuelle Sitzung und die Freigabe auf dem Server bleiben bestehen.",
   "updates.notice.aria": "Keiko-Update-Hinweis",
   "updates.status.portableSetupRequired": "Portable Setup erforderlich",
+  "updates.status.portableUpdateUnavailable": "Updates in der App nicht verfügbar",
+  "updates.versionPortableUpdateUnavailable":
+    "Aktuell {current}; diese Installation unterstützt keine Updates in der App.",
+  "updates.portableUpdateUnavailable.body":
+    "Dieses Windows-Paket kann sich nicht selbst aktualisieren. Du kannst Keiko weiter nutzen; eine erneute Einrichtung aktiviert keine Updates in der App.",
+  "updates.portableUpdateUnavailable.guidance":
+    "Nutze diese Version weiter. Lies vor einem Update die Windows-Anleitung der neueren Veröffentlichung.",
+  "updates.portableUpdateUnavailable.releases": "Offizielle Veröffentlichungen ansehen",
+  "updates.check.portableUpdateUnavailable":
+    "Gerade geprüft. Dieses Windows-Paket kann sich weiterhin nicht selbst aktualisieren; eine erneute Einrichtung aktiviert keine Updates in der App.",
   "updates.status.portableExternallyManaged": "Updates werden durch deine Organisation verwaltet",
   "updates.notice.title": "Update verfügbar",
   "updates.notice.criticalTitle": "Kritisches Update verfügbar",

@@ -794,6 +794,16 @@ only the strict six-field `windowsGeneration` binding from the artifact contract
 launcher digest, package version, target, stable managed eligibility, root identity and registration
 must agree with disk. Flat Windows schema 1 stays readable for launch/manual setup and cannot
 become one-click eligible through automatic migration. Mac schema 1 is unchanged.
+
+A matching historical Windows schema 1 managed receipt remains managed presentation metadata
+(#4400), not update authority or a new disk attestation. The detector forces `updateEligible=false`
+and reports the closed `portable-update-unavailable` reason. Startup and Updates explain that
+this package cannot update itself and point to the Windows release instructions; repeating the
+same setup is not a remedy for an unavailable capability. A missing receipt still takes the
+bootstrap setup path. Generation 2 receipt, signature, digest and ownership validation stays
+unchanged. The existing install-mode and startup-notice Activity Log operations carry the closed
+reason without receipt contents or installation paths.
+
 Keep the server parser/resolver internal and CLI authority parsing within its existing boundary.
 Shared frozen fixtures prevent boundary-local parser drift. KHT1 has one reviewed TypeScript
 authority in the internal security package, exposed only through a narrow workspace subpath to

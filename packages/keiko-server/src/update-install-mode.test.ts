@@ -415,33 +415,40 @@ describe("detectUpdateInstallMode", () => {
     },
   );
 
-  it("keeps historical flat Windows schema 1 registrations manual-only", () => {
-    const installRoot = "/Users/alice/Applications/Keiko";
-    const packageRoot = `${installRoot}/app`;
-    const detectorFs = fakeFiles({
-      [`${installRoot}/.portable/setup-manifest.json`]: portableManifest("windows-x64"),
-      [`${PORTABLE_STATE_DIR}/portable-install-state.json`]: managedRegistration({
-        platformTarget: "windows-x64",
-        updateEligible: true,
-      }),
-    });
-    const mode = detectUpdateInstallMode(
-      facts({
-        packageRoot,
-        packageManagerHint: undefined,
-        installScope: "local",
-        portableStateDir: PORTABLE_STATE_DIR,
-      }),
-      {},
-      detectorFs,
-    );
+  it.each([false, true])(
+    "keeps managed Windows schema 1 updates unavailable without recommending setup (#4400): %s",
+    (updateEligible) => {
+      const installRoot = "/Users/alice/Applications/Keiko";
+      const packageRoot = `${installRoot}/app`;
+      const detectorFs = fakeFiles({
+        [`${installRoot}/.portable/setup-manifest.json`]: portableManifest("windows-x64"),
+        [`${PORTABLE_STATE_DIR}/portable-install-state.json`]: managedRegistration({
+          platformTarget: "windows-x64",
+          updateEligible,
+        }),
+      });
+      const mode = detectUpdateInstallMode(
+        facts({
+          packageRoot,
+          packageManagerHint: undefined,
+          installScope: "local",
+          portableStateDir: PORTABLE_STATE_DIR,
+        }),
+        {},
+        detectorFs,
+      );
 
-    expect(mode).toMatchObject({
-      status: "unsupported",
-      reason: "portable-bootstrap",
-      portable: { target: "windows-x64", updateEligible: false },
-    });
-  });
+      expect(mode).toMatchObject({
+        status: "unsupported",
+        installKind: "portable-managed",
+        reason: "portable-update-unavailable",
+        recommendedAction: "manual-download",
+        portable: { status: "managed", target: "windows-x64", updateEligible: false },
+      });
+      expect(mode.manualInstructions).not.toMatch(/run.*setup/iu);
+      expect(mode.manualInstructions).toContain("release instructions");
+    },
+  );
 
   it.each([
     [

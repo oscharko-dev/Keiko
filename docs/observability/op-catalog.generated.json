@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7cf7f2bf72a0a4d283b8f2b823d7791a9ae246aefaadfe4f09116d51bfb9e2e6",
+    "catalogDigest": "d67cf91528993bc8fa61c9fbda21456412b51038895abafb9ce4e37ceed7b6b6",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8594,6 +8594,7 @@
               "update-available",
               "critical-update-available",
               "portable-setup-required",
+              "portable-update-unavailable",
               "externally-managed",
               "check-unavailable",
               "action-required",
@@ -49938,6 +49939,7 @@
               "package-manager-unsupported",
               "manifest-unavailable",
               "portable-bootstrap",
+              "portable-update-unavailable",
               "portable-setup-failed",
               "portable-it-managed",
               "portable-registration-invalid",
@@ -49965,7 +49967,7 @@
         "proofIds": ["update.install-mode.detected.body-free"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:277",
-        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:358"]
+        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:359"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -50177,8 +50179,8 @@
         "failureClasses": ["update-runtime"],
         "proofIds": ["update.registry.checked.failure"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:375",
-        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:444"]
+        "registrationSite": "packages/keiko-server/src/update-preflight-activity.ts:376",
+        "emitterSites": ["packages/keiko-server/src/update-preflight-activity.ts:445"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -124922,7 +124924,7 @@
     {
       "op": "update.registry.checked",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-preflight-activity.ts:378",
+      "site": "packages/keiko-server/src/update-preflight-activity.ts:379",
       "package": "keiko-server"
     },
     {
