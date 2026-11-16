@@ -57,7 +57,7 @@ import {
   pendingConversationReadiness,
 } from "./gateway-readiness.js";
 import {
-  currentConversationReadinessObservation,
+  currentConversationReadinessPresentation,
   currentGatewayConfig,
   currentGateway,
   currentGatewayConfigPresent,
@@ -85,8 +85,8 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
 // TRI-STATE on the wire (see currentConversationReadinessObservation): the observation store is
 // process-local, so a hard `false` for never-probed models told the UI after every restart that
 // nothing was usable until a manual probe plus reload (customer field incident, 0.3.11). Absent
-// means "unknown — the configuration-owned startup result or explicit Settings verification
-// determines readiness". Passive reads and conversation entry points never start another probe.
+// also covers a timed-out or overloaded check, so the existing explicit pick/first-use recovery
+// stays reachable. This projection never grants inference. Passive reads start no probe.
 export function handleModels(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -98,7 +98,7 @@ export function handleModels(
     config === undefined
       ? []
       : listSafeConfiguredCapabilities(config).map((model) => {
-          const conversationReady = currentConversationReadinessObservation(deps, model.id);
+          const conversationReady = currentConversationReadinessPresentation(deps, model.id);
           return {
             ...model,
             ...(conversationReady === undefined ? {} : { conversationReady }),

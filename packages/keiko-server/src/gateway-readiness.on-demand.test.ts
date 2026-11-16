@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
-  awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
   checkSelectedConversationModel,
   ensureOnDemandConversationReadiness,
@@ -55,13 +54,12 @@ function holderWith(
 }
 
 describe("ensureOnDemandConversationReadiness guards", () => {
-  it("does not probe a previously failed model when opening or sending a chat", async () => {
+  it("does not probe a previously failed model when sending in a chat", async () => {
     freezeNow();
     const { deps, fetchCalls } = probeableDeps(new Date(NOW - 86_400_000).toISOString(), {
       conversationReady: false,
     });
     await awaitInitializedConversationReadiness(deps, "chat-model");
-    await awaitAnyInitializedConversationReadyChatModel(deps, "chat-model");
     expect(fetchCalls()).toBe(0);
   });
 
@@ -69,7 +67,6 @@ describe("ensureOnDemandConversationReadiness guards", () => {
   it("does not start probes from conversation requests with unknown or malformed observations", async () => {
     const { deps, fetchCalls } = probeableDeps("invalid");
     await awaitInitializedConversationReadiness(deps, "chat-model");
-    await awaitAnyInitializedConversationReadyChatModel(deps, "chat-model");
     expect(fetchCalls()).toBe(0);
   });
   it("returns without probing when no gateway is configured", async () => {
@@ -368,7 +365,7 @@ describe("startup check without request-time recovery", () => {
       expect(readyRecords().at(-1)).toBe(false);
       expect(fetch).toHaveBeenCalledTimes(initialCalls);
       const recoveredCalls = fetch.mock.calls.length;
-      await awaitAnyInitializedConversationReadyChatModel(recovering, "chat-model");
+      await awaitInitializedConversationReadiness(recovering, "chat-model");
       expect(fetch).toHaveBeenCalledTimes(recoveredCalls);
     },
   );

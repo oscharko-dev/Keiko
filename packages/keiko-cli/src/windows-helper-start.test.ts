@@ -36,6 +36,14 @@ describe("the visible Windows helper start", () => {
     expect(visibleWindowsHelperSpawnOptions({}).cwd).not.toBe(process.cwd());
   });
 
+  it("selects the same copied Windows SystemRoot alias as the child (#4408)", () => {
+    const selected = String.raw`D:\Windows`;
+    expect(visibleWindowsHelperSpawnOptions({ systemroot: selected }).cwd).toBe(selected);
+    expect(
+      visibleWindowsHelperSpawnOptions({ SystemRoot: selected, SYSTEMROOT: undefined }).cwd,
+    ).toBe(tmpdir());
+  });
+
   it("hands the command, the arguments and exactly those options to the spawn", () => {
     const calls: [string, readonly string[], VisibleWindowsHelperSpawnOptions][] = [];
     const child = startVisibleWindowsHelper(

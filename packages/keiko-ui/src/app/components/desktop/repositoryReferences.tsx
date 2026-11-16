@@ -24,6 +24,7 @@ import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import { escapeRegExp } from "./chatRepositoryReference";
 
 import type { ChatConnectedScope, GroundedEvidenceCitation } from "@/lib/types";
 import {
@@ -254,8 +255,9 @@ function referenceLineRange(
 }
 const REFERENCE_LINE_RANGE = referenceLineRange(true);
 const FOLLOWING_REFERENCE_LINE_RANGE = new RegExp(`^${REFERENCE_LINE_RANGE}`, "u");
+const BRACKETED_REFERENCE_FRAGMENT = String.raw`\[[^\[\]]{1,4096}\]`;
 const REPOSITORY_REFERENCE_PATTERN = new RegExp(
-  String.raw`\[[^\[\]]{1,4096}\]|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?:${REFERENCE_LINE_RANGE})?`,
+  `${BRACKETED_REFERENCE_FRAGMENT}|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?:${REFERENCE_LINE_RANGE})?`,
   "gu",
 );
 // Exact/bracketed references have a known boundary, so their filenames may contain spaces or
@@ -340,13 +342,13 @@ const KNOWN_REPOSITORY_EXTENSIONS = new Set([
 function boundaryBefore(value: string, index: number): boolean {
   if (index <= 0) return true;
   const previous = value.slice(Math.max(0, index - 2), index);
-  return !/[\p{L}\p{N}\p{M}\p{Sc}_./:@+^~\x60-]$/u.test(previous);
+  return !/[\p{L}\p{N}\p{M}\p{Sc}_.\\/:@+^~\x60-]$/u.test(previous);
 }
 
 function boundaryAfter(value: string, index: number): boolean {
   if (index >= value.length) return true;
   const next = value.slice(index, index + 2);
-  return !/^[\p{L}\p{N}\p{M}\p{Sc}_/:+$^~\x60\u2010-\u2014\u2212-]/u.test(next);
+  return !/^[\p{L}\p{N}\p{M}\p{Sc}_\\/:@+$^~\x60\u2010-\u2014\u2212-]/u.test(next);
 }
 
 // Plain string scans (not regexes) for leading/trailing slash trimming: an unanchored-at-start
@@ -365,7 +367,12 @@ function trimLeadingSlashes(value: string): string {
 }
 
 export function normalizeReferencePath(path: string): string {
-  return trimTrailingSlashes(trimLeadingSlashes(path.replaceAll("\\", "/")));
+  return trimTrailingSlashes(trimLeadingSlashes(relativeReferenceSpelling(path)));
+}
+
+function relativeReferenceSpelling(path: string): string {
+  const normalized = path.replaceAll("\\", "/");
+  return normalized.startsWith("./") ? normalized.slice(2) : normalized;
 }
 
 function referenceIdentity(reference: RepositoryReference | null): string | null {
@@ -438,17 +445,20 @@ function sanitizeEvidenceProse(source: string): string {
   );
 }
 
-export function sanitizeRepositoryEvidenceText(source: string): string {
+export function sanitizeRepositoryEvidenceText(
+  source: string,
+  knownPaths: readonly string[] = [],
+): string {
   const parts: string[] = [];
   let cursor = 0;
   for (const range of markdownCodeRanges(source)) {
     parts.push(
-      sanitizeEvidenceProse(source.slice(cursor, range.start)),
+      sanitizeKnownEvidenceProse(source.slice(cursor, range.start), knownPaths),
       source.slice(range.start, range.end),
     );
     cursor = range.end;
   }
-  parts.push(sanitizeEvidenceProse(source.slice(cursor)));
+  parts.push(sanitizeKnownEvidenceProse(source.slice(cursor), knownPaths));
   return parts.join("");
 }
 
@@ -564,9 +574,11 @@ function bracketReferenceParts(contents: string): readonly RepositoryReferenceTe
 function referencePartsFromTextMatch(
   match: RegExpExecArray,
   source: string,
+  isKnownFragment: (path: string) => boolean,
 ): readonly RepositoryReferenceTextPart[] {
   const token = match[0] ?? "";
   if (token.startsWith("[")) return bracketReferenceParts(token.slice(1, -1));
+  if (!token.startsWith("@") && isKnownFragment(match[1] ?? "")) return [];
   const reference = referenceFromMatch(match, source);
   return reference === null ? [] : referenceParts([reference]);
 }
@@ -580,26 +592,174 @@ function referenceParts(references: readonly RepositoryReference[]): RepositoryR
   return parts;
 }
 
+interface KnownReferenceMatch {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+  readonly reference: RepositoryReference | null;
+}
+
+function knownReferenceBoundary(source: string, start: number, end: number): boolean {
+  return (
+    boundaryBefore(source, start) &&
+    boundaryAfter(source, end) &&
+    !/^\.[\p{L}\p{N}_]/u.test(source.slice(end, end + 3))
+  );
+}
+
+function knownReferenceMatch(
+  source: string,
+  path: string,
+  match: RegExpExecArray,
+): KnownReferenceMatch {
+  const start = source[match.index - 1] === "@" ? match.index - 1 : match.index;
+  const end = match.index + match[0].length;
+  const suffix = consumeRepositoryReferenceLineSuffix(path, source.slice(end, end + 160));
+  const finalEnd = end + (suffix?.length ?? 0);
+  const reference = suffix?.reference ?? parseExactRepositoryReference(path, true);
+  const boundary = knownReferenceBoundary(source, start, finalEnd);
+  const text = source.slice(start, finalEnd);
+  return {
+    start,
+    end: finalEnd,
+    text,
+    reference:
+      reference?.path !== path || relativeReferenceSpelling(match[0]) !== path || !boundary
+        ? null
+        : { ...reference, label: text },
+  };
+}
+
+/** Explicit brackets own the whole expression, including source qualifiers and refusal guards. */
+function outsideBracketReference(source: string): (match: KnownReferenceMatch) => boolean {
+  const brackets = [...source.matchAll(new RegExp(BRACKETED_REFERENCE_FRAGMENT, "gu"))];
+  let index = 0;
+  return (match): boolean => {
+    let bracket = brackets[index];
+    while (bracket !== undefined && bracket.index + bracket[0].length <= match.start) {
+      index += 1;
+      bracket = brackets[index];
+    }
+    return bracket === undefined || bracket.index > match.start;
+  };
+}
+
+function knownReferenceMatches(
+  source: string,
+  knownPaths: readonly string[],
+): readonly KnownReferenceMatch[] {
+  const matches: KnownReferenceMatch[] = [];
+  // Separators have equal UTF-16 length, so matches retain their original source offsets.
+  const normalizedSource = source.replaceAll("\\", "/");
+  for (const rawPath of new Set(knownPaths)) {
+    if (!/\s/u.test(rawPath) || rawPath.length > 4096) continue;
+    const path = relativeReferenceSpelling(rawPath);
+    // Case-insensitive matches reserve the whole expression; only the exact case can link.
+    // This prevents an untrusted spelling from falling through to a shorter basename.
+    const pattern = new RegExp(String.raw`(?:\./)?${escapeRegExp(path)}`, "giu");
+    for (const match of normalizedSource.matchAll(pattern)) {
+      matches.push(knownReferenceMatch(source, path, match));
+    }
+  }
+  matches.sort(
+    (left, right) =>
+      left.start - right.start ||
+      right.end - left.end ||
+      Number(left.reference === null) - Number(right.reference === null),
+  );
+  const outsideBrackets = outsideBracketReference(source);
+  let end = 0;
+  return matches.filter((match) => {
+    if (match.start < end || !outsideBrackets(match)) return false;
+    end = match.end;
+    return true;
+  });
+}
+
+function sanitizeKnownEvidenceProse(source: string, knownPaths: readonly string[]): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const match of knownReferenceMatches(source, knownPaths)) {
+    parts.push(sanitizeEvidenceProse(source.slice(cursor, match.start)), match.text);
+    cursor = match.end;
+  }
+  parts.push(sanitizeEvidenceProse(source.slice(cursor)));
+  return parts.join("");
+}
+
 export function repositoryReferenceTextParts(
   source: string,
+  knownPaths: readonly string[] = [],
 ): readonly RepositoryReferenceTextPart[] {
+  const matches = knownReferenceMatches(source, knownPaths);
+  if (matches.length === 0) return unboundRepositoryReferenceTextParts(source, knownPaths);
   const parts: RepositoryReferenceTextPart[] = [];
-  let lastIndex = 0;
-  const pattern = new RegExp(REPOSITORY_REFERENCE_PATTERN);
-  for (;;) {
-    const match = pattern.exec(source);
-    if (match === null) break;
-    const references = referencePartsFromTextMatch(match, source);
-    if (references.length === 0) continue;
-    if (match.index > lastIndex) {
-      parts.push({ kind: "text", text: source.slice(lastIndex, match.index) });
-    }
-    parts.push(...references);
-    lastIndex = match.index + (match[0]?.length ?? 0);
+  const unboundParts = unboundReferenceTextRangeReader(source, knownPaths);
+  let cursor = 0;
+  for (const match of matches) {
+    if (match.start > cursor) parts.push(...unboundParts(cursor, match.start));
+    parts.push(
+      match.reference === null
+        ? { kind: "text", text: match.text }
+        : { kind: "reference", reference: match.reference },
+    );
+    cursor = match.end;
   }
-  if (lastIndex === 0) return [{ kind: "text", text: source }];
-  if (lastIndex < source.length) parts.push({ kind: "text", text: source.slice(lastIndex) });
+  if (cursor < source.length) parts.push(...unboundParts(cursor, source.length));
   return parts;
+}
+
+function unboundRepositoryReferenceTextParts(
+  source: string,
+  knownPaths: readonly string[],
+): readonly RepositoryReferenceTextPart[] {
+  return unboundReferenceTextRangeReader(source, knownPaths)(0, source.length);
+}
+
+function knownReferenceFragmentGuard(knownPaths: readonly string[]): (path: string) => boolean {
+  const exact = new Set(
+    knownPaths.filter((path) => path.length <= 4096).map(relativeReferenceSpelling),
+  );
+  const fragments = new Set<string>();
+  for (const path of exact) {
+    if (!/\s/u.test(path)) continue;
+    // Reserve only fragments the legacy scanner could invent from a complete known name.
+    // Explicit expressions and independently known simple paths retain their own identity.
+    for (const match of path.matchAll(new RegExp(REPOSITORY_REFERENCE_PATTERN))) {
+      if (match[1] !== undefined) fragments.add(match[1].toLowerCase());
+    }
+  }
+  return (path): boolean => !exact.has(path) && fragments.has(path.toLowerCase());
+}
+
+function unboundReferenceTextRangeReader(
+  source: string,
+  knownPaths: readonly string[],
+): (start: number, end: number) => readonly RepositoryReferenceTextPart[] {
+  // Keep the original neighbors when evidence splits a text node into ranges. A refused known
+  // prefix must not turn its attached remainder into an apparently standalone filename (#4406).
+  // Scan once across all ordered ranges, including ranges with no possible reference match.
+  const matches = source.matchAll(new RegExp(REPOSITORY_REFERENCE_PATTERN));
+  const isKnownFragment = knownReferenceFragmentGuard(knownPaths);
+  let next = matches.next();
+  return (start, end): readonly RepositoryReferenceTextPart[] => {
+    const parts: RepositoryReferenceTextPart[] = [];
+    let lastIndex = start;
+    while (!next.done && next.value.index < end) {
+      const match = next.value;
+      next = matches.next();
+      if (match.index < start || match.index + match[0].length > end) continue;
+      const references = referencePartsFromTextMatch(match, source, isKnownFragment);
+      if (references.length === 0) continue;
+      if (match.index > lastIndex)
+        parts.push({ kind: "text", text: source.slice(lastIndex, match.index) });
+      parts.push(...references);
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex === start) return [{ kind: "text", text: source.slice(start, end) }];
+    if (lastIndex < end) parts.push({ kind: "text", text: source.slice(lastIndex, end) });
+    return parts;
+  };
 }
 
 function qualifiedReferenceSource(

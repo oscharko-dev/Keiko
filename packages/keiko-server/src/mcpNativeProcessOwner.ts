@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 import {
   contentFreeErrorClass,
   emitServerDiagnostic,
@@ -45,7 +46,7 @@ function probeOwner(
     timeout: 2000,
     maxBuffer: 1024,
     encoding: "utf8",
-    env: { SYSTEMROOT: env.SYSTEMROOT ?? env.SystemRoot ?? "" },
+    env: { SYSTEMROOT: environmentVariableValue(env, "SYSTEMROOT", "win32") ?? "" },
   });
   if (probe.status !== 0) {
     recordProbeRefusal(diagnostics, "probe-failed");

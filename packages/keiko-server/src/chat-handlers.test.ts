@@ -62,6 +62,10 @@ import { createInMemoryUiStore } from "./store/index.js";
 import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
 import { canonicalChatTurnGroundingScopeIdentity } from "./chat-turn-identity.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
@@ -358,22 +362,43 @@ describe("desktop chat production gateway reuse", () => {
     }
   });
 
-  it("does not launch a readiness probe from a chat request with an unknown model observation", async () => {
+  it.each([undefined, "breaker-chat"])(
+    "opens an empty Chat with selection %s before its first model check",
+    async (modelId) => {
+      const fixture = await createGatewayBreakerFixture();
+      try {
+        await stopConfiguredConversationReadiness(fixture.deps);
+        fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
+        const fetchSpy = vi.fn();
+        vi.stubGlobal("fetch", fetchSpy);
+        const result = await handleCreateDesktopChat(
+          requestContext({ modelId, projectPath: fixture.projectPath }),
+          fixture.deps,
+        );
+        expect(result).toMatchObject({
+          status: 201,
+          body: { chat: { selectedModel: "breaker-chat" }, messages: [] },
+        });
+        expect(currentConversationReady(fixture.deps, "breaker-chat")).toBe(false);
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+        await disposeGatewayBreakerFixture(fixture);
+      }
+    },
+  );
+
+  it("still requires a configured chat model to open a Chat", async () => {
     const fixture = await createGatewayBreakerFixture();
     try {
-      // Isolate request admission from the configuration-owned background probe lifecycle.
       await stopConfiguredConversationReadiness(fixture.deps);
-      fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
-      const fetchSpy = vi.fn();
-      vi.stubGlobal("fetch", fetchSpy);
+      fixture.deps.gatewayConfig?.set(undefined, false);
       const result = await handleCreateDesktopChat(
-        requestContext({ modelId: "breaker-chat", projectPath: fixture.projectPath }),
+        requestContext({ projectPath: fixture.projectPath }),
         fixture.deps,
       );
-      expect(result.status).toBe(400);
-      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
     } finally {
-      vi.unstubAllGlobals();
       await disposeGatewayBreakerFixture(fixture);
     }
   });
@@ -394,12 +419,12 @@ describe("desktop chat production gateway reuse", () => {
       );
       const initializationCalls = fetchSpy.mock.calls.length;
 
-      const createRejected = await handleCreateDesktopChat(
+      const created = await handleCreateDesktopChat(
         requestContext(
           {
             modelId: "breaker-chat",
             projectPath: fixture.projectPath,
-            title: "must not be created",
+            title: "private empty chat title",
           },
           "corr-create-unready",
         ),
@@ -411,15 +436,9 @@ describe("desktop chat production gateway reuse", () => {
         "corr-send-unready",
       );
 
-      expect(createRejected).toEqual({
-        status: 400,
-        body: {
-          error: {
-            code: "CONVERSATION_MODEL_NOT_READY",
-            message:
-              "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
-          },
-        },
+      expect(created).toMatchObject({
+        status: 201,
+        body: { chat: { selectedModel: "breaker-chat" }, messages: [] },
       });
       expect(rejected).toEqual({
         status: 400,
@@ -432,8 +451,7 @@ describe("desktop chat production gateway reuse", () => {
         },
       });
       // Configuration-owned initialization above sends only the static readiness prompt.
-      // Both interactive requests consume its stored refusal without starting another probe;
-      // the user's content must remain off every provider request.
+      // Local creation and rejected inference both leave the provider untouched.
       expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
       expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(4);
       expect(fetchSpy).toHaveBeenCalledTimes(initializationCalls);
@@ -441,7 +459,7 @@ describe("desktop chat production gateway reuse", () => {
         const init = call[1] as { body?: unknown } | undefined;
         const body = typeof init?.body === "string" ? init.body : "";
         expect(body).not.toContain("must not leave the server");
-        expect(body).not.toContain("must not be created");
+        expect(body).not.toContain("private empty chat title");
       }
       expect(
         fixture.deps.gatewayConfig?.verifiedCapability("breaker-chat")?.fields.conversationReady,
@@ -450,14 +468,9 @@ describe("desktop chat production gateway reuse", () => {
       expect(sink.events).toContainEqual(
         expect.objectContaining({
           category: "gateway",
-          op: "chat.creation.rejected",
+          op: "chat.creation.opened",
           correlationId: "corr-create-unready",
-          status: 400,
-          errorKind: "unavailable",
           extra: {
-            reason: "readiness",
-            modelKind: "chat",
-            // The on-demand probe ran and failed, so the refusal names a failed check (#3557).
             modelIdDigest: BREAKER_CHAT_DIGEST,
             readinessObservation: "not-ready",
             completeness: "complete",
@@ -536,21 +549,20 @@ describe("desktop chat production gateway reuse", () => {
     }
   });
 
-  it("digests a configured model id that is not itself body-free, instead of dropping the rejection line", async () => {
-    // Review finding A follow-up: gateway config accepts any nonempty modelId, so an operator can
-    // configure one that is email-shaped. Logging it raw would fail `activityLogEvent`'s own
-    // opaque-id validation and silently drop the WHOLE `chat.creation.rejected` line.
+  it("digests a configured model id that is not itself body-free when opening the chat", async () => {
+    // A date-bearing registry id can be a valid selection, but only its digest may reach the log.
     const fixture = await createGatewayBreakerFixture();
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
     try {
+      await stopConfiguredConversationReadiness(fixture.deps);
       const runtimeConfig = fixture.deps.gatewayConfig;
       if (runtimeConfig === undefined) throw new Error("expected runtime gateway config");
       runtimeConfig.set(
         parseGatewayConfig({
           providers: [
             {
-              modelId: "alice@example.com",
+              modelId: "fixture-archive-1931-07-23",
               baseUrl: "https://provider.example.invalid/v1",
               apiKey: "fake-test-key",
               timeoutMs: 5_000,
@@ -567,25 +579,28 @@ describe("desktop chat production gateway reuse", () => {
       const fetchSpy = vi.fn();
       vi.stubGlobal("fetch", fetchSpy);
 
-      const rejected = await handleCreateDesktopChat(
+      const created = await handleCreateDesktopChat(
         requestContext({
-          modelId: "alice@example.com",
+          modelId: "fixture-archive-1931-07-23",
           projectPath: fixture.projectPath,
-          title: "must not be created",
+          title: "private empty chat title",
         }),
         fixture.deps,
       );
 
-      expect(rejected).toMatchObject({
-        status: 400,
-        body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
+      expect(created.status).toBe(201);
+      const openedEvents = sink.events.filter((event) => event.op === "chat.creation.opened");
+      expect(openedEvents).toHaveLength(1);
+      const opened = openedEvents[0];
+      if (opened === undefined) throw new TypeError("Expected chat opening evidence.");
+      const line = formatActivityLogProofLine(opened);
+      expect(expectActivityLogProof("chat.creation.opened.line", line)).toMatchObject({
+        readinessObservation: "unobserved",
+        modelIdDigest: expect.stringMatching(/^[a-f0-9]{16}$/) as unknown,
       });
-      const rejectionEvents = sink.events.filter((event) => event.op === "chat.creation.rejected");
-      expect(rejectionEvents).toHaveLength(1);
-      const [rejectionEvent] = rejectionEvents;
-      expect(rejectionEvent?.extra).not.toHaveProperty("modelId");
-      expect(rejectionEvent?.extra?.modelIdDigest).toMatch(/^[a-f0-9]{16}$/);
-      expect(JSON.stringify(sink.events)).not.toContain("alice@example.com");
+      expect(opened.extra).not.toHaveProperty("modelId");
+      expect(JSON.stringify(sink.events)).not.toContain("fixture-archive-1931-07-23");
+      expect(JSON.stringify(sink.events)).not.toContain("private empty chat title");
     } finally {
       vi.unstubAllGlobals();
       resetServerLogger();

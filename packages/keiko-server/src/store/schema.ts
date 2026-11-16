@@ -14,7 +14,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 78;
+export const SCHEMA_VERSION = 79;
 
 interface Migration {
   readonly version: number;
@@ -3558,6 +3558,21 @@ export const MIGRATIONS: readonly Migration[] = [
         learned_timestamp INTEGER NOT NULL,
         learned_rowid INTEGER NOT NULL
       ) STRICT;`,
+  },
+  {
+    version: 79,
+    // #4390: completed local report exports survive restart without persisting remote authority.
+    sql: `CREATE TABLE jira_report_exports (
+      report_id TEXT PRIMARY KEY CHECK (length(report_id) = 36),
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      last_used_at INTEGER NOT NULL CHECK (last_used_at >= 0),
+      report_digest TEXT NOT NULL CHECK (length(report_digest) = 64),
+      markdown TEXT NOT NULL,
+      csv TEXT NOT NULL,
+      content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+      byte_count INTEGER NOT NULL CHECK (byte_count >= 256)
+    ) STRICT;
+    CREATE INDEX jira_report_exports_owner ON jira_report_exports(chat_id, last_used_at);`,
   },
 ];
 

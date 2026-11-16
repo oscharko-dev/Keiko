@@ -3,6 +3,7 @@ import {
   JIRA_REPORT_EXPORT_FORMATS,
   JIRA_REPORT_ID_PATTERN,
   type JiraReportExportFormat,
+  type JiraReportExportResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { UiHandlerDeps } from "../deps.js";
 import { correlationIdOrUnknown } from "../correlation.js";
@@ -42,6 +43,21 @@ function refused(
       };
 }
 
+function reportFile(
+  deps: UiHandlerDeps,
+  reportId: string,
+  chatId: string,
+  format: JiraReportExportFormat,
+): { readonly file: JiraReportExportResponse; readonly source: "memory" | "retained" } | undefined {
+  if (deps.store.findChatById(chatId) === undefined) return undefined;
+  const retained = deps.store.jiraReportExports?.read(reportId, chatId, format);
+  if (retained !== undefined) return { file: retained, source: "retained" };
+  const report = deps.jiraReportStore?.peek(reportId, chatId)?.report;
+  return report === undefined
+    ? undefined
+    : { file: exportJiraReport(report, format), source: "memory" };
+}
+
 /**
  * The user-controlled local export of a finished Jira report (#4181): the server renders the stored,
  * computed report as Markdown or CSV and the browser saves the file. A model's prose is never the
@@ -54,13 +70,14 @@ export function exportJiraReportRoute(ctx: RouteContext, deps: UiHandlerDeps): R
   const chatId = ctx.url.searchParams.get("chatId") ?? "";
   if (format === undefined || !REPORT_ID.test(reportId) || !CHAT_ID.test(chatId))
     return refused(ctx, deps, "invalid-format", startedAt);
-  const report = deps.jiraReportStore?.peek(reportId, chatId)?.report;
-  if (report === undefined) return refused(ctx, deps, "export-unavailable", startedAt);
-  const file = exportJiraReport(report, format);
+  const exported = reportFile(deps, reportId, chatId, format);
+  if (exported === undefined) return refused(ctx, deps, "export-unavailable", startedAt);
+  const { file, source } = exported;
   recordJiraReportActivity(deps.activityLog, correlationIdOrUnknown(ctx.correlationId), {
     phase: "export",
     format,
     byteCount: file.byteCount,
+    exportSource: source,
     durationMs: Date.now() - startedAt,
   });
   return { status: 200, body: file, headers: { "Cache-Control": "no-store" } };

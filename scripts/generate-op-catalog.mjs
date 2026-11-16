@@ -887,6 +887,9 @@ function typedRegistryProgram(repoRoot) {
         "@oscharko-dev/keiko-contracts/runtime/diagnostics": [
           "packages/keiko-contracts/src/diagnostics.ts",
         ],
+        "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage": [
+          "packages/keiko-contracts/src/knowledge-turn-coverage.ts",
+        ],
         "@oscharko-dev/keiko-contracts/runtime/pr-description": [
           "packages/keiko-contracts/src/pr-description.ts",
         ],

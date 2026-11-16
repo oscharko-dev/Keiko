@@ -190,6 +190,20 @@ function assertSystemDirectoryIdentity(
   );
 }
 
+// This owner is also loaded directly by provisioning and MSVC setup before dependencies or dist
+// exist. Keep its two environment inputs self-contained. Select Node's first code-unit casing
+// alias, including an undefined value; insertion order must not choose a different OS root.
+function systemEnvironmentValue(
+  env: Readonly<Record<string, string | undefined>>,
+  name: "SYSTEMROOT" | "WINDIR",
+): string | undefined {
+  let selected: string | undefined;
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === name && (selected === undefined || key < selected)) selected = key;
+  }
+  return selected === undefined ? undefined : env[selected];
+}
+
 /**
  * The trusted Windows system directory: `SystemRoot`, then `WINDIR`, then the hard-coded default —
  * validated for canonical shape in every case. Every trusted Windows system-binary resolution in
@@ -203,7 +217,10 @@ export function resolveWindowsSystemDirectory(
   env: Readonly<Record<string, string | undefined>> = process.env,
   identityCheck: WindowsSystemDirectoryIdentityCheck | undefined = defaultSystemDirectoryIdentity,
 ): string {
-  const candidate = env.SystemRoot ?? env.WINDIR ?? DEFAULT_WINDOWS_SYSTEM_ROOT;
+  const candidate =
+    systemEnvironmentValue(env, "SYSTEMROOT") ??
+    systemEnvironmentValue(env, "WINDIR") ??
+    DEFAULT_WINDOWS_SYSTEM_ROOT;
   assertCanonicalSystemRoot(candidate);
   assertSystemDirectoryIdentity(candidate, identityCheck);
   return candidate;

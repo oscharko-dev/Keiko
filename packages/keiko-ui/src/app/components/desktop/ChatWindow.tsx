@@ -2668,6 +2668,7 @@ function ComposerSendButton({
 }
 
 function skillSendHint(skill: ChatMarkdownSkill | undefined, t: I18nTranslate): string {
+  if (skill?.connectionRequired === true) return t("chat.skills.connectionRequired");
   return t(skill?.busy === true ? "chat.skills.loading" : "chat.skills.sendBlocked");
 }
 
@@ -5946,11 +5947,7 @@ function ComposerSkillNotice(): ReactNode {
   const { markdownSkill } = useChatSessionComposer();
   const t = useTranslate();
   if (!chatSkillBlocksSend(markdownSkill)) return null;
-  return (
-    <output className={styles.sessionNotice}>
-      {t(markdownSkill?.busy === true ? "chat.skills.loading" : "chat.skills.sendBlocked")}
-    </output>
-  );
+  return <output className={styles.sessionNotice}>{skillSendHint(markdownSkill, t)}</output>;
 }
 
 function ComposerSendNotice({

@@ -794,6 +794,16 @@ only the strict six-field `windowsGeneration` binding from the artifact contract
 launcher digest, package version, target, stable managed eligibility, root identity and registration
 must agree with disk. Flat Windows schema 1 stays readable for launch/manual setup and cannot
 become one-click eligible through automatic migration. Mac schema 1 is unchanged.
+
+A historical Windows schema 1 receipt supports managed presentation when its setup-manifest,
+canonical install-root and launcher digests match the current instance (#4400). The detector
+forces `updateEligible=false`. Organization- or machine-managed installations report
+`portable-it-managed`. Other bound stable installs report `portable-update-unavailable`.
+Startup and Updates explain the package's update capability and link to the Windows release
+instructions. A missing receipt takes the bootstrap setup path. Generation 2 eligibility still
+requires its full signature, digest and ownership validation. The existing Activity Log operations
+carry the closed install-mode and startup-notice reasons.
+
 Keep the server parser/resolver internal and CLI authority parsing within its existing boundary.
 Shared frozen fixtures prevent boundary-local parser drift. KHT1 has one reviewed TypeScript
 authority in the internal security package, exposed only through a narrow workspace subpath to

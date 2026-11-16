@@ -22,6 +22,7 @@ import { isAbsolute, resolve } from "node:path";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { CommandResult, CommandRule, SandboxPolicy } from "./types.js";
 import { DEFAULT_SANDBOX_POLICY } from "./types.js";
+import { buildSandboxEnv } from "./sandbox.js";
 import {
   nodeSpawnFn,
   runCommand,
@@ -80,8 +81,8 @@ export class GitWorktreeOperandError extends Error {
 // Thrown when a worktree command fails to spawn. A non-zero EXIT is NOT an exception — it is returned
 // as `{ ok: false, exitCode }` so the caller can classify it (e.g. branch conflict vs. dirty target).
 export class GitWorktreeSpawnError extends Error {
-  public constructor(message: string) {
-    super(message);
+  public constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "GitWorktreeSpawnError";
   }
 }
@@ -356,12 +357,7 @@ function structuredCommandEnvironment(
   processEnv: NodeJS.ProcessEnv,
   policy: SandboxPolicy,
 ): NodeJS.ProcessEnv {
-  const safe: NodeJS.ProcessEnv = {};
-  for (const name of policy.envAllowlist) {
-    const value = processEnv[name];
-    if (value !== undefined) safe[name] = value;
-  }
-  return safe;
+  return buildSandboxEnv(processEnv, policy.envAllowlist);
 }
 
 // The rules deny `-c`, so checkout settings travel as pinned config. A policy that already pins Git
@@ -423,6 +419,7 @@ async function runGit(ctx: AdapterContext, argv: readonly string[]): Promise<Com
   } catch (error) {
     throw new GitWorktreeSpawnError(
       `git ${argv[0] ?? "?"} failed to run: ${error instanceof Error ? error.name : "unknown"}`,
+      { cause: error },
     );
   }
 }

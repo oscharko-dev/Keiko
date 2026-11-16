@@ -16,6 +16,7 @@ describe("closed startup update presentation evidence", () => {
     { blockerCount: 0, noticeKind: "update-available", updateAvailable: true },
     { blockerCount: 0, noticeKind: "critical-update-available", updateAvailable: true },
     { blockerCount: 0, noticeKind: "portable-setup-required", updateAvailable: false },
+    { blockerCount: 1, noticeKind: "portable-update-unavailable", updateAvailable: false },
     { blockerCount: 0, noticeKind: "externally-managed", updateAvailable: false },
     { blockerCount: 0, noticeKind: "check-unavailable", updateAvailable: false },
     { blockerCount: 0, noticeKind: "action-required", updateAvailable: false },

@@ -22,6 +22,7 @@ describe("workspace trust store rows", () => {
   });
 
   it("writes then reads a row back with a stamped updated_at", () => {
+    const updatedAt = clock;
     store.writeWorkspaceTrustRecord({
       rootRef: "root-a",
       revision: 0,
@@ -33,7 +34,7 @@ describe("workspace trust store rows", () => {
       revision: 0,
       trust: "trusted",
       recordJson: '{"v":0}',
-      updatedAt: 1_000,
+      updatedAt,
     });
   });
 

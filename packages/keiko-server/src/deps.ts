@@ -700,6 +700,7 @@ export interface RuntimeGatewayConfig {
     observedGeneration?: number,
     conversationCheckedAt?: string,
     citationObservation?: CitationCapabilityObservation,
+    conversationReadinessFailure?: "transient",
   ): void;
   readonly clearVerifiedCapability: (modelId: string, observedGeneration?: number) => boolean;
 }
@@ -736,6 +737,8 @@ export interface VerifiedModelCapabilityObservation {
   readonly checkedAt: string;
   /** Actual chat observation time, separate from retained feature evidence. */
   readonly conversationCheckedAt?: string | undefined;
+  /** A timed-out or overloaded basic-chat check; selection/election only, never admission. */
+  readonly conversationReadinessFailure?: "transient";
   readonly fields: VerifiedModelCapabilityFields;
   /** Body-free, request outcomes owned by this same generation; never readiness or durable config. */
   readonly citationBehaviourWindow?: readonly NonNullable<ModelCapability["citationBehaviour"]>[];
@@ -1941,6 +1944,7 @@ function gatewayCapabilityRecorder(
     observedGeneration,
     conversationCheckedAt,
     citationObservation,
+    conversationReadinessFailure,
   ): void => {
     const currentGeneration = generation();
     if (!admitted(modelId)) return;
@@ -1953,6 +1957,9 @@ function gatewayCapabilityRecorder(
         ? {}
         : { conversationCheckedAt: conversationCheckedAt ?? checkedAt }),
       fields: { ...fields },
+      ...(fields.conversationReady === false && conversationReadinessFailure === "transient"
+        ? { conversationReadinessFailure }
+        : {}),
       ...boundedCitationObservation(
         citationObservation ?? observations.get(modelId),
         currentGeneration,
@@ -2085,6 +2092,18 @@ export function currentConversationReadinessObservation(
   if (observation.fields.conversationReady !== true) return observation.fields.conversationReady;
   const ageMs = conversationReadinessAgeMs(observation);
   return Number.isFinite(ageMs) && ageMs >= 0 ? true : undefined;
+}
+
+/** A transient check leaves selection and default election unknown; admission stays strict. */
+export function currentConversationReadinessPresentation(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+): boolean | undefined {
+  const ready = currentConversationReadinessObservation(deps, modelId);
+  const observation = deps.gatewayConfig?.verifiedCapability(modelId);
+  if (ready !== false || observation?.conversationReadinessFailure !== "transient") return ready;
+  const ageMs = conversationReadinessAgeMs(observation);
+  return Number.isFinite(ageMs) && ageMs >= 0 ? undefined : false;
 }
 
 function configuredChatContextProfile(

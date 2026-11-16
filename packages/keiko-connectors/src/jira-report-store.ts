@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
+  JIRA_REPORT_IDLE_TTL_MS,
+  JIRA_REPORT_STORE_MAX_BYTES,
+  JIRA_REPORT_OWNER_SESSIONS_MAX,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
   createJiraReportSession,
   type JiraReportRequest,
   type JiraReportSession,
@@ -7,10 +12,11 @@ import {
 import { trimOwnedBytes } from "./jira-store-bounds.js";
 
 /**
- * Reports live in memory only: a report in progress resumes in the next tool call, and a finished
- * report is what the export reads. Idle reports expire, one owner holds a bounded number of
- * reports (its oldest go first), and beyond the shared byte budget the owner holding the most is
- * trimmed first, so one Chat can never push another Chat's reports out. Nothing is persisted.
+ * Report sessions live in memory. Tool calls continue an in-progress session and can export
+ * a finished session. Idle sessions expire. Limits trim each owner's oldest sessions first,
+ * and the shared byte budget trims the owner holding the most.
+ * Separately, the server retains bounded, owner-bound finished downloads in
+ * `jira_report_exports` so the Chat card can download them after restart.
  */
 export interface JiraReportStore {
   readonly start: (
@@ -37,10 +43,7 @@ export interface JiraReportStoreOptions {
   readonly maxSessionsPerOwner?: number;
 }
 
-export const JIRA_REPORT_IDLE_TTL_MS = 4 * 60 * 60 * 1000;
-/** Retained size of all reports together; a safety bound on memory, never a limit on a scope. */
-export const JIRA_REPORT_STORE_MAX_BYTES = 768 * 1024 * 1024;
-export const JIRA_REPORT_OWNER_SESSIONS_MAX = 4;
+export { JIRA_REPORT_IDLE_TTL_MS, JIRA_REPORT_STORE_MAX_BYTES, JIRA_REPORT_OWNER_SESSIONS_MAX };
 
 type Sessions = Map<string, JiraReportSession>;
 

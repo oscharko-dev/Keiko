@@ -236,6 +236,13 @@ read rechecks the attached scope, lifecycle and model-use policy, and revision-b
 changed sources. The inventory is bounded to 10,000 document descriptors and the existing complete
 text reader to 4,000,000 characters per document; exclusions remain explicit.
 
+When a document or review call refuses a stale continuation, changed source or no-longer-selected
+document, Chat renders the canonical refusal in the selected UI language and explains how to restart
+from the current Pod inventory. It never treats the refusal as a successful read, replays a call,
+or displays arbitrary provider recovery instructions. The saved receipt retains this explanation
+after reload. `knowledge.documents.operation` records the closed `sourceRefusal` reason without
+document text, scope references or cursor values (#4405).
+
 Before synthesis, each accepted Chat tool turn with selected Pods records one metadata inventory
 page through that same managed tool, authority and cancellation path. The first model request
 receives up to 20 document descriptors, the total count and any next cursor; the visible transcript

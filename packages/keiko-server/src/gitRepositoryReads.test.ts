@@ -916,55 +916,85 @@ describe("git process env factories", () => {
     }
   });
 
-  it("uses the hardened network env at the actual fetch and pull spawn boundary", async () => {
-    const binDir = await mkdtemp(join(tmpdir(), "keiko-git-network-bin-"));
-    const capturePath = join(binDir, "git-env.jsonl");
-    writeNodeExecutableFixture(
-      binDir,
-      "git",
-      [
-        'const fs = require("node:fs");',
-        `fs.appendFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args: process.argv.slice(2), env: process.env }) + "\\n");`,
-        "process.exit(0);",
-      ].join("\n"),
-    );
-    vi.stubEnv("PATH", `${binDir}${delimiter}${process.env.PATH ?? ""}`);
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "aws-secret-that-must-not-reach-git");
-    vi.stubEnv("GIT_CONFIG_GLOBAL", "/tmp/attacker.gitconfig");
-    vi.stubEnv("GIT_ASKPASS", "/tmp/unsafe-askpass");
-    try {
-      await defaultGitNetworkProcessRunner(["fetch", "--no-tags"], {
-        cwd: root,
-        maxBytes: 4096,
-        timeoutMs: 5_000,
-      });
-      await defaultGitNetworkProcessRunner(["pull", "--ff-only"], {
-        cwd: root,
-        maxBytes: 4096,
-        timeoutMs: 5_000,
-      });
-      const records = (await readFile(capturePath, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as { args: readonly string[]; env: NodeJS.ProcessEnv });
-      expect(
-        records.map((record) => record.args.find((arg) => arg === "fetch" || arg === "pull")),
-      ).toEqual(["fetch", "pull"]);
-      for (const record of records) {
-        expect(record.args).toContain("protocol.ext.allow=never");
-        expect(record.args).toContain("credential.helper=");
-        expect(record.env.GIT_TERMINAL_PROMPT).toBe("0");
-        expect(record.env.GIT_SSH_COMMAND).toContain("StrictHostKeyChecking=yes");
-        expect(record.env.GIT_SSH_COMMAND).toContain("NumberOfPasswordPrompts=0");
-        expect(record.env.GIT_ASKPASS).not.toBe("/tmp/unsafe-askpass");
-        expect(record.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
-        expect(record.env.GIT_CONFIG_GLOBAL).toBeUndefined();
+  // This child-observed fixture is a POSIX script. On Windows the helper writes git.CMD,
+  // which the production image-only resolver correctly refuses rather than invoking a shell.
+  it.skipIf(process.platform === "win32")(
+    "uses the hardened network env at the actual fetch and pull spawn boundary",
+    async () => {
+      const binDir = await mkdtemp(join(tmpdir(), "keiko-git-network-bin-"));
+      const capturePath = join(binDir, "git-env.jsonl");
+      writeNodeExecutableFixture(
+        binDir,
+        "git",
+        [
+          'const fs = require("node:fs");',
+          `fs.appendFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args: process.argv.slice(2), env: process.env }) + "\\n");`,
+          "process.exit(0);",
+        ].join("\n"),
+      );
+      vi.stubEnv("PATH", `${binDir}${delimiter}${process.env.PATH ?? ""}`);
+      vi.stubEnv("AWS_SECRET_ACCESS_KEY", "aws-secret-that-must-not-reach-git");
+      vi.stubEnv("GIT_CONFIG_GLOBAL", "/tmp/attacker.gitconfig");
+      vi.stubEnv("GIT_ASKPASS", "/tmp/unsafe-askpass");
+      try {
+        const fetch = await defaultGitNetworkProcessRunner(["fetch", "--no-tags"], {
+          cwd: root,
+          maxBytes: 4096,
+          timeoutMs: 5_000,
+        });
+        const pull = await defaultGitNetworkProcessRunner(["pull", "--ff-only"], {
+          cwd: root,
+          maxBytes: 4096,
+          timeoutMs: 5_000,
+        });
+        for (const result of [fetch, pull]) {
+          expect(result).toMatchObject({
+            exitCode: 0,
+            truncated: false,
+            credentialHelperSource: "none",
+          });
+        }
+        const records = (await readFile(capturePath, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as { args: readonly string[]; env: NodeJS.ProcessEnv });
+        expect(
+          records.map((record) =>
+            record.args.find((arg) => arg === "config" || arg === "fetch" || arg === "pull"),
+          ),
+        ).toEqual(["config", "fetch", "config", "pull"]);
+        for (const record of records) {
+          const discovery = record.args.includes("config");
+          // Only the bounded host-helper discovery can read system configuration. Both remote
+          // operations restore isolation; every phase retains the same credential/secret floor.
+          expect(record.env.GIT_CONFIG_NOSYSTEM).toBe(discovery ? "0" : "1");
+          if (discovery) {
+            expect(record.args.slice(-6)).toEqual([
+              "config",
+              "--null",
+              "--show-scope",
+              "--no-includes",
+              "--get-regexp",
+              String.raw`^credential(\..*)?\.helper$`,
+            ]);
+          }
+          expect(record.args).toContain("protocol.ext.allow=never");
+          expect(record.args).toContain("credential.helper=");
+          expect(record.env.GIT_TERMINAL_PROMPT).toBe("0");
+          expect(record.env.GCM_INTERACTIVE).toBe("never");
+          expect(record.env.SSH_ASKPASS_REQUIRE).toBe("never");
+          expect(record.env.GIT_SSH_COMMAND).toContain("StrictHostKeyChecking=yes");
+          expect(record.env.GIT_SSH_COMMAND).toContain("NumberOfPasswordPrompts=0");
+          expect(record.env.GIT_ASKPASS).not.toBe("/tmp/unsafe-askpass");
+          expect(record.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+          expect(record.env.GIT_CONFIG_GLOBAL).toBeUndefined();
+        }
+      } finally {
+        vi.unstubAllEnvs();
+        await rm(binDir, { recursive: true, force: true });
       }
-    } finally {
-      vi.unstubAllEnvs();
-      await rm(binDir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 });
 
 // Read routes are local and never authenticate. An auth-shaped failure therefore has no dedicated

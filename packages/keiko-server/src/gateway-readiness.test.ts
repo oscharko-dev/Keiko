@@ -2248,12 +2248,14 @@ it.each([true, false])(
     try {
       const report = await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
       if ("status" in report) throw new TypeError("Expected actual readiness report.");
-      expect(record).toHaveBeenCalledWith(
+      expect(record).toHaveBeenCalledExactlyOnceWith(
         "test-chat-model",
         { streaming: true, conversationReady: passes },
         "2026-10-07T12:00:00.000Z",
         0,
         report.checkedAt,
+        // Failed chat observations explicitly pass the optional citation and failure slots.
+        ...(passes ? [] : [undefined, undefined]),
       );
     } finally {
       deps.store.close();

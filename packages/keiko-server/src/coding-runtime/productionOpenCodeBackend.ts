@@ -1444,8 +1444,9 @@ function runtimeSupervisor(
 /**
  * The digest the installed D18 broker must carry for this runtime, or `undefined` when no broker may
  * enforce its gateway policy, which refuses every Windows start (ADR-0043 D14/D19). A
- * release-qualified package, a Windows dev checkout and the Windows npm runtime package yield one;
- * an evaluation package and the functional test runtime do not.
+ * release-qualified package, an independently pinned Windows evaluation artifact, a Windows dev
+ * checkout and the Windows npm runtime package yield one; other evaluation artifacts and the
+ * functional test runtime do not. A compiled artifact pin never claims platform qualification.
  */
 export function windowsGatewayHelperPin(
   portable: ResolvedPortableOpenCodeRuntime,

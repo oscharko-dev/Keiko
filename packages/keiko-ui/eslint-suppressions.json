@@ -1036,7 +1036,7 @@
       "count": 3
     },
     "max-lines-per-function": {
-      "count": 4
+      "count": 3
     }
   },
   "src/app/components/desktop/widgets/cards/git-client/HistoryPane.tsx": {

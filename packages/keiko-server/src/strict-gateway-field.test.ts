@@ -12,7 +12,7 @@ import type { RouteContext } from "./routes.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
-  awaitAnyInitializedConversationReadyChatModel,
+  settleStartupConversationReadiness,
   codingWorkbenchProbesSettledForTests,
   checkSelectedConversationModel,
   initializeConfiguredConversationReadiness,
@@ -507,7 +507,7 @@ describe("strict LiteLLM field twin", () => {
       behavior.emptyChatModels.add("qwen-chat");
       deps.gatewayConfig?.set(deps.gatewayConfig.current(), true);
       initializeConfiguredConversationReadiness(deps, "corr-field-reload");
-      await awaitAnyInitializedConversationReadyChatModel(deps, "qwen-chat", "corr-field-join");
+      await settleStartupConversationReadiness(deps);
       expect(deps.gatewayConfig?.verifiedCapability("qwen-chat")?.fields.conversationReady).toBe(
         false,
       );
@@ -526,7 +526,7 @@ describe("strict LiteLLM field twin", () => {
     }
   });
 
-  it("rejects an explicitly requested unready model without starting a probe or walking siblings", async () => {
+  it("opens a Chat for its explicit unready model without probing it or its siblings", async () => {
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const behavior: StrictLiteLlmBehavior = { emptyChatModels: new Set() };
     const gateway = startStrictLiteLlm(log, { unsuitableFirstChatModel: true }, behavior);
@@ -538,11 +538,7 @@ describe("strict LiteLLM field twin", () => {
       behavior.emptyChatModels.add("dotsocr");
       deps.gatewayConfig?.set(deps.gatewayConfig.current(), true);
       initializeConfiguredConversationReadiness(deps, "corr-field-explicit-reload");
-      await awaitAnyInitializedConversationReadyChatModel(
-        deps,
-        "qwen-chat",
-        "corr-field-explicit-join",
-      );
+      await settleStartupConversationReadiness(deps);
       // Startup checked only the model in use; the person's pick is what finds dotsocr unready.
       await checkSelectedConversationModel(deps, "dotsocr", "corr-field-pick-unready");
       expect(deps.gatewayConfig?.verifiedCapability("dotsocr")?.fields.conversationReady).toBe(
@@ -558,7 +554,10 @@ describe("strict LiteLLM field twin", () => {
         }),
         deps,
       );
-      expect(chat.status).toBe(400);
+      expect(chat).toMatchObject({
+        status: 201,
+        body: { chat: { selectedModel: "dotsocr" }, messages: [] },
+      });
       expect(probesSince(log, mark, "dotsocr")).toBe(0);
       expect(probesSince(log, mark, "qwen-chat")).toBe(0);
     } finally {

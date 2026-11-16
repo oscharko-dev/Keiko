@@ -623,6 +623,8 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "files-directory-navigation",
   "files-project-selection",
   "editor-project-selection",
+  "editor-watch-recovery",
+  "git-sync-outcome",
   "gateway-catalog-adoption",
   "gateway-profile-refresh",
   "model-selection-availability",
@@ -632,6 +634,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "browser-approval",
   "knowledge-pod-selection",
   "jira-human-input",
+  "jira-starter-draft",
   "chat-connector-selection",
   "chat-connector-refresh",
 ] as const;
@@ -651,6 +654,8 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "files directory navigation": "files-directory-navigation",
   "files project selection": "files-project-selection",
   "editor project selection": "editor-project-selection",
+  "editor watch recovery": "editor-watch-recovery",
+  "git sync outcome": "git-sync-outcome",
   "gateway catalog adoption": "gateway-catalog-adoption",
   "gateway profile refresh": "gateway-profile-refresh",
   "model selection availability": "model-selection-availability",
@@ -660,6 +665,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "browser approval": "browser-approval",
   "knowledge pod selection": "knowledge-pod-selection",
   "jira human input": "jira-human-input",
+  "jira starter draft": "jira-starter-draft",
   "chat connector selection": "chat-connector-selection",
   "chat connector refresh": "chat-connector-refresh",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;

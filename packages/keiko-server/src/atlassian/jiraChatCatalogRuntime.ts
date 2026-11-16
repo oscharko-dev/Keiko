@@ -20,6 +20,7 @@ import {
   type JiraTraceRequest,
   type StagedJiraDraftItem,
 } from "@oscharko-dev/keiko-connectors";
+import { retainJiraReportExports } from "./jiraReportPersistence.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpProvider,
@@ -629,6 +630,8 @@ function reportTool(
     requirements: (context) => chatReportRequirementIds(deps, context),
     activity: (activity, context): void => {
       recordJiraReportActivity(deps.activityLog, context.correlationId, activity);
+      if (activity.status === "complete" || activity.status === "incomplete")
+        retainJiraReportExports(deps, store, context.chatId, context.correlationId);
     },
   };
 }

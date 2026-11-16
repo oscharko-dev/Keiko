@@ -7,8 +7,7 @@ import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contract
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
 import {
-  CHAT_MODEL_WALK_BUDGET_MS,
-  awaitAnyInitializedConversationReadyChatModel,
+  CONVERSATION_ADMISSION_WAIT_MS,
   awaitInitializedConversationReadiness,
   checkSelectedConversationModel,
   initializeConfiguredConversationReadiness,
@@ -22,53 +21,9 @@ import { resetServerLogger } from "../../../tests/support/activity-log-test-supp
 const compositions: UiHandlerDeps[] = [];
 const directories: string[] = [];
 
-it.each([
-  ["selected", awaitInitializedConversationReadiness],
-  ["default", awaitAnyInitializedConversationReadyChatModel],
-] as const)(
-  "keeps %s Chat admission pending through a three-minute shared probe",
-  async (_name, join) => {
-    const sink = createBufferedServerLogSink();
-    setServerLogger(createServerLogger({ sink, level: "info" }));
-    const deps = composition();
-    vi.useFakeTimers();
-    let release: ((response: Response) => void) | undefined;
-    const fetch = vi.fn(
-      () =>
-        new Promise<Response>((resolve) => {
-          release = resolve;
-        }),
-    );
-    vi.stubGlobal("fetch", fetch);
-    configure(deps, "corr-slow-initialization");
-    await vi.waitFor(() => {
-      expect(fetch).toHaveBeenCalledOnce();
-    });
-    let settled = false;
-    const admission = join(deps, "chat-model", "corr-slow-admission").then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(180_000);
-    const settledBeforeAnswer = settled;
-    release?.(chatProbeAnswer());
-    await admission;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settledBeforeAnswer).toBe(false);
-    expect(fetch).toHaveBeenCalledOnce();
-    expect(currentConversationReady(deps, "chat-model")).toBe(true);
-    expect(sink.events).toContainEqual(
-      expect.objectContaining({
-        op: "gateway.readiness.automatic.joined",
-        correlationId: "corr-slow-admission",
-      }),
-    );
-  },
-);
-
-it.each([
-  ["selected", awaitInitializedConversationReadiness],
-  ["default", awaitAnyInitializedConversationReadyChatModel],
-] as const)("keeps a shared probe alive after one %s waiter expires", async (_name, join) => {
+it("keeps Chat execution admission pending through a three-minute shared probe", async () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
   const deps = composition();
   vi.useFakeTimers();
   let release: ((response: Response) => void) | undefined;
@@ -79,20 +34,63 @@ it.each([
       }),
   );
   vi.stubGlobal("fetch", fetch);
-  configure(deps, "corr-long-probe", CHAT_MODEL_WALK_BUDGET_MS * 2);
+  configure(deps, "corr-slow-initialization");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  let settled = false;
+  const admission = awaitInitializedConversationReadiness(
+    deps,
+    "chat-model",
+    "corr-slow-admission",
+  ).then(() => {
+    settled = true;
+  });
+  await vi.advanceTimersByTimeAsync(180_000);
+  const settledBeforeAnswer = settled;
+  release?.(chatProbeAnswer());
+  await admission;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(settledBeforeAnswer).toBe(false);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(currentConversationReady(deps, "chat-model")).toBe(true);
+  expect(sink.events).toContainEqual(
+    expect.objectContaining({
+      op: "gateway.readiness.automatic.joined",
+      correlationId: "corr-slow-admission",
+    }),
+  );
+});
+
+it("keeps a shared probe alive after one execution waiter expires", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  let release: ((response: Response) => void) | undefined;
+  const fetch = vi.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-long-probe", CONVERSATION_ADMISSION_WAIT_MS * 2);
   await vi.waitFor(() => {
     expect(fetch).toHaveBeenCalledOnce();
   });
   let firstSettled = false;
-  const first = join(deps, "chat-model", "corr-first-waiter").then(() => {
-    firstSettled = true;
-  });
+  const first = awaitInitializedConversationReadiness(deps, "chat-model", "corr-first-waiter").then(
+    () => {
+      firstSettled = true;
+    },
+  );
   await vi.advanceTimersByTimeAsync(60_000);
   let laterSettled = false;
-  const later = join(deps, "chat-model", "corr-later-waiter").then(() => {
-    laterSettled = true;
-  });
-  await vi.advanceTimersByTimeAsync(CHAT_MODEL_WALK_BUDGET_MS - 60_001);
+  const later = awaitInitializedConversationReadiness(deps, "chat-model", "corr-later-waiter").then(
+    () => {
+      laterSettled = true;
+    },
+  );
+  await vi.advanceTimersByTimeAsync(CONVERSATION_ADMISSION_WAIT_MS - 60_001);
   expect(firstSettled).toBe(false);
   await vi.advanceTimersByTimeAsync(1);
   await first;

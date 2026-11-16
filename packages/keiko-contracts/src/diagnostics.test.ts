@@ -1846,6 +1846,22 @@ it.each([undefined, null, { unknown: 1 }, { postsFailed: -1 }, { postsFailed: 1_
 );
 
 describe("closed diagnostic navigation and render context", () => {
+  it.each(["started", "settled"])(
+    "accepts git sync outcome %s without repository content",
+    (phase) => {
+      const report = {
+        kind: "stage",
+        stage: "git sync outcome",
+        phase,
+        ordinal: 1,
+        ...(phase === "settled" ? { durationMs: 0 } : {}),
+      };
+      expect(isClientStageIngestRequest(report)).toBe(true);
+      expect(isClientStageIngestRequest({ ...report, repositoryRoot: "/private/repository" })).toBe(
+        false,
+      );
+    },
+  );
   it.each(["applied", "unavailable", "failed", "dropped", "stale", "cancelled", "deferred"])(
     "accepts settled navigation outcome %s only on a navigation stage",
     (navigationOutcome) => {
@@ -1857,6 +1873,7 @@ describe("closed diagnostic navigation and render context", () => {
         navigationOutcome,
       };
       expect(isClientStageIngestRequest({ ...base, stage: "editor project selection" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "editor watch recovery" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files directory load" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files source preview" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files source reveal" })).toBe(true);
@@ -2457,6 +2474,24 @@ it.each(["workspace-sync-idle", "workspace-sync-active", "workspace-sync-pull-pe
     const report = {
       message: "Workspace polling state changed.",
       clientTs: "2026-11-08T00:00:00.000Z",
+      composerActivity,
+    };
+    expect(isClientDiagnosticIngestRequest(report)).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...report,
+        composerActivity: `${composerActivity}-private`,
+      }),
+    ).toBe(false);
+  },
+);
+
+it.each(["skill-connection-unavailable", "chat-navigation-superseded", "chat-catalog-reconciled"])(
+  "accepts only the closed Chat activity %s",
+  (composerActivity) => {
+    const report = {
+      message: "Chat activity.",
+      clientTs: "2026-11-16T00:00:00.000Z",
       composerActivity,
     };
     expect(isClientDiagnosticIngestRequest(report)).toBe(true);

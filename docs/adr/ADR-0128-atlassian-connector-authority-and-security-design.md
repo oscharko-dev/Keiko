@@ -1645,6 +1645,36 @@ otherwise, so a marker an earlier leg stored never outlives the answer it descri
 answer shows none, because regeneration runs no tool turn. The voice dialogue reads the same note after
 the answer; its speech preparation counts are unchanged.
 
+The same truthfulness correction covers a claim that a Jira approval card is ready after only
+metadata reads or draft staging (#4401, 2026-11-16). A pending, unexpired Jira approval bound to its
+own invocation is the evidence; staging is preparation alone. A turn with the existing Jira Pod
+binding is checked even if it called no tool when its request names Jira or follows the preceding
+Jira turn with a request about its approval or card. The wording need not name the saved draft or
+use a fixed verb; an explicitly different Git-hosting context remains separate.
+The Pod binding alone is not a topic signal.
+The check reuses the UI's bounded history limit and caches that history within the turn.
+An earlier visible card exempts the claim only while
+the existing approval registry still holds its matching pending invocation/action and current
+Chat/Pod/binding/authentication identity; a stored card or prose alone is insufficient. Negation
+and deferral are checked at the claim, not an attached consequence or request to approve when
+convenient; quoted examples remain examples. The tool guidance asks the model to
+invoke the requested write through the existing governed tool once its facts are ready, without
+another prose confirmation. An unsupported claim gets the tool-less correction
+`approval-not-requested`; if it persists, the closed `no-jira-approval` notice states that no card
+is waiting. This does not synthesize an approval or execute a write to make a claim true.
+
+An explicit current request for a Markdown/CSV report download, answered only with export code
+blocks and no completed `jira.report` export, gets the existing single correction with tools
+available (#4402). `report-download-missing` asks for the exact requested JQL scope, its real export
+controls and no Jira change; a concrete limitation may be stated instead. Example and how-to
+requests are excluded. Ordinary English plurals and German compound report names and separable
+download verbs follow the same rule; a negated separable download request remains excluded.
+A repeated code-block substitute keeps the closed
+`jira-report-not-generated` notice. Both additions log only the closed correction kind and count
+on `chat.tool-turn.corrected`, and the closed notice on `chat.tool-transcript.updated`; no request,
+issue key, scope or answer enters the Activity Log. These narrow English/German checks do not
+promise to recognize every paraphrase or language.
+
 A turn that ends early is worded in the person's language by the same pattern (2026-11-14, #4355).
 The deterministic ending answer was server-composed English, which a German-speaking clerk read at
 the deadline, an expired token or an unfinished batch. The server never receives the UI language, so
@@ -2156,12 +2186,24 @@ cannot be read the next call asks again and a second failure ends the report as 
 word (`invalid-jql`, `auth`, `permission`, `not-found`, `rate-limited`, `timeout`, `unavailable`,
 `malformed-payload`, `bounds-exceeded`) beside the reason. A caller clause must have balanced
 parentheses outside quoted strings and, without a `projectKey`, must contain more than ordering, so
-it can neither escape the project scope nor read the whole instance. Reports live in memory only,
+it can neither escape the project scope nor read the whole instance. Report reading sessions live in memory,
 bound to the Chat (or, for a Coding run, the Pod binding) that started them and to the Jira
 instance and credential identity they were started with (a resume against another is refused as
 `connection-changed`). They expire after four idle hours (an export does not renew that), one owner
 keeps at most four and the owner holding the most is trimmed first beyond the shared byte budget, so
-one Chat cannot push out another's reports. One report may hold 192 MiB of derived records, charged
+one Chat cannot push out another's reports. Finished Chat reports also retain their server-rendered
+Markdown and CSV files in the existing UI SQLite store (#4390, 2026-11-16). Their original Chat
+foreign key, report identity and content digest bind the files; deleting the Chat or project
+cascades to them. The existing content policy projects them before storage and again on download,
+so a newly configured credential cannot leak through an older file. The artifact store uses the
+same four-per-Chat and 768 MiB total bounds, charging UTF-8 bytes and trimming the largest owner
+first. Its four-hour expiry follows the report's last tool use; downloads and restarts never renew
+it. Only finished download files survive a restart, not partial reads, Jira connections, grants,
+approvals or remote execution authority. The card's downloads therefore survive a same-store
+restart within their lifetime without reopening Jira. The existing `atlassian.jira-report` line
+records `phase=retain`, a retained report count and a closed failure on storage refusal; exports
+state only the closed source `memory` or `retained`, never file text, scope or issue keys.
+One report may hold 192 MiB of derived records, charged
 at a realistic per-issue cost that includes the build peak; beyond it the read ends as
 `memory-budget`. Tool results cap every per-requirement and per-epic list at 25 entries with its
 true total beside it; the exports carry everything. The CSV starts with a byte order mark so a

@@ -100,6 +100,13 @@ lane, because it needs the sandbox isolation this lane does not ship. Windows jo
 admitted only at the digest compiled into the server, and its runs are confined by the D18 broker
 pinned to that digest (ADR-0043 D19).
 
+The owner-authorized Windows fix of 2026-11-16 (#4404) reuses this independent artifact-approval
+owner for the public Windows portable runtime. Its exact, separately authenticated helper set is
+an additive approval: it neither changes the npm package's pins nor makes the dev lane available
+inside a packaged installation. Portable discovery retains its own layout, volume and declared-lane
+checks and returns the same functional evidence class. The existing D19 broker is the only Windows
+execution path; an approved artifact still needs that broker installed and ready. See ADR-0163 D9.
+
 **Amended 2026-10-24 — the runtime package carries the pinned ripgrep (#3897, #4064).** OpenCode's
 `glob` and `grep` tools run ripgrep and would otherwise download it on first use, which a
 firewalled customer on a clean `npm install -g` cannot do; only a developer override
@@ -196,6 +203,13 @@ content-free reason vocabulary (`runtimeUnavailableReason`), bound to `runtimeAv
 in both directions by the shared contract validator. Discovery failures no longer collapse into
 an unexplained `false`. The kill switch (`KEIKO_CODING_SIDECAR_DISABLED`) dominates every other
 prerequisite and reports `runtime-disabled` before discovery runs.
+
+The Workbench presents each concrete prerequisite through the same recovery mapping in setup and
+in an already-bound workspace (#4412). Missing or unverified runtime files, disabled activation,
+development setup, the protected reader and local connection remain distinct from the Windows
+gateway service. An unknown prerequisite points to the existing Activity Log instead of guessing
+the operating system or prescribing an unrelated runtime package. These messages do not change
+activation, qualification, service ownership or the server-owned Start decision.
 
 ### D5 — All modes available by default, never lane-implied
 

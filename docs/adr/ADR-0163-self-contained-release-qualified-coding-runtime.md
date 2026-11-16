@@ -540,6 +540,18 @@ supervisor binary still changes the runtime identity. It is deliberately NOT rou
 platform receipt parser, which would force a macOS receipt to assert `macos-endpoint-security`: a
 forged containment claim.
 
+For Windows broker admission, internal consistency is insufficient (#4404, owner-authorized repair
+2026-11-16). The published 1.5.0 runtime's exact native-helper digests and sizes are additionally
+compiled into the existing runtime-approvals owner, alongside its current OpenCode tree, adapter,
+protocol, license and SBOM pins. The source artifact was authenticated using the existing portable
+release key and matched against the actual installed bytes; no mutable manifest approves itself.
+Only a complete match yields the D19 broker pin. This adds an independent artifact identity to the
+evaluation path; it does not turn `signatureVerified` or `qualificationVerified` true, supply an
+Authenticode chain, relax the signed-install downgrade guard or change the runtime evidence class.
+The CLI reports `portable-evaluation`, and the existing broker-state Activity Log records its origin,
+helper digest and functional evidence class. The previously published 1.5.0 code is not changed by
+this source fix, and native platform qualification remains separate from functional acceptance.
+
 **`SecureWorkspaceTextReadArtifact.signed` is a structural artifact-shape literal, not a signature
 claim.** It means "this record is the verified artifact identity". The artifact validator requires
 it truthy before the point-of-use verifier runs at all, so setting it `false` on this lane would

@@ -7305,12 +7305,6 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.ts",
-      "owner": "run",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.ts",
       "owner": "runSummaryFromManifestFallback",
       "kind": "unregistered-catch",
       "count": 1
@@ -7319,7 +7313,7 @@
       "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.ts",
       "owner": "useChatSession",
       "kind": "unregistered-catch",
-      "count": 10
+      "count": 7
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.ts",

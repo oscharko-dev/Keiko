@@ -8,6 +8,8 @@ import styles from "./ClaimNoticeLine.module.css";
 /** One catalog sentence per closed marker value the server states (#4355). */
 const SENTENCE_KEYS = {
   "no-jira-create": "chat.claimNotice.noJiraCreate",
+  "no-jira-approval": "chat.claimNotice.noJiraApproval",
+  "jira-report-not-generated": "chat.claimNotice.jiraReportNotGenerated",
   "tool-call-not-executed": "chat.claimNotice.toolCallNotExecuted",
 } as const satisfies Record<ChatClaimNotice, string>;
 

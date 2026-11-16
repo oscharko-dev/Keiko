@@ -117,6 +117,32 @@ const CHAT_CREATION_REJECTED_OPERATION = defineActivityLogOperation({
   proofIds: ["chat.creation.rejected.reason"],
 });
 
+const CHAT_CREATION_OPENED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.creation.opened",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "chat-activity.logChatCreationOpenedEvent",
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-admission"],
+  releaseImpact: "patch",
+  fields: {
+    modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
+    readinessObservation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ready", "unobserved", "not-ready"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  proofIds: ["chat.creation.opened.line"],
+});
+
 const CHAT_SEND_REJECTED_OPERATION = defineActivityLogOperation({
   ...CHAT_REJECTION_REGISTRATION,
   op: "chat.send.rejected",
@@ -392,6 +418,20 @@ export function logChatCreationRejectionEvent(
         completeness: "complete",
         loss: "none",
       },
+    ),
+  );
+}
+
+export function logChatCreationOpenedEvent(
+  correlationId: string | undefined,
+  readinessObservation: ChatReadinessObservation | "ready",
+  model: { readonly modelIdDigest?: string },
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_CREATION_OPENED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      { ...model, readinessObservation, completeness: "complete", loss: "none" },
     ),
   );
 }

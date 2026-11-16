@@ -1548,6 +1548,36 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
+  it("retains managed Windows update refusal with a distinct payload-capability blocker (#4400)", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const deps = depsWith(fetchImpl);
+    const mode: UpdateInstallMode = {
+      ...portableBootstrapMode("windows-x64"),
+      installKind: "portable-managed",
+      reason: "portable-update-unavailable",
+      manualInstructions:
+        "This Windows package cannot update itself. Review the Windows release instructions before updating.",
+      recommendedAction: "manual-download",
+      portable: { status: "managed", target: "windows-x64", updateEligible: false },
+    };
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "1.5.0",
+      bundledCatalog: baseCatalog(),
+      installMode: () => mode,
+    });
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-update-unavailable" }),
+    );
+    expect(report.blockers).not.toContainEqual(
+      expect.objectContaining({ code: "portable-install-mode-ineligible" }),
+    );
+    expect(report.oneClickEligible).toBe(false);
+    expect(report.manualUpdateRequired).toBe(true);
+    expect(report.candidate).toBeUndefined();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    deps.store.close();
+  });
+
   it("uses a distinct blocker for organization-managed portable installs", async () => {
     const target: UpdatePortableTarget = "macos-arm64";
     const fetchImpl = vi.fn<typeof fetch>();

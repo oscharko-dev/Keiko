@@ -52,6 +52,7 @@ import {
   isPortableManagedOneClickPath,
   isPortableManagedPolicyDisabled,
   isPortableReleaseMetadataUnavailable,
+  isPortableUpdateUnavailable,
   isSessionInProgress,
   isUpdateCheckUnavailable,
   remediationLabel,
@@ -109,6 +110,7 @@ interface RemediationProjection {
 const COPY_PRESSED_RESET_MS = 240;
 const COPY_FEEDBACK_RESET_MS = 900;
 const POLL_DELAYS_MS = [2_500, 5_000, 10_000, 20_000] as const;
+const KEIKO_RELEASES_PAGE_URL = "https://github.com/oscharko-dev/Keiko/releases";
 
 const DEFAULT_API: UpdateWindowApi = {
   fetchPreflight: fetchStartupUpdatePreflight,
@@ -234,6 +236,9 @@ function versionText(
   }
   if (isPortableExternallyManaged(report, session)) {
     return t("updates.versionExternallyManaged", { current: report.currentVersion });
+  }
+  if (isPortableUpdateUnavailable(report, session)) {
+    return t("updates.versionPortableUpdateUnavailable", { current: report.currentVersion });
   }
   if (isPortableBootstrapSetupRequired(report, session)) {
     return t("updates.versionSetupRequired", { current: report.currentVersion });
@@ -497,6 +502,9 @@ function primaryActionTextForPortable(
   if (isPortableExternallyManaged(report, session)) {
     return t("updates.primary.portableExternallyManaged");
   }
+  if (isPortableUpdateUnavailable(report, session)) {
+    return t("updates.portableUpdateUnavailable.guidance");
+  }
   if (isPortableBootstrapSetupRequired(report, session)) {
     return t("updates.primary.portableSetupRequired");
   }
@@ -556,6 +564,9 @@ function summaryTitleText(
   if (volumeIssue !== undefined) return t(`updates.status.portableVolume.${volumeIssue}`);
   if (isPortableExternallyManaged(report, session)) {
     return t("updates.status.portableExternallyManaged");
+  }
+  if (isPortableUpdateUnavailable(report, session)) {
+    return t("updates.status.portableUpdateUnavailable");
   }
   if (isPortableBootstrapSetupRequired(report, session)) {
     return t("updates.status.portableSetupRequired");
@@ -1227,6 +1238,18 @@ function RemediationPanel({
   );
 }
 
+function portableInstallModePath(
+  report: UpdatePreflightReport,
+  session: UpdateSessionStatus,
+): ReactNode {
+  if (isPortableExternallyManaged(report, session)) return <PortableExternallyManagedPath />;
+  if (isPortableUpdateUnavailable(report, session)) {
+    return <PortableUpdateUnavailablePath releaseUrl={report.release?.url} />;
+  }
+  if (isPortableBootstrapSetupRequired(report, session)) return <PortableSetupRequiredPath />;
+  return undefined;
+}
+
 function ManualPath({
   report,
   session,
@@ -1247,12 +1270,8 @@ function ManualPath({
   if (volumeIssue !== undefined) {
     return <PortableVolumePath issue={volumeIssue} busy={busy} onCheck={onCheck} />;
   }
-  if (isPortableExternallyManaged(report, session)) {
-    return <PortableExternallyManagedPath />;
-  }
-  if (isPortableBootstrapSetupRequired(report, session)) {
-    return <PortableSetupRequiredPath />;
-  }
+  const installModePath = portableInstallModePath(report, session);
+  if (installModePath !== undefined) return installModePath;
   if (!isManualUpdatePath(report, session)) return null;
   if (report.updateAvailable && isPortableManagedPolicyDisabled(session)) {
     return <PortablePolicyDisabledPath busy={busy} onCheck={onCheck} />;
@@ -1354,6 +1373,33 @@ function PortableVolumePath({
           {t("updates.action.check")}
         </button>
       </div>
+    </section>
+  );
+}
+
+function PortableUpdateUnavailablePath({
+  releaseUrl,
+}: {
+  readonly releaseUrl: string | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <section className="upd-panel upd-manual" aria-labelledby="updates-portable-unavailable-title">
+      <div className="upd-panel-head">
+        <strong id="updates-portable-unavailable-title">
+          {t("updates.status.portableUpdateUnavailable")}
+        </strong>
+        <span>{t("updates.portableUpdateUnavailable.body")}</span>
+      </div>
+      <p>{t("updates.portableUpdateUnavailable.guidance")}</p>
+      <a
+        className="upd-link"
+        href={releaseUrl ?? KEIKO_RELEASES_PAGE_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {t("updates.portableUpdateUnavailable.releases")}
+      </a>
     </section>
   );
 }
@@ -1664,6 +1710,23 @@ function applyAvailableUpdateManualInstallState(
   }
 }
 
+function portableInstallModeFeedback(
+  report: UpdatePreflightReport,
+  session: UpdateSessionStatus,
+  t: I18nTranslate,
+): string | undefined {
+  if (isPortableExternallyManaged(report, session)) {
+    return t("updates.check.portableExternallyManaged");
+  }
+  if (isPortableUpdateUnavailable(report, session)) {
+    return t("updates.check.portableUpdateUnavailable");
+  }
+  if (isPortableBootstrapSetupRequired(report, session)) {
+    return t("updates.check.portableSetupRequired");
+  }
+  return undefined;
+}
+
 function checkFeedbackMessage(
   report: UpdatePreflightReport,
   session: UpdateSessionStatus,
@@ -1675,12 +1738,8 @@ function checkFeedbackMessage(
   }
   const volumeIssue = portableVolumeIssue(report);
   if (volumeIssue !== undefined) return t(`updates.check.portableVolume.${volumeIssue}`);
-  if (isPortableExternallyManaged(report, session)) {
-    return t("updates.check.portableExternallyManaged");
-  }
-  if (isPortableBootstrapSetupRequired(report, session)) {
-    return t("updates.check.portableSetupRequired");
-  }
+  const installModeFeedback = portableInstallModeFeedback(report, session, t);
+  if (installModeFeedback !== undefined) return installModeFeedback;
   if (isPortableReleaseMetadataUnavailable(report)) {
     return t("updates.check.releaseUnavailable");
   }

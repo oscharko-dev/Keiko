@@ -34,6 +34,7 @@
   "chat.continuity.degraded": "bff",
   "chat.continuity.rehydration": "bff",
   "chat.creation.intent": "bff",
+  "chat.creation.opened": "bff",
   "chat.creation.rejected": "bff",
   "chat.draft.operation": "bff",
   "chat.grounded-tool-round.completed": "bff",

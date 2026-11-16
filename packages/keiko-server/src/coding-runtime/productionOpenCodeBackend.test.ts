@@ -535,17 +535,26 @@ describe("production OpenCode backend composition", () => {
 
   // #4068: composition binds the gateway policy into every Windows run (ADR-0043), and the native
   // backend can enforce it only through the installed broker. A runtime that yields no broker pin
-  // (an evaluation package) therefore refuses every start, and readiness must not offer one.
-  it.each(["evaluation"] as const)(
-    "refuses every %s Windows run before a helper starts, and readiness says so",
-    () => {
+  // (an evaluation package without independent artifact approval) therefore refuses every start,
+  // and readiness must not offer one.
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "refuses an unqualified Windows runtime in a separate workspace with %s authority",
+    (mode) => {
       const root = mkdtempSync(join(tmpdir(), "keiko-windows-unqualified-lane-"));
       try {
         const portable: ResolvedPortableOpenCodeRuntime = {
           ...releaseQualifiedNativeRuntime(root),
           platformAssurance: "evaluation-unqualified",
         };
-        const request = runInput(root);
+        const workspaceRoot = join(root, mode);
+        mkdirSync(workspaceRoot);
+        const base = runInput(workspaceRoot);
+        const request: ProductionRuntimeBackendInput = {
+          ...base,
+          request: { ...base.request, requestedMode: mode },
+          context: { ...base.context, deploymentCeiling: mode },
+          minted: { ...base.minted, effectiveMode: mode },
+        };
         const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
         createProductionOpenCodeBackend(backendInput(root, portable)).createRun(request);
         const created = factory.mock.results.at(-1)?.value as RuntimeProcessBackend;
@@ -569,12 +578,12 @@ describe("production OpenCode backend composition", () => {
   // supervisor it built, so its runs take the release path's confinement rather than a refusal.
   // The npm runtime package does the same with the supervisor digest compiled into this server
   // (owner decision 2026-11-09).
-  it.each(["dev-checkout", "npm-runtime-package"] as const)(
+  it.each(["dev-checkout", "npm-runtime-package", "portable-evaluation"] as const)(
     "runs a Windows %s through the broker it pinned, and readiness asks that broker",
     (lane) => {
       const root = mkdtempSync(join(tmpdir(), "keiko-windows-dev-checkout-"));
       try {
-        const portable = { ...windowsDevLaneRuntime(root), lane };
+        const portable = brokerRuntime(root, lane);
         const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
         createProductionOpenCodeBackend(backendInput(root, portable)).createRun(runInput(root));
 
@@ -1241,6 +1250,23 @@ function releaseQualifiedNativeRuntime(root: string): QualifiedPortableOpenCodeR
       releaseReceipt: `sha256:${digest}`,
     },
     nativeHelperPath: helperPath,
+  };
+}
+
+/** Discovery's independent artifact checks are covered in productionPortableCodingRuntime.test. */
+function brokerRuntime(
+  root: string,
+  lane: "dev-checkout" | "npm-runtime-package" | "portable-evaluation",
+): QualifiedPortableOpenCodeRuntime | DevLanePortableOpenCodeRuntime {
+  const local = windowsDevLaneRuntime(root);
+  if (lane !== "portable-evaluation") return { ...local, lane };
+  const pin = local.nativeHelperSha256;
+  if (pin === undefined) throw new Error("fixture supervisor pin missing");
+  return {
+    ...releaseQualifiedNativeRuntime(root),
+    platformAssurance: "evaluation-unqualified",
+    nativeHelperSha256: pin,
+    windowsGatewayHelperSha256: pin,
   };
 }
 

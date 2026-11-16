@@ -508,7 +508,12 @@ describe("recordChatToolTurnCorrected", () => {
     expect(line).not.toMatch(/message-private-id|issuesChecked|issuesJudged/u);
   });
 
-  it.each(["announced-create", "tool-call-as-text"] as const)(
+  it.each([
+    "announced-create",
+    "tool-call-as-text",
+    "approval-not-requested",
+    "report-download-missing",
+  ] as const)(
     "counts the %s sentences or calls of an answer, never quoting them",
     (correctionKind) => {
       const logs = createBufferedServerLogSink();

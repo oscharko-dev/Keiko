@@ -371,6 +371,12 @@ const CLONE_FAILURE: Readonly<Record<Exclude<GitRemoteFailureReason, "none">, Cl
       code: "GIT_UNAVAILABLE",
       message: "Git is not available on this host.",
     },
+    "credential-discovery-unavailable": {
+      status: 409,
+      code: "GIT_CLONE_FAILED",
+      message:
+        "Git credential configuration could not be read safely. Check the installed Git configuration and retry.",
+    },
     timeout: {
       status: 504,
       code: "GIT_CLONE_TIMEOUT",

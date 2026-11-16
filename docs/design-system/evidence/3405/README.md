@@ -734,3 +734,20 @@ Linux arm64 gates container (Node 24.18.0, `KEIKO_WRITE_TRACKED_EVIDENCE=1`): al
 the source digests and `generatedAt` in the three records were taken from this run; its
 fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
 behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
+
+## Windows legacy setup and Chat copy follow-up — 2026-11-16 (#4400, #4405, #4407)
+
+The complete original nine-case producer ran with the locked dependencies in the Linux arm64
+gates container with `--init` and Node 26.13.1.
+`KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:update-ui-1696` passed all nine cases, and
+`npm run check:update-ui-evidence` passed. The three provenance records use the new source digests
+and generation time. The runner substituted fallback fonts, so the fourteen captures keep their
+original renderer's typography.
+
+## Jira starter templates in Skills — 2026-11-16
+
+The localized starter drafts change the optional English and German catalogs. All nine original
+updater cases passed again in the Linux arm64 gates container with the locked dependencies,
+Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The freshness gate passed. The three
+producer-generated records bind the updated source digests and generation time. The fourteen
+captures retain the typography of their original renderer.

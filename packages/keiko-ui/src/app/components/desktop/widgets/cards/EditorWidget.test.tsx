@@ -300,6 +300,25 @@ function workspaceWatchEventSources(
   return sources.filter((source) => source.url.startsWith("/api/editor/workspace-watch/events"));
 }
 
+function requireWorkspaceSnapshot(source: FakeEventSource | undefined, sequence = 9): void {
+  act(() => {
+    source?.emit("editor-watch:snapshot-required", {
+      schemaVersion: "1",
+      sequence,
+      rootToken: ["01234567", "89abcdef"].join(""),
+      nativeWatcherCount: 1,
+      subscriberCount: 1,
+      queueDepth: 0,
+      replayCapacity: 100,
+      replayOldestSequence: sequence,
+      eventCount: sequence,
+      requiresSnapshot: true,
+      health: "healthy",
+      degradedReasons: [],
+    });
+  });
+}
+
 function fileResponse(over?: Partial<FilesContentResponse>): FilesContentResponse {
   return {
     root: "/repo",
@@ -4361,4 +4380,244 @@ describe("EditorWidget — definition resolver dispatch preservation", () => {
       expect(openEditorFile).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("Editor workspace snapshot recovery (#4403)", () => {
+  function refreshSnapshot(): void {
+    fireEvent.click(
+      within(screen.getByTestId("editor-workspace-watch-status")).getByRole("button", {
+        name: "Refresh",
+      }),
+    );
+  }
+
+  it.each(["file read", "hot-exit read"])(
+    "keeps the newer same-file refresh when an older %s finishes last",
+    async (delayedStep) => {
+      const FakeSource = installFakeEventSource();
+      await renderLoaded();
+      const diagnostics = vi.fn();
+      setClientDiagnosticWriter(diagnostics);
+      const source = workspaceWatchEventSources(FakeSource.instances)[0];
+      const oldFile = deferred<FilesContentResponse>();
+      const oldSnapshot = deferred<EditorHotExitSnapshotV1 | null>();
+      const older = fileResponse({ content: "older disk content\n" });
+      if (delayedStep === "file read")
+        vi.mocked(fetchFilesContent).mockReturnValueOnce(oldFile.promise);
+      else {
+        vi.mocked(fetchFilesContent).mockResolvedValueOnce(older);
+        vi.mocked(readEditorHotExitSnapshot).mockReturnValueOnce(oldSnapshot.promise);
+      }
+      requireWorkspaceSnapshot(source, 9);
+      refreshSnapshot();
+      if (delayedStep === "hot-exit read")
+        await waitFor(() => expect(readEditorHotExitSnapshot).toHaveBeenCalledTimes(2));
+
+      requireWorkspaceSnapshot(source, 10);
+      vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+        fileResponse({ content: "newer disk content\n" }),
+      );
+      refreshSnapshot();
+      await waitFor(() => expect(surface.props?.buffer.content.text).toBe("newer disk content\n"));
+      expect(screen.queryByTestId("editor-workspace-watch-status")).toBeNull();
+
+      await act(async () => {
+        oldFile.resolve(older);
+        oldSnapshot.resolve(recoverySnapshotFixture());
+      });
+
+      expect(surface.props?.buffer.content.text).toBe("newer disk content\n");
+      expect(surface.props?.fileLoadState.status).toBe("ready");
+      expect(screen.queryByText(/recovered editor changes are available/i)).toBeNull();
+      expect(screen.queryByTestId("editor-workspace-watch-status")).toBeNull();
+      expect(diagnostics).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          stageReport: expect.objectContaining({
+            stage: "editor watch recovery",
+            phase: "settled",
+            navigationOutcome: "cancelled",
+          }),
+        }),
+      );
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toMatch(/older disk|newer disk|\/repo/u);
+    },
+  );
+
+  it("ignores an older same-file refresh failure after a newer refresh succeeds", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    const source = workspaceWatchEventSources(FakeSource.instances)[0];
+    const oldFile = deferred<FilesContentResponse>();
+    vi.mocked(fetchFilesContent).mockImplementationOnce(async () => {
+      await oldFile.promise;
+      throw new ApiError("READ_FAILED", "Superseded read failed.", 500);
+    });
+    requireWorkspaceSnapshot(source, 9);
+    refreshSnapshot();
+    requireWorkspaceSnapshot(source, 10);
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ content: "newer disk content\n" }),
+    );
+    refreshSnapshot();
+    await waitFor(() => expect(surface.props?.buffer.content.text).toBe("newer disk content\n"));
+
+    await act(async () => oldFile.resolve(fileResponse()));
+
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+    expect(surface.props?.fileLoadState.status).toBe("ready");
+    expect(surface.props?.buffer.content.text).toBe("newer disk content\n");
+    expect(screen.queryByText("Superseded read failed.")).toBeNull();
+    expect(screen.queryByTestId("editor-workspace-watch-status")).toBeNull();
+  });
+
+  it("ignores an older same-file reconciliation after the current disk version is confirmed", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    act(() =>
+      surface.props?.onContentChange({ text: "unsaved local edit\n", sizeBytes: 19 }, "human"),
+    );
+    const source = workspaceWatchEventSources(FakeSource.instances)[0];
+    const oldFile = deferred<FilesContentResponse>();
+    vi.mocked(fetchFilesContent).mockReturnValueOnce(oldFile.promise);
+    requireWorkspaceSnapshot(source, 9);
+    let oldReconciliation: Promise<void> | undefined;
+    act(() => {
+      oldReconciliation = requestEditorBufferReconciliation("/repo");
+    });
+    requireWorkspaceSnapshot(source, 10);
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    await act(async () => requestEditorBufferReconciliation("/repo"));
+    expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+    expect(screen.queryByTestId("editor-workspace-watch-status")).toBeNull();
+
+    await act(async () => {
+      oldFile.resolve(
+        fileResponse({
+          content: "obsolete disk content\n",
+          session: {
+            schemaVersion: "1",
+            version: { ...BASE_VERSION, contentHash: "c".repeat(64) },
+          },
+        }),
+      );
+      await oldReconciliation;
+    });
+
+    expect(surface.props?.buffer.content.text).toBe("unsaved local edit\n");
+    expect(surface.props?.fileModel.dirty).toBe(true);
+    expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+    expect(screen.queryByTestId("editor-workspace-watch-status")).toBeNull();
+  });
+
+  it("clears the current gap only after a successful uncached refresh and records recovery", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    const diagnostics = vi.fn();
+    setClientDiagnosticWriter(diagnostics);
+    requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances)[0]);
+    const pending = deferred<FilesContentResponse>();
+    vi.mocked(fetchFilesContent).mockReturnValueOnce(pending.promise);
+    const banner = screen.getByTestId("editor-workspace-watch-status");
+    fireEvent.click(within(banner).getByRole("button", { name: "Refresh" }));
+    expect(banner).toBeVisible();
+    await act(async () => pending.resolve(fileResponse()));
+    await waitFor(() => expect(screen.queryByTestId("editor-workspace-watch-status")).toBeNull());
+    expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
+    expect(diagnostics).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        stageReport: expect.objectContaining({
+          stage: "editor watch recovery",
+          phase: "settled",
+          navigationOutcome: "applied",
+        }),
+      }),
+    );
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("/repo");
+  });
+
+  it("keeps the gap visible when the refreshed file cannot be read", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances)[0]);
+    vi.mocked(fetchFilesContent).mockRejectedValueOnce(new ApiError("INTERNAL", "Failed", 500));
+    fireEvent.click(
+      within(screen.getByTestId("editor-workspace-watch-status")).getByRole("button", {
+        name: "Refresh",
+      }),
+    );
+    await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByTestId("editor-workspace-watch-status")).toBeVisible();
+  });
+
+  it("does not acknowledge a gap when the user keeps a dirty buffer", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    act(() => surface.props?.onContentChange({ text: "unsaved\n", sizeBytes: 8 }, "human"));
+    requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances)[0]);
+    vi.mocked(fetchFilesContent).mockClear();
+    fireEvent.click(
+      within(screen.getByTestId("editor-workspace-watch-status")).getByRole("button", {
+        name: "Refresh",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(fetchFilesContent).not.toHaveBeenCalled();
+    expect(surface.props?.buffer.content.text).toBe("unsaved\n");
+    expect(screen.getByTestId("editor-workspace-watch-status")).toBeVisible();
+  });
+
+  it.each([9, 10])(
+    "does not acknowledge replacement gap %s with an older in-flight read",
+    async (sequence) => {
+      const FakeSource = installFakeEventSource();
+      await renderLoaded();
+      requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances)[0]);
+      const pending = deferred<FilesContentResponse>();
+      vi.mocked(fetchFilesContent).mockReturnValueOnce(pending.promise);
+      fireEvent.click(
+        within(screen.getByTestId("editor-workspace-watch-status")).getByRole("button", {
+          name: "Refresh",
+        }),
+      );
+      requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances).at(-1), sequence);
+      await act(async () => pending.resolve(fileResponse()));
+      expect(screen.getByTestId("editor-workspace-watch-status")).toBeVisible();
+      fireEvent.click(
+        within(screen.getByTestId("editor-workspace-watch-status")).getByRole("button", {
+          name: "Refresh",
+        }),
+      );
+      await waitFor(() => expect(screen.queryByTestId("editor-workspace-watch-status")).toBeNull());
+    },
+  );
+
+  it("does not apply a pending refresh after the Editor moves to another root", async () => {
+    const FakeSource = installFakeEventSource();
+    const view = await renderLoaded();
+    requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances)[0]);
+    const pending = deferred<FilesContentResponse>();
+    vi.mocked(fetchFilesContent).mockReturnValueOnce(pending.promise);
+    fireEvent.click(
+      within(screen.getByTestId("editor-workspace-watch-status")).getByRole("button", {
+        name: "Refresh",
+      }),
+    );
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        root: "/other",
+        path: "b.ts",
+        name: "b.ts",
+        content: "const other = 2;\n",
+      }),
+    );
+    view.rerender(<EditorRuntimeWidget windowId="editor-test" root="/other" file="b.ts" />);
+    await waitFor(() => expect(surface.props?.buffer.content.text).toBe("const other = 2;\n"));
+    requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances).at(-1));
+    await act(async () => pending.resolve(fileResponse()));
+    expect(surface.props?.buffer.content.text).toBe("const other = 2;\n");
+    expect(screen.getByTestId("editor-workspace-watch-status")).toBeVisible();
+  });
 });

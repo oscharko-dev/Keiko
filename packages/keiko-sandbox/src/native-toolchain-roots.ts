@@ -1,4 +1,5 @@
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, parse, relative, sep } from "node:path";
@@ -424,7 +425,7 @@ export function nativeBuildToolReadRoots(
     M2_HOME: ["bin/mvn"],
     GRADLE_HOME: ["bin/gradle"],
   };
-  const pathJava = javaOnPathHome(env.PATH);
+  const pathJava = javaOnPathHome(environmentVariableValue(env, "PATH"));
   const candidates = [
     ...BUILD_TOOL_HOME_ENV.flatMap((name) => {
       const value = env[name];

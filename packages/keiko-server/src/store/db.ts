@@ -11,6 +11,7 @@ import {
 } from "./chatDrafts.js";
 import { createMarkdownSkillStore } from "./markdownSkills.js";
 import { createBrowserApprovalStore } from "./browserApprovals.js";
+import { createJiraReportExportStore } from "./jiraReportExports.js";
 import { bindMarkdownSkillTurn } from "./markdownSkillSelections.js";
 import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 // ADR-0013 D3/D8/D9 — DB lifecycle, factories, and the public UiStore wiring. The synchronous
@@ -746,6 +747,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     chatToolMutations: createChatToolMutationStore(db, options.now),
     markdownSkills: createMarkdownSkillStore(db, options.now),
     browserApprovals: createBrowserApprovalStore(db),
+    jiraReportExports: createJiraReportExportStore(db, options),
     listProjects: () => sqlListProjects(db),
     createProject: (path: string, name?: string, correlationId?: string): Project =>
       createProjectRecord(db, options, path, name, correlationId),

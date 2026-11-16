@@ -121,6 +121,7 @@ const MANUAL_BLOCKER_CODES = new Set<UpdatePreflightBlocker["code"]>([
   "breaking-exception-manual",
   "one-click-ineligible",
   "portable-install-mode-ineligible",
+  "portable-update-unavailable",
   "portable-install-managed-externally",
   "portable-release-unavailable",
   "portable-release-malformed",

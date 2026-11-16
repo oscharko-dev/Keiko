@@ -440,6 +440,13 @@ source-page cursors cannot continue against the changed membership. This dynamic
 not permit reads outside the currently resolved selection or transfer its authority to another set.
 Authority previews do not open another Knowledge database or retain a membership cache.
 
+Known source/cursor refusals from the versioned document and review tools retain their rejection
+while Chat presents a localized explanation and recovery from the current document inventory
+(#4405). The view derives from the canonical producer, failed result state and closed reason;
+provider `nextStep` prose cannot supply UI instructions. Persisted receipts remain readable after
+reload. The existing `knowledge.documents.operation` line records the same closed `sourceRefusal`
+reason without source text, document references or cursor values.
+
 Before synthesis, a turn with selected Knowledge Pods obtains one bounded metadata inventory page
 through the existing catalog offer, binder and dispatch path. It consumes the same authority and
 tool budget as a model-requested read; no extra synthesis allowance or semantic review is implicit.

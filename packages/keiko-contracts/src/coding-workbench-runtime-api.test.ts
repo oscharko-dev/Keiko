@@ -1637,6 +1637,17 @@ describe("body-free Workbench verifier metadata", () => {
     expect(validateCodingWorkbenchRuntimeSseEvent(enriched)).toEqual({ ok: true, value: enriched });
   });
 
+  it.each([0, 1])(
+    "accepts an explicit denied subset while retaining canonical failure counts: %s",
+    (deniedCount) => {
+      const enriched = { ...event, verificationSummary: { ...verificationSummary, deniedCount } };
+      expect(validateCodingWorkbenchRuntimeSseEvent(enriched)).toEqual({
+        ok: true,
+        value: enriched,
+      });
+    },
+  );
+
   it.each([
     { stdout: "private verifier output" },
     { path: "/private/workspace/test.ts" },
@@ -1650,6 +1661,14 @@ describe("body-free Workbench verifier metadata", () => {
     { durationMs: Number.NaN },
     { durationMs: "100" },
     { passedCount: undefined },
+    { status: "passed", failedCount: 1 },
+    { status: "passed", failedCount: 1, deniedCount: 1 },
+    { deniedCount: undefined },
+    { deniedCount: -1 },
+    { deniedCount: 0.5 },
+    { deniedCount: 2 },
+    { deniedCount: "1" },
+    { deniedCount: Number.MAX_SAFE_INTEGER + 1 },
   ])("rejects noncanonical verifier metadata %j", (invalid) => {
     expect(
       validateCodingWorkbenchRuntimeSseEvent({

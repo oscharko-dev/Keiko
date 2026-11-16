@@ -4,6 +4,8 @@
 // git message is stable English — a localized `fatal:` line must never defeat failure
 // classification. Porcelain `-z` path output is raw bytes and unaffected by the C locale.
 
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
+
 function devNullPath(platform: NodeJS.Platform = process.platform): string {
   return platform === "win32" ? "NUL" : "/dev/null";
 }
@@ -16,7 +18,7 @@ export function gitEnv(
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    PATH: source.PATH ?? "",
+    PATH: environmentVariableValue(source, "PATH", platform) ?? "",
     GIT_TERMINAL_PROMPT: "0",
     GIT_PAGER: "cat",
     PAGER: "cat",
@@ -30,8 +32,8 @@ export function gitEnv(
     LC_ALL: "C",
   };
   if (platform === "win32") {
-    env.SystemRoot = source.SystemRoot ?? "";
-    env.WINDIR = source.WINDIR ?? "";
+    env.SystemRoot = environmentVariableValue(source, "SystemRoot", platform) ?? "";
+    env.WINDIR = environmentVariableValue(source, "WINDIR", platform) ?? "";
   } else {
     env.HOME = "/nonexistent";
     env.XDG_CONFIG_HOME = "/nonexistent";
@@ -58,13 +60,20 @@ const GIT_NETWORK_ENV_PASSTHROUGH = [
   "WINDIR",
 ] as const;
 
-function inheritAllowedGitNetworkEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function inheritAllowedGitNetworkEnv(
+  source: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const key of GIT_NETWORK_ENV_PASSTHROUGH) {
-    const value = source[key];
+  const names =
+    platform === "win32"
+      ? [...GIT_NETWORK_ENV_PASSTHROUGH, "APPDATA", "LOCALAPPDATA", "PROGRAMDATA"]
+      : GIT_NETWORK_ENV_PASSTHROUGH;
+  for (const key of names) {
+    const value = environmentVariableValue(source, key, platform);
     if (value !== undefined && value.length > 0) env[key] = value;
   }
-  env.PATH ??= process.env.PATH ?? "";
+  env.PATH ??= "";
   return env;
 }
 
@@ -75,12 +84,15 @@ function inheritAllowedGitNetworkEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessE
 // askpass, or first-use host-key flow. LC_ALL=C (not inherited) keeps remote/transport errors in
 // English for the sync/publish outcome classifiers. Local reads keep the fully config-isolated
 // `gitEnv` above.
-export function networkGitEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function networkGitEnv(
+  source: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
   return {
-    ...inheritAllowedGitNetworkEnv(source),
+    ...inheritAllowedGitNetworkEnv(source, platform),
     GIT_TERMINAL_PROMPT: "0", // never prompt — fail closed
-    GIT_ASKPASS: devNullPath(),
-    SSH_ASKPASS: devNullPath(),
+    GIT_ASKPASS: devNullPath(platform),
+    SSH_ASKPASS: devNullPath(platform),
     SSH_ASKPASS_REQUIRE: "never",
     GCM_INTERACTIVE: "never",
     GIT_PAGER: "cat",

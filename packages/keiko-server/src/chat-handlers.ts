@@ -128,10 +128,7 @@ import {
   semanticRetrievalGateForText,
 } from "./memory-retrieval-signals.js";
 import { memoriesUsedInAnswer } from "./memory-answer-use.js";
-import {
-  awaitAnyInitializedConversationReadyChatModel,
-  awaitInitializedConversationReadiness,
-} from "./gateway-readiness.js";
+import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import {
   extractCandidatesFromUserText,
   type CaptureContext,
@@ -163,6 +160,7 @@ import {
   currentAuditRedactString,
   currentConversationReady,
   currentConversationReadinessObservation,
+  currentConversationReadinessPresentation,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentRedactionSecrets,
@@ -243,6 +241,7 @@ import {
 import { memoryLearningRuntime } from "./memory-learning.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
+  logChatCreationOpenedEvent,
   logChatCreationRejectionEvent,
   logChatRejectionEvent,
   logChatTurnStartedEvent,
@@ -397,15 +396,9 @@ function defaultChatModelId(deps: UiHandlerDeps): string {
   const conversationReady = (model: ModelCapability): boolean =>
     currentConversationReady(deps, model.id);
   const readinessObservation = (model: ModelCapability): boolean | undefined =>
-    currentConversationReadinessObservation(deps, model.id);
-  // The public create contract makes modelId optional, so the default must not hand
-  // modelFromBody an unready model while another configured chat model has a current
-  // successful probe — that turned an otherwise valid request into a 400. Readiness only
-  // reorders the preference; when nothing is ready the unready default still flows into
-  // the guard so the caller keeps the precise "not ready" error.
-  // Tier-first election (review finding on the first cut): a verified probe breaks ties only
-  // WITHIN the best rank tier — a warm special-purpose model that happened to pass one probe
-  // must not outrank an unprobed declared chat model.
+    currentConversationReadinessPresentation(deps, model.id);
+  // Readiness breaks ties within the best rank tier. Opening a local chat can keep a
+  // configured model while its readiness is unknown; inference checks readiness separately.
   return (
     (
       chatModels.find((model) => model.id === DEFAULT_CHAT_MODEL && conversationReady(model)) ??
@@ -419,18 +412,16 @@ function explicitChatModelId(body: Record<string, unknown>): string | undefined 
 }
 
 function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): string | RouteResult {
-  // ONE explicitness predicate: the readiness path (create walk vs single probe) and this
-  // admission must never disagree on what counts as an explicit model id.
   const modelId = explicitChatModelId(body) ?? defaultChatModelId(deps);
   const capability = chatCapability(deps, modelId);
-  if (capability?.kind !== "chat") {
+  if (
+    capability?.kind !== "chat" ||
+    (deps.gatewayConfig !== undefined && currentGatewayConfig(deps) === undefined)
+  ) {
     return asParsedOrRouteResult<string>({
       status: 400,
       body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
     });
-  }
-  if (deps.gatewayConfig !== undefined && !currentConversationReady(deps, modelId)) {
-    return asParsedOrRouteResult<string>(unreadyChatModelResult());
   }
   return asParsedOrRouteResult<string>(modelId);
 }
@@ -979,14 +970,12 @@ function logChatCreationRejection(
   status: number,
 ): void {
   const modelKind = chatCapability(deps, modelId)?.kind ?? "unknown";
-  const readinessFailure = modelKind === "chat";
   logChatCreationRejectionEvent({
     correlationId: ctx.correlationId,
     status,
-    reason: readinessFailure ? "readiness" : "configuration",
+    reason: "configuration",
     modelKind,
     ...modelIdEvidence(modelId),
-    readinessObservation: readinessFailure ? readinessObservationOf(deps, modelId) : undefined,
   });
 }
 
@@ -3383,7 +3372,8 @@ export async function handleCreateDesktopChat(
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
-  // Reuse configuration initialization; opening a chat never sends a readiness request.
+  // An empty local chat makes the model picker reachable even during a cold gateway start.
+  // Send and regeneration enforce live readiness at their own inference boundaries.
   if (
     body.creationRequestId !== undefined &&
     !isDesktopChatCreationRequestId(body.creationRequestId)
@@ -3397,15 +3387,6 @@ export async function handleCreateDesktopChat(
   const explicitModelId = explicitChatModelId(body);
   const replay = replayDesktopChat(ctx, deps, body, explicitModelId);
   if (replay !== undefined) return replay;
-  await (explicitModelId === undefined
-    ? awaitAnyInitializedConversationReadyChatModel(
-        deps,
-        defaultChatModelId(deps),
-        ctx.correlationId,
-      )
-    : awaitInitializedConversationReadiness(deps, explicitModelId, ctx.correlationId));
-  const acceptedWhileWaiting = replayDesktopChat(ctx, deps, body, explicitModelId);
-  if (acceptedWhileWaiting !== undefined) return acceptedWhileWaiting;
   const modelId = modelFromBody(body, deps);
   if (isRouteResult(modelId)) {
     logChatCreationRejection(
@@ -3438,7 +3419,13 @@ function persistDesktopChat(
           }
         : {}),
     });
-    return { status: 201, body: chatEnvelope(deps, project, chat) };
+    const envelope = chatEnvelope(deps, project, chat);
+    logChatCreationOpenedEvent(
+      ctx.correlationId,
+      readinessObservationOf(deps, chat.selectedModel) ?? "ready",
+      modelIdEvidence(chat.selectedModel),
+    );
+    return { status: 201, body: envelope };
   } catch (error) {
     if (error instanceof UiStoreError) {
       return {

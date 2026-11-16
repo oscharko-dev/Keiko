@@ -619,10 +619,26 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko konnte seinen Installationsordner gerade nicht prüfen, weil Windows zu langsam geantwortet hat. Versuch es gleich noch einmal; wenn es so bleibt, starte Keiko neu.",
   "codingWorkbench.runtime.outdated":
     "Coding-Läufe können nicht starten, weil die mit diesem Keiko installierte Coding-Engine eine ältere Version ist, die Keiko nicht mehr freigibt. Aktualisiere Keiko auf die neueste Version.",
+  "codingWorkbench.runtime.disabled":
+    "Coding-Läufe sind in der Konfiguration dieser Installation deaktiviert. Bitte den Betreiber, die Coding-Runtime zu aktivieren und Keiko neu zu starten.",
+  "codingWorkbench.runtime.platformUnqualified":
+    "Keiko hat für diese Installation keine unterstützte Coding-Runtime gefunden. Installiere das Keiko-Paket für diesen Computer mit der zugehörigen Runtime und starte Keiko neu.",
+  "codingWorkbench.runtime.developmentRefused":
+    "Die Entwicklungs-Runtime konnte für diesen Checkout nicht aktiviert werden. Prüfe das Dev-Setup und den Ablehnungsgrund im Aktivitätsprotokoll und starte Keiko danach neu.",
+  "codingWorkbench.runtime.payloadMissing":
+    "In dieser Installation fehlen Dateien, die die Coding-Runtime benötigt. Repariere oder installiere Keiko mit dem zugehörigen Runtime-Paket neu und starte Keiko danach neu.",
+  "codingWorkbench.runtime.payloadUnapproved":
+    "Die installierte Coding-Runtime ist für diese Keiko-Version nicht freigegeben. Aktualisiere oder installiere Keiko mit der für diese Version vorgesehenen Runtime neu und starte Keiko danach neu.",
+  "codingWorkbench.runtime.payloadUnverified":
+    "Keiko konnte die Integrität seiner Coding-Runtime-Dateien nicht bestätigen. Repariere oder installiere Keiko aus einem vertrauenswürdigen Paket neu und starte Keiko danach neu.",
+  "codingWorkbench.runtime.secureReadUnavailable":
+    "Die für Coding-Läufe erforderliche geschützte Dateilesefunktion ist nicht verfügbar. Repariere oder installiere Keiko mit dem zugehörigen Runtime-Paket neu und starte Keiko danach neu.",
+  "codingWorkbench.runtime.loopbackUnavailable":
+    "Die lokale Verbindung der Coding-Runtime ist nicht richtig konfiguriert. Bitte den Betreiber, den lokalen Server-Port von Keiko zu prüfen und Keiko neu zu starten.",
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":
-    "Auf dieser Installation kann kein Coding-Lauf gestartet werden. Du kannst weiterhin einen Workspace binden. Unter Windows braucht ein Coding-Lauf zusätzlich das Windows-Runtime-Gateway. Auf einem Mac installiert npm die optionale Runtime normalerweise automatisch. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
+    "Auf dieser Installation kann kein Coding-Lauf gestartet werden. Du kannst weiterhin einen Workspace binden. Prüfe die Startdiagnose im Aktivitätsprotokoll, bevor du die Installation änderst.",
   "codingWorkbench.setup.runtimeEvaluation":
     "Diese Installation nutzt eine ungeprüfte Evaluations-Runtime. Sie trägt keine Apple- oder Microsoft-Codesignatur und läuft unter macOS ohne die Endpoint-Security-Eingrenzung eines Release-Builds. Die Integrität ihrer Nutzdaten wird bei jedem Start weiterhin Byte für Byte geprüft.",
   "codingWorkbench.readiness.modelSource.label": "Modellquelle",
@@ -1360,6 +1376,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.verification.status.notRun": "Nicht gelaufen",
   "codingWorkbench.verification.checks":
     "Prüfungen: {passed} bestanden, {failed} nicht erfolgreich, {skipped} übersprungen",
+  "codingWorkbench.verification.checksWithBlocked":
+    "Prüfungen: {passed} bestanden, {failed} nicht erfolgreich, {blocked} blockiert, {skipped} übersprungen",
   "codingWorkbench.verification.duration": "Dauer: {duration}",
   "codingWorkbench.activity.readBytes": "Gelesen: {bytes} Bytes",
   "codingWorkbench.activity.readFacts": "Gelesen: {bytes} Bytes · Ganze Datei: {lines} Zeilen",
@@ -1476,7 +1494,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Modellquelle konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeUnqualified":
-    "Auf dieser Installation kann kein Coding-Lauf gestartet werden. Unter Windows braucht ein Coding-Lauf zusätzlich das Windows-Runtime-Gateway. Auf einem Mac installiert npm die optionale Runtime normalerweise automatisch. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
+    "Auf dieser Installation kann kein Coding-Lauf gestartet werden. Prüfe die Startdiagnose im Aktivitätsprotokoll, bevor du die Installation änderst.",
   "codingWorkbench.alert.workspaceRefreshFailed":
     "Arbeitsbereich konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.workspaceBindFailed":

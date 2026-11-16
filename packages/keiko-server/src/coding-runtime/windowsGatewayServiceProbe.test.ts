@@ -116,6 +116,8 @@ describe("Windows gateway service probe", () => {
         helperPath: HELPER,
         helperSha256: PIN,
         activityLog: sink,
+        evidenceClass: "functional-not-platform-qualified",
+        origin: "portable-release",
         now: () => time,
         runStatus: () => Promise.resolve(results.shift() ?? 0),
       });
@@ -133,13 +135,25 @@ describe("Windows gateway service probe", () => {
           "coding-runtime.windows-gateway-service.real-sink-line",
           lines[0] ?? "",
         ),
-      ).toMatchObject({ level: "warn", state: "absent" });
+      ).toMatchObject({
+        level: "warn",
+        state: "absent",
+        helperSha256: PIN,
+        evidenceClass: "functional-not-platform-qualified",
+        origin: "portable-release",
+      });
       expect(
         expectActivityLogProof(
           "coding-runtime.windows-gateway-service.real-sink-line",
           lines[1] ?? "",
         ),
-      ).toMatchObject({ level: "info", state: "ready" });
+      ).toMatchObject({
+        level: "info",
+        state: "ready",
+        helperSha256: PIN,
+        evidenceClass: "functional-not-platform-qualified",
+        origin: "portable-release",
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

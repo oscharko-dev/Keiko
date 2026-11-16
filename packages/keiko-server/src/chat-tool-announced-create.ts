@@ -313,7 +313,130 @@ export function toolCallAsTextCorrection(count: number): string {
 const CLAIMED_ACTION_KINDS: ReadonlySet<string> = new Set([
   "announced-create",
   "tool-call-as-text",
+  "approval-not-requested",
 ]);
 export function correctionRoundOffersTools(kinds: readonly string[]): boolean {
   return !kinds.some((kind) => CLAIMED_ACTION_KINDS.has(kind));
+}
+
+const APPROVAL_CLAIMS = [
+  /\bapproval (?:card|request)\s+is (?:(?:now|already) )?(?:ready|prepared)\b/giu,
+  /\bapproval (?:card|request)\s+has (?:(?:now|already) )?been prepared\b/giu,
+  /\b(?:freigabekarte|freigabeanfrage|freigabe)\s+ist (?:(?:erneut|jetzt|bereits|schon) )?(?:für dich )?(?:bereit|vorbereitet)\b/giu,
+  /\b(?:freigabekarte|freigabeanfrage|freigabe)\s+(?:steht|liegt) (?:(?:erneut|jetzt|bereits|schon) )?bereit\b/giu,
+  /\b(?:freigabekarte|freigabeanfrage|freigabe)\s+wurde (?:(?:erneut|jetzt|bereits|schon) )?vorbereitet\b/giu,
+  /\bi(?: have|'ve)? prepared\s+(?:(?:a|an|the)\s+)?approval (?:card|request)(?=$|[,.!?])/giu,
+  /\bi(?: have|'ve)? prepared\s+(?:(?:a|an|the)\s+)?approval (?:card|request)\s+(?:for|and|so|which|that)\b/giu,
+  /\bich habe\s+(?:(?:die|eine)\s+)?(?:freigabekarte|freigabeanfrage|freigabe)\s+(?:(?:jetzt|bereits|schon)\s+)?(?:vorbereitet|erstellt)\b/giu,
+  /\bplease approve\b[^.!?\n]{0,60}\bin the card\b/giu,
+  /\bbitte (?:bestätige|bestätigen|genehmige|genehmigen)\b[^.!?\n]{0,60}\b(?:in der karte|(?:die|der) freigabekarte)\b/giu,
+  /\bbitte (?:die )?freigabe in der karte (?:erteilen|bestätigen|genehmigen)\b/giu,
+  /\bdu kannst\b[^.!?,;\n]{0,60}\b(?:jetzt |bereits |schon )?in der (?:freigabe)?karte (?:genehmigen|freigeben)\b/giu,
+] as const;
+const APPROVAL_PREFIX_CONTEXT =
+  /\b(?:not|no|kein\w*|nicht|will|werde|zuvor|earlier|previous|abgelehnt|declined)\b/iu;
+const APPROVAL_CONDITIONAL_CONTEXT = /\b(?:if|when|once|falls|wenn|sobald|as soon as)\b/iu;
+const APPROVAL_LEADING_CONDITION =
+  /^\s*(?:if|when|once|falls|wenn|sobald|as soon as)\b[^,;.!?\n]{0,160},\s*(?:the |die )?$/iu;
+const APPROVAL_DEFERRED_SUFFIX =
+  /^,?\s+(?:(?:but|aber)\s+)?(?:(?:only|nur)\s+)?(?:if|when|once|falls|wenn|sobald|as soon as)\b/iu;
+const APPROVAL_DECLINED_SUFFIX = /^\s+(?:and|und)\s+(?:was )?(?:declined|abgelehnt)\b/iu;
+const APPROVAL_QUOTES: Readonly<Record<string, string>> = {
+  '"': '"',
+  "“": "”",
+  "„": "“",
+  "‘": "’",
+  "'": "'",
+  "`": "`",
+};
+const APPROVAL_WORD_CHARACTER = /[\p{L}\p{N}]/u;
+
+function approvalQuoteStart(answer: string, index: number): string | undefined {
+  const character = answer.charAt(index);
+  if (character === "'" && APPROVAL_WORD_CHARACTER.test(answer.charAt(index - 1))) return undefined;
+  return Object.hasOwn(APPROVAL_QUOTES, character) ? APPROVAL_QUOTES[character] : undefined;
+}
+
+function closesApprovalQuote(answer: string, index: number, closing: string): boolean {
+  if (answer.charAt(index) !== closing) return false;
+  if (closing !== "'" && closing !== "’") return true;
+  return (
+    !APPROVAL_WORD_CHARACTER.test(answer.charAt(index - 1)) ||
+    !APPROVAL_WORD_CHARACTER.test(answer.charAt(index + 1))
+  );
+}
+
+/** Quoted examples are not assertions; scan once and keep sentence boundaries intact. */
+function approvalProse(answer: string): string {
+  let closing: string | undefined;
+  let prose = "";
+  for (let index = 0; index < answer.length; index += 1) {
+    const character = answer.charAt(index);
+    if (closing !== undefined) {
+      if (closesApprovalQuote(answer, index, closing)) closing = undefined;
+      prose += character === "\n" ? "\n" : " ";
+    } else {
+      closing = approvalQuoteStart(answer, index);
+      prose += closing === undefined ? character : " ";
+    }
+  }
+  return prose;
+}
+
+function assertsApproval(sentence: string): boolean {
+  return APPROVAL_CLAIMS.some((pattern) =>
+    [...sentence.matchAll(pattern)].some((match) => {
+      const end = match.index + match[0].length;
+      const prefix = sentence.slice(0, match.index);
+      const clause = prefix.split(/[,;]|\b(?:and|but|und|aber)\b/iu).at(-1) ?? "";
+      return (
+        !APPROVAL_PREFIX_CONTEXT.test(clause + match[0]) &&
+        !APPROVAL_CONDITIONAL_CONTEXT.test(clause + match[0]) &&
+        !APPROVAL_LEADING_CONDITION.test(prefix) &&
+        !APPROVAL_DEFERRED_SUFFIX.test(sentence.slice(end)) &&
+        !APPROVAL_DECLINED_SUFFIX.test(sentence.slice(end))
+      );
+    }),
+  );
+}
+
+function approvalClaimSentences(answer: string): readonly string[] {
+  return approvalProse(answer)
+    .replaceAll(/\*\*|__/gu, "")
+    .split(SENTENCE_END)
+    .filter((sentence) => !sentence.trimStart().startsWith(">"))
+    .filter(assertsApproval);
+}
+
+/** Preparation is not an approval. Only this turn's still-pending server-owned card can be one. */
+export function unsupportedApprovalClaimCount(
+  exchanges: readonly ChatToolExchange[],
+  answer: string,
+  now = Date.now(),
+  jiraContext = false,
+): number {
+  const jira = exchanges.filter((exchange) =>
+    exchange.result?.toolRef?.canonicalId.startsWith("keiko.jira."),
+  );
+  if (jira.length === 0 && !jiraContext) return 0;
+  if (
+    jira.some((exchange) => {
+      const approval = exchange.approval;
+      return (
+        approval?.kind === "jira-chat-write" &&
+        approval.state === "pending" &&
+        approval.invocationId === exchange.call.id &&
+        approval.expiresAt > now
+      );
+    })
+  )
+    return 0;
+  return Math.min(COUNT_MAX, approvalClaimSentences(answer).length);
+}
+
+export function unsupportedApprovalCorrection(count: number): string {
+  return (
+    `Your answer claims ${String(count)} time(s) that an approval card is ready, but this turn has no pending Jira approval. ` +
+    "Reading fields or saving a draft does not request approval. Correct the answer to describe only the actual preparation and missing action; do not ask the person to click a nonexistent card and do not create or change anything now."
+  );
 }

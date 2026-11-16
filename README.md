@@ -98,11 +98,18 @@ Connected folders do not need Git metadata or a `package.json`. Run `npx keiko i
 
 - The Linux package is a community tier. It keeps what it does today, but new features that depend on the operating system are built and qualified for macOS and Windows first and may not reach Linux ([ADR-0183](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0183-linux-desktop-community-tier.md)).
 - Updating from before 1.2.0 requires manual review of custom support scripts: legacy inclusion flags, filename-based `--out` arguments and sidecar bundles are replaced by the canonical private report workflow. See the [support guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/observability/support-workspace.md).
-- Windows Coding requires a verified platform runtime and the matching gateway service. The development checkout has passed real read, edit and verification journeys, but the Windows npm runtime is not yet published and the complete installed Node 26 customer path remains under qualification. Chat, Files and manual Editor use are separate; see the [qualification status](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/opencode-windows-qualification.md).
+- Windows Coding requires a verified platform runtime and the matching gateway service. The Windows 1.5.1 desktop package includes an evaluation runtime. Coding Workbench runs from the installed package require completion of the [Windows runtime qualification](https://github.com/oscharko-dev/Keiko/issues/4068). The development checkout has passed bounded Windows read and edit journeys.
 - Model weights and inference servers are not bundled. Connect a compatible local model server, including a separately installed Gemma server, through Keiko's gateway configuration, directly or through a proxy such as LiteLLM. This release does not install MLX or certify every model and context-window configuration.
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `npx keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `npx keiko start --port <n>` sets the Port to bind (default: 1983).
+
+## What's new in 1.5.1
+
+- **Chat and browser connection.** Chat opens while saved gateway models settle. Late responses preserve the newest selection, and reconnecting keeps the draft.
+- **Windows Git and Editor.** Git discovery handles the Windows user environment. Fetch and Pull show the resulting branch counts. File-list refresh and Windows Editor history are more reliable.
+- **Jira Pods and Skills.** Jira displays the actual approval card and downloadable reports. Recent reports remain downloadable after restart. A verified Jira Pod enables editable Epic, Issue and Bug examples in Skills.
+- **Local state.** UI schema 79 adds bounded Jira report downloads and preserves existing Chats. Keep a matching pre-update backup if you may need to downgrade.
 
 ## What's new in 1.5.0
 

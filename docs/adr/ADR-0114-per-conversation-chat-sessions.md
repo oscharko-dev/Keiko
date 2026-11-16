@@ -135,6 +135,31 @@ windows.
    conversation aborts THAT conversation's in-flight send" — never a sibling window's.
    Each window session owns its late-response guard (responses land keyed by `chatId`, so a settled
    response can only ever land in its own conversation).
+   Initial bootstrap, project loads, conversation selections and creation requests share one window-local navigation
+   generation. Every newer intent supersedes older asynchronous success and failure, including
+   within the same project or when selecting the current conversation again. An accepted creation
+   still updates the catalog and returns its persisted conversation to the caller; only its stale
+   selection adoption is dropped. Late results cannot replace the newer selection, messages, draft
+   or error. Superseded results emit the closed `chat-navigation-superseded` activity through the
+   existing Composer Activity Log operation. Project reads retain their original list correlation;
+   no project path or conversation content is logged (#4418).
+   A superseded bootstrap can still fill missing project/model metadata for the selected
+   conversation, while keeping newer catalog results and selection state. Its loading flag always
+   settles; only a current bootstrap can surface a navigation error.
+   A missing Chat list is filled only for that live selected conversation's project; a bootstrap
+   snapshot from another project is not imported, and a newer empty project selection stays empty.
+   An acknowledged deletion clears its matching pending selection identity before an older read
+   can select it again. Opening a Chat keeps existing canonical rows in that project's list and
+   filters foreign rows even when its project metadata has not arrived yet.
+   Each pending project read also observes acknowledged Chat mutations through the existing
+   subscription until a newer navigation, unmount, or its `finally` cleanup. Its catalog reconciles only those transient upserts
+   and deletions against the server snapshot; another project's upserts cannot enter it. This keeps
+   a persisted superseded creation visible without selecting it, and prevents a stale snapshot from
+   restoring a deleted conversation. No lasting mutation cache is introduced. A changed catalog
+   emits `chat-catalog-reconciled` under the same existing activity and original list correlation.
+   Acknowledged mutations also invalidate affected shared in-flight list entries, so a later reader
+   cannot join a request that started before that mutation. Existing readers retain their own
+   observations until settlement; their cleanup cannot evict a newer shared request.
 4. **D4 — Window binding and restoration.** `chat` is not a singleton. The per-`chatId` dedupe in
    `workspaceActions.add()` stays: opening the same conversation focuses its existing window, while
    a different conversation creates a collision-safe window identity. Durable window state keeps

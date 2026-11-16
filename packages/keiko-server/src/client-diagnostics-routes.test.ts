@@ -317,6 +317,9 @@ describe("POST /api/diagnostics/client", () => {
     "send-failure-skipped-unproven",
     "send-cancel-requested",
     "send-refused-while-running",
+    "skill-connection-unavailable",
+    "chat-navigation-superseded",
+    "chat-catalog-reconciled",
   ])("records %s as correlated body-free composer evidence", async (composerActivity) => {
     const sink = captureServerLog();
     await handleClientDiagnosticIngest(
@@ -3926,36 +3929,39 @@ describe("reviewed navigation and render evidence", () => {
       expect(clientDiagnosticEvents(sink)).toHaveLength(0);
     },
   );
-  it("persists file-read transport and stage lifecycle under one minted correlation", async () => {
-    const stateDir = await mkdtemp(join(tmpdir(), "keiko-navigation-stage-"));
-    const sink = createActivityLogSink(stateDir, { level: "debug" });
-    setServerLogger(createServerLogger({ sink, level: "debug" }));
-    const correlationId = "ui_files-read-0001";
-    const base = { kind: "stage", stage: "files directory load", ordinal: 1, correlationId };
-    try {
-      for (const body of [
-        { ...base, phase: "started" },
-        { ...base, phase: "settled", durationMs: 3, navigationOutcome: "applied" },
-      ])
-        await handleClientDiagnosticIngest(context(JSON.stringify(body), correlationId));
-      sink.close?.();
-      const analyzed = analyzeLogText(readPersistedActivityLog(stateDir));
-      const timeline = analyzed.timelines.find((entry) => entry.correlationId === correlationId);
-      expect(
-        timeline?.lines.filter((line) => line.op === "http.request.body.received"),
-      ).toHaveLength(2);
-      expect(
-        timeline?.lines
-          .filter((line) => line.op.startsWith("client.stage."))
-          .map((line) => line.op),
-      ).toEqual(["client.stage.started", "client.stage.settled"]);
-      expect(analyzed.sufficiency.status).toBe("complete");
-    } finally {
-      resetServerLogger();
-      sink.close?.();
-      await rm(stateDir, { recursive: true, force: true });
-    }
-  });
+  it.each(["files directory load", "editor watch recovery"])(
+    "persists %s transport and stage lifecycle under one minted correlation",
+    async (stage) => {
+      const stateDir = await mkdtemp(join(tmpdir(), "keiko-navigation-stage-"));
+      const sink = createActivityLogSink(stateDir, { level: "debug" });
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const correlationId = "ui_files-read-0001";
+      const base = { kind: "stage", stage, ordinal: 1, correlationId };
+      try {
+        for (const body of [
+          { ...base, phase: "started" },
+          { ...base, phase: "settled", durationMs: 3, navigationOutcome: "applied" },
+        ])
+          await handleClientDiagnosticIngest(context(JSON.stringify(body), correlationId));
+        sink.close?.();
+        const analyzed = analyzeLogText(readPersistedActivityLog(stateDir));
+        const timeline = analyzed.timelines.find((entry) => entry.correlationId === correlationId);
+        expect(
+          timeline?.lines.filter((line) => line.op === "http.request.body.received"),
+        ).toHaveLength(2);
+        expect(
+          timeline?.lines
+            .filter((line) => line.op.startsWith("client.stage."))
+            .map((line) => line.op),
+        ).toEqual(["client.stage.started", "client.stage.settled"]);
+        expect(analyzed.sufficiency.status).toBe("complete");
+      } finally {
+        resetServerLogger();
+        sink.close?.();
+        await rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
   it.each(["shell", "window-body"])(
     "records a real %s render failure at error while plain internal boundaries remain warn",
     async (renderFailure) => {
@@ -4179,6 +4185,8 @@ describe("actual source reveal lifecycle", () => {
 });
 
 it.each([
+  ["git sync outcome", "started", "git-sync-outcome"],
+  ["git sync outcome", "settled", "git-sync-outcome"],
   ["markdown copy feedback", "started", "markdown-copy-feedback"],
   ["markdown copy feedback", "settled", "markdown-copy-feedback"],
   ["transcript navigation", "started", "transcript-navigation"],
@@ -4187,6 +4195,8 @@ it.each([
   ["modal focus restoration", "settled", "modal-focus-restoration"],
   ["knowledge pod selection", "started", "knowledge-pod-selection"],
   ["knowledge pod selection", "settled", "knowledge-pod-selection"],
+  ["jira starter draft", "started", "jira-starter-draft"],
+  ["jira starter draft", "settled", "jira-starter-draft"],
   ["chat connector selection", "started", "chat-connector-selection"],
   ["chat connector selection", "settled", "chat-connector-selection"],
   ["chat connector refresh", "started", "chat-connector-refresh"],

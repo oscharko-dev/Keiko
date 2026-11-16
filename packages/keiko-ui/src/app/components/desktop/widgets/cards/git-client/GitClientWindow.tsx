@@ -409,8 +409,6 @@ function selectedChangeResolver(
 interface SyncExecutionContext {
   readonly sequence: number;
   readonly startedAt: number;
-  readonly aheadBefore: number;
-  readonly behindBefore: number;
   readonly projectId: string;
   readonly repositoryRoot: string | undefined;
   readonly sequenceRef: RefObject<number>;
@@ -420,21 +418,35 @@ interface SyncExecutionContext {
   readonly reconcileEditorBuffers: (root: string) => Promise<void>;
 }
 
+interface SyncPostCounts {
+  readonly ahead?: number | undefined;
+  readonly behind?: number | undefined;
+}
+
+function syncPostCountSuffix(counts: SyncPostCounts | undefined, t: I18nTranslate): string {
+  const suffixes: string[] = [];
+  for (const [key, count] of [
+    ["gitClientWindow.sync.aheadSuffix", counts?.ahead],
+    ["gitClientWindow.sync.behindSuffix", counts?.behind],
+  ] as const) {
+    if (count !== undefined && Number.isSafeInteger(count) && count >= 0)
+      suffixes.push(t(key, { count }));
+  }
+  return suffixes.join("");
+}
+
 function syncOutcomeWithMetrics(
   context: SyncExecutionContext,
   outcome: SyncOutcomeView,
   t: I18nTranslate,
+  counts?: SyncPostCounts,
 ): SyncOutcomeView {
   const elapsedSeconds = Math.round((performance.now() - context.startedAt) / 100) / 10;
-  const delta =
-    context.aheadBefore > 0
-      ? t("gitClientWindow.sync.aheadSuffix", { count: context.aheadBefore })
-      : t("gitClientWindow.sync.behindSuffix", { count: context.behindBefore });
   return {
     message: t("gitClientWindow.sync.outcome", {
       label: outcome.message,
       seconds: elapsedSeconds,
-      delta,
+      delta: syncPostCountSuffix(counts, t),
     }),
     failed: outcome.failed,
   };
@@ -445,6 +457,19 @@ function syncOutcomeWithMetrics(
 // syncOutcomePresentation decide.
 function blockedOutcome(message: string): SyncOutcomeView {
   return { message, failed: false };
+}
+
+function recordSyncOutcomePresentation(): void {
+  const correlationId = newClientCorrelationId();
+  const stage = { stage: "git sync outcome", ordinal: 1 } as const;
+  reportClientDiagnostic("Git sync outcome presentation started.", {
+    correlationId,
+    stageReport: { ...stage, phase: "started" },
+  });
+  reportClientDiagnostic("Git sync outcome presentation settled.", {
+    correlationId,
+    stageReport: { ...stage, phase: "settled", durationMs: 0 },
+  });
 }
 
 function completeSync(
@@ -458,6 +483,7 @@ function completeSync(
   if (context.sequenceRef.current !== context.sequence) return;
   context.setBusy(false);
   context.setOutcome(outcome);
+  recordSyncOutcomePresentation();
 }
 
 function failSync(context: SyncExecutionContext, error: unknown): void {
@@ -502,6 +528,7 @@ function runFetchOrPullSync(
           context,
           syncOutcomePresentation(label, result.status, t),
           t,
+          result,
         );
         if (operation !== "pull" || result.status !== "succeeded") {
           completeSync(context, outcome, true);
@@ -618,7 +645,6 @@ function runPushSync(
 }
 
 interface GitSyncActionOptions {
-  readonly activeSummary: GitRepositorySummary | null;
   readonly client: GitClientSeam;
   readonly repositoryRoot: string | undefined;
   readonly selectedPath: string | null;
@@ -634,7 +660,6 @@ interface GitSyncActionOptions {
 
 function useGitSyncAction(options: GitSyncActionOptions): () => void {
   const {
-    activeSummary,
     client,
     repositoryRoot,
     selectedPath,
@@ -657,8 +682,6 @@ function useGitSyncAction(options: GitSyncActionOptions): () => void {
     const context: SyncExecutionContext = {
       sequence,
       startedAt: performance.now(),
-      aheadBefore: activeSummary?.ahead ?? 0,
-      behindBefore: activeSummary?.behind ?? 0,
       projectId: selectedPath,
       repositoryRoot,
       sequenceRef,
@@ -670,7 +693,6 @@ function useGitSyncAction(options: GitSyncActionOptions): () => void {
     runFetchOrPullSync(client, selectedPath, syncView, context, t, optionalT);
     runPushSync(client, selectedPath, syncView, context, t);
   }, [
-    activeSummary,
     client,
     repositoryRoot,
     reconcileEditorBuffers,
@@ -1947,7 +1969,6 @@ export function GitClientWindow({
   );
 
   const runSync = useGitSyncAction({
-    activeSummary,
     client,
     repositoryRoot:
       activeStatus?.available === true

@@ -15,6 +15,7 @@ import { delimiter, join, resolve as resolvePath } from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   redact,
+  environmentVariableValue,
   WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
 } from "@oscharko-dev/keiko-security";
@@ -649,6 +650,15 @@ interface WindowsAdmissionPorts {
   readonly elapsedNow: () => number;
 }
 
+function windowsTerminationEnvironment(processEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of ["SystemRoot", "WINDIR"]) {
+    const value = environmentVariableValue(processEnv, name, "win32");
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
 function admitWindowsCommand(
   slots: { available: number },
   drain: () => void,
@@ -657,10 +667,7 @@ function admitWindowsCommand(
   const { killWindowsTree, resolveInvocation, runTaskkill, budget, elapsedNow } = ports;
   return (processEnv) => {
     if (slots.available <= 0) return undefined;
-    const boundSystemEnv: NodeJS.ProcessEnv = {
-      ...(processEnv.SystemRoot === undefined ? {} : { SystemRoot: processEnv.SystemRoot }),
-      ...(processEnv.WINDIR === undefined ? {} : { WINDIR: processEnv.WINDIR }),
-    };
+    const boundSystemEnv = windowsTerminationEnvironment(processEnv);
     // Authenticate the root against GLOBALROOT and prove taskkill is a regular OS binary before
     // admitting a child. The resulting conventional CreateProcess-compatible path is bound to
     // this reservation. Only the resolver inputs are copied: later mutation of deps.env cannot
@@ -813,7 +820,7 @@ function assertBareExecutable(command: string): void {
 }
 
 function pathEntries(processEnv: NodeJS.ProcessEnv): readonly string[] {
-  const pathValue = processEnv.PATH ?? "";
+  const pathValue = environmentVariableValue(processEnv, "PATH") ?? "";
   return pathValue.length === 0 ? [] : pathValue.split(delimiter).filter(Boolean);
 }
 
@@ -821,7 +828,7 @@ function executableExtensions(processEnv: NodeJS.ProcessEnv): readonly string[] 
   if (process.platform !== "win32") {
     return [""];
   }
-  return (processEnv.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+  return (environmentVariableValue(processEnv, "PATHEXT") ?? ".EXE;.CMD;.BAT;.COM")
     .split(";")
     .filter((value) => value.length > 0);
 }

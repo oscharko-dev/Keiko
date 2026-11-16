@@ -5,6 +5,7 @@ import { JIRA_ISSUE_TEMPLATE_LIMITS } from "@oscharko-dev/keiko-contracts/runtim
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { Icons } from "../Icons";
+import { JiraStarterTemplates } from "./JiraStarterTemplates";
 import { JiraTemplateList, PodSelect, type JiraTemplates } from "./JiraTemplateTools";
 import { SkillChatToggle } from "./SkillChatToggle";
 import type { MarkdownSkillLibrary, MarkdownSkillLibraryError } from "./useMarkdownSkillLibrary";
@@ -94,6 +95,7 @@ function TemplateGroup({
       hint={t("chat.skills.jira.description")}
       extra={<PodSelect jira={jira} />}
     >
+      <JiraStarterTemplates available={jira.podReady} workspace={workspace} />
       <JiraTemplateList
         jira={jira}
         library={library}

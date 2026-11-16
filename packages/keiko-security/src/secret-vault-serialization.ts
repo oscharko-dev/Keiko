@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, toNamespacedPath } from "node:path";
 import {
   assertSqliteStatePath,
   chmodIfPresent,
@@ -20,8 +20,9 @@ function acquire(storePath: string, scope: string): (() => void) | undefined {
   assertSqliteStatePath(path);
   ensureDirHardened(dirname(path));
   assertSqliteStatePath(path);
-  // Stable zero-data SQLite inode; never unlink it or reclaim by a PID/timeout guess.
-  const guard = acquireSqliteFileGuard(path, () => {
+  // Use the same validated inode even when the Windows SQLite path exceeds MAX_PATH.
+  // Never unlink the stable guard or reclaim it by a PID/timeout guess.
+  const guard = acquireSqliteFileGuard(toNamespacedPath(path), () => {
     chmodIfPresent(path, FILE_MODE);
   });
   if (guard === undefined) return undefined;
