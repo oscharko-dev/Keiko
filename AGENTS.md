@@ -1255,9 +1255,11 @@ because the answer names it as not verified (the dialog tells the person to choo
 Coding Workbench, or to verify it in Settings > Models), its tool-calling record is `unverified`, and
 no successful observation is recorded for it. A request for a model with no current positive
 observation that did not come through the UI's first-use check (a Voice canonical target, a direct
-API call) is refused and starts no check: Chat create, send and regeneration answer 400
+API call) is refused and starts no check. Chat send and regeneration answer 400
 `CONVERSATION_MODEL_NOT_READY`, a coding run start is refused as model-unavailable, and the Voice
-queue retries a bounded number of times and then suspends with the transcript kept. A window opening
+queue retries a bounded number of times and then suspends with the transcript kept. Opening an empty
+local Chat requires a configured chat model and works while readiness is unknown or failed.
+`chat.creation.opened` records the closed readiness observation without starting a check. A window opening
 or restored selection reads the Workbench profile with `check=use`, which may join a check that
 already runs and report the state but never dispatches one; only a person's pick or Start sends
 `check=1`, and a Start belongs to the model it was pressed for (a model adopted or picked meanwhile

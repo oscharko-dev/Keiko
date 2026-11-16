@@ -7,7 +7,7 @@ import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contract
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
 import {
-  CHAT_MODEL_WALK_BUDGET_MS,
+  CONVERSATION_ADMISSION_WAIT_MS,
   awaitInitializedConversationReadiness,
   checkSelectedConversationModel,
   initializeConfiguredConversationReadiness,
@@ -73,7 +73,7 @@ it("keeps a shared probe alive after one execution waiter expires", async () => 
       }),
   );
   vi.stubGlobal("fetch", fetch);
-  configure(deps, "corr-long-probe", CHAT_MODEL_WALK_BUDGET_MS * 2);
+  configure(deps, "corr-long-probe", CONVERSATION_ADMISSION_WAIT_MS * 2);
   await vi.waitFor(() => {
     expect(fetch).toHaveBeenCalledOnce();
   });
@@ -90,7 +90,7 @@ it("keeps a shared probe alive after one execution waiter expires", async () => 
       laterSettled = true;
     },
   );
-  await vi.advanceTimersByTimeAsync(CHAT_MODEL_WALK_BUDGET_MS - 60_001);
+  await vi.advanceTimersByTimeAsync(CONVERSATION_ADMISSION_WAIT_MS - 60_001);
   expect(firstSettled).toBe(false);
   await vi.advanceTimersByTimeAsync(1);
   await first;

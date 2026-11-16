@@ -3942,7 +3942,7 @@ async function awaitConversationRequestReadiness(
     probe.correlationId,
     holder.generation(),
   );
-  await settledWithinBudget(probe.promise, CHAT_MODEL_WALK_BUDGET_MS);
+  await settledWithinBudget(probe.promise, CONVERSATION_ADMISSION_WAIT_MS);
 }
 
 // Bound repeated explicit/initialization checks after a failed observation. Conversation
@@ -4159,7 +4159,7 @@ async function runOnDemandReadinessProbe(
 }
 
 // Keep the shared startup check alive when a conversation request stops waiting for it (#4038).
-export const CHAT_MODEL_WALK_BUDGET_MS = GATEWAY_SILENCE_FLOOR_MS;
+export const CONVERSATION_ADMISSION_WAIT_MS = GATEWAY_SILENCE_FLOOR_MS;
 
 async function settledWithinBudget(probe: Promise<void>, budgetMs: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
