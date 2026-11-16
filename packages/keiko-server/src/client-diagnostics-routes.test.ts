@@ -317,6 +317,7 @@ describe("POST /api/diagnostics/client", () => {
     "send-failure-skipped-unproven",
     "send-cancel-requested",
     "send-refused-while-running",
+    "skill-connection-unavailable",
   ])("records %s as correlated body-free composer evidence", async (composerActivity) => {
     const sink = captureServerLog();
     await handleClientDiagnosticIngest(

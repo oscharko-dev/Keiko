@@ -682,6 +682,14 @@ captured session identity and rotation, including retries. Missing or revoked au
 without dispatching the skill. Ordinary no-skill Chat remains available without pairing; rejected
 ordinary requests do not extend a session's idle lifetime merely through request parsing.
 
+If a previously loaded Chat skill selection becomes unreadable, the composer preserves it and
+keeps sending blocked until a fresh selection read succeeds. A concealed not-found response alone
+does not prove session loss: the existing browser-approval inspection must report unavailable
+before the UI directs the person to **Connect browser** (#4407). This recovery hint never clears or
+changes the selected skill, and reconnection triggers the existing selection refresh. Initially
+unpaired no-skill Chat retains its server-checked no-selection precondition. The existing
+`client.composer.activity` operation records only the closed `skill-connection-unavailable` state.
+
 The governed unit-test-generation and bug-investigation workflows take an explicitly selected
 skill on `POST /api/runs` (#4025 AC1): the request names only its identity, revision and digest,
 never its text, and is not inferred from any Chat selection. Launch reads it only from the paired

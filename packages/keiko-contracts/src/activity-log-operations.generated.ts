@@ -6479,6 +6479,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "send-failure-skipped-unproven",
           "send-cancel-requested",
           "send-refused-while-running",
+          "skill-connection-unavailable",
           "equivalent-edit-ignored",
           "stale-draft-echo-ignored",
           "non-text-paste-ignored",

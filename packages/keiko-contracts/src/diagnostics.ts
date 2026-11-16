@@ -448,6 +448,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "send-failure-skipped-unproven",
   "send-cancel-requested",
   "send-refused-while-running",
+  "skill-connection-unavailable",
   "equivalent-edit-ignored",
   "stale-draft-echo-ignored",
   "non-text-paste-ignored",

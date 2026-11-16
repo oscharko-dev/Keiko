@@ -2890,6 +2890,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.unavailable": "Ausgewählter Skill nicht verfügbar",
   "chat.skills.requestError":
     "Skills konnten nicht aktualisiert werden. Auswahl neu laden und erneut versuchen.",
+  "chat.skills.connectionRequired":
+    "Wähle „Browser verbinden“, um Skills neu zu laden und fortzufahren. Deine Auswahl bleibt erhalten.",
   "chat.skills.upload": "Markdown hochladen (.md, bis 128 KiB)",
   "chat.skills.retry": "Neu laden",
   "chat.skills.refusal.template-marker-misplaced":

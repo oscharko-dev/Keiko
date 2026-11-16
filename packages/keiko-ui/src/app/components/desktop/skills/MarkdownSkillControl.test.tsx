@@ -23,6 +23,7 @@ import {
   expectedMarkdownSkillSelection,
 } from "../hooks/useChatMarkdownSkill";
 import { ApiError } from "@/lib/api";
+import { inspectBrowserApprovals } from "@/lib/browser-approval-api";
 import { carryMarkdownSkillRefusal } from "@/lib/markdown-skill-refusal";
 import * as atlassian from "@/lib/atlassian-connectors-api";
 import * as jiraTemplates from "@/lib/jira-templates-api";
@@ -42,6 +43,7 @@ vi.mock("@/lib/markdown-skills-api", () => ({
   changeMarkdownSkillSelection: vi.fn(),
 }));
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
+vi.mock("@/lib/browser-approval-api", () => ({ inspectBrowserApprovals: vi.fn() }));
 vi.mock("@/lib/jira-templates-api", () => ({
   fetchJiraTemplates: vi.fn(),
   proposeJiraTemplates: vi.fn(),
@@ -81,6 +83,7 @@ function Harness({ chatId = "chat-a" }: { readonly chatId?: string }): ReactNode
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(inspectBrowserApprovals).mockResolvedValue({ state: "unavailable" });
   vi.mocked(jiraTemplates.fetchJiraTemplates).mockResolvedValue([]);
   vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([]);
   vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([]);

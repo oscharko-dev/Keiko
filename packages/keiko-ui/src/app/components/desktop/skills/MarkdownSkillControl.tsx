@@ -31,7 +31,13 @@ export function MarkdownSkillControl({
       </button>
       <SelectedSkillChip skill={skill} disabled={disabled} onOpen={() => setOpen(true)} />
       {skill.failed && skill.requireNoSkill !== true ? (
-        <span role="alert">{t("chat.skills.requestError")}</span>
+        <span role="alert">
+          {t(
+            skill.connectionRequired
+              ? "chat.skills.connectionRequired"
+              : "chat.skills.requestError",
+          )}
+        </span>
       ) : null}
       {open ? (
         <MarkdownSkillDialog

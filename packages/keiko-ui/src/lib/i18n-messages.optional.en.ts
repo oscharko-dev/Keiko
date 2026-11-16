@@ -2730,6 +2730,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.remove": "Remove skill from this chat",
   "chat.skills.unavailable": "Selected skill unavailable",
   "chat.skills.requestError": "Skills could not be updated. Reload the selection and try again.",
+  "chat.skills.connectionRequired":
+    "Choose Connect browser to refresh Skills and continue. Your selection is kept.",
   "chat.skills.upload": "Upload Markdown (.md, up to 128 KiB)",
   "chat.skills.retry": "Reload",
   "chat.skills.refusal.template-marker-misplaced":

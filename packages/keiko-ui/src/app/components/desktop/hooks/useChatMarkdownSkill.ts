@@ -10,6 +10,7 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
 import { ApiError } from "@/lib/api";
+import { inspectBrowserApprovals } from "@/lib/browser-approval-api";
 import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 
 export interface ChatMarkdownSkill {
@@ -18,6 +19,7 @@ export interface ChatMarkdownSkill {
   readonly busy: boolean;
   readonly failed: boolean;
   readonly requireNoSkill?: boolean;
+  readonly connectionRequired?: boolean;
   readonly refresh: () => Promise<void>;
   readonly select: (skill: MarkdownSkillReference | null) => Promise<void>;
 }
@@ -28,7 +30,12 @@ interface SelectionState {
   readonly failed: boolean;
   readonly busy: boolean;
   readonly accessUnavailable?: boolean;
+  readonly connectionRequired?: boolean;
 }
+
+type SetSelectionState = (
+  update: SelectionState | ((previous: SelectionState) => SelectionState),
+) => void;
 
 export function chatSkillBlocksSend(skill: ChatMarkdownSkill | undefined): boolean {
   return (
@@ -66,6 +73,33 @@ function failedSelectionRead(
   };
 }
 
+async function recordSelectionReadFailure(
+  error: unknown,
+  chatId: string,
+  ownsResult: () => boolean,
+  setState: SetSelectionState,
+): Promise<void> {
+  if (!ownsResult()) return;
+  const accessUnavailable = error instanceof ApiError && error.status === 404;
+  if (!accessUnavailable) reportFailure(error);
+  // Retain the selection and refuse sends before checking why the private read was concealed.
+  setState((previous) => failedSelectionRead(previous, chatId, accessUnavailable));
+  if (!accessUnavailable) return;
+  try {
+    const connection = await inspectBrowserApprovals(undefined, correlationIdOf(error));
+    if (!ownsResult()) return;
+    const connectionRequired = connection.state === "unavailable";
+    setState((previous) => ({ ...previous, connectionRequired }));
+    if (connectionRequired)
+      reportClientDiagnostic("Chat skill refresh requires a browser connection.", {
+        correlationId: correlationIdOf(error),
+        composerActivity: "skill-connection-unavailable",
+      });
+  } catch (inspectionError) {
+    if (ownsResult()) reportFailure(inspectionError);
+  }
+}
+
 export function useChatMarkdownSkill(chatId: string | undefined): ChatMarkdownSkill {
   const redemptions = useCodingAppSessionRedemptions();
   const [state, setState] = useState<SelectionState>({ busy: false, failed: false });
@@ -76,16 +110,13 @@ export function useChatMarkdownSkill(chatId: string | undefined): ChatMarkdownSk
   const refresh = useCallback(async (): Promise<void> => {
     if (chatId === undefined || mutating.current === chatId) return;
     const epoch = ++request.current;
+    const ownsResult = (): boolean => current.current === chatId && request.current === epoch;
     try {
       const { fetchMarkdownSkillSelection } = await import("@/lib/markdown-skills-api");
       const view = await fetchMarkdownSkillSelection(chatId);
-      if (current.current === chatId && request.current === epoch)
-        setState({ chatId, view, busy: false, failed: false });
+      if (ownsResult()) setState({ chatId, view, busy: false, failed: false });
     } catch (error) {
-      if (current.current !== chatId || request.current !== epoch) return;
-      const accessUnavailable = error instanceof ApiError && error.status === 404;
-      if (!accessUnavailable) reportFailure(error);
-      setState((previous) => failedSelectionRead(previous, chatId, accessUnavailable));
+      await recordSelectionReadFailure(error, chatId, ownsResult, setState);
     }
   }, [chatId]);
   useEffect(() => {
@@ -112,6 +143,7 @@ export function useChatMarkdownSkill(chatId: string | undefined): ChatMarkdownSk
       busy: chatId !== undefined && !requireNoSkill && (view === undefined || state.busy),
       failed: state.chatId === chatId && state.failed,
       requireNoSkill,
+      connectionRequired: state.chatId === chatId && state.connectionRequired === true,
     }),
     [chatId, view, select, refresh, state, requireNoSkill],
   );
@@ -123,7 +155,7 @@ function useSelectionMutation(
   current: { current: string | undefined },
   request: { current: number },
   mutating: { current: string | undefined },
-  setState: (update: SelectionState | ((previous: SelectionState) => SelectionState)) => void,
+  setState: SetSelectionState,
   reload: { current: () => Promise<void> },
 ): ChatMarkdownSkill["select"] {
   return useCallback(

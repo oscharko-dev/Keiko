@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2b37de44dd10636556d5b4ead0b9c345570723c8659638540dbf03f4b7414244",
+    "catalogDigest": "7cf7f2bf72a0a4d283b8f2b823d7791a9ae246aefaadfe4f09116d51bfb9e2e6",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6705,6 +6705,7 @@
               "send-failure-skipped-unproven",
               "send-cancel-requested",
               "send-refused-while-running",
+              "skill-connection-unavailable",
               "equivalent-edit-ignored",
               "stale-draft-echo-ignored",
               "non-text-paste-ignored",

@@ -5904,6 +5904,34 @@ it("acknowledges a missing-file scope before the user explicitly sends the focus
 });
 
 describe("ChatWindow private draft and skill recovery", () => {
+  it("directs a disconnected composer to Connect browser without suggesting a skill change", () => {
+    const session = makeSession({
+      activeChat: makeChat(),
+      draft: "A complete message",
+      markdownSkill: {
+        chatId: makeChat().id,
+        view: { availability: "none", selection: { revision: 0, skill: null } },
+        busy: false,
+        failed: true,
+        connectionRequired: true,
+        refresh: vi.fn(),
+        select: vi.fn(),
+      },
+    });
+    renderWindow(session);
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect(send).toHaveAttribute("aria-disabled", "true");
+    expect(send).toHaveAccessibleDescription(
+      "Choose Connect browser to refresh Skills and continue. Your selection is kept.",
+    );
+    expect(screen.queryByText(/Open Skills and select an available skill/u)).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent(
+      "A complete message",
+    );
+    fireEvent.click(send);
+    expect(session.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("explains a blocked skill selection for a populated composer", () => {
     renderWindow(
       makeSession({
