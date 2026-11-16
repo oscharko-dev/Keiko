@@ -41,7 +41,7 @@ export const LOCALE_BOOTSTRAP = `try{var l=null;try{l=localStorage.getItem("keik
 // but its literal must also remain data when the containing bootstrap is embedded in HTML.
 const APP_BOOT_RECOVERY_HANDOFF_LITERAL = JSON.stringify(
   APP_BOOT_RECOVERY_HANDOFF_EVENT,
-).replaceAll("<", "\\u003c");
+).replaceAll("<", String.raw`\u003c`);
 
 // Issue #1214: if a restart/redeploy interrupts the initial RSC/Flight boot, the static
 // prerender shell can remain visible forever and React effects never run. This pre-hydration
