@@ -275,6 +275,7 @@ import { useEditorSettings } from "./useEditorSettings";
 import { useEditorVerificationRun } from "./useEditorVerificationRun";
 import { useWorkspaceSnippets } from "./useWorkspaceSnippets";
 import { useWorkspaceWatch } from "./useWorkspaceWatch";
+import { beginWorkspaceWatchRecovery } from "./workspaceWatchRecovery";
 import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -2301,6 +2302,8 @@ function EditorRuntimeWidget({
     [reconcileWorkspaceWatchEvent],
   );
   const workspaceWatch = useWorkspaceWatch(root, handleWorkspaceWatchEvent);
+  const workspaceWatchRef = useRef(workspaceWatch);
+  workspaceWatchRef.current = workspaceWatch;
   const gitReconciliationSequenceRef = useRef(0);
   useEffect(() => {
     if (!hasTarget || root === undefined || file === undefined || !fileModelMatchesTarget) return;
@@ -2567,20 +2570,30 @@ function EditorRuntimeWidget({
         beginLoad();
       }
       const requestCorrelationId = newClientCorrelationId();
+      const recoverSnapshot = beginWorkspaceWatchRecovery(workspaceWatchRef, requestCorrelationId);
+      let recoveryOutcome: "applied" | "failed" | "cancelled" = "cancelled";
       try {
         const response = await fetchFilesContent(root, file, requestCorrelationId);
-        if (signal.cancelled) return;
+        if (signal.cancelled || workspaceWatchGenerationRef.current.sessionKey !== sessionKey)
+          return;
         const snapshot = await readEditorHotExitSnapshot(root, file);
-        if (signal.cancelled) return;
+        if (signal.cancelled || workspaceWatchGenerationRef.current.sessionKey !== sessionKey)
+          return;
         if (options.preserveDirty === true && dirtyRef.current) {
           reconcilePreservedDirtyBuffer(response, file);
+          recoveryOutcome = "applied";
           return;
         }
         finishLoad(root, file, response, snapshot);
+        recoveryOutcome = "applied";
       } catch (err: unknown) {
-        if (signal.cancelled) return;
+        if (signal.cancelled || workspaceWatchGenerationRef.current.sessionKey !== sessionKey)
+          return;
+        recoveryOutcome = "failed";
         failLoad(err, requestCorrelationId, sessionKey);
         throw err;
+      } finally {
+        recoverSnapshot(recoveryOutcome);
       }
     },
     [
@@ -5052,7 +5065,7 @@ function EditorRuntimeWidget({
             type="button"
             className="ed-reload"
             onClick={() => {
-              workspaceWatch.refresh();
+              if (workspaceWatch.health !== "healthy") workspaceWatch.refresh();
               requestReload();
             }}
           >

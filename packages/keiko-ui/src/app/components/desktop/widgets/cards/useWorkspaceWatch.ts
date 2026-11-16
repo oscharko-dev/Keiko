@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { EditorM7WatchEvent, EditorM7WatchHealth } from "@oscharko-dev/keiko-contracts";
 import {
@@ -11,7 +11,7 @@ import { refreshSharedEventSource, subscribeSharedEventSource } from "./sharedEv
 
 export interface WorkspaceWatchClientState {
   readonly refresh: () => void;
-  readonly acknowledgeSnapshot: () => void;
+  readonly acknowledgeSnapshot: () => boolean;
   readonly health: EditorM7WatchHealth;
   readonly sequence: number;
   readonly degradedReason: string | null;
@@ -61,6 +61,10 @@ export function useWorkspaceWatch(
 ): WorkspaceWatchClientState {
   const onEventRef = useRef(onEvent);
   const [state, setState] = useState<WatchState>(INITIAL_STATE);
+  const stateRef = useRef(state);
+  const binding = useMemo(() => ({ root }), [root]);
+  const bindingRef = useRef(binding);
+  bindingRef.current = binding;
   onEventRef.current = onEvent;
 
   const refresh = useCallback((): void => {
@@ -68,23 +72,29 @@ export function useWorkspaceWatch(
     refreshSharedEventSource(watchEventsUrl(root));
   }, [root]);
 
-  const acknowledgeSnapshot = useCallback((): void => {
-    setState((current) =>
-      current.snapshotRequired ? { ...current, snapshotRequired: false } : current,
-    );
-  }, []);
+  const acknowledgeSnapshot = useCallback((): boolean => {
+    const current = stateRef.current;
+    // A replacement stream may reuse the same numeric sequence after a server restart.
+    if (bindingRef.current !== binding || current !== state || !current.snapshotRequired)
+      return false;
+    stateRef.current = { ...current, snapshotRequired: false };
+    setState(stateRef.current);
+    return true;
+  }, [binding, state]);
 
   useEffect(() => {
+    stateRef.current = INITIAL_STATE;
     setState(INITIAL_STATE);
     if (root === undefined || root.length === 0) return;
     return subscribeSharedEventSource(watchEventsUrl(root), WATCH_EVENT_TYPES, (event) => {
       const parsed = watchStateFrom(event);
       if (parsed === null) return;
-      setState((current) =>
+      const current = stateRef.current;
+      stateRef.current =
         parsed.event !== undefined && parsed.event.sequence <= current.sequence
           ? current
-          : parsed.state,
-      );
+          : parsed.state;
+      setState(stateRef.current);
       if (parsed.event !== undefined) onEventRef.current(parsed.event);
     });
   }, [root]);

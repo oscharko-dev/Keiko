@@ -191,3 +191,55 @@ it("keeps a current healthy snapshot while delivering older replay changes", () 
   expect(result.current.sequence).toBe(9);
   expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ sequence: 4, kind: "rescan" }));
 });
+
+it("does not acknowledge a newer sequence with a stale snapshot callback", () => {
+  const { result } = renderHook(() => useWorkspaceWatch("/repo", vi.fn()));
+  act(() =>
+    FakeEventSource.instances[0]?.emit("editor-watch:snapshot-required", watchSnapshot("healthy")),
+  );
+  const acknowledge = result.current.acknowledgeSnapshot;
+  act(() =>
+    FakeEventSource.instances[0]?.emit("editor-watch:snapshot-required", {
+      ...watchSnapshot("healthy"),
+      sequence: 10,
+    }),
+  );
+  act(() => acknowledge());
+  expect(result.current.snapshotRequired).toBe(true);
+  act(() => result.current.acknowledgeSnapshot());
+  expect(result.current.snapshotRequired).toBe(false);
+});
+
+it("does not acknowledge a replacement root even when its sequence matches", () => {
+  const { result, rerender } = renderHook(({ root }) => useWorkspaceWatch(root, vi.fn()), {
+    initialProps: { root: "/old" },
+  });
+  act(() =>
+    FakeEventSource.instances[0]?.emit("editor-watch:snapshot-required", watchSnapshot("healthy")),
+  );
+  const acknowledge = result.current.acknowledgeSnapshot;
+  rerender({ root: "/new" });
+  act(() =>
+    FakeEventSource.instances
+      .at(-1)
+      ?.emit("editor-watch:snapshot-required", watchSnapshot("healthy")),
+  );
+  act(() => acknowledge());
+  expect(result.current.snapshotRequired).toBe(true);
+});
+
+it.each([false, true])(
+  "does not acknowledge a replacement snapshot with the same sequence (reconnect=%s)",
+  (reconnect) => {
+    const { result } = renderHook(() => useWorkspaceWatch("/repo", vi.fn()));
+    const snapshot = { ...watchSnapshot("healthy"), sequence: 0 };
+    act(() => FakeEventSource.instances[0]?.emit("editor-watch:snapshot-required", snapshot));
+    const acknowledge = result.current.acknowledgeSnapshot;
+    if (reconnect) act(() => result.current.refresh());
+    act(() => FakeEventSource.instances.at(-1)?.emit("editor-watch:snapshot-required", snapshot));
+    act(() => expect(acknowledge()).toBe(false));
+    expect(result.current.snapshotRequired).toBe(true);
+    act(() => expect(result.current.acknowledgeSnapshot()).toBe(true));
+    expect(result.current.snapshotRequired).toBe(false);
+  },
+);

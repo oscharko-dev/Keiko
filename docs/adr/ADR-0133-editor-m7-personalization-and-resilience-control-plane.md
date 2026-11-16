@@ -102,6 +102,13 @@ surface degraded/snapshot-required health, bound replay and queues, and close ha
 server shutdown. Source-control metadata changes are represented as bounded invalidation signals,
 not raw `.git` internals.
 
+The manual Editor acknowledges a missing watch snapshot only after an uncached file read succeeds
+for the same root and exact snapshot (#4403). A failed read or a replacement gap keeps the recovery
+notice, even if a restarted watch session reuses its sequence number;
+dirty-buffer reload still requires the existing discard decision. Refreshing content does not
+reconnect a healthy watch stream, and snapshot acknowledgement never clears degraded watcher health.
+The existing Activity Log stage lifecycle records this recovery with closed outcomes only.
+
 ### D3 — External-change coherence extends the dirty/hot-exit authority
 
 External disk changes never create a second dirty-buffer authority. Clean buffers may reload according

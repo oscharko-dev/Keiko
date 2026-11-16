@@ -1857,6 +1857,7 @@ describe("closed diagnostic navigation and render context", () => {
         navigationOutcome,
       };
       expect(isClientStageIngestRequest({ ...base, stage: "editor project selection" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "editor watch recovery" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files directory load" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files source preview" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files source reveal" })).toBe(true);

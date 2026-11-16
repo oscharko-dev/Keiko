@@ -300,6 +300,25 @@ function workspaceWatchEventSources(
   return sources.filter((source) => source.url.startsWith("/api/editor/workspace-watch/events"));
 }
 
+function requireWorkspaceSnapshot(source: FakeEventSource | undefined, sequence = 9): void {
+  act(() => {
+    source?.emit("editor-watch:snapshot-required", {
+      schemaVersion: "1",
+      sequence,
+      rootToken: "0123456789abcdef",
+      nativeWatcherCount: 1,
+      subscriberCount: 1,
+      queueDepth: 0,
+      replayCapacity: 100,
+      replayOldestSequence: sequence,
+      eventCount: sequence,
+      requiresSnapshot: true,
+      health: "healthy",
+      degradedReasons: [],
+    });
+  });
+}
+
 function fileResponse(over?: Partial<FilesContentResponse>): FilesContentResponse {
   return {
     root: "/repo",
@@ -4361,4 +4380,117 @@ describe("EditorWidget — definition resolver dispatch preservation", () => {
       expect(openEditorFile).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("Editor workspace snapshot recovery (#4403)", () => {
+  it("clears the current gap only after a successful uncached refresh and records recovery", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    const diagnostics = vi.fn();
+    setClientDiagnosticWriter(diagnostics);
+    requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances)[0]);
+    const pending = deferred<FilesContentResponse>();
+    vi.mocked(fetchFilesContent).mockReturnValueOnce(pending.promise);
+    const banner = screen.getByTestId("editor-workspace-watch-status");
+    fireEvent.click(within(banner).getByRole("button", { name: "Refresh" }));
+    expect(banner).toBeVisible();
+    await act(async () => pending.resolve(fileResponse()));
+    await waitFor(() => expect(screen.queryByTestId("editor-workspace-watch-status")).toBeNull());
+    expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
+    expect(diagnostics).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        stageReport: expect.objectContaining({
+          stage: "editor watch recovery",
+          phase: "settled",
+          navigationOutcome: "applied",
+        }),
+      }),
+    );
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("/repo");
+  });
+
+  it("keeps the gap visible when the refreshed file cannot be read", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances)[0]);
+    vi.mocked(fetchFilesContent).mockRejectedValueOnce(new ApiError("INTERNAL", "Failed", 500));
+    fireEvent.click(
+      within(screen.getByTestId("editor-workspace-watch-status")).getByRole("button", {
+        name: "Refresh",
+      }),
+    );
+    await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByTestId("editor-workspace-watch-status")).toBeVisible();
+  });
+
+  it("does not acknowledge a gap when the user keeps a dirty buffer", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    act(() => surface.props?.onContentChange({ text: "unsaved\n", sizeBytes: 8 }, "human"));
+    requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances)[0]);
+    vi.mocked(fetchFilesContent).mockClear();
+    fireEvent.click(
+      within(screen.getByTestId("editor-workspace-watch-status")).getByRole("button", {
+        name: "Refresh",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(fetchFilesContent).not.toHaveBeenCalled();
+    expect(surface.props?.buffer.content.text).toBe("unsaved\n");
+    expect(screen.getByTestId("editor-workspace-watch-status")).toBeVisible();
+  });
+
+  it.each([9, 10])(
+    "does not acknowledge replacement gap %s with an older in-flight read",
+    async (sequence) => {
+      const FakeSource = installFakeEventSource();
+      await renderLoaded();
+      requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances)[0]);
+      const pending = deferred<FilesContentResponse>();
+      vi.mocked(fetchFilesContent).mockReturnValueOnce(pending.promise);
+      fireEvent.click(
+        within(screen.getByTestId("editor-workspace-watch-status")).getByRole("button", {
+          name: "Refresh",
+        }),
+      );
+      requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances).at(-1), sequence);
+      await act(async () => pending.resolve(fileResponse()));
+      expect(screen.getByTestId("editor-workspace-watch-status")).toBeVisible();
+      fireEvent.click(
+        within(screen.getByTestId("editor-workspace-watch-status")).getByRole("button", {
+          name: "Refresh",
+        }),
+      );
+      await waitFor(() => expect(screen.queryByTestId("editor-workspace-watch-status")).toBeNull());
+    },
+  );
+
+  it("does not apply a pending refresh after the Editor moves to another root", async () => {
+    const FakeSource = installFakeEventSource();
+    const view = await renderLoaded();
+    requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances)[0]);
+    const pending = deferred<FilesContentResponse>();
+    vi.mocked(fetchFilesContent).mockReturnValueOnce(pending.promise);
+    fireEvent.click(
+      within(screen.getByTestId("editor-workspace-watch-status")).getByRole("button", {
+        name: "Refresh",
+      }),
+    );
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        root: "/other",
+        path: "b.ts",
+        name: "b.ts",
+        content: "const other = 2;\n",
+      }),
+    );
+    view.rerender(<EditorRuntimeWidget windowId="editor-test" root="/other" file="b.ts" />);
+    await waitFor(() => expect(surface.props?.buffer.content.text).toBe("const other = 2;\n"));
+    requireWorkspaceSnapshot(workspaceWatchEventSources(FakeSource.instances).at(-1));
+    await act(async () => pending.resolve(fileResponse()));
+    expect(surface.props?.buffer.content.text).toBe("const other = 2;\n");
+    expect(screen.getByTestId("editor-workspace-watch-status")).toBeVisible();
+  });
 });
