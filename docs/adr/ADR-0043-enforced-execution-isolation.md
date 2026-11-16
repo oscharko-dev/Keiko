@@ -455,10 +455,11 @@ Windows refusal leaves the same evidence a support report can reconstruct. Produ
 and release-qualified native lanes. Process-tree qualification alone cannot authorize an unconfined
 network launch. Until a native backend can enforce the policy, starting that run refuses before
 spawning a Windows helper and records `runtime.confinement.failed`; omitting the policy to keep a
-launch working is a fail-open defect. Under D19 only a release-qualified package, a Windows dev
-checkout or the Windows npm runtime package yields a pin for the broker that enforces it. A Windows
-evaluation package yields none, so it refuses every start, and readiness reports
-`gateway-service-unqualified` instead of offering one. The macOS app-sandbox, npm-runtime and explicit dev lanes
+launch working is a fail-open defect. Under D19 a release-qualified package, an independently
+approved Windows evaluation artifact, a Windows dev checkout or the Windows npm runtime package
+yields a pin for the broker that enforces it. Other Windows evaluation artifacts yield none, so they
+refuse every start, and readiness reports `gateway-service-unqualified` instead of offering one.
+The macOS app-sandbox, npm-runtime and explicit dev lanes
 enforce the same policy through Seatbelt. A generic supervisor-prepared loopback wrapper never bypasses the exact gateway policy:
 both prepared and direct backend launches derive the final wrapper from the same server-owned
 policy. The sealed helper receives that exact wrapper in its existing launch packet.
@@ -982,7 +983,19 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   approved digests, so a package cannot vouch for itself (proposed 2026-11-09, pending repository-owner approval). Without
   `--dev-lane`, the command uses a release-qualified helper and, only where none exists, that
   package's supervisor; the outcome line names the `npm-runtime-package` lane. Its evidence stays
-  `functional-not-platform-qualified`. A Windows evaluation package yields no pin.
+  `functional-not-platform-qualified`.
+  The owner-authorized Windows repair of 2026-11-16 (#4404) additionally admits the independently
+  pinned public 1.5.0 Windows artifact set through this same broker. Discovery must match both
+  native-helper digests and sizes, the current OpenCode executable tree, adapter, protocol schema,
+  license and SBOM against `WINDOWS_PORTABLE_RUNTIME_APPROVAL` in the existing approvals owner.
+  The published manifest was authenticated with Keiko's compiled portable-release key; its helper
+  bytes were independently measured in the installed public package. A coherent manifest alone
+  cannot confer this approval. The portable secure-read image differs from the npm image, so its
+  admission is additive and does not replace the npm or dev pins. The CLI outcome records
+  `portable-evaluation`; `platformAssurance` remains `evaluation-unqualified` and readiness remains
+  `functional-not-platform-qualified`. Unapproved artifacts, signed-install downgrade attempts,
+  changed bytes and unsupported install volumes retain their refusals. No platform qualification,
+  unattended elevation, unsigned service update or second broker path is introduced.
 - **Placement.** The image goes to `%ProgramFiles%\KeikoRuntimeGateway`, which is owned by
   Administrators and closed to inherited or user write access. The copy is verified again there,
   before the running service is stopped, so a failed copy leaves the old broker serving.
@@ -1021,8 +1034,9 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   checks that again before it confirms the tree.
 
 Every action records body-free lifecycle evidence as `cli.gateway-service.*`, with its closed `lane`
-(`release-qualified` or `dev-checkout`), and a change of broker state records
-`coding-runtime.windows-gateway-service`. The lifecycle is
+(`release-qualified`, `portable-evaluation`, `dev-checkout` or `npm-runtime-package`), and a change
+of broker state records `coding-runtime.windows-gateway-service`, including the helper digest,
+runtime origin and honest evidence class when composed by the runtime owner. The lifecycle is
 qualified on the disposable runner by `test-windows-gateway-scm.ps1`, which installs through the
 product path instead of `New-Service`.
 

@@ -4,7 +4,11 @@ import {
   defineActivityLogOperation,
   type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { CodingWorkbenchRuntimeUnavailableReason } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeEvidenceClass,
+  CodingWorkbenchRuntimeUnavailableReason,
+  CodingWorkbenchRuntimeVersion,
+} from "@oscharko-dev/keiko-contracts";
 import { reportServerLogFailure, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 // Tells the Workbench why a released Windows runtime cannot start, and what the human can do about
@@ -26,6 +30,19 @@ const WINDOWS_GATEWAY_SERVICE_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: ["ready", "absent", "stopped", "image-mismatch", "state-unknown"],
+    },
+    helperSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    evidenceClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["platform-qualified", "functional-not-platform-qualified"],
+    },
+    origin: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["portable-release", "dev-checkout", "npm-runtime-package"],
     },
   },
   causal: "correlation",
@@ -75,6 +92,8 @@ export interface WindowsGatewayServiceProbeInput {
   readonly helperPath: string;
   readonly helperSha256: string;
   readonly activityLog: ServerLogSink;
+  readonly evidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
+  readonly origin?: CodingWorkbenchRuntimeVersion["origin"] | undefined;
   /** Resolves to the helper's exit code, or null when it did not run to an exit. */
   readonly runStatus: (helperPath: string, helperSha256: string) => Promise<number | null>;
   readonly now?: () => number;
@@ -87,14 +106,22 @@ interface CachedState {
 
 // One line per state change. A sink that throws reports the loss on the existing body-free stderr
 // channel instead of failing the refresh.
-function writeStateChange(sink: ServerLogSink, state: WindowsGatewayServiceState): void {
+function writeStateChange(
+  input: WindowsGatewayServiceProbeInput,
+  state: WindowsGatewayServiceState,
+): void {
   const correlationId = randomUUID();
   try {
-    sink.write(
+    input.activityLog.write(
       activityLogEvent(
         WINDOWS_GATEWAY_SERVICE_OPERATION,
         { level: state === "ready" ? "info" : "warn", correlationId },
-        { state },
+        {
+          state,
+          helperSha256: input.helperSha256,
+          ...(input.evidenceClass === undefined ? {} : { evidenceClass: input.evidenceClass }),
+          ...(input.origin === undefined ? {} : { origin: input.origin }),
+        },
       ),
     );
   } catch (error) {
@@ -123,7 +150,7 @@ export function createWindowsGatewayServiceProbe(
     // The state is cached first: a sink that throws must neither crash the process nor make the
     // next read spawn the helper again.
     cached = { state, at: now() };
-    if (changed) writeStateChange(input.activityLog, state);
+    if (changed) writeStateChange(input, state);
   };
 
   const refresh = (): void => {

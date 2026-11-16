@@ -448,8 +448,8 @@ export function windowsGatewayServiceFacts(
   portable: ResolvedPortableOpenCodeRuntime,
 ): { readonly windowsGatewayService?: WindowsGatewayServiceProbe } {
   if (portable.target !== "windows-x64") return {};
-  // A release-qualified package, a Windows dev checkout and the Windows npm runtime package carry a
-  // broker pin (ADR-0043 D19); all
+  // A release-qualified or independently pinned evaluation package, a Windows dev checkout and the
+  // Windows npm runtime package carry a broker pin (ADR-0043 D19); all
   // then report the installed broker's state, so a checkout without one is told to install it.
   const helperSha256 = windowsGatewayHelperPin(portable);
   const helperPath = portable.nativeHelperPath;
@@ -459,6 +459,8 @@ export function windowsGatewayServiceFacts(
         windowsGatewayService: createWindowsGatewayServiceProbe({
           helperPath,
           helperSha256,
+          evidenceClass: runtimeEvidenceClass(portable),
+          origin: runtimeVersionFacts(portable).origin,
           activityLog: input.activityLog ?? processServerLogSink(),
           runStatus: readWindowsGatewayServiceStatus,
         }),

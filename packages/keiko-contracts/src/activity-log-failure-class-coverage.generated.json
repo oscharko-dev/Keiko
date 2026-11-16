@@ -53251,13 +53251,31 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "evidenceClass",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "helperSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "origin",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "state",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false

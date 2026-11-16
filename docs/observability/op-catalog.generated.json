@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "04da9712df1b353c904ccac698094ad35a326629523f047f6fb84e64efa75eca",
+    "catalogDigest": "e7fdd5d595a17a59b3e7e82a736855a96d926f28c23531a921460e96b7d3195b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4872,7 +4872,12 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["release-qualified", "dev-checkout", "npm-runtime-package"]
+            "values": [
+              "release-qualified",
+              "portable-evaluation",
+              "dev-checkout",
+              "npm-runtime-package"
+            ]
           },
           "state": {
             "type": "string",
@@ -4892,8 +4897,8 @@
         "failureClasses": ["cli-gateway-service"],
         "proofIds": ["cli.gateway-service.completed.real-sink-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:87",
-        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:336"]
+        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:92",
+        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:341"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4923,7 +4928,12 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["release-qualified", "dev-checkout", "npm-runtime-package"]
+            "values": [
+              "release-qualified",
+              "portable-evaluation",
+              "dev-checkout",
+              "npm-runtime-package"
+            ]
           },
           "reason": {
             "type": "string",
@@ -4964,8 +4974,8 @@
         "failureClasses": ["cli-gateway-service"],
         "proofIds": ["cli.gateway-service.failed.real-sink-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:113",
-        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:349"]
+        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:118",
+        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:354"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4995,7 +5005,12 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["release-qualified", "dev-checkout", "npm-runtime-package"]
+            "values": [
+              "release-qualified",
+              "portable-evaluation",
+              "dev-checkout",
+              "npm-runtime-package"
+            ]
           }
         },
         "causal": "correlation",
@@ -5004,8 +5019,8 @@
         "failureClasses": ["cli-gateway-service"],
         "proofIds": ["cli.gateway-service.started.real-sink-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:71",
-        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:324"]
+        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:76",
+        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:329"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -11171,7 +11186,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:90",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:549"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:551"
         ]
       },
       {
@@ -11224,7 +11239,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:137",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:568"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:570"
         ]
       },
       {
@@ -18772,6 +18787,24 @@
             "dataClass": "closed-enum",
             "required": true,
             "values": ["ready", "absent", "stopped", "image-mismatch", "state-unknown"]
+          },
+          "helperSha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "evidenceClass": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["platform-qualified", "functional-not-platform-qualified"]
+          },
+          "origin": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["portable-release", "dev-checkout", "npm-runtime-package"]
           }
         },
         "causal": "correlation",
@@ -18780,9 +18813,9 @@
         "failureClasses": ["windows-gateway-service"],
         "proofIds": ["coding-runtime.windows-gateway-service.real-sink-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:16",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:20",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:94"
+          "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:116"
         ]
       },
       {
@@ -39505,9 +39538,9 @@
         "failureClasses": ["portable-native-helper-binding"],
         "proofIds": ["portable.runtime.native-helper-bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:329",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:358",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:364"
+          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:393"
         ]
       },
       {
@@ -52712,7 +52745,7 @@
         "requiredProofOperations": ["coding-runtime.windows-gateway-service"],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": ["coding-runtime.windows-gateway-service"],
-        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
       },
@@ -116885,13 +116918,31 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "evidenceClass",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "helperSha256",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "origin",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "state",
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
                 }
               ],
-              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
@@ -118510,19 +118561,19 @@
     {
       "op": "cli.gateway-service.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/gateway-service.ts:90",
+      "site": "packages/keiko-cli/src/gateway-service.ts:95",
       "package": "keiko-cli"
     },
     {
       "op": "cli.gateway-service.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/gateway-service.ts:116",
+      "site": "packages/keiko-cli/src/gateway-service.ts:121",
       "package": "keiko-cli"
     },
     {
       "op": "cli.gateway-service.started",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/gateway-service.ts:74",
+      "site": "packages/keiko-cli/src/gateway-service.ts:79",
       "package": "keiko-cli"
     },
     {
@@ -120220,14 +120271,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:204",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:218",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:102",
+      "site": "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:129",
       "package": "keiko-server"
     },
     {
@@ -122420,7 +122471,7 @@
     {
       "op": "coding-runtime.windows-gateway-service",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:19",
+      "site": "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:23",
       "package": "keiko-server"
     },
     {
@@ -122573,7 +122624,7 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:319",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:348",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -124250,7 +124301,7 @@
     {
       "op": "portable.runtime.native-helper-bound",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:332",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:361",
       "package": "keiko-server"
     },
     {

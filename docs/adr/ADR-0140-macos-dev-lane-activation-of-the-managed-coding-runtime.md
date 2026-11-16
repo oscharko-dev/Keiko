@@ -100,6 +100,13 @@ lane, because it needs the sandbox isolation this lane does not ship. Windows jo
 admitted only at the digest compiled into the server, and its runs are confined by the D18 broker
 pinned to that digest (ADR-0043 D19).
 
+The owner-authorized Windows fix of 2026-11-16 (#4404) reuses this independent artifact-approval
+owner for the public Windows portable runtime. Its exact, separately authenticated helper set is
+an additive approval: it neither changes the npm package's pins nor makes the dev lane available
+inside a packaged installation. Portable discovery retains its own layout, volume and declared-lane
+checks and returns the same functional evidence class. The existing D19 broker is the only Windows
+execution path; an approved artifact still needs that broker installed and ready. See ADR-0163 D9.
+
 **Amended 2026-10-24 — the runtime package carries the pinned ripgrep (#3897, #4064).** OpenCode's
 `glob` and `grep` tools run ripgrep and would otherwise download it on first use, which a
 firewalled customer on a clean `npm install -g` cannot do; only a developer override

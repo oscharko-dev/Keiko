@@ -23,8 +23,7 @@ export interface NpmLaneRuntimeSupervisorApproval {
   readonly sourceTreeSha256: string;
 }
 
-export interface NpmLaneRuntimeApproval {
-  readonly packageName: string;
+export interface CodingRuntimeArtifactApproval {
   readonly upstreamVersion: string;
   readonly adapterName: string;
   readonly adapterVersion: string;
@@ -39,6 +38,10 @@ export interface NpmLaneRuntimeApproval {
   readonly helperMaxBytes?: number;
   /** Required on Windows, absent elsewhere; a Windows approval without it is refused. */
   readonly runtimeSupervisor?: NpmLaneRuntimeSupervisorApproval;
+}
+
+export interface NpmLaneRuntimeApproval extends CodingRuntimeArtifactApproval {
+  readonly packageName: string;
 }
 
 /** The helper both tables carry: an OpenCode upgrade leaves its source and binaries unchanged. */
@@ -104,6 +107,24 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
     sbomSha256: "320b03dca2e27a8d9afc6a6bf2d1b4b903f6c5340f25202f20aa7dd104573493",
     runtimeSupervisor: RUNTIME_SUPERVISOR_WINDOWS_X64,
   }),
+});
+
+/**
+ * The published Windows 1.5.0 artifact set (#4404), independently authenticated with the existing
+ * portable-release key. Its supervisor and OpenCode are the same approved bytes as the npm lane;
+ * its secure-read image is a different build of the same source. Keep the npm pin unchanged.
+ * Source: v1.5.0/windows-x64-portable-manifest.json, release metadata 446705441, commit
+ * 1906b6a5f28a4ec51fa93a18a3affade7194a126. These pins permit the existing functional broker lane;
+ * they are not Authenticode or platform-qualification evidence.
+ */
+export const WINDOWS_PORTABLE_RUNTIME_APPROVAL: CodingRuntimeArtifactApproval = Object.freeze({
+  ...SHARED,
+  ...HELPER_WINDOWS_X64,
+  helperSha256: "65cc98c377f0e82494c54a1dd68a5be85fcd7b80272679638579aff23f4ab9e6",
+  helperSourceCommit: "1906b6a5f28a4ec51fa93a18a3affade7194a126",
+  executableTreeSha256: NPM_LANE_RUNTIME_APPROVALS["windows-x64"].executableTreeSha256,
+  sbomSha256: NPM_LANE_RUNTIME_APPROVALS["windows-x64"].sbomSha256,
+  runtimeSupervisor: RUNTIME_SUPERVISOR_WINDOWS_X64,
 });
 
 /**

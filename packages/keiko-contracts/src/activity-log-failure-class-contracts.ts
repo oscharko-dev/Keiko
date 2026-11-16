@@ -1189,7 +1189,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: ["coding-runtime.windows-gateway-service"],
     requiredReplayProofIds: [],
     requiredResourceOperations: ["coding-runtime.windows-gateway-service"],
-    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },
