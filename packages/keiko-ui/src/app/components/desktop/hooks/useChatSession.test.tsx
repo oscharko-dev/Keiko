@@ -319,6 +319,201 @@ function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): Rea
 }
 
 describe("useChatSession bootstrap", () => {
+  afterEach(resetClientDiagnosticWriter);
+  it.each(["/repo", "/other"])(
+    "keeps an explicit selection in %s when the initial bootstrap settles later",
+    async (selectedProject) => {
+      const projects = deferred<{ projects: readonly ProjectWithAvailability[] }>();
+      const picked = chat({ id: "picked", projectPath: selectedProject, updatedAt: 1 });
+      const latest = chat({ id: "boot-latest", updatedAt: 20 });
+      vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-a" })] });
+      vi.mocked(fetchProjects).mockReturnValue(projects.promise);
+      vi.mocked(fetchChats).mockImplementation(async (path) => ({
+        chats: [latest, picked].filter((entry) => entry.projectPath === path),
+      }));
+      vi.mocked(fetchChatMessages).mockImplementation(async (id) => ({
+        messages: [message({ id: `message-${id}`, chatId: id })],
+      }));
+      const diagnostics = vi.fn();
+      setClientDiagnosticWriter(diagnostics);
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() => expect(fetchProjects).toHaveBeenCalled());
+      await act(async () => result.current.openChat(picked));
+      act(() => result.current.setDraft("A newer draft."));
+      expect(result.current.activeChat?.id).toBe(picked.id);
+      await act(async () =>
+        projects.resolve({
+          projects: [project("/repo", { lastOpenedAt: 20 }), project("/other")],
+        }),
+      );
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.activeChat?.id).toBe(picked.id);
+      expect(result.current.messages.map((entry) => entry.chatId)).toEqual([picked.id]);
+      expect(result.current.activeProject?.path).toBe(selectedProject);
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-a"]);
+      expect(result.current.modelCatalogStatus).toBe("ready");
+      expect(result.current.selectedModel).toBe("chat-a");
+      expect(result.current.draft).toBe("A newer draft.");
+      expect(result.current.chats.map((entry) => entry.id).sort()).toEqual(
+        selectedProject === "/repo" ? [latest.id, picked.id].sort() : [picked.id],
+      );
+      expect(diagnostics).toHaveBeenCalledWith("Chat navigation superseded.", {
+        composerActivity: "chat-navigation-superseded",
+        correlationId: vi.mocked(fetchModels).mock.calls[0]?.[0],
+      });
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain(picked.id);
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain(selectedProject);
+    },
+  );
+
+  it("ignores a superseded initial bootstrap failure after explicit selection", async () => {
+    const projects = deferred<{ projects: readonly ProjectWithAvailability[] }>();
+    const picked = chat({ id: "picked" });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
+    vi.mocked(fetchProjects).mockReturnValue(projects.promise);
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [message({ chatId: picked.id })] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(fetchProjects).toHaveBeenCalled());
+    await act(async () => result.current.openChat(picked));
+    await act(async () => projects.reject(new TypeError("Old bootstrap failed.")));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeChat?.id).toBe(picked.id);
+    expect(result.current.messages.map((entry) => entry.chatId)).toEqual([picked.id]);
+    expect(result.current.error).toBeUndefined();
+  });
+
+  it.each(["creation", "project"] as const)(
+    "keeps a newer %s when the initial bootstrap is pending",
+    async (intent) => {
+      const projects = deferred<{ projects: readonly ProjectWithAvailability[] }>();
+      const target = project("/new");
+      const picked = chat({ id: "new-intent", projectPath: target.path });
+      vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-a" })] });
+      vi.mocked(fetchProjects).mockReturnValue(projects.promise);
+      vi.mocked(fetchChats).mockImplementation(async (path) => ({
+        chats: [path === target.path ? picked : chat({ id: "boot-latest" })],
+      }));
+      vi.mocked(fetchChatMessages).mockImplementation(async (id) => ({
+        messages: [message({ chatId: id })],
+      }));
+      vi.mocked(createDesktopChat).mockResolvedValue({
+        chat: picked,
+        project: target,
+        projects: [target],
+        chats: [picked],
+        messages: [],
+      });
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() => expect(fetchProjects).toHaveBeenCalled());
+      await act(async () => {
+        if (intent === "project") await result.current.openProject(target);
+        else
+          expect(
+            await result.current.openNewChat(target, undefined, undefined, {
+              kind: "explicit",
+              modelId: "chat-a",
+            }),
+          ).toEqual(picked);
+      });
+      await act(async () =>
+        projects.resolve({ projects: [project("/repo", { favorite: true }), target] }),
+      );
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.activeChat?.id).toBe(picked.id);
+      expect(result.current.activeProject?.path).toBe(target.path);
+      expect(result.current.chats.map((entry) => entry.id)).toEqual([picked.id]);
+      expect(result.current.messages.map((entry) => entry.chatId)).toEqual(
+        intent === "project" ? [picked.id] : [],
+      );
+      expect(result.current.selectedModel).toBe("chat-a");
+      expect(result.current.error).toBeUndefined();
+    },
+  );
+
+  it("retains a refreshed model catalog while the initial bootstrap is pending", async () => {
+    const projects = deferred<{ projects: readonly ProjectWithAvailability[] }>();
+    const picked = chat({ id: "picked", selectedModel: "chat-new" });
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({ models: [model({ id: "chat-old" })] })
+      .mockResolvedValue({ models: [model({ id: "chat-new" })] });
+    vi.mocked(fetchProjects).mockReturnValue(projects.promise);
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ id: "boot-latest" })] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(fetchProjects).toHaveBeenCalled());
+    await act(async () => result.current.openChat(picked));
+    act(() => notifyGatewayConfigUpdated());
+    await waitFor(() =>
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-new"]),
+    );
+    await act(async () => projects.resolve({ projects: [project()] }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-new"]);
+    expect(result.current.selectedModel).toBe("chat-new");
+    expect(result.current.activeChat?.id).toBe(picked.id);
+  });
+
+  it("keeps a newer empty project list when the initial bootstrap settles", async () => {
+    const projects = deferred<{ projects: readonly ProjectWithAvailability[] }>();
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-a" })] });
+    vi.mocked(fetchProjects).mockReturnValue(projects.promise);
+    vi.mocked(fetchChats)
+      .mockResolvedValueOnce({ chats: [] })
+      .mockResolvedValue({ chats: [chat({ id: "boot-latest" })] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(fetchProjects).toHaveBeenCalled());
+    await act(async () => result.current.openProject(project()));
+    await act(async () => projects.resolve({ projects: [project()] }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeProject?.path).toBe(project().path);
+    expect(result.current.activeChat).toBeUndefined();
+    expect(result.current.chats).toEqual([]);
+    expect(result.current.messages).toEqual([]);
+  });
+
+  it.each(["/repo", "/other"])(
+    "keeps the %s inventory when initial bootstrap finishes before selected messages",
+    async (selectedProject) => {
+      const bootMessages = deferred<{ messages: readonly ChatMessage[] }>();
+      const selectedMessages = deferred<{ messages: readonly ChatMessage[] }>();
+      const picked = chat({ id: "picked", projectPath: selectedProject });
+      const latest = chat({ id: "boot-latest", updatedAt: 20 });
+      vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-a" })] });
+      vi.mocked(fetchProjects).mockResolvedValue({
+        projects: [project("/repo", { favorite: true }), project("/other")],
+      });
+      vi.mocked(fetchChats).mockImplementation(async (path) => ({
+        chats: [latest, picked].filter((entry) => entry.projectPath === path),
+      }));
+      vi.mocked(fetchChatMessages).mockImplementation((id) =>
+        id === picked.id ? selectedMessages.promise : bootMessages.promise,
+      );
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() => expect(fetchChatMessages).toHaveBeenCalled());
+      let opening!: Promise<void>;
+      act(() => {
+        opening = result.current.openChat(picked);
+      });
+      await act(async () => bootMessages.resolve({ messages: [message({ chatId: latest.id })] }));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.activeChat).toBeUndefined();
+      await act(async () => {
+        selectedMessages.resolve({ messages: [message({ chatId: picked.id })] });
+        await opening;
+      });
+      expect(result.current.activeChat?.id).toBe(picked.id);
+      expect(result.current.activeProject?.path).toBe(selectedProject);
+      expect(result.current.messages.map((entry) => entry.chatId)).toEqual([picked.id]);
+      expect(result.current.chats.map((entry) => entry.id).sort()).toEqual(
+        selectedProject === "/repo" ? [latest.id, picked.id].sort() : [picked.id],
+      );
+      expect(result.current.chats.every((entry) => entry.projectPath === selectedProject)).toBe(
+        true,
+      );
+    },
+  );
+
   it("shares event-driven model reads and stays quiet across time, focus and visibility", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "startup-model" })] });
@@ -8452,4 +8647,82 @@ it("aborts the shared startup metadata read when its final chat leaves", async (
   const signal = vi.mocked(fetchModels).mock.calls[1]?.[2]?.signal;
   unmount();
   expect(signal?.aborted).toBe(true);
+});
+
+describe("useChatSession bootstrap deletion ownership", () => {
+  it("does not reselect a canonically deleted chat after a pending early open", async () => {
+    const projects = deferred<{ projects: readonly ProjectWithAvailability[] }>();
+    const pickedMessages = deferred<{ messages: readonly ChatMessage[] }>();
+    const picked = chat({ id: "independent-deleted-picked" });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
+    vi.mocked(fetchProjects).mockReturnValue(projects.promise);
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    vi.mocked(fetchChatMessages).mockImplementation(async (id) =>
+      id === picked.id ? pickedMessages.promise : { messages: [] },
+    );
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(fetchProjects).toHaveBeenCalled());
+    let opening: Promise<void> | undefined;
+    act(() => {
+      opening = result.current.openChat(picked);
+    });
+    await waitFor(() =>
+      expect(fetchChatMessages).toHaveBeenCalledWith(picked.id, picked.projectPath),
+    );
+    act(() => notifyChatDeleted(picked.id));
+    await act(async () => projects.resolve({ projects: [project()] }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => {
+      pickedMessages.resolve({ messages: [message({ chatId: picked.id })] });
+      await opening;
+    });
+    expect(result.current.activeChat?.id).not.toBe(picked.id);
+    expect(result.current.chats.map((entry) => entry.id)).not.toContain(picked.id);
+    expect(result.current.messages.map((entry) => entry.chatId)).not.toContain(picked.id);
+  });
+});
+
+describe("useChatSession bootstrap project list ownership", () => {
+  it("keeps the canonical list row when a stale caller opens that chat", async () => {
+    const current = chat({ id: "current", updatedAt: 20 });
+    const picked = chat({ id: "picked", title: "Canonical title", updatedAt: 10 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project()] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [current, picked] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () =>
+      result.current.openChat({ ...picked, title: "Old caller title", updatedAt: 1 }),
+    );
+    expect(result.current.chats.find((entry) => entry.id === picked.id)).toEqual(picked);
+    expect(result.current.activeChat?.id).toBe(picked.id);
+  });
+
+  it("does not keep earlier project rows under a later early selected chat", async () => {
+    const projects = deferred<{ projects: readonly ProjectWithAvailability[] }>();
+    const earlierProject = project("/earlier", { favorite: true });
+    const selectedProject = project("/selected");
+    const earlier = chat({ id: "independent-earlier", projectPath: earlierProject.path });
+    const picked = chat({ id: "independent-picked", projectPath: selectedProject.path });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
+    vi.mocked(fetchProjects).mockReturnValue(projects.promise);
+    vi.mocked(fetchChats).mockImplementation(async (path) => ({
+      chats: path === earlierProject.path ? [earlier] : [picked],
+    }));
+    vi.mocked(fetchChatMessages).mockImplementation(async (id) => ({
+      messages: [message({ chatId: id })],
+    }));
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(fetchProjects).toHaveBeenCalled());
+    await act(async () => result.current.openProject(earlierProject));
+    expect(result.current.chats.map((entry) => entry.id)).toEqual([earlier.id]);
+    await act(async () => result.current.openChat(picked));
+    await act(async () => projects.resolve({ projects: [earlierProject, selectedProject] }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeChat?.id).toBe(picked.id);
+    expect(result.current.activeProject?.path).toBe(selectedProject.path);
+    expect(result.current.chats.map((entry) => entry.projectPath)).toEqual([selectedProject.path]);
+    expect(result.current.chats.map((entry) => entry.id)).toEqual([picked.id]);
+  });
 });

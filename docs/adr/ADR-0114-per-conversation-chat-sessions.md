@@ -135,7 +135,7 @@ windows.
    conversation aborts THAT conversation's in-flight send" — never a sibling window's.
    Each window session owns its late-response guard (responses land keyed by `chatId`, so a settled
    response can only ever land in its own conversation).
-   Project loads, conversation selections and creation requests share one window-local navigation
+   Initial bootstrap, project loads, conversation selections and creation requests share one window-local navigation
    generation. Every newer intent supersedes older asynchronous success and failure, including
    within the same project or when selecting the current conversation again. An accepted creation
    still updates the catalog and returns its persisted conversation to the caller; only its stale
@@ -143,6 +143,14 @@ windows.
    or error. Superseded results emit the closed `chat-navigation-superseded` activity through the
    existing Composer Activity Log operation. Project reads retain their original list correlation;
    no project path or conversation content is logged (#4418).
+   A superseded bootstrap can still fill missing project/model metadata for the selected
+   conversation, while keeping newer catalog results and selection state. Its loading flag always
+   settles; only a current bootstrap can surface a navigation error.
+   A missing Chat list is filled only for that live selected conversation's project; a bootstrap
+   snapshot from another project is not imported, and a newer empty project selection stays empty.
+   An acknowledged deletion clears its matching pending selection identity before an older read
+   can select it again. Opening a Chat keeps existing canonical rows in that project's list and
+   filters foreign rows even when its project metadata has not arrived yet.
    Each pending project read also observes acknowledged Chat mutations through the existing
    subscription until a newer navigation, unmount, or its `finally` cleanup. Its catalog reconciles only those transient upserts
    and deletions against the server snapshot; another project's upserts cannot enter it. This keeps

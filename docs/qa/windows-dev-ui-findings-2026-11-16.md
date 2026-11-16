@@ -140,7 +140,7 @@ answer and completed in two model steps.
 | [#4415](https://github.com/oscharko-dev/Keiko/issues/4415) | Closed after macOS cold-start repair and Windows control.                                  |
 | [#4416](https://github.com/oscharko-dev/Keiko/issues/4416) | Closed after the tiled and narrow Chat pointer, resize and fullscreen controls.            |
 | [#4417](https://github.com/oscharko-dev/Keiko/issues/4417) | Closed after Windows Editor Save produced a readable local history restore point.          |
-| [#4418](https://github.com/oscharko-dev/Keiko/issues/4418) | Windows creation passed on `426c5d3ab`. The late startup acquisition case is under review. |
+| [#4418](https://github.com/oscharko-dev/Keiko/issues/4418) | Windows creation and targeted startup races passed. The issue records the scoped evidence. |
 | [#4419](https://github.com/oscharko-dev/Keiko/issues/4419) | Closed after the first-load gate, module-refusal tests, and exact Windows reconnect.       |
 | [#4420](https://github.com/oscharko-dev/Keiko/issues/4420) | Closed after all five Jira starter criteria, including Windows save and removal.           |
 | [#4421](https://github.com/oscharko-dev/Keiko/issues/4421) | Closed after the same Windows store retained revision v2 without a stale checking label.   |

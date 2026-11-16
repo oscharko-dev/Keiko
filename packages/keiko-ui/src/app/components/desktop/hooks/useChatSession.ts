@@ -2930,6 +2930,94 @@ function refreshSessionModels(
   };
 }
 
+function hydrateBootstrapChats(
+  previous: SessionState,
+  patch: Partial<SessionState>,
+  projectPath: string | undefined,
+  selected: Chat | undefined,
+): Chat[] {
+  if (
+    previous.chats.length > 0 ||
+    selected === undefined ||
+    selected.status === "closed" ||
+    selected.projectPath !== projectPath
+  )
+    return previous.chats;
+  const snapshot = patch.activeProject?.path === projectPath ? (patch.chats ?? []) : [];
+  return upsertChatIntoList(snapshot, selected);
+}
+
+function hydrateSupersededBootstrap(
+  previous: SessionState,
+  patch: Partial<SessionState>,
+  selectedChatId: string | undefined,
+): SessionState {
+  const projects = previous.projects.length === 0 ? (patch.projects ?? []) : previous.projects;
+  const selected =
+    previous.activeChat?.id === selectedChatId
+      ? previous.activeChat
+      : patch.chats?.find((chat) => chat.id === selectedChatId);
+  const activeProject =
+    previous.activeProject ?? projects.find((project) => project.path === selected?.projectPath);
+  return hydrateBootstrapModels(
+    {
+      ...previous,
+      projects,
+      activeProject,
+      chats: hydrateBootstrapChats(previous, patch, activeProject?.path, selected),
+    },
+    patch,
+  );
+}
+
+function hydrateBootstrapModels(
+  previous: SessionState,
+  patch: Partial<SessionState>,
+): SessionState {
+  if (
+    previous.modelCatalogStatus !== "unknown" ||
+    patch.catalogCapabilities === undefined ||
+    patch.catalogCorrelationId === undefined
+  )
+    return previous;
+  const catalog = sessionCatalogState(
+    patch.catalogCapabilities,
+    "bootstrap",
+    patch.catalogCorrelationId,
+  );
+  const remembered = rememberedSessionSelection(previous);
+  return {
+    ...previous,
+    ...catalog,
+    startupReadinessPending: patch.startupReadinessPending === true,
+    ...selectSessionModel(
+      remembered.id ?? previous.activeChat?.selectedModel,
+      remembered.id !== undefined && remembered.elected,
+      catalog.models,
+      catalog.unreadyConversationModelIds,
+    ),
+  };
+}
+
+function sessionAfterOpenedChat(
+  previous: SessionState,
+  chat: Chat,
+  messages: readonly ChatMessage[],
+  projections: ReadonlyMap<string, CanonicalVoiceProjection>,
+): SessionState {
+  const project = previous.projects.find((item) => item.path === chat.projectPath);
+  const chats = previous.chats.filter((entry) => entry.projectPath === chat.projectPath);
+  const missing = !chats.some((entry) => entry.id === chat.id);
+  return {
+    ...previous,
+    activeProject: project,
+    activeChat: chat,
+    chats: project !== undefined && missing ? upsertChatIntoList(chats, chat) : chats,
+    ...selectionForPersistedChat(previous, chat),
+    messages: mergeCanonicalVoiceProjections(messages, chat.id, projections),
+  };
+}
+
 function selectionForChatSwitch(
   persistedModelId: string | undefined,
   models: readonly ModelCapability[],
@@ -4264,13 +4352,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   useEffect(() => {
     let cancelled = false;
+    const current = beginChatNavigation(navigationOwnerRef, mountedRef);
     async function run(): Promise<void> {
       setLoading(true);
       setError(undefined);
       try {
         const patch = await sharedBootstrapSession(autoCreate);
         if (!cancelled) {
+          if (!current()) reportSupersededChatNavigation(patch.catalogCorrelationId);
           setState((previous) => {
+            if (!current())
+              return hydrateSupersededBootstrap(previous, patch, activeChatIdRef.current);
             const next = { ...previous, ...patch };
             return next.activeChat === undefined
               ? next
@@ -4285,7 +4377,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           });
         }
       } catch (error_) {
-        if (!cancelled) setError(errorMessage(error_));
+        if (!cancelled) {
+          if (current()) setError(errorMessage(error_));
+          else reportSupersededChatNavigation();
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -4340,6 +4435,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setState((previous) => applyChatUpsert(previous, mutation.chat));
         return;
       }
+      if (activeChatIdRef.current === mutation.chatId) activeChatIdRef.current = undefined;
       chatDraft.controller.forget(mutation.chatId);
       setState((previous) => ({
         ...previous,
@@ -4704,20 +4800,14 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       try {
         const messagePayload = await sharedFetchChatMessages(chat.id, chat.projectPath);
         if (!current()) return reportSupersededChatNavigation();
-        setState((previous) => {
-          const project = previous.projects.find((item) => item.path === chat.projectPath);
-          return {
-            ...previous,
-            activeProject: project,
-            activeChat: chat,
-            ...selectionForPersistedChat(previous, chat),
-            messages: mergeCanonicalVoiceProjections(
-              messagePayload.messages,
-              chat.id,
-              canonicalVoiceProjectionRef.current,
-            ),
-          };
-        });
+        setState((previous) =>
+          sessionAfterOpenedChat(
+            previous,
+            chat,
+            messagePayload.messages,
+            canonicalVoiceProjectionRef.current,
+          ),
+        );
       } catch (error_) {
         if (!current()) return reportSupersededChatNavigation();
         setError(errorMessage(error_));
