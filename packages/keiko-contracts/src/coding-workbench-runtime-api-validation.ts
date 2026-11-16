@@ -125,18 +125,17 @@ export function isCodingWorkbenchVerificationSummary(
     keys.every((key) => Object.hasOwn(value, key)) &&
     isVerificationKind(value.verifierId) &&
     isOneOf(value.status, ["passed", "failed", "partial"]) &&
-    [value.passedCount, value.failedCount, value.skippedCount].every(
-      (count) => Number.isSafeInteger(count) && Number(count) >= 0,
-    ) &&
-    (value.status !== "passed" || value.failedCount === 0) &&
-    validDeniedVerificationCount(value) &&
+    validVerificationCounts(value) &&
     typeof value.durationMs === "number" &&
     Number.isFinite(value.durationMs) &&
     value.durationMs >= 0
   );
 }
 
-function validDeniedVerificationCount(value: Record<string, unknown>): boolean {
+function validVerificationCounts(value: Record<string, unknown>): boolean {
+  const counts = [value.passedCount, value.failedCount, value.skippedCount];
+  if (!counts.every((count) => Number.isSafeInteger(count) && Number(count) >= 0)) return false;
+  if (value.status === "passed" && value.failedCount !== 0) return false;
   if (!Object.hasOwn(value, "deniedCount")) return true;
   const count = value.deniedCount;
   return (
