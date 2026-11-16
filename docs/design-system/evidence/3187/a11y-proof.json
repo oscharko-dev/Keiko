@@ -3,7 +3,7 @@
   "verdict": "PASS",
   "harness": "tests/e2e/boot-recovery-3187.spec.ts",
   "globalsCssSha256": "299b807fe42bc6069a49ac28c4a5195c016739335b5c375be5c73f216ca9471c",
-  "layoutSha256": "fd29ed3cd05cb5ad3a59398b0a800f56f59d8121a2a679e4b47f83fc7555ac76",
+  "layoutSha256": "ba6cff4b51469a9a704de1bff6453876f008f9df3d5c0b28a791665e3ad3b3d2",
   "captures": [
     {
       "file": "01-dark.png",
