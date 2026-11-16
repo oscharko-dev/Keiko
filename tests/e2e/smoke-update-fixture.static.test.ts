@@ -42,10 +42,17 @@ interface SmokeSpec {
   readonly source: string;
 }
 
+// A spec joins the smoke lanes through an @smoke test title, not through a comment that mentions
+// the tag. editor-performance.spec.ts names @smoke only in a comment that says it is not a smoke
+// spec, and it must keep Playwright's HTTP cache, which the fixture's context route disables.
+function isSmokeSpec(source: string): boolean {
+  return source.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "").includes("@smoke");
+}
+
 function smokeSpecs(): readonly SmokeSpec[] {
   return specFiles(E2E_ROOT)
     .map((path) => ({ name: relative(E2E_ROOT, path), source: readFileSync(path, "utf8") }))
-    .filter((spec) => spec.source.includes("@smoke"));
+    .filter((spec) => isSmokeSpec(spec.source));
 }
 
 describe("smoke specs use the offline update fixture", () => {
@@ -65,6 +72,12 @@ describe("smoke specs use the offline update fixture", () => {
       .filter((spec) => importsPlaywrightTest(spec.source))
       .map((spec) => spec.name);
     expect(direct).toEqual([]);
+  });
+
+  it("selects specs by an @smoke title, not by a comment", () => {
+    expect(isSmokeSpec('test("opens the window @smoke", async () => {});\n')).toBe(true);
+    expect(isSmokeSpec("// This spec is not part of the @smoke set.\n")).toBe(false);
+    expect(isSmokeSpec("/**\n * Not part of the required `@smoke` set.\n */\n")).toBe(false);
   });
 
   it("recognizes a direct Playwright test import", () => {

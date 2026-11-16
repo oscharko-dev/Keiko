@@ -1,5 +1,4 @@
-import { expect, type CDPSession, type Page, type Response } from "@playwright/test";
-import { test } from "./support/smoke-test.js";
+import { expect, test, type CDPSession, type Page, type Response } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
