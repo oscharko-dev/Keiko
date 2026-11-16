@@ -281,6 +281,37 @@ describe("Jira starter templates", () => {
     expect(openFileMeta(dialog).getByText("Unsaved changes")).toBeInTheDocument();
     expect(api.saveMarkdownSkill).not.toHaveBeenCalled();
   });
+
+  it("ends pending validation in the library and editor when the last Jira Pod is removed", async () => {
+    seedStore([REVIEW, PLAN]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    vi.mocked(jiraTemplates.fetchJiraTemplates).mockResolvedValue([
+      {
+        id: REVIEW.id,
+        revision: 1,
+        name: REVIEW.name,
+        valid: true,
+        project: "LAB",
+        issueType: "Task",
+      },
+      { id: PLAN.id, revision: 1, name: PLAN.name, valid: false },
+    ]);
+    vi.mocked(jiraTemplates.validateJiraTemplate).mockImplementation(() => new Promise(() => {}));
+    const dialog = await openDialog();
+    const library = within(dialog);
+    expect(await library.findByText(/Checking against Jira/u)).toBeVisible();
+    fireEvent.click(item(dialog, REVIEW.name));
+    await waitFor(() => expect(library.getAllByText(/Checking against Jira/u)).toHaveLength(2));
+
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([]);
+    refreshPods();
+    await waitFor(() => expect(library.queryAllByText(/Checking against Jira/u)).toHaveLength(0));
+    expect(library.getAllByText("LAB · Task")).toHaveLength(2);
+    expect(library.getByText("Needs repair")).toBeVisible();
+    expect(documentTitle(dialog)).toBe(REVIEW.name);
+    expect(openFileMeta(dialog).getByText("v1")).toBeVisible();
+    expect(api.saveMarkdownSkill).not.toHaveBeenCalled();
+  });
 });
 
 describe("a new skill", () => {

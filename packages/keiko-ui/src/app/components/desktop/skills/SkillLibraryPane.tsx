@@ -95,7 +95,7 @@ function TemplateGroup({
       hint={t("chat.skills.jira.description")}
       extra={<PodSelect jira={jira} />}
     >
-      <JiraStarterTemplates available={jira.starterTemplatesAvailable} workspace={workspace} />
+      <JiraStarterTemplates available={jira.podReady} workspace={workspace} />
       <JiraTemplateList
         jira={jira}
         library={library}
