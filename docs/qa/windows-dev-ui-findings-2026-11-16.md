@@ -206,6 +206,10 @@ results with the observed reason.
 - Verify with the native command result when the runtime admits a test. When it refuses,
   check the exact reason, the `Not run` presentation and the absence of a test process.
 
+Live Queue, Send now and scheduled continuations require the native runtime profile.
+The Windows mapped profile can exercise Pause, Resume, Stop and a new task. Windows
+qualification of the native profile remains in [#4068](https://github.com/oscharko-dev/Keiko/issues/4068).
+
 On release commit `0ad205016`, a three-file, 367-byte Git fixture reached **Succeeded**
 with the expected read result and zero changes through both Azure GPT-5.4 and LiteLLM
 Gemma. A separate controlled provider held a real stream across an Edge reload. The
@@ -238,6 +242,15 @@ recognition remain open.
 - Review and deny one proposed change, then approve an isolated test write in the QA Jira
   project. Check Jira and Keiko receipts for the resulting issue and exact write count.
   Exercise a rejected or interrupted write and check the recovery message.
+
+In the released Windows checkout, Verify connection went from **Verifying** to
+**Connection verified**. The bound Chat reported the three expected `Task` issues, all
+`To Do`. Its tool trail showed **Complete: 3 issues read** and offered both exports.
+Both actual files contained exactly the same three issue keys. Downloading again after
+an ordinary Edge reload produced byte-identical Markdown and CSV. All three Jira
+starters opened editable drafts with their own Metadata panel. Discard confirmation
+protected unsaved drafts on switching. The isolated Jira instance's expired evaluation
+license limits this block to reads and draft presentation.
 
 ### Git
 
@@ -285,13 +298,22 @@ gateway chat starts in the same observation window before and after reload.
 
 ### Knowledge Pod
 
-- Create a Pod and index a one-page PDF and a short text file. Compare the source list,
+- Create a Pod and index a small PDF and a short text file. Compare the source list,
   index status and grounded answer to the known fixture content.
 - Change the text, reindex the selection and query for the revised value. Exercise a
   malformed document or unavailable source, recover it and retry. Verify valid
   documents remain usable and check the persisted index after restart.
 - Switch between two small Pods with distinct facts. Verify the selected scope, source
   removal and the answer's behavior when the selected Pod has no relevant evidence.
+
+The primary Pod indexed one three-page PDF and a short text file through Qwen
+embeddings. Its initial index contained two documents with all four chunks embedded.
+An incremental refresh after adding a malformed 60-byte PDF retained both valid files
+and counted one failed file. Its summary still described the current source set as
+fully aligned, recorded in [#4442](https://github.com/oscharko-dev/Keiko/issues/4442).
+After replacing the invalid PDF and changing the text file, the ordinary Repair action
+resulted in 3 of 3 indexed documents and zero failed or skipped files. Gemma retrieved
+the new marker `Juniper-151-Dawn` from the same Pod.
 
 ### Citation
 
@@ -311,6 +333,12 @@ Its marker opened page 2 of that file, and the Activity Log recorded
 and disabled Next. Previous returned to page 2. Entering 99 in the page field and
 moving focus clamped the viewer to page 3. Zoom, Fit width and reopening the citation
 left the viewer operable and the reopened citation returned to page 2.
+
+The text reference for **Companion - Übersicht.txt** exposed its full filename in the
+answer. Activation opened an Editor tab against the unrelated Workbench task worktree,
+where the file was absent. The actual source still existed in the selected Pod. The
+Editor showed a read-surface refusal despite the activation event's `opened` outcome.
+This mismatch is tracked in [#4443](https://github.com/oscharko-dev/Keiko/issues/4443).
 
 ### UI and UX checks for every surface
 
