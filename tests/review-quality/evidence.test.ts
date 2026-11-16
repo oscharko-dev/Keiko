@@ -128,11 +128,19 @@ describe("gateConfiguration", () => {
     expect(Object.keys(defaults.budgetSettings)).toEqual([...BUDGET_SETTING_KEYS]);
     expect(Object.values(defaults.budgetSettings)).toEqual(BUDGET_SETTING_KEYS.map(() => null));
     const raised = gateConfiguration(checkout, args("product"), {
-      KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS: "1500000",
+      KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES: "30",
     });
-    expect(raised.budgetSettings.KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS).toBe("1500000");
+    expect(raised.budgetSettings.KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES).toBe("30");
     expect(raised.configurationDigest).not.toBe(defaults.configurationDigest);
     expect(raised.promptDigest).toBe(defaults.promptDigest);
+    // Keiko does not limit tokens (#4346): a retired prompt-token setting bounds nothing, so it
+    // neither enters the record nor changes the digest.
+    const retired = gateConfiguration(checkout, args("product"), {
+      KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS: "1500000",
+      KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "1500000",
+    });
+    expect(retired.budgetSettings).toEqual(defaults.budgetSettings);
+    expect(retired.configurationDigest).toBe(defaults.configurationDigest);
   });
 
   it("refuses to run on uncommitted review configuration", () => {

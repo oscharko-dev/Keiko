@@ -43,11 +43,13 @@ const PROMPT_PATHS = [
   "packages/keiko-server/src/review/counter-check/prompt.ts",
 ] as const;
 
-/** The operator settings that bound a review run; an absent key keeps the product default. */
+/**
+ * The operator settings that bound a review run; an absent key keeps the product default. Keiko
+ * does not limit tokens (#4346), so the two retired prompt-token settings bound nothing and are not
+ * recorded.
+ */
 export const BUDGET_SETTING_KEYS = [
-  "KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS",
   "KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES",
-  "KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS",
   "KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES",
 ] as const;
 
