@@ -240,7 +240,7 @@ describe("CI test/gate wiring guard", () => {
 
   it("runs the portable handoff protocol fixture suite on a genuine Windows host", () => {
     const windowsJobStart = ci.indexOf("  cross-platform-smoke:");
-    const windowsJobEnd = ci.indexOf("\n  node-26-compatibility:", windowsJobStart);
+    const windowsJobEnd = ci.indexOf("\n  firefox-smoke:", windowsJobStart);
     const windowsJob = ci.slice(windowsJobStart, windowsJobEnd);
     const buildStep = ci.indexOf("      - name: Build", windowsJobStart);
     const fixtureStep = ci.indexOf(
@@ -471,9 +471,7 @@ describe("CI test/gate wiring guard", () => {
       nightlyPerfEvidenceWorkflow,
       codeTaskRealBinaryWorkflow,
     ].join("\n");
-    const node24SetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
-    const node26SetupCount = runtimeWorkflows.match(/node-version: "26\.8\.1"/gu)?.length ?? 0;
-    const nodeSetupCount = node24SetupCount + node26SetupCount;
+    const nodeSetupCount = runtimeWorkflows.match(/node-version: "26\.13\.1"/gu)?.length ?? 0;
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
     // This inventory covers every workflow that selects Node. Issue #3403 retired the six
@@ -488,23 +486,22 @@ describe("CI test/gate wiring guard", () => {
     // The load-bearing pairing below proves every lane verifies the governed toolchain, while the
     // exact counts make a removed or unreviewed new lane fail.
     // ADR-0178 adds one Node lane: `verified-tree`, the resolver that answers whether this exact
-    // tree was already proven green. It sets up Node 24 and verifies the governed toolchain like
+    // tree was already proven green. It sets up Node 26 and verifies the governed toolchain like
     // every other lane, so `verificationCount === nodeSetupCount` below still holds.
     // Issue #3594 adds the required customer-shape qualification job to the release workflow.
-    // It uses the same pinned Node 24 setup and toolchain verification before staging the package.
-    // The portable secure-read matrix adds one governed Node 24 lane for all four native targets.
+    // It uses the same pinned Node 26 setup and toolchain verification before staging the package.
+    // The portable secure-read matrix adds one governed Node 26 lane for all four native targets.
     // Firefox's isolated smoke matrix retains its own pinned setup and verification.
-    expect(node24SetupCount).toBe(33);
-    expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(34);
+    // The Node 26-only baseline retires the duplicate compatibility matrix.
+    expect(nodeSetupCount).toBe(33);
     expect(verificationCount).toBe(nodeSetupCount);
-    expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
-    expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");
+    expect(runtimeWorkflows).not.toMatch(/node-version: "(?:22|24)\./u);
+    expect(ci).not.toContain("RUNTIME_QUALIFICATION_RESULT");
   });
 
   it("executes typecheck, build, and install smokes on Linux, macOS, and Windows", () => {
     const start = ci.indexOf("  cross-platform-smoke:");
-    const end = ci.indexOf("\n  node-26-compatibility:", start);
+    const end = ci.indexOf("\n  firefox-smoke:", start);
     const crossPlatform = ci.slice(start, end);
     expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(crossPlatform).toContain("Typecheck the complete package graph");
@@ -517,7 +514,7 @@ describe("CI test/gate wiring guard", () => {
 
   it("keeps Windows in the full cross-platform proof instead of a slim side job", () => {
     const start = ci.indexOf("  cross-platform-smoke:");
-    const end = ci.indexOf("\n  node-26-compatibility:", start);
+    const end = ci.indexOf("\n  firefox-smoke:", start);
     const crossPlatform = ci.slice(start, end);
     expect(ci).not.toContain("windows-cross-platform-smoke");
     expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
@@ -614,4 +611,36 @@ describe("CI test/gate wiring guard", () => {
       expect(extendedE2e.includes(suite), `${suite} is not wired into e2e-extended.yml`).toBe(true);
     });
   }
+});
+
+describe("native host regression coverage", () => {
+  it("runs the environment-sensitive suites in the existing cross-platform matrix", () => {
+    const start = ci.indexOf("\n  cross-platform-smoke:");
+    const end = ci.indexOf("\n  firefox-smoke:", start);
+    const job = ci.slice(start, end);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const step = job.slice(
+      job.indexOf("      - name: Verify local paths, timezone and runtime selection on this OS"),
+      job.indexOf("      - name: Build\n"),
+    );
+    expect(step).toContain("TZ: Europe/Berlin");
+    expect(step).toContain("node node_modules/vitest/vitest.mjs run");
+    expect(step).not.toContain("if:");
+    for (const path of [
+      "packages/keiko-server/src/knowledge-chat-turn.test.ts",
+      "packages/keiko-server/src/editor/verificationRuntimeTarget.test.ts",
+      "packages/keiko-memory-capture/src/salience.test.ts",
+      "packages/keiko-memory-capture/src/stated-validity.test.ts",
+      "packages/keiko-git/src/git-executable.test.ts",
+      "packages/keiko-sandbox/src/native-build-toolchain.test.ts",
+      "scripts/__tests__/host-executable.test.mjs",
+      "scripts/__tests__/host-npm-invocation.test.mjs",
+      "scripts/__tests__/check-activity-log.test.mjs",
+    ])
+      expect(step).toContain(path);
+    const provision = job.indexOf("run: npm run provision:usearch");
+    expect(provision).toBeGreaterThan(-1);
+    expect(provision).toBeLessThan(job.indexOf(step));
+  });
 });

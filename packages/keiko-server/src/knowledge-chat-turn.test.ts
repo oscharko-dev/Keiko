@@ -441,7 +441,6 @@ it.each([
   "shares review admission with external MCP tools (rotated: $rotate, caller calls: $callerCalls, output: $maxOutputTokens)",
   async ({ rotate, callerCalls, maxOutputTokens, contextWindow, expectedOutput }) => {
     const { pod, deps } = await fixture(1, maxOutputTokens, contextWindow);
-    const { settings } = requiredReviewOwners(deps);
     const server: McpServerDefinition = {
       name: "synthetic",
       description: "Read-only test tools",
@@ -449,14 +448,7 @@ it.each([
       transport: { kind: "local", command: [process.execPath], environment: {} },
       tools: { status: "read" },
     };
-    settings.update(
-      {
-        expectedRevision: settings.read("knowledge-source-proof").revision,
-        servers: [server],
-        secrets: {},
-      },
-      "knowledge-source-proof",
-    );
+    configureStaticMcpSettings(deps, server, "knowledge-source-proof");
     const connection: ExternalMcpConnection = {
       signal: new AbortController().signal,
       tools: [
@@ -729,21 +721,36 @@ it.each(["call", "stream", "meter"] as const)(
   },
 );
 
-function installSemanticExternalCatalog(deps: UiHandlerDeps): void {
+function configureStaticMcpSettings(
+  deps: UiHandlerDeps,
+  server: McpServerDefinition,
+  correlationId: string,
+): void {
   const { settings } = requiredReviewOwners(deps);
-  settings.update(
+  const updated = settings.update(
     {
-      expectedRevision: settings.read("semantic-ledger-proof").revision,
-      servers: [
-        {
-          name: "semantic-external",
-          description: "Read-only test tools",
-          enabled: true,
-          transport: { kind: "local", command: [process.execPath], environment: {} },
-          tools: { status: "read" },
-        },
-      ],
+      expectedRevision: settings.read(correlationId).revision,
+      servers: [server],
       secrets: {},
+    },
+    correlationId,
+  );
+  expect(updated.ok).toBe(true);
+  // These admission scenarios keep the MCP configuration fixed. Retain the validated registry
+  // snapshot without repeatedly starting the Windows ACL inspector; registry revocation has its
+  // own owner tests. Gateway-generation rotation and every turn authority check remain real.
+  vi.spyOn(settings, "read").mockReturnValue(updated.snapshot);
+}
+
+function installSemanticExternalCatalog(deps: UiHandlerDeps): void {
+  configureStaticMcpSettings(
+    deps,
+    {
+      name: "semantic-external",
+      description: "Read-only test tools",
+      enabled: true,
+      transport: { kind: "local", command: [process.execPath], environment: {} },
+      tools: { status: "read" },
     },
     "semantic-ledger-proof",
   );
@@ -912,12 +919,9 @@ it.each([
     });
     // Synthesis has its own pending usage; the turn registry above accounts for every tool round.
     const pendingSynthesis = budget.pendingUsage();
-    const remainingInput = 1000 - pendingSynthesis.promptTokens;
     const remainingOutput = 1000 - pendingSynthesis.completionTokens;
-    expect(
-      tracker.admission({ promptTokens: remainingInput + 1, maxOutputTokens: 25 }),
-    ).toBeUndefined();
-    const finalGrant = tracker.admission({ promptTokens: remainingInput, maxOutputTokens: 25 });
+    expect(tracker.admission({ promptTokens: 1001, maxOutputTokens: 25 })).toBeUndefined();
+    const finalGrant = tracker.admission({ promptTokens: 1000, maxOutputTokens: 25 });
     expect(finalGrant?.maxOutputTokens).toBe(Math.min(25, remainingOutput));
     expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
     expect(budget.takeUsage()).toEqual({

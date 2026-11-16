@@ -102,7 +102,7 @@ describe("workspace maximized viewport adaptation", () => {
       await vi.advanceTimersByTimeAsync(400);
     });
     window.localStorage.setItem(WS_LS, JSON.stringify(remoteWindows()));
-    const writes = vi.spyOn(Storage.prototype, "setItem");
+    const writes = vi.spyOn(Object.getPrototypeOf(window.localStorage) as Storage, "setItem");
     act(emitStorage);
     expectLocalGeometry();
     const applied = latest?.wins;

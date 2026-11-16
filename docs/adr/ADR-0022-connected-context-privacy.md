@@ -290,7 +290,7 @@ citation marker. The existing repair owner inserts markers at original coordinat
 the unchanged verbatim-content, code, assessment, token-boundary, sent-evidence and size guards.
 Ambiguous anchors, duplicate coordinates, extra schema fields and unsupported ranges fail
 closed. Existing literal marker-only responses remain compatible under those guards. This
-changes neither the turn's physical-attempt ceiling nor its remaining input/output/time grants;
+changes neither the turn's physical-attempt ceiling, its per-request input caps nor its remaining output/time grants;
 existing answer-details and reconciliation events record the actual disposition without bodies.
 Single-source, multi-source and hybrid marker repair use an explicit tool-free purpose through
 the same admitted, turn-metered model port. Repair advertises no catalog and never enters the
@@ -1177,7 +1177,9 @@ while charging the actual completed repair attempt within the unchanged shared g
 The existing Activity Log records the actual repair disposition and final citation behaviour;
 clarifications and already cited answers do not acquire an extra model call.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
-maximum of two physical synthesis attempts and the original remaining search/read/token/spend/time grants.
+maximum of two physical synthesis attempts and the original remaining search/read/output/spend/time grants.
+Each prompt fits its current model and caller input caps; earlier synthesis prompts do not consume
+that input capacity (owner decision 2026-11-11, ADR-0137 D2).
 Declared unread targets receive priority during final prompt fitting;
 the actual sent pack must retain each admitted target before a second gateway dispatch. A rejected
 fit preserves the first insufficiency and all physical-read usage. Injected answerers are also checked
@@ -1672,13 +1674,14 @@ Synthesis accounting refines the two-call rule at the actual attempt boundary: i
 marker repair, follow-up, and context/provider retries share the same turn-owned allowance. The
 answer-details sibling records optional `synthesisCallCount`, `completedSynthesisCallCount` and
 `synthesisReservedOutputTokens`. Physical synthesis attempts remain separate from completed
-responses: overflow, transient and compatibility failures consume attempt and token/spend grants
+responses: overflow, transient and compatibility failures consume attempt and output/spend grants
 without incrementing completed-response count. A completed marker repair increments that count
 even when its content is rejected; a completed follow-up does likewise. The common grounded
 evidence producer receives the completed count for `usageTotals.requestCount` and the human report
 (ADR-0010 D7); unchanged callers retain the existing one-request default. The existing factory
 ledger owns the lifetime completed counter, per-result deltas and caught-repair recovery.
-Input charges use the canonical sent-prompt estimate as a floor and retain larger reported counts.
+Recorded input usage uses the canonical sent-prompt estimate as a floor and retains larger reported
+counts, including discarded attempts. It never reduces a later request's input capacity.
 Reported partial output is charged; an uncertain interrupted stream retains its requested output
 upper reservation. A definitive HTTP rejection before generation leaves the spare output grant
 available for bounded recovery. These admission charges do not claim exact measured consumption.
@@ -1693,10 +1696,11 @@ their existing resilience classification. Caller attempt/cap refusals use the no
 `GATEWAY_ATTEMPT_ADMISSION_DENIED` code and HTTP 403, also preserved in streamed error notices.
 The localized request-limit notice does not diagnose context-window overflow or claim exact
 unknown output consumption; genuine context-window refusals retain `GATEWAY_CONTEXT_OVERFLOW`.
-Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
+Prompt fitting retains separate model and caller input caps for each request. Mandatory overhead that
 fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
 the model retains context-overflow handling. Best-effort citation repair keeps the completed
-answer when its remaining input allowance or synthesis attempt slots cannot fund the repair. Early
+answer when its current prompt does not fit, its cumulative output grant is exhausted, or no
+synthesis attempt slot remains. Early
 iterator close and aborted reads without terminal usage retain uncertain output exposure.
 An acquired caller reservation is also settled when local cap validation or HTTP preparation fails
 before fetch; that failure does not claim a provider dispatch or token consumption. Canonical token

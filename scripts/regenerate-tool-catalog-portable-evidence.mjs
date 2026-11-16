@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { cpus, release, tmpdir, totalmem } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { canonicalD12ArtifactBytes } from "./check-perf-evidence.mjs";
 import {
@@ -19,6 +19,7 @@ import {
 } from "./check-tool-catalog-performance.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
+import { EXPECTED_NODE_BASELINE, EXPECTED_NPM_ENGINE } from "./check-runtime-toolchain.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const readJson = (root, path) => JSON.parse(readFileSync(join(root, path), "utf8"));
@@ -55,16 +56,50 @@ function requireSame(actual, expected, label) {
   if (!isDeepStrictEqual(actual, expected)) throw new TypeError(label);
 }
 
+const HISTORICAL_EVALUATION_SOURCE = `
+  import { readFileSync } from "node:fs";
+  const { evaluateToolCatalogPerformanceEvidence } = await import(process.argv[2]);
+  const { measurement, calibration, budget } = JSON.parse(readFileSync(0, "utf8"));
+  process.stdout.write(JSON.stringify(
+    evaluateToolCatalogPerformanceEvidence(measurement, calibration, budget),
+  ));
+`;
+
+function evaluateHistoricalEvidence(baselineRoot, documents) {
+  const moduleUrl = pathToFileURL(
+    join(baselineRoot, "scripts/check-tool-catalog-performance.mjs"),
+  ).href;
+  return JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        HISTORICAL_EVALUATION_SOURCE,
+        "historical-catalog",
+        moduleUrl,
+      ],
+      { cwd: baselineRoot, encoding: "utf8", input: JSON.stringify(documents) },
+    ),
+  );
+}
+
 function preparePair(context, deps) {
   const { root, baselineRoot, baselineCommit, candidateCommit } = context;
   const previous = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
   const previousBudget = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.budget);
+  // A runtime migration validates the frozen old documents with their reviewed baseline ruler.
+  // Only that historical validation uses the ancestor's checker; both new measurements and the
+  // final gate use this candidate's Node 26 contract and preserve every previous ceiling.
+  const measurement = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.measurement);
   requirePassing(
-    evaluateToolCatalogPerformanceEvidence(
-      deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.measurement),
-      previous,
-      previousBudget,
-    ),
+    previous.environment.nodeVersion === `v${EXPECTED_NODE_BASELINE}`
+      ? evaluateToolCatalogPerformanceEvidence(measurement, previous, previousBudget)
+      : evaluateHistoricalEvidence(baselineRoot, {
+          measurement,
+          calibration: previous,
+          budget: previousBudget,
+        }),
   );
   const environment = deps.environment();
   const measurementHarnessSha256 = deps.ruler(root);
@@ -159,8 +194,10 @@ function pinnedNpm(deps) {
   const npmCli = deps.npmCli;
   if (!npmCli?.endsWith("npm-cli.js")) throw new TypeError("run the portable producer through npm");
   const npmVersion = deps.run(process.execPath, [npmCli, "--version"], { encoding: "utf8" }).trim();
-  if (deps.nodeVersion !== "v24.18.0" || npmVersion !== "11.16.0")
-    throw new TypeError("portable catalog producer requires Node 24.18.0 and npm 11.16.0");
+  if (deps.nodeVersion !== `v${EXPECTED_NODE_BASELINE}` || npmVersion !== EXPECTED_NPM_ENGINE)
+    throw new TypeError(
+      `portable catalog producer requires Node ${EXPECTED_NODE_BASELINE} and npm ${EXPECTED_NPM_ENGINE}`,
+    );
   return (cwd, args) => deps.run(process.execPath, [npmCli, ...args], { cwd, stdio: "inherit" });
 }
 

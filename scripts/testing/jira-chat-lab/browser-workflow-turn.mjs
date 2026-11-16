@@ -346,7 +346,125 @@ async function decidePending(region, user, options, decisions) {
   }
 }
 
-async function approveWorkflowExchange(region, exchange, options, decisions) {
+function expectedDraftItems(options) {
+  const items = options.expectedDraftItems;
+  const fields = [
+    "summary",
+    "projectLabel",
+    "issueType",
+    "parentIssueKey",
+    "parentFieldId",
+    "parentFieldLabel",
+  ];
+  assert.ok(
+    Array.isArray(items) &&
+      items.length > 0 &&
+      items.every((item) =>
+        fields.every((field) => typeof item?.[field] === "string" && item[field].trim() !== ""),
+      ),
+    "A draft needs an explicit expected item set and native target labels",
+  );
+  assert.equal(new Set(items.map((item) => item.summary)).size, items.length);
+  return items;
+}
+
+async function draftText(locator) {
+  const [text, visible] = await Promise.all([locator.innerText(), locator.isVisible()]);
+  return { text: text.trim(), visible };
+}
+
+async function draftChildren(locator, read) {
+  const count = await locator.count();
+  return Promise.all(Array.from({ length: count }, (_, index) => read(locator.nth(index))));
+}
+
+async function reviewDraftParent(item, expected, notes) {
+  const wanted = `Parent (${expected.parentFieldId}): ${expected.parentIssueKey}`;
+  const parents = notes.flatMap((note) =>
+    note.text
+      .split(" · ")
+      .filter((text) => text.startsWith("Parent ("))
+      .map((text) => ({ ...note, text })),
+  );
+  assert.ok(
+    parents.every((parent) => parent.text === wanted && parent.visible),
+    "The reviewed parent must match",
+  );
+  const labels = new Set([expected.parentFieldId, expected.parentFieldLabel]);
+  const fields = await draftChildren(item.locator(":scope > div > dl > div"), async (field) => {
+    const [label, value] = await Promise.all([
+      draftText(field.locator(":scope > dt")),
+      draftText(field.locator(":scope > dd")),
+    ]);
+    return { label, value };
+  });
+  const parentFields = fields.filter(({ label }) => labels.has(label.text));
+  assert.ok(
+    parentFields.every(
+      ({ label, value }) =>
+        label.visible && value.visible && value.text === expected.parentIssueKey,
+    ),
+    "The reviewed parent field must match",
+  );
+  assert.ok(
+    parents.length + parentFields.length > 0,
+    "The reviewed item must show its exact parent relationship",
+  );
+}
+
+async function reviewDraftItem(preview, expected) {
+  const choice = preview.getByRole("checkbox", {
+    name: expected.summary,
+    exact: true,
+    includeHidden: true,
+  });
+  assert.equal(await choice.count(), 1, "Each expected item must be shown exactly once");
+  // DraftItem keeps its own title/target/fields beside its checkbox; children are outside this div.
+  const item = choice.locator("..");
+  const title = item.locator(":scope > div > label");
+  assert.equal(await title.count(), 1, "Each item must show one associated title");
+  const checked = await Promise.all([
+    choice.isVisible(),
+    choice.isEnabled(),
+    choice.isChecked(),
+    title.isVisible(),
+    choice.evaluate(
+      (element, summary) =>
+        element.labels?.length === 1 &&
+        element.labels[0] === element.parentElement.querySelector(":scope > div > label") &&
+        element.labels[0].textContent === summary,
+      expected.summary,
+    ),
+  ]);
+  assert.ok(
+    checked.every(Boolean),
+    "Every expected item must remain visibly selected with its exact own title",
+  );
+  const notes = await draftChildren(item.locator(":scope > div > span"), draftText);
+  const targets = notes.filter(({ text }) => text.startsWith("Project "));
+  const wanted = `Project ${expected.projectLabel} · Issue type ${expected.issueType}`;
+  assert.ok(
+    targets.length === 1 && targets[0].text === wanted && targets[0].visible,
+    "Each item must show its exact native project and issue type",
+  );
+  await reviewDraftParent(item, expected, notes);
+}
+
+async function reviewDraftItems(review, options) {
+  const items = expectedDraftItems(options);
+  const preview = review.getByRole("group", {
+    name: `Issues to create (${items.length} of ${items.length} selected)`,
+    exact: true,
+  });
+  await preview.waitFor({ state: "visible" });
+  assert.equal(await preview.count(), 1, "Exactly one complete draft preview is reviewed");
+  assert.equal(await preview.getByRole("checkbox", { includeHidden: true }).count(), items.length);
+  await Promise.all(items.map((expected) => reviewDraftItem(preview, expected)));
+  return preview.innerText();
+}
+
+/** Review visible native targets; a draft is never approved from a generic fallback or raw args. */
+export async function approveWorkflowExchange(region, exchange, options, decisions) {
   reviewWorkflowExchange(exchange, options.operations);
   const review = region.getByRole("region", { name: "Review Jira action", exact: true }).filter({
     has: region
@@ -355,13 +473,15 @@ async function approveWorkflowExchange(region, exchange, options, decisions) {
       .filter({ visible: true }),
   });
   assert.equal(await review.count(), 1, "Only one concrete pending action is reviewed at a time");
-  const details = await review
-    .getByRole("group", { name: "Proposed action details", exact: true })
-    .innerText();
+  const draft = exchange.approval.operation === "jira.draft";
+  const details = draft
+    ? await reviewDraftItems(review, options)
+    : await review.getByRole("group", { name: "Proposed action details", exact: true }).innerText();
   for (const fact of options.reviewText ?? [])
     assert.ok(details.includes(fact), "Reviewed target is visible");
   assert.equal(await review.locator("pre").count(), 0);
   await options.beforeDecision?.(exchange);
+  if (draft) await reviewDraftItems(review, options);
   decisions.add(exchange.approval.approvalId);
   options.persist?.({
     phase: "approval-may-have-been-sent",

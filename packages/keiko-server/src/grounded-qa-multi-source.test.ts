@@ -2971,11 +2971,7 @@ describe("multi-source bounded citation repair", () => {
     );
     expect(prompts[1]).toMatchObject({
       correlationId: "corr-multi-repair",
-      inputBudget:
-        DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax -
-        groundedSynthesisAttemptUsage(countGatewayPromptTokens(calls[0] ?? { messages: [] }), {
-          promptTokens: 10,
-        }).promptTokens,
+      inputBudget: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
     });
     expect(prompts[1]?.promptTokens).toBe(
       countGatewayPromptTokens({ messages: calls[1]?.messages ?? [] }),
@@ -3041,23 +3037,38 @@ describe("multi-source bounded citation repair", () => {
       expect(answer.citationBehaviour).toBeUndefined();
     },
   );
-  it.each([
-    { inputMax: 1600, promptTokens: 1500 },
-    { outputMax: 10, completionTokens: 10 },
-  ])(
-    "retains the original response when the shared remaining budget is exhausted: %j",
-    async (controls) => {
-      const { calls, answer } = await repairAsk(
-        "The implementation works [source:2|src/beta.ts:1-5].",
-        "The implementation works.",
-        controls,
-      );
-      expect(calls).toHaveLength(1);
-      expect(answer.content).toBe("The implementation works.");
-      expect(answer.citationBehaviour).toBe("never");
-      expect(answer.citations).toEqual([]);
-    },
-  );
+  it("keeps the source repair input window after observing an almost full-window prompt", async () => {
+    const repaired = "The implementation works [source:2|src/beta.ts:1-5].";
+    const { calls, answer, logLines } = await repairAsk(repaired, "The implementation works.", {
+      inputMax: 1600,
+      promptTokens: 1500,
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => countGatewayPromptTokens(call) <= 1600)).toBe(true);
+    expect(answer.content).toBe(repaired);
+    expect(answer.citationBehaviour).toBe("cites-after-repair");
+    const prompts = logLines.filter((line) => line.includes('"op":"chat.context.selected"'));
+    expect(prompts).toHaveLength(2);
+    for (const line of prompts) {
+      expect(expectActivityLogProof("chat.context.selected.budget", line)).toMatchObject({
+        inputBudget: 1600,
+      });
+      expect(line).not.toContain("The implementation works");
+      expect(line).not.toContain("src/beta.ts");
+    }
+  });
+  it("retains the original response when the shared remaining output budget is exhausted", async () => {
+    const controls = { outputMax: 10, completionTokens: 10 };
+    const { calls, answer } = await repairAsk(
+      "The implementation works [source:2|src/beta.ts:1-5].",
+      "The implementation works.",
+      controls,
+    );
+    expect(calls).toHaveLength(1);
+    expect(answer.content).toBe("The implementation works.");
+    expect(answer.citationBehaviour).toBe("never");
+    expect(answer.citations).toEqual([]);
+  });
   it("repairs a current missing citation despite three prior reliable citation observations", async () => {
     const configured = reliableCitationRuntime(tmp, CHAT_MODEL);
     try {

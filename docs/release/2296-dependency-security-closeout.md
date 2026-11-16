@@ -433,14 +433,14 @@ Keiko-owned release signatures remain the mandatory cross-platform trust anchor.
 Enforced by `npm run check:runtime-toolchain` and `npm run check:typescript-toolchain`, which own
 these values; this document does not restate them as a second source.
 
-| Surface             | Governed value                    | Enforcing gate               |
-| ------------------- | --------------------------------- | ---------------------------- |
-| Node.js engine      | `>=24.18.0 <25 \|\| >=26.3.0 <27` | `check:runtime-toolchain`    |
-| npm engine          | `>=11.16.0 <12`                   | `check:runtime-toolchain`    |
-| packageManager      | `npm@11.16.0`                     | `check:runtime-toolchain`    |
-| TypeScript compiler | 7.0.2 (native)                    | `check:typescript-toolchain` |
-| TypeScript API      | 6.0.3                             | `check:typescript-toolchain` |
-| Internal versions   | 0.3.17 across all workspaces      | `check:version-consistency`  |
+| Surface             | Governed value               | Enforcing gate               |
+| ------------------- | ---------------------------- | ---------------------------- |
+| Node.js engine      | `>=26.13.1 <27`              | `check:runtime-toolchain`    |
+| npm engine          | `>=11.20.0 <12`              | `check:runtime-toolchain`    |
+| packageManager      | `npm@11.20.0`                | `check:runtime-toolchain`    |
+| TypeScript compiler | 7.0.2 (native)               | `check:typescript-toolchain` |
+| TypeScript API      | 6.0.3                        | `check:typescript-toolchain` |
+| Internal versions   | 0.3.17 across all workspaces | `check:version-consistency`  |
 
 ## Dependency graph validity (`npm ls`)
 
@@ -494,8 +494,8 @@ points across eight workflows, in every case before `npm ci`. `engine-strict` wo
 version of a question that is already answered where it matters.
 
 **Its cost is a silent failure mode in exactly the machinery this closeout exists to protect.**
-`engines.node` is upper-bounded (`>=24.18.0 <25 || >=26.3.0 <27`) and `engines.npm` accepts the
-governed npm 11 range (`>=11.16.0 <12`). Under `engine-strict` both become hard install-time gates
+`engines.node` is upper-bounded (`>=26.13.1 <27`) and `engines.npm` accepts the
+governed npm 11 range (`>=11.20.0 <12`). Under `engine-strict` both become hard install-time gates
 for _every_ npm process that runs in this working directory, including Dependabot's updater, which
 brings its own Node and npm and reads the project
 `.npmrc`. If either differs, the dependency-update pull requests stop, and they stop **without

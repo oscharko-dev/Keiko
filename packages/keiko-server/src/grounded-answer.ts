@@ -173,8 +173,9 @@ export function createGroundedSynthesisAttemptAdmission(
     // is admitted; its physical usage stays in the reported total.
     if (input.correctsUnusableAttempt === true) latest?.releaseUnusableAttempt();
     const pending = budget.pendingUsage();
+    // Prompt totals remain usage evidence; each request receives the same input window.
     if (
-      input.promptTokens > options.inputTokensMax - pending.promptTokens ||
+      input.promptTokens > options.inputTokensMax ||
       options.outputTokensMax <= pending.completionTokens ||
       !budget.tryReserve()
     )
@@ -234,7 +235,6 @@ function retryWithinSynthesisGrant(
   const pending = budget.pendingUsage();
   return (
     budget.remaining() > 0 &&
-    pending.promptTokens < options.inputTokensMax &&
     pending.completionTokens < options.outputTokensMax &&
     options.signal?.aborted !== true &&
     (options.deadlineAtMs === undefined || (options.nowMs ?? Date.now)() < options.deadlineAtMs) &&

@@ -6040,7 +6040,7 @@ describe("actual fitted repository evidence authority", () => {
       spy.mockRestore();
     }
   });
-  it("keeps a newly declared follow-up source in the actual second prompt under cumulative tokens", async () => {
+  it("keeps a newly declared follow-up source when each prompt fits but their sum exceeds the input window", async () => {
     const { chatId } = await setupChatWithScope();
     mkdirSync(join(tmp, "src"), { recursive: true });
     mkdirSync(join(tmp, "lib"), { recursive: true });
@@ -6100,7 +6100,8 @@ describe("actual fitted repository evidence authority", () => {
     );
     expect(
       requests.reduce((sum, request) => sum + countGatewayPromptTokens(request), 0),
-    ).toBeLessThanOrEqual(5000);
+    ).toBeGreaterThan(5000);
+    expect(requests.every((request) => countGatewayPromptTokens(request) <= 5000)).toBe(true);
     expect(result.body).toMatchObject({
       content: "Configuration is 42 [lib/ConfigurationOrchid.ts:1].",
     });

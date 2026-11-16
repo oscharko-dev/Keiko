@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   nativeBuildCacheReadRoots,
@@ -95,6 +96,33 @@ describe("native build-tool environment and roots (#4271)", () => {
       ),
     ).toEqual([join(root, "certs")]);
   });
+
+  it.each(["etc", "EtC", "private", "PRIVATE", "certs/private", "etc/ssl"])(
+    "keeps the certificate directory %s closed, including below macOS's /private prefix",
+    (directory) => {
+      const root = tree();
+      const bundle = join(root, directory, "ca.pem");
+      mkdirSync(join(root, directory), { recursive: true });
+      writeFileSync(bundle, "");
+      expect(nativeBuildToolReadRoots({ SSL_CERT_FILE: bundle }, join(root, "home"))).toEqual([]);
+    },
+  );
+
+  it.each([...new Set([tmpdir(), ...(process.platform === "darwin" ? ["/tmp", "/var/tmp"] : [])])])(
+    "admits only the certificate file, never the shared temporary directory %s",
+    (directory) => {
+      const bundle = join(directory, `keiko-build-certificate-${randomUUID()}.pem`);
+      writeFileSync(bundle, "");
+      created.push(bundle);
+      const home = join(parse(realpathSync(directory)).root, "keiko-synthetic-home");
+      expect(nativeBuildToolReadRoots({ SSL_CERT_FILE: bundle }, home)).toEqual([]);
+      expect(nativeBuildCertificateFiles({ SSL_CERT_FILE: bundle }, home)).toEqual({
+        files: [realpathSync(bundle)],
+        namedCount: 1,
+        admittedCount: 1,
+      });
+    },
+  );
 
   // The directory alone opens nothing: the bundle's own `*.pem` name is denied by the final
   // credential-name rule unless the profile names the exact file (#4271 lab).

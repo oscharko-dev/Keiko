@@ -521,6 +521,64 @@ describe("binding a template to this Jira", () => {
       f.deps,
     );
 
+  it("repairs the saved German Sub-task parent binding and records body-free validation evidence", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const projectTypes = [{ id: "10003", name: "Sub-task" }];
+    const f = fixture({ projectTypes });
+    let available = false;
+    f.http.mockImplementation((request) => {
+      if (!new URL(request.url).pathname.includes("createmeta"))
+        return jiraGet(request, projectTypes);
+      return Promise.resolve(
+        available
+          ? response({
+              values: [{ ...field("parent", "issuelink", true), name: "Übergeordnet" }],
+              startAt: 0,
+              maxResults: 100,
+              isLast: true,
+              total: 1,
+            })
+          : response({}, 403),
+      );
+    });
+    const skill = await stored(f, typed("Sub-task", "requiredFields: [Übergeordnet]"));
+    expect((await bind(f, skill)).body).toMatchObject({ changed: true });
+    const before = f.deps.store.markdownSkills.get(skill.id);
+    expect(before?.body).toContain('requiredFieldIds: ["none"]');
+    available = true;
+    const checked = await handleValidateJiraTemplate(
+      context(f.cookie, { podId: POD, markdown: before?.body }),
+      f.deps,
+    );
+    expect(checked.body).toMatchObject({
+      findings: [],
+      checked: { fields: true },
+      binding: { state: "bindable", binding: { requiredFieldIds: ["parent"] } },
+    });
+    expect((await bind(f, { id: skill.id, revision: 2 })).body).toMatchObject({ changed: true });
+    expect(f.deps.store.markdownSkills.get(skill.id)?.body).toContain(
+      'requiredFieldIds: ["parent"]',
+    );
+    expect((await bind(f, { id: skill.id, revision: 3 })).body).toMatchObject({ changed: false });
+    expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    const completed = sink.events.filter(
+      (event) => event.op === "skills.library.operation" && event.extra?.phase === "completed",
+    );
+    const validation = completed.find((event) => event.extra?.action === "jira-template-validate");
+    expect(validation?.extra).toMatchObject({
+      checkedFieldCount: expect.any(Number) as unknown,
+      validationFindingCount: 0,
+    });
+    const bindings = completed.filter((event) => event.extra?.action === "jira-template-bind");
+    expect(bindings.map((event) => event.extra?.bindingUpdateCount)).toEqual([1, 1, 0]);
+    for (const event of [validation, ...bindings]) {
+      const line = formatActivityLogProofLine(event ?? {});
+      expectActivityLogProof("skills.library.operation.lifecycle", line);
+      expect(line).not.toMatch(/Übergeordnet|Sub-task|SYN|example/u);
+    }
+  });
+
   it("offers the ids, writes them as a new revision, and does it once", async () => {
     const f = fixture();
     const skill = await stored(f, typed("Story"));

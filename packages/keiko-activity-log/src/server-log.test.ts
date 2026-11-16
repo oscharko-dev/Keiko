@@ -3112,6 +3112,13 @@ describe("activity log store policy", () => {
       pinQuotaBytes: 64 * 1024 * 1024,
     });
 
+    // Seed the retained bytes directly: thousands of individually durable writes only make
+    // this policy test depend on filesystem latency. The next real rollover must prune them
+    // under the replacement budget, while the original budget would still retain them.
+    const retained = seedLegacyFile(stateDir, "server.log", secondBudget * 2);
+    expect(directoryBytes(logs)).toBeGreaterThan(secondBudget);
+    expect(directoryBytes(logs)).toBeLessThan(firstBudget);
+
     // One segment rollover: its maintenance pass re-reads the record before anything is pruned.
     for (let index = 0; index < 150; index += 1) {
       sink.write({ category: "http", op: "after.replacement", extra: { index } });
@@ -3124,13 +3131,11 @@ describe("activity log store policy", () => {
       }),
     );
 
-    // Well past the new, smaller budget but far below the first: only the replaced policy prunes.
-    for (let index = 150; index < 2_500; index += 1) {
-      sink.write({ category: "http", op: "after.replacement", extra: { index } });
-    }
+    expect(existsSync(retained)).toBe(false);
     expect(linesWithOp(stateDir, "activity-log.retention.pruned").at(-1)).toMatchObject({
       retentionBudgetBytes: secondBudget,
     });
+    expect(directoryBytes(logs)).toBeLessThanOrEqual(secondBudget);
   });
 
   it("refuses to replace the stored policy while a live peer still holds an active segment", async () => {

@@ -125,17 +125,32 @@ describe("factory-owned physical synthesis allowance", () => {
     expect(budget.remaining()).toBe(0);
   });
 
-  it("refuses an internal retry whose prompt no longer fits the original input grant", () => {
-    const budget = createGroundedSynthesisCallBudget();
-    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
-      inputTokensMax: 150,
-      outputTokensMax: 80,
-    });
-    tracker.admission({ promptTokens: 100, maxOutputTokens: 80 })?.settle(undefined, true);
-    expect(tracker.admission({ promptTokens: 100, maxOutputTokens: 80 })).toBeUndefined();
-    expect(budget.remaining()).toBe(1);
-    expect(budget.pendingUsage()).toEqual({ promptTokens: 100, completionTokens: 0 });
-  });
+  it.each([100, 150])(
+    "fits each retry independently after %i observed prompt tokens",
+    (promptTokens) => {
+      const budget = createGroundedSynthesisCallBudget();
+      const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+        inputTokensMax: 150,
+        outputTokensMax: 80,
+        retryFollows: () => true,
+      });
+      tracker
+        .admission({ promptTokens, maxOutputTokens: 80 })
+        ?.settle({ promptTokens, completionTokens: 7 }, true, "observed");
+      expect(tracker.retryFollows?.(new Error("Synthetic retry"))).toBe(true);
+      expect(tracker.admission({ promptTokens: 151, maxOutputTokens: 80 })).toBeUndefined();
+      expect(budget.remaining()).toBe(1);
+      const second = tracker.admission({ promptTokens: 100, maxOutputTokens: 80 });
+      expect(second?.maxOutputTokens).toBe(73);
+      second?.settle({ promptTokens: 100, completionTokens: 5 }, true, "observed");
+      expect(budget.pendingUsage()).toEqual({
+        promptTokens: promptTokens + 100,
+        completionTokens: 12,
+      });
+      expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
+      expect(budget.remaining()).toBe(0);
+    },
+  );
 
   it("releases a local reservation when spend admission refuses before provider dispatch", () => {
     const budget = createGroundedSynthesisCallBudget();

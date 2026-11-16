@@ -399,14 +399,14 @@ A fresh clone must `git fetch origin <helperSourceCommit>` first (the commit nam
 `NPM_LANE_RUNTIME_APPROVALS`): `--pack` compares `native/secure-workspace-read` with it and stops with
 a bare exit 128 when the object is missing. The prerelease `coding-runtime-1.1.5` carries each
 tarball under its pinned name and each `receipt.json` renamed `<tarball without .tgz>.receipt.json`.
-The root manifest and lockfile stay on 1.1.4 until npm serves both 1.1.5 packages and the workflow's
-verification is green, and `release-publish.mjs` refuses a product release while a root runtime pin
-carries another OpenCode than `portable-runtime-approvals.json` approves, so 1.1.4 (OpenCode 2.1.4)
-cannot ship by accident in the meantime.
+Both macOS 1.1.5 packages are published, and the root manifest and lockfile select 1.1.5.
+`release-publish.mjs` refuses a product release while a root runtime pin carries another OpenCode
+than `portable-runtime-approvals.json` approves, so a retired package carrying OpenCode 2.1.4
+cannot ship by accident.
 
 The 1.1.4 runtime packages carry OpenCode 2.1.4 and address F18's one-MiB secure-read helper.
-`coding-runtime-publish.yml` published both on 2026-10-26 (#3898 AC8), and the root optional
-dependency pins and `package-lock.json` name 1.1.4 since that date (step 3). Public 1.1.3 stays capped
+`coding-runtime-publish.yml` published both on 2026-10-26 (#3898 AC8); the root optional dependencies
+and `package-lock.json` selected them until the move to 1.1.5 (step 3). Public 1.1.3 stays capped
 at 64 KiB and has left the approvals with the OpenCode 2.2.5 bump (#4271): an installation that still
 holds it reports `payload-unapproved` until it updates. The 1.1.4 packages are retired the same way
 (#4359): the change that selects the runtime packages built from the current pin also removes the
@@ -631,8 +631,8 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
   governed `EXPECTED_PACKAGE_MANAGER` constant in `scripts/check-runtime-toolchain.mjs`
   (`scripts/__tests__/release-workflow-npm-pin.test.mjs` compares the workflow line against
   that constant, so the two cannot drift; this document deliberately does not restate the
-  number and become a third copy). Node 24.18.0 already
-  bundles npm 11.16.0, so the pin is not about clearing that floor: it holds the publish npm at
+  number and become a third copy). The approved Node 26 archive already
+  bundles the governed npm version, so the pin is not about clearing that floor: it holds the publish npm at
   the exact governed version, because a drifted hand-maintained pin is what broke the 0.3.1
   publish and a tag freezes whatever it captured.
 - **The one-time npmjs.com setup is done (issue #3088).** The package's Settings → Trusted

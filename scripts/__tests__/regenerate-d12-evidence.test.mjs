@@ -83,7 +83,7 @@ describe("D12 evidence regeneration plan", () => {
   // steps it names are executed, so the pin follows them there — same three parts, checked where
   // they now bind rather than where they were quoted.
   it("directs non-Linux hosts to the pinned container invocation", () => {
-    expect(CONTAINER_REMEDIATION).toContain("node:24.18.0-bookworm");
+    expect(CONTAINER_REMEDIATION).toContain("node:26.13.1-bookworm");
     expect(CONTAINER_REMEDIATION).toContain("npm run perf:evidence:regen:container");
     expect(CONTAINER_SCRIPT).toContain("bubblewrap");
     expect(CONTAINER_SCRIPT).toContain("scripts/regenerate-d12-evidence.mjs");

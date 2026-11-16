@@ -1867,10 +1867,7 @@ function groundedRemainingOptions(
   const pending = ctx.synthesis.pendingUsage();
   return {
     ...options,
-    modelInputTokensMax: Math.max(
-      0,
-      (options.modelInputTokensMax ?? pack.budget.modelInputTokensMax) - pending.promptTokens,
-    ),
+    modelInputTokensMax: options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
     modelOutputTokensMax: Math.max(
       0,
       (options.modelOutputTokensMax ?? pack.budget.modelOutputTokensMax) - pending.completionTokens,

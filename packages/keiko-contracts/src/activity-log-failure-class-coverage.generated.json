@@ -14446,6 +14446,12 @@
               "required": true
             },
             {
+              "name": "directoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "fileCount",
               "type": "integer",
               "dataClass": "count",
@@ -40257,6 +40263,18 @@
               "required": false
             },
             {
+              "name": "bindingUpdateCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "checkedFieldCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "httpStatus",
               "type": "integer",
               "dataClass": "count",
@@ -40306,6 +40324,12 @@
             },
             {
               "name": "typeCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "validationFindingCount",
               "type": "integer",
               "dataClass": "count",
               "required": false

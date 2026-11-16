@@ -20,6 +20,7 @@ import { GlobalSupportReportAction } from "./SupportReportButton";
 import { DiagnosticReadinessNotice } from "./DiagnosticReadinessNotice";
 import { useBackendHealth } from "./hooks/useBackendHealth";
 import { AppShellBoundary } from "./AppShellBoundary";
+import { AppBootPlaceholder } from "./AppBootPlaceholder";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
 import { AnnouncerProvider } from "./context/AnnouncerContext";
@@ -3371,14 +3372,7 @@ export function AppShell(): ReactNode {
   // is untouched: the placeholder is static markup, so the build-time prerender and the client's
   // first render stay byte-identical.
   if (!mounted) {
-    return (
-      <div className="app" aria-hidden="true">
-        <div className="app-boot">
-          {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG; next/image would inject a wrapper that breaks the centered placeholder */}
-          <img className="app-boot-logo" src="/keiko-logo.svg" alt="" />
-        </div>
-      </div>
-    );
+    return <AppBootPlaceholder />;
   }
   return (
     <AppShellFrame>

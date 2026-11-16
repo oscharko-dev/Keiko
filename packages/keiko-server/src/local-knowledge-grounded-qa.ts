@@ -1037,12 +1037,10 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       this.selectedSkill(),
       this.lastAnswer,
     ).messages;
-    // A repair sends the tool results again, which only the last measured prompt counts (S11).
-    const promptTokens = Math.max(
-      countGatewayPromptTokens({ messages }, limits.tokenAccounting),
-      this.measuredPromptTokens,
-    );
-    return promptTokens <= limits.effectiveInputBudget - pending.promptTokens;
+    // The prior response can total several tool rounds. The complete current repair, including
+    // projected tool results, is checked by callPluralGroundedSynthesis before dispatch.
+    const promptTokens = countGatewayPromptTokens({ messages }, limits.tokenAccounting);
+    return promptTokens <= limits.effectiveInputBudget;
   }
 
   /** Whether the last answer ended on its own rather than being interrupted (S12 of #4173). */

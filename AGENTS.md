@@ -20,7 +20,7 @@ remaining drift.
 ## 1. What Keiko is (and the one rule you cannot break)
 
 Keiko is a **governed, local-first agentic workspace** for regulated engineering and knowledge
-work. It is a TypeScript monorepo (npm workspaces, Node >=24.18.0 <25 or >=26.3.0 <27) that ships as one bundled
+work. It is a TypeScript monorepo (npm workspaces, Node >=26.13.1 <27) that ships as one bundled
 product.
 
 **The human-control invariant — non-negotiable:**
@@ -899,10 +899,12 @@ system that exists, never beside it:
   including completed marker repairs and follow-up answers; failed retries do not become completed
   requests. Legacy evidence callers retain their one-request default.
   It also records
-  `synthesisReservedOutputTokens`. Synthesis input usage charges the greater of the canonical sent
-  prompt estimate and reported provider usage. Reported discarded output is retained; an interrupted
+  `synthesisReservedOutputTokens`. Synthesis input usage records the greater of the canonical sent
+  prompt estimate and reported provider usage. These totals include discarded attempts but never
+  reduce a later request's input capacity (owner decision 2026-11-11, ADR-0137 D2).
+  Reported discarded output is retained; an interrupted
   stream without output measurement retains its requested output reservation instead of granting an
-  unknown output amount as zero. These charges are conservative admission bounds, not claims of exact
+  unknown output amount as zero. These output charges are conservative admission bounds, not claims of exact
   provider consumption. The optional local gateway attempt hook preserves transient recovery within
   the two-attempt allowance and does not change unrelated callers' retry policy.
   OpenAI-compatible HTTP dispatches, including shape/stream/output-field fallbacks, settle the same
@@ -914,10 +916,12 @@ system that exists, never beside it:
   `GATEWAY_ATTEMPT_ADMISSION_DENIED` code and HTTP 403; streamed notices retain that same code.
   Their localized request-limit notice does not claim a model context overflow or exact unknown
   output consumption. Genuine context-window refusals retain `GATEWAY_CONTEXT_OVERFLOW`.
-  Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
+  Prompt fitting retains separate model and caller input caps for each request; earlier prompt usage
+  consumes neither cap. Mandatory overhead that
   fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
   the model retains context-overflow handling. Best-effort citation repair keeps the completed
-  answer when its remaining input allowance or synthesis attempt slots cannot fund the repair.
+  answer when its current prompt does not fit, its cumulative output grant is exhausted, or no
+  synthesis attempt slot remains.
   Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
   optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
@@ -1433,8 +1437,8 @@ and, when a repair ran, `repairOutcome` (`recovered`, `exhausted-again`, `empty-
 naming how the repaired attempt ended) — a line written before the gateway call settled (a byte cut,
 a cancellation) omits both, because it cannot know; a repaired turn that failed the same way again
 is final for the coding runtime (`runtimeRetry=refused`). The provider usage of the attempts a call
-discarded (a repair's first answer, a rejected tool call) counts against the run's prompt
-allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
+discarded (a repair's first answer, a rejected tool call) remains in the run's cumulative usage
+roll-up without a prompt-token allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
 `discardedPromptTokens`, `discardedCompletionTokens`). The correction the model receives is one fixed
 sentence, and the failed answer's reasoning is never recorded. For default and shared-history profiles, runtime reasoning fields are
 never forwarded directly: the coding sidecar drops echoed reasoning fields and reasoning-only assistant

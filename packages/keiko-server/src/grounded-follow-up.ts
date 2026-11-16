@@ -79,10 +79,7 @@ export function remainingTurnBudget(ctx: FollowUpContext): ExplorationBudget {
     filesReadMax:
       budget.filesReadMax === null ? null : Math.max(0, budget.filesReadMax - usage.filesRead),
     excerptBytesMax: Math.max(0, budget.excerptBytesMax - usage.excerptBytes),
-    modelInputTokensMax: Math.max(
-      0,
-      budget.modelInputTokensMax - usage.modelInputTokens - ctx.initial.usage.promptTokens,
-    ),
+    modelInputTokensMax: Math.max(0, budget.modelInputTokensMax - usage.modelInputTokens),
     modelOutputTokensMax: Math.max(
       0,
       budget.modelOutputTokensMax - usage.modelOutputTokens - ctx.initial.usage.completionTokens,

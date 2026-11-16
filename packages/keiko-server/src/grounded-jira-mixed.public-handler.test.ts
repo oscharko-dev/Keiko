@@ -58,7 +58,6 @@ import type {
   AtlassianCredentialMetadata,
 } from "@oscharko-dev/keiko-connectors";
 import type { ChatToolExchange, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { buildUiHandlerDeps, currentContextProfileForModel, type UiHandlerDeps } from "./deps.js";
 import { handleGroundedAsk, modelWindowAwareBudget } from "./grounded-qa.js";
 import { mockRequest, mockResponse } from "./_support.js";
@@ -73,6 +72,7 @@ import { resetServerLogger } from "../../../tests/support/activity-log-test-supp
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import * as groundedOrchestrator from "./grounded-orchestrator.js";
+import * as groundedSynthesis from "./grounded-answer.js";
 import * as gatewayWindow from "./gateway-context-window.js";
 import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
 
@@ -1952,28 +1952,24 @@ function assertPreservedWriteContinuation(requests: readonly string[]): void {
 }
 
 function boundCallerSynthesisInput(grant: number): void {
-  // This synthetic caller owns one allowance across answer and citation repair. Narrowing only
-  // answer() options leaves repair() using the unchanged context pack's much larger budget.
-  let spent = 0;
+  // The caller's per-request window applies to both the answer and citation repair.
+  // Physical usage remains accounted; a prior prompt does not shrink the next context window.
   const run = groundedOrchestrator.runGroundedExploration;
   vi.spyOn(groundedOrchestrator, "runGroundedExploration").mockImplementation((input, deps) =>
     run(input, {
       ...deps,
       answerer: {
         ...deps.answerer,
-        answer: async (question, pack, options) => {
-          const answer = await deps.answerer.answer(question, pack, {
+        answer: (question, pack, options) =>
+          deps.answerer.answer(question, pack, {
             ...options,
             modelInputTokensMax: grant,
-          });
-          if (typeof answer !== "string") spent += answer.usage.promptTokens;
-          return answer;
-        },
+          }),
         repair: (question, pack, original, options) => {
           if (deps.answerer.repair === undefined) throw new Error("Missing gateway repair");
           return deps.answerer.repair(question, pack, original, {
             ...options,
-            modelInputTokensMax: Math.max(0, grant - spent),
+            modelInputTokensMax: grant,
           });
         },
       },
@@ -2043,42 +2039,57 @@ function assertOriginalMutationRetryGrant(
   deps: UiHandlerDeps,
   requests: readonly string[],
   grant: number,
-  calls: number,
-): void {
+): readonly number[] {
   const costs = physicallyDispatchedPromptCosts(deps, requests);
   expect(costs).toHaveLength(requests.length);
-  expect(costs[0]).toBeLessThanOrEqual(grant);
-  // Only the fully observed first write is reclassified to the turn's Authority Envelope.
+  for (const cost of costs) expect(cost).toBeLessThanOrEqual(grant);
   const synthesisCost = costs.slice(1).reduce((total, cost) => total + cost, 0);
-  expect(synthesisCost).toBeLessThanOrEqual(grant);
-  if (calls === 2) {
-    const actual = JSON.parse(requests.at(-1) ?? "{}") as {
-      tools?: {
-        function: { name: string; description: string; parameters: ToolDefinition["parameters"] };
-      }[];
-    };
-    const tools = actual.tools?.map(({ function: tool }) => tool);
-    if (tools === undefined) throw new TypeError("Expected the physically offered Jira tools");
-    const catalogFloor = countGatewayPromptTokens({ messages: [], tools });
-    expect(grant - synthesisCost).toBeLessThan(catalogFloor);
-  }
+  if (grant < 8192) expect(synthesisCost).toBeGreaterThan(grant);
+  return costs;
 }
 
-// Size the original cumulative grant around the complete provider prompts, including tool schemas.
-// Keep the owner's original 8192 caller allowance with the operation this workflow needs.
-// Physical-cost assertions derive from the owning gateway counter; only the
-// confirmed write leaves this grant.
-it.each([
-  { grant: 4096, calls: 2 },
-  { grant: 4500, calls: 2 },
-  { grant: 4600, calls: 2 },
-  { grant: 8192, calls: 3 },
-  { grant: 10000, calls: 3 },
-])(
-  "settles an adopted retry inside the original positive input grant $grant",
-  async ({ grant, calls }) => {
+function observeToolRoundAndTwoSynthesisAttempts(
+  deps: UiHandlerDeps,
+  completionTokens: readonly number[] = [1, 0, 1],
+  reportedPromptTokens = 0,
+): (costs: readonly number[]) => void {
+  const budgets: groundedSynthesis.GroundedSynthesisCallBudget[] = [];
+  const create = groundedSynthesis.createGroundedSynthesisCallBudget;
+  vi.spyOn(groundedSynthesis, "createGroundedSynthesisCallBudget").mockImplementation(() => {
+    const budget = create();
+    vi.spyOn(budget, "recordUsage");
+    vi.spyOn(budget, "recordToolRoundUsage");
+    budgets.push(budget);
+    return budget;
+  });
+  const spend = deps.gatewayConfig?.spendBudget;
+  if (spend === undefined) throw new TypeError("Expected the real durable spend budget");
+  const reserve = vi.spyOn(spend, "reserve");
+  return (costs): void => {
+    expect(reserve).toHaveBeenCalledTimes(3);
+    expect(budgets).toHaveLength(1);
+    const budget = budgets[0];
+    if (budget === undefined) throw new TypeError("Expected the shared synthesis budget");
+    const charges = vi.mocked(budget.recordUsage).mock.calls.map(([usage]) => usage);
+    expect(charges.map((usage) => usage.promptTokens)).toEqual(
+      costs.map((cost) => Math.max(cost, reportedPromptTokens)),
+    );
+    expect(charges.map((usage) => usage.completionTokens)).toEqual(completionTokens);
+    // Only the completed tool round releases a synthesis slot; its physical charge stays.
+    expect(vi.mocked(budget.recordToolRoundUsage).mock.calls).toEqual([[charges[0]]]);
+    expect(budget.remaining()).toBe(0);
+    expect(budget.reservedOutputTokens()).toBe(0);
+  };
+}
+
+// Each complete provider prompt, including tool schemas, must fit the caller's window.
+// The first three windows deliberately cannot fit the two synthesis prompts cumulatively.
+it.each([4096, 4500, 4600, 8192, 10000])(
+  "settles an adopted retry inside each request's positive input window %i",
+  async (grant) => {
     const f = runtime(true, {}, false, "jira.comment");
     boundCallerSynthesisInput(grant);
+    const assertAccounting = observeToolRoundAndTwoSynthesisAttempts(f.deps);
     const requests = provider(["write", "overflow", "answer", "answer"], undefined, undefined, {
       overflowContextWindow: RETRY_CONTEXT_WINDOW,
     });
@@ -2091,17 +2102,19 @@ it.each([
     };
     const response = await handleSendDesktopChat(context(body), f.deps);
     expect(response.status).toBe(200);
-    expect(requests).toHaveLength(calls);
+    expect(requests).toHaveLength(3);
     expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
     const messages = f.deps.store.listMessages(f.chatId);
     expect(messages).toHaveLength(2);
     expect(messages[0]?.turnState).toBe("completed");
     expect(messages[0]?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe("succeeded");
-    assertOriginalMutationRetryGrant(f.deps, requests, grant, calls);
+    const costs = assertOriginalMutationRetryGrant(f.deps, requests, grant);
+    assertAccounting(costs);
     expect((await handleSendDesktopChat(context(body), f.deps)).status).toBe(200);
-    expect(requests).toHaveLength(calls);
+    expect(requests).toHaveLength(3);
     expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
     expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
+    assertAccounting(costs);
   },
 );
 
@@ -2507,16 +2520,19 @@ function assertDataPodSynthesisGrant(
   deps: UiHandlerDeps,
   requests: readonly string[],
   originalGrant: number,
-): { readonly charged: number; readonly adoptedGrant: number } {
+): {
+  readonly charged: number;
+  readonly adoptedGrant: number;
+  readonly costs: readonly number[];
+} {
   const adoptedGrant = dataPodInputGrant(deps);
   expect(adoptedGrant).toBeLessThan(originalGrant);
   const costs = physicallyDispatchedPromptCosts(deps, requests);
-  expect(costs[0]).toBeLessThanOrEqual(originalGrant);
-  // The exact confirmed write is the Envelope's; overflow and answer retain their full costs.
+  for (const cost of costs.slice(0, -1)) expect(cost).toBeLessThanOrEqual(originalGrant);
+  expect(costs.at(-1)).toBeLessThanOrEqual(adoptedGrant);
+  // The exact confirmed write is the Envelope's; overflow and answer retain physical usage.
   const charged = costs.slice(1).reduce((total, cost) => total + cost, 0);
-  expect(charged).toBeLessThanOrEqual(originalGrant);
-  expect(charged).toBeLessThanOrEqual(adoptedGrant);
-  return { charged, adoptedGrant };
+  return { charged, adoptedGrant, costs };
 }
 
 // S12 and S17 of epic #4173: a citation repair after the turn ended, or one its grant cannot fund,
@@ -2529,8 +2545,7 @@ it("retains a Data-Pod turn's committed write across the existing adopted-window
     ["write", "overflow", "answer", "answer"],
     "Feature returns true [1]. Jira tool result: the comment was added.",
     undefined,
-    // Data-Pod retries narrow the cumulative synthesis grant with the adopted model profile.
-    // This window funds both complete prompts while remaining below the initial 32768 window.
+    // Data-Pod retries adopt the smaller per-request context window.
     { overflowContextWindow: 24576 },
   );
   const body = {
@@ -2569,10 +2584,11 @@ it("retains a Data-Pod turn's committed write across the existing adopted-window
   expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
 });
 
-it("retains a Data-Pod write when the adopted cumulative grant cannot fund its physical retry", async () => {
+it("retries a Data-Pod answer when each prompt fits the adopted window but their sum does not", async () => {
   const f = runtime(true);
   await connectDataPod(f, "Feature returns true. Feature is a function.");
   const originalGrant = dataPodInputGrant(f.deps);
+  const assertAccounting = observeToolRoundAndTwoSynthesisAttempts(f.deps);
   const requests = provider(
     ["write", "overflow", "answer"],
     "Feature returns true [1]. Jira tool result: the comment was added.",
@@ -2583,26 +2599,31 @@ it("retains a Data-Pod write when the adopted cumulative grant cannot fund its p
     chatId: f.chatId,
     content: "What does Feature return? Also add the Jira comment.",
     modelId: MODEL,
-    clientTurnId: "pod-write-tight-cumulative-grant",
+    clientTurnId: "pod-write-tight-request-window",
   };
   const response = await handleGroundedAsk(context(body), f.deps);
   expect(response.status, JSON.stringify(response.body)).toBe(200);
-  expect(requests).toHaveLength(2);
+  expect(requests).toHaveLength(3);
   expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
-  expect(JSON.stringify(response.body)).toContain("context window");
-  const { charged, adoptedGrant } = assertDataPodSynthesisGrant(f.deps, requests, originalGrant);
+  expect((response.body as GroundedAnswer).content).toContain("the comment was added");
+  const { charged, adoptedGrant, costs } = assertDataPodSynthesisGrant(
+    f.deps,
+    requests,
+    originalGrant,
+  );
+  expect(charged).toBeGreaterThan(adoptedGrant);
+  assertAccounting(costs);
   const admissions = gatewayPromptAdmissions(f.deps);
-  expect(admissions).toHaveLength(requests.length + 1);
-  const refused = admissions.at(-1);
-  expect(refused).toMatchObject({
+  expect(admissions).toHaveLength(requests.length);
+  const retried = admissions.at(-1);
+  expect(retried).toMatchObject({
     state: "admitted",
     contextWindow: RETRY_CONTEXT_WINDOW,
     inputBudget: adoptedGrant,
   });
-  if (typeof refused?.promptTokens !== "number")
-    throw new TypeError("Expected the complete prompt cost of the refused physical retry");
-  expect(refused.promptTokens).toBeLessThanOrEqual(adoptedGrant);
-  expect(charged + refused.promptTokens).toBeGreaterThan(adoptedGrant);
+  if (typeof retried?.promptTokens !== "number")
+    throw new TypeError("Expected the complete prompt cost of the admitted physical retry");
+  expect(retried.promptTokens).toBeLessThanOrEqual(adoptedGrant);
   const messages = f.deps.store.listMessages(f.chatId);
   expect(messages[0]?.turnState).toBe("completed");
   expect(
@@ -2613,9 +2634,10 @@ it("retains a Data-Pod write when the adopted cumulative grant cannot fund its p
     result: { status: "completed" },
   });
   expect((await handleGroundedAsk(context(body), f.deps)).status).toBe(200);
-  expect(requests).toHaveLength(2);
+  expect(requests).toHaveLength(3);
   expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
   expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
+  assertAccounting(costs);
 });
 
 it("keeps a Data-Pod turn's transcript answer without another model call after the model failed", async () => {
@@ -2634,9 +2656,10 @@ it("keeps a Data-Pod turn's transcript answer without another model call after t
   expect((result.body as GroundedAnswer).citations).toEqual([]);
 });
 
-it("keeps a complete Data-Pod answer when the input grant cannot fund its citation repair", async () => {
+it("admits a fitting Data-Pod citation repair after a large reported prompt usage", async () => {
   const f = runtime();
   await connectDataPod(f, "Feature returns true. Feature is a function.");
+  const assertAccounting = observeToolRoundAndTwoSynthesisAttempts(f.deps, [1, 1, 1], 32_000);
   const uncited = "Jira tool result: project SYN is visible, and Feature is a plain function.";
   const requests = provider(["tool", "answer"], uncited, undefined, {
     usage: { prompt_tokens: 32_000, completion_tokens: 1 },
@@ -2646,16 +2669,24 @@ it("keeps a complete Data-Pod answer when the input grant cannot fund its citati
     f.deps,
   );
   expect(result.status, JSON.stringify(result.body)).toBe(200);
-  expect(requests).toHaveLength(2);
+  expect(requests).toHaveLength(3);
   expect((result.body as GroundedAnswer).content).toContain("project SYN is visible");
+  const costs = physicallyDispatchedPromptCosts(f.deps, requests);
+  for (const cost of costs) expect(cost).toBeLessThanOrEqual(dataPodInputGrant(f.deps));
+  assertAccounting(costs);
 });
 
-// S11: the repair sends the tool results again, so a grant that fits its bare prompt cannot fund it.
+// S11: the repair repeats the tool results; its complete current prompt owns the window check.
 it.each([29_000, 29_500, 30_000, 30_500, 31_000])(
-  "keeps a complete Data-Pod answer when the tool results leave no grant for a repair (%i)",
+  "admits a fitting Data-Pod repair independently of prior reported prompt usage (%i)",
   async (promptTokens) => {
     const f = runtime();
     await connectDataPod(f, "Feature returns true. Feature is a function.");
+    const assertAccounting = observeToolRoundAndTwoSynthesisAttempts(
+      f.deps,
+      [1, 1, 1],
+      promptTokens,
+    );
     const uncited = "Jira tool result: project SYN is visible, and Feature is a plain function.";
     const requests = provider(["tool", "answer"], uncited, undefined, {
       usage: { prompt_tokens: promptTokens, completion_tokens: 1 },
@@ -2665,8 +2696,11 @@ it.each([29_000, 29_500, 30_000, 30_500, 31_000])(
       f.deps,
     );
     expect(result.status, JSON.stringify(result.body)).toBe(200);
-    expect(requests).toHaveLength(2);
+    expect(requests).toHaveLength(3);
     expect((result.body as GroundedAnswer).content).toContain("project SYN is visible");
+    const costs = physicallyDispatchedPromptCosts(f.deps, requests);
+    for (const cost of costs) expect(cost).toBeLessThanOrEqual(dataPodInputGrant(f.deps));
+    assertAccounting(costs);
   },
 );
 

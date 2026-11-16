@@ -5,28 +5,22 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJsonFile } from "./lib/json.mjs";
 
-export const EXPECTED_NODE_ENGINE = ">=24.18.0 <25 || >=26.3.0 <27";
-export const EXPECTED_NPM_ENGINE_RANGE = ">=11.16.0 <12";
+export const EXPECTED_NODE_ENGINE = ">=26.13.1 <27";
+export const EXPECTED_NPM_ENGINE_RANGE = ">=11.20.0 <12";
 // Exported for the same reason as EXPECTED_PACKAGE_MANAGER below: a workflow-parity test compares
 // its setup-node pins against THIS constant, so a fixture cannot restate the version and go on
 // passing while the governed baseline moves and the workflows stay behind.
-export const EXPECTED_NODE_BASELINE = "24.18.0";
-export const EXPECTED_NODE_COMPATIBILITY_BASELINE = "26.8.1";
+export const EXPECTED_NODE_BASELINE = "26.13.1";
 // Exported for the same reason as the Node baseline: three perf-evidence scripts hard-compared
 // this value and would have started rejecting valid runs on the next npm bump, with nothing to
 // point the person doing the bump at them (#3304).
-export const EXPECTED_NPM_ENGINE = "11.16.0";
-export const EXPECTED_NPM_COMPATIBILITY_BASELINE = "11.19.0";
+export const EXPECTED_NPM_ENGINE = "11.20.0";
 // Exported: release.yml pins its publish npm to this exact governed version, and the lockstep
 // test compares the workflow line against THIS constant — the 0.3.1 CI publish died on a drifted
 // hand-maintained pin (11.18.0) that the tag then froze forever.
-export const EXPECTED_PACKAGE_MANAGER = "npm@11.16.0";
+export const EXPECTED_PACKAGE_MANAGER = "npm@11.20.0";
 export const EXPECTED_EXACT_TOOLCHAINS = Object.freeze([
   Object.freeze({ node: EXPECTED_NODE_BASELINE, npm: EXPECTED_NPM_ENGINE }),
-  Object.freeze({
-    node: EXPECTED_NODE_COMPATIBILITY_BASELINE,
-    npm: EXPECTED_NPM_COMPATIBILITY_BASELINE,
-  }),
 ]);
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -42,16 +36,14 @@ function isSupportedNodeVersion(value) {
   const parts = versionParts(value);
   if (parts === undefined) return false;
   const [major, minor, patch] = parts;
-  const isSupported24 = major === 24 && (minor > 18 || (minor === 18 && patch !== undefined));
-  const isSupported26 = major === 26 && (minor > 3 || (minor === 3 && patch !== undefined));
-  return isSupported24 || isSupported26;
+  return major === 26 && (minor > 13 || (minor === 13 && patch >= 1));
 }
 
 function isSupportedNpmVersion(value) {
   const parts = versionParts(value);
   if (parts === undefined) return false;
   const [major, minor, patch] = parts;
-  return major === 11 && (minor > 16 || (minor === 16 && patch !== undefined));
+  return major === 11 && (minor > 20 || (minor === 20 && patch !== undefined));
 }
 
 function isApprovedExactToolchain(nodeVersion, npmVersion) {
@@ -63,7 +55,7 @@ function isApprovedExactToolchain(nodeVersion, npmVersion) {
 function evaluateDeclaredToolchain(input) {
   const problems = [];
   if (input.rootNodeEngine !== EXPECTED_NODE_ENGINE) {
-    problems.push("root Node.js engine policy does not match the governed Node.js 24/26 lines");
+    problems.push("root Node.js engine policy does not match the governed Node.js 26 LTS line");
   }
   if (input.rootNpmEngine !== EXPECTED_NPM_ENGINE_RANGE) {
     problems.push("root npm engine policy does not match the governed npm 11 range");
@@ -92,7 +84,7 @@ function evaluateDeclaredToolchain(input) {
 function evaluateExecutedToolchain(input, options) {
   const problems = [];
   if (!isSupportedNodeVersion(input.runtimeNodeVersion)) {
-    problems.push("executed Node.js version is outside the supported Node.js 24/26 lines");
+    problems.push("executed Node.js version is outside the supported Node.js 26 LTS line");
   }
   if (!isSupportedNpmVersion(input.runtimeNpmVersion)) {
     problems.push("executed npm version is outside the supported npm 11 range");

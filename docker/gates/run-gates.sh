@@ -16,6 +16,10 @@ set -euo pipefail
 suite="${1:-fast}"
 failed=()
 
+# Reject a previously built image before installing or running anything under a stale runtime.
+# Rebuild with: docker compose -f docker/gates/docker-compose.yml build gates
+node scripts/check-runtime-toolchain.mjs --exact
+
 # Skips a gate whose npm script does not exist on this branch instead of reporting a failure: the
 # suite must stay usable while a branch is mid-way through adding or removing a check.
 has_script() {

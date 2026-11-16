@@ -155,11 +155,7 @@ export async function callPluralGroundedSynthesis(
     retryFollows: input.retryFollows,
   });
   const promptTokens = countGatewayPromptTokens(request, input.accounting);
-  const pending = input.budget.pendingUsage();
-  if (
-    promptTokens > input.grants.inputTokensMax - pending.promptTokens ||
-    (request.maxOutputTokens ?? 0) <= 0
-  )
+  if (promptTokens > input.grants.inputTokensMax || (request.maxOutputTokens ?? 0) <= 0)
     throw new CallerAttemptAdmissionError("Grounded synthesis token grant is exhausted");
   if (input.signal.aborted) throw new CancelledError("Grounded synthesis cancelled");
   if (input.grants.deadlineAtMs !== undefined && Date.now() >= input.grants.deadlineAtMs)

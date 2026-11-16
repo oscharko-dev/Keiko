@@ -81,8 +81,10 @@ function normalizeBundleRuntime(value) {
     fail("runtime must contain only the canonical bundle-runtime fields");
   }
   if (value.platform !== "linux") fail("runtime platform must be linux");
-  if (value.nodeVersion !== EXPECTED_NODE_BASELINE) fail("runtime Node.js version must be 24.18.0");
-  if (value.npmVersion !== EXPECTED_NPM_ENGINE) fail("runtime npm version must be 11.16.0");
+  if (value.nodeVersion !== EXPECTED_NODE_BASELINE)
+    fail(`runtime Node.js version must be ${EXPECTED_NODE_BASELINE}`);
+  if (value.npmVersion !== EXPECTED_NPM_ENGINE)
+    fail(`runtime npm version must be ${EXPECTED_NPM_ENGINE}`);
   for (const field of ["architecture", "osRelease", "zlibVersion"]) {
     if (typeof value[field] !== "string" || value[field].length === 0) {
       fail(`runtime ${field} must be a non-empty string`);

@@ -172,9 +172,11 @@ describe("useInstallPrompt", () => {
   // consumed prompt, so a throw left the hook reporting `available: true` for a prompt the browser
   // can never show again — the Install button then silently does nothing.
   it("retires the consumed prompt even when persisting the accepted install throws", async () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("quota", "QuotaExceededError");
-    });
+    vi.spyOn(Object.getPrototypeOf(window.localStorage) as Storage, "setItem").mockImplementation(
+      () => {
+        throw new DOMException("quota", "QuotaExceededError");
+      },
+    );
     const { result } = renderHook(() => useInstallPrompt());
     const event = makePromptEvent("accepted");
 
@@ -191,9 +193,11 @@ describe("useInstallPrompt", () => {
   });
 
   it("retires the consumed prompt even when persisting an appinstalled event throws", () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("quota", "QuotaExceededError");
-    });
+    vi.spyOn(Object.getPrototypeOf(window.localStorage) as Storage, "setItem").mockImplementation(
+      () => {
+        throw new DOMException("quota", "QuotaExceededError");
+      },
+    );
     const { result } = renderHook(() => useInstallPrompt());
 
     act(() => {

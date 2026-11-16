@@ -2,8 +2,8 @@
   "issue": 3187,
   "verdict": "PASS",
   "harness": "tests/e2e/boot-recovery-3187.spec.ts",
-  "globalsCssSha256": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
-  "layoutSha256": "d1f977571138d9c148dfca170622bccb1746ba5872145f2aacf9559e3bd4cba6",
+  "globalsCssSha256": "299b807fe42bc6069a49ac28c4a5195c016739335b5c375be5c73f216ca9471c",
+  "layoutSha256": "ba6cff4b51469a9a704de1bff6453876f008f9df3d5c0b28a791665e3ad3b3d2",
   "captures": [
     {
       "file": "01-dark.png",

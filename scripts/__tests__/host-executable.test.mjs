@@ -7,6 +7,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -102,7 +103,11 @@ describe("resolveHostExecutable", () => {
     writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     chmodSync(bin, 0o775);
     expect(() =>
-      resolveHostExecutable("keiko-test-tool", { env: { PATH: bin }, workspaceRoot: workspace }),
+      resolveHostExecutable("keiko-test-tool", {
+        env: { PATH: bin },
+        groupIds: [statSync(bin).gid],
+        workspaceRoot: workspace,
+      }),
     ).toThrow("trusted host executable is unavailable");
   });
 
@@ -177,6 +182,7 @@ describe("resolveHostExecutable", () => {
       ]);
       const resolvedGh = resolveHostExecutable("gh", {
         env: { PATH: bin },
+        groupIds: [statSync(bin).gid],
         runtimeExecutable: nodeExecutable,
         workspaceRoot: workspace,
       });
@@ -185,6 +191,7 @@ describe("resolveHostExecutable", () => {
       expect(
         resolveHostExecutable("npm", {
           env: { PATH: bin },
+          groupIds: [statSync(bin).gid],
           runtimeExecutable: nodeExecutable,
           workspaceRoot: workspace,
         }),
@@ -204,6 +211,7 @@ describe("resolveHostExecutable", () => {
       expect(() =>
         resolveHostExecutable("gh", {
           env: { PATH: bin },
+          groupIds: [statSync(bin).gid],
           runtimeExecutable: nodeExecutable,
           workspaceRoot: workspace,
         }),
@@ -218,6 +226,7 @@ describe("resolveHostExecutable", () => {
       expect(() =>
         resolveHostExecutable("gh", {
           env: { PATH: bin },
+          groupIds: [statSync(bin).gid],
           runtimeExecutable: nodeExecutable,
           workspaceRoot: workspace,
         }),
@@ -254,6 +263,7 @@ describe("resolveHostExecutable", () => {
       expect(() =>
         resolveHostExecutable("npm", {
           env: { PATH: bin },
+          groupIds: [statSync(bin).gid],
           trustedRoots: [toolchain],
           workspaceRoot: workspace,
         }),

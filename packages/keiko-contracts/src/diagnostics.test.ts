@@ -1864,6 +1864,9 @@ describe("closed diagnostic navigation and render context", () => {
         true,
       );
       expect(isClientStageIngestRequest({ ...base, stage: "files project selection" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "chat connector selection" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "chat connector refresh" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "modal focus restoration" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "chat bind" })).toBe(false);
       expect(
         isClientStageIngestRequest({

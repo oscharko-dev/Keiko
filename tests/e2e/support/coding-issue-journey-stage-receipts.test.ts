@@ -3,11 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Page } from "@playwright/test";
+import { platformKeyFor } from "../../../scripts/lib/coding-issue-journey-evidence.mjs";
 import { recordSuccessfulJourneyStage } from "./coding-issue-journey-stage-receipts.js";
+
+vi.mock("../../../scripts/lib/coding-issue-journey-evidence.mjs", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../scripts/lib/coding-issue-journey-evidence.mjs")>();
+  return { ...actual, platformKeyFor: vi.fn(actual.platformKeyFor) };
+});
 
 const roots: string[] = [];
 
 afterEach(() => {
+  vi.mocked(platformKeyFor).mockReset();
   vi.unstubAllEnvs();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -54,6 +62,7 @@ describe("coding issue journey stage receipt", () => {
   });
 
   it("retains the exact completed-flow binding with positive tool activity", async () => {
+    vi.mocked(platformKeyFor).mockReturnValue("linux-x64");
     const root = mkdtempSync(join(tmpdir(), "keiko-stage-receipt-"));
     roots.push(root);
     vi.stubEnv("KEIKO_QUALIFICATION_RECEIPTS_DIR", root);
@@ -69,6 +78,7 @@ describe("coding issue journey stage receipt", () => {
       readFileSync(join(root, "mark-ready-intent.artifact"), "utf8"),
     );
     expect(artifact).toMatchObject({
+      platformTarget: "linux-x64",
       result: "passed",
       flowBinding: FLOW_BINDING,
       usage: { observedToolCallEvents: 3 },

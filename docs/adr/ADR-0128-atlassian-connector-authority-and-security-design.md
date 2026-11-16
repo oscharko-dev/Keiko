@@ -1880,6 +1880,12 @@ the approval.
   name. **By name, because nothing stable answers it:** link types, priorities, labels, section and summary
   text, the project key (language independent already), and a transition typed as a transition id (an id
   already). The file stays a plain Markdown document and the binding travels with an exported copy.
+  Validation and binding supplement an unresolved field name with the selected project/type's bounded
+  create metadata, using the write gate's field-catalog merge. Data Center omits `parent` from `GET field`;
+  its localized name (for example `Übergeordnet`) is supplied by Sub-task create metadata. If that needed
+  read fails, fields remain explicitly unchecked. A re-check fills newly resolvable `none` field slots
+  while preserving existing bound ids, including under another profile language (#4390). Validation
+  records catalog/finding counts and binding records its update count on `skills.library.operation`.
   **The binding is in force only for what it was resolved from:** `jiraBinding` is one digest (version 2) over
   the Jira's identity (a digest of its normalised base URL), the typed names and every written id, and the
   single source of templates (`jiraTemplateForInstance`) drops a binding whose digest no longer matches
@@ -2515,6 +2521,14 @@ invocation key requirement for external connector effects.
 
 The authenticated Chat PATCH and serializer own the single Jira binding and saved human mode.
 Responses add the server-resolved ceiling and effective mode without replacing the saved selection.
+The Connectors control shares a synchronous publication guard between confirmed PATCH replies and
+canonical focus reads. An older reply cannot replace an already published revision before React renders.
+The server's monotonic `jiraBindingGeneration` also orders replies with the same millisecond timestamp;
+a read started before an intervening publication cannot replace an equally versioned publication.
+Unmounting the control closes its publication boundary, so navigating away and back cannot let an old
+read or PATCH reply overwrite the current selection.
+Focus reads never submit a mode change. The existing client stage lifecycle records selection/refresh
+outcomes (`applied`, `stale`, `dropped`, `failed`) without Chat identities or content (#4390).
 The Chat composer's Connectors menu, the Local Knowledge window and workspace ports use that same
 PATCH; a presentation edge appears only after confirmation for the exact requested Chat and Pod.
 The Connectors menu switches the bound Pod (or none) and the Chat's MCP server selection directly;

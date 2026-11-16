@@ -297,13 +297,13 @@ describe("extractSalientMemories", () => {
       "Ich nutze Slack bis März 2027.",
       "ich nutze Slack",
       "Ich nutze Slack",
-      Date.UTC(2027, 2, 31, 23, 59, 59, 999),
+      new Date(2027, 2, 31, 23, 59, 59, 999).getTime(),
     ],
     [
       "I use Slack until March 2027.",
       "uses Slack",
       "I use Slack",
-      Date.UTC(2027, 2, 31, 23, 59, 59, 999),
+      new Date(2027, 2, 31, 23, 59, 59, 999).getTime(),
     ],
   ])("closes validity at a stated end: %s", async (text, body, evidence, validUntil) => {
     const [learned] = candidates(await learn(text, [fact(body, evidence)]));
@@ -318,7 +318,7 @@ describe("extractSalientMemories", () => {
     );
     expect(learned?.proposal.validity).toEqual({
       validFrom: FIXED_NOW,
-      validUntil: Date.UTC(2027, 11, 31, 23, 59, 59, 999),
+      validUntil: new Date(2027, 11, 31, 23, 59, 59, 999).getTime(),
     });
   });
 

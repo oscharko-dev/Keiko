@@ -60,11 +60,11 @@ The `publish` job gains one step, immediately after `actions/setup-node` and bef
 
 ```yaml
 - name: Ensure npm supports OIDC trusted publishing
-  run: npm install --global npm@11.16.0
+  run: npm install --global npm@11.20.0
 ```
 
 The pinned version is exactly the governed `EXPECTED_PACKAGE_MANAGER` from
-`scripts/check-runtime-toolchain.mjs` (`npm@11.16.0` as amended 2026-08-10, held in lockstep by
+`scripts/check-runtime-toolchain.mjs` (`npm@11.20.0` as amended 2026-11-15, held in lockstep by
 `scripts/__tests__/release-workflow-npm-pin.test.mjs`): prepack re-verifies the executed npm
 against that same constant, so any other pin here kills every publish from the tag that freezes
 it — the original hand pin (`11.18.0`) did exactly that to the 0.3.1 CI publish. The exact pin

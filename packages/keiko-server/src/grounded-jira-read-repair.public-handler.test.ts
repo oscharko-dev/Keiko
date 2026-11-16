@@ -35,7 +35,7 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { handleSendDesktopChat } from "./chat-handlers.js";
-import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import { buildUiHandlerDeps, currentContextProfileForModel, type UiHandlerDeps } from "./deps.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import type { RouteContext } from "./routes.js";
 
@@ -531,38 +531,52 @@ function expectDirectRead(f: Fixture, name: "jira_projects" | "jira_report"): vo
   expect(f.script.calls).toHaveLength(1 + f.script.answers.length);
 }
 
-it("retains this turn's validated Jira read evidence when repairing a Knowledge Pod answer", async () => {
-  const f = await fixture();
-  const result = await handleGroundedAsk(context(f, "golden-current-turn"), f.deps);
-  expect(result.status, JSON.stringify(result.body)).toBe(200);
-  const exchange = currentExchange(f)?.exchanges.find(
-    (entry) => entry.call.name === "jira_projects",
-  );
-  expect(exchange?.result).toMatchObject({
-    status: "completed",
-    data: { outcome: "succeeded", items: [{ key: "GOLD", name: CURRENT }] },
-  });
-  expect(JSON.stringify(exchange)).not.toContain(RAW);
-  expect(f.native.requests).toHaveLength(1);
-  expectDirectRead(f, "jira_projects");
-  expect(f.script.answers).toHaveLength(2);
-  const initialAnswer = f.script.answers[0];
-  const repair = f.script.answers[1];
-  if (initialAnswer === undefined || repair === undefined)
-    throw new Error("Missing synthesis calls");
-  expect(toolEvidence(initialAnswer)).toContain(CURRENT);
-  expect(
-    repair.messages.some((message) =>
-      message.content.includes(`\`\`\`text\n${KNOWLEDGE_TEXT}\n\`\`\``),
-    ),
-  ).toBe(true);
-  expect(repair.toolCatalog).toBeUndefined();
-  // Baseline pin: a completed card must not lose its evidence at the final repair handoff.
-  expect(toolEvidence(repair)).toContain(CURRENT);
-  expect(toolEvidence(repair)).not.toContain(RAW);
-  expect(answerContent(result.body)).toContain(CURRENT);
-  expect(result.body).toMatchObject({ citations: [expect.anything()] });
-});
+it.each([false, true])(
+  "retains this turn's validated Jira read evidence when repairing a Knowledge Pod answer (full-window=%s)",
+  async (fullWindow) => {
+    const f = await fixture();
+    if (fullWindow) {
+      const profile = currentContextProfileForModel(f.deps, MODEL);
+      if (profile === undefined) throw new Error("Missing actual synthesis profile");
+      f.script = scriptedModel("jira.projects", {}, (request, round) => {
+        const answer = response(scriptedAnswer(request, CURRENT, round > 1));
+        return {
+          ...answer,
+          usage: { ...answer.usage, promptTokens: profile.effectiveInputBudget },
+        };
+      });
+    }
+    const result = await handleGroundedAsk(context(f, "golden-current-turn"), f.deps);
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const exchange = currentExchange(f)?.exchanges.find(
+      (entry) => entry.call.name === "jira_projects",
+    );
+    expect(exchange?.result).toMatchObject({
+      status: "completed",
+      data: { outcome: "succeeded", items: [{ key: "GOLD", name: CURRENT }] },
+    });
+    expect(JSON.stringify(exchange)).not.toContain(RAW);
+    expect(f.native.requests).toHaveLength(1);
+    expectDirectRead(f, "jira_projects");
+    expect(f.script.answers).toHaveLength(2);
+    const initialAnswer = f.script.answers[0];
+    const repair = f.script.answers[1];
+    if (initialAnswer === undefined || repair === undefined)
+      throw new Error("Missing synthesis calls");
+    expect(toolEvidence(initialAnswer)).toContain(CURRENT);
+    expect(
+      repair.messages.some((message) =>
+        message.content.includes(`\`\`\`text\n${KNOWLEDGE_TEXT}\n\`\`\``),
+      ),
+    ).toBe(true);
+    expect(repair.toolCatalog).toBeUndefined();
+    // Baseline pin: a completed card must not lose its evidence at the final repair handoff.
+    expect(toolEvidence(repair)).toContain(CURRENT);
+    expect(toolEvidence(repair)).not.toContain(RAW);
+    expect(answerContent(result.body)).toContain(CURRENT);
+    expect(result.body).toMatchObject({ citations: [expect.anything()] });
+  },
+);
 
 it.each([
   { variant: "markers", disposition: "applied", after: 3 },

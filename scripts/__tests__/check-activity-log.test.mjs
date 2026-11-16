@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -205,7 +206,9 @@ describe("the Activity Log gate command", () => {
   });
 
   it("runs Windows npm through Node with literal paths and preserves the child exit status", () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko npm & %PATH% ü "));
+    // The injected resolver obeys resolveHostExecutable's canonical-path contract, including
+    // macOS's /var -> /private/var alias. hostNpmInvocation still rejects tree escapes.
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko npm & %PATH% ü ")));
     try {
       const cliDirectory = join(root, "node_modules", "npm", "bin");
       mkdirSync(cliDirectory, { recursive: true });
@@ -383,12 +386,20 @@ function withScripts(wiring, change) {
 }
 
 function replaced(text, search, replacement) {
-  expect(text).toContain(search);
-  return text.replace(search, () => replacement);
+  const normalized = text.replaceAll("\r\n", "\n");
+  expect(normalized).toContain(search);
+  return normalized.replace(search, () => replacement);
 }
 
-describe("required wiring of the Activity Log gate", () => {
-  const current = currentWiring();
+describe.each([
+  { name: "LF", ending: "\n" },
+  { name: "CRLF", ending: "\r\n" },
+])("required wiring of the Activity Log gate ($name)", ({ ending }) => {
+  const original = currentWiring();
+  const current = {
+    ...original,
+    workflow: original.workflow.replaceAll(/\r?\n/gu, ending),
+  };
   const gateRun = `        run: ${GATE_COMMAND}\n`;
 
   it("is complete in the repository today", () => {

@@ -44,7 +44,7 @@ ghost text, agent prompts) is proven by
 
 ## Environment
 
-- Headless Chromium via Playwright 1.64.1 (`chromium`), Node 24.18.0 and npm 11.16.0.
+- Headless Chromium via Playwright 1.64.1 (`chromium`), Node 26.13.1 and npm 11.20.0.
 - Fidelity gates use `page.setContent` / `file://` (no server — CodeQL-safe); the running-app capture serves
   `packages/keiko-ui/out` over a realpath-confined loopback server and stubs same-origin API responses with
   deterministic `keiko.workspace.v4` workspace-window state.
@@ -352,3 +352,30 @@ committed as recaptured: the memory-relationships workspace now shows the curren
 copy (the kept 2026-11-10 captures predated it), and the editor references move by a few pixels of
 line height with unchanged content. Representative captures were visually inspected. No producer
 assertion, tolerance, fixture or budget changed.
+
+## Release 1.5.0 and Node 26 — 2026-11-15
+
+All four original producers were rerun from `860edf47877a205feab6aa18e0db4154d60b885a`
+in the isolated Linux arm64 gate container with Node 26.13.1, npm 11.20.0 and the locked
+Playwright 1.64.1 browsers. All 133 PNGs and four JSON records were regenerated and imported;
+their 29 declared source fingerprints match the release inputs.
+
+Component fidelity passed all 427 probes with zero gated or recorded differences and no missing
+selectors. Editor fidelity passed 160 gated probes and all 14 reference captures; the existing
+non-gated dark high-contrast bracket-color difference remains recorded. The seven-mode axe proof
+has zero serious/critical violations and zero unresolved incomplete findings. All 108 browser
+captures have zero page errors, unexpected API requests, missing selectors, crashed windows,
+visible error notices or unavailable workspace-trust states. No producer, tolerance, disposition,
+fixture or budget changed.
+
+Representative desktop, mobile, constrained Git, high-contrast and editor-reference captures were
+independently inspected. The fixed fixture windows retain their existing clipping on narrow
+viewports, and the browser's historical health mock retains its fixture version; these captures
+are neither complete responsive interaction qualification nor evidence of the product version.
+The editor references remain historical design pages. Existing non-gated differences and the
+accessibility disposition are unchanged.
+
+Editor bundle-size and B1/B2/B3 release-evidence checks remain separate gates, as does D12 performance
+qualification. These are synthetic fixture proofs; the independently audited Jira AC1/AC3
+measurements and the fresh 1.5.0 build/reload supplement are recorded separately in
+[`4390-release-evidence.json`](../../../qa/4390-release-evidence.json).

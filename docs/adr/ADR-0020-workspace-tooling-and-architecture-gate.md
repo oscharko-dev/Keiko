@@ -23,13 +23,13 @@ Nothing in this ADR migrates domain source files. It only establishes the skelet
 ### D1 — Workspace Manager: npm workspaces
 
 We will use **npm workspaces**. Host execution supports Node.js
-`>=24.18.0 <25 || >=26.3.0 <27` with npm `>=11.16.0 <12`; `packageManager` and reproducible
-publish/portable inputs remain pinned to `npm@11.16.0`.
+`>=26.13.1 <27` with npm `>=11.20.0 <12`; `packageManager` and reproducible
+publish/portable inputs remain pinned to `npm@11.20.0`.
 
-The `package.json` `packageManager` field is pinned to `npm@11.16.0`. CI uses
+The `package.json` `packageManager` field is pinned to `npm@11.20.0`. CI uses
 `actions/setup-node` with approved exact Node/npm pairs, verifies the selected pair, and then runs
-`npm ci`. Node 24.18.0/npm 11.16.0 remains the artifact baseline and Node 26.8.1/npm 11.19.0 is the
-compatibility baseline. Switching to pnpm would require updating every CI job, regenerating
+`npm ci`. Node 26.13.1/npm 11.20.0 is the sole artifact, development, CI and measurement
+baseline (owner decision, 2026-11-15); Node 24 is no longer supported. Switching to pnpm would require updating every CI job, regenerating
 lockfiles, validating equivalent workspace behaviour, and re-auditing supply-chain tooling — a scope
 expansion orthogonal to this decision. npm workspaces satisfy the stated requirements: reproducible
 installs (`npm ci` plus the committed `package-lock.json`), workspace package references
@@ -191,7 +191,7 @@ This ADR does not decide:
 
 - **Pros**: Stricter phantom-dependency prevention; content-addressed store; cleaner lockfile format.
 - **Cons**: Requires changing `packageManager` field, all CI `npm ci` steps, `--prefix` patterns, and cache strategy. Introduces lockfile format change.
-- **Why rejected**: `packageManager` is pinned to `npm@11.16.0` and all CI is npm-native. Migration
+- **Why rejected**: `packageManager` is pinned to `npm@11.20.0` and all CI is npm-native. Migration
   risk is orthogonal to the sprint goal. pnpm remains an option for a later ADR.
 
 ### Alternative 2: Move ui/ to apps/ui/ in this PR
@@ -231,10 +231,16 @@ If workspace manager, layout, gate tooling, or stub strategy changes materially,
 | 1.1 | 2026-06-03 | D3 clarification: root tsconfig uses direct `packages/*/src/**/*.ts` include rather than `references` entries to avoid TS6305 under `tsc -p ... --noEmit`. Same one-pass typecheck intent; project references remain inside each package and become load-bearing when the build migrates to `tsc -b`. |
 | 1.2 | 2026-06-03 | D6 script-topology table updated to match D3's direct-include strategy (drift caught in review). No behaviour change. |
 
-## Node 26 package-manager compatibility clarification (2026-09-04)
+## Node 26 package-manager compatibility clarification (2026-09-04, updated 2026-11-15)
 
-Node 26 does not bundle Corepack. Its compatibility lane therefore copies the `npm ci`-verified,
+Node 26 does not bundle Corepack. Every install-smoke lane therefore copies the `npm ci`-verified,
 lockfile-pinned Corepack package tree into the Node runtime trust root and creates its fixed
 executable shim there before provisioning the existing digest-pinned Yarn smoke. This preserves
 the trusted-executable boundary and does not widen the network, registry, or package-manager
 authority of the install smoke.
+
+Node 26 is the sole baseline as of 2026-11-15, so the separate compatibility matrix is retired.
+The required package-coverage jobs execute the complete root test inventory in four shards;
+Editor fast-path PRs run the same test shards without coverage instrumentation. Existing core and
+cross-platform jobs retain typecheck, UI builds and native optional install smokes. The exact
+runtime verification and all coverage floors remain required.

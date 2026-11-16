@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-activity-log",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal Activity Log writer, segmented store, and support reader engine (ADR-0179). Not published independently.",
@@ -26,11 +26,11 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=24.18.0 <25 || >=26.3.0 <27"
+    "node": ">=26.13.1 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "1.4.0",
-    "@oscharko-dev/keiko-security": "1.4.0"
+    "@oscharko-dev/keiko-contracts": "1.5.0",
+    "@oscharko-dev/keiko-security": "1.5.0"
   },
   "private": true
 }

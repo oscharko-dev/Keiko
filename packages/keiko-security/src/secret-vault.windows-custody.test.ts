@@ -2,7 +2,7 @@
 // principal before the key is used. This suite drives the real key resolution on any host through
 // the `windowsCustody` seam: a real temporary directory and key file, with the Windows inspection
 // and protection injected.
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -58,7 +58,7 @@ let dir: string;
 let events: SecurityLogEvent[];
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "keiko-vault-custody-"));
+  dir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-vault-custody-")));
   events = [];
   resetWindowsVaultCustodyForTest();
 });

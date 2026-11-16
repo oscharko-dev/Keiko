@@ -6214,6 +6214,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: [
           "run",
+          "readiness",
           "model-reasoning",
           "tool",
           "activity-group",
@@ -6454,6 +6455,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "workspace-layout-locked",
           "workspace-layout-unlocked",
           "workspace-window-content-zoomed",
+          "workspace-ownership-started",
           "workspace-layout-restored",
           "workspace-layout-empty",
           "workspace-layout-unowned",
@@ -7815,9 +7817,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "model-selection-availability",
           "markdown-copy-feedback",
           "transcript-navigation",
+          "modal-focus-restoration",
           "browser-approval",
           "knowledge-pod-selection",
           "jira-human-input",
+          "chat-connector-selection",
+          "chat-connector-refresh",
         ],
       },
       ordinal: {
@@ -8007,9 +8012,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "model-selection-availability",
           "markdown-copy-feedback",
           "transcript-navigation",
+          "modal-focus-restoration",
           "browser-approval",
           "knowledge-pod-selection",
           "jira-human-input",
+          "chat-connector-selection",
+          "chat-connector-refresh",
         ],
       },
       ordinal: {
@@ -12640,6 +12648,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       fileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      directoryCount: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -44494,6 +44507,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       partialProposalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      checkedFieldCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      validationFindingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      bindingUpdateCount: {
         type: "integer",
         dataClass: "count",
         required: false,

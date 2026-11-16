@@ -424,6 +424,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "workspace-layout-locked",
   "workspace-layout-unlocked",
   "workspace-window-content-zoomed",
+  "workspace-ownership-started",
   "workspace-layout-restored",
   "workspace-layout-empty",
   "workspace-layout-unowned",
@@ -1139,9 +1140,12 @@ export const CLIENT_STAGE_IDS = [
   "model selection availability",
   "markdown copy feedback",
   "transcript navigation",
+  "modal focus restoration",
   "browser approval",
   "knowledge pod selection",
   "jira human input",
+  "chat connector selection",
+  "chat connector refresh",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
@@ -1285,6 +1289,9 @@ export const CLIENT_NAVIGATION_OUTCOMES = [
 export type ClientNavigationOutcome = (typeof CLIENT_NAVIGATION_OUTCOMES)[number];
 const NAVIGATION_OUTCOMES: ReadonlySet<string> = new Set(CLIENT_NAVIGATION_OUTCOMES);
 const NAVIGATION_OUTCOME_STAGES: ReadonlySet<string> = new Set([
+  "modal focus restoration",
+  "chat connector selection",
+  "chat connector refresh",
   "knowledge pod selection",
   "editor project selection",
   "files directory load",
@@ -2414,6 +2421,7 @@ export type ClientCodingWorkbenchInteractionName =
 /** The disclosure the human opened or closed. */
 export const CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS = [
   "run",
+  "readiness",
   "model-reasoning",
   "tool",
   "activity-group",

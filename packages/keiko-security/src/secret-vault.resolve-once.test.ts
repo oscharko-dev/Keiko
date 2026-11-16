@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,7 +14,7 @@ let dir: string;
 
 beforeEach(() => {
   resetResolvedLocalVaultKeysForTest();
-  dir = mkdtempSync(join(tmpdir(), "keiko-resolve-once-"));
+  dir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-resolve-once-")));
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });

@@ -132,8 +132,8 @@ function d12Provenance(revision = "candidate") {
     platform: "linux",
     architecture: "arm64",
     osRelease: "6.8.0-test",
-    nodeVersion: "24.18.0",
-    npmVersion: "11.16.0",
+    nodeVersion: "26.13.1",
+    npmVersion: "11.20.0",
     lockfileSha256: D12_LOCKFILE_SHA_256_BY_REVISION[revision],
     playwrightVersion: "1.55.0",
     zlibVersion: "1.3.1",
@@ -486,8 +486,8 @@ function d12BundleBinding(revision) {
     producerCommit: CANDIDATE_COMMIT,
     runtime: {
       architecture: "arm64",
-      nodeVersion: "24.18.0",
-      npmVersion: "11.16.0",
+      nodeVersion: "26.13.1",
+      npmVersion: "11.20.0",
       osRelease: "6.8.0-test",
       platform: "linux",
       zlibVersion: "1.3.1",
@@ -1225,8 +1225,8 @@ describe("evaluateD12Comparison", () => {
 
     const failures = evaluateD12Comparison(evidence);
     expect(failures).toContain("d12 repetition 1 baseline: platform must be linux");
-    expect(failures).toContain("d12 repetition 1 baseline: Node.js version must be 24.18.0");
-    expect(failures).toContain("d12 repetition 1 baseline: npm version must be 11.16.0");
+    expect(failures).toContain("d12 repetition 1 baseline: Node.js version must be 26.13.1");
+    expect(failures).toContain("d12 repetition 1 baseline: npm version must be 11.20.0");
   });
 
   it("rejects an aggregate that is not the median run-level percentile", () => {

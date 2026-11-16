@@ -6,10 +6,11 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { WorkspaceStorageScopeContext } from "./hooks/workspace-storage";
+import { AppBootPlaceholder, APP_BOOT_RECOVERY_HANDOFF_EVENT } from "./AppBootPlaceholder";
 import styles from "./AppShellBoundary.module.css";
 
 type RestoreState =
-  | { readonly kind: "loading" }
+  | { readonly kind: "booting" | "loading" }
   | { readonly kind: "failed" }
   | { readonly kind: "ready"; readonly storageId: string };
 
@@ -35,12 +36,21 @@ async function readWorkspaceStorageId(signal: AbortSignal): Promise<string> {
 }
 
 function useWorkspaceRestoration(): { readonly state: RestoreState; readonly retry: () => void } {
-  const [state, setState] = useState<RestoreState>({ kind: "loading" });
+  const [state, setState] = useState<RestoreState>({ kind: "booting" });
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
+    setState({ kind: "loading" });
     const controller = new AbortController();
     let stopped = false;
     const timer = setTimeout(() => controller.abort(), 10_000);
+    const correlationId = newClientCorrelationId();
+    // This effect owns the real, bounded read now. Its loading state has not necessarily
+    // committed, so the pre-hydration watchdog must stop inspecting the old placeholder.
+    window.dispatchEvent(new Event(APP_BOOT_RECOVERY_HANDOFF_EVENT));
+    reportClientDiagnostic("Workspace layout ownership lifecycle started.", {
+      correlationId,
+      composerActivity: "workspace-ownership-started",
+    });
     void readWorkspaceStorageId(controller.signal).then(
       (storageId) => {
         if (!stopped) setState({ kind: "ready", storageId });
@@ -50,7 +60,7 @@ function useWorkspaceRestoration(): { readonly state: RestoreState; readonly ret
         clearTimeout(timer);
         if (stopped) return;
         reportClientDiagnostic("Workspace layout ownership could not be resolved.", {
-          correlationId: newClientCorrelationId(),
+          correlationId,
           kind: "other",
           errorKind: "unavailable",
           errorEvidence: clientErrorEvidence(error),
@@ -77,6 +87,9 @@ export function WorkspacePersistenceBoundary({
   readonly children: ReactNode;
 }): ReactNode {
   const { state, retry } = useWorkspaceRestoration();
+  // Before hydration, only the inline watchdog can recover a missing client bundle. Keep its
+  // existing static target until this boundary mounts; store ownership still gates every child.
+  if (state.kind === "booting") return <AppBootPlaceholder />;
   if (state.kind === "ready") {
     return (
       <WorkspaceStorageScopeContext value={state.storageId}>

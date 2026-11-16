@@ -251,14 +251,14 @@ describe("exact-head catalog closeout artifact", () => {
     Object.assign(f.reports.get("required-ci"), {
       platform: "linux-x64",
       artifactDigest: null,
-      runtime: { node: "24.18.0", product: f.context.runtime.product },
+      runtime: { node: "26.13.1", product: f.context.runtime.product },
     });
     f.receipts.get("required-ci").platform = "linux-x64";
     const manifest = buildToolCatalogCloseout(f.context, f.receipts, f.reports);
     expect(manifest.checks.find((entry) => entry.id === "required-ci")).toMatchObject({
       platform: "linux-x64",
       artifactDigest: null,
-      runtime: { node: "24.18.0" },
+      runtime: { node: "26.13.1" },
     });
     expect(manifest.platform).toBe("darwin-arm64");
   });

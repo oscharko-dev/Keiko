@@ -21,10 +21,9 @@
 # Junio C. Hamano's release key (fingerprint 96E0 7AF2 5771 9559 80DA D100 20D0 4E5A 7136 60A7).
 # Raising the pin is a deliberate edit of these two arguments. NO_RUST=1 builds without the optional
 # Rust subsystems of git 2.5x, which would need a Rust toolchain this image does not carry.
-# The Node version is a build argument: the default lane is Node 24.18.0 and the optional Node 26
-# lane (compose service `gates-node26`) builds the same image with the version CI's "Node 26
-# compatibility" job runs. Both pins are the governed pair of scripts/check-runtime-toolchain.mjs.
-ARG NODE_VERSION=24.18.0
+# Node 26 LTS is the sole runtime line. Keep this exact pin aligned with CI, portable archives
+# and scripts/check-runtime-toolchain.mjs.
+ARG NODE_VERSION=26.13.1
 FROM node:${NODE_VERSION}-bookworm AS git-build
 ARG GIT_VERSION=2.56.1
 ARG GIT_SHA256=f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34a607f
@@ -57,6 +56,7 @@ FROM node:${NODE_VERSION}-bookworm
 # Bubblewrap backs the mandatory network:none sandbox the egress proof and the #2215 verification
 # E2E exercise. Without it those suites assert their fallback instead of the real boundary.
 # The Playwright system dependencies mirror what `playwright install --with-deps chromium` pulls.
+# Lifecycle tests observe listeners with lsof; portable signing fixtures create archives with zip.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bubblewrap \
@@ -84,7 +84,9 @@ RUN apt-get update \
         libxfixes3 \
         libxkbcommon0 \
         libxrandr2 \
+        lsof \
         unzip \
+        zip \
     && rm -rf /var/lib/apt/lists/*
 
 # The newer git, ahead of the distribution's in PATH (/usr/local/bin precedes /usr/bin). The
