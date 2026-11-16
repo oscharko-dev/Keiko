@@ -1,4 +1,4 @@
-import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { JiraReportActivity } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_REPORT_ESTIMATE_SOURCES,
@@ -16,6 +16,7 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "../process-log-sink.js";
+import { ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS } from "../activity-line-fields.js";
 
 type JiraReportRefusalKind =
   | "invalid-input"
@@ -156,6 +157,7 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
       maxItems: 64,
     },
     durationMs: { type: "integer", dataClass: "duration", required: false },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -176,6 +178,8 @@ export interface JiraReportExportActivity {
   readonly retainedReportCount?: number;
   readonly exportSource?: "memory" | "retained";
   readonly durationMs: number;
+  /** Reduced to Keiko frames and cause classes before entering the Activity Log. */
+  readonly error?: unknown;
 }
 export type JiraReportLogInput = JiraReportActivity | JiraReportExportActivity;
 
@@ -331,7 +335,7 @@ function exportLine(input: JiraReportExportActivity): JiraReportLine {
   };
 }
 
-/** Counts, closed words and rule ids only: no scope text, issue key, summary or report content. */
+/** Body-free evidence only: no scope text, issue key, summary or report content. */
 export function recordJiraReportActivity(
   log: ServerLogSink | undefined,
   correlationId: string,
@@ -347,7 +351,14 @@ export function recordJiraReportActivity(
         level: degraded ? "warn" : "info",
         ...(errorKind === undefined ? {} : { errorKind }),
       },
-      { ...lineOf(input), completeness: degraded ? "partial" : "complete", loss: "none" },
+      {
+        ...lineOf(input),
+        ...("error" in input && input.error !== undefined
+          ? { frames: keikoStackFrames(input.error), causeChain: causeChain(input.error) }
+          : {}),
+        completeness: degraded ? "partial" : "complete",
+        loss: "none",
+      },
     ),
   );
 }

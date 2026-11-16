@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "277c49fc4a558c67b62262956aa754294160269c96abe8b3dfb945ef82caa793",
+    "catalogDigest": "d43836175a06b957433b6be0137efc493f426b2724a4b02910ff30a3919c0cee",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1980,6 +1980,20 @@
             "type": "integer",
             "dataClass": "duration",
             "required": false
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "maxLength": 512,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 128,
+            "maxItems": 5
           }
         },
         "causal": "correlation",
@@ -1988,8 +2002,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["atlassian.jira-report.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:32",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:343"]
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:33",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:347"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -51770,8 +51784,8 @@
           "opaque-id",
           "safe-platform-class"
         ],
-        "requiredFrameOperations": ["atlassian.jira-draft-batch"],
-        "requiredCauseOperations": ["atlassian.jira-draft-batch"]
+        "requiredFrameOperations": ["atlassian.jira-draft-batch", "atlassian.jira-report"],
+        "requiredCauseOperations": ["atlassian.jira-draft-batch", "atlassian.jira-report"]
       },
       {
         "contractKind": "activity-log-failure-class",
@@ -65537,6 +65551,12 @@
                   "required": false
                 },
                 {
+                  "name": "causeChain",
+                  "type": "string-array",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
                   "name": "continued",
                   "type": "boolean",
                   "dataClass": "closed-enum",
@@ -65582,6 +65602,12 @@
                   "name": "format",
                   "type": "string",
                   "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "frames",
+                  "type": "string-array",
+                  "dataClass": "safe-platform-class",
                   "required": false
                 },
                 {
@@ -65716,12 +65742,14 @@
                 "completeness-state",
                 "count",
                 "duration",
+                "error-kind",
                 "loss-state",
-                "opaque-id"
+                "opaque-id",
+                "safe-platform-class"
               ],
               "frameCauseEvidence": {
-                "frames": false,
-                "causeChain": false
+                "frames": true,
+                "causeChain": true
               },
               "proofIds": ["atlassian.jira-report.line"],
               "replayReferences": [],
@@ -120840,7 +120868,7 @@
     {
       "op": "atlassian.jira-report",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:35",
+      "site": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:36",
       "package": "keiko-server"
     },
     {

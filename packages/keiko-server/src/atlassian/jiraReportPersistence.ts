@@ -35,12 +35,13 @@ export function retainJiraReportExports(
     try {
       if (retain(store, session)) retainedReportCount++;
       else failed = true;
-    } catch {
-      // SQLite or projection errors may contain private report text. Record only the closed failure.
+    } catch (error) {
+      // SQLite or projection errors may contain report text; the activity owner reduces them.
       recordJiraReportActivity(deps.activityLog, correlationId, {
         phase: "retain",
         refusal: "export-unavailable",
         durationMs: Date.now() - startedAt,
+        error,
       });
       failed = true;
     }

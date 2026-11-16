@@ -239,8 +239,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "opaque-id",
       "safe-platform-class",
     ],
-    requiredFrameOperations: ["atlassian.jira-draft-batch"],
-    requiredCauseOperations: ["atlassian.jira-draft-batch"],
+    requiredFrameOperations: ["atlassian.jira-draft-batch", "atlassian.jira-report"],
+    requiredCauseOperations: ["atlassian.jira-draft-batch", "atlassian.jira-report"],
   },
   {
     contractKind: "activity-log-failure-class",

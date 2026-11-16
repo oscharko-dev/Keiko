@@ -2249,6 +2249,12 @@
               "required": false
             },
             {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
               "name": "continued",
               "type": "boolean",
               "dataClass": "closed-enum",
@@ -2294,6 +2300,12 @@
               "name": "format",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "safe-platform-class",
               "required": false
             },
             {
@@ -2428,12 +2440,14 @@
             "completeness-state",
             "count",
             "duration",
+            "error-kind",
             "loss-state",
-            "opaque-id"
+            "opaque-id",
+            "safe-platform-class"
           ],
           "frameCauseEvidence": {
-            "frames": false,
-            "causeChain": false
+            "frames": true,
+            "causeChain": true
           },
           "proofIds": ["atlassian.jira-report.line"],
           "replayReferences": [],

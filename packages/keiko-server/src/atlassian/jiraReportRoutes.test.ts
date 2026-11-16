@@ -165,7 +165,9 @@ describe("Jira report export route", () => {
       const beforeContinuation: unknown[] = [];
       vi.spyOn(port, "touch")
         .mockImplementationOnce(() => {
-          throw new Error("SYN-99 private-report-body");
+          throw new Error("SYN-99 private-report-body", {
+            cause: new Error("SYN-99 private-report-body cause"),
+          });
         })
         .mockImplementationOnce(() => {
           beforeContinuation.push(...logs.events);
@@ -177,8 +179,18 @@ describe("Jira report export route", () => {
         op: "atlassian.jira-report",
         level: "warn",
         correlationId: "retention-fixture",
-        extra: { phase: "retain", refusal: "export-unavailable" },
+        extra: { phase: "retain", refusal: "export-unavailable", causeChain: ["Error"] },
       });
+      const frames = logs.events[0]?.extra?.frames;
+      expect(Array.isArray(frames)).toBe(true);
+      if (!Array.isArray(frames)) throw new TypeError("Missing retention failure frames");
+      expect(frames.length).toBeGreaterThan(0);
+      expect(frames.length).toBeLessThanOrEqual(8);
+      expect(frames).toContainEqual(
+        expect.stringMatching(
+          /^packages\/keiko-server\/src\/atlassian\/jiraReportPersistence\.ts:\d+:\d+$/u,
+        ),
+      );
       expect(logs.events.at(-1)).toMatchObject({
         extra: { phase: "retain", retainedReportCount: 1, refusal: "export-unavailable" },
       });
