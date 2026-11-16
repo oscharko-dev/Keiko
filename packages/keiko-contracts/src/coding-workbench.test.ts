@@ -2190,12 +2190,21 @@ describe("canonical Workbench verifier summary agreement", () => {
     expect(validateCodingWorkbenchRuntimeEvent(event)).toEqual({ ok: true, value: event });
   });
 
+  it("accepts a denied subset without changing the canonical non-passing count", () => {
+    const enriched = {
+      ...event,
+      verificationSummary: { ...event.verificationSummary, deniedCount: 1 },
+    };
+    expect(validateCodingWorkbenchRuntimeEvent(enriched)).toEqual({ ok: true, value: enriched });
+  });
+
   it.each([
     { status: "passed" },
     { passedCount: 1 },
     { failedCount: 0 },
     { skippedCount: 1 },
     { stdout: "private command output" },
+    { deniedCount: 2 },
   ])("rejects conflicting or content-bearing verifier summaries %j", (invalid) => {
     expect(
       validateCodingWorkbenchRuntimeEvent({

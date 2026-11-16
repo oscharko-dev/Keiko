@@ -1687,6 +1687,36 @@ describe("verification detail and active turn failures", () => {
     expect(container).not.toHaveTextContent("1 test failed");
   });
 
+  it.each([
+    [0, 1, "Not run", "0 unsuccessful"],
+    [1, 1, "Partial", "0 unsuccessful"],
+    [0, 2, "Failed", "1 unsuccessful"],
+  ])(
+    "separates denied checks from executed failures (%s passed, %s non-passing)",
+    (passedCount, failedCount, label, failures) => {
+      const verified = {
+        ...event(1),
+        eventKind: "verification-summarized" as const,
+        verificationSummary: { ...summary, passedCount, failedCount, deniedCount: 1 },
+      };
+      const { container } = render(
+        <Timeline
+          events={[verified]}
+          activity={activityLike(bareFeed())}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Run details" }));
+      expect(container).toHaveTextContent(`Targeted tests: ${label}`);
+      expect(container).toHaveTextContent(failures);
+      expect(container).toHaveTextContent("1 blocked");
+      if (label === "Not run") {
+        expect(container).not.toHaveTextContent("Targeted tests: Failed");
+        expect(container.querySelector('[data-event-tone="attention"]')).toBeNull();
+      }
+    },
+  );
+
   it("keeps a failed verification visible while routine details are collapsed", () => {
     const verified = {
       ...event(1),

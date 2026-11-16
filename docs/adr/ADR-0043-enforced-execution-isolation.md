@@ -1041,7 +1041,14 @@ unconfined on the host.
   execution. The native proof in `windows-verification-loop.real.test.ts` qualifies the Windows shell
   path below the boundary and does not certify governed verification.
 - **Refusal stays truthful.** A Windows host without a container runtime cannot run governed
-  verification. Such a run is denied and reports no pass.
+  verification. Such a run is denied and reports no pass. The orchestrator's aggregate `failed`
+  remains a failed gate, while the model and tool card use the existing not-run/denied outcome
+  when no check reached an executed failure. Real step failures, timeouts, resource ceilings and
+  failed dependency bootstrap remain distinct failures. The Workbench summary may carry an
+  optional `deniedCount` subset of its canonical non-passing `failedCount`, so blocked checks do
+  not appear as checks that ran unsuccessfully. Historical summaries without that subset retain
+  their original facts. The existing `coding-runtime.verification` not-run Activity Log evidence
+  records the closed denial reason; neither presentation nor counts grant verification authority.
 - **Scope.** This decides repository verification only. It does not decide the Windows tool profile
   or the runtime confinement of D11 and D18, and D13 still holds.
 - **Open.** The container-backed loop from a Windows checkout, with dependencies installed for the

@@ -1376,6 +1376,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.verification.status.notRun": "Nicht gelaufen",
   "codingWorkbench.verification.checks":
     "Prüfungen: {passed} bestanden, {failed} nicht erfolgreich, {skipped} übersprungen",
+  "codingWorkbench.verification.checksWithBlocked":
+    "Prüfungen: {passed} bestanden, {failed} nicht erfolgreich, {blocked} blockiert, {skipped} übersprungen",
   "codingWorkbench.verification.duration": "Dauer: {duration}",
   "codingWorkbench.activity.readBytes": "Gelesen: {bytes} Bytes",
   "codingWorkbench.activity.readFacts": "Gelesen: {bytes} Bytes · Ganze Datei: {lines} Zeilen",
