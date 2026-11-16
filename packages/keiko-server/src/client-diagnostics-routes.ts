@@ -634,6 +634,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "browser-approval",
   "knowledge-pod-selection",
   "jira-human-input",
+  "jira-starter-draft",
   "chat-connector-selection",
   "chat-connector-refresh",
 ] as const;
@@ -664,6 +665,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "browser approval": "browser-approval",
   "knowledge pod selection": "knowledge-pod-selection",
   "jira human input": "jira-human-input",
+  "jira starter draft": "jira-starter-draft",
   "chat connector selection": "chat-connector-selection",
   "chat connector refresh": "chat-connector-refresh",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;

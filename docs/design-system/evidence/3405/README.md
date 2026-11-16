@@ -743,3 +743,11 @@ gates container with `--init` and Node 26.13.1.
 `npm run check:update-ui-evidence` passed. The three provenance records use the new source digests
 and generation time. The runner substituted fallback fonts, so the fourteen captures keep their
 original renderer's typography.
+
+## Jira starter templates in Skills — 2026-11-16
+
+The localized starter drafts change the optional English and German catalogs. All nine original
+updater cases passed again in the Linux arm64 gates container with the locked dependencies,
+Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The freshness gate passed. The three
+producer-generated records bind the updated source digests and generation time. The fourteen
+captures retain the typography of their original renderer.

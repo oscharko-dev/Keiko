@@ -2839,7 +2839,18 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.pod": "Jira Pod",
   "chat.skills.jira.podRequired":
     "Verbinde einen bereiten Jira Pod, um eine Vorlage zu prüfen oder vorzuschlagen.",
-  "chat.skills.jira.empty": "Noch keine Vorlagen. Erstelle eine aus einem Jira-Projekt.",
+  "chat.skills.jira.empty": "Noch keine Jira-Vorlagen gespeichert.",
+  "chat.skills.jira.starter.title": "Jira-Startvorlagen",
+  "chat.skills.jira.starter.connect":
+    "Aktiviere einen Jira Pod, um die Startvorlagen zu verwenden.",
+  "chat.skills.jira.starter.edit":
+    "Öffne eine Startvorlage und ergänze unter Metadaten (YAML) den Projektschlüssel und den Vorgangstyp.",
+  "chat.skills.jira.starter.epic":
+    "## Ziel\n\nBeschreibe das Ziel des Epics.\n\n## Umfang\n\nListe die enthaltenen Arbeiten auf.\n\n## Akzeptanzkriterien\n\nBeschreibe, wie sich überprüfen lässt, ob das Ziel erreicht wurde.",
+  "chat.skills.jira.starter.issue":
+    "## Beschreibung\n\nBeschreibe, was zu tun ist und warum.\n\n## Akzeptanzkriterien\n\nListe die Bedingungen für den Abschluss auf.",
+  "chat.skills.jira.starter.bug":
+    "## Schritte zur Reproduktion\n\nNenne die Schritte und die betroffene Version oder Umgebung.\n\n## Erwartetes Verhalten\n\nBeschreibe, was passieren sollte.\n\n## Tatsächliches Verhalten\n\nBeschreibe, was passiert.",
   "chat.skills.jira.invalid": "Muss korrigiert werden",
   "chat.skills.jira.checking": "Wird mit Jira abgeglichen …",
   "chat.skills.jira.checkFailed": "Konnte gerade nicht mit Jira abgeglichen werden.",

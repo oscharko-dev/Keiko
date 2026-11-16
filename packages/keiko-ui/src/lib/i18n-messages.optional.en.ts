@@ -2683,7 +2683,17 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.description": "Apply automatically to every Jira change Keiko makes.",
   "chat.skills.jira.pod": "Jira Pod",
   "chat.skills.jira.podRequired": "Connect a ready Jira Pod to validate a template or propose one.",
-  "chat.skills.jira.empty": "No templates yet. Create one from a Jira project.",
+  "chat.skills.jira.empty": "No saved Jira templates yet.",
+  "chat.skills.jira.starter.title": "Jira starter templates",
+  "chat.skills.jira.starter.connect": "Activate a Jira Pod to use the starter templates.",
+  "chat.skills.jira.starter.edit":
+    "Open a starter template and complete the project key and issue type under Metadata (YAML).",
+  "chat.skills.jira.starter.epic":
+    "## Objective\n\nDescribe the goal of the epic.\n\n## Scope\n\nList the work included.\n\n## Acceptance criteria\n\nDescribe how to verify the goal is met.",
+  "chat.skills.jira.starter.issue":
+    "## Description\n\nDescribe what needs to be done and why.\n\n## Acceptance criteria\n\nList the conditions for completion.",
+  "chat.skills.jira.starter.bug":
+    "## Steps to reproduce\n\nList the steps and the affected version or environment.\n\n## Expected behavior\n\nDescribe what should happen.\n\n## Actual behavior\n\nDescribe what happens.",
   "chat.skills.jira.invalid": "Needs repair",
   "chat.skills.jira.checking": "Checking against Jira…",
   "chat.skills.jira.checkFailed": "Could not be checked against Jira right now.",

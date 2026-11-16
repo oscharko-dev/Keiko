@@ -217,6 +217,7 @@ export interface JiraTemplates {
   readonly tools: Tools;
   readonly pods: readonly { readonly id: string; readonly name: string }[];
   readonly podId: string | undefined;
+  readonly starterTemplatesAvailable: boolean;
   readonly selectPod: (podId: string) => void;
   /** The stored skills that are templates, once the list was read (empty when it failed). */
   readonly templateIds: ReadonlySet<string> | undefined;
@@ -233,7 +234,14 @@ export function useJiraTemplates(library: MarkdownSkillLibrary): JiraTemplates {
     if (!tools.listed) return undefined;
     return new Set(ids.length === 0 ? [] : ids.split("|"));
   }, [ids, tools.listed]);
-  return { tools, pods: ready, podId, selectPod: setSelected, templateIds };
+  return {
+    tools,
+    pods: ready,
+    podId,
+    starterTemplatesAvailable: podId !== undefined && !pods.loading && !pods.failed,
+    selectPod: setSelected,
+    templateIds,
+  };
 }
 
 export function PodSelect({ jira }: { readonly jira: JiraTemplates }): ReactNode {

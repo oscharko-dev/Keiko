@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { parseJiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   MarkdownSkillDocument,
   MarkdownSkillSelectionView,
@@ -17,6 +18,7 @@ import type {
 import * as api from "@/lib/markdown-skills-api";
 import * as atlassian from "@/lib/atlassian-connectors-api";
 import * as jiraTemplates from "@/lib/jira-templates-api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
 import { useChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { MarkdownSkillDialog } from "./MarkdownSkillDialog";
@@ -63,6 +65,27 @@ const PLAN: MarkdownSkillDocument = {
 const EMPTY: MarkdownSkillSelectionView = {
   availability: "none",
   selection: { revision: 0, skill: null },
+};
+
+const POD: atlassian.AtlassianConnectorMetadata = {
+  schemaVersion: "1",
+  authRef: "synthetic-ref",
+  provider: "jira",
+  deployment: "data-center",
+  authScheme: "bearer-pat",
+  generation: 1,
+  displayName: "Lab Jira",
+  baseUrl: "https://jira.example.invalid",
+  createdAt: 1,
+  livePod: {
+    kind: "jira-live",
+    podId: "pod-one",
+    authenticationGeneration: 1,
+    verificationRevision: 1,
+    verificationInProgress: false,
+    verificationStatus: "ok",
+    capabilities: ["live-read"],
+  },
 };
 
 /** A small in-memory skill store behind the mocked skill API, so a save really changes the library. */
@@ -164,6 +187,101 @@ function openFileMeta(dialog: HTMLElement): ReturnType<typeof within> {
 async function waitForVersion(dialog: HTMLElement, version: string): Promise<void> {
   await waitFor(() => expect(openFileMeta(dialog).getByText(version)).toBeInTheDocument());
 }
+
+function starterButtons(dialog: HTMLElement): HTMLElement[] {
+  return within(within(dialog).getByRole("list", { name: "Jira starter templates" })).getAllByRole(
+    "button",
+  );
+}
+
+function refreshPods(): void {
+  act(() => {
+    window.dispatchEvent(new Event(atlassian.ATLASSIAN_CONNECTORS_CHANGED_EVENT));
+  });
+}
+
+describe("Jira starter templates", () => {
+  it("enables all three on Pod activation and disables them again on removal or refresh failure", async () => {
+    seedStore([]);
+    const dialog = await openDialog();
+    const buttons = starterButtons(dialog);
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Jira Epic",
+      "Jira Issue",
+      "Jira Bug",
+    ]);
+    for (const button of buttons) expect(button).toBeDisabled();
+
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    refreshPods();
+    await waitFor(() => {
+      for (const button of buttons) expect(button).toBeEnabled();
+    });
+
+    vi.mocked(atlassian.listAtlassianConnectors).mockRejectedValueOnce(new Error("offline"));
+    refreshPods();
+    for (const button of buttons) expect(button).toBeDisabled();
+    await act(async () => {});
+    for (const button of buttons) expect(button).toBeDisabled();
+
+    refreshPods();
+    await waitFor(() => expect(buttons[0]).toBeEnabled());
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([]);
+    refreshPods();
+    await act(async () => {});
+    for (const button of buttons) expect(button).toBeDisabled();
+    expect(api.saveMarkdownSkill).not.toHaveBeenCalled();
+    expect(api.changeMarkdownSkillSelection).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["Jira Epic", "Epic", ["Objective", "Scope", "Acceptance criteria"]],
+    ["Jira Issue", "Task", ["Description", "Acceptance criteria"]],
+    ["Jira Bug", "Bug", ["Steps to reproduce", "Expected behavior", "Actual behavior"]],
+  ])("opens %s as an editable, unsaved template", async (name, issueType, sections) => {
+    seedStore([]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    const dialog = await openDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name }));
+    expect(documentTitle(dialog)).toBe(name);
+    expect(openFileMeta(dialog).getByText("Not saved yet")).toBeInTheDocument();
+    const metadata = within(dialog).getByLabelText<HTMLTextAreaElement>("Metadata (YAML)");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Markdown" }));
+    const body = within(dialog).getByRole<HTMLTextAreaElement>("textbox", { name: /· Markdown$/u });
+    const draft = `---\n${metadata.value}\n---\n${body.value}`;
+    expect(parseJiraIssueTemplate(draft).ok).toBe(false);
+    expect(parseJiraIssueTemplate(draft.replace('project: ""', "project: LAB"))).toMatchObject({
+      ok: true,
+      template: { project: "LAB", issueType, requiredSections: sections },
+    });
+    expect(api.saveMarkdownSkill).not.toHaveBeenCalled();
+    expect(api.changeMarkdownSkillSelection).not.toHaveBeenCalled();
+    expect(jiraTemplates.proposeJiraTemplates).not.toHaveBeenCalled();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        stageReport: expect.objectContaining({ stage: "jira starter draft", phase: "settled" }),
+      }),
+    );
+  });
+
+  it("keeps the user's draft if the Pod is removed while confirming a switch", async () => {
+    seedStore([]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    const dialog = await openDialog();
+    newSkill(dialog);
+    writeMarkdown(dialog, "# Keep this draft\n");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Jira Bug" }));
+
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([]);
+    refreshPods();
+    await act(async () => {});
+    fireEvent.click(within(dialog).getByRole("button", { name: "Discard changes" }));
+    expect(documentTitle(dialog)).toBe("Keep this draft");
+    expect(openFileMeta(dialog).getByText("Unsaved changes")).toBeInTheDocument();
+    expect(api.saveMarkdownSkill).not.toHaveBeenCalled();
+  });
+});
 
 describe("a new skill", () => {
   it("opens unsaved, becomes dirty with its text and is created by Save", async () => {

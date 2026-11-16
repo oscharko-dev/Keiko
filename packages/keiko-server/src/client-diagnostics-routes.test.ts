@@ -4193,6 +4193,8 @@ it.each([
   ["modal focus restoration", "settled", "modal-focus-restoration"],
   ["knowledge pod selection", "started", "knowledge-pod-selection"],
   ["knowledge pod selection", "settled", "knowledge-pod-selection"],
+  ["jira starter draft", "started", "jira-starter-draft"],
+  ["jira starter draft", "settled", "jira-starter-draft"],
   ["chat connector selection", "started", "chat-connector-selection"],
   ["chat connector selection", "settled", "chat-connector-selection"],
   ["chat connector refresh", "started", "chat-connector-refresh"],

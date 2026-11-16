@@ -1148,6 +1148,7 @@ export const CLIENT_STAGE_IDS = [
   "browser approval",
   "knowledge pod selection",
   "jira human input",
+  "jira starter draft",
   "chat connector selection",
   "chat connector refresh",
 ] as const;
