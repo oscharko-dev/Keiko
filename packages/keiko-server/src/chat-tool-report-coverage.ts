@@ -357,11 +357,16 @@ export function rawReportKeyCorrection(names: readonly string[]): string {
   );
 }
 
-const REPORT_DOWNLOAD_REQUEST = /\b(?:report|bericht)\b/iu;
-const REPORT_DOWNLOAD_ACTION = /\b(?:download\w*|export\w*|herunterladen|herunterladbar)\b/iu;
+const REPORT_DOWNLOAD_REQUEST =
+  /(?<![\p{L}\p{N}_])(?:reports?|\p{L}*bericht(?:e[ns]?|s)?)(?![\p{L}\p{N}_])/iu;
+const REPORT_DOWNLOAD_ACTION = /\b(?:download\w*|export\w*|herunterladen|herunterladbar)\b/giu;
+const REPORT_DIRECT_DOWNLOAD_NEGATION =
+  /\b(?:not|never|don['’]t|nicht|keinesfalls)(?:\s+(?:to|please|bitte|als|as|in|csv|markdown)){0,3}\s*$/iu;
+const REPORT_DOWNLOAD_PREFIX_LIMIT = 64;
+const REPORT_SEPARATED_DOWNLOAD = /\blade[nt]?\b[^.!?\n]{0,240}\bherunter\b/iu;
 const REPORT_DOWNLOAD_FORMAT = /\b(?:csv|markdown)\b/iu;
 const REPORT_EXAMPLE_REQUEST =
-  /\b(?:example|beispiel|sample|how (?:can|do|to)|wie (?:kann|geht)|no download|kein(?:en)? download)\b/iu;
+  /\b(?:example|beispiel|sample|how (?:can|do|to)|wie (?:kann|geht|lade)|no download|kein(?:en)? download)\b/iu;
 // Indentation never consumes a line break: multiline retries must not rescan whole blank runs.
 const EXPORT_CODE_BLOCK = /^[^\S\r\n\u2028\u2029]*```(?:csv|markdown|md)\b/imu;
 const REPORT_ID = new RegExp(JIRA_REPORT_ID_PATTERN, "u");
@@ -397,6 +402,18 @@ function hasReportExports(data: Readonly<Record<string, unknown>> | undefined): 
   );
 }
 
+function requestsDownload(request: string): boolean {
+  for (const action of request.matchAll(REPORT_DOWNLOAD_ACTION)) {
+    const prefix = request.slice(
+      Math.max(0, action.index - REPORT_DOWNLOAD_PREFIX_LIMIT),
+      action.index,
+    );
+    if (!REPORT_DIRECT_DOWNLOAD_NEGATION.test(prefix)) return true;
+  }
+  const separated = REPORT_SEPARATED_DOWNLOAD.exec(request);
+  return separated !== null && !/\b(?:nicht|keinesfalls)\b/iu.test(separated[0]);
+}
+
 /** Only an explicit current download request answered with copyable export text needs this repair. */
 export function reportDownloadMissing(
   exchanges: readonly ChatToolExchange[],
@@ -405,7 +422,7 @@ export function reportDownloadMissing(
 ): boolean {
   return (
     REPORT_DOWNLOAD_REQUEST.test(currentRequest) &&
-    REPORT_DOWNLOAD_ACTION.test(currentRequest) &&
+    requestsDownload(currentRequest) &&
     REPORT_DOWNLOAD_FORMAT.test(currentRequest) &&
     !REPORT_EXAMPLE_REQUEST.test(currentRequest) &&
     EXPORT_CODE_BLOCK.test(answer) &&

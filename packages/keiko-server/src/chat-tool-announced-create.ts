@@ -320,29 +320,102 @@ export function correctionRoundOffersTools(kinds: readonly string[]): boolean {
 }
 
 const APPROVAL_CLAIMS = [
-  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+(?:is ready|is prepared|has been prepared)\b/iu,
-  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+ist (?:(?:erneut|jetzt|bereits|schon) )?(?:bereit|vorbereitet)\b/iu,
-  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+wurde vorbereitet\b/iu,
-  /\bi(?: have|'ve)? prepared\s+(?:(?:a|an|the)\s+)?approval (?:card|request)(?=$|[,.!?])/iu,
-  /\bi(?: have|'ve)? prepared\s+(?:(?:a|an|the)\s+)?approval (?:card|request)\s+(?:for|and|so|which|that)\b/iu,
-  /\bich habe\s+(?:(?:die|eine)\s+)?(?:freigabekarte|freigabeanfrage)\s+(?:(?:jetzt|bereits|schon)\s+)?(?:vorbereitet|erstellt)\b/iu,
-  /\bplease approve\b[^.!?\n]{0,60}\bin the card\b/iu,
-  /\bbitte (?:bestätige|bestätigen|genehmige|genehmigen)\b[^.!?\n]{0,60}\b(?:in der karte|(?:die|der) freigabekarte)\b/iu,
-  /\bbitte (?:die )?freigabe in der karte (?:erteilen|bestätigen|genehmigen)\b/iu,
+  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+(?:is ready|is prepared|has been prepared)\b/giu,
+  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+ist (?:(?:erneut|jetzt|bereits|schon) )?(?:bereit|vorbereitet)\b/giu,
+  /\b(?:freigabekarte|freigabeanfrage|freigabe)\s+steht bereit\b/giu,
+  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+wurde vorbereitet\b/giu,
+  /\bi(?: have|'ve)? prepared\s+(?:(?:a|an|the)\s+)?approval (?:card|request)(?=$|[,.!?])/giu,
+  /\bi(?: have|'ve)? prepared\s+(?:(?:a|an|the)\s+)?approval (?:card|request)\s+(?:for|and|so|which|that)\b/giu,
+  /\bich habe\s+(?:(?:die|eine)\s+)?(?:freigabekarte|freigabeanfrage)\s+(?:(?:jetzt|bereits|schon)\s+)?(?:vorbereitet|erstellt)\b/giu,
+  /\bplease approve\b[^.!?\n]{0,60}\bin the card\b/giu,
+  /\bbitte (?:bestätige|bestätigen|genehmige|genehmigen)\b[^.!?\n]{0,60}\b(?:in der karte|(?:die|der) freigabekarte)\b/giu,
+  /\bbitte (?:die )?freigabe in der karte (?:erteilen|bestätigen|genehmigen)\b/giu,
+  /\bdu kannst\b[^.!?,;\n]{0,60}\bjetzt in der freigabekarte genehmigen\b/giu,
 ] as const;
-const APPROVAL_CONTEXT_ONLY =
+const APPROVAL_PREFIX_CONTEXT =
   /\b(?:not|no|kein\w*|nicht|wenn|falls|once|when|if|will|werde|zuvor|earlier|previous|abgelehnt|declined)\b/iu;
+const APPROVAL_LEADING_CONDITION =
+  /^\s*(?:if|when|once|falls|wenn)\b[^,;.!?\n]{0,160},\s*(?:the |die )?$/iu;
+const APPROVAL_DEFERRED_SUFFIX =
+  /^,?\s+(?:(?:but|aber)\s+)?(?:(?:only|nur)\s+)?(?:if|when|once|falls|wenn)\b/iu;
+const APPROVAL_DECLINED_SUFFIX = /^\s+(?:and|und)\s+(?:was )?(?:declined|abgelehnt)\b/iu;
+const APPROVAL_QUOTES: Readonly<Record<string, string>> = {
+  '"': '"',
+  "“": "”",
+  "„": "“",
+  "‘": "’",
+  "'": "'",
+  "`": "`",
+};
+const APPROVAL_WORD_CHARACTER = /[\p{L}\p{N}]/u;
+
+function approvalQuoteStart(answer: string, index: number): string | undefined {
+  const character = answer.charAt(index);
+  if (character === "'" && APPROVAL_WORD_CHARACTER.test(answer.charAt(index - 1))) return undefined;
+  return Object.hasOwn(APPROVAL_QUOTES, character) ? APPROVAL_QUOTES[character] : undefined;
+}
+
+function closesApprovalQuote(answer: string, index: number, closing: string): boolean {
+  if (answer.charAt(index) !== closing) return false;
+  if (closing !== "'" && closing !== "’") return true;
+  return (
+    !APPROVAL_WORD_CHARACTER.test(answer.charAt(index - 1)) ||
+    !APPROVAL_WORD_CHARACTER.test(answer.charAt(index + 1))
+  );
+}
+
+/** Quoted examples are not assertions; scan once and keep sentence boundaries intact. */
+function approvalProse(answer: string): string {
+  let closing: string | undefined;
+  let prose = "";
+  for (let index = 0; index < answer.length; index += 1) {
+    const character = answer.charAt(index);
+    if (closing !== undefined) {
+      if (closesApprovalQuote(answer, index, closing)) closing = undefined;
+      prose += character === "\n" ? "\n" : " ";
+    } else {
+      closing = approvalQuoteStart(answer, index);
+      prose += closing === undefined ? character : " ";
+    }
+  }
+  return prose;
+}
+
+function assertsApproval(sentence: string): boolean {
+  return APPROVAL_CLAIMS.some((pattern) =>
+    [...sentence.matchAll(pattern)].some((match) => {
+      const end = match.index + match[0].length;
+      const prefix = sentence.slice(0, match.index);
+      const clause = prefix.split(/[,;]|\b(?:and|but|und|aber)\b/iu).at(-1) ?? "";
+      return (
+        !APPROVAL_PREFIX_CONTEXT.test(clause + match[0]) &&
+        !APPROVAL_LEADING_CONDITION.test(prefix) &&
+        !APPROVAL_DEFERRED_SUFFIX.test(sentence.slice(end)) &&
+        !APPROVAL_DECLINED_SUFFIX.test(sentence.slice(end))
+      );
+    }),
+  );
+}
+
+function approvalClaimSentences(answer: string): readonly string[] {
+  return approvalProse(answer)
+    .replaceAll(/\*\*|__/gu, "")
+    .split(SENTENCE_END)
+    .filter((sentence) => !sentence.trimStart().startsWith(">"))
+    .filter(assertsApproval);
+}
 
 /** Preparation is not an approval. Only this turn's still-pending server-owned card can be one. */
 export function unsupportedApprovalClaimCount(
   exchanges: readonly ChatToolExchange[],
   answer: string,
   now = Date.now(),
+  jiraContext = false,
 ): number {
   const jira = exchanges.filter((exchange) =>
     exchange.result?.toolRef?.canonicalId.startsWith("keiko.jira."),
   );
-  if (jira.length === 0) return 0;
+  if (jira.length === 0 && !jiraContext) return 0;
   if (
     jira.some((exchange) => {
       const approval = exchange.approval;
@@ -355,16 +428,7 @@ export function unsupportedApprovalClaimCount(
     })
   )
     return 0;
-  return Math.min(
-    COUNT_MAX,
-    answer
-      .split(SENTENCE_END)
-      .filter(
-        (sentence) =>
-          !APPROVAL_CONTEXT_ONLY.test(sentence) &&
-          APPROVAL_CLAIMS.some((pattern) => pattern.test(sentence.replaceAll(/\*\*|__/gu, ""))),
-      ).length,
-  );
+  return Math.min(COUNT_MAX, approvalClaimSentences(answer).length);
 }
 
 export function unsupportedApprovalCorrection(count: number): string {

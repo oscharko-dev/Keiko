@@ -120233,7 +120233,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:447",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:449",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

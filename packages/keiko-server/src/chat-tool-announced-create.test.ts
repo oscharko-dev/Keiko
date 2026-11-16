@@ -12,6 +12,7 @@ import {
 import { jiraMutationToolId } from "./atlassian/jiraMutationToolId.js";
 import { jiraMutationToolResult } from "./atlassian/jiraMutationResult.js";
 import { draftResult, type DraftItemResult } from "./atlassian/jiraChatDraft.js";
+import { checkProperty } from "../../../tests/support/property-testing.js";
 
 function exchange(name: string, extra: Record<string, unknown> = {}): ChatToolExchange {
   const stored: unknown = { call: { id: `call-${name}`, name, arguments: {} }, ...extra };
@@ -221,6 +222,13 @@ describe("unsupportedApprovalClaimCount (#4401)", () => {
 
   it.each([
     claim,
+    "Die Freigabekarte ist bereit, bitte bestätige sie, wenn alles passt.",
+    "The approval card is ready, approve it when you are happy with the three tasks.",
+    "The approval card is ready and will create three tasks.",
+    "No Jira issues were created and the approval card is ready.",
+    "Es wurden keine Jira-Aufgaben erstellt und die Freigabekarte ist bereit.",
+    "Die Freigabekarte steht bereit.",
+    "Du kannst die drei Aufgaben jetzt in der Freigabekarte genehmigen.",
     "The approval card is ready. Please confirm the card.",
     "Die **Freigabekarte** wurde vorbereitet.",
     "I've prepared the approval card for you.",
@@ -241,6 +249,22 @@ describe("unsupportedApprovalClaimCount (#4401)", () => {
     "Die Freigabekarte ist nicht bereit.",
     "No approval card is ready.",
     "Once the approval card is ready, please confirm it.",
+    "Once the request succeeds, the approval card is ready.",
+    "If the requested metadata is complete, the approval card is ready.",
+    "Wenn die Anfrage gelingt, ist die Freigabekarte bereit.",
+    "The approval card is ready if the request succeeds.",
+    "The approval card is ready only if the request succeeds.",
+    "Die Freigabekarte ist bereit, aber nur wenn die Anfrage gelingt.",
+    "The guide says: 'Don't claim the approval card is ready.'",
+    "The guide says: ‘Don’t claim the approval card is ready.’",
+    "If the approval card is ready, approve it when convenient.",
+    "Wenn die Freigabekarte bereit ist, kannst du sie genehmigen.",
+    "Die Freigabekarte ist bereit, falls die Anfrage gelingt.",
+    "The approval card is ready and was declined.",
+    'The guide says: "The approval card is ready and will create three tasks."',
+    "Die Anleitung sagt: „Die Freigabekarte steht bereit.“",
+    "Example: `The approval card is ready`.",
+    "> The approval card is ready.",
     "Die Freigabe wurde zuvor vorbereitet und abgelehnt.",
     "The previous approval card was prepared yesterday.",
     "I will prepare an approval card.",
@@ -264,6 +288,47 @@ describe("unsupportedApprovalClaimCount (#4401)", () => {
     expect(
       unsupportedApprovalClaimCount([exchange("jira_edit", { result: { data: {} } })], claim, now),
     ).toBe(0);
+  });
+
+  it("accepts only a server-bound Jira context for a turn without tools", () => {
+    expect(unsupportedApprovalClaimCount([], claim, now, true)).toBe(1);
+    expect(unsupportedApprovalClaimCount([], claim, now, false)).toBe(0);
+  });
+
+  it("keeps the assertion separate from attached conditions and quoted examples", async () => {
+    await checkProperty({
+      name: "approval assertion clause boundaries",
+      runs: 64,
+      generate: (random) => ({
+        english: random.chance(0.5),
+        suffix: random.pick([0, 1, 2] as const),
+        quote: random.pick([
+          ['"', '"'],
+          ["„", "“"],
+          ["`", "`"],
+        ] as const),
+      }),
+      property: ({ english, suffix, quote }) => {
+        const assertion = english ? "The approval card is ready" : "Die Freigabekarte ist bereit";
+        const tails = english
+          ? ([
+              ", approve it when everything is correct.",
+              " and will create the tasks.",
+              ", please check that nothing is missing.",
+            ] as const)
+          : ([
+              ", bitte bestätige sie, wenn alles passt.",
+              ", danach werde ich die Aufgaben anlegen.",
+              ", prüfe bitte, dass nichts fehlt.",
+            ] as const);
+        const statement = assertion + tails[suffix];
+        expect(unsupportedApprovalClaimCount([read], statement, now)).toBe(1);
+        expect(unsupportedApprovalClaimCount([read], quote[0] + statement + quote[1], now)).toBe(0);
+        const conditional =
+          assertion + (english ? ", if the request succeeds." : ", wenn die Anfrage gelingt.");
+        expect(unsupportedApprovalClaimCount([read], conditional, now)).toBe(0);
+      },
+    });
   });
 
   it.each([

@@ -1647,7 +1647,15 @@ the answer; its speech preparation counts are unchanged.
 
 The same truthfulness correction covers a claim that a Jira approval card is ready after only
 metadata reads or draft staging (#4401, 2026-11-16). A pending, unexpired Jira approval bound to its
-own invocation is the evidence; staging is preparation alone. The tool guidance asks the model to
+own invocation is the evidence; staging is preparation alone. A turn with the existing Jira Pod
+binding is checked even if it called no tool when its request names Jira or follows the preceding
+Jira turn's draft with a request to show its card. The Pod binding alone is not a topic signal.
+The check reuses the UI's bounded history limit and caches that history within the turn.
+An earlier visible card exempts the claim only while
+the existing approval registry still holds its matching pending invocation/action and current
+Chat/Pod/binding/authentication identity; a stored card or prose alone is insufficient. Negation
+and deferral are checked at the claim, not an attached consequence or request to approve when
+convenient; quoted examples remain examples. The tool guidance asks the model to
 invoke the requested write through the existing governed tool once its facts are ready, without
 another prose confirmation. An unsupported claim gets the tool-less correction
 `approval-not-requested`; if it persists, the closed `no-jira-approval` notice states that no card
@@ -1657,7 +1665,9 @@ An explicit current request for a Markdown/CSV report download, answered only wi
 blocks and no completed `jira.report` export, gets the existing single correction with tools
 available (#4402). `report-download-missing` asks for the exact requested JQL scope, its real export
 controls and no Jira change; a concrete limitation may be stated instead. Example and how-to
-requests are excluded. A repeated code-block substitute keeps the closed
+requests are excluded. Ordinary English plurals and German compound report names and separable
+download verbs follow the same rule; a negated separable download request remains excluded.
+A repeated code-block substitute keeps the closed
 `jira-report-not-generated` notice. Both additions log only the closed correction kind and count
 on `chat.tool-turn.corrected`, and the closed notice on `chat.tool-transcript.updated`; no request,
 issue key, scope or answer enters the Activity Log. These narrow English/German checks do not

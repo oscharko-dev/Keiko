@@ -25,7 +25,11 @@ import {
   type ChatWriteApprovalEntry,
 } from "./atlassian/chatWriteApprovalState.js";
 import { recordChatAuthorityResult } from "./editor/chatAuthorityActivity.js";
-import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  Chat,
+  ChatJiraPodBinding,
+  ChatToolExchange,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
@@ -146,6 +150,59 @@ export function refreshChatToolWriteApproval(
     message.id,
     { kind: "write-approval", callId, approval: observed, ...approvalOperationBinding(observed) },
     correlationId,
+  );
+}
+
+/** A visible earlier card is evidence only while its server-owned approval and binding remain live. */
+export function hasPendingJiraApproval(
+  chat: Pick<Chat, "id" | "jiraPodBinding">,
+  exchanges: readonly ChatToolExchange[],
+  registry: UiHandlerDeps["atlassianActionApprovalRegistry"],
+  correlationId: string,
+): boolean {
+  const binding = chat.jiraPodBinding;
+  if (binding === undefined || registry === undefined) return false;
+  return exchanges.some((exchange) => {
+    const previous = exchange.approval;
+    if (previous?.kind !== "jira-chat-write" || previous.invocationId !== exchange.call.id)
+      return false;
+    const current = registry.getChatWriteApproval(previous.approvalId, correlationId)?.approval;
+    if (current?.kind !== "jira-chat-write" || current.state !== "pending") return false;
+    return (
+      sameWriteAction(current, previous) &&
+      current.chatId === chat.id &&
+      approvalMatchesJiraBinding(current, binding)
+    );
+  });
+}
+
+function approvalMatchesJiraBinding(
+  approval: Extract<ChatToolWriteApprovalView, { readonly kind: "jira-chat-write" }>,
+  binding: ChatJiraPodBinding,
+): boolean {
+  return (
+    approval.podId === binding.podId &&
+    approval.bindingGeneration === binding.bindingGeneration &&
+    approval.authenticationGeneration === binding.authenticationGeneration
+  );
+}
+
+/** A Pod binding alone does not turn an unrelated conversation into a Jira approval request. */
+export function hasJiraApprovalClaimContext(
+  request: string,
+  previous: ChatMessage | undefined,
+): boolean {
+  if (/\bjira\b/iu.test(request)) return true;
+  const draftFollowUp =
+    /\b(?:entwurf|draft)\b/iu.test(request) &&
+    /\b(?:zeig(?:e)? (?:mir )?die freigabekarte|show (?:me )?the approval card)\b/iu.test(request);
+  if (!draftFollowUp || previous === undefined) return false;
+  return (
+    /\bjira\b/iu.test(previous.content) ||
+    (previous.toolTranscript?.exchanges.some((exchange) =>
+      exchange.result?.toolRef?.canonicalId.startsWith("keiko.jira."),
+    ) ??
+      false)
   );
 }
 

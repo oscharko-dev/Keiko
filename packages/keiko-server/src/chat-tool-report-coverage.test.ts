@@ -35,10 +35,30 @@ describe("reportDownloadMissing (#4402)", () => {
   });
 
   it.each([
+    "Lade den Bericht für diese drei Keys als Markdown und CSV herunter.",
+    "Erstelle einen Statusbericht für diese drei Keys und stelle ihn als Markdown und CSV zum Download bereit.",
+    "Give me downloadable reports for these keys as CSV.",
+    "Bitte den Abschlussbericht als CSV exportieren.",
+    "Erstelle Downloads des Jira-Berichts als Markdown und CSV.",
+    "Lade den Übergabebericht als Markdown herunter.",
+    "Export the Jira report as CSV, but do not change the issues.",
+  ])("recognizes an ordinary localized download request: %s", (currentRequest) => {
+    const search = jiraExchange("jira.search", {}, { items: [{ key: "SYN-1" }] });
+    expect(reportDownloadMissing([search], currentRequest, answer)).toBe(true);
+  });
+
+  it.each([
     "Zeige ein Beispiel eines Berichts mit CSV-Download.",
     "How can I export a Jira report as CSV?",
     "Erstelle einen Jira-Bericht in Markdown, kein Download.",
     "Fasse die Jira-Vorgänge zusammen.",
+    "Wie lade ich den Statusbericht als CSV herunter?",
+    "Lade den Statusbericht nicht als CSV herunter.",
+    "Bitte den Abschlussbericht als CSV nicht exportieren.",
+    "Erstelle den Bericht in Markdown, aber bitte nicht herunterladen.",
+    "Do not export the Jira report as CSV.",
+    "Show an example of downloadable reports as CSV.",
+    "Export the reporter names as CSV.",
   ])("does not turn an explanation into a report request: %s", (currentRequest) => {
     expect(reportDownloadMissing([], currentRequest, answer)).toBe(false);
   });

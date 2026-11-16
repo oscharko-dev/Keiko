@@ -35,6 +35,8 @@ import {
   acceptChatToolReadGrant,
   waitForChatToolWriteConsent,
   refreshChatToolWriteApproval,
+  hasPendingJiraApproval,
+  hasJiraApprovalClaimContext,
   type ChatToolApprovalContext,
 } from "./chat-tool-approvals.js";
 import type {
@@ -52,7 +54,7 @@ import type {
   CatalogToolBinder,
   OfferedToolSet,
 } from "./tool-catalog/catalogToolPorts.js";
-import { gatewayMessagesForToolExchange } from "./conversation-gateway.js";
+import { gatewayMessagesForToolExchange, MAX_CONTEXT_MESSAGES } from "./conversation-gateway.js";
 import { jiraDraftCondensedRows } from "./atlassian/jiraDraftModelData.js";
 import { parseJiraDraft } from "@oscharko-dev/keiko-connectors";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -540,6 +542,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   )[] = [];
   /** The text the claim detection saw: the person's words and what the turn already held. */
   private claimContext: readonly string[] = [];
+  /** The same bounded history the UI shows, read only when an approval claim needs checking. */
+  private approvalHistory: readonly ChatMessage[] | undefined;
   /** The turn corrected a rejected call and no round has dispatched a tool call since. */
   private correctedSinceProgress = false;
   /** The first admission of a correction round follows an attempt the turn could not use. */
@@ -1386,8 +1390,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   ): boolean {
     if (kind === "report-download-missing")
       return reportDownloadMissing(this.settledExchanges, this.options.message.content, content);
-    if (kind === "approval-not-requested")
-      return unsupportedApprovalClaimCount(this.settledExchanges, content) > 0;
+    if (kind === "approval-not-requested") return this.unsupportedApprovalClaims(content) > 0;
     return kind === "announced-create"
       ? announcedCreateCount(this.settledExchanges, content, this.claimContext) > 0
       : toolCallsWrittenAsText(content) > 0;
@@ -2063,6 +2066,38 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     return [...request.messages, ...this.continuation].map((message) => message.content);
   }
 
+  private unsupportedApprovalClaims(content: string): number {
+    const { deps, message, correlationId } = this.options;
+    const chat = deps.store.findChatById(message.chatId);
+    const count = unsupportedApprovalClaimCount(
+      this.settledExchanges,
+      content,
+      Date.now(),
+      chat?.jiraPodBinding !== undefined,
+    );
+    if (count === 0 || chat === undefined) return count;
+    const history = (this.approvalHistory ??= deps.store.listMessages(
+      chat.id,
+      MAX_CONTEXT_MESSAGES * 2,
+    ));
+    const jiraContext =
+      chat.jiraPodBinding !== undefined &&
+      hasJiraApprovalClaimContext(message.content, previousUserMessage(history, message.id));
+    if (
+      unsupportedApprovalClaimCount(this.settledExchanges, content, Date.now(), jiraContext) === 0
+    )
+      return 0;
+    const exchanges = history.flatMap((stored) => stored.toolTranscript?.exchanges ?? []);
+    return hasPendingJiraApproval(
+      chat,
+      exchanges,
+      deps.atlassianActionApprovalRegistry,
+      correlationId,
+    )
+      ? 0
+      : count;
+  }
+
   private reportDownloadCorrections(
     content: string,
   ): readonly { readonly content: string; readonly log: AnswerCorrectionLog }[] {
@@ -2104,8 +2139,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         content: unsupportedIssueKeyCorrection(unsupported),
         log: { correctionKind: "unsupported-issue-key", unsupportedKeyCount: unsupported.length },
       });
+    const approvals = this.unsupportedApprovalClaims(answer.content);
     corrections.push(
-      ...claimedActionCorrections(this.settledExchanges, answer.content, context),
+      ...claimedActionCorrections(this.settledExchanges, answer.content, context, approvals),
       ...this.reportDownloadCorrections(answer.content),
     );
     const coverage = knowledgeTurnCoverage(this.settledExchanges, {
@@ -2174,6 +2210,17 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   }
 }
 
+function previousUserMessage(
+  history: readonly ChatMessage[],
+  currentId: string,
+): ChatMessage | undefined {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (message?.role === "user" && message.id !== currentId) return message;
+  }
+  return undefined;
+}
+
 /**
  * What an answer claims that its own turn does not bear out (#4355): a created issue no create call
  * made, a tool call written as text, and internal report result keys printed as if they were prose.
@@ -2182,10 +2229,10 @@ function claimedActionCorrections(
   exchanges: readonly ChatToolExchange[],
   answer: string,
   context: readonly string[],
+  approvals: number,
 ): { readonly content: string; readonly log: AnswerCorrectionLog }[] {
   const announced = announcedCreateCount(exchanges, answer, context);
   const writtenCalls = toolCallsWrittenAsText(answer);
-  const approvals = unsupportedApprovalClaimCount(exchanges, answer);
   const rawKeys = rawReportKeys(exchanges, answer);
   return [
     ...(announced === 0

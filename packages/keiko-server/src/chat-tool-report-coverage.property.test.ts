@@ -12,6 +12,40 @@ const REQUEST = "Create a Jira report for download as CSV.";
 const FENCE = "```csv\nkey\nSYN-1\n```";
 
 describe("Jira report download fence boundaries", () => {
+  it("recognizes localized request forms without confusing examples or negated downloads", async () => {
+    await checkProperty({
+      name: "localized report download requests",
+      runs: 64,
+      generate: (random) => ({
+        report: random.pick([
+          "Bericht",
+          "Statusbericht",
+          "Abschlussbericht",
+          "Übergabebericht",
+          "Jira-Bericht",
+        ]),
+        format: random.pick(["CSV", "Markdown", "Markdown und CSV"]),
+        action: random.pick(["separated", "export", "plural"]),
+      }),
+      property: ({ report, format, action }) => {
+        const request =
+          action === "separated"
+            ? `Lade den ${report} für SYN-1 als ${format} herunter.`
+            : action === "export"
+              ? `Exportiere den ${report} für SYN-1 als ${format}.`
+              : `Give me downloadable reports for SYN-1 as ${format}.`;
+        expect(reportDownloadMissing([], request, FENCE)).toBe(true);
+        expect(reportDownloadMissing([], `Example: ${request}`, FENCE)).toBe(false);
+        expect(
+          reportDownloadMissing([], `Lade den ${report} nicht als ${format} herunter.`, FENCE),
+        ).toBe(false);
+        expect(
+          reportDownloadMissing([], request, "The report export is unavailable.\n" + FENCE),
+        ).toBe(false);
+      },
+    });
+  });
+
   it("preserves fenced alternatives and explicit limitations across line endings", async () => {
     const name = "report download fences retain their line boundary";
     const settings = propertySettings({ name });
