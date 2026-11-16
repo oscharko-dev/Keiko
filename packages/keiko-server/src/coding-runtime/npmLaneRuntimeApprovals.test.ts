@@ -56,7 +56,7 @@ describe("npm-lane runtime approvals", () => {
       adapterVersion: "2",
       executableTreeSha256: "90c59877d8fd7b0d25279bb926194f6cc1a356421d380d54eeb29646ef32046e",
       licenseSha256: "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
-      protocolSchemaSha256: "92cc33ef9a107c8af6295e6fcbdf6d339d4374955910924456bd91a76844a5db",
+      protocolSchemaSha256: approvedRuntime().protocolSchema.sha256,
       sbomSha256: "320b03dca2e27a8d9afc6a6bf2d1b4b903f6c5340f25202f20aa7dd104573493",
       runtimeSupervisor: {
         sha256: "888130331e49b71d3c29f81cdb0dbae97f4c062d9eea4914a576ee06a8bada52",
