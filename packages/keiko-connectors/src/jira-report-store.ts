@@ -12,10 +12,11 @@ import {
 import { trimOwnedBytes } from "./jira-store-bounds.js";
 
 /**
- * Reports live in memory only: a report in progress resumes in the next tool call, and a finished
- * report is what the export reads. Idle reports expire, one owner holds a bounded number of
- * reports (its oldest go first), and beyond the shared byte budget the owner holding the most is
- * trimmed first, so one Chat can never push another Chat's reports out. Nothing is persisted.
+ * Report sessions live in memory. Tool calls continue an in-progress session and can export
+ * a finished session. Idle sessions expire. Limits trim each owner's oldest sessions first,
+ * and the shared byte budget trims the owner holding the most.
+ * Separately, the server retains bounded, owner-bound finished downloads in
+ * `jira_report_exports` so the Chat card can download them after restart.
  */
 export interface JiraReportStore {
   readonly start: (
