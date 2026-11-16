@@ -378,7 +378,8 @@ function assembleComposition(
     get facadePurpose(): CodingRuntimePurpose | undefined {
       return parts.facadePurpose();
     },
-    sidecarDeps: (base): UiHandlerDeps => reviewSidecarDeps(base, controlPlane, gatewayEvidence),
+    sidecarDeps: (base): UiHandlerDeps =>
+      reviewSidecarDeps(base, controlPlane, gatewayEvidence, parts.readiness),
     runEffort: (runId) => parts.host.runEffort?.read(runId),
     close: (): void => {
       snapshots.db.close();
@@ -395,6 +396,7 @@ function reviewSidecarDeps(
   base: UiHandlerDeps,
   controlPlane: CodingRuntimeControlPlane,
   gatewayEvidence: NonNullable<UiHandlerDeps["codingSidecarGatewayEvidenceAggregator"]>,
+  readiness: OpenCodeGatewayReadinessRegistry,
 ): UiHandlerDeps {
   return {
     ...base,
@@ -402,7 +404,11 @@ function reviewSidecarDeps(
     codingRuntimeEventHub: controlPlane.eventHub,
     codingSidecarGatewayEvidenceAggregator: gatewayEvidence,
     runtimeCapabilityAuthenticator: controlPlane.runtimeCapabilityAuthenticator,
-    openCodeGatewayReadinessRegistry: controlPlane.openCodeGatewayReadinessRegistry,
+    // The instance's own registry, the one its activation and its runtime host were composed with.
+    // The control plane's type names only the handshake methods; the sidecar route also matches a
+    // run's continuation route on it, as it does on the coding instance's registry.
+    openCodeGatewayReadinessRegistry:
+      controlPlane.openCodeGatewayReadinessRegistry === undefined ? undefined : readiness,
     toolFacadeBridge: controlPlane.toolFacadeBridge,
     codingSidecarGatewayCancellationRegistry: controlPlane.cancellationRegistry,
   };

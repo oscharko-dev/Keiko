@@ -48,9 +48,17 @@ const REVIEW_RUNTIME_START_FAILURES = [
   "payload-missing",
   "payload-unapproved",
   "payload-tampered",
+  "runtime-outdated",
   "secure-read-unavailable",
   "loopback-unavailable",
   "runtime-unqualified",
+  "gateway-service-absent",
+  "gateway-service-stopped",
+  "gateway-service-stale",
+  "gateway-service-unknown",
+  "gateway-service-unqualified",
+  "install-volume-not-local",
+  "install-volume-unverified",
   "host-unavailable",
 ] as const;
 export type ReviewRuntimeStartFailure = (typeof REVIEW_RUNTIME_START_FAILURES)[number];
