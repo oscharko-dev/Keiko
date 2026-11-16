@@ -15,6 +15,7 @@ import type {
   RuntimeCommandSource,
 } from "@oscharko-dev/keiko-contracts";
 import { RUNTIME_CAPABILITY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/runtime-capabilities";
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 import {
   isWithinWorkspace,
   readWorkspaceFile,
@@ -281,10 +282,12 @@ export class PathHostExecutableProbe implements HostExecutableProbe {
     if (hasUnsafeExecutableName(executable)) {
       return { state: "policy-blocked", unavailableReason: "policy-blocked" };
     }
+    const pathValue = environmentVariableValue(this.env, "PATH", this.platform) ?? "";
+    const pathExtensions = environmentVariableValue(this.env, "PATHEXT", this.platform);
     const cacheKey = [
       this.platform,
-      this.env.PATH ?? "",
-      this.env.PATHEXT ?? "",
+      pathValue,
+      pathExtensions ?? "",
       workspaceRoot ?? "",
       executable,
     ].join("\0");
@@ -293,8 +296,7 @@ export class PathHostExecutableProbe implements HostExecutableProbe {
     if (cached !== undefined && cached.expiresAt > now) {
       return cached.result;
     }
-    const pathValue = this.env.PATH ?? "";
-    const extensions = executableExtensions(this.platform, this.env.PATHEXT);
+    const extensions = executableExtensions(this.platform, pathExtensions);
     let sawPermissionDenied = false;
     let sawUnsafePath = false;
     let result: HostExecutableProbeResult | undefined;

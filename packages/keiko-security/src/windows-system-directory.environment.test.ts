@@ -1,10 +1,43 @@
 import { describe, expect, it, vi } from "vitest";
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 import {
   resolveWindowsSystemDirectory,
   WindowsSystemDirectoryError,
 } from "./windows-system-directory.js";
 
 describe("Windows system root environment aliases (#4408)", () => {
+  it("keeps the dependency-free bootstrap selector in parity with generated contracts aliases", () => {
+    function aliases(name: string): readonly string[] {
+      let prefixes = [""];
+      for (const letter of name) {
+        prefixes = prefixes.flatMap((prefix) => [
+          prefix + letter.toLowerCase(),
+          prefix + letter.toUpperCase(),
+        ]);
+      }
+      return prefixes;
+    }
+    for (const name of ["SystemRoot", "Windir"]) {
+      for (const alias of aliases(name)) {
+        const entries: readonly (readonly [string, string | undefined])[] = [
+          [alias, String.raw`D:\Windows`],
+          [name.toUpperCase(), undefined],
+          ["windir", String.raw`E:\Windows`],
+        ];
+        for (const input of [entries, [...entries].reverse()]) {
+          const env = Object.fromEntries(input);
+          const expected =
+            environmentVariableValue(env, "SystemRoot", "win32") ??
+            environmentVariableValue(env, "WINDIR", "win32") ??
+            String.raw`C:\Windows`;
+          const identity = vi.fn(() => true);
+          expect(resolveWindowsSystemDirectory(env, identity)).toBe(expected);
+          expect(identity).toHaveBeenCalledWith(expected, String.raw`\\?\GLOBALROOT\SystemRoot`);
+        }
+      }
+    }
+  });
+
   it.each(["SYSTEMROOT", "systemroot", "SystemRoot"])("validates the selected %s value", (name) => {
     const identity = vi.fn(() => true);
     expect(resolveWindowsSystemDirectory({ [name]: String.raw`D:\Windows` }, identity)).toBe(

@@ -173,10 +173,11 @@ export {
   hasCriticalInjectionSignal,
 } from "./promptInjection.js";
 
+export { environmentVariableNames, environmentVariableValue } from "./process-environment.js";
+
 // The ONE trusted Windows system-directory decision, shared with keiko-tools (PR #3354 review):
 // keiko-tools depends on keiko-security, never the reverse, so this is the only layer both the
 // cscript/powershell helpers here and the cmd.exe/taskkill.exe resolution there can reach.
-export { environmentVariableNames, environmentVariableValue } from "./process-environment.js";
 export {
   DEFAULT_WINDOWS_SYSTEM_ROOT,
   WINDOWS_CMD_METACHARACTER_SOURCE,

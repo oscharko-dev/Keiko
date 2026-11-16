@@ -4,7 +4,10 @@
 // pinned down. Only node:path (a pure string utility) is imported here.
 
 import { basename } from "node:path";
-import { environmentVariableNames, environmentVariableValue } from "@oscharko-dev/keiko-security";
+import {
+  environmentVariableNames,
+  environmentVariableValue,
+} from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 import type { CommandRule, SandboxPolicy } from "./types.js";
 
 // A value shorter than this is too generic to scrub safely — redacting it would over-redact

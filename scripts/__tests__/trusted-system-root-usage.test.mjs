@@ -193,6 +193,129 @@ function joinsAPathFromRawSystemRoot(text) {
   return sourceJoinsRawSystemRoot(sourceFile);
 }
 
+const COPIED_ENVIRONMENT_NAMES = new Set(["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR"]);
+const CANONICAL_ENVIRONMENT_SPELLINGS = new Set([
+  "PATH",
+  "Path",
+  "PATHEXT",
+  "Pathext",
+  "SYSTEMROOT",
+  "SystemRoot",
+  "WINDIR",
+  "Windir",
+]);
+
+// These two read the product's own closed output, never a parent environment. The debug capsule
+// rejects every non-canonical key before comparing its fixed PATH; Git supplies an empty canonical
+// PATH only after allowlisted projection. Keep exemptions at the exact expression, not a whole file.
+const CANONICAL_ENVIRONMENT_READS = new Map([
+  [join("keiko-server", "src", "editor", "dap", "debugLaunchPlan.ts"), "context.environment.PATH"],
+  [join("keiko-git", "src", "env.ts"), "env.PATH"],
+]);
+
+function isLiveProcessEnvironment(node) {
+  return (
+    ts.isPropertyAccessExpression(node) &&
+    node.name.text === "env" &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === "process"
+  );
+}
+
+function isEnvironmentProperty(name, receiver) {
+  if (name === undefined || !COPIED_ENVIRONMENT_NAMES.has(name.toUpperCase())) return false;
+  // Ordinary file.path and a validated system.systemRoot are not raw environment variables.
+  // Lowercase/mixed-case reads from an env receiver still are.
+  return (
+    CANONICAL_ENVIRONMENT_SPELLINGS.has(name) ||
+    /(?:^|\.)[a-z]*env(?:ironment)?$/iu.test(receiver.getText())
+  );
+}
+
+function copiedEnvironmentMemberRead(node) {
+  if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return undefined;
+  if (
+    !isEnvironmentProperty(rawSystemRootPropertyName(node), node.expression) ||
+    isLiveProcessEnvironment(node.expression)
+  )
+    return undefined;
+  const parent = node.parent;
+  const isWrite =
+    ts.isBinaryExpression(parent) &&
+    parent.left === node &&
+    parent.operatorToken.kind === ts.SyntaxKind.EqualsToken;
+  return isWrite ? undefined : node.getText();
+}
+
+function copiedEnvironmentDestructuredReads(node) {
+  if (
+    !ts.isVariableDeclaration(node) ||
+    !ts.isObjectBindingPattern(node.name) ||
+    node.initializer === undefined ||
+    isLiveProcessEnvironment(node.initializer)
+  )
+    return [];
+  return node.name.elements.flatMap((element) => {
+    const property = element.propertyName ?? element.name;
+    const key =
+      ts.isIdentifier(property) || ts.isStringLiteral(property) ? property.text : undefined;
+    return isEnvironmentProperty(key, node.initializer) ? [element.getText()] : [];
+  });
+}
+
+function rawCopiedEnvironmentReads(text) {
+  const source = ts.createSourceFile("environment-fixture.ts", text, ts.ScriptTarget.Latest, true);
+  const reads = [];
+  function visit(node) {
+    const member = copiedEnvironmentMemberRead(node);
+    if (member !== undefined) reads.push(member);
+    reads.push(...copiedEnvironmentDestructuredReads(node));
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  return reads;
+}
+
+describe("copied Windows environment lookup (#4408 whole-class pin)", () => {
+  it("uses the contracts selector for parent environment PATH/PATHEXT/SystemRoot/WINDIR reads", () => {
+    const offenders = [];
+    for (const path of sourceFiles()) {
+      const relative = path.slice(PACKAGES_ROOT.length + 1);
+      const text = readFileSync(path, "utf8");
+      if (!/PATH|SystemRoot|WINDIR|systemroot|\.path\b/iu.test(text)) continue;
+      const exemption = CANONICAL_ENVIRONMENT_READS.get(relative);
+      if (rawCopiedEnvironmentReads(text).some((read) => read !== exemption))
+        offenders.push(relative);
+    }
+    expect(offenders).toEqual([]);
+  }, 60_000);
+
+  it.each([
+    "env.PATH",
+    "deps.env?.PATHEXT",
+    'env["SystemRoot"]',
+    'input.env?.["WINDIR"]',
+    "processEnv.Path",
+    "env.path",
+    "input.env.systemRoot",
+    "const { PATH: path } = env",
+    "const { PATHEXT } = deps.env",
+  ])("detects copied reads: %s", (source) => {
+    expect(rawCopiedEnvironmentReads(source)).not.toEqual([]);
+  });
+
+  it.each([
+    "process.env.PATH",
+    "const { PATH } = process.env",
+    "file.path",
+    "system.systemRoot",
+    "env.PATH = selected",
+    'environmentVariableValue(env, "PATH", platform)',
+  ])("preserves live reads, ordinary fields and projected writes: %s", (source) => {
+    expect(rawCopiedEnvironmentReads(source)).toEqual([]);
+  });
+});
+
 describe("trusted Windows system-root usage (whole-class pin)", () => {
   it("no product file joins a PATH from a raw SystemRoot/WINDIR read", () => {
     const offenders = [];

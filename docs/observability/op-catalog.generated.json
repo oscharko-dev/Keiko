@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1323dd0e700a9c16c981290121c4e0ad3a5e0c60840729d48f6382652758fa65",
+    "catalogDigest": "85f576f76d02f4752c461d9405e146bdd85a6f140df289051a90b68f3c42fbf2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -5044,8 +5044,8 @@
         "failureClasses": ["cli-install-layout-normalization"],
         "proofIds": ["cli.install-layout.normalized.before-support-snapshot"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/install-layout.ts:33",
-        "emitterSites": ["packages/keiko-cli/src/install-layout.ts:108"]
+        "registrationSite": "packages/keiko-cli/src/install-layout.ts:34",
+        "emitterSites": ["packages/keiko-cli/src/install-layout.ts:109"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15814,8 +15814,8 @@
         "failureClasses": ["coding-runtime-ripgrep-unavailable"],
         "proofIds": ["coding-runtime.ripgrep.resolved.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:51",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:402"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:55",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:416"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37621,8 +37621,8 @@
         "failureClasses": ["lsp-java-version-probe"],
         "proofIds": ["lsp.java.version-probe.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:46",
-        "emitterSites": ["packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:419"]
+        "registrationSite": "packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:47",
+        "emitterSites": ["packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:420"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -118526,7 +118526,7 @@
     {
       "op": "cli.install-layout.normalized",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/install-layout.ts:36",
+      "site": "packages/keiko-cli/src/install-layout.ts:37",
       "package": "keiko-cli"
     },
     {
@@ -122077,7 +122077,7 @@
     {
       "op": "coding-runtime.ripgrep.resolved",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:54",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:58",
       "package": "keiko-server"
     },
     {
@@ -123938,7 +123938,7 @@
     {
       "op": "lsp.java.version-probe.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:49",
+      "site": "packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:50",
       "package": "keiko-server"
     },
     {
@@ -124029,14 +124029,14 @@
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcpNativeProcessOwner.ts:27",
+      "site": "packages/keiko-server/src/mcpNativeProcessOwner.ts:28",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcpNativeProcessOwner.ts:68",
+      "site": "packages/keiko-server/src/mcpNativeProcessOwner.ts:69",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

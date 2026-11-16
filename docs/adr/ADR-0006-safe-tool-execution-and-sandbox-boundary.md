@@ -143,9 +143,14 @@ plain copies of `process.env` (#4408). Duplicate casing variants use Node's lexi
 key, so executable lookup and the child environment select the same value; no ambient PATH fallback
 is added. POSIX names remain case-sensitive. Pinned values replace inherited aliases. The allowlist
 is unchanged, and credential scrubbing includes every casing variant, including shadowed values.
-The same contracts-owned lookup (re-exported by security) supplies the trusted Windows system-directory decision and the
-termination reservation's captured root. An explicitly malformed alias therefore fails the existing
-shape and OS-identity checks instead of falling back to another Windows directory.
+The contracts-owned lookup (re-exported by security) supplies executable discovery, child projection,
+and the termination reservation's captured root. The trusted Windows system-directory owner also
+runs during dependency-free bootstrap, so it retains its small local implementation of the same
+selection rule. Generated casing and undefined-first tests bind that bootstrap copy to the contracts
+owner. An explicitly malformed alias still fails the existing shape and OS-identity checks instead
+of falling back to another Windows directory. Host capability and sandbox probes, Editor language
+tool discovery, Git resolution, and the native MCP probe use the same contracts lookup; native
+Ripgrep launch filters the selected inherited PATH and removes its shadow aliases before pinning it.
 The managed-worktree adapter reuses this boundary and preserves command failures as causes for the
 existing body-free Activity Log evidence; environment values and command error messages are not
 added to that evidence.

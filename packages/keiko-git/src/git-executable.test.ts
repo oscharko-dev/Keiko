@@ -30,6 +30,38 @@ afterEach(() => {
   for (const root of cleanup.splice(0)) rmSync(root, { force: true, recursive: true });
 });
 
+describe("Windows copied environment aliases (#4408)", () => {
+  it("resolves the selected Path while retaining undefined-first refusal", () => {
+    const bin = temporary("keiko-git-alias-bin-");
+    const executable = join(bin, "git.exe");
+    writeFileSync(executable, "fixture", { mode: 0o755 });
+    expect(resolveGitExecutable({ Path: bin }, workspace, "win32")).toEqual({
+      ok: true,
+      path: executable,
+    });
+    expect(resolveGitExecutable({ Path: bin, PATH: undefined }, workspace, "win32")).toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+    expect(resolveGitExecutable({ Path: bin }, workspace, "darwin")).toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+  });
+
+  it("uses the selected PATHEXT alias only for refused script diagnostics", () => {
+    writeFileSync(join(workspace, "git.cmd"), "fixture", { mode: 0o755 });
+    expect(resolveGitExecutable({ PATH: workspace, Pathext: ".EXE" }, workspace, "win32")).toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+    expect(resolveGitExecutable({ Path: workspace, Pathext: ".CMD" }, workspace, "win32")).toEqual({
+      ok: false,
+      reason: "untrusted-location",
+    });
+  });
+});
+
 describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
   function writeGit(bin: string): string {
     const executable = join(bin, "git");

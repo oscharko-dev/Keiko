@@ -189,6 +189,29 @@ describe("editor process executable resolution", () => {
     ).toThrow(EditorProcessHardeningError);
   });
 
+  it("matches the Windows child alias order including undefined entries (#4408)", () => {
+    const bin = temporary("keiko-shared-win-alias-bin-");
+    const missing = temporary("keiko-shared-win-alias-missing-");
+    const root = workspace(temporary("keiko-shared-win-alias-ws-"));
+    const expected = executable(bin, "alias-tool.CUSTOM");
+    expect(
+      resolveExecutableOutsideWorkspace(
+        "alias-tool",
+        root,
+        { Path: bin, Pathext: ".CUSTOM" },
+        "win32",
+      ),
+    ).toBe(realpathSync(expected));
+    for (const env of [
+      { path: bin, Path: missing, Pathext: ".CUSTOM" },
+      { Path: bin, PATH: undefined, Pathext: ".CUSTOM" },
+    ]) {
+      expect(() => resolveExecutableOutsideWorkspace("alias-tool", root, env, "win32")).toThrow(
+        EditorProcessHardeningError,
+      );
+    }
+  });
+
   it("skips an existing non-executable candidate", () => {
     const first = temporary("keiko-shared-nonexec-");
     const second = temporary("keiko-shared-exec-");

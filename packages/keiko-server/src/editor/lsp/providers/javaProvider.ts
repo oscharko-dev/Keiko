@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { performance } from "node:perf_hooks";
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 
 import type {
   LanguageServiceOperation,
@@ -653,7 +654,10 @@ function isolatedJavaCommand(
     const java = (securityDeps.resolveJava ?? resolveExecutableOutsideWorkspace)(
       "java",
       input.workspace,
-      { PATH: input.env.PATH, PATHEXT: input.processEnv.PATHEXT },
+      {
+        PATH: environmentVariableValue(input.env, "PATH", platform),
+        PATHEXT: environmentVariableValue(input.processEnv, "PATHEXT", platform),
+      },
     );
     const discovered = securityDeps.availability ?? nativeBackends(input, platform);
     const availability = { ...discovered, docker: false, podman: false };

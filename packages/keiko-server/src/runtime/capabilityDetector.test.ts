@@ -372,6 +372,26 @@ describe("detectRuntimeCapabilities", () => {
     expect(probe.probe("win-tool", undefined)).toEqual({ state: "available" });
   });
 
+  it("selects copied Windows environment aliases in probing and its cache (#4408)", async () => {
+    const missing = await makeTempDir("keiko-runtime-alias-missing-");
+    const bin = await makeTempDir("keiko-runtime-alias-bin-");
+    await makeExecutable(bin, "alias-tool.CUSTOM");
+    const env = { Path: missing, Pathext: ".CUSTOM" };
+    const probe = new PathHostExecutableProbe(env, "win32");
+    expect(probe.probe("alias-tool", undefined).state).toBe("missing");
+    env.Path = bin;
+    expect(probe.probe("alias-tool", undefined)).toEqual({ state: "available" });
+    expect(
+      new PathHostExecutableProbe(
+        { PATH: undefined, Path: bin, Pathext: ".CUSTOM" },
+        "win32",
+      ).probe("alias-tool", undefined).state,
+    ).toBe("missing");
+    expect(new PathHostExecutableProbe(env, "darwin").probe("alias-tool", undefined).state).toBe(
+      "missing",
+    );
+  });
+
   it("reports missing package manifests and skips workspace discovery after the deadline", () => {
     const missingPackageFs: WorkspaceFs = {
       readFileUtf8: (): string => {
