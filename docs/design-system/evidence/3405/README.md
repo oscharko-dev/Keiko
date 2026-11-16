@@ -751,3 +751,10 @@ updater cases passed again in the Linux arm64 gates container with the locked de
 Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The freshness gate passed. The three
 producer-generated records bind the updated source digests and generation time. The fourteen
 captures retain the typography of their original renderer.
+
+### Gateway credential guidance (#4441)
+
+The English and German gateway credential guidance changes the optional catalogs. The original
+nine updater cases passed in the Linux arm64 gates container with Node 26.13.1 and
+`KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three records use that run's source digests and generation
+time where recorded. The captures retain their original typography.

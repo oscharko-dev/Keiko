@@ -1243,12 +1243,17 @@ function GatewayBaseUrlField({
   );
 }
 
+interface GatewayApiKeyFieldProps extends GatewayPreservableFieldProps {
+  readonly secretsNoteId: string;
+}
+
 function GatewayApiKeyField({
   preserveExisting,
   value,
   disabled,
   onChange,
-}: GatewayPreservableFieldProps): ReactNode {
+  secretsNoteId,
+}: GatewayApiKeyFieldProps): ReactNode {
   const t = useGatewaySetupTranslate();
   return (
     <GatewayFieldShell
@@ -1266,6 +1271,7 @@ function GatewayApiKeyField({
         className="gw-input mono"
         type="password"
         value={value}
+        aria-describedby={secretsNoteId}
         placeholder={
           preserveExisting
             ? t("gatewaySetup.ui.apiTokenReplacePlaceholder")
@@ -1490,6 +1496,7 @@ function GatewayEndpointProtocolFields({
 
 interface GatewayFieldsSectionProps {
   readonly t: GatewaySetupTranslate;
+  readonly secretsNoteId: string;
   readonly preserveExisting: boolean;
   readonly busy: boolean;
   readonly success: string | undefined;
@@ -1532,6 +1539,7 @@ function GatewayFieldsSection(props: GatewayFieldsSectionProps): ReactNode {
         value={props.apiKey}
         disabled={disabled}
         onChange={props.setApiKey}
+        secretsNoteId={props.secretsNoteId}
       />
       <GatewayApiKeyHeaderField
         preserveExisting={props.preserveExisting}
@@ -2738,6 +2746,7 @@ export function GatewaySetupDialog({
   const voiceEndpointStyleLabelId = useId();
   const endpointStyleLabelId = useId();
   const voiceRealtimeAuthModeLabelId = useId();
+  const secretsNoteId = useId();
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const figmaAccessTokenRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -3423,6 +3432,7 @@ export function GatewaySetupDialog({
   const gatewayFields = (
     <GatewayFieldsSection
       t={t}
+      secretsNoteId={secretsNoteId}
       preserveExisting={preserveExisting}
       busy={busy}
       success={success}
@@ -3568,7 +3578,9 @@ export function GatewaySetupDialog({
             figmaAccessTokenRef={figmaAccessTokenRef}
           />
 
-          <div className="gw-note">{t("gatewaySetup.ui.secretsNote")}</div>
+          <div className="gw-note" id={secretsNoteId}>
+            {t("gatewaySetup.ui.secretsNote")}
+          </div>
           {/* role=alert/status: the test result arrives after a long async wait
               while all controls are disabled — without a live region screen
               readers never hear it (audit C084). */}

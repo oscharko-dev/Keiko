@@ -3846,7 +3846,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gatewaySetup.ui.testing": "Testing credentials…",
   "gatewaySetup.ui.testAndSave": "Test & save",
   "gatewaySetup.ui.secretsNote":
-    "Stored secrets stay local and are never returned to the browser. Supported API-key headers: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
+    "Stored secrets stay local and are never returned to the browser. If your browser offers to save these credentials as a password, decline that separate prompt. Supported API-key headers: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
   "gatewaySetup.ui.copy.titleUpdate": "Update Keiko credentials",
   "gatewaySetup.ui.copy.titleSetup": "Connect Keiko to your internal LLMs",
   "gatewaySetup.ui.copy.descriptionUpdate":

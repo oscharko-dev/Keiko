@@ -116,6 +116,46 @@ describe("GatewaySetupDialog", () => {
     expect(setupGateway).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "en",
+      false,
+      /If your browser offers to save these credentials as a password, decline that separate prompt\./,
+    ],
+    [
+      "de",
+      true,
+      /Wenn dein Browser diese Zugangsdaten als Passwort speichern möchte, lehne diese separate Browserabfrage ab\./,
+    ],
+  ] as const)(
+    "describes separate browser storage for the gateway token (%s, update=%s)",
+    async (locale, preserveExisting, guidance) => {
+      await loadLocaleMessages(locale);
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      render(
+        <I18nProvider>
+          <GatewaySetupDialog preserveExisting={preserveExisting} />
+        </I18nProvider>,
+      );
+      const token = screen.getByLabelText(/^api[- ]token/i);
+      const note = await screen.findByText(guidance);
+      expect(note).toBeVisible();
+      expect(token).toHaveAttribute("type", "password");
+      expect(token).toHaveAttribute("autocomplete", "off");
+      expect(token).toHaveAccessibleDescription(guidance);
+      expect(note.id).not.toBe("");
+      expect(token).toHaveAttribute("aria-describedby", note.id);
+      expect(
+        Array.from(document.querySelectorAll("input")).filter(
+          (input) => input.getAttribute("aria-describedby") === note.id,
+        ),
+      ).toEqual([token]);
+      expect(
+        screen.getByRole("button", { name: /test & save|prüfen & speichern/i }),
+      ).toHaveAttribute("aria-describedby", "gw-submit-requirements");
+    },
+  );
+
   // GEN-UI-FOCUS-015: the Tab trap must skip fields hidden inside a collapsed
   // <details> ("Replace model gateway settings" / "Update voice dictation
   // credentials"), otherwise the trap's first/last boundary can be an invisible
@@ -1481,15 +1521,15 @@ describe("GatewaySetupDialog", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/verified figma access token/i);
   });
 
-  it("announces a failed test via role=alert, keeps the code as a secondary line, and refocuses Base URL (C084/C186/C191)", async () => {
-    vi.mocked(setupGateway).mockRejectedValueOnce(
-      new ApiError("GATEWAY_PROBE_FAILED", "The gateway did not respond.", 502),
-    );
+  it("announces a failed test, refocuses Base URL and preserves masked keyboard retry (C084/C186/C191)", async () => {
+    const failure = new ApiError("GATEWAY_PROBE_FAILED", "The gateway did not respond.", 502);
+    vi.mocked(setupGateway).mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
     render(<GatewaySetupDialog />);
 
     await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
-    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
-    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+    const token = screen.getByLabelText(/api token/i);
+    await userEvent.type(token, "example-token");
+    await userEvent.keyboard("{Enter}");
 
     const alert = await screen.findByRole("alert");
     // Human message first — never a raw "CODE: message" prefix (C191) …
@@ -1499,6 +1539,14 @@ describe("GatewaySetupDialog", () => {
     expect(alert).toHaveTextContent("GATEWAY_PROBE_FAILED");
 
     // C186: after the failure the controls re-enable and focus returns to Base URL.
+    await waitFor(() => expect(screen.getByLabelText(/base url/i)).toHaveFocus());
+    expect(setupGateway).toHaveBeenCalledTimes(1);
+    expect(token).toHaveValue("example-token");
+    expect(token).toHaveAttribute("type", "password");
+    expect(token).toBeEnabled();
+    await userEvent.click(token);
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByLabelText(/base url/i)).toHaveFocus());
   });
 

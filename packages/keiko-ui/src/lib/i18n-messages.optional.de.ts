@@ -4055,7 +4055,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gatewaySetup.ui.testing": "Zugangsdaten werden geprüft…",
   "gatewaySetup.ui.testAndSave": "Prüfen & speichern",
   "gatewaySetup.ui.secretsNote":
-    "Gespeicherte Geheimnisse bleiben lokal und werden nie an den Browser zurückgegeben. Unterstützte API-Key-Header: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
+    "Gespeicherte Geheimnisse bleiben lokal und werden nie an den Browser zurückgegeben. Wenn dein Browser diese Zugangsdaten als Passwort speichern möchte, lehne diese separate Browserabfrage ab. Unterstützte API-Key-Header: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
   "gatewaySetup.ui.copy.titleUpdate": "Keiko-Zugangsdaten aktualisieren",
   "gatewaySetup.ui.copy.titleSetup": "Keiko mit Ihren internen LLMs verbinden",
   "gatewaySetup.ui.copy.descriptionUpdate":
