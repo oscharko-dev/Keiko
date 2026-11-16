@@ -12,7 +12,7 @@
   min-height: 0;
 }
 
-.cmpWorkspaceViewport .cmpWorkspacePalette {
+.cmpWorkspaceViewport [aria-labelledby="palette-title"] {
   bottom: 14px;
   max-height: calc(100% - 28px);
 }
