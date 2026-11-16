@@ -405,7 +405,8 @@ const GATEWAY_TOOL_CATALOG_REPAIR_OPERATION = defineActivityLogOperation({
     invalidPathCount: { type: "integer", dataClass: "count", required: false },
     unexpectedPropertyCount: { type: "integer", dataClass: "count", required: false },
     droppedPathCount: { type: "integer", dataClass: "count", required: false },
-    // Listed paths the correction describes from the offered schema (type, bounds, description).
+    // Listed paths whose closed-dialect schema gives a description (#4130); type and bounds are in
+    // the rule sentence and are not counted. Before the merge of dev 1.5.0 it counted those as well.
     describedPathCount: { type: "integer", dataClass: "count", required: false },
     promptTokens: { type: "integer", dataClass: "count", required: true },
     maxPromptTokens: { type: "integer", dataClass: "count", required: true },

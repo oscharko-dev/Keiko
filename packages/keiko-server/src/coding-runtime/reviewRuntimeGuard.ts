@@ -107,8 +107,9 @@ export const REVIEW_RUN_READ_ACTIONS: ReadonlySet<CodingToolAction> = new Set<Co
  * One Reviewer session's read allowance (ADR-0184 D1, Issue #4130). The session's task already
  * carries every changed hunk; the read tools only fetch surrounding code. A session that keeps
  * reading resends its whole conversation with every call and runs out of time before it reports
- * (and, while a session had a prompt allowance, ran out of that), so the tool facade answers at most `maxCalls` read, discover and search calls and
- * refuses the rest with one fixed instruction to report and end.
+ * (and, while a session had a prompt allowance, ran out of that), so the tool facade answers at
+ * most `maxCalls` read, discover and search calls and refuses the rest with one fixed instruction
+ * to report and end.
  */
 export interface ReviewReadAllowance {
   /** Counts one read call; `false` once the allowance is used up, and the call must not run. */

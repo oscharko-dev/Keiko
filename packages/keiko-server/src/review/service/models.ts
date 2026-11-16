@@ -43,7 +43,7 @@ export async function ensureReviewRoleModelsReady(
 ): Promise<void> {
   if (port.ensureReady === undefined) return;
   for (const modelId of new Set([models.reviewerModelId, models.counterCheckerModelId])) {
-    await port.ensureReady(modelId, correlationId); // NOSONAR typescript:S9382 -- a readiness check is a model call: the two role models are verified one after the other
+    await port.ensureReady(modelId, correlationId); // NOSONAR typescript:S9382 -- a readiness check can be a model call: the two role models are verified one after the other, never at once on a single-slot provider
   }
 }
 

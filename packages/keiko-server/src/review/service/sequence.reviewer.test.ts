@@ -132,7 +132,6 @@ function runPhase(options: PhaseOptions): Promise<Phase> {
     activityLog: capture.sink,
     events: new ReviewRunEventHub(now),
     now,
-    counterCheckRunPromptTokens: 1_000,
   } as unknown as ReviewSequenceDeps;
   const state = newReviewRunState();
   state.target = { baseSha: "b".repeat(40), headSha: "a".repeat(40), diffBaseSha: "b".repeat(40) };

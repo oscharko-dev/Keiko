@@ -263,7 +263,7 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
   public async dispose(correlationId?: string): Promise<void> {
     for (const key of this.instances.keys()) await this.stop(key, "shutdown", correlationId); // NOSONAR typescript:S9382 -- one shutdown at a time, in map order: each stop takes its own entry out of the map and writes its stop line
     for (const [key, live] of this.quarantined) {
-      await this.stopLive(key, live, "shutdown", correlationId); // NOSONAR typescript:S9382 -- quarantined instances shut down after the serving ones, one at a time, each with its own stop line
+      await this.stopLive(key, live, "shutdown", correlationId); // NOSONAR typescript:S9382 -- each stop takes its own entry out of the map this loop walks and ends one runtime process; one at a time keeps the stop lines in shutdown order
     }
   }
 
