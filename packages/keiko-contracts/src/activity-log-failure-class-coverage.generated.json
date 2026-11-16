@@ -3766,15 +3766,19 @@
       "failureClass": "chat-admission",
       "requirementContract": "chat-admission",
       "productSurfaces": ["keiko-server"],
-      "lifecycleTransitions": ["end", "failure"],
+      "lifecycleTransitions": ["end", "failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": [],
+        "state": ["chat.creation.opened"],
         "end": ["chat.scope.update"],
         "failure": ["chat.creation.rejected", "chat.regeneration.rejected", "chat.send.rejected"],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "chat.creation.opened",
+          "mode": "correlation"
+        },
         {
           "op": "chat.creation.rejected",
           "mode": "correlation"
@@ -3793,9 +3797,39 @@
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["chat.scope.update"],
+      "resourceSignals": ["chat.creation.opened", "chat.scope.update"],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "chat.creation.opened",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "modelIdDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "readinessObservation",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.creation.opened.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "chat.creation.rejected",
           "owner": "keiko-server",

@@ -15,7 +15,6 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
 import {
-  awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
   checkSelectedConversationModel,
   handleGatewayReadiness,
@@ -272,7 +271,6 @@ it("adds no request when a person sends to or regenerates with an unselected, un
   const before = gateway.requests.length;
   await awaitInitializedConversationReadiness(deps, CHAT_B, "corr-send-b");
   await awaitInitializedConversationReadiness(deps, CHAT_B, "corr-regenerate-b");
-  await awaitAnyInitializedConversationReadyChatModel(deps, CHAT_B, "corr-create-b");
   expect(gateway.requests).toHaveLength(before);
   expect(currentConversationReady(deps, CHAT_B)).toBe(false);
 });

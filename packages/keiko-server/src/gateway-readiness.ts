@@ -4129,21 +4129,7 @@ async function runOnDemandReadinessProbe(
   }
 }
 
-// Chat creation without an explicit model must not die on an unsuitable FIRST list entry
-// (customer field incident: an OCR model at position 1 legitimately fails the chat probe;
-// the single-model on-demand check then recorded not-ready and stopped, so every chat
-// create failed until a suitable model was probed MANUALLY). When the requested default is
-// not conversation-ready, walk the remaining configured chat models — mode-declared
-// candidates first (keiko-contracts conversationDefaultRank) — until one verifies; the
-// default-model selection then prefers the verified one.
-//
-// The walk is BOUNDED: probes are serial and each can burn the full provider timeout, so an
-// aggregate budget caps what one interactive create may wait (the unbounded-sum lesson of the
-// 0.3.11 embedding ladder, applied here). A probe that outlives the budget keeps running in
-// the shared in-flight map — its observation lands for the NEXT attempt — but this request
-// stops waiting.
-// Admission must not stop waiting before the supported interactive silence window (#4038).
-// This remains one aggregate budget across all candidates, never a per-model allowance.
+// Keep the shared startup check alive when a conversation request stops waiting for it (#4038).
 export const CHAT_MODEL_WALK_BUDGET_MS = GATEWAY_SILENCE_FLOOR_MS;
 
 async function settledWithinBudget(probe: Promise<void>, budgetMs: number): Promise<boolean> {
@@ -4157,54 +4143,6 @@ async function settledWithinBudget(probe: Promise<void>, budgetMs: number): Prom
     return await Promise.race([probe.then(() => true), expired]);
   } finally {
     clearTimeout(timer);
-  }
-}
-
-function conversationWalkCandidates(
-  deps: UiHandlerDeps,
-  requestedModelId: string,
-): readonly ModelCapability[] {
-  const config = currentGatewayConfig(deps);
-  if (config === undefined) return [];
-  return preferredConversationModelOrder(
-    listConfiguredCapabilities(config).filter(
-      (capability) => capability.kind === "chat" && capability.id !== requestedModelId,
-    ),
-  );
-}
-
-export async function awaitAnyInitializedConversationReadyChatModel(
-  deps: UiHandlerDeps,
-  requestedModelId: string,
-  correlationId?: string,
-): Promise<void> {
-  await awaitConversationReadyCandidate(
-    deps,
-    requestedModelId,
-    awaitInitializedConversationReadiness,
-    correlationId,
-  );
-}
-
-async function awaitConversationReadyCandidate(
-  deps: UiHandlerDeps,
-  requestedModelId: string,
-  awaitReadiness: typeof awaitInitializedConversationReadiness,
-  correlationId?: string,
-): Promise<void> {
-  // The budget covers the REQUESTED model's probe too (review finding on the first cut):
-  // computed after it, a hanging gateway burned the full provider timeout before the budget
-  // even started. The interactive create never waits longer than the budget, full stop.
-  const deadlineAt = Date.now() + CHAT_MODEL_WALK_BUDGET_MS;
-  const firstProbe = awaitReadiness(deps, requestedModelId, correlationId);
-  if (!(await settledWithinBudget(firstProbe, CHAT_MODEL_WALK_BUDGET_MS))) return;
-  if (currentConversationReady(deps, requestedModelId)) return;
-  for (const capability of conversationWalkCandidates(deps, requestedModelId)) {
-    const remainingMs = deadlineAt - Date.now();
-    if (remainingMs <= 0) return;
-    const probe = awaitReadiness(deps, capability.id, correlationId);
-    if (!(await settledWithinBudget(probe, remainingMs))) return;
-    if (currentConversationReady(deps, capability.id)) return;
   }
 }
 

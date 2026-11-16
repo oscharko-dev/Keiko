@@ -68,9 +68,12 @@ an unchanged provider keeps its observations under the new generation, including
 only reordered (D3). Observations intentionally survive separate HTTP requests in the current
 process, but not a process restart; because a replacement resets the coarse verification state,
 basic-chat verification starts during configuration initialization after a restart or a replacement. Successful
-credential-setup chat checks populate the same generation-bound ledger and are reused. A Chat
-create, send, streaming send, regeneration, or grounded question may join an already running
-initialization. A successful result remains usable for that configured connection and current
+credential-setup chat checks populate the same generation-bound ledger and are reused. Chat send,
+streaming send, regeneration and grounded questions may join an already running initialization.
+Opening an empty local Chat requires a configured conversation model and remains available while
+its readiness is unknown or a check failed. This makes the composer and model picker reachable
+before the first successful check. Creation records `chat.creation.opened` with a closed readiness
+observation and a model digest. A successful result remains usable for that configured connection and current
 process; elapsed age alone never invalidates it. Malformed or future successful timestamps remain
 unknown. Configuration initialization checks the chat model in use once per connection (#4351):
 the elected default, through the same generation/model in-flight map and two slots. Only a
@@ -104,7 +107,7 @@ no request reached are configured and reported unverified. A model kept without 
 only because the answer names it as not verified (with what to do), its tool-calling record is
 `unverified` and no successful observation is recorded for it. A request for a model with no current
 positive observation that did not come through the UI's first-use check (a Voice canonical target, a
-direct API call) is refused and starts no check: Chat create, send and regeneration answer 400
+direct API call) is refused and starts no check: Chat send and regeneration answer 400
 `CONVERSATION_MODEL_NOT_READY`, a coding run start is refused as model-unavailable, and the Voice
 queue retries a bounded number of times and then suspends with the transcript kept. A window's
 opening or restored selection reads with `check=use`, which may join a check that runs and report
@@ -113,12 +116,13 @@ belongs to the model it was pressed for. A connection is the provider entry
 with its credential; a proof another model's check persists advances the generation without
 changing the connection, so it repeats no check. Startup and explicit readiness probes share the
 interactive gateway's five-minute silence floor (#4038), preserving larger configured timeouts.
-Interactive admission may join a running startup check with the existing aggregate five-minute
-wait across all candidate models, including the selected model. Its deadline only stops that
+Interactive inference admission may join a running startup check for the selected model for up to
+five minutes. Its deadline only stops that
 caller's wait and never authorizes an unverified model or cancels the configuration-owned probe.
 
-Chat create, send, regeneration, grounded questions, model lists, page loads and passive Workbench
-profile reads consume the stored result without scheduling provider readiness work; the explicit
+Chat creation uses the stored result as a default-model preference. Send, regeneration, grounded
+questions, model lists, page loads and passive Workbench profile reads consume the stored result
+without scheduling provider readiness work. The explicit
 selection above is a deliberate human action, not a passive read. This includes
 old failed results and unavailable observations. A passive profile read does not await background
 verification. Failed startup remains visible until explicit Settings verification, connection
