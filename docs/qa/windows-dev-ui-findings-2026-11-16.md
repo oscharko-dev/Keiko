@@ -215,6 +215,9 @@ and succeeded. The mapped turn offered Pause and Stop. Queue and Send now depend
 native Windows qualification [#4068](https://github.com/oscharko-dev/Keiko/issues/4068).
 The missing instruction to pause before sending is tracked in
 [#4440](https://github.com/oscharko-dev/Keiko/issues/4440).
+On candidate `3ba00388c`, Edge showed the hint in both languages. It remained readable
+at 110% Workbench zoom. Pausing hid the hint and exposed **Send follow-up** with the
+draft available. Resuming restored the hint. Clearing the draft hid it again.
 
 After the normal Edge microphone permission prompt, the Workbench transmitted WAV
 audio captured from a synthetic source to the controlled transcription provider.
@@ -247,6 +250,14 @@ recognition remain open.
   Verify ahead and behind counts and resulting refs. Repeat against a divergent or
   unavailable remote and check the recovery action, local refs and file contents.
 
+On release commit `0ad205016`, Fetch left `HEAD` at `28723ff` and advanced `origin/main`
+to `7614c9b`. The UI and native Git both reported 0 ahead and 2 behind. The confirmed
+Pull advanced `HEAD` to `7614c9b`, left a clean tree, displayed both commits in History
+and settled at 0 ahead and 0 behind. Switching to a local branch at `700e7e6` displayed
+1 ahead and 2 behind and offered Fetch with Merge guidance. Fetch preserved both refs.
+The unrelated original repository was restored and the fixture's listener, directory
+and synthetic credential were removed with an exact native cleanup check.
+
 ### Chat
 
 - Open a fresh Chat during startup with configured models, switch models and send a
@@ -257,6 +268,13 @@ recognition remain open.
   identity, draft recovery and workspace or Knowledge Pod selection after reload.
 - Disconnect and reconnect the browser during a draft save. Verify the recovery action
   retains the text and that tool actions stay behind the configured authority.
+
+On release commit `0ad205016`, a fresh Chat used the configured model without opening
+Settings and returned the expected controlled response. The model picker exposed the
+chat model. A normal Edge reload restored the same transcript and exact unsent draft
+with 10 provider chat requests before and after reload. Sending that draft opened a
+held streaming response. **Cancel response** aborted the provider request and left the
+cancelled turn visible in Chat. This used the controlled provider.
 
 ### Knowledge Pod
 
