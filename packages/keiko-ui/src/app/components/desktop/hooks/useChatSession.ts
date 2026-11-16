@@ -108,12 +108,7 @@ import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/r
 import { sha256Hex } from "./canonical-voice-hasher-runtime";
 import { bffRequestErrorKind } from "@/lib/http";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import {
-  classifyRunReport,
-  formatRunSummaryFromManifest,
-  type RunSummaryFallbackKind,
-  type TerminalRunSummary,
-} from "@/lib/run-summary";
+import type { RunSummaryFallbackKind, TerminalRunSummary } from "@/lib/run-summary";
 import type {
   Chat,
   ChatMessage,
@@ -2566,13 +2561,32 @@ type RunSummaryAttemptResult =
   | { readonly kind: "retry" }
   | { readonly kind: "abort" };
 
+type RunSummaryFormatters = typeof import("@/lib/run-summary");
+
+async function loadRunSummaryFormatters(): Promise<RunSummaryFormatters | undefined> {
+  try {
+    return await import("@/lib/run-summary");
+  } catch (error) {
+    reportClientDiagnostic("Run summary formatting could not load.", {
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+    return undefined;
+  }
+}
+
 async function runSummaryFromManifestFallback(
   runId: string,
   fallbackKind: RunSummaryFallbackKind,
+  formatters: RunSummaryFormatters,
 ): Promise<RunSummaryAttemptResult> {
   try {
     const response = await fetchEvidenceManifest(runId);
-    const manifestSummary = formatRunSummaryFromManifest(response.manifest, fallbackKind);
+    const manifestSummary = formatters.formatRunSummaryFromManifest(
+      response.manifest,
+      fallbackKind,
+    );
     const workflowStatus =
       manifestSummary.workflowStatus === "failed" || manifestSummary.workflowStatus === "cancelled"
         ? manifestSummary.workflowStatus
@@ -2590,16 +2604,17 @@ async function runSummaryFromManifestFallback(
 async function attemptRunSummaryFetch(
   runId: string,
   fallbackKind: RunSummaryFallbackKind,
+  formatters: RunSummaryFormatters,
 ): Promise<RunSummaryAttemptResult> {
   try {
     const response = await fetchRunReport(runId);
-    const outcome = classifyRunReport(response.report, fallbackKind);
+    const outcome = formatters.classifyRunReport(response.report, fallbackKind);
     return outcome.kind === "terminal"
       ? { kind: "summary", summary: outcome.summary }
       : { kind: "retry" };
   } catch (error_) {
     if (!(error_ instanceof ApiError) || error_.status !== 404) return { kind: "abort" };
-    return runSummaryFromManifestFallback(runId, fallbackKind);
+    return runSummaryFromManifestFallback(runId, fallbackKind, formatters);
   }
 }
 
@@ -2611,6 +2626,8 @@ async function pollRunSummaryPatch(
 ): Promise<RunSummarySyncResult | undefined> {
   const runId = message.runId;
   if (runId === undefined) return undefined;
+  const formatters = await loadRunSummaryFormatters();
+  if (formatters === undefined) return undefined;
   const fallbackKind = runSummaryFallbackKind(message);
 
   for (let attempt = 0; attempt < RUN_SUMMARY_SYNC_MAX_ATTEMPTS; attempt += 1) {
@@ -2618,7 +2635,7 @@ async function pollRunSummaryPatch(
     // network requests instead of running out the remaining attempts.
     if (signal?.aborted === true) return undefined;
 
-    const attemptResult = await attemptRunSummaryFetch(runId, fallbackKind);
+    const attemptResult = await attemptRunSummaryFetch(runId, fallbackKind, formatters);
     if (attemptResult.kind === "abort") return undefined;
 
     if (attemptResult.kind === "summary") {

@@ -26,6 +26,7 @@ import {
   deleteConversationAttachment,
   fetchChatMessages,
   fetchChats,
+  fetchEvidenceManifest,
   fetchRunReport,
   fetchModels,
   fetchProjects,
@@ -86,6 +87,20 @@ import {
   registerChatWindowRuntime,
   chatScopeTransition,
 } from "../windows/chatWindowActivity";
+
+const runSummaryModule = vi.hoisted(() => {
+  let finishLoad = (): void => undefined;
+  const loading = new Promise<void>((resolve) => {
+    finishLoad = resolve;
+  });
+  return { loads: 0, delayLoad: false, loading, finishLoad };
+});
+
+vi.mock("@/lib/run-summary", async (original) => {
+  runSummaryModule.loads += 1;
+  if (runSummaryModule.delayLoad) await runSummaryModule.loading;
+  return original<typeof import("@/lib/run-summary")>();
+});
 
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
@@ -319,6 +334,41 @@ function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): Rea
 }
 
 describe("useChatSession bootstrap", () => {
+  it("loads run-summary formatting on demand and cancels before a delayed load can fetch", async () => {
+    expect(runSummaryModule.loads).toBe(0);
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project()] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat()] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    expect(runSummaryModule.loads).toBe(0);
+
+    runSummaryModule.delayLoad = true;
+    const selected = chat({ id: "summary-chat" });
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [
+        message({
+          id: "delayed-summary",
+          chatId: selected.id,
+          role: "system",
+          runId: "run-delayed",
+          workflowStatus: "running",
+        }),
+      ],
+    });
+    await act(async () => rendered.result.current.openChat(selected));
+    await waitFor(() => expect(runSummaryModule.loads).toBe(1));
+    rendered.unmount();
+    await act(async () => {
+      runSummaryModule.finishLoad();
+      await import("@/lib/run-summary");
+    });
+    expect(fetchRunReport).not.toHaveBeenCalled();
+    expect(fetchEvidenceManifest).not.toHaveBeenCalled();
+    expect(patchChatMessage).not.toHaveBeenCalled();
+  });
+
   afterEach(resetClientDiagnosticWriter);
   it.each(["/repo", "/other"])(
     "keeps an explicit selection in %s when the initial bootstrap settles later",

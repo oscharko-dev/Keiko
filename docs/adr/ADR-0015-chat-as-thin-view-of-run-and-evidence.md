@@ -134,6 +134,11 @@ fallback ("Completed." / "Failed." / "Cancelled.") on shape mismatch. Per-kind t
 The 200-char cap is enforced on the client too (the BFF re-truncates) so the wire never carries
 pathological failure messages.
 
+The Chat loads this formatter only when a run-summary poll is needed, outside the desktop startup
+bundle. A failed module load parks the poll with body-free client diagnostics and preserves the
+stored summary. After loading, the shared poll checks its existing cancellation signal before
+the first request and each subsequent polling attempt.
+
 ### D7 — Unavailable state is presentation-only.
 
 When `/api/runs/:runId` 404 and `/api/evidence/:runId` 404 both happen, the persisted
