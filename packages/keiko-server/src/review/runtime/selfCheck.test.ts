@@ -153,6 +153,43 @@ describe("checkReviewRuntimeLayers", () => {
     expect(reviewConfigurationIsExact(null)).toBe(false);
   });
 
+  // A provider with native reasoning continuation (#4267) declares it on the run's model. The
+  // canonical review configuration of that model carries the same declaration, and nothing else may
+  // stand in its place.
+  it("admits the review configuration of a model that requires reasoning continuation", () => {
+    const continued = buildOpenCodeLaunchProfile({
+      executable: "/opt/keiko/opencode",
+      stateRoot: "/var/keiko/review-runtime/run-3",
+      contextGeometry: { ...GEOMETRY, reasoningContinuation: "required-with-tools" },
+      toolProfile: "review",
+    });
+    if (!continued.ok) throw new Error("launch profile refused");
+    expect(reviewConfigurationIsExact(continued.configValue)).toBe(true);
+
+    const providers = continued.configValue.providers as Readonly<
+      Record<string, Readonly<Record<string, unknown>>>
+    >;
+    const provider = providers["keiko-runtime"];
+    const models = provider?.models as Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+    for (const compatibility of [
+      { reasoningField: "reasoning_content", requireReasoning: false },
+      { reasoningField: "reasoning", requireReasoning: true },
+      { reasoningField: "reasoning_content", requireReasoning: true, extra: true },
+      "required",
+    ]) {
+      const forgedModels = Object.fromEntries(
+        Object.entries(models).map(([id, model]) => [id, { ...model, compatibility }]),
+      );
+      expect(
+        reviewConfigurationIsExact({
+          ...continued.configValue,
+          providers: { "keiko-runtime": { ...provider, models: forgedModels } },
+        }),
+        JSON.stringify(compatibility),
+      ).toBe(false);
+    }
+  });
+
   it("refuses a system prompt the server did not write", () => {
     const base = configFor("review");
     const agents = base.agents as Readonly<Record<string, Readonly<Record<string, unknown>>>>;

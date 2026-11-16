@@ -68,12 +68,15 @@ export type ReviewRuntimeSelfCheck =
 /**
  * The SHA-256 of each generated review plugin source (ADR-0184 D2 layer 2). The governed-tools
  * plugin registers exactly `keiko_read`, `keiko_discover`, `keiko_search` and
- * `keiko_review_report`; the context plugin only adds Keiko's guidance. A change to either source
- * changes its digest and refuses the review start until the new source is reviewed and re-pinned.
+ * `keiko_review_report`. The context plugin registers no tool: it adds Keiko's guidance to the
+ * system prompt and, for a model that requires reasoning continuation (#4267), leaves the
+ * assistant turns that did not finish, and their tool results, out of the next prompt. A change to
+ * either source changes its digest and refuses the review start until the new source is reviewed
+ * and re-pinned.
  */
 const REVIEW_PLUGIN_SOURCE_SHA256: Readonly<Record<string, string>> = Object.freeze({
   keiko_governed_tools: "c4665cbb5c2857b8750c84cbfb6f0ca77121d4456e9fe74e3cb12a0de417a13c",
-  keiko_native_context: "884d0fd4f1eda22f363a2f1e0709446b45d6e5e96b98fdb689977ec66dc53e89",
+  keiko_native_context: "7c4c56f0e84453bcb8c01619cf2286e47d9d847d1d409b833f6ea41c535bfa42",
 });
 
 function sameSet(values: readonly string[], expected: readonly string[]): boolean {
@@ -88,9 +91,25 @@ function positiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+/** The one compatibility declaration a provider model may carry (`providerModel`, #4267). */
+const REASONING_CONTINUATION_COMPATIBILITY = {
+  reasoningField: "reasoning_content",
+  requireReasoning: true,
+} as const;
+
+/**
+ * Whether a provider model declares that its provider requires reasoning continuation. Only the
+ * exact declaration the server generates counts. Any other `compatibility` value leaves the
+ * canonical configuration without one, so the comparison in `reviewConfigurationIsExact` refuses it.
+ */
+function declaresReasoningContinuation(model: Readonly<Record<string, unknown>>): boolean {
+  return isDeepStrictEqual(model.compatibility, REASONING_CONTINUATION_COMPATIBILITY);
+}
+
 /**
  * The context geometry a configuration declares for its one provider model: the only input the
- * canonical review configuration depends on (its provider limits and compaction derive from it).
+ * canonical review configuration depends on (its provider limits, its reasoning continuation and
+ * its compaction derive from it).
  */
 function declaredGeometry(
   config: Readonly<Record<string, unknown>>,
@@ -99,13 +118,19 @@ function declaredGeometry(
   const provider = isRecord(providers) ? providers[OPENCODE_RUNTIME_PROVIDER_ID] : undefined;
   const models = isRecord(provider) ? provider.models : undefined;
   const model = isRecord(models) ? models[OPENCODE_RUNTIME_MODEL_ALIAS] : undefined;
-  const limit = isRecord(model) ? model.limit : undefined;
-  if (!isRecord(limit)) return undefined;
-  const { context, input, output } = limit;
+  if (!isRecord(model) || !isRecord(model.limit)) return undefined;
+  const { context, input, output } = model.limit;
   if (!positiveInteger(context) || !positiveInteger(input) || !positiveInteger(output)) {
     return undefined;
   }
-  return { contextWindowTokens: context, maxInputTokens: input, maxOutputTokens: output };
+  return {
+    contextWindowTokens: context,
+    maxInputTokens: input,
+    maxOutputTokens: output,
+    ...(declaresReasoningContinuation(model)
+      ? { reasoningContinuation: "required-with-tools" as const }
+      : {}),
+  };
 }
 
 /**
