@@ -99,7 +99,10 @@ without a verdict may be repeated by a pick or the next Send after the not-ready
 explicit Settings verification that answers definitively ends the walk's pause. Chat keeps
 the model selectable after a basic-chat timeout or transient overload: the existing generation-bound
 observation retains `conversationReady: false` plus a closed transient failure marker, while
-`/api/models` omits the readiness flag for that presentation only (#4415). The existing explicit
+`/api/models`, Chat and Knowledge default elections, and the startup proof target treat that
+transient observation as unknown (#4415). A timeout does not demote the selected default or move
+the server's election away from the picker. Inference admission still reads the strict observation.
+The existing explicit
 pick or first Send may check it once after the same cooldown; passive reads start no work. Definitive
 refusals, including HTTP 401/403/404, remain observed not-ready. The marker follows unchanged
 connections and disappears with a changed connection or a later definitive observation; it is never

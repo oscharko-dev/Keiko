@@ -737,7 +737,7 @@ export interface VerifiedModelCapabilityObservation {
   readonly checkedAt: string;
   /** Actual chat observation time, separate from retained feature evidence. */
   readonly conversationCheckedAt?: string | undefined;
-  /** A timed-out or overloaded basic-chat check; presentation only, never admission. */
+  /** A timed-out or overloaded basic-chat check; selection/election only, never admission. */
   readonly conversationReadinessFailure?: "transient";
   readonly fields: VerifiedModelCapabilityFields;
   /** Body-free, request outcomes owned by this same generation; never readiness or durable config. */
@@ -2094,7 +2094,7 @@ export function currentConversationReadinessObservation(
   return Number.isFinite(ageMs) && ageMs >= 0 ? true : undefined;
 }
 
-/** A transient check leaves the model selectable; inference still reads the strict observation. */
+/** A transient check leaves selection and default election unknown; admission stays strict. */
 export function currentConversationReadinessPresentation(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
   modelId: string,

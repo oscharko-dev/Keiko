@@ -3027,6 +3027,47 @@ describe("local-knowledge handlers", () => {
     expect(row?.context_status).toBe("generated");
   });
 
+  it.each([true, false])(
+    "keeps contextual default election transient-aware (%s) without starting a model (#4415)",
+    async (transient) => {
+      const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-election-"));
+      tempDirs.push(tmp);
+      const { store, capId } = seedStore(tmp);
+      updateCapsuleDetails(store, capId, { contextualRetrieval: { enabled: true } });
+      store.close();
+      const base = depsFor(tmp, gatewayConfigWithChatModels(["chat-first", "chat-other"]));
+      const deps: UiHandlerDeps = {
+        ...base,
+        gatewayConfig: {
+          current: () => base.config,
+          present: () => true,
+          generation: () => 7,
+          verifiedCapability: (modelId: string) =>
+            modelId === "chat-first"
+              ? {
+                  modelId,
+                  generation: 7,
+                  checkedAt: new Date().toISOString(),
+                  fields: { conversationReady: false },
+                  ...(transient ? { conversationReadinessFailure: "transient" as const } : {}),
+                }
+              : undefined,
+        } as unknown as UiHandlerDeps["gatewayConfig"],
+      };
+      const result = await handleGetLocalKnowledgeCapsule(
+        { ...baseCtx(tmp, "GET"), params: { capsuleId: capId } },
+        deps,
+      );
+      expect(result).toMatchObject({
+        status: 200,
+        body: {
+          health: { contextualRetrieval: { modelId: transient ? "chat-first" : "chat-other" } },
+        },
+      });
+      expect(base.localKnowledgeEmbeddingRequest).not.toHaveBeenCalled();
+    },
+  );
+
   it("elects the mode-declared chat model as fallback context model, never the first-listed OCR id", async () => {
     // 2026-08 field review: with no explicit context model the old pure-costClass fallback let
     // a mode-less OCR id FIRST in the configured list become the context model by position —

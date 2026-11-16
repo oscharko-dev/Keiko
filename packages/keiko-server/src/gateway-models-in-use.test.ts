@@ -1,6 +1,6 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
@@ -13,6 +13,7 @@ import {
   type GatewayConfig,
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
+import { electConversationDefault } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
 import {
   awaitInitializedConversationReadiness,
@@ -20,7 +21,14 @@ import {
   handleGatewayReadiness,
   handleGatewaySelectionCheck,
   initializeConfiguredConversationReadiness,
+  conversationModelForStartupProof,
 } from "./gateway-readiness.js";
+import { handleCreateDesktopChat } from "./chat-handlers.js";
+import {
+  captureConversationReadinessAdmission,
+  ConversationModelNotReadyError,
+  withConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
   codingWorkbenchProbesSettledForTests,
@@ -181,14 +189,74 @@ function gatewayDouble(): GatewayDouble {
   };
 }
 
-function singleChatConfig(): GatewayConfig {
+function selectedChatConfig(modelIds: readonly string[] = [CHAT_A]): GatewayConfig {
   const configured = config();
+  if (configured.capabilities === undefined) throw new TypeError("Missing fixture capabilities");
   return {
     ...configured,
-    providers: configured.providers.filter((provider) => provider.modelId === CHAT_A),
-    capabilities: configured.capabilities.filter((capability) => capability.id === CHAT_A),
+    providers: configured.providers.filter((provider) => modelIds.includes(provider.modelId)),
+    capabilities: configured.capabilities.filter((capability) => modelIds.includes(capability.id)),
   };
 }
+
+async function conversationElections(deps: UiHandlerDeps): Promise<{
+  readonly server: string | undefined;
+  readonly wire: string | undefined;
+  readonly startupProof: string | undefined;
+}> {
+  if (deps.uiDbPath === undefined) throw new TypeError("Missing fixture database path");
+  const created = await handleCreateDesktopChat(
+    selectionRequest({ projectPath: dirname(deps.uiDbPath), title: "Synthetic default election" }),
+    deps,
+  );
+  expect(created.status).toBe(201);
+  const body = created.body as { readonly chat: { readonly selectedModel?: string } };
+  const listed = handleModels({ url: new URL("http://127.0.0.1/api/models") } as RouteContext, deps)
+    .body as { readonly models: readonly ModelCapability[] };
+  return {
+    server: body.chat.selectedModel,
+    wire: electConversationDefault(listed.models, (model) => model.conversationReady)?.id,
+    startupProof: conversationModelForStartupProof(deps),
+  };
+}
+
+it.each(["503", "timeout", "401"] as const)(
+  "keeps two-model elections consistent after a cold %s without admitting inference (#4415)",
+  async (failure) => {
+    const gateway = gatewayDouble();
+    if (failure === "timeout")
+      gateway.chatErrors.set(CHAT_A, new DOMException("synthetic timeout", "TimeoutError"));
+    else gateway.chatStatus.set(CHAT_A, Number(failure));
+    const deps = composition();
+    deps.gatewayConfig?.set(selectedChatConfig([CHAT_A, CHAT_B]), true, "cold-election");
+    await vi.waitFor(() => {
+      expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
+    });
+    await awaitInitializedConversationReadiness(deps, CHAT_A, "cold-election");
+    const expected = failure === "401" ? CHAT_B : CHAT_A;
+    expect(await conversationElections(deps)).toEqual({
+      server: expected,
+      wire: expected,
+      startupProof: failure === "401" ? undefined : CHAT_A,
+    });
+    expect(captureConversationReadinessAdmission(deps, CHAT_A)).toMatchObject({ status: 400 });
+    const call = vi.fn((): Promise<never> =>
+      Promise.reject(new Error("Unexpected inference dispatch")),
+    );
+    const admitted = withConversationReadinessAdmission(
+      { call },
+      CHAT_A,
+      { modelId: CHAT_A, gatewayConfigGeneration: deps.gatewayConfig?.generation() },
+      deps,
+    );
+    await expect(
+      admitted.call({ modelId: CHAT_A, messages: [] }, new AbortController().signal),
+    ).rejects.toBeInstanceOf(ConversationModelNotReadyError);
+    expect(call).not.toHaveBeenCalled();
+    expect(gateway.requestsFor(CHAT_A)).toBe(1);
+    expect(gateway.requestsFor(CHAT_B)).toBe(0);
+  },
+);
 
 function listedConversationReady(deps: UiHandlerDeps): boolean | undefined {
   const body = handleModels({ url: new URL("http://127.0.0.1/api/models") } as RouteContext, deps)
@@ -204,7 +272,7 @@ it.each(["503", "timeout"])(
     if (failure === "503") gateway.chatStatus.set(CHAT_A, 503);
     else gateway.chatErrors.set(CHAT_A, new DOMException("synthetic timeout", "TimeoutError"));
     const deps = composition();
-    deps.gatewayConfig?.set(singleChatConfig(), true, "cold-transient");
+    deps.gatewayConfig?.set(selectedChatConfig(), true, "cold-transient");
     await vi.waitFor(() => {
       expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
     });
@@ -242,7 +310,7 @@ it.each([400, 401, 403, 404, 501])(
     const gateway = gatewayDouble();
     gateway.chatStatus.set(CHAT_A, status);
     const deps = composition();
-    deps.gatewayConfig?.set(singleChatConfig(), true, "cold-definitive");
+    deps.gatewayConfig?.set(selectedChatConfig(), true, "cold-definitive");
     await vi.waitFor(() => {
       expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
     });
@@ -256,7 +324,7 @@ it("clears transient Chat presentation after a later definitive credential refus
   const gateway = gatewayDouble();
   gateway.chatStatus.set(CHAT_A, 503);
   const deps = composition();
-  deps.gatewayConfig?.set(singleChatConfig(), true, "cold-transient-then-refused");
+  deps.gatewayConfig?.set(selectedChatConfig(), true, "cold-transient-then-refused");
   await vi.waitFor(() => {
     expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
   });

@@ -2791,7 +2791,7 @@ export async function initializeLiteLlmCodingReadiness(
 // observations. At startup, after the walk concluded, it is the model that proved ready.
 function inUseConversationModelId(deps: UiHandlerDeps, config: GatewayConfig): string | undefined {
   return electConversationDefault(configuredChatModels(config), (model) =>
-    currentConversationReadinessObservation(deps, model.id),
+    currentConversationReadinessPresentation(deps, model.id),
   )?.id;
 }
 
@@ -2804,10 +2804,10 @@ export function conversationModelForStartupProof(deps: UiHandlerDeps): string | 
   const config = currentGatewayConfig(deps);
   if (config === undefined) return undefined;
   const inUse = inUseConversationModelId(deps, config);
-  if (inUse === undefined || currentConversationReadinessObservation(deps, inUse) !== undefined)
+  if (inUse === undefined || currentConversationReadinessPresentation(deps, inUse) !== undefined)
     return inUse;
   const moved = configuredChatModels(config).some(
-    (model) => currentConversationReadinessObservation(deps, model.id) === false,
+    (model) => currentConversationReadinessPresentation(deps, model.id) === false,
   );
   return moved ? undefined : inUse;
 }

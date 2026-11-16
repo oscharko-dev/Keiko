@@ -160,6 +160,7 @@ import {
   currentAuditRedactString,
   currentConversationReady,
   currentConversationReadinessObservation,
+  currentConversationReadinessPresentation,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentRedactionSecrets,
@@ -395,7 +396,7 @@ function defaultChatModelId(deps: UiHandlerDeps): string {
   const conversationReady = (model: ModelCapability): boolean =>
     currentConversationReady(deps, model.id);
   const readinessObservation = (model: ModelCapability): boolean | undefined =>
-    currentConversationReadinessObservation(deps, model.id);
+    currentConversationReadinessPresentation(deps, model.id);
   // Readiness breaks ties within the best rank tier. Opening a local chat can keep a
   // configured model while its readiness is unknown; inference checks readiness separately.
   return (
