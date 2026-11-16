@@ -537,16 +537,24 @@ describe("production OpenCode backend composition", () => {
   // backend can enforce it only through the installed broker. A runtime that yields no broker pin
   // (an evaluation package without independent artifact approval) therefore refuses every start,
   // and readiness must not offer one.
-  it.each(["evaluation"] as const)(
-    "refuses every %s Windows run before a helper starts, and readiness says so",
-    () => {
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "refuses an unqualified Windows runtime in a separate workspace with %s authority",
+    (mode) => {
       const root = mkdtempSync(join(tmpdir(), "keiko-windows-unqualified-lane-"));
       try {
         const portable: ResolvedPortableOpenCodeRuntime = {
           ...releaseQualifiedNativeRuntime(root),
           platformAssurance: "evaluation-unqualified",
         };
-        const request = runInput(root);
+        const workspaceRoot = join(root, mode);
+        mkdirSync(workspaceRoot);
+        const base = runInput(workspaceRoot);
+        const request: ProductionRuntimeBackendInput = {
+          ...base,
+          request: { ...base.request, requestedMode: mode },
+          context: { ...base.context, deploymentCeiling: mode },
+          minted: { ...base.minted, effectiveMode: mode },
+        };
         const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
         createProductionOpenCodeBackend(backendInput(root, portable)).createRun(request);
         const created = factory.mock.results.at(-1)?.value as RuntimeProcessBackend;
