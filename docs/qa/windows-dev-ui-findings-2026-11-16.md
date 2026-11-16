@@ -172,14 +172,88 @@ The Windows 11 ARM64 QA VM checked out that exact commit with x64 Node.js 26.13.
 11.20.0. Dependency, USearch and ripgrep provisioning succeeded. The normal Dev launch
 rebuilt the native runtime and started the loopback application.
 
-| Surface          | Evidence to collect in the Windows UI                                                                         |
-| ---------------- | ------------------------------------------------------------------------------------------------------------- |
-| Jira Pod         | Check the QA connection and the Epic, Issue and Bug starter drafts before and after disconnecting it.         |
-| Coding Workbench | Open a small synthetic Git workspace, send a bounded task and verify its actual result and terminal status.   |
-| Git              | Check history and local changes, then Fetch and Pull from a controlled remote and compare the resulting refs. |
-| Chat             | Open a new Chat, choose a configured model and verify a short response and draft recovery after reload.       |
-| Knowledge Pod    | Create a Pod, index a one-page PDF and a short text file, then verify index status and grounded retrieval.    |
-| Citation         | Open the citation and confirm it points to the expected fixture file and page.                                |
+### Coding Workbench
+
+- Run a bounded task in a tiny Git worktree. Approve one local edit, deny another and
+  verify file contents, the Changes view and the recorded outcome. Exercise the other
+  autonomy modes with routine in-workspace work and an action outside their allowed scope.
+- Dictate a short synthetic phrase through the microphone control. Verify the transcript
+  lands at the expected position in the editable prompt and waits for Send. Cancel a
+  recording and exercise microphone permission refusal and transcription failure.
+- Exercise batch submission through the message queue with multiple distinct follow-ups.
+  Compare the Inbox order and each delivered turn. Pause the run at a controllable
+  boundary and check that it blocks new tool mutations. Reload the window and resume the
+  same run. Check for duplicate messages, tool actions or file edits.
+- Stop a separate run during streaming or while approval is pending. Reopen its history
+  after restart and start the next bounded task. Check retained drafts and changes, the
+  interrupted run's terminal state and the new task's workspace identity.
+- Create a short scheduled task and exercise pause, resume and removal. Compare the visible
+  next-run status with the actual occurrence and verify a paused schedule does not fire.
+- Verify with the native command result when the runtime admits a test. When it refuses,
+  check the exact reason, the `Not run` presentation and the absence of a test process.
+
+### Jira Pod
+
+- Test connection and recovery with a dedicated QA Jira project. Search across two pages
+  of known synthetic issues and verify filters, totals and the final page. Reopen the
+  same report after restart and compare its Markdown and CSV to the known issue set.
+- Open the Epic, Issue and Bug starter drafts. Validate missing and valid project metadata,
+  save an edited template and reopen it. Disconnect the QA Pod and reconnect it. Check
+  the disabled starters during disconnection and retention of the saved template.
+- Review and deny one proposed change, then approve an isolated test write in the QA Jira
+  project. Check Jira and Keiko receipts for the resulting issue and exact write count.
+  Exercise a rejected or interrupted write and check the recovery message.
+
+### Git
+
+- Compare clean, staged, unstaged and conflicted views against native Git. Open a scoped
+  history entry and diff, stage and unstage a selected file and verify each resulting index.
+  Commit one fixture edit using the normal confirmation flow.
+- Switch branches or worktrees and confirm the displayed root, ref and file tree agree.
+  Exercise detached and dirty states, including cancellation of a destructive operation.
+- Fetch and fast-forward an authenticated fixture remote with two pending changes.
+  Verify ahead and behind counts and resulting refs. Repeat against a divergent or
+  unavailable remote and check the recovery action, local refs and file contents.
+
+### Chat
+
+- Open a fresh Chat during startup with configured models, switch models and send a
+  short request. Exercise an unavailable provider and recovery with the draft and
+  explicit model selection intact.
+- Stop a controlled streaming answer and verify the visible completion state and
+  persisted transcript. Send a follow-up. Reopen from history and verify the conversation
+  identity, draft recovery and workspace or Knowledge Pod selection after reload.
+- Disconnect and reconnect the browser during a draft save. Verify the recovery action
+  retains the text and that tool actions stay behind the configured authority.
+
+### Knowledge Pod
+
+- Create a Pod and index a one-page PDF and a short text file. Compare the source list,
+  index status and grounded answer to the known fixture content.
+- Change the text, reindex the selection and query for the revised value. Exercise a
+  malformed document or unavailable source, recover it and retry. Verify valid
+  documents remain usable and check the persisted index after restart.
+- Switch between two small Pods with distinct facts. Verify the selected scope, source
+  removal and the answer's behavior when the selected Pod has no relevant evidence.
+
+### Citation
+
+- Expand the answer evidence and open the PDF citation at the expected page. Compare the
+  title, file and quoted content to the fixture. Verify that a full text filename opens
+  the correct editor document and preserves the complete name.
+- Use duplicate basenames in distinct roots and verify the source choice reaches the
+  selected root. Exercise an unavailable or removed source and verify the visible error
+  and a successful return to the conversation.
+
+### UI and UX checks for every surface
+
+Repeat key actions in a normal desktop window and a narrow window. Increase the
+workspace zoom and verify that every affected control and recovery action stays
+reachable. Check keyboard navigation, visible focus and focus return after dialogs,
+and status text during waiting and failure. Inspect German and English labels and
+keep a screenshot for a confirmed visual failure.
+A journey passes when the visible result and its corresponding stored or native effect
+agree. Record runtime, provider and permission restrictions with their observed reason.
 
 Record reproduced failures as User Findings with the Windows source revision, expected
 behavior, visible outcome and body-free diagnostics. Linked fixes carry their focused
