@@ -49,6 +49,34 @@ describe("logGitProcessOutcome", () => {
     expect(log.events).toEqual([]);
   });
 
+  it.each(["host-config", "none", "unavailable"] as const)(
+    "persists only closed credential provenance for %s authentication failures",
+    (credentialHelperSource) => {
+      const log = captureActivityLog();
+      logGitProcessOutcome(
+        log.sink,
+        "corr-host-credentials",
+        ["fetch", "origin"],
+        result({
+          exitCode: 128,
+          stderr:
+            "fatal: could not read Username: terminal prompts disabled; fixture-helper-private-value",
+          credentialHelperSource,
+        }),
+        1,
+      );
+      const event = onlyEvent(log.events);
+      expect(event.op).toBe("git.process.failed");
+      expect(event.extra).toMatchObject({ credentialHelperSource, failureKind: "auth-failed" });
+      expect(JSON.stringify(event)).not.toContain("fixture-helper-private-value");
+      const persisted = expectActivityLogProof(
+        "git.process.failed.line",
+        formatActivityLogProofLine(event),
+      );
+      expect(persisted).toMatchObject({ credentialHelperSource });
+    },
+  );
+
   it("reports the spawn-boundary refusal on the security category with its refusal class", () => {
     const log = captureActivityLog();
 

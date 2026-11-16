@@ -112,8 +112,8 @@ describe("networkGitEnv", () => {
     expect(env.HOME).toBeUndefined();
   });
 
-  it("falls back to the process PATH when the source omits PATH", () => {
+  it("does not borrow ambient PATH when an explicit source omits it", () => {
     const env = networkGitEnv({});
-    expect(env.PATH).toBe(process.env.PATH ?? "");
+    expect(env.PATH).toBe("");
   });
 });

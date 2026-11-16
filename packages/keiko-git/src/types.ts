@@ -36,6 +36,8 @@ export type GitRefusalClass =
   | "untrusted-executable";
 
 export interface GitProcessResult {
+  /** Content-free provenance only; helper definitions and credential values never enter evidence. */
+  readonly credentialHelperSource?: "host-config" | "none" | "unavailable" | undefined;
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly stdout: string;

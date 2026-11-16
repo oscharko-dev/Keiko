@@ -111,6 +111,12 @@ const GIT_PROCESS_OUTCOME_FIELD_CONTRACTS = {
   truncated: { type: "boolean", dataClass: "closed-enum", required: true },
   timedOut: { type: "boolean", dataClass: "closed-enum", required: true },
   aborted: { type: "boolean", dataClass: "closed-enum", required: true },
+  credentialHelperSource: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["host-config", "none", "unavailable"],
+  },
 } as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
 
 const GIT_PROCESS_FAILURE_FIELD_CONTRACTS = {
@@ -299,6 +305,7 @@ interface GitOutcomeFields {
   readonly truncated: boolean;
   readonly timedOut: boolean;
   readonly aborted: boolean;
+  readonly credentialHelperSource?: NonNullable<GitProcessResult["credentialHelperSource"]>;
 }
 
 function gitOutcomeFields(subcommand: string, result: GitProcessResult): GitOutcomeFields {
@@ -313,6 +320,11 @@ function gitOutcomeFields(subcommand: string, result: GitProcessResult): GitOutc
     truncated: result.truncated,
     timedOut: result.timedOut === true,
     aborted: result.aborted === true,
+    ...(result.credentialHelperSource === undefined
+      ? {}
+      : {
+          credentialHelperSource: result.credentialHelperSource,
+        }),
   };
 }
 

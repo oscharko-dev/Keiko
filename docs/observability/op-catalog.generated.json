@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b2d7e405cffd4286ff1b38b170ec43e449f81a1340ea068d9373c87292cbafee",
+    "catalogDigest": "3b321ff3f5de9bbe82c622750825239429daf04ed46152ac25aaf0082ff7fecb",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -31565,6 +31565,12 @@
             "dataClass": "closed-enum",
             "required": true
           },
+          "credentialHelperSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["host-config", "none", "unavailable"]
+          },
           "failureKind": {
             "type": "string",
             "dataClass": "error-kind",
@@ -31578,8 +31584,8 @@
         "failureClasses": ["git-process-failure"],
         "proofIds": ["git.process.failed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:152",
-        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:445"]
+        "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:158",
+        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:457"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31637,6 +31643,12 @@
             "dataClass": "closed-enum",
             "required": true
           },
+          "credentialHelperSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["host-config", "none", "unavailable"]
+          },
           "refusal": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -31661,8 +31673,8 @@
         "failureClasses": ["git-process-refusal"],
         "proofIds": ["git.process.refused.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:122",
-        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:417"]
+        "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:128",
+        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:429"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -100063,6 +100075,12 @@
                   "required": true
                 },
                 {
+                  "name": "credentialHelperSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "endedBy",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -100160,6 +100178,12 @@
                   "type": "boolean",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "credentialHelperSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "endedBy",
@@ -123348,13 +123372,13 @@
     {
       "op": "git.process.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitProcessActivity.ts:155",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:161",
       "package": "keiko-server"
     },
     {
       "op": "git.process.refused",
       "category": "security",
-      "site": "packages/keiko-server/src/gitProcessActivity.ts:125",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:131",
       "package": "keiko-server"
     },
     {

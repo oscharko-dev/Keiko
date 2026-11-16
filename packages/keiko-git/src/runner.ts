@@ -6,6 +6,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { Buffer } from "node:buffer";
+import { hostCredentialConfigArgs, HOST_CREDENTIAL_CONFIG_QUERY } from "./network-credentials.js";
 import { gitEnv, networkGitEnv } from "./env.js";
 import { resolveGitExecutable } from "./git-executable.js";
 import type {
@@ -261,6 +262,7 @@ const DENIED_CONFIG_WILDCARD_PATTERNS: readonly RegExp[] = [
   /^diff\.[\s\S]*\.command$/u,
   /^pager\.[\s\S]+$/u,
   /^alias\.[\s\S]+$/u,
+  /^credential\.[\s\S]*\.helper$/u,
   /^protocol\.[\s\S]*\.allow$/u,
 ];
 
@@ -747,7 +749,47 @@ async function runFilterNeutralized(
   ])(args, read);
 }
 
-export const defaultGitNetworkProcessRunner: GitProcessRunner = createGitProcessRunnerWithFixedArgs(
-  networkGitEnv,
-  NETWORK_CONFIG_ARGS,
-);
+const CREDENTIAL_LISTING_EXIT_CODES: ReadonlySet<number | null> = new Set([0, 1]);
+const NETWORK_CREDENTIAL_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "clone",
+  "fetch",
+  "pull",
+  "push",
+  "ls-remote",
+]);
+
+// A network operation may use the user's direct system/global helpers, never executable settings
+// owned by the repository. Read only that narrow configuration, then append it after the existing
+// empty helper reset. No includes, ambient GIT_CONFIG_* overrides or other system settings cross
+// the boundary. Discovery and the remote operation share one environment snapshot and deadline.
+export const defaultGitNetworkProcessRunner: GitProcessRunner = async (args, options) => {
+  const preflight = gitSpawnPreflight(args, options);
+  if (preflight !== undefined) return preflight;
+  const env = networkGitEnv();
+  const run = createGitProcessRunnerWithFixedArgs(() => env, NETWORK_CONFIG_ARGS);
+  if (!NETWORK_CREDENTIAL_SUBCOMMANDS.has(gitSubcommand(args) ?? ""))
+    return await run(args, options);
+  const startedAt = Date.now();
+  const listing = await createGitProcessRunnerWithFixedArgs(
+    () => ({ ...env, GIT_CONFIG_NOSYSTEM: "0" }),
+    NETWORK_CONFIG_ARGS,
+  )(HOST_CREDENTIAL_CONFIG_QUERY, { ...options, maxBytes: 32 * 1024 });
+  if (
+    listing.timedOut ||
+    listing.aborted ||
+    listing.truncated ||
+    !CREDENTIAL_LISTING_EXIT_CODES.has(listing.exitCode)
+  )
+    return { ...listing, stdout: "", stderr: "", credentialHelperSource: "unavailable" };
+  const helpers = hostCredentialConfigArgs(listing.stdout);
+  if (helpers === undefined)
+    return {
+      ...refusedOptionResult("credential.helper", "config-override"),
+      credentialHelperSource: "unavailable",
+    };
+  const result = await createGitProcessRunnerWithFixedArgs(
+    () => env,
+    [...NETWORK_CONFIG_ARGS, ...helpers],
+  )(args, { ...options, timeoutMs: Math.max(1, options.timeoutMs - (Date.now() - startedAt)) });
+  return { ...result, credentialHelperSource: helpers.length === 0 ? "none" : "host-config" };
+};

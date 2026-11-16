@@ -221,9 +221,12 @@ it, because a **local read** and a **network sync** have opposite credential req
   helper, or an SSH identity. This is the correct, unchanged behavior for every read route and for
   the sync preview and the post-op ahead/behind re-read.
 - **`networkGitEnv` (the fetch/pull command only — `defaultGitNetworkProcessRunner`).** A fetch or
-  pull against a private or SSH remote *must* be able to authenticate, so this env inherits the real
-  process environment (the user's global `~/.gitconfig` `credential.helper`, the macOS `osxkeychain`
-  helper, and the real `~/.ssh` identities). It still **never prompts**: `GIT_TERMINAL_PROMPT=0` and
+  pull against a private or SSH remote *must* be able to authenticate, so this env preserves an
+  allowlist of account and SSH-agent state, including Windows credential-store profile paths.
+  The runner admits only direct system/global credential-helper entries after clearing inherited
+  helpers; this restores Git Credential Manager and macOS `osxkeychain` without executing helpers
+  from repository configuration or includes (#4411; ADR-0115). No ambient secrets or caller
+  `GIT_*` overrides are inherited. It still **never prompts**: `GIT_TERMINAL_PROMPT=0` and
   `GIT_SSH_COMMAND="ssh -oBatchMode=yes -oStrictHostKeyChecking=yes"` force the operation to
   **fail closed** when no stored credential satisfies the remote (`auth-failed`) or when SSH cannot
   verify a known host key (`untrusted-host-key`), rather than hang on an interactive prompt or trust

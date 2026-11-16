@@ -30314,6 +30314,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
       },
+      credentialHelperSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["host-config", "none", "unavailable"],
+      },
       failureKind: {
         type: "string",
         dataClass: "error-kind",
@@ -30383,6 +30389,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "boolean",
         dataClass: "closed-enum",
         required: true,
+      },
+      credentialHelperSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["host-config", "none", "unavailable"],
       },
       refusal: {
         type: "string",

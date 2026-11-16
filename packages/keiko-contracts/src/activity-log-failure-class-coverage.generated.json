@@ -36571,6 +36571,12 @@
               "required": true
             },
             {
+              "name": "credentialHelperSource",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "endedBy",
               "type": "string",
               "dataClass": "closed-enum",
@@ -36668,6 +36674,12 @@
               "type": "boolean",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "credentialHelperSource",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "endedBy",
