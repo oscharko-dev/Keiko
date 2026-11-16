@@ -69,7 +69,7 @@ const UNNAMED_SUBCOMMAND = "unknown";
 
 /**
  * `errorKind` per refusal class. Distinct from every `GitFailureReason` on purpose: a refused
- * invocation never reached a `git` process, so the shared failure classifier reports the argv
+ * invocation never reached its requested `git` command, so the shared failure classifier reports the argv
  * refusals as the generic `git-error` and the untrusted-executable refusal as the same
  * `git-missing` a machine without git produces — in both cases making Keiko's own security
  * decision indistinguishable from an ordinary environment problem.
@@ -82,6 +82,7 @@ const REFUSAL_ERROR_KIND: Readonly<Record<GitRefusalClass, string>> = {
   "diff-enabling-flag": "git-option-refused",
   "config-override": "git-option-refused",
   "untrusted-executable": "git-executable-untrusted",
+  "credential-discovery-unavailable": "credential-discovery-unavailable",
 };
 
 /** `errorKind` for a run the bounded caller cancelled — also not a git failure. */
@@ -143,6 +144,7 @@ const GIT_PROCESS_REFUSED_OPERATION = defineActivityLogOperation({
         "diff-enabling-flag",
         "config-override",
         "untrusted-executable",
+        "credential-discovery-unavailable",
       ],
     },
     ...GIT_PROCESS_FAILURE_FIELD_CONTRACTS,
@@ -256,6 +258,7 @@ const CLOSED_GIT_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
   "unsafe-repository": "unsafe-target",
   "git-executable-untrusted": "unsafe-target",
   "git-option-refused": "authority-denied",
+  "credential-discovery-unavailable": "unavailable",
   [TRUNCATED_ERROR_KIND]: "unavailable",
   "git-missing": "unavailable",
   "not-a-repository": "unavailable",

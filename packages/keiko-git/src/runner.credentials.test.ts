@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultGitNetworkProcessRunner } from "./runner.js";
 import { classifyGitRemoteFailure } from "./classify.js";
+import { gitEnv } from "./env.js";
 
 let fixture: string;
 let repository: string;
@@ -23,8 +24,19 @@ let server: Server;
 let remote: string;
 let authenticated = 0;
 
+function runFixtureGit(args: readonly string[], cwd = repository): void {
+  execFileSync("git", args, {
+    cwd,
+    env: {
+      ...gitEnv(),
+      GIT_CONFIG_GLOBAL: join(account, ".gitconfig"),
+      GIT_ALLOW_PROTOCOL: "file",
+    },
+  });
+}
+
 function config(key: string, value: string, scope: "global" | "local" = "global"): void {
-  execFileSync("git", ["config", `--${scope}`, "--add", key, value], { cwd: repository });
+  runFixtureGit(["config", `--${scope}`, "--add", key, value]);
 }
 
 function helper(marker: string): string {
@@ -51,25 +63,21 @@ beforeEach(async () => {
   vi.stubEnv("HOME", account);
   vi.stubEnv("USERPROFILE", account);
   vi.stubEnv("XDG_CONFIG_HOME", account);
-  execFileSync("git", ["init", "-q"], { cwd: repository });
+  runFixtureGit(["init", "-q"]);
   config("credential.helper", "");
-  execFileSync(
-    "git",
-    [
-      "-c",
-      "user.name=Fixture",
-      "-c",
-      "user.email=fixture@invalid",
-      "commit",
-      "--allow-empty",
-      "-qm",
-      "fixture",
-    ],
-    { cwd: repository },
-  );
+  runFixtureGit([
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@invalid",
+    "commit",
+    "--allow-empty",
+    "-qm",
+    "fixture",
+  ]);
   const remoteRoot = join(fixture, "remote.git");
-  execFileSync("git", ["clone", "--bare", "-q", repository, remoteRoot]);
-  execFileSync("git", ["update-server-info"], { cwd: remoteRoot });
+  runFixtureGit(["clone", "--bare", "-q", repository, remoteRoot]);
+  runFixtureGit(["update-server-info"], remoteRoot);
   authenticated = 0;
   server = createServer((request, response) => {
     const expected = `Basic ${Buffer.from("fixture-user:fixture-password").toString("base64")}`;
@@ -176,8 +184,11 @@ describe("host credentials at the network Git boundary (#4411)", () => {
       `\n[credential]\n\thelper = ${JSON.stringify(helper("oversized-helper-used") + " ".repeat(40_000))}\n`,
     );
     const result = await fetchRemote();
-    expect(result.truncated).toBe(true);
+    expect(result.truncated).toBe(false);
     expect(result.credentialHelperSource).toBe("unavailable");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.refusal).toBe("credential-discovery-unavailable");
+    expect(classifyGitRemoteFailure(result)).toBe("credential-discovery-unavailable");
     expect(result.stdout + result.stderr).toBe("");
     expect(existsSync(join(fixture, "oversized-helper-used"))).toBe(false);
   });

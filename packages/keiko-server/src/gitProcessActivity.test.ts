@@ -38,6 +38,37 @@ function onlyEvent(events: readonly ServerLogEvent[]): ServerLogEvent {
 }
 
 describe("logGitProcessOutcome", () => {
+  it("records failed credential admission as unavailable without echoing configuration", () => {
+    const log = captureActivityLog();
+    logGitProcessOutcome(
+      log.sink,
+      "corr-credential-admission",
+      ["fetch", "origin"],
+      result({
+        exitCode: 128,
+        truncated: true,
+        refusal: "credential-discovery-unavailable",
+        credentialHelperSource: "unavailable",
+        stdout: "synthetic-private-helper-body",
+        stderr: "synthetic-private-config-detail",
+      }),
+      1,
+    );
+    const event = onlyEvent(log.events);
+    expect(event).toMatchObject({
+      op: "git.process.refused",
+      errorKind: "unavailable",
+      extra: {
+        refusal: "credential-discovery-unavailable",
+        failureKind: "credential-discovery-unavailable",
+        credentialHelperSource: "unavailable",
+      },
+    });
+    const line = formatActivityLogProofLine(event);
+    expectActivityLogProof("git.process.refused.line", line);
+    expect(line).not.toMatch(/synthetic-private|helper-body|config-detail/u);
+  });
+
   it("writes nothing for a successful git run", () => {
     const log = captureActivityLog();
 

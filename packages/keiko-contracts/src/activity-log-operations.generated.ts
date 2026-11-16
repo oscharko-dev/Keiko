@@ -30485,6 +30485,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "diff-enabling-flag",
           "config-override",
           "untrusted-executable",
+          "credential-discovery-unavailable",
         ],
       },
       failureKind: {

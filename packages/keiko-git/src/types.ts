@@ -3,7 +3,8 @@
 // git through this one interface so byte caps, timeouts, and error mapping behave identically.
 
 /**
- * Why the single spawn boundary refused an invocation BEFORE starting a process.
+ * Why the single spawn boundary refused the requested Git command before starting it.
+ * Admission may first run a bounded host-configuration probe.
  *
  * This union is the body-free half of that fact: it names WHICH preflight fired and nothing about
  * the value that tripped it. The RAW token in the result's `stderr` is not — for the
@@ -22,6 +23,8 @@ export type GitRefusalClass =
   | "diff-enabling-flag"
   /** `-c` / `--config-env` overriding a denied config key (`diff.external`, `core.pager`, …). */
   | "config-override"
+  /** Host credential configuration could not be read completely; the remote command never ran. */
+  | "credential-discovery-unavailable"
   /**
    * A `git` on PATH that resolves to a location this process must not trust — workspace-contained,
    * or group/world-writable (KEIKO-0263's planted-binary indicator). Not an argv refusal, but the
@@ -58,10 +61,10 @@ export interface GitProcessResult {
    */
   readonly aborted?: boolean | undefined;
   /**
-   * Set only when the spawn boundary refused this invocation and no process ever ran — the argv
-   * preflight (`exitCode` 128) or the executable-trust check (`exitCode` 127). Optional for the
+   * Set when the requested invocation did not run: argv preflight (`exitCode` 128), executable
+   * trust (`exitCode` 127), or credential admission after a bounded configuration probe. Optional for the
    * same reason as `timedOut`/`aborted` above — result literals in fake runners stay valid — and
-   * absent on every result that reached a real `git` process, so `refusal !== undefined` is the
+   * absent on every result of the requested real `git` command, so `refusal !== undefined` is the
    * exact test for "Keiko itself refused this", never a stderr match.
    */
   readonly refusal?: GitRefusalClass | undefined;

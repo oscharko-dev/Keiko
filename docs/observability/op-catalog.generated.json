@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4e5399bbd0cf5c8c1b0cec734cdf701bd6f8710eaaed8773e490865729e7bd86",
+    "catalogDigest": "7683a4841d63689b4a5f71c77bf359e7abf28a212d6d6610b427ae08e62daf6f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -31681,8 +31681,8 @@
         "failureClasses": ["git-process-failure"],
         "proofIds": ["git.process.failed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:158",
-        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:457"]
+        "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:160",
+        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:460"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31754,7 +31754,8 @@
               "remote-command-option",
               "diff-enabling-flag",
               "config-override",
-              "untrusted-executable"
+              "untrusted-executable",
+              "credential-discovery-unavailable"
             ]
           },
           "failureKind": {
@@ -31770,8 +31771,8 @@
         "failureClasses": ["git-process-refusal"],
         "proofIds": ["git.process.refused.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:128",
-        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:429"]
+        "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:129",
+        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:432"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -123559,13 +123560,13 @@
     {
       "op": "git.process.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitProcessActivity.ts:161",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:163",
       "package": "keiko-server"
     },
     {
       "op": "git.process.refused",
       "category": "security",
-      "site": "packages/keiko-server/src/gitProcessActivity.ts:131",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:132",
       "package": "keiko-server"
     },
     {

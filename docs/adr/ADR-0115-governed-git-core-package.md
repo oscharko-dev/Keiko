@@ -63,6 +63,15 @@ package-graph allowlist) that owns the shared git core:
    credential bytes. Discovery shares the operation's cancellation and deadline, fails closed on
    truncated or invalid configuration, and records only closed helper provenance on the existing
    `git.process.failed`/`git.process.refused` activity lines. Local reads remain config-isolated.
+   A failed, malformed or truncated listing returns a synthetic nonzero
+   `credential-discovery-unavailable` refusal; its exit status and text never stand in for a
+   remote command that did not run, and the synthetic refusal does not claim truncated remote
+   output. Spawn, cancellation and deadline causes retain their own classification. Discovery and
+   the remote command share a monotonic deadline; an exhausted budget cannot start the remote
+   command with a fresh minimum timeout. Sync explicitly projects the admission refusal to `git-error`, clone to
+   `GIT_CLONE_FAILED`, and sync success requires the shared classifier's `none` reason, so even a
+   byte-capped process racing to exit zero cannot appear successful. The Activity Log carries the
+   closed refusal and helper provenance, never configuration text.
    Windows profile/store paths use the same case-insensitive, code-unit-ordered environment
    lookup as the security boundary, now owned by the contracts leaf and re-exported by security;
    macOS/POSIX names remain exact. Explicit environment snapshots never borrow an ambient PATH.
