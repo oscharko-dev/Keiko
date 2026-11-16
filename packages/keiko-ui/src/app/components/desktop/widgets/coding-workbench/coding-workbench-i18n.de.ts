@@ -464,7 +464,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.projectMemory.enable": "Projekt-Memory für diesen Lauf einschalten",
   "codingWorkbench.composer.projectMemory.disable": "Projekt-Memory für diesen Lauf ausschalten",
   "codingWorkbench.composer.help":
-    "Pausieren Sie den aktiven Lauf, um eine Rückfrage zu senden. Ein entworfener Follow-up wird nur im pausierten Zustand zugelassen und niemals in eine Warteschlange gestellt.",
+    "Pausiere den Lauf, um die Rückfrage zu senden. Für diesen Lauf ist keine Warteschlange verfügbar.",
   "codingWorkbench.composer.workspaceMismatch":
     "Dieser Lauf behält die Autorität des Arbeitsbereichs, in dem er gestartet wurde; dieser ist nicht mehr der aktive. Das Informationspanel und der Laufstatus beschreiben weiterhin diesen Lauf. Wechseln Sie über die Workspace-Auswahl oben zurück, um seine Dateien zu prüfen oder zu bearbeiten.",
   "codingWorkbench.composer.blocked.busy": "Keiko verarbeitet gerade eine Runtime-Aktion.",

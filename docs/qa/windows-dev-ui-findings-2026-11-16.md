@@ -206,6 +206,24 @@ results with the observed reason.
 - Verify with the native command result when the runtime admits a test. When it refuses,
   check the exact reason, the `Not run` presentation and the absence of a test process.
 
+On release commit `0ad205016`, a three-file, 367-byte Git fixture reached **Succeeded**
+with the expected read result and zero changes through both Azure GPT-5.4 and LiteLLM
+Gemma. A separate controlled provider held a real stream across an Edge reload. The
+unsent follow-up survived reload, Pause offered **Send follow-up**, Resume returned to
+**Running**, and Stop aborted the provider request. The next task opened a new request
+and succeeded. The mapped turn offered Pause and Stop. Queue and Send now depend on
+native Windows qualification [#4068](https://github.com/oscharko-dev/Keiko/issues/4068).
+The missing instruction to pause before sending is tracked in
+[#4440](https://github.com/oscharko-dev/Keiko/issues/4440).
+
+After the normal Edge microphone permission prompt, the Workbench transmitted WAV
+audio captured from a synthetic source to the controlled transcription provider.
+The returned text was inserted once into the editable draft and started zero model
+turns. A provider HTTP 503 showed the dictation error, preserved the edited draft and
+left the microphone control usable. This covers capture, transport, insertion and
+error recovery with a fixed transcript. Hardware recording and upstream model
+recognition remain open.
+
 ### Jira Pod
 
 - Test connection and recovery with a dedicated QA Jira project. Search across two pages

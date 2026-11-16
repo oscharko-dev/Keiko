@@ -439,7 +439,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.projectMemory.enable": "Enable project memory for this run",
   "codingWorkbench.composer.projectMemory.disable": "Disable project memory for this run",
   "codingWorkbench.composer.help":
-    "Pause the active run to send a follow-up. A drafted follow-up is admitted only while paused and is never queued.",
+    "Pause the run to send this follow-up. Queuing is unavailable for this run.",
   "codingWorkbench.composer.workspaceMismatch":
     "This run keeps the authority of the workspace it started in, which is no longer the active one. The information panel and run status keep describing that run; switch back through the header workspace selector to review or edit its files.",
   "codingWorkbench.composer.blocked.busy": "Keiko is already processing a runtime action.",

@@ -671,6 +671,9 @@ function ProjectMemoryToggle({ input, t }: ControlProps): ReactNode {
 }
 
 function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode {
+  const followUpHelpId = useId();
+  const showFollowUpHelp =
+    input.runState === "running" && !controller.deliveryEnabled && input.taskIntent.trim() !== "";
   return (
     <div className="cmp-box">
       <ComposerShell
@@ -687,6 +690,7 @@ function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode
         ariaControls={
           controller.picker.controls ?? controller.menu.controls ?? controller.skillMenu.controls
         }
+        ariaDescribedBy={showFollowUpHelp ? followUpHelpId : undefined}
         onChange={(event): void => {
           input.onTaskIntentChange(event.target.value);
           controller.onTextChange(event.target.value, event.target.selectionStart);
@@ -696,7 +700,16 @@ function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode
         }
         onKeyDown={controller.onKeyDown}
         aboveInput={<FileReferences controller={controller} t={t} />}
-        belowInput={<ComposerNotices controller={controller} input={input} t={t} />}
+        belowInput={
+          <>
+            {showFollowUpHelp ? (
+              <output className={promptStyles.cmpNotice} id={followUpHelpId}>
+                {t("codingWorkbench.composer.help")}
+              </output>
+            ) : null}
+            <ComposerNotices controller={controller} input={input} t={t} />
+          </>
+        }
         footer={<ComposerFooter input={input} controller={controller} t={t} />}
       />
     </div>
