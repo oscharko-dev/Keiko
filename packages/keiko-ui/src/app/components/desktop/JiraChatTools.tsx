@@ -36,6 +36,7 @@ import { ChatProcessingPipeline } from "./ChatProcessingPipeline";
 import { chatProcessingSteps } from "./chat-processing-pipeline";
 import type { JiraDraftProblemCode } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { useJiraResultEvidence } from "./jira-result-evidence";
+import { knowledgeToolFailureView } from "./knowledge-tool-failure";
 import {
   jiraToolOutcomeView,
   knowledgeToolOutcomeView,
@@ -100,6 +101,14 @@ function JiraToolResultDetails({ exchange }: { readonly exchange: ChatToolExchan
   const t = useTranslate();
   const data = exchange.result?.data ?? exchange.draftProgress;
   if (data == null) return null;
+  const failure = knowledgeToolFailureView(exchange);
+  if (failure !== undefined)
+    return (
+      <div>
+        <p>{t(failure.reason)}</p>
+        <p>{t(failure.recovery)}</p>
+      </div>
+    );
   return (
     <div>
       <p>{t("chat.tool.readableResultUnavailable")}</p>

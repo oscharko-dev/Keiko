@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e334a6950974e4c9cba271cc3867de7d0cb1b7195897ac27e3e14079fa2d376d",
+    "catalogDigest": "2b37de44dd10636556d5b4ead0b9c345570723c8659638540dbf03f4b7414244",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -36986,6 +36986,17 @@
             "dataClass": "closed-enum",
             "required": true
           },
+          "sourceRefusal": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "cursor-stale",
+              "document-or-cursor-stale",
+              "document-stale-or-out-of-scope",
+              "source-changed"
+            ]
+          },
           "requirementCount": {
             "type": "integer",
             "dataClass": "count",
@@ -37110,8 +37121,8 @@
         "failureClasses": ["requirement-inventory"],
         "proofIds": ["knowledge.documents.operation.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/knowledge-document-activity.ts:62",
-        "emitterSites": ["packages/keiko-server/src/knowledge-document-activity.ts:166"]
+        "registrationSite": "packages/keiko-server/src/knowledge-document-activity.ts:64",
+        "emitterSites": ["packages/keiko-server/src/knowledge-document-activity.ts:179"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -108457,6 +108468,12 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "sourceRefusal",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -123783,7 +123800,7 @@
     {
       "op": "knowledge.documents.operation",
       "category": "search",
-      "site": "packages/keiko-server/src/knowledge-document-activity.ts:65",
+      "site": "packages/keiko-server/src/knowledge-document-activity.ts:67",
       "package": "keiko-server"
     },
     {

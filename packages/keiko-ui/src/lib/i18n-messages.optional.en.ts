@@ -2274,6 +2274,15 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.documents.tool": "Documents",
   "chat.review.tool": "Document review",
   "chat.knowledge.partial": "Partial result. Some document information is not included.",
+  "chat.knowledge.failure.cursorStale":
+    "This continuation is no longer valid for the requested document read.",
+  "chat.knowledge.failure.documentOrCursorStale":
+    "The selected document or its continuation is no longer valid for this request.",
+  "chat.knowledge.failure.documentStaleOrOutOfScope":
+    "The selected document changed or is outside the currently connected Knowledge Pods.",
+  "chat.knowledge.failure.sourceChanged": "The connected sources changed during this request.",
+  "chat.knowledge.failure.restartSource":
+    "Ask Keiko to refresh the document list from the currently connected Knowledge Pods and restart the read or review. It must use the newly returned continuation and state any remaining coverage limits.",
   "chat.knowledge.outcome.results": "Knowledge results",
   "chat.knowledge.outcome.detected": "Detected requirements",
   "chat.knowledge.outcome.matched": "Matching requirements",

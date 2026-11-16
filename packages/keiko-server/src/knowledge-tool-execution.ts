@@ -1,5 +1,6 @@
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { knowledgeStaleSourceReason } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import type { KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
 import type { UiHandlerDeps } from "./deps.js";
 import { correlationIdOrUnknown } from "./correlation.js";
@@ -37,12 +38,6 @@ export interface KnowledgeToolRead {
   readonly confirmModelOperation?: () => void;
 }
 
-const STALE_SOURCE_REASONS = new Set([
-  "cursor-stale",
-  "document-or-cursor-stale",
-  "document-stale-or-out-of-scope",
-  "source-changed",
-]);
 const STALE_SOURCE_NEXT_STEP =
   "Restart knowledge.documents inventory in this Chat's current selected Pods. Use its current documentScope and revisionDigest, then read or review from the first window without the refused cursor. Follow only newly returned nextCursor values and state any remaining coverage limits.";
 
@@ -51,7 +46,9 @@ export function knowledgeToolFailure(reason: string): KnowledgeToolRead {
     data: {
       outcome: "failed",
       reason,
-      ...(STALE_SOURCE_REASONS.has(reason) ? { nextStep: STALE_SOURCE_NEXT_STEP } : {}),
+      ...(knowledgeStaleSourceReason(reason) === undefined
+        ? {}
+        : { nextStep: STALE_SOURCE_NEXT_STEP }),
     },
   };
 }
@@ -67,6 +64,8 @@ function logRead(
   read: KnowledgeToolRead,
   documentCount: number,
 ): void {
+  const sourceRefusal =
+    read.data.outcome === "failed" ? knowledgeStaleSourceReason(read.data.reason) : undefined;
   logKnowledgeDocumentOperation(context.correlationId, {
     operation,
     disposition: readDisposition(read),
@@ -75,6 +74,7 @@ function logRead(
     sourceChars: read.sourceChars ?? 0,
     cached: read.cached ?? false,
     hasNextPage: typeof read.data.nextCursor === "string",
+    ...(sourceRefusal === undefined ? {} : { sourceRefusal }),
     ...read.reviewObservation,
   });
 }

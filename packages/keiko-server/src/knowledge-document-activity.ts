@@ -5,6 +5,7 @@ import {
 import { getServerLogger } from "./observability/index.js";
 
 import type {
+  KnowledgeStaleSourceReason,
   KnowledgeReviewFailureStage,
   KnowledgeReviewValidationReason,
 } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
@@ -51,6 +52,7 @@ export interface KnowledgeDocumentActivity extends KnowledgeReviewObservation {
   readonly sourceChars: number;
   readonly hasNextPage: boolean;
   readonly cached: boolean;
+  readonly sourceRefusal?: KnowledgeStaleSourceReason;
   readonly requirementCount?: number;
   readonly readRequirementCount?: number;
   readonly reviewedDocumentCount?: number;
@@ -84,6 +86,17 @@ const OPERATION = defineActivityLogOperation({
     sourceChars: COUNT,
     hasNextPage: { type: "boolean", dataClass: "closed-enum", required: true },
     cached: { type: "boolean", dataClass: "closed-enum", required: true },
+    sourceRefusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "cursor-stale",
+        "document-or-cursor-stale",
+        "document-stale-or-out-of-scope",
+        "source-changed",
+      ] satisfies readonly KnowledgeStaleSourceReason[],
+    },
     requirementCount: { ...COUNT, required: false },
     readRequirementCount: { ...COUNT, required: false },
     reviewedDocumentCount: { ...COUNT, required: false },
