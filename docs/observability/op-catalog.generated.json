@@ -126395,7 +126395,7 @@
     {
       "op": "coding-runtime.composition.retired-setting",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:6953",
+      "site": "packages/keiko-server/src/deps.ts:6956",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129290,7 +129290,7 @@
     {
       "op": "review.pair-qualification.startup-sweep",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5564",
+      "site": "packages/keiko-server/src/deps.ts:5562",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129357,21 +129357,21 @@
     {
       "op": "review.runtime.budget",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5359",
+      "site": "packages/keiko-server/src/deps.ts:5357",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "review.runtime.compose",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5619",
+      "site": "packages/keiko-server/src/deps.ts:5617",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "review.services.compose",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5394",
+      "site": "packages/keiko-server/src/deps.ts:5392",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129433,7 +129433,7 @@
     {
       "op": "review.worktree.startup-sweep",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5423",
+      "site": "packages/keiko-server/src/deps.ts:5421",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

@@ -5347,10 +5347,8 @@ function reviewRunBudget(args: UiHandlerDepsAssemblyArgs): ReviewRunBudget | und
   if (known !== undefined) return known ?? undefined;
   let budget: ReviewRunBudget | null = null;
   try {
-    budget = configuredReviewRunBudget(
-      args.options.env,
-      configuredRuntimeEnvelopeBounds(args.options.env),
-    );
+    // The bounds alone: the coding composition already records a retired setting once (#4346).
+    budget = configuredReviewRunBudget(args.options.env, runtimeEnvelopeBounds(args.options.env));
   } catch (error) {
     emitServerDiagnostic(
       args.options.diagnostics,
@@ -6935,6 +6933,11 @@ interface RuntimeEnvelopeBounds {
 
 function configuredRuntimeEnvelopeBounds(env: EnvSource): RuntimeEnvelopeBounds {
   recordRetiredPromptTokenSetting(env);
+  return runtimeEnvelopeBounds(env);
+}
+
+/** The envelope bounds alone, for a second reader such as the review run budget; records nothing. */
+function runtimeEnvelopeBounds(env: EnvSource): RuntimeEnvelopeBounds {
   return {
     maxDurationMinutes: configuredRuntimeMaxDurationMinutes(
       env.KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES,
