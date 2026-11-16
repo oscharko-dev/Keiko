@@ -147,6 +147,51 @@ function onlyLine(logs: ReturnType<typeof createBufferedServerLogSink>): string 
 }
 
 describe("Jira report export route", () => {
+  it("records a failed retention attempt before continuing the remaining reports", () => {
+    const store = createInMemoryUiStore();
+    try {
+      const project = store.createProject(process.cwd());
+      const chat = store.createChat(project.path, "Report fixture", "synthetic");
+      const reports = seeded(chat.id);
+      const first = reports.finished(chat.id)[0];
+      const port = store.jiraReportExports;
+      if (first === undefined || port === undefined)
+        throw new TypeError("Missing retention fixture");
+      vi.spyOn(reports, "finished").mockReturnValue([
+        first,
+        { ...first, id: "22222222-2222-4333-8444-555555555555" },
+      ]);
+      const logs = createBufferedServerLogSink();
+      const beforeContinuation: unknown[] = [];
+      vi.spyOn(port, "touch")
+        .mockImplementationOnce(() => {
+          throw new Error("SYN-99 private-report-body");
+        })
+        .mockImplementationOnce(() => {
+          beforeContinuation.push(...logs.events);
+          return false;
+        });
+      retainJiraReportExports({ store, activityLog: logs }, reports, chat.id, "retention-fixture");
+      expect(beforeContinuation).toHaveLength(1);
+      expect(beforeContinuation[0]).toMatchObject({
+        op: "atlassian.jira-report",
+        level: "warn",
+        correlationId: "retention-fixture",
+        extra: { phase: "retain", refusal: "export-unavailable" },
+      });
+      expect(logs.events.at(-1)).toMatchObject({
+        extra: { phase: "retain", retainedReportCount: 1, refusal: "export-unavailable" },
+      });
+      for (const event of logs.events)
+        expectActivityLogProof("atlassian.jira-report.line", formatActivityLogProofLine(event));
+      expect(JSON.stringify(logs.events)).not.toMatch(
+        /SYN-99|private-report-body|Only task|REP-1/u,
+      );
+    } finally {
+      store.close();
+    }
+  });
+
   it("retains finished exports once and records retention failures without report text (#4390)", () => {
     const store = createInMemoryUiStore();
     try {

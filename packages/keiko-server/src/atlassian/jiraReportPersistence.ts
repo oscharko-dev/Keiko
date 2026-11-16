@@ -37,6 +37,11 @@ export function retainJiraReportExports(
       else failed = true;
     } catch {
       // SQLite or projection errors may contain private report text. Record only the closed failure.
+      recordJiraReportActivity(deps.activityLog, correlationId, {
+        phase: "retain",
+        refusal: "export-unavailable",
+        durationMs: Date.now() - startedAt,
+      });
       failed = true;
     }
   }
