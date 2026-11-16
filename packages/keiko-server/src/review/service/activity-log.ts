@@ -225,9 +225,9 @@ const REVIEW_RUN_SETTLED = defineActivityLogOperation({
     // findings as it may. They carry no verdict and do not make the run incomplete. Present only
     // when there are any.
     surplusCandidateCount: OPTIONAL_COUNT,
-    // #4130: parts whose Reviewer session reached its read allowance, and those of them whose
-    // session then reported nothing. Such a part counts as reviewed, and a run with a silent one
-    // settles as a warning. Present once the Reviewer has run.
+    // #4130: parts whose last Reviewer session was refused a read, and those of them whose completed
+    // session reported nothing. A completed one counts as reviewed, a failed one keeps its failure;
+    // a run with a silent one settles as a warning. Present once the Reviewer has run.
     readLimitedPartCount: OPTIONAL_COUNT,
     readLimitedSilentPartCount: OPTIONAL_COUNT,
     reviewerPromptTokens: COUNT,

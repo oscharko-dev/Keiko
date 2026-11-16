@@ -572,7 +572,7 @@ describe("counterCheckCandidate", () => {
     });
   });
 
-  // #4130: a session with a verdict, and one out of prompt tokens, would end the same way again.
+  // #4130: a session with a verdict, and one at its tool-call ceiling, would end the same way again.
   it("marks neither a decided check nor one out of budget as worth a second session", async () => {
     const candidate = await candidateOf(report());
     expect(await check(scripted([CONFIRM]), candidate)).toMatchObject({

@@ -118,9 +118,9 @@ export interface ReviewRunState {
    */
   partCount: number;
   /**
-   * Parts whose last Reviewer session reached its read allowance, and those of them whose session
-   * completed without an accepted report (#4130). Such a part counts as reviewed; the run's result
-   * and its settled line carry both numbers, so a part that was cut and silent is never unseen.
+   * Parts whose last Reviewer session was refused a read, and those of them whose session completed
+   * without an accepted report (#4130). A completed one counts as reviewed, a failed one keeps its
+   * failure; the result and the settled line carry both numbers, so a silent cut is never unseen.
    */
   readLimitedParts: number;
   readLimitedPartsWithoutReport: number;

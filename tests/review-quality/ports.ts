@@ -35,9 +35,9 @@ export interface GateReviewRecord {
   readonly presentedCount: number;
   readonly runtimeCleanup: string | null;
   /**
-   * Parts whose Reviewer session reached its read allowance, and those of them that then reported
-   * nothing (#4130). Such a part counts as reviewed, so the settlement does not show it; the gate
-   * reports it beside the settlements. `null` when the Reviewer never ran.
+   * Parts whose last Reviewer session was refused a read, and those of them whose completed session
+   * reported nothing (#4130). A completed one counts as reviewed, so the settlement does not show
+   * it; the gate reports it beside the settlements. `null` when the Reviewer never ran.
    */
   readonly readLimitedParts: number | null;
   readonly readLimitedPartsWithoutReport: number | null;

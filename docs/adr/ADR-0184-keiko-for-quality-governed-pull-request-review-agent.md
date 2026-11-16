@@ -348,20 +348,6 @@ that keeps calling the refused tools still ends on the tool ceiling. `review.cou
 records `admittedReadCallCount` and `refusedReadCallCount`, and `review.run.started` the allowance
 in force as `counterCheckMaxReadCalls`.
 
-A counter-check has a read allowance of 8 read, list and search calls (Issue #4130,
-`REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS`), the mechanism the Reviewer's sessions have (D1).
-Once it is used up, the three tools answer one fixed instruction to record the verdict from what
-was read, and the verdict tool works as before; the verdict tool is not counted. The task states
-the number. In development iteration 7 the number of tool calls a check made predicted how it
-ended: of 104 checks with at most 4 tool calls 1 ran out of time or tokens, of 72 with 5 to 8 calls
-12 did, and of 22 with 9 or more 13 did. Each call resends the session's conversation, so a check
-that keeps reading uses up its time or its prompt tokens before it decides, and the task's request
-for at most four calls did not hold it. A verdict recorded at the allowance is the Counter-checker's
-own, including `undecided/insufficient-context`, which does not make a run incomplete; a session
-that keeps calling the refused tools still ends on the tool ceiling. `review.counter-check.completed`
-records `admittedReadCallCount` and `refusedReadCallCount`, and `review.run.started` the allowance
-in force as `counterCheckMaxReadCalls`.
-
 A turn of a counter-check may take 4,096 output tokens (Issue #4130,
 `REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS`), and each turn asks for the gateway's one steered
 repair (`answerRepair: "steered"`, ADR-0003). The offline gate's Counter-checker writes about 12

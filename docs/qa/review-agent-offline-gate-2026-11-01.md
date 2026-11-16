@@ -233,8 +233,9 @@ Reading of the runs so far:
   the last turns took 2,400 to 3,900 output tokens each.
 - The Counter-checker's reasoning grows with the turns of a check. Its median reasoning was 181
   tokens in the first turn, 437 in the sixth, 605 in the ninth and 1,521 in the tenth, the turn
-  after the read allowance is used. Turns that used their output budget cluster at turns 6, 7 and 10. Keiko does not send a model's earlier reasoning back to it, so each turn starts from the tool
-  calls and results alone. Whether that causes the growth is not measured yet.
+  after the read allowance is used. Turns that used their output budget cluster at turns 6, 7
+  and 10. Keiko does not send a model's earlier reasoning back to it, so each turn starts from
+  the tool calls and results alone. Whether that causes the growth is not measured yet.
 - The Reviewer's sessions: 112 sessions for 109 parts. Three sessions that failed without a
   candidate were started again, and all three second sessions completed, with 3, 4 and 4
   candidates. 101 of the 109 parts ended with a completed session. 60 sessions used all 16 reads,
@@ -262,9 +263,9 @@ Reading of the runs so far:
   - The stock chat template marks "no thinking" only on a turn that does not follow a tool result,
     and the model reasons on its first turn all the same, so a template cannot switch its
     reasoning off.
-    The merge of dev 1.5.0 brings a provider setting that sends the reasoning back (`reasoningHistory`).
-    The lab uses it from iteration 9 on. A turn that runs away is left to the second counter-check
-    session.
+  - The merge of dev 1.5.0 brings a provider setting that sends the reasoning back
+    (`reasoningHistory`). The lab uses it from iteration 9 on. A turn that runs away is left to the
+    second counter-check session.
 - From the merge of dev 1.5.0 on, two recorded values are not comparable with earlier rows: the
   configuration digest, because the two retired prompt-token settings are no longer part of it,
   and `describedPathCount` on `gateway.tool-catalog.repair`, which now counts only the listed

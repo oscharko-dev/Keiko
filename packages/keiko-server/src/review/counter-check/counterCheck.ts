@@ -119,8 +119,8 @@ export interface CounterCheckOutcome {
   readonly effect: CounterCheckEffect;
   /**
    * Whether a fresh session may end differently (#4130): this one ended without a verdict on a
-   * model failure or on its own wall-time limit. A model that does not exist, a session out of
-   * prompt tokens and a cancelled one are not.
+   * model failure or on its own wall-time limit. A model that does not exist, a session at its
+   * tool-call ceiling and a cancelled one are not.
    */
   readonly retryable: boolean;
   readonly toolCallCount: number;

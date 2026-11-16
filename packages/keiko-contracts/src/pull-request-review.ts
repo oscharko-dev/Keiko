@@ -634,10 +634,10 @@ export interface ReviewDiffCoverageSummary {
   /** The included content's token count as the gateway's estimator measures it. */
   readonly usedTokens: number;
   /**
-   * Diff package parts whose Reviewer session reached its read allowance: Keiko answered no further
-   * read, list or search call, so the session judged the part from its hunks and the code it had
-   * read until then (#4130). Such a part counts as reviewed. Present once the Reviewer has run;
-   * absent on a run recorded before this field and on one whose Reviewer never started.
+   * Diff package parts whose last Reviewer session was refused a read (#4130). A completed one
+   * counts as reviewed: the session judged the part from its hunks and the code it had read until
+   * then. A failed one keeps its failure (R4130-073). Present once the Reviewer has run; absent
+   * on a run recorded before this field and on one whose Reviewer never started.
    */
   readonly readLimitedParts?: number | undefined;
   /**
