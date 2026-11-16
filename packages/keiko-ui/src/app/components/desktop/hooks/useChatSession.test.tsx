@@ -334,6 +334,8 @@ function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): Rea
 }
 
 describe("useChatSession bootstrap", () => {
+  afterEach(resetClientDiagnosticWriter);
+
   it("loads run-summary formatting on demand and cancels before a delayed load can fetch", async () => {
     expect(runSummaryModule.loads).toBe(0);
     vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
@@ -369,7 +371,6 @@ describe("useChatSession bootstrap", () => {
     expect(patchChatMessage).not.toHaveBeenCalled();
   });
 
-  afterEach(resetClientDiagnosticWriter);
   it.each(["/repo", "/other"])(
     "keeps an explicit selection in %s when the initial bootstrap settles later",
     async (selectedProject) => {
