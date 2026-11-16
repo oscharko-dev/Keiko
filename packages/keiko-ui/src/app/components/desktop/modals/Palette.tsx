@@ -18,6 +18,7 @@ import {
 } from "../windows/WindowsRegistry";
 import { useTranslate } from "@/lib/i18n";
 import { useWindowStageEvidence } from "../hooks/useWindowStageEvidence";
+import controlStyles from "../WorkspaceControls.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const AddIcon = Icons.add;
@@ -160,7 +161,7 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <div
       ref={ref}
-      className="palette"
+      className={`palette ${controlStyles.cmpWorkspacePalette}`}
       role="dialog"
       aria-labelledby="palette-title"
       aria-describedby="palette-desc"
