@@ -183,14 +183,18 @@ Each refusal is recorded on `review.run.action-refused` with its `layer` (`tool-
 The startup self-check (`selfCheck.ts`) refuses with `review-profile-invalid`, `native-profile` or
 `authority-missing` (`review.run.profile-refused`) unless: the readiness profile is `review`; the
 generated configuration deep-equals the canonical review configuration regenerated for the context
-geometry it declares (the only geometry-dependent parts are the provider model limits and the
-compaction derived from them), so any added, removed or changed key refuses, including plugins,
+geometry it declares (the only geometry-dependent parts are the provider model limits, the
+compaction derived from them and, for a provider that requires reasoning continuation, the one
+`compatibility` declaration the server generates), so any added, removed or changed key refuses, including plugins,
 commands, skills, references, shell, web search, foreign providers and policies; the plugin set is
 exactly the two review plugins, each source matching its pinned SHA-256; the authority a run would
 be minted with is `workspace-read` only at `governed-assist` with the review purpose; and the
 composed resolver's facade purpose (read from the composition, not from the authority probe) is
 `review`. The composition re-checks the configuration and plugin set of every review launch with the
-same exact comparisons before they are written. Each layer is proven alone with the others disabled
+same exact comparisons before they are written. The context plugin is shared with the coding
+profiles. Since dev's #4267 it also leaves the assistant turns that did not finish, and their tool
+results, out of the next prompt of a model that requires reasoning continuation. It still registers
+no tool, and its source was reviewed and re-pinned with that change. Each layer is proven alone with the others disabled
 (`readOnlyLayers.test.ts`), and layer 4 is proven with the review purpose removed from the minted
 authority (`composition.test.ts`).
 
