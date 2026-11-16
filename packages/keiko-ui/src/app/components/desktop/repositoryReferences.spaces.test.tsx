@@ -122,6 +122,47 @@ describe("complete prose source filenames (#4406)", () => {
     expect(sanitizeRepositoryEvidenceText(`[1] ${path}`, [path])).toBe(`[1] ${path}`);
   });
 
+  it.each([
+    "Release - Notes.mdExtra.ts",
+    "Release - Notes.mdExtra.ts:1-2",
+    "Release - Notes.mdREADME.md",
+    "Release - Notes.md.foo.ts",
+    "Release - Notes.md/Extra.ts",
+    String.raw`Release - Notes.md\Extra.ts`,
+    "Release - Notes.md-Extra.ts",
+    "Release - Notes.md_Extra.ts",
+    "Release - Notes.md@Extra.ts",
+    "Release - Notes.md:12Extra.ts",
+    "README.mdRelease - Notes.md",
+    "README.md/Release - Notes.md",
+  ])("does not invent a reference at a rejected known-path boundary: %s", (source) => {
+    const path = "Release - Notes.md";
+    const sanitized = sanitizeRepositoryEvidenceText(source, [path]);
+    expect(sanitized).toBe(source);
+    expect(
+      repositoryReferenceTextParts(sanitized, [path]).filter((part) => part.kind === "reference"),
+    ).toEqual([]);
+    render(
+      <SafeMarkdown
+        source={source}
+        repositoryRoots={roots}
+        repositoryEvidence={evidenceFor(path)}
+        openRepositoryReference={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(document.body).toHaveTextContent(source);
+  });
+
+  it("keeps real neighboring references around a rejected known-path boundary", () => {
+    const source = "README.md; Release - Notes.mdExtra.ts; see CONTRIBUTING.md.";
+    const parts = repositoryReferenceTextParts(source, ["Release - Notes.md"]);
+    expect(
+      parts.flatMap((part) => (part.reference === undefined ? [] : [part.reference.path])),
+    ).toEqual(["README.md", "CONTRIBUTING.md"]);
+    expect(parts.map((part) => part.reference?.label ?? part.text ?? "").join("")).toBe(source);
+  });
+
   it("preserves a bracketed source identity through known-path sanitization and parsing", () => {
     const source = "[source:2|Release  Notes.md]";
     const knownPaths = ["Release  Notes.md"];

@@ -71,4 +71,43 @@ describe("evidence-bound spaced filenames", () => {
     expect(scaling.measurable).toBe(true);
     expect(scalingRatio(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
   });
+
+  it("keeps rejected known-path fragments inert in their original context", async () => {
+    const name = "known path fragments cannot create new reference boundaries";
+    const settings = propertySettings({ name });
+    let checked = 0;
+    await checkProperty({
+      name,
+      generate: (random) => ({
+        path: `${random.pick(["Release", "Prüfung", "会議"])} - Notes.md`,
+        attachment: random.pick(["", "_", "-", "@"]),
+        side: random.pick(["before", "after"]),
+      }),
+      property: ({ path, attachment, side }) => {
+        const invalid =
+          side === "before" ? `README.md${attachment}${path}` : `${path}${attachment}Extra.ts`;
+        const source = `README.md; ${invalid}; see CONTRIBUTING.md.`;
+        const sanitized = sanitizeRepositoryEvidenceText(source, [path]);
+        const parts = repositoryReferenceTextParts(sanitized, [path]);
+        expect(
+          parts.flatMap((part) => (part.reference === undefined ? [] : [part.reference.path])),
+        ).toEqual(["README.md", "CONTRIBUTING.md"]);
+        expect(parts.map((part) => part.reference?.label ?? part.text ?? "").join("")).toBe(source);
+        checked += 1;
+      },
+    });
+    expect(checked).toBe(settings.runs);
+  });
+
+  it("scans non-reference ranges only once around refused evidence names", () => {
+    const path = "not a path";
+    const scaling = measureScaling({
+      size: 512,
+      maximumSize: 8192,
+      build: (size) => `${path}; `.repeat(size),
+      run: (source) => repositoryReferenceTextParts(source, [path]),
+    });
+    expect(scaling.measurable).toBe(true);
+    expect(scalingRatio(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
+  });
 });

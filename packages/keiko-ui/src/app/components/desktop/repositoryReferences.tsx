@@ -347,7 +347,7 @@ function boundaryBefore(value: string, index: number): boolean {
 function boundaryAfter(value: string, index: number): boolean {
   if (index >= value.length) return true;
   const next = value.slice(index, index + 2);
-  return !/^[\p{L}\p{N}\p{M}\p{Sc}_\\/:+$^~\x60\u2010-\u2014\u2212-]/u.test(next);
+  return !/^[\p{L}\p{N}\p{M}\p{Sc}_\\/:@+$^~\x60\u2010-\u2014\u2212-]/u.test(next);
 }
 
 // Plain string scans (not regexes) for leading/trailing slash trimming: an unanchored-at-start
@@ -680,10 +680,10 @@ export function repositoryReferenceTextParts(
   const matches = knownReferenceMatches(source, knownPaths);
   if (matches.length === 0) return unboundRepositoryReferenceTextParts(source);
   const parts: RepositoryReferenceTextPart[] = [];
+  const unboundParts = unboundReferenceTextRangeReader(source);
   let cursor = 0;
   for (const match of matches) {
-    if (match.start > cursor)
-      parts.push(...unboundRepositoryReferenceTextParts(source.slice(cursor, match.start)));
+    if (match.start > cursor) parts.push(...unboundParts(cursor, match.start));
     parts.push(
       match.reference === null
         ? { kind: "text", text: match.text }
@@ -691,31 +691,42 @@ export function repositoryReferenceTextParts(
     );
     cursor = match.end;
   }
-  if (cursor < source.length)
-    parts.push(...unboundRepositoryReferenceTextParts(source.slice(cursor)));
+  if (cursor < source.length) parts.push(...unboundParts(cursor, source.length));
   return parts;
 }
 
 function unboundRepositoryReferenceTextParts(
   source: string,
 ): readonly RepositoryReferenceTextPart[] {
-  const parts: RepositoryReferenceTextPart[] = [];
-  let lastIndex = 0;
-  const pattern = new RegExp(REPOSITORY_REFERENCE_PATTERN);
-  for (;;) {
-    const match = pattern.exec(source);
-    if (match === null) break;
-    const references = referencePartsFromTextMatch(match, source);
-    if (references.length === 0) continue;
-    if (match.index > lastIndex) {
-      parts.push({ kind: "text", text: source.slice(lastIndex, match.index) });
+  return unboundReferenceTextRangeReader(source)(0, source.length);
+}
+
+function unboundReferenceTextRangeReader(
+  source: string,
+): (start: number, end: number) => readonly RepositoryReferenceTextPart[] {
+  // Keep the original neighbors when evidence splits a text node into ranges. A refused known
+  // prefix must not turn its attached remainder into an apparently standalone filename (#4406).
+  // Scan once across all ordered ranges, including ranges with no possible reference match.
+  const matches = source.matchAll(new RegExp(REPOSITORY_REFERENCE_PATTERN));
+  let next = matches.next();
+  return (start, end): readonly RepositoryReferenceTextPart[] => {
+    const parts: RepositoryReferenceTextPart[] = [];
+    let lastIndex = start;
+    while (!next.done && next.value.index < end) {
+      const match = next.value;
+      next = matches.next();
+      if (match.index < start || match.index + match[0].length > end) continue;
+      const references = referencePartsFromTextMatch(match, source);
+      if (references.length === 0) continue;
+      if (match.index > lastIndex)
+        parts.push({ kind: "text", text: source.slice(lastIndex, match.index) });
+      parts.push(...references);
+      lastIndex = match.index + match[0].length;
     }
-    parts.push(...references);
-    lastIndex = match.index + (match[0]?.length ?? 0);
-  }
-  if (lastIndex === 0) return [{ kind: "text", text: source }];
-  if (lastIndex < source.length) parts.push({ kind: "text", text: source.slice(lastIndex) });
-  return parts;
+    if (lastIndex === start) return [{ kind: "text", text: source.slice(start, end) }];
+    if (lastIndex < end) parts.push({ kind: "text", text: source.slice(lastIndex, end) });
+    return parts;
+  };
 }
 
 function qualifiedReferenceSource(
