@@ -2060,6 +2060,7 @@ function EditorRuntimeWidget({
   // Bounded LRU (Issue 2.8): evict the least-recently-used snapshot on overflow, but never the active
   // file, a mid-save, or a dirty buffer — those are the background-tab save-correctness invariants.
   const activeSessionKeyRef = useRef<string | null>(null);
+  const loadInvocationRef = useRef(0);
   const sessionCacheRef = useRef(
     new LruSessionCache<EditorFileSessionSnapshot>(
       SESSION_CACHE_CAPACITY,
@@ -2555,11 +2556,18 @@ function EditorRuntimeWidget({
       signal: { cancelled: boolean },
       options: { bypassCache?: boolean; preserveDirty?: boolean } = {},
     ): Promise<void> => {
+      const invocation = ++loadInvocationRef.current;
       if (!hasTarget) {
         clearLoadedTarget();
         return;
       }
       const sessionKey = documentSessionKey(root, file);
+      // Refreshes and Git reconciliation can overlap for the same file. Only the latest load
+      // owns its content, recovery snapshot, comparison baseline and failure state (#4403).
+      const isCurrent = (): boolean =>
+        !signal.cancelled &&
+        loadInvocationRef.current === invocation &&
+        workspaceWatchGenerationRef.current.sessionKey === sessionKey;
       const cached =
         options.bypassCache === true ? undefined : sessionCacheRef.current.get(sessionKey);
       if (cached !== undefined) {
@@ -2574,11 +2582,9 @@ function EditorRuntimeWidget({
       let recoveryOutcome: "applied" | "failed" | "cancelled" = "cancelled";
       try {
         const response = await fetchFilesContent(root, file, requestCorrelationId);
-        if (signal.cancelled || workspaceWatchGenerationRef.current.sessionKey !== sessionKey)
-          return;
+        if (!isCurrent()) return;
         const snapshot = await readEditorHotExitSnapshot(root, file);
-        if (signal.cancelled || workspaceWatchGenerationRef.current.sessionKey !== sessionKey)
-          return;
+        if (!isCurrent()) return;
         if (options.preserveDirty === true && dirtyRef.current) {
           reconcilePreservedDirtyBuffer(response, file);
           recoveryOutcome = "applied";
@@ -2587,8 +2593,7 @@ function EditorRuntimeWidget({
         finishLoad(root, file, response, snapshot);
         recoveryOutcome = "applied";
       } catch (err: unknown) {
-        if (signal.cancelled || workspaceWatchGenerationRef.current.sessionKey !== sessionKey)
-          return;
+        if (!isCurrent()) return;
         recoveryOutcome = "failed";
         failLoad(err, requestCorrelationId, sessionKey);
         throw err;
@@ -2614,6 +2619,7 @@ function EditorRuntimeWidget({
     void load(signal).catch(() => undefined);
     return () => {
       signal.cancelled = true;
+      loadInvocationRef.current += 1;
     };
   }, [load]);
 
