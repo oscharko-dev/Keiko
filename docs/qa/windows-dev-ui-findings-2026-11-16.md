@@ -160,3 +160,27 @@ repair. Reopen when a later confirmed finding leaves that scope incomplete. Epic
 all acceptance criteria. Release 1.5.0 is the published baseline for this investigation. The owner
 subsequently authorized the verified fixes in a stable 1.5.1 release through the protected release
 workflow. PR #4409 is regular, targets `dev`, and has auto-merge disabled.
+
+## Windows validation after the 1.5.1 release
+
+The verified 1.5.1 tag and npm package were published from signed commit
+`0ad205016392b47b5fad6ed9b187225a25a90c64`.
+[GitHub release](https://github.com/oscharko-dev/Keiko/releases/tag/v1.5.1) ·
+[npm package](https://www.npmjs.com/package/@oscharko-dev/keiko/v/1.5.1)
+
+The Windows 11 ARM64 QA VM checked out that exact commit with x64 Node.js 26.13.1 and npm
+11.20.0. Dependency, USearch and ripgrep provisioning succeeded. The normal Dev launch
+rebuilt the native runtime and started the loopback application.
+
+| Surface          | Evidence to collect in the Windows UI                                                                         |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| Jira Pod         | Check the QA connection and the Epic, Issue and Bug starter drafts before and after disconnecting it.         |
+| Coding Workbench | Open a small synthetic Git workspace, send a bounded task and verify its actual result and terminal status.   |
+| Git              | Check history and local changes, then Fetch and Pull from a controlled remote and compare the resulting refs. |
+| Chat             | Open a new Chat, choose a configured model and verify a short response and draft recovery after reload.       |
+| Knowledge Pod    | Create a Pod, index a one-page PDF and a short text file, then verify index status and grounded retrieval.    |
+| Citation         | Open the citation and confirm it points to the expected fixture file and page.                                |
+
+Record reproduced failures as User Findings with the Windows source revision, expected
+behavior, visible outcome and body-free diagnostics. Linked fixes carry their focused
+test and review evidence. Installed Windows Workbench qualification is tracked in [#4068](https://github.com/oscharko-dev/Keiko/issues/4068).
