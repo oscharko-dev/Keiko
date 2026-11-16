@@ -4,6 +4,7 @@
 // so the check has to run at the launch, not before the session is requested (R4130-048).
 
 import { describe, expect, it } from "vitest";
+import type { ReviewDiffCoverageSummary } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 import { captureActivityLog } from "../../activityLogCapture.test-support.js";
 import type { ReviewDiffPackage } from "../diff-package/types.js";
@@ -37,6 +38,15 @@ function candidateOf(index: number): ReviewCandidateFinding {
   return { fingerprint: String(index).padStart(64, "0") } as ReviewCandidateFinding;
 }
 
+/** The read calls a part's sessions report, as a result fragment. */
+function readCallsOf(
+  options: PhaseOptions,
+  index: number,
+): Pick<Extract<ReviewRuntimeRunResult, { readonly ok: true }>, "readCalls"> | object {
+  const readCalls = options.readCalls?.[index];
+  return readCalls === undefined ? {} : { readCalls };
+}
+
 /**
  * One session's result for a part: the scripted end of this launch when the options name one,
  * otherwise completed with the read calls and report the options name.
@@ -47,13 +57,14 @@ function sessionResult(
   launch: number,
 ): ReviewRuntimeRunResult {
   const end = options.sessions?.[index]?.[launch];
+  const reads = readCallsOf(options, index);
   if (end !== undefined && end !== "completed") {
     const candidates = end.candidate === true ? [candidateOf(index)] : [];
-    return { ...COMPLETED, outcome: "failed" as const, failureCode: end.failureCode, candidates };
+    const failed = { outcome: "failed" as const, failureCode: end.failureCode };
+    return { ...COMPLETED, ...failed, candidates, ...reads };
   }
-  const readCalls = options.readCalls?.[index];
   const candidates = options.reportingParts?.includes(index) === true ? [candidateOf(index)] : [];
-  return { ...COMPLETED, candidates, ...(readCalls === undefined ? {} : { readCalls }) };
+  return { ...COMPLETED, candidates, ...reads };
 }
 
 /** A fresh readiness observation lives this long in the fixture. */
@@ -68,6 +79,8 @@ interface Phase {
   readonly completed: boolean;
   /** The fields of every `review.run.part` line the phase wrote. */
   readonly partLines: readonly Readonly<Record<string, unknown>>[];
+  /** Every coverage summary the phase stored, in order (#4130: the read-limit counts). */
+  readonly coverageSummaries: readonly ReviewDiffCoverageSummary[];
 }
 
 interface PhaseOptions {
@@ -123,9 +136,14 @@ function runPhase(options: PhaseOptions): Promise<Phase> {
     if (clock.now - observedAt >= READINESS_LIFETIME_MS) observedAt = clock.now;
     return Promise.resolve();
   };
-  // The phase reads only these ports; the store is not exercised without a rules digest.
+  // The phase reads only these ports; of the store it calls the coverage summary's update.
+  const coverageSummaries: ReviewDiffCoverageSummary[] = [];
   const deps = {
-    store: {},
+    store: {
+      setCoverageSummary: (_runId: string, summary: ReviewDiffCoverageSummary): void => {
+        coverageSummaries.push(summary);
+      },
+    },
     reviewServices: {},
     reviewRuntime: { run },
     models: options.ensureReady === false ? {} : { ensureReady },
@@ -136,6 +154,16 @@ function runPhase(options: PhaseOptions): Promise<Phase> {
   const state = newReviewRunState();
   state.target = { baseSha: "b".repeat(40), headSha: "a".repeat(40), diffBaseSha: "b".repeat(40) };
   state.worktreeRoot = "/review-worktree";
+  state.coverageSummary = {
+    changedFiles: options.partCount,
+    reviewedFiles: options.partCount,
+    partiallyReviewedFiles: 0,
+    unprocessedFiles: 0,
+    addedLines: 1,
+    removedLines: 0,
+    budgetTokens: 100,
+    usedTokens: 10,
+  };
   const ctx: ReviewRunContext = {
     runId: "review-run-1",
     correlationId: "run-correlation",
@@ -157,6 +185,7 @@ function runPhase(options: PhaseOptions): Promise<Phase> {
     state,
     order,
     completed,
+    coverageSummaries,
     partLines: capture.events
       .filter((event) => event.op === "review.run.part")
       .map((event) => event.extra ?? {}),
@@ -227,33 +256,65 @@ describe("the Reviewer session's read calls on the part line (Issue #4130)", () 
   });
 
   // R4130-054: the allowance stopped the session, the session ended its turn as told, and the part
-  // settled as a clean `complete` although nothing was reported.
-  it("fails a part whose session was refused a read and filed no report", async () => {
-    const { partLines, state, completed } = await runPhase({
-      partCount: 3,
+  // settled as a clean `complete` although nothing was reported and nothing said so. The first fix
+  // failed such a part. The owner decided on 2026-11-16 that the part counts as reviewed and that
+  // the result must show it: the run counts the parts whose reading was cut and, of those, the
+  // ones that reported nothing.
+  it("keeps a part whose session was refused a read and filed no report, and counts it", async () => {
+    const { partLines, state, completed, coverageSummaries } = await runPhase({
+      partCount: 4,
       readCalls: [
-        { admitted: 24, refused: 2 },
-        { admitted: 24, refused: 1 },
+        { admitted: 16, refused: 2 },
+        { admitted: 16, refused: 1 },
         { admitted: 5, refused: 0 },
+        { admitted: 16, refused: 4 },
       ],
       reportingParts: [0],
     });
 
-    expect(state.reviewer).toEqual({ outcome: "failed", reason: "budget-exhausted" });
+    expect(state.reviewer).toEqual({ outcome: "completed" });
     expect(completed).toBe(true);
     expect(state.candidates).toHaveLength(1);
     expect(partLines).toMatchObject([
       { partNumber: 1, outcome: "completed", candidateCount: 1, refusedReadCallCount: 2 },
-      {
-        partNumber: 2,
-        outcome: "failed",
-        reason: "budget-exhausted",
-        candidateCount: 0,
-        readCallCount: 24,
-        refusedReadCallCount: 1,
-      },
+      { partNumber: 2, outcome: "completed", candidateCount: 0, refusedReadCallCount: 1 },
       { partNumber: 3, outcome: "completed", candidateCount: 0, refusedReadCallCount: 0 },
+      { partNumber: 4, outcome: "completed", candidateCount: 0, refusedReadCallCount: 4 },
     ]);
+    // Three parts had a read refused; two of them reported nothing.
+    expect(state.readLimitedParts).toBe(3);
+    expect(state.readLimitedPartsWithoutReport).toBe(2);
+    expect(coverageSummaries.at(-1)).toMatchObject({
+      readLimitedParts: 3,
+      readLimitedPartsWithoutReport: 2,
+    });
+  });
+
+  it("counts no part of a run whose sessions were never refused a read", async () => {
+    const { state, coverageSummaries } = await runPhase({
+      partCount: 2,
+      readCalls: [
+        { admitted: 3, refused: 0 },
+        { admitted: 16, refused: 0 },
+      ],
+    });
+    expect(state.readLimitedParts).toBe(0);
+    expect(state.readLimitedPartsWithoutReport).toBe(0);
+    expect(coverageSummaries.at(-1)).toMatchObject({
+      readLimitedParts: 0,
+      readLimitedPartsWithoutReport: 0,
+    });
+  });
+
+  it("does not call a part silent whose read-limited session failed", async () => {
+    const { state } = await runPhase({
+      partCount: 1,
+      readCalls: [{ admitted: 16, refused: 1 }],
+      sessions: [[{ failureCode: "authority-budget-exceeded" }]],
+    });
+    expect(state.reviewer).toEqual({ outcome: "failed", reason: "budget-exhausted" });
+    expect(state.readLimitedParts).toBe(1);
+    expect(state.readLimitedPartsWithoutReport).toBe(0);
   });
 
   it("writes no read counts for a session whose result carries none", async () => {

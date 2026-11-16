@@ -39541,6 +39541,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "duration",
         required: true,
       },
+      attempt: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       verdict: {
         type: "string",
         dataClass: "closed-enum",
@@ -39591,6 +39596,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      discardedAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
     },
     causal: "parent-correlation",
     lifecycle: "end",
@@ -39632,6 +39642,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "duration",
         required: true,
+      },
+      attempt: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       failureClass: {
         type: "string",
@@ -41115,6 +41130,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       surplusCandidateCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      readLimitedPartCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      readLimitedSilentPartCount: {
         type: "integer",
         dataClass: "count",
         required: false,

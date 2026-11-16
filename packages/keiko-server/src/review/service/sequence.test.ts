@@ -33,6 +33,8 @@ interface Phase {
   /** The start line of every candidate a counter-check ran for, in order. */
   readonly checked: number[];
   readonly clock: { now: number };
+  /** The `attempt` each counter-check session was started with, in order (1 when absent). */
+  readonly attempts: number[];
 }
 
 interface PhaseOptions {
@@ -43,18 +45,32 @@ interface PhaseOptions {
   readonly effect?: CounterCheckOutcome["effect"];
   /** A check's effect by the candidate's start line, where it differs from `effect`. */
   readonly effectByLine?: Readonly<Record<number, CounterCheckOutcome["effect"]>>;
+  /** The effects of a candidate's successive sessions by its start line; the last one repeats. */
+  readonly effectsByLine?: Readonly<Record<number, readonly CounterCheckOutcome["effect"][]>>;
   /** The verdict by a candidate's start line; a line not named stays undecided. */
   readonly verdicts?: Readonly<Record<number, "confirmed" | "refuted" | "undecided">>;
   /** The run's exclusion of dismissed fingerprints; by default nothing is excluded. */
   readonly excluded?: (fingerprint: string) => boolean;
+  /** A counter-check that answers in place of the scripted one. */
+  readonly counterCheck?: (input: CounterCheckInput) => Promise<CounterCheckOutcome>;
+  /** The run's cancellation; by default the run is never cancelled. */
+  readonly cancellation?: AbortController;
 }
 
 function sequenceDeps(
   options: PhaseOptions,
-  phase: Pick<Phase, "log" | "checked" | "clock">,
+  phase: Pick<Phase, "log" | "checked" | "clock" | "attempts">,
 ): ReviewSequenceDeps {
   const answer = counterCheckBy(options.verdicts ?? {}, options.effect ?? "none");
   const now = (): number => phase.clock.now;
+  const sessions = new Map<number, number>();
+  const effectOf = (line: number): CounterCheckOutcome["effect"] | undefined => {
+    const scripted = options.effectsByLine?.[line];
+    if (scripted === undefined) return options.effectByLine?.[line];
+    const session = sessions.get(line) ?? 0;
+    sessions.set(line, session + 1);
+    return scripted[Math.min(session, scripted.length - 1)];
+  };
   // Of the store and the review services the phase calls one method each, and the scripted
   // counter-check never reads through the runner, so only these two ports are cast. The object
   // itself is typed: a port added to `ReviewSequenceDeps` fails to compile here.
@@ -67,10 +83,16 @@ function sequenceDeps(
     counterCheck: (input: CounterCheckInput): Promise<CounterCheckOutcome> => {
       phase.checked.push(input.candidate.report.startLine);
       options.onCheck?.(input, phase.clock);
-      const effect = options.effectByLine?.[input.candidate.report.startLine];
+      const effect = effectOf(input.candidate.report.startLine);
+      phase.attempts.push(input.attempt ?? 1);
+      if (options.counterCheck !== undefined) return options.counterCheck(input);
       return effect === undefined
         ? answer(input)
-        : answer(input).then((outcome) => ({ ...outcome, effect }));
+        : answer(input).then((outcome) => ({
+            ...outcome,
+            effect,
+            retryable: effect === "model-failed" || effect === "deadline-exceeded",
+          }));
     },
     models: { capability: (): undefined => undefined },
     activityLog: phase.log.sink,
@@ -86,6 +108,7 @@ async function runPhase(options: PhaseOptions): Promise<Phase> {
     log: captureActivityLog(),
     checked: [],
     clock: { now: START },
+    attempts: [],
   };
   phase.state.target = {
     baseSha: "b".repeat(40),
@@ -107,7 +130,7 @@ async function runPhase(options: PhaseOptions): Promise<Phase> {
     reviewerModelId: "reviewer",
     counterCheckerModelId: "counter-checker",
     counterCheck: "on",
-    signal: new AbortController().signal,
+    signal: (options.cancellation ?? new AbortController()).signal,
     startedAt: START,
   };
   await counterCheckCandidates(
@@ -265,7 +288,8 @@ describe("the counter-check phase stops when the presentation is full (Issue #41
       effectByLine: effects,
     });
 
-    expect(checked).toEqual([3, 7, 10, 12]);
+    // The check of line 7 ends on its limit in both of its sessions (#4130: one more session).
+    expect(checked).toEqual([3, 7, 7, 10, 12]);
     expect(state.surplusCandidates).toBe(2);
     expect(settlementOf(state)).toEqual({ kind: "incomplete", reason: "deadline-exceeded" });
   });
@@ -292,5 +316,111 @@ describe("the counter-check phase stops when the presentation is full (Issue #41
     expect(state.surplusCandidates).toBe(0);
     expect(state.uncheckedCandidates).toBe(4);
     expect(settlementOf(state)).toEqual({ kind: "incomplete", reason: "deadline-exceeded" });
+  });
+});
+
+// #4130: the offline gate's Counter-checker sometimes spends a turn and its one repair on reasoning
+// alone, or reasons until the check's limit ends it. In development iteration 8 that ended 4 of the
+// first 72 checks (2 `model-failed`, 2 on the limit), and each made its review incomplete. Such a
+// check is started once more in a fresh session.
+describe("a counter-check that ends on a model failure or on its limit (Issue #4130)", () => {
+  it("is started once more, and the second session's verdict and effect count", async () => {
+    const { state, checked, attempts } = await runPhase({
+      reports: THREE,
+      verdicts: { 3: "refuted", 7: "confirmed", 10: "refuted" },
+      effectsByLine: { 7: ["model-failed", "none"] },
+    });
+
+    expect(checked).toEqual([3, 7, 7, 10]);
+    expect(attempts).toEqual([1, 1, 2, 1]);
+    expect(state.counterCheckEffects).toEqual(["none", "none", "none"]);
+    expect(state.outcomes.get("fingerprint-7")).toMatchObject({
+      verdict: { verdict: "confirmed" },
+      effect: "none",
+    });
+    expect(settlementOf(state)).toEqual({ kind: "complete" });
+  });
+
+  it("keeps the failure when the second session fails as well, and starts no third", async () => {
+    const { state, checked } = await runPhase({
+      reports: THREE,
+      effectsByLine: { 3: ["model-failed", "model-failed", "none"] },
+    });
+
+    expect(checked).toEqual([3, 3, 7, 10]);
+    expect(state.counterCheckEffects).toEqual(["model-failed", "none", "none"]);
+    expect(settlementOf(state)).toEqual({ kind: "incomplete", reason: "model-failed" });
+  });
+
+  it("starts a check once more that ended on its own wall-time limit", async () => {
+    const { state, checked, attempts } = await runPhase({
+      reports: [reportAt(3, "high"), reportAt(7, "medium")],
+      verdicts: { 3: "confirmed", 7: "refuted" },
+      effectsByLine: { 3: ["deadline-exceeded", "none"] },
+    });
+
+    expect(checked).toEqual([3, 3, 7]);
+    expect(attempts).toEqual([1, 2, 1]);
+    expect(state.counterCheckEffects).toEqual(["none", "none"]);
+    expect(settlementOf(state)).toEqual({ kind: "complete" });
+  });
+
+  it.each(["budget-exhausted", "cancelled"] as const)(
+    "does not start a check again that ended %s",
+    async (effect) => {
+      const { checked } = await runPhase({
+        reports: [reportAt(3, "high")],
+        effectsByLine: { 3: [effect, "none"] },
+      });
+      expect(checked).toEqual([3]);
+    },
+  );
+
+  it("does not start a check again whose session says a second one is not worth it", async () => {
+    const answer = counterCheckBy({ 3: "undecided" }, "model-failed");
+    const { checked } = await runPhase({
+      reports: [reportAt(3, "high")],
+      counterCheck: (input) => answer(input).then((outcome) => ({ ...outcome, retryable: false })),
+    });
+    expect(checked).toEqual([3]);
+  });
+
+  it("does not start it again once the phase's limit has passed", async () => {
+    const { state, checked } = await runPhase({
+      reports: THREE,
+      effectsByLine: { 3: ["model-failed", "none"] },
+      onCheck: taking(90_000),
+    });
+
+    expect(checked).toEqual([3]);
+    expect(state.counterCheckEffects).toEqual(["model-failed"]);
+    expect(state.uncheckedCandidates).toBe(2);
+  });
+
+  it("does not start it again once the run is cancelled", async () => {
+    const cancellation = new AbortController();
+    const { checked } = await runPhase({
+      reports: [reportAt(3, "high")],
+      effectsByLine: { 3: ["model-failed", "none"] },
+      cancellation,
+      onCheck: () => {
+        cancellation.abort();
+      },
+    });
+    expect(checked).toEqual([3]);
+  });
+
+  it("adds both sessions' tokens and time to the Counter-checker totals", async () => {
+    const once = await runPhase({ reports: [reportAt(3, "high")] });
+    const twice = await runPhase({
+      reports: [reportAt(3, "high")],
+      effectsByLine: { 3: ["model-failed", "none"] },
+    });
+    const single = once.state.counterCheckerTotals;
+    expect(twice.state.counterCheckerTotals).toEqual({
+      promptTokens: single.promptTokens * 2,
+      completionTokens: single.completionTokens * 2,
+      durationMs: single.durationMs * 2,
+    });
   });
 });

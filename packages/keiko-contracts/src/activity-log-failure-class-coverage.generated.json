@@ -45334,7 +45334,19 @@
               "required": true
             },
             {
+              "name": "attempt",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "completionTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "discardedAttemptCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
@@ -45418,6 +45430,12 @@
           "causal": "parent-correlation",
           "analyzerProjection": "failure-cluster",
           "safeContextFields": [
+            {
+              "name": "attempt",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
             {
               "name": "causeChain",
               "type": "string-array",
@@ -46758,6 +46776,18 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "readLimitedPartCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "readLimitedSilentPartCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "reason",

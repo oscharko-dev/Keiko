@@ -44,6 +44,8 @@ import { reviewDiffBudgetTokens } from "./budget.js";
 import type { ReviewRunEventHub } from "./events.js";
 import {
   reviewerOutcomeFact,
+  reviewerReadLimit,
+  type ReviewerReadLimit,
   runtimeRefusalSettlement,
   targetRefusalSettlement,
   worktreeRefusalSettlement,
@@ -115,6 +117,13 @@ export interface ReviewRunState {
    * (#4130).
    */
   partCount: number;
+  /**
+   * Parts whose last Reviewer session was refused a read, and those of them whose session completed
+   * without an accepted report (#4130). A completed one counts as reviewed, a failed one keeps its
+   * failure; the result and the settled line carry both numbers, so a silent cut is never unseen.
+   */
+  readLimitedParts: number;
+  readLimitedPartsWithoutReport: number;
   /** `diffBaseSha` is the merge base the diff starts at; `baseSha` is the base the rules come from. */
   target: ReviewRunTarget | undefined;
   worktreeRoot: string | undefined;
@@ -146,6 +155,8 @@ export function newReviewRunState(): ReviewRunState {
     uncheckedReason: undefined,
     surplusCandidates: 0,
     partCount: 0,
+    readLimitedParts: 0,
+    readLimitedPartsWithoutReport: 0,
     target: undefined,
     worktreeRoot: undefined,
     candidates: [],
@@ -462,7 +473,7 @@ async function runReviewerSession(
   ctx: ReviewRunContext,
   state: ReviewRunState,
   input: ReviewerPart & { readonly attempt: ReviewerSessionAttempt },
-): Promise<{ readonly step: ReviewerPartStep; readonly failedWithoutCandidate: boolean }> {
+): Promise<ReviewerSessionEnd> {
   const startedAt = deps.now();
   const result = await runtime.run({
     reviewRunId: ctx.runId,
@@ -483,7 +494,26 @@ async function runReviewerSession(
   state.reviewerTotals = addRoleTotals(state.reviewerTotals, totals);
   const step = partStep(deps, ctx, state, result);
   logReviewRunPart(deps.activityLog, ctx.correlationId, partLine(ctx, input, result, step, totals));
-  return { step, failedWithoutCandidate: failedWithoutCandidate(result, step) };
+  return {
+    step,
+    failedWithoutCandidate: failedWithoutCandidate(result, step),
+    readLimit: result.ok ? reviewerReadLimit(result) : "none",
+  };
+}
+
+/** How one Reviewer session ended, for the part's decision and the run's read-limit counts. */
+interface ReviewerSessionEnd {
+  readonly step: ReviewerPartStep;
+  readonly failedWithoutCandidate: boolean;
+  readonly readLimit: ReviewerReadLimit;
+}
+
+/** Counts a part's last session in the run's read-limit numbers. */
+function countReadLimit(state: ReviewRunState, last: ReviewerSessionEnd): void {
+  if (last.readLimit === "none") return;
+  state.readLimitedParts += 1;
+  const completed = last.step.kind === "fact" && last.step.fact.outcome === "completed";
+  if (last.readLimit === "silent" && completed) state.readLimitedPartsWithoutReport += 1;
 }
 
 /**
@@ -500,9 +530,12 @@ async function runReviewerPart(
   input: ReviewerPart,
 ): Promise<ReviewerPartStep> {
   const first = await runReviewerSession(deps, runtime, ctx, state, { ...input, attempt: 1 });
-  if (!first.failedWithoutCandidate || ctx.signal.aborted) return first.step;
-  const second = await runReviewerSession(deps, runtime, ctx, state, { ...input, attempt: 2 });
-  return second.step;
+  const retried = first.failedWithoutCandidate && !ctx.signal.aborted;
+  const last = retried
+    ? await runReviewerSession(deps, runtime, ctx, state, { ...input, attempt: 2 })
+    : first;
+  countReadLimit(state, last);
+  return last.step;
 }
 
 function partStep(
@@ -550,9 +583,28 @@ export async function runReviewer(
     worktreeRoot,
   });
   if ("kind" in facts) return stopWith(state, facts);
+  recordReadLimits(deps, ctx, state);
   const fact = combineReviewerFacts(facts);
   state.reviewer = fact;
   return fact.outcome === "completed" || fact.outcome === "failed";
+}
+
+/**
+ * Puts the run's read-limit numbers into its stored coverage summary, so the run's result carries
+ * them from the moment the Reviewer has run (#4130).
+ */
+function recordReadLimits(
+  deps: ReviewSequenceDeps,
+  ctx: ReviewRunContext,
+  state: ReviewRunState,
+): void {
+  if (state.coverageSummary === null) return;
+  state.coverageSummary = {
+    ...state.coverageSummary,
+    readLimitedParts: state.readLimitedParts,
+    readLimitedPartsWithoutReport: state.readLimitedPartsWithoutReport,
+  };
+  deps.store.setCoverageSummary(ctx.runId, state.coverageSummary);
 }
 
 /** Each part's session in order: their facts, or the first part's refusal that settles the run. */
@@ -616,16 +668,16 @@ interface CounterCheckPhase {
   readonly deadline: number;
 }
 
-/** One candidate's counter-check; its verdict, effect and totals go into the state. */
-async function counterCheckCandidate(
+/** One session of a candidate's counter-check; its tokens and time go into the totals. */
+async function counterCheckSession(
   deps: ReviewSequenceDeps,
   ctx: ReviewRunContext,
   state: ReviewRunState,
   phase: CounterCheckPhase,
-  candidate: CounterCheckInput["candidate"],
-): Promise<void> {
+  input: { readonly candidate: CounterCheckInput["candidate"]; readonly attempt: 1 | 2 },
+): Promise<CounterCheckOutcome> {
   const outcome = await deps.counterCheck({
-    candidate,
+    candidate: input.candidate,
     modelId: ctx.counterCheckerModelId,
     worktreeRoot: phase.worktreeRoot,
     headSha: phase.headSha,
@@ -633,10 +685,38 @@ async function counterCheckCandidate(
     signal: ctx.signal,
     runCorrelationId: ctx.correlationId,
     rulesText: state.rulesText,
+    ...(input.attempt === 1 ? {} : { attempt: input.attempt }),
   });
+  state.counterCheckerTotals = addRoleTotals(state.counterCheckerTotals, outcome);
+  return outcome;
+}
+
+/**
+ * One candidate's counter-check; its verdict and effect go into the state. A check that ended on a
+ * model failure or on its own wall-time limit is started once more in a fresh session (#4130). A
+ * local Counter-checker sometimes spends a turn and its one repair on reasoning alone, or reasons
+ * so long in every turn that the limit ends the check: in development iteration 8 that ended 4 of
+ * the first 72 checks, and each made its review incomplete although nothing was wrong with the
+ * candidate. How long a check takes varies from session to session: the decided ones took 210
+ * seconds at the median. A check at its tool-call ceiling is not started again, because its second
+ * session would read the same code, a check whose model does not exist is not either, and neither
+ * is any check once the phase's wall-time limit has passed or the run is cancelled. The candidate's
+ * verdict and effect are the last session's; both sessions count in the totals.
+ */
+async function counterCheckCandidate(
+  deps: ReviewSequenceDeps,
+  ctx: ReviewRunContext,
+  state: ReviewRunState,
+  phase: CounterCheckPhase,
+  candidate: CounterCheckInput["candidate"],
+): Promise<void> {
+  let outcome = await counterCheckSession(deps, ctx, state, phase, { candidate, attempt: 1 });
+  const stopped = counterCheckStop(deps.now(), phase.deadline) !== undefined;
+  if (outcome.retryable && !stopped && !ctx.signal.aborted) {
+    outcome = await counterCheckSession(deps, ctx, state, phase, { candidate, attempt: 2 });
+  }
   state.outcomes.set(candidate.fingerprint, outcome);
   state.counterCheckEffects.push(outcome.effect);
-  state.counterCheckerTotals = addRoleTotals(state.counterCheckerTotals, outcome);
   deps.events.update(ctx.runId, { counts: { counterChecked: state.outcomes.size } });
 }
 

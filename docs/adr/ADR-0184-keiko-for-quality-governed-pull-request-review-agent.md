@@ -82,18 +82,30 @@ Each session also has a read allowance (Issue #4130): the tool facade answers at
 every further one before any admission, with one fixed instruction to report the confirmed findings
 and end the turn. `keiko_review_report` is never counted or refused by it. The task already carries
 every changed hunk of the part, so the allowance bounds only how much surrounding code a session
-fetches. A session that was refused a read and then ends its turn is judged by what it filed
-(R4130-054). With at least one accepted report it is a completed session, and its part counts as
-reviewed. Without one, Keiko cut its reading short and nothing shows what it examined, so its part
-fails with `budget-exhausted` and the run settles `incomplete` (D6). The allowance can therefore
-turn a clean review into an incomplete one, never an unfinished review into a clean one. A session
-that kept reading until its prompt budget ran out settled `incomplete` before the allowance as
-well. A session that would have read on, found nothing and completed now settles `incomplete` too,
-because the prompt forbids a report that says there is no defect, so a stopped session and a
-session with nothing to report look the same. In the 418 stored reviews, 30 of the 84 complete ones
-made more than 24 model calls, and 9 of those 30 had no accepted report. Model calls include
-reports, so 9 of 84 is an upper bound on the complete reviews this rule would have settled
-`incomplete`. Each `review.run.part` line records the read calls the allowance let
+fetches. A session that was refused a read and then ends its turn is a completed session, and its part counts
+as reviewed (owner decision, 2026-11-16). The task carries every changed hunk of the part, so the
+session saw all the changed code; the allowance cut only the surrounding code it wanted to fetch.
+The review states that openly. `ReviewDiffCoverageSummary` carries `readLimitedParts`, the parts
+whose last session was refused a read, and `readLimitedPartsWithoutReport`, those of them whose
+completed session then filed no accepted report. The prompt forbids a report that says there is no
+defect, so a stopped session and a session with nothing to report look the same. The second count
+names that case: a review that carries it is complete and not clean, and whoever shows the run's
+result shows the number with it. `review.run.settled` records both counts
+(`readLimitedPartCount`, `readLimitedSilentPartCount`) and is written at `warn` when the second is
+above zero. The offline gate's summary counts the complete reviews with a read-limited part and
+those with a silent one (D9). A read-limited session that failed is not counted as silent: its
+failure already makes the run incomplete under its own reason (D6).
+
+The rule before (R4130-054) failed a silent read-limited part with `budget-exhausted` and settled
+the run `incomplete`. It could never turn an unfinished review into a clean one, and it made every
+review with one such part incomplete although the session had seen every changed hunk. In the 418
+stored reviews, 30 of the 84 complete ones made more than 24 model calls, and 9 of those 30 had no
+accepted report, so 9 of 84 was the upper bound on the complete reviews that rule would have
+settled `incomplete`. With one session per diff part the share grew, because a review has up to 24
+sessions and one silent one was enough. The counts replace the failure: the fact stays on the
+result, and the review keeps the findings of its other parts.
+
+Each `review.run.part` line records the read calls the allowance let
 through to admission and the ones it refused (`readCallCount`, `refusedReadCallCount`). A call
 counts when the allowance lets it through, whether or not a later check then answers it `busy` or
 denies it, because each one costs the Reviewer a model call. The
@@ -340,6 +352,34 @@ that keeps calling the refused tools still ends on the tool ceiling. `review.cou
 records `admittedReadCallCount` and `refusedReadCallCount`, and `review.run.started` the allowance
 in force as `counterCheckMaxReadCalls`.
 
+A turn of a counter-check may take 4,096 output tokens (Issue #4130,
+`REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS`), and each turn asks for the gateway's one steered
+repair (`answerRepair: "steered"`, ADR-0003). The offline gate's Counter-checker writes about 12
+tokens per second, about 80 % of them reasoning, so the model's default of 8,192 tokens is 11
+minutes of one turn. A turn that spent them all on reasoning ended without a tool call, and the
+check failed `model-failed` after 684 seconds, 645 of them in that one turn: one such check made a
+probe review incomplete. Of the 955 Counter-checker turns of development iteration 7 half took at most 351
+tokens, 99 % at most 3,823, and 6 took more than 4,096. A turn that reaches the budget is asked once
+more for its answer; a second failure ends the check as before. A turn never asks for more output
+than the model's configuration declares as its limit, because the gateway refuses such a request
+(R4130-067). What the gateway discarded inside a turn was processed by the provider, so its tokens
+count in the check's totals, and a verdict that came with the answer is still recorded. Until the
+merge of dev 1.5.0 they were also charged to the check's and the run's prompt allowance
+(R4130-066); no allowance exists since (#4346). `review.counter-check.completed` records
+`discardedAttemptCount`.
+
+A counter-check that ends on a model failure or on its own wall-time limit is started once more
+in a fresh session (Issue #4130). A local Counter-checker sometimes spends a turn and its one repair
+on reasoning alone, or reasons so long in every turn that the limit ends the check: in development
+iteration 8 that ended 4 of the first 72 checks (2 `model-failed`, 2 on the limit), and each made
+its review incomplete although nothing was wrong with the candidate. How long a check takes varies
+from session to session. A check at its tool-call ceiling is not started again, because its second
+session would read the same code; a check whose model does not exist is not either; and neither is
+any check once the phase's wall-time limit has passed or the run is cancelled. The candidate's
+verdict and effect are the last session's, both sessions count in the Counter-checker totals, and
+the second session's `review.counter-check.completed` and `review.counter-check.failed` lines
+carry `attempt: 2`.
+
 The phase stops when the run already presents as many findings as it may (Issue #4130).
 Counter-checks run in the order the presentation rule ranks by, so once three checked candidates
 are presentable, every candidate that is still unchecked ranks after them and can never be
@@ -422,9 +462,11 @@ review runtime's `rules-file-invalid` is `skipped/rules-file-invalid`, `task-too
 `skipped/diff-too-large`, `runtime-unavailable` and a Reviewer run the orchestrator refused
 `skipped/model-unavailable`, a failed read-only self-check `skipped/policy-invalid`, and a failed
 rules read `abandoned/interrupted`. A Reviewer that fails with an exhausted or drifted
-authority budget is `incomplete/budget-exhausted`, and so is a Reviewer session that the read
-allowance (D1) refused a read and that filed no accepted report; with an exhausted envelope duration
-`incomplete/deadline-exceeded`, otherwise `incomplete/model-failed`; its candidates are still
+authority budget is `incomplete/budget-exhausted`; with an exhausted envelope duration
+`incomplete/deadline-exceeded`, otherwise `incomplete/model-failed`. A completed Reviewer session
+that the read allowance (D1) refused a read is not a failure: its part counts as reviewed, and the
+coverage summary counts it (`readLimitedParts`, and `readLimitedPartsWithoutReport` when it filed
+no accepted report). A failed Reviewer's candidates are still
 counter-checked, and findings confirmed before an incomplete settlement are presented. Candidates
 the phase limit left unchecked make the run incomplete (`deadline-exceeded`); surplus candidates, which
 the phase skipped because the presentation was already full (D5), do not. A Reviewer
@@ -734,7 +776,10 @@ review code, the counter-check and presentation limits, the variant and the pair
 start on uncommitted review code. Cost per role comes from each review's own record: the
 counter-checker's tokens from its model calls, the Reviewer's prompt and completion tokens from the
 review runtime's effort roll-up, which counts provider-reported counts only (an estimated output size
-is never counted). The holdout run needs an explicit confirmation flag. Results and the iteration
+is never counted). The summary also counts the complete reviews with a part whose Reviewer
+reached its read allowance, and those of them where such a part reported nothing (D1), so a
+complete review of that kind is never read as a clean one. The holdout run needs an explicit
+confirmation flag. Results and the iteration
 log are in `docs/qa/review-agent-offline-gate-<date>.md`.
 
 Offline scoring. The owner made four decisions on 2026-11-04 during the epic branch review:

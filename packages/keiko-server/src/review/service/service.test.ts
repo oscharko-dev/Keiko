@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
+import type { ReviewFindingReport } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
 import type {
   ReviewRunSettlement,
@@ -118,6 +119,70 @@ function noWorktreeLeft(h: ReviewRunHarness, runId: string): void {
   if (request !== undefined) expect(existsSync(request.worktreeRoot)).toBe(false);
   expect(git(h.repo, "worktree", "list", "--porcelain")).not.toContain("review-root");
 }
+
+// #4130, owner decision of 2026-11-16: a Reviewer that reached its read allowance and then reported
+// nothing has reviewed its part, but the review must not look clean. The settlement stays
+// `complete`; the run's result and its settled line say that reading was cut and nothing reported.
+describe("review run service: a Reviewer that reached its read allowance", () => {
+  /** A Reviewer that files `reports` after the allowance refused `refused` of its read calls. */
+  function readLimited(reports: readonly ReviewFindingReport[], refused: number): RuntimeScript {
+    const filing = reviewerFiling(reports);
+    return async (request, harness) => {
+      const result = await filing(request, harness);
+      return result.ok ? { ...result, readCalls: { admitted: 16, refused } } : result;
+    };
+  }
+
+  it("settles a silent, read-limited review complete and says so on the result and the log", async () => {
+    const h = setUp({ runtime: readLimited([], 2) });
+    const view = await settled(h, await start(h));
+
+    expect(view.settlement).toEqual({ kind: "complete" });
+    expect(view.presentedFindings).toEqual([]);
+    expect(view.coverage).toMatchObject({
+      readLimitedParts: 1,
+      readLimitedPartsWithoutReport: 1,
+    });
+    const line = h.log.events.find((event) => event.op === "review.run.settled");
+    expect(line?.level).toBe("warn");
+    expect(line?.extra).toMatchObject({
+      settlement: "complete",
+      readLimitedPartCount: 1,
+      readLimitedSilentPartCount: 1,
+    });
+    // The stored record carries it too: a later read of the run shows the same.
+    expect((await h.service.get(view.runId))?.coverage).toMatchObject({
+      readLimitedPartsWithoutReport: 1,
+    });
+  });
+
+  it("counts a read-limited review that reported as limited and not as silent", async () => {
+    const h = setUp({
+      runtime: readLimited([reportAt(3, "high")], 1),
+      counterCheck: counterCheckBy({ 3: "confirmed" }),
+    });
+    const view = await settled(h, await start(h));
+
+    expect(view.settlement).toEqual({ kind: "complete" });
+    expect(view.coverage).toMatchObject({
+      readLimitedParts: 1,
+      readLimitedPartsWithoutReport: 0,
+    });
+    const line = h.log.events.find((event) => event.op === "review.run.settled");
+    expect(line?.level).toBe("info");
+    expect(line?.extra).toMatchObject({ readLimitedPartCount: 1, readLimitedSilentPartCount: 0 });
+  });
+
+  it("reports zero for a review whose Reviewer was never refused a read", async () => {
+    const h = setUp({ runtime: reviewerFiling([]) });
+    const view = await settled(h, await start(h));
+    expect(view.coverage).toMatchObject({
+      readLimitedParts: 0,
+      readLimitedPartsWithoutReport: 0,
+    });
+    expect(h.log.events.find((event) => event.op === "review.run.settled")?.level).toBe("info");
+  });
+});
 
 describe("review run service: complete runs and presentation (AC2)", () => {
   it("presents at most three confirmed findings and stores the others", async () => {

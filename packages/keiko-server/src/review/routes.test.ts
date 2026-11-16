@@ -113,7 +113,8 @@ describe("review run reconstruction from the Activity Log (AC7)", () => {
   it("rebuilds the run and its counter-checks from the lines of its correlation id", async () => {
     const h = createReviewRunHarness({
       runtime: reviewerFiling([reportAt(3, "high")]),
-      // The real counter-check with no model: it records its failure under the run.
+      // The real counter-check with no model: it records its failure under the run. A model that
+      // does not exist gets no second session, so there is one check.
       counterCheck: (input) =>
         counterCheckCandidate(
           {

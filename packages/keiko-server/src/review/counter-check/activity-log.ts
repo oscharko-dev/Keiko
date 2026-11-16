@@ -61,6 +61,8 @@ const SESSION_FIELDS = {
   fingerprintDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
   toolCallCount: { type: "integer", dataClass: "count", required: true },
   durationMs: { type: "integer", dataClass: "duration", required: true },
+  // #4130: only on a candidate's second session, after the first ended on a model failure.
+  attempt: { type: "integer", dataClass: "count", required: false },
 } as const;
 
 const REVIEW_COUNTER_CHECK_COMPLETED = defineActivityLogOperation({
@@ -94,6 +96,9 @@ const REVIEW_COUNTER_CHECK_COMPLETED = defineActivityLogOperation({
     // #4130: the read, list and search calls the session's read allowance answered and refused.
     admittedReadCallCount: { type: "integer", dataClass: "count", required: true },
     refusedReadCallCount: { type: "integer", dataClass: "count", required: true },
+    // #4130: attempts the gateway discarded inside the session's turns (a repaired answer, a
+    // corrected tool call); their tokens are in `promptTokens` and `completionTokens`.
+    discardedAttemptCount: { type: "integer", dataClass: "count", required: true },
   },
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -139,17 +144,21 @@ export interface CounterCheckSessionFacts {
   readonly fingerprint: string;
   readonly toolCallCount: number;
   readonly durationMs: number;
+  /** Only on a candidate's second session (#4130). */
+  readonly attempt?: number | undefined;
 }
 
 function sessionFields(facts: CounterCheckSessionFacts): {
   readonly fingerprintDigest: string;
   readonly toolCallCount: number;
   readonly durationMs: number;
+  readonly attempt?: number;
 } {
   return {
     fingerprintDigest: reviewEvidenceDigest("fingerprint", facts.fingerprint),
     toolCallCount: facts.toolCallCount,
     durationMs: Math.max(0, Math.round(facts.durationMs)),
+    ...(facts.attempt === undefined ? {} : { attempt: facts.attempt }),
   };
 }
 
@@ -163,6 +172,7 @@ export function logCounterCheckCompleted(
     readonly promptTokens: number;
     readonly completionTokens: number;
     readonly readCalls: { readonly admitted: number; readonly refused: number };
+    readonly discardedAttemptCount: number;
   },
 ): void {
   log.write(
@@ -183,6 +193,7 @@ export function logCounterCheckCompleted(
         completionTokens: outcome.completionTokens,
         admittedReadCallCount: outcome.readCalls.admitted,
         refusedReadCallCount: outcome.readCalls.refused,
+        discardedAttemptCount: outcome.discardedAttemptCount,
       },
     ),
   );

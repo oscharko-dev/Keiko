@@ -225,6 +225,11 @@ const REVIEW_RUN_SETTLED = defineActivityLogOperation({
     // findings as it may. They carry no verdict and do not make the run incomplete. Present only
     // when there are any.
     surplusCandidateCount: OPTIONAL_COUNT,
+    // #4130: parts whose last Reviewer session was refused a read, and those of them whose completed
+    // session reported nothing. A completed one counts as reviewed, a failed one keeps its failure;
+    // a run with a silent one settles as a warning. Present once the Reviewer has run.
+    readLimitedPartCount: OPTIONAL_COUNT,
+    readLimitedSilentPartCount: OPTIONAL_COUNT,
     reviewerPromptTokens: COUNT,
     reviewerCompletionTokens: COUNT,
     reviewerDurationMs: DURATION,
@@ -426,11 +431,27 @@ export interface ReviewRunSettledLine {
   readonly runtimeCleanup?: ReviewRuntimeCleanup | undefined;
 }
 
-/** A clean settlement is info; an unclean one, or an unproven runtime cleanup, is a warning. */
+/**
+ * A clean settlement is info. An unclean one, an unproven runtime cleanup, and a part whose Reviewer
+ * reached its read allowance and then reported nothing (#4130) are warnings: such a run settles
+ * `complete`, and it must not look like a clean one.
+ */
 function settledLevel(line: ReviewRunSettledLine): "info" | "warn" {
-  return line.settlement.kind === "complete" && line.runtimeCleanup !== "unproven"
-    ? "info"
-    : "warn";
+  const silentParts = line.coverage?.readLimitedPartsWithoutReport ?? 0;
+  const clean = line.settlement.kind === "complete" && line.runtimeCleanup !== "unproven";
+  return clean && silentParts === 0 ? "info" : "warn";
+}
+
+/** The read-limit counts as fields, once the Reviewer has run. */
+function readLimitCounts(coverage: ReviewDiffCoverageSummary | null): {
+  readonly readLimitedPartCount?: number;
+  readonly readLimitedSilentPartCount?: number;
+} {
+  if (coverage?.readLimitedParts === undefined) return {};
+  return {
+    readLimitedPartCount: coverage.readLimitedParts,
+    readLimitedSilentPartCount: coverage.readLimitedPartsWithoutReport ?? 0,
+  };
 }
 
 function coverageCounts(coverage: ReviewDiffCoverageSummary | null): {
@@ -468,6 +489,7 @@ export function logReviewRunSettled(
         undecidedCount: line.verdicts.undecided,
         presentedCount: line.verdicts.presented,
         ...surplusCandidateCount(line.verdicts.surplus),
+        ...readLimitCounts(line.coverage),
         reviewerPromptTokens: line.reviewer.promptTokens,
         reviewerCompletionTokens: line.reviewer.completionTokens,
         reviewerDurationMs: Math.round(line.reviewer.durationMs),

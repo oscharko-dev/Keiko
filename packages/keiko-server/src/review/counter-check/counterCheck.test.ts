@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { boundGatewayToolCatalog } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
+  REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS,
   REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS,
   type ReviewFindingReport,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
@@ -185,9 +186,15 @@ function check(
   options: {
     readonly limits?: CounterCheckDeps["limits"];
     readonly signal?: AbortSignal;
+    readonly declaredMaxOutputTokens?: CounterCheckDeps["declaredMaxOutputTokens"];
+    readonly attempt?: number;
   } = {},
 ): Promise<CounterCheckOutcome> {
-  return counterCheckCandidate(deps(model, options.limits), {
+  const checkDeps = {
+    ...deps(model, options.limits),
+    declaredMaxOutputTokens: options.declaredMaxOutputTokens,
+  };
+  return counterCheckCandidate(checkDeps, {
     candidate,
     modelId: "checker",
     worktreeRoot: repo,
@@ -199,6 +206,7 @@ function check(
     }),
     signal: options.signal ?? new AbortController().signal,
     runCorrelationId: "review-run-correlation",
+    ...(options.attempt === undefined ? {} : { attempt: options.attempt }),
   });
 }
 
@@ -399,6 +407,106 @@ describe("counterCheckCandidate", () => {
     });
   });
 
+  // #4130: a turn that spends the model's whole output budget on reasoning ends without a tool
+  // call, and the check failed `model-failed` after 645 seconds in that one turn. Each turn now has a
+  // smaller budget and asks for the gateway's one steered repair.
+  describe("the output budget of a turn", () => {
+    it("gives every turn the budget and asks for the gateway's steered repair", async () => {
+      const candidate = await candidateOf(report());
+      const read = { tool: TOOLS.read, args: { relativePath: "src/total.ts", startLine: 3 } };
+      const model = scripted([read, CONFIRM]);
+      await check(model, candidate);
+      expect(model.requests).toHaveLength(2);
+      for (const request of model.requests) {
+        expect(request.maxOutputTokens).toBe(REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS);
+        expect(request.answerRepair).toBe("steered");
+      }
+
+      const configured = scripted([CONFIRM]);
+      await check(configured, candidate, { limits: { maxOutputTokens: 1_000 } });
+      expect(configured.requests[0]?.maxOutputTokens).toBe(1_000);
+    });
+
+    /** The scripted model with one discarded attempt reported on its first answer. */
+    function repairedOnce(steps: readonly Step[]): ScriptedModel {
+      const model = scripted(steps);
+      const answer = model.call;
+      let first = true;
+      return {
+        ...model,
+        call: async (request, signal): Promise<NormalizedResponse> => {
+          const response = await answer(request, signal);
+          if (!first) return response;
+          first = false;
+          return {
+            ...response,
+            discardedAttemptUsage: { attemptCount: 1, promptTokens: 700, completionTokens: 4_096 },
+          };
+        },
+      };
+    }
+
+    it("counts what the gateway discarded inside a turn in the session's totals", async () => {
+      const candidate = await candidateOf(report());
+      const plain = await check(scripted([CONFIRM]), candidate);
+      const outcome = await check(repairedOnce([CONFIRM]), candidate);
+
+      // A verdict that came with the answer whose attempt was discarded is still recorded.
+      expect(outcome.verdict.verdict).toBe("confirmed");
+      expect(outcome.effect).toBe("none");
+      expect(outcome.discardedAttemptCount).toBe(1);
+      // The same turn's own tokens, and the discarded attempt's 700 prompt and 4,096 completion.
+      expect(outcome.promptTokens).toBe(plain.promptTokens + 700);
+      expect(outcome.completionTokens).toBe(plain.completionTokens + 4_096);
+      const completed = log.events.filter((event) => event.op === "review.counter-check.completed");
+      expect(completed.map((event) => event.extra?.discardedAttemptCount)).toEqual([0, 1]);
+    });
+
+    // R4130-067: the gateway refuses a request that asks for more output than the model declares.
+    it.each([
+      [2_048, 2_048],
+      [8_192, REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS],
+      [0, REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS],
+      [undefined, REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS],
+    ])("asks for no more output than the model declares (%s)", async (declared, expected) => {
+      const candidate = await candidateOf(report());
+      const model = scripted([CONFIRM]);
+      const asked: string[] = [];
+      await check(model, candidate, {
+        declaredMaxOutputTokens: (modelId) => {
+          asked.push(modelId);
+          return declared;
+        },
+      });
+      expect(asked).toEqual(["checker"]);
+      expect(model.requests[0]?.maxOutputTokens).toBe(expected);
+    });
+
+    it("reports no discarded attempt for a session without one", async () => {
+      const candidate = await candidateOf(report());
+      const outcome = await check(scripted([CONFIRM]), candidate);
+      expect(outcome.discardedAttemptCount).toBe(0);
+      expect(completedLine()).toMatchObject({ extra: { discardedAttemptCount: 0 } });
+    });
+  });
+
+  // #4130: a candidate's second session, after the first ended on a model failure, says so.
+  it("records the attempt of a second session on its lines, and none on a first session", async () => {
+    const candidate = await candidateOf(report());
+    await check(scripted([CONFIRM]), candidate);
+    expect(completedLine()).not.toMatchObject({ extra: { attempt: expect.anything() as number } });
+
+    log = captureActivityLog();
+    await check(scripted([CONFIRM]), candidate, { attempt: 2 });
+    expect(completedLine()).toMatchObject({ extra: { attempt: 2, verdict: "confirmed" } });
+
+    log = captureActivityLog();
+    await check(undefined, candidate, { attempt: 2 });
+    expect(log.events.find((event) => event.op === "review.counter-check.failed")).toMatchObject({
+      extra: { attempt: 2, failureClass: "model-unavailable" },
+    });
+  });
+
   it("ends at the tool-call ceiling as out-of-budget (budget-exhausted)", async () => {
     const candidate = await candidateOf(report());
     const read = { tool: TOOLS.read, args: { relativePath: "src/total.ts" } };
@@ -415,14 +523,22 @@ describe("counterCheckCandidate", () => {
 
   it("settles an unavailable or failing model as model-failed", async () => {
     const candidate = await candidateOf(report());
-    expect((await check(undefined, candidate)).effect).toBe("model-failed");
+    // #4130: a model that does not exist is not worth a second session; a failing one is.
+    expect(await check(undefined, candidate)).toMatchObject({
+      effect: "model-failed",
+      retryable: false,
+    });
     const failing: ScriptedModel = {
       requests: [],
       toolOutputs: [],
       call: () => Promise.reject(new Error("provider failed mid-stream")),
     };
     const outcome = await check(failing, candidate);
-    expect(outcome).toMatchObject({ effect: "model-failed", verdict: { verdict: "undecided" } });
+    expect(outcome).toMatchObject({
+      effect: "model-failed",
+      retryable: true,
+      verdict: { verdict: "undecided" },
+    });
     const failures = log.events.filter((event) => event.op === "review.counter-check.failed");
     expect(failures.map((event) => event.extra?.failureClass)).toEqual([
       "model-unavailable",
@@ -434,9 +550,10 @@ describe("counterCheckCandidate", () => {
     const candidate = await candidateOf(report());
     const aborted = new AbortController();
     aborted.abort();
-    expect((await check(scripted([CONFIRM]), candidate, { signal: aborted.signal })).effect).toBe(
-      "cancelled",
-    );
+    expect(await check(scripted([CONFIRM]), candidate, { signal: aborted.signal })).toMatchObject({
+      effect: "cancelled",
+      retryable: false,
+    });
     const slow: ScriptedModel = {
       requests: [],
       toolOutputs: [],
@@ -450,7 +567,22 @@ describe("counterCheckCandidate", () => {
     const outcome = await check(slow, candidate, { limits: { wallTimeMs: 50 } });
     expect(outcome).toMatchObject({
       effect: "deadline-exceeded",
+      retryable: true,
       verdict: { reasonCode: "out-of-budget" },
     });
+  });
+
+  // #4130: a session with a verdict, and one at its tool-call ceiling, would end the same way again.
+  it("marks neither a decided check nor one out of budget as worth a second session", async () => {
+    const candidate = await candidateOf(report());
+    expect(await check(scripted([CONFIRM]), candidate)).toMatchObject({
+      effect: "none",
+      retryable: false,
+    });
+    const read = { tool: TOOLS.read, args: { relativePath: "src/total.ts" } };
+    const outcome = await check(scripted([read, read, read, CONFIRM]), candidate, {
+      limits: { maxToolCalls: 2 },
+    });
+    expect(outcome).toMatchObject({ effect: "budget-exhausted", retryable: false });
   });
 });

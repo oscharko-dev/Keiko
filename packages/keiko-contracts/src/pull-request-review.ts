@@ -633,6 +633,19 @@ export interface ReviewDiffCoverageSummary {
   readonly budgetTokens: number;
   /** The included content's token count as the gateway's estimator measures it. */
   readonly usedTokens: number;
+  /**
+   * Diff package parts whose last Reviewer session was refused a read (#4130). A completed one
+   * counts as reviewed: the session judged the part from its hunks and the code it had read until
+   * then. A failed one keeps its failure (R4130-073). Present once the Reviewer has run; absent
+   * on a run recorded before this field and on one whose Reviewer never started.
+   */
+  readonly readLimitedParts?: number | undefined;
+  /**
+   * Those of `readLimitedParts` whose session then reported no finding. A review without findings
+   * must never read as a clean review when this is above zero: its Reviewer wanted to read more
+   * and was not allowed to (#4130). Whoever shows a run's result shows this number with it.
+   */
+  readonly readLimitedPartsWithoutReport?: number | undefined;
 }
 
 /** What the package reviewed and what it did not, with closed reason codes (ADR-0184 D6). */
@@ -905,6 +918,16 @@ export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS = 32;
  * every check that decided with up to 9 tool calls.
  */
 export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS = 8;
+/**
+ * Output tokens one turn of a counter-check may take (#4130). The Counter-checker of the offline
+ * gate writes about 12 tokens per second and about 80 % of them are reasoning, so the model's
+ * default of 8,192 tokens is 11 minutes of one turn. A turn that spends them all on reasoning ends
+ * without a tool call, and the check fails `model-failed` after most of its 900 seconds. Of the
+ * 955 Counter-checker turns of development iteration 7 half took at most 351 tokens, 99 % at most
+ * 3,823, and 6 took more than 4,096. A turn that reaches this budget gets the gateway's one
+ * steered repair, which asks for the answer without the reasoning.
+ */
+export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
 // #4138, #4130: 900 s, tuned on the development set. A local Gemma 4 31B 4-bit counter-checker
 // generates about 12 tokens per second: at 120 s it ended candidates undecided after 1 to 5
 // tool calls, and at 300 s 20 of 48 checks still ended undecided while the decided ones took up to

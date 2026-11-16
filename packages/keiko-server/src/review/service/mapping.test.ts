@@ -11,6 +11,7 @@ import type { ReviewCandidateFinding } from "../runtime/findingIntake.js";
 import {
   reviewerFailureReason,
   reviewerOutcomeFact,
+  reviewerReadLimit,
   runtimeRefusalSettlement,
   targetRefusalSettlement,
   worktreeRefusalSettlement,
@@ -136,14 +137,31 @@ describe("settlement mapping", () => {
     };
     const candidate = { fingerprint: "f".repeat(64) } as ReviewCandidateFinding;
 
-    it("fails a session with a refused read and no accepted report as budget-exhausted", () => {
+    // R4130-054 settled such a session as `budget-exhausted`. The owner decided on 2026-11-16 that
+    // its part counts as reviewed, provided the run's result says that its reading was cut and that
+    // it reported nothing. The session is `completed` and classified `silent`.
+    it("keeps a session with a refused read and no accepted report completed, and calls it silent", () => {
+      const silent = { ...completed, candidates: [], readCalls: { admitted: 16, refused: 1 } };
+      expect(reviewerOutcomeFact(silent)).toEqual({ outcome: "completed" });
+      expect(reviewerReadLimit(silent)).toBe("silent");
+    });
+
+    it("classifies how a session met its read allowance", () => {
       expect(
-        reviewerOutcomeFact({
+        reviewerReadLimit({
+          ...completed,
+          candidates: [candidate],
+          readCalls: { admitted: 16, refused: 3 },
+        }),
+      ).toBe("reported");
+      expect(
+        reviewerReadLimit({
           ...completed,
           candidates: [],
-          readCalls: { admitted: 24, refused: 1 },
+          readCalls: { admitted: 16, refused: 0 },
         }),
-      ).toEqual({ outcome: "failed", reason: "budget-exhausted" });
+      ).toBe("none");
+      expect(reviewerReadLimit({ ...completed, candidates: [] })).toBe("none");
     });
 
     it("keeps a session that reported after a refused read completed", () => {

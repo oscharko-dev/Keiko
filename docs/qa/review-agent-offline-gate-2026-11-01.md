@@ -78,6 +78,9 @@ pull request; the replay refuses that, and every row's `split` is `development`.
 | dev-6                                | roles-swapped     | `8982b14fd` (review code as `912b930f5`), rerun with the memory bounds below: Gemma as Reviewer, Qwen as Counter-checker.                                                                                                                                                                                                                                                                                                                                                         | `a216908b13b1`       | 0       | n/a (no candidate reported)                                                                                                                                              | 0                     | 11 complete, 11 files-unprocessed, 8 deadline-exceeded                                             | 762 s            |
 | dev-7 (first attempt)                | product           | `d88963ad5`: the review code of #4381 before its last two commits. Stopped after 17 minutes, in its first review: the fourth of four parts was refused (`quarantine-limit`).                                                                                                                                                                                                                                                                                                      | n/a                  | 0       | n/a                                                                                                                                                                      | 0                     | none (stopped in the first review)                                                                 | n/a              |
 | dev-7                                | product           | `3d166c931`, the tree of the epic commit `bc1f0ca28`: the diff package in up to 12 parts with a fresh runtime instance per part, three lines after a change, a read allowance of 24 per session, described schema corrections, one defect definition, the counter-check allowance and phase limit per part, and a readiness check before each session. The lab gateway allowed two schema corrections per call (`maxRetries: 2`, the Gateway Setup default; earlier runs used 1). | `e05f7da3dca3`       | 12      | 45.5 % gated (10/22: 10 hits, 2 false alarms, 8 undecided, 2 duplicates; Wilson 95 % interval 26.9 to 65.3 %); 83.3 % of the decided (10/12); 39 presented, 17 unmatched | 3                     | 13 complete, 8 deadline-exceeded, 4 budget-exhausted, 4 model-failed, 1 files-unprocessed          | 2311 s           |
+| probe-allowance                      | product           | `7c02f9a9f`, the tree of #4392, on five pull requests that dev-7 left incomplete (#3011, #3028, #3043, #3046, #3065): a Reviewer read allowance of 16, a second Reviewer session after a failure without a candidate, the early stop of counter-checks, a counter-check limit of 900 seconds with a read allowance of 8, hunks larger than a part shown as windows, and the tool-call proof renewed before a session.                                                             | `057faee9d45d`       | 2       | 50.0 % gated (1/2: 1 hit, 1 false alarm); 4 presented, 2 unmatched                                                                                                       | 2                     | 3 complete, 1 budget-exhausted, 1 model-failed                                                     | 1460 s           |
+| dev-8                                | product           | `d9e25dbc5`, the tree of #4394: the changes of the probe, an output budget of 4,096 tokens for each counter-check turn and the gateway's one repair of a turn that used it up.                                                                                                                                                                                                                                                                                                    | `c349d939b497`       | 15      | 59.1 % gated (13/22: 13 hits, 2 false alarms, 5 undecided, 2 duplicates; Wilson 95 % interval 38.7 to 76.7 %); 86.7 % of the decided (13/15); 37 presented, 15 unmatched | 3                     | 16 complete, 5 deadline-exceeded, 5 model-failed, 4 budget-exhausted                               | 2621 s           |
+| probe-replay                         | product           | `d9e25dbc5`, the tree of dev-8, on the six small pull requests that dev-8 lost to counter-checks only (#2997, #3011, #3020, #3040, #3041, #3048). A lab proxy in front of the Counter-checker's model server put the reasoning of each earlier tool-call turn back into the request; Keiko's code is unchanged.                                                                                                                                                                   | `c349d939b497`       | 1       | 50.0 % gated (1/2: 1 hit, 1 undecided); 6 presented, 3 unmatched                                                                                                         | 3                     | 3 complete, 1 model-failed, 1 deadline-exceeded, 1 budget-exhausted                                | 1725 s           |
 
 Reading of the runs so far:
 
@@ -202,6 +205,72 @@ Reading of the runs so far:
 - 5.30 of those 16.06 hours of counter-checks were spent on candidates that could no longer be
   presented, because three candidates checked before them were already presentable. Stopping
   there would have changed one review from `incomplete` to `complete`.
+- dev-8 is the development run of the changes made after dev-7. Its evidence is `evidence.json`
+  with sha256 `d7b5c6c8638f0f976557a7f987d3fea14d88be72b1dd982fd49a0d04802ca70a`. It ran 26.4 hours
+  without an interruption: the tool-call proof was renewed twice before a session
+  (`gateway.readiness.automatic.started`, trigger `review-launch`), the first time 24 hours and 5
+  minutes after the server's start, and no part was refused.
+- dev-8 presented 37 findings: 13 hits, 2 false alarms, 5 undecided, 2 duplicates and 15
+  unmatched. Its gated rate of 59.1 % is above the 50 % threshold, and its interval of 38.7 to
+  76.7 % includes it.
+- 14 of 30 reviews did not settle `complete` (46.7 %, limit 20 %), against 17 in dev-7. What blocks
+  each of the 14, counted once per review and cause:
+  - A counter-check without a verdict: 10 reviews, and the only cause in 8 of them. Of 172 checks,
+    37 confirmed, 122 refuted, 1 ended undecided by its own verdict, 9 ran into the 900-second
+    limit and 3 failed as `model-failed`.
+  - A Reviewer session that the read allowance stopped and that filed no report: 4 reviews, the
+    only cause in 1 (the rule of R4130-054).
+  - A Reviewer session that failed after it had filed a candidate: 2 reviews (3 sessions, each at
+    the read allowance: an invalid report call after two corrections, an exhausted output budget,
+    and one whose cause the gateway's lines do not name).
+  - Files that no part holds: 2 reviews with 16 files, both with another cause as well. One is the
+    review of 198 changed files.
+  - A Reviewer session out of its prompt allowance: 1 review, with an undecided check as well.
+- In 10 of the 12 counter-checks without a verdict a turn used its whole output budget. The gateway
+  scheduled its repair 18 times inside counter-checks. In the 3 `model-failed` checks the repaired
+  attempt used the whole budget again. In 7 of the 9 checks on the limit a turn had needed the
+  repair, and in 6 of them the limit ended the check during the repaired attempt. In the other 2
+  the last turns took 2,400 to 3,900 output tokens each.
+- The Counter-checker's reasoning grows with the turns of a check. Its median reasoning was 181
+  tokens in the first turn, 437 in the sixth, 605 in the ninth and 1,521 in the tenth, the turn
+  after the read allowance is used. Turns that used their output budget cluster at turns 6, 7
+  and 10. Keiko does not send a model's earlier reasoning back to it, so each turn starts from
+  the tool calls and results alone. Whether that causes the growth is not measured yet.
+- The Reviewer's sessions: 112 sessions for 109 parts. Three sessions that failed without a
+  candidate were started again, and all three second sessions completed, with 3, 4 and 4
+  candidates. 101 of the 109 parts ended with a completed session. 60 sessions used all 16 reads,
+  at 266,000 to 1,472,000 prompt tokens (median 631,000); in dev-7 the sessions at 24 reads used
+  885,000 at the median. 39 sessions made no read call.
+- The early stop left 31 candidates unchecked in 7 reviews because three findings were already
+  presentable. Five reviews had a hunk shown as windows.
+- The Reviewer used 45.5 million prompt tokens, 1.52 million per review at the mean (dev-7: 59.1
+  and 1.97). The reviews took 26.4 hours in all: 8.5 hours of Reviewer sessions and 17.8 hours of
+  counter-checks.
+- Two lab probes on the tree of dev-8 tested why a counter-check turn uses its whole output budget.
+  Neither changes Keiko's code, and both ran on the six small pull requests that dev-8 lost to
+  counter-checks only, so their failure counts regress towards the run's base rate of 12 of 172.
+  - probe-replay sent the Counter-checker's earlier reasoning back between its tool calls, which
+    Gemma 4's prompt format asks for and Keiko did not do. Its evidence is `evidence.json` with
+    sha256 `ac5beb01fbd53dd7b58e05962210673809849697528398387c760199ba32c9e5`. The median reasoning
+    of turns 3 to 9 fell to 20 to 90 tokens, with 236 at turn 8 (dev-8: 276 to 605). The turn after
+    the read allowance is used stayed long (2,246 tokens at the median), and 2 of 16 checks still
+    ended without a verdict after one turn used its whole budget. One of the three incomplete
+    reviews had no failed check: the rule of R4130-054 failed a silent read-limited part.
+  - The second probe also switched the Counter-checker to Gemma's official thinking mode. It was
+    stopped after four reviews, so it has no evidence file: 11 checks, 6 confirmed, 3 refuted and 2
+    without a verdict, again after a turn that used its budget twice. Thinking mode is not
+    adopted.
+  - The stock chat template marks "no thinking" only on a turn that does not follow a tool result,
+    and the model reasons on its first turn all the same, so a template cannot switch its
+    reasoning off.
+  - The merge of dev 1.5.0 brings a provider setting that sends the reasoning back
+    (`reasoningHistory`). The lab uses it from iteration 9 on. A turn that runs away is left to the
+    second counter-check session.
+- From the merge of dev 1.5.0 on, two recorded values are not comparable with earlier rows: the
+  configuration digest, because the two retired prompt-token settings are no longer part of it,
+  and `describedPathCount` on `gateway.tool-catalog.repair`, which now counts only the listed
+  paths whose schema gives a description. Review runs have no prompt-token allowance from then on
+  (#4346).
 
 ## Final holdout run
 
