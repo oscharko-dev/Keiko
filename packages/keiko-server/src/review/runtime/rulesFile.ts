@@ -1,4 +1,4 @@
-// The review-rules reader (ADR-0182 D4, Issue #4135).
+// The review-rules reader (ADR-0184 D4, Issue #4135).
 //
 // The rules come from the BASE commit object only: `<baseSha>:<path>` is resolved and read through
 // the hardened review runner, never from the head commit, the review worktree or the user's

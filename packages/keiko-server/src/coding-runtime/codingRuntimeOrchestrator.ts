@@ -231,7 +231,7 @@ const CODING_RUNTIME_RUN_FIELDS = {
       "chatgpt-codex-subscription-profile",
     ],
   },
-  // ADR-0173 / ADR-0182 D1 (#4135): the runtime instance that ran it. The Keiko for Quality review
+  // ADR-0173 / ADR-0184 D1 (#4135): the runtime instance that ran it. The Keiko for Quality review
   // instance always sets `review`; the Coding Workbench instance leaves it absent (`coding`).
   runtimePurpose: {
     type: "string",

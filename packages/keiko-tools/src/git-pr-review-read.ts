@@ -1,4 +1,4 @@
-// Read-only pull request list and detail for Keiko for Quality (ADR-0182, ADR-0086, Issue #4133).
+// Read-only pull request list and detail for Keiko for Quality (ADR-0184, ADR-0086, Issue #4133).
 //
 // Two fixed GraphQL documents and nothing else. Neither is a mutation; the only variables are the
 // repository owner and name (validated `owner/repo`), the page size or pull request number

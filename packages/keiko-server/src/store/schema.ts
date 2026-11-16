@@ -3561,7 +3561,7 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     version: 79,
-    // ADR-0182 D6 (#4136): Keiko for Quality review runs, their coverage and their candidate
+    // ADR-0184 D6 (#4136): Keiko for Quality review runs, their coverage and their candidate
     // findings. Paths and finding text are local product data for the UI; they never enter logs.
     // One unsettled run per repository is enforced here, not only by the service.
     sql: `CREATE TABLE review_runs (
@@ -3626,14 +3626,14 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     version: 80,
-    // ADR-0182 D6 (#4136): whether the Reviewer runtime's end was proven, a warning beside the
+    // ADR-0184 D6 (#4136): whether the Reviewer runtime's end was proven, a warning beside the
     // settlement. NULL when no Reviewer run started and for every run recorded before this column.
     sql: `ALTER TABLE review_runs ADD COLUMN runtime_cleanup TEXT
       CHECK (runtime_cleanup IS NULL OR runtime_cleanup IN ('proven','unproven'));`,
   },
   {
     version: 81,
-    // ADR-0182 D6 (R4130-015): the base path of a renamed file, so the reviewed diff reads the base
+    // ADR-0184 D6 (R4130-015): the base path of a renamed file, so the reviewed diff reads the base
     // side under the name it had there. NULL for every other entry and every entry recorded earlier.
     sql: `ALTER TABLE review_coverage ADD COLUMN previous_path TEXT;`,
   },

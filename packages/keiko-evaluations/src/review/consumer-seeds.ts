@@ -1,4 +1,4 @@
-// Keiko consumer seeds (Issue #4132, ADR-0182 D9), ported in shape from the retired reviewer's
+// Keiko consumer seeds (Issue #4132, ADR-0184 D9), ported in shape from the retired reviewer's
 // `seed-gate-cases.mjs`: real defects planted into real Keiko files by exact `find` → `replace`.
 // A synthetic fixture can be aced by a reviewer that still misses a defect sitting in a production
 // file with its own comments and context; these seeds measure that.

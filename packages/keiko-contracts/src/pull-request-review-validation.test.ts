@@ -200,7 +200,7 @@ describe("validateReviewRunSettlement", () => {
     expect(
       rejection(validateReviewRunSettlement({ kind: "incomplete", reason: "cancelled" })),
     ).toEqual(["unknown-enum-value@reason"]);
-    // A moved head is a display state, never a settlement (ADR-0182 D6).
+    // A moved head is a display state, never a settlement (ADR-0184 D6).
     expect(rejection(validateReviewRunSettlement({ kind: "stale" }))).toEqual([
       "unknown-enum-value@kind",
     ]);

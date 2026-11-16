@@ -1,4 +1,4 @@
-// The server-owned, ephemeral, detached review worktree (ADR-0182 D3, ADR-0098, Issue #4133).
+// The server-owned, ephemeral, detached review worktree (ADR-0184 D3, ADR-0098, Issue #4133).
 //
 // One worktree per review run at `<review root>/<leaf>`, outside the user's checkout and outside
 // the task-workspace managed root, locked with the reason `keiko-review` so a user's

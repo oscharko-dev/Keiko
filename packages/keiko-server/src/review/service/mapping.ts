@@ -1,5 +1,5 @@
 // How each refusal or outcome of a run's building blocks maps onto the child 1 reason table
-// (ADR-0182 D6, Issue #4136). Pure and exhaustive over each block's closed vocabulary.
+// (ADR-0184 D6, Issue #4136). Pure and exhaustive over each block's closed vocabulary.
 
 import type {
   ReviewIncompleteReason,

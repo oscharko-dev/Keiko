@@ -1,4 +1,4 @@
-// Review model-policy resolution (ADR-0182 D8, Issue #4137). Strictest wins:
+// Review model-policy resolution (ADR-0184 D8, Issue #4137). Strictest wins:
 //   1. the operator's configuration: an invalid explicit value refuses every role
 //      (`invalid-operator-value`) and never yields to another model; an allowlist bounds every
 //      choice; a lock makes the operator defaults (or the recommendation) the only admissible pair;

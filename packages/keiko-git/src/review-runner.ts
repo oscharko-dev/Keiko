@@ -1,4 +1,4 @@
-// The hardened Git runner for pull request review operations (ADR-0182 D3, Issue #4133).
+// The hardened Git runner for pull request review operations (ADR-0184 D3, Issue #4133).
 //
 // A review materializes a hostile pull request head in a server-owned worktree. Nothing from that
 // head may execute: no hook, no filter driver (Git LFS included), no fsmonitor, no submodule, no

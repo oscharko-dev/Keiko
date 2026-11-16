@@ -1,4 +1,4 @@
-// The local pair qualification routes (ADR-0182 D8, Issue #4137).
+// The local pair qualification routes (ADR-0184 D8, Issue #4137).
 //
 //   POST /api/git-review/pair-qualifications            start one for a Reviewer/Counter-checker
 //        pair, after the same operator and user policy and eligibility check a run start applies;

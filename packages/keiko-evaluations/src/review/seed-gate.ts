@@ -1,4 +1,4 @@
-// The review seed gate (Issue #4132, ADR-0182 D9), ported in meaning from the retired reviewer's
+// The review seed gate (Issue #4132, ADR-0184 D9), ported in meaning from the retired reviewer's
 // `seed-gate-lib.mjs`. It runs every seed fixture — the shipped synthetic corpus the caller passes
 // in, plus the Keiko consumer seeds planted here — through the injected review port and scores the
 // presented findings with `scoreReviewSeedRun`, the one seed scorer the server's pair

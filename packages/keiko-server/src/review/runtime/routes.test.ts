@@ -1,4 +1,4 @@
-// The review instance's sidecar routes (ADR-0182 D1, Issue #4135, AC3): a request reaches the shared
+// The review instance's sidecar routes (ADR-0184 D1, Issue #4135, AC3): a request reaches the shared
 // gateway and tool-facade handlers with the deps of the ONE review instance whose capability it
 // carries, and with no runtime at all otherwise -- never with the Coding Workbench's runtime.
 

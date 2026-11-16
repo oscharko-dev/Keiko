@@ -449,7 +449,7 @@ before any request. A run without a choice has no Jira tools and is unchanged. S
 
 ## Amendment — the Keiko for Quality review instance and its review authority (2026-10-30, #4135)
 
-ADR-0182 D1/D2 adds a second, server-owned instance of the same sidecar runtime composition: the
+ADR-0184 D1/D2 adds a second, server-owned instance of the same sidecar runtime composition: the
 Keiko for Quality review instance. It changes no Coding Workbench mode and adds none.
 
 - **Runtime purpose.** A composition is either `coding` (the Coding Workbench's, unchanged) or
@@ -462,7 +462,7 @@ Keiko for Quality review instance. It changes no Coding Workbench mode and adds 
 - **Review authority (D3, D4).** A review run's Authority Envelope is minted by the same
   `CodingRuntimeAuthorityService` from a context the review workspace authority resolves
   (`runtimePurpose: "review"` on `ProductionWorkspaceAuthorityInput`): the workspace is the hardened
-  review worktree of ADR-0182 D3 at its head commit, the action classes are `workspace-read` alone,
+  review worktree of ADR-0184 D3 at its head commit, the action classes are `workspace-read` alone,
   the command policy is `deny`, the network policy `deny-all` with no connector scope, the
   deployment ceiling and therefore the effective mode `governed-assist` (the envelope schema requires
   a mode), and the budgets are the review run's own (1,500,000 prompt tokens and 20 minutes by
@@ -478,7 +478,7 @@ Keiko for Quality review instance. It changes no Coding Workbench mode and adds 
   A review run therefore never reaches an ask: its tool facade and catalog bridge refuse every
   action other than `read`, `discover`, `search` and `review-report` before any admission, and its
   tool bridge refuses the native read, permission-request, native-policy and web-search transports
-  before dispatch (ADR-0182 D2 layer 4, `reviewRuntimeGuard.ts`), each refusal leaving one
+  before dispatch (ADR-0184 D2 layer 4, `reviewRuntimeGuard.ts`), each refusal leaving one
   body-free `review.run.action-refused` line. The purpose they enforce comes from the review
   composition's own tool profile, not from the minted authority, so the refusal holds even if the
   review authority were missing.

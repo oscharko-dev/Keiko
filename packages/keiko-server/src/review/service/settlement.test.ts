@@ -1,4 +1,4 @@
-// The settlement rule (ADR-0182 D6, Issue #4136): every settlement and reason of the child 1 table
+// The settlement rule (ADR-0184 D6, Issue #4136): every settlement and reason of the child 1 table
 // is reachable, and no run with unprocessed files, an exhausted budget, a failed model, a
 // cancellation or an interruption settles `complete`.
 

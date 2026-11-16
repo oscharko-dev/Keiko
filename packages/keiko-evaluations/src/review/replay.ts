@@ -1,4 +1,4 @@
-// Chronological review replay (Issue #4132, ADR-0182 D9), ported in meaning from the retired
+// Chronological review replay (Issue #4132, ADR-0184 D9), ported in meaning from the retired
 // reviewer's `historical-replay-lib.mjs`: replay historical pull requests at their head commits
 // through an injected review port and score each presented finding against the labeled harvest by
 // file and overlapping range.

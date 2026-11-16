@@ -1,4 +1,4 @@
-// Construction helpers of the synthetic review seed corpus (Issue #4132, ADR-0182 D9). A corpus
+// Construction helpers of the synthetic review seed corpus (Issue #4132, ADR-0184 D9). A corpus
 // case is data: a small generated repository before and after one change. A defect case's expected
 // location is derived from the planted text itself, so the recorded range can never drift from the
 // fixture it describes; a planted text that is absent or ambiguous fails when the module loads.

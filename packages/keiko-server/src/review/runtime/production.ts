@@ -1,4 +1,4 @@
-// Production composition of the Keiko for Quality review runtime service (ADR-0182 D1, #4135).
+// Production composition of the Keiko for Quality review runtime service (ADR-0184 D1, #4135).
 //
 // The server's deps graph supplies what the Coding Workbench's runtime is composed from -- the
 // OpenCode activation, the verification runner, the model admission, the gateway evidence recorder
@@ -64,7 +64,7 @@ function boundedSetting(
 
 /**
  * The Reviewer run's budgets: 1,500,000 prompt tokens and 20 minutes by default, operator-configurable
- * but never above the coding runtime's configured envelope (ADR-0182 D1). Out of range fails closed.
+ * but never above the coding runtime's configured envelope (ADR-0184 D1). Out of range fails closed.
  */
 export function configuredReviewRunBudget(
   env: NodeJS.ProcessEnv,

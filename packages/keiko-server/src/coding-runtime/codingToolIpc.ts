@@ -265,7 +265,7 @@ export type CodingToolActionRequest =
       /**
        * The Reviewer's candidate finding, untrusted and unvalidated here: the review report port
        * validates it with `validateReviewFindingReport` and answers a closed acknowledgement, so a
-       * malformed report is the model's to correct, never a transport failure (ADR-0182 D4).
+       * malformed report is the model's to correct, never a transport failure (ADR-0184 D4).
        */
       readonly report: Readonly<Record<string, unknown>>;
     });
@@ -288,7 +288,7 @@ const STATIC_REQUIRED_CLASSES: Readonly<
   skill: ["workspace-read"],
   "skill-discover": ["workspace-read"],
   "child-agent": ["workspace-read"],
-  // ADR-0182 D4: a report changes nothing; its validation reads the reviewed commit.
+  // ADR-0184 D4: a report changes nothing; its validation reads the reviewed commit.
   "review-report": ["workspace-read"],
 };
 
@@ -367,7 +367,7 @@ export type CodingToolResult =
   | {
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
-      /** ADR-0182 D4: the report's closed acknowledgement, so the model can correct it once. */
+      /** ADR-0184 D4: the report's closed acknowledgement, so the model can correct it once. */
       readonly reviewReport: ReviewReportAcknowledgement;
     }
   | { readonly status: "completed"; readonly evidence: readonly CodingToolEvidence[] }
@@ -642,7 +642,7 @@ function childAgentRequest(value: Record<string, unknown>): CodingToolActionRequ
 }
 
 /**
- * The wire bound of one `keiko_review_report` argument (ADR-0182 D4): far above the largest report
+ * The wire bound of one `keiko_review_report` argument (ADR-0184 D4): far above the largest report
  * `ReviewFindingReport` admits, and inside the catalog's generic argument and string bounds, so an
  * admitted report is always catalog JSON. Its content is validated by the report port.
  */

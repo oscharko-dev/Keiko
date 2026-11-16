@@ -832,7 +832,7 @@ function actionAllowed(
   );
 }
 
-// R4130-009 (ADR-0182 D2 layer 3): an authority that carries `workspace-read` alone is the read-only
+// R4130-009 (ADR-0184 D2 layer 3): an authority that carries `workspace-read` alone is the read-only
 // review authority. Skills, skill discovery, child agents and Git reads need only `workspace-read`
 // too, so the class check would admit them; this rule admits only the review tools instead, as
 // PLANNING_CLASSES does for planning. Every coding authority carries `workspace-write`
@@ -877,7 +877,7 @@ function actionClassesAllowed(
 
 // What the relaxed delivery and Git planning paths above still require. Planning, staging or
 // syncing a change is meaningful only for an authority that may change the workspace at all, so a
-// read-only authority -- the Keiko for Quality review authority, `workspace-read` alone (ADR-0182
+// read-only authority -- the Keiko for Quality review authority, `workspace-read` alone (ADR-0184
 // D2) -- is refused here instead of being asked about it. Every coding authority carries
 // `workspace-write` (`codingRuntimeActionClassesForMode`), so this tightens nothing for it.
 const PLANNING_CLASSES: readonly CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["actionClasses"][number][] =

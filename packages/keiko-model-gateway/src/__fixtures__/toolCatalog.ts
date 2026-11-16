@@ -66,7 +66,7 @@ export function openCodeGatewayCatalogAdvertisement(now: number): GatewayToolCat
 }
 
 /**
- * The same for the review profile (ADR-0182 D2): the three read tools and `keiko_review_report`,
+ * The same for the review profile (ADR-0184 D2): the three read tools and `keiko_review_report`,
  * from the producer the review runtime composes (`opencodeRegistrationSet("review")`).
  */
 export function openCodeReviewGatewayCatalogAdvertisement(

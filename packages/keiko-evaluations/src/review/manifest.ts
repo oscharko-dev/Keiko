@@ -1,7 +1,7 @@
-// The review evaluation manifest (Issue #4132, ADR-0182 D9). The holdout boundary is a constant
+// The review evaluation manifest (Issue #4132, ADR-0184 D9). The holdout boundary is a constant
 // here, chosen once from the recorded baseline (docs/qa/review-agent-baseline-2026-10-30.md) and
 // never an option of a run: changing it is a reviewed edit to this file, not a flag. The offline
-// thresholds are ADR-0182 D9's and are never lowered to make a model pass.
+// thresholds are ADR-0184 D9's and are never lowered to make a model pass.
 
 import { REVIEW_PRESENTED_FINDINGS_MAX } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 

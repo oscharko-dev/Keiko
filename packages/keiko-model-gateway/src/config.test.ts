@@ -432,7 +432,7 @@ describe("parseGatewayConfig", () => {
     ).toThrow(/branding must be an object/);
   });
 
-  // #4137 (ADR-0182 D8): the operator's review section never fails the gateway load. An invalid
+  // #4137 (ADR-0184 D8): the operator's review section never fails the gateway load. An invalid
   // value is a closed issue the review policy fails closed on, and the block is kept verbatim.
   it("parses the review section with its overrides and keeps an invalid block verbatim", () => {
     const raw = validRaw() as Record<string, unknown>;

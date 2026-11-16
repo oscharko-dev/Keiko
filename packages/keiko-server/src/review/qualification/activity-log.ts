@@ -1,4 +1,4 @@
-// Activity Log evidence of a local pair qualification (ADR-0182 `review.pair-qualification.*`,
+// Activity Log evidence of a local pair qualification (ADR-0184 `review.pair-qualification.*`,
 // Issue #4137). One qualification is one correlation: `started`, one `case-scored` per seed case,
 // then `completed` (a pair status was recorded) or `failed` (none was). Every seed case's review run
 // is started under the same correlation, so its `review.run.*` lines join the same timeline. Fields

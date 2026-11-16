@@ -241,7 +241,7 @@ const EXPECTED_TABLES = new Set([
   "relationship_audit_entries",
   "relationship_lifecycle_history",
   "relationships",
-  // ADR-0182 D6 (#4136): review runs, their coverage and candidate findings. Content-free
+  // ADR-0184 D6 (#4136): review runs, their coverage and candidate findings. Content-free
   // identifiers, SHAs, closed outcomes and counts, plus the local finding text and paths the Pull
   // requests area shows; no credential, endpoint or deployment column.
   "review_coverage",

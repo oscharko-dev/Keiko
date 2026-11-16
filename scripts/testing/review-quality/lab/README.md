@@ -1,7 +1,7 @@
 # Review gate lab: 4-bit against 8-bit
 
 `lab.sh` serves the review model pair on one Mac and runs the offline review gate
-(ADR-0182 D9, Issue #4138) against it. It is meant for the quantization diagnostic proposed on
+(ADR-0184 D9, Issue #4138) against it. It is meant for the quantization diagnostic proposed on
 Epic #4130 after the holdout failed on coverage. The same development sample and seed set run once
 with the 4-bit pair and once with the 8-bit pair, on the same code and the same machine. Only the
 weights differ.

@@ -1,4 +1,4 @@
-// Changed-path identity for the review diff package (ADR-0182 D6, Issue #4134).
+// Changed-path identity for the review diff package (ADR-0184 D6, Issue #4134).
 //
 // Git stores a path as bytes. The package keeps those bytes as the identity of a changed file (two
 // names that differ only in invalid UTF-8 bytes stay two files), reports a valid UTF-8 name exactly

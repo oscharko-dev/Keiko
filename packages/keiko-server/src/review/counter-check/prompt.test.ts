@@ -1,4 +1,4 @@
-// The Counter-checker's fixed instruction (ADR-0182 D5, Issue #4136): it names its tools and its
+// The Counter-checker's fixed instruction (ADR-0184 D5, Issue #4136): it names its tools and its
 // one output, and since the #4138 tuning it asks for a short check within the wall time.
 
 import { describe, expect, it } from "vitest";

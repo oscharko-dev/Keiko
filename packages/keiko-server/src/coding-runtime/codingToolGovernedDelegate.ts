@@ -59,7 +59,7 @@ export type GovernedCodingToolResult =
       readonly search?: CodingRepositoryResult;
       readonly verification?: CodingToolVerificationResult;
       readonly skills?: SkillDiscoveryResultV1 | undefined;
-      /** The review report port's closed, model-facing acknowledgement (ADR-0182 D4). */
+      /** The review report port's closed, model-facing acknowledgement (ADR-0184 D4). */
       readonly reviewReport?: ReviewReportAcknowledgement | undefined;
       /** Fresh server-only approval-store observation; the immutable domain receipt is unchanged. */
       readonly approvalDisposition?: "ready" | undefined;
@@ -97,7 +97,7 @@ export interface CodingToolGovernedPorts {
   readonly skillAuthority?: GovernedCodingToolPort<"skill"> | undefined;
   readonly skillDiscovery?: GovernedCodingToolPort<"skill-discover"> | undefined;
   readonly childAgentAuthority?: GovernedCodingToolPort<"child-agent"> | undefined;
-  /** Present only on a Keiko for Quality review run (ADR-0182 D4); absent refuses every report. */
+  /** Present only on a Keiko for Quality review run (ADR-0184 D4); absent refuses every report. */
   readonly reviewReport?: GovernedCodingToolPort<"review-report"> | undefined;
 }
 

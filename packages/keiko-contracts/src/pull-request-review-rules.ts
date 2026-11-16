@@ -1,4 +1,4 @@
-// Pure rules shared by every Keiko for Quality consumer (ADR-0182, Issues #4131 and #4134): the
+// Pure rules shared by every Keiko for Quality consumer (ADR-0184, Issues #4131 and #4134): the
 // finding fingerprint preimage, the review-role eligibility rule, seed scoring and the mapping of a
 // diff package's coverage to the run's settlement input. Each rule exists exactly
 // once, so the development seed gate (keiko-evaluations) and the shipped pair qualification
@@ -234,7 +234,7 @@ export function scoreReviewSeedRun(
 // ─── Diff package coverage → settlement input (Issue #4134) ──────────────────
 
 /**
- * What a diff package's coverage means for the run (ADR-0182 D6). Nothing included while some
+ * What a diff package's coverage means for the run (ADR-0184 D6). Nothing included while some
  * reviewable file was left unprocessed is `skipped/diff-too-large`, never `no-reviewable-changes`;
  * nothing to review at all (every path filtered, binary, deleted, a gitlink, a link, a mode change
  * or a content-free rename) is `skipped/no-reviewable-changes`; any unprocessed or partially

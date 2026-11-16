@@ -1,4 +1,4 @@
-// The presentation rule (ADR-0182 D4/D5, Issue #4136): one pure, server-enforced function decides
+// The presentation rule (ADR-0184 D4/D5, Issue #4136): one pure, server-enforced function decides
 // which candidate findings a person sees. A candidate is presented only when the Counter-checker
 // confirmed it with its own evidence, that evidence lies in the reviewed head, and it overlaps or
 // connects to the reported location. At most three are presented, by severity, then in the

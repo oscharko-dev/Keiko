@@ -5347,7 +5347,7 @@ export type {
   ManagedMcpFailure,
 } from "./managed-mcp.js";
 
-// Keiko for Quality review contracts (ADR-0182, Issue #4131). Runtime values ship through the
+// Keiko for Quality review contracts (ADR-0184, Issue #4131). Runtime values ship through the
 // `./runtime/pull-request-review*` subpaths.
 export type {
   CounterCheckReasonCode,

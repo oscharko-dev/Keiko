@@ -1,7 +1,7 @@
 // Arguments of the offline review gate (Issue #4138). Every run names its set, its variant, the
 // exact model pair and where its evidence goes; a development run also names its iteration and the
 // pull requests whose labels informed its configuration. The holdout run needs an explicit
-// confirmation flag because it may happen exactly once (ADR-0182 D9). `--resume-since` continues
+// confirmation flag because it may happen exactly once (ADR-0184 D9). `--resume-since` continues
 // an interrupted replay from the reviews the original run stored since that instant;
 // `--resume-legacy-digest` additionally admits reviews stored before client request ids carried a
 // reuse key, and only when it equals the run's configuration digest (resume.ts).

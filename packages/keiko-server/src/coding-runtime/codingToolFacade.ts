@@ -305,13 +305,13 @@ async function executeParsed(
   request: CodingToolActionRequest,
 ): Promise<CodingToolResult> {
   if (input.signal?.aborted === true) return empty("cancelled");
-  // ADR-0182 D2 layer 4: a review run refuses every non-read action before any admission.
+  // ADR-0184 D2 layer 4: a review run refuses every non-read action before any admission.
   if (
     refuseReviewRunAction(context.runtimePurpose, request, "tool-facade", context.runtimePurposeLog)
   ) {
     return empty("denied");
   }
-  // ADR-0182 D1 (#4130): a review run's reads beyond its allowance are refused with the instruction
+  // ADR-0184 D1 (#4130): a review run's reads beyond its allowance are refused with the instruction
   // to report and end, before they reach the authority port or use up one of its tool calls.
   if (reviewReadAllowanceRefuses(context.runtimePurpose, request, context.reviewReadAllowance)) {
     return { status: "denied", evidence: [], guidance: REVIEW_READ_ALLOWANCE_GUIDANCE };
@@ -763,7 +763,7 @@ const REVIEW_REPORT_STATUSES: ReadonlySet<unknown> = new Set([
   "limit-reached",
 ]);
 
-// ADR-0182 D4: a report answers with its closed acknowledgement only; any other shape the port
+// ADR-0184 D4: a report answers with its closed acknowledgement only; any other shape the port
 // returned collapses to a failure rather than reaching the model.
 function projectReviewReport(
   request: CodingToolActionRequest,

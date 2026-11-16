@@ -1,4 +1,4 @@
-// Entry of the offline review gate (#4138, ADR-0182 D9):
+// Entry of the offline review gate (#4138, ADR-0184 D9):
 //
 //   node scripts/testing/review-quality/run.mjs --set development|holdout|seeds [--variant ...] ...
 //

@@ -1,4 +1,4 @@
-// Types of the review diff package builder (ADR-0182 D6, Issue #4134).
+// Types of the review diff package builder (ADR-0184 D6, Issue #4134).
 
 import type {
   ContextTokenAccounting,

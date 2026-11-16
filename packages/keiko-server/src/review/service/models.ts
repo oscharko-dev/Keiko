@@ -1,4 +1,4 @@
-// Role model validation of one review run (ADR-0182 D8, Issue #4136). Each role's model is checked
+// Role model validation of one review run (ADR-0184 D8, Issue #4136). Each role's model is checked
 // with the one eligibility rule of child 1 (`evaluateReviewRoleEligibility`) against the gateway's
 // current capability data. An ineligible model refuses the run as `policy-invalid`, a temporarily
 // unavailable one as `model-unavailable`. Operator defaults, allowlist and lock (Issue #4137) sit

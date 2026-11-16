@@ -1,4 +1,4 @@
-// ADR-0182 D5 (#4136): the Keiko for Quality Counter-checker's own registration set. A counter-check
+// ADR-0184 D5 (#4136): the Keiko for Quality Counter-checker's own registration set. A counter-check
 // session is a bounded, read-only child session (ADR-0175 D2) with a reserved profile of its own:
 // three read tools over the reviewed head commit and one verdict tool, nothing else. The child
 // profile (`keiko_child_workspace_read`) is unchanged; these aliases are distinct canonical

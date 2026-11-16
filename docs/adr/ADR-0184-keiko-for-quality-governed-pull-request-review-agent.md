@@ -1,4 +1,4 @@
-# ADR-0182: Keiko for Quality — governed pull request review agent
+# ADR-0184: Keiko for Quality — governed pull request review agent
 
 ## Status
 

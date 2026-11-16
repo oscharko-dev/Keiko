@@ -1,4 +1,4 @@
-// Fixed-argv Git operations for pull request review (ADR-0182 D3, Issue #4133).
+// Fixed-argv Git operations for pull request review (ADR-0184 D3, Issue #4133).
 //
 // Every operation builds its complete argument vector here from validated operands only: a
 // positive pull request number, full hexadecimal object ids, a remote alias, an absolute

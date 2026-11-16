@@ -1,4 +1,4 @@
-// Public barrel for the Keiko for Quality review evaluation family (Issue #4132, ADR-0182 D9): the
+// Public barrel for the Keiko for Quality review evaluation family (Issue #4132, ADR-0184 D9): the
 // harvest dataset loader, the labeling rules, the chronological replay with its holdout guard, the
 // precision gate, the seed gate with the Keiko consumer seeds, the baseline summary and the
 // renderers. Re-exported from the package barrel as one auditable namespace (`ReviewEval`).

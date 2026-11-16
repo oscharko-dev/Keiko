@@ -2,7 +2,7 @@
 
 Operator entries for the Keiko for Quality model policy
 ([operator guide](../git-delivery/pull-request-review-model-policy.md),
-[ADR-0182](../adr/ADR-0182-keiko-for-quality-governed-pull-request-review-agent.md) D8).
+[ADR-0184](../adr/ADR-0184-keiko-for-quality-governed-pull-request-review-agent.md) D8).
 
 ---
 

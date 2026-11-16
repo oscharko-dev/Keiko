@@ -205,7 +205,7 @@ export interface CodingRuntimeToolFacadeBridge {
 
 export interface CodingRuntimeControlPlaneInput {
   /**
-   * ADR-0182 D1 (#4135): `review` composes the Keiko for Quality review instance's own control
+   * ADR-0184 D1 (#4135): `review` composes the Keiko for Quality review instance's own control
    * plane (never with a history store, so its runs are not listed in Coding History). Absent is the
    * Coding Workbench's.
    */

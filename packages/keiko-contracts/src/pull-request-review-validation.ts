@@ -1,4 +1,4 @@
-// Runtime validation for the Keiko for Quality review contracts (ADR-0182, Issue #4131).
+// Runtime validation for the Keiko for Quality review contracts (ADR-0184, Issue #4131).
 //
 // Every validator takes `unknown`, rejects unknown fields and returns either the normalized value
 // or a list of typed issues. Display text is NFC-normalized and stripped of bidirectional and

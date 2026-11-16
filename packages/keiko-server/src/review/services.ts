@@ -1,4 +1,4 @@
-// Composition of the review target and review worktree services (ADR-0182 D3, Issue #4133).
+// Composition of the review target and review worktree services (ADR-0184 D3, Issue #4133).
 //
 // One instance per server: the read-only pull request reads, the target resolver, the worktree
 // manager and the private-ref retention, sharing one owner-private review root, one registry and

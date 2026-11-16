@@ -1,4 +1,4 @@
-// Fail-closed outcomes of the review diff package (ADR-0182 D6, Issue #4134).
+// Fail-closed outcomes of the review diff package (ADR-0184 D6, Issue #4134).
 //
 // Every exceeded time or byte bound of the packaging as a whole becomes `diff-too-large` with its
 // closed detail, a cancellation becomes `cancelled`, and any unexpected Git result `git-failed`:

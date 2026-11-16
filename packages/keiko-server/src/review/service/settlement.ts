@@ -1,4 +1,4 @@
-// The settlement of one review run (ADR-0182 D6, Issue #4136): one pure function over the facts
+// The settlement of one review run (ADR-0184 D6, Issue #4136): one pure function over the facts
 // the run sequence collected, mapping them onto exactly the child 1 reason table. Incomplete work
 // never settles `complete`: a cancellation abandons the run, a preparation failure skips it, and any
 // unprocessed file, exhausted budget, exceeded deadline or failed model makes it incomplete.

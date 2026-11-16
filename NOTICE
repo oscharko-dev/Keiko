@@ -12,7 +12,7 @@ Third-party notices
 
 PR-Agent v0.49.0 (https://github.com/The-PR-Agent/pr-agent/tree/v0.49.0)
 
-Keiko for Quality (ADR-0182) ports PR-Agent's diff packaging to TypeScript in
+Keiko for Quality (ADR-0184) ports PR-Agent's diff packaging to TypeScript in
 packages/keiko-server/src/review/diff-package/: hunk context extension and
 dynamic enclosing-function context (pr_agent/algo/git_patch_processing.py), the
 decoupled "__new hunk__"/"__old hunk__" hunk presentation, language

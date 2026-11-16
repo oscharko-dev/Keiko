@@ -1,4 +1,4 @@
-// The real Keiko server composition the offline review gate drives (Issue #4138, ADR-0182 D9),
+// The real Keiko server composition the offline review gate drives (Issue #4138, ADR-0184 D9),
 // started the way the dev BFF (`scripts/dev-bff.mjs`) starts it: `buildUiHandlerDeps` over the
 // operator's state directory and gateway configuration, served by `createUiServer` on loopback, so
 // each review instance reaches the Model Gateway through the server's own coding sidecar route.

@@ -1,4 +1,4 @@
-// The review model-policy and settings routes (ADR-0182 D8, Issue #4137).
+// The review model-policy and settings routes (ADR-0184 D8, Issue #4137).
 //
 //   GET /api/git-review/model-policy?repositoryId=…  the resolved roles with their sources, the lock
 //       and allowlist state, every configured chat model as an option with its capability summary,

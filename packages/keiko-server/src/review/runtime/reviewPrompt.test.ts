@@ -1,4 +1,4 @@
-// The Reviewer's server-owned prompt and the review task framing (ADR-0182 D2/D4, Issue #4135,
+// The Reviewer's server-owned prompt and the review task framing (ADR-0184 D2/D4, Issue #4135,
 // AC4): injected instructions in the rules, the diff package, file names or code stay inside a
 // nonce-bound data block, and nothing in them reaches the tool set or the output contract.
 

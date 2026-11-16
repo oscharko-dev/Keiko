@@ -1,4 +1,4 @@
-// Which sidecar surface a shared sidecar request arrived on (ADR-0182 D1, Issue #4135).
+// Which sidecar surface a shared sidecar request arrived on (ADR-0184 D1, Issue #4135).
 //
 // The review instance's sidecar reaches the server under `/api/review-sidecar/*`, served by the
 // SAME gateway and tool-facade handlers as the Coding Workbench's `/api/coding-sidecar/*`. Those

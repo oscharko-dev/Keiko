@@ -1,4 +1,4 @@
-// The evaluation repository of the offline review gate (Issue #4138, ADR-0182 D9): a local clone
+// The evaluation repository of the offline review gate (Issue #4138, ADR-0184 D9): a local clone
 // of Keiko that holds the commits every replayed pull request and every consumer seed needs. The
 // review service reviews `local-range` targets between two local branches, so this module creates
 // them: for a pull request, its merge base and its final head; for a consumer seed, a pinned base

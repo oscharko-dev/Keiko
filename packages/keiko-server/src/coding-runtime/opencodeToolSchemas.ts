@@ -555,7 +555,7 @@ export const OPENCODE_MODEL_VISIBLE_TOOL_NAMES = OPENCODE_MODEL_VISIBLE_TOOLS.ma
   ({ name }) => name,
 );
 
-// ADR-0182 D4 (#4135): the Reviewer's one output channel. Every argument is required at the tool
+// ADR-0184 D4 (#4135): the Reviewer's one output channel. Every argument is required at the tool
 // boundary, as for every other generated tool; the server validates each call again with the
 // contract's `validateReviewFindingReport`.
 const REVIEW_REPORT_SCHEMA = {
@@ -565,7 +565,7 @@ const REVIEW_REPORT_SCHEMA = {
 } as const;
 
 /**
- * The review profile's whole model-visible contract (ADR-0182 D2): the three read tools and
+ * The review profile's whole model-visible contract (ADR-0184 D2): the three read tools and
  * `keiko_review_report`, in the contract's order. There is no `question`: an unattended review
  * cannot ask. Pinned by `hasExactOpenCodeVisibleToolContract(tools, "review")`.
  */
@@ -692,7 +692,7 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
 ] as const;
 
 /**
- * The generated-tool definitions the review profile registers (ADR-0182 D2): exactly the three
+ * The generated-tool definitions the review profile registers (ADR-0184 D2): exactly the three
  * read tools of the governed set and `keiko_review_report`, nothing else.
  */
 const REVIEW_TOOL_NAME_SET: ReadonlySet<string> = new Set(REVIEW_RUNTIME_TOOL_NAMES);
@@ -834,7 +834,7 @@ function expectedGatewaySchemaDigests(
   return CODE_MODE_GATEWAY_SCHEMA_DIGESTS;
 }
 
-/** SHA-256 over the review profile's exact model-visible contract, pinned by a test (ADR-0182 D2). */
+/** SHA-256 over the review profile's exact model-visible contract, pinned by a test (ADR-0184 D2). */
 export function openCodeReviewToolContractDigest(): string {
   return createHash("sha256")
     .update(stableJson([...REVIEW_GATEWAY_SCHEMA_DIGESTS.entries()]), "utf8")

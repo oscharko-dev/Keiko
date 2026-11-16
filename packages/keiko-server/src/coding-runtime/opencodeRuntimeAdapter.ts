@@ -1707,7 +1707,7 @@ type OpenCodeToolSourceDefinition =
  */
 function v2ToolDefinitions(profile: OpenCodeToolProfile): readonly OpenCodeToolSourceDefinition[] {
   if (profile === "native") return OPENCODE_NATIVE_DELIVERY_TOOL_SOURCE_DEFINITIONS;
-  // ADR-0182 D2 layer 2: a review instance registers the three read tools and the report, only.
+  // ADR-0184 D2 layer 2: a review instance registers the three read tools and the report, only.
   if (profile === "review") return OPENCODE_REVIEW_TOOL_SOURCE_DEFINITIONS;
   return OPENCODE_TOOL_SOURCE_DEFINITIONS;
 }
@@ -2209,7 +2209,7 @@ function toolSource(
     // `["action","actionId","idempotencyKey","repositoryRequest"]`, so the flat fields the loop
     // above just set are moved under `repositoryRequest` (with the fixed `kind: "search"`) and
     // removed from the top level rather than left alongside it.
-    // keiko_review_report (ADR-0182 D4): the report travels as one `report` object, so the wire
+    // keiko_review_report (ADR-0184 D4): the report travels as one `report` object, so the wire
     // parser's exact keys stay closed and the server validates the whole report as one value.
     '    if (action === "review-report") {',
     "      request.report = {};",

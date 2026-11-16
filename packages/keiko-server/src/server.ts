@@ -215,7 +215,7 @@ function isStateChangingMethod(method: string): boolean {
 // `preflightToolRequest`), reached through coding-sidecar-tool-facade.ts, upstream of the same
 // unconditional loopback Host/Origin check.
 //
-// ADR-0182 D1 (#4135): the Keiko for Quality review instance's sidecar posts to the two
+// ADR-0184 D1 (#4135): the Keiko for Quality review instance's sidecar posts to the two
 // `/api/review-sidecar/*` twins for the same reason. They are served by the SAME handlers, whose
 // per-request authenticators are the review instance's own (review/runtime/routes.ts); a request
 // whose capability no review instance owns reaches those handlers with no runtime and is refused.

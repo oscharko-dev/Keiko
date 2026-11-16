@@ -1,4 +1,4 @@
-// Activity Log evidence of the Keiko for Quality counter-check (ADR-0182 `review.counter-check.*`,
+// Activity Log evidence of the Keiko for Quality counter-check (ADR-0184 `review.counter-check.*`,
 // Issue #4136). Each counter-check session has its own correlation id and points at its review
 // run through `parentCorrelationId`. Every field is a closed value, a count, a duration or a digest
 // (ADR-0173 D4): never finding prose, code, a prompt, model output or a path.

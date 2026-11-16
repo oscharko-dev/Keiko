@@ -1,7 +1,7 @@
 # Keiko for Quality: review models, settings and pair qualification
 
 Operator guide for the model policy of the Pull requests area (Epic #4130, Issue #4137,
-[ADR-0182](../adr/ADR-0182-keiko-for-quality-governed-pull-request-review-agent.md) D8). Keiko for
+[ADR-0184](../adr/ADR-0184-keiko-for-quality-governed-pull-request-review-agent.md) D8). Keiko for
 Quality uses two roles, **Reviewer** and **Counter-checker**, each bound to a chat model of your own
 gateway. Keiko prescribes no model. This page explains how an operator presets and restricts the
 two roles, how a user chooses within those limits, and how a pair is qualified locally.

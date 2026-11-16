@@ -284,13 +284,13 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly workspaceScriptTrust?:
     Pick<WorkspaceScriptTrustService, "admitRunManifest" | "revokeRunAdmissions"> | undefined;
   /**
-   * ADR-0182 D4 (#4135): the `keiko_review_report` port of one run, supplied only by the Keiko for
+   * ADR-0184 D4 (#4135): the `keiko_review_report` port of one run, supplied only by the Keiko for
    * Quality review composition. A coding composition supplies none, so a report is refused there.
    */
   readonly reviewReportPort?:
     ((runId: string) => ProductionManagedWorktreeToolInput["reviewReport"]) | undefined;
   /**
-   * ADR-0182 D1 (#4130): the read allowance of one run, supplied only by the review composition.
+   * ADR-0184 D1 (#4130): the read allowance of one run, supplied only by the review composition.
    * A coding composition supplies none, so its runs' reads are never counted.
    */
   readonly reviewReadAllowance?:
@@ -358,7 +358,7 @@ export function createProductionCodingRuntimeResolver(
 ): ProductionCodingRuntimeResolver & {
   /**
    * The purpose the composed runtime hands every run's tool facade and catalog bridge,
-   * independently of the minted context (ADR-0182 D2 layer 4): `review` for a runtime composed
+   * independently of the minted context (ADR-0184 D2 layer 4): `review` for a runtime composed
    * with the review tool profile. `undefined` until a runtime is composed.
    */
   readonly facadePurpose: CodingRuntimePurpose | undefined;
@@ -1811,7 +1811,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
   });
 }
 
-// ADR-0182 D2/D4 (#4135): a review run's facade carries its purpose (layer 4) and its report port;
+// ADR-0184 D2/D4 (#4135): a review run's facade carries its purpose (layer 4) and its report port;
 // an ordinary coding run carries neither. The purpose follows the composition's tool profile, so a
 // review composition's facade refuses even when its minted context carries no review purpose.
 function reviewRunFacadeOptions({

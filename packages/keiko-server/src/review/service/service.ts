@@ -1,4 +1,4 @@
-// The Keiko for Quality review service (ADR-0182 D3-D6, Issue #4136).
+// The Keiko for Quality review service (ADR-0184 D3-D6, Issue #4136).
 //
 // Turns a person's "Start review" into one governed review run: it records the run, runs the
 // sequence (`sequence.ts`) in the background, settles it honestly (`settlement.ts`), decides what is
