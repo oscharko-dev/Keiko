@@ -254,8 +254,9 @@ function referenceLineRange(
 }
 const REFERENCE_LINE_RANGE = referenceLineRange(true);
 const FOLLOWING_REFERENCE_LINE_RANGE = new RegExp(`^${REFERENCE_LINE_RANGE}`, "u");
+const BRACKETED_REFERENCE_FRAGMENT = String.raw`\[[^\[\]]{1,4096}\]`;
 const REPOSITORY_REFERENCE_PATTERN = new RegExp(
-  String.raw`\[[^\[\]]{1,4096}\]|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?:${REFERENCE_LINE_RANGE})?`,
+  `${BRACKETED_REFERENCE_FRAGMENT}|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?:${REFERENCE_LINE_RANGE})?`,
   "gu",
 );
 // Exact/bracketed references have a known boundary, so their filenames may contain spaces or
@@ -340,13 +341,13 @@ const KNOWN_REPOSITORY_EXTENSIONS = new Set([
 function boundaryBefore(value: string, index: number): boolean {
   if (index <= 0) return true;
   const previous = value.slice(Math.max(0, index - 2), index);
-  return !/[\p{L}\p{N}\p{M}\p{Sc}_./:@+^~\x60-]$/u.test(previous);
+  return !/[\p{L}\p{N}\p{M}\p{Sc}_.\\/:@+^~\x60-]$/u.test(previous);
 }
 
 function boundaryAfter(value: string, index: number): boolean {
   if (index >= value.length) return true;
   const next = value.slice(index, index + 2);
-  return !/^[\p{L}\p{N}\p{M}\p{Sc}_/:+$^~\x60\u2010-\u2014\u2212-]/u.test(next);
+  return !/^[\p{L}\p{N}\p{M}\p{Sc}_\\/:+$^~\x60\u2010-\u2014\u2212-]/u.test(next);
 }
 
 // Plain string scans (not regexes) for leading/trailing slash trimming: an unanchored-at-start
@@ -438,17 +439,20 @@ function sanitizeEvidenceProse(source: string): string {
   );
 }
 
-export function sanitizeRepositoryEvidenceText(source: string): string {
+export function sanitizeRepositoryEvidenceText(
+  source: string,
+  knownPaths: readonly string[] = [],
+): string {
   const parts: string[] = [];
   let cursor = 0;
   for (const range of markdownCodeRanges(source)) {
     parts.push(
-      sanitizeEvidenceProse(source.slice(cursor, range.start)),
+      sanitizeKnownEvidenceProse(source.slice(cursor, range.start), knownPaths),
       source.slice(range.start, range.end),
     );
     cursor = range.end;
   }
-  parts.push(sanitizeEvidenceProse(source.slice(cursor)));
+  parts.push(sanitizeKnownEvidenceProse(source.slice(cursor), knownPaths));
   return parts.join("");
 }
 
@@ -510,6 +514,14 @@ function validReferenceMatchBoundary(match: RegExpExecArray, source: string): bo
   );
 }
 
+function continuesSpacedFilename(source: string, index: number): boolean {
+  // Without a complete evidence path this could be a filename such as "Notes - Final.txt".
+  // Do not turn its last word into a different navigation target.
+  return /[\p{L}\p{N}\p{M}_.][ \t]{1,64}[-\u2010-\u2014][ \t]{1,64}$/u.test(
+    source.slice(Math.max(0, index - 131), index),
+  );
+}
+
 function referenceFromMatch(match: RegExpExecArray, source: string): RepositoryReference | null {
   const raw = match[0] ?? "";
   if (!validReferenceMatchBoundary(match, source)) {
@@ -567,6 +579,7 @@ function referencePartsFromTextMatch(
 ): readonly RepositoryReferenceTextPart[] {
   const token = match[0] ?? "";
   if (token.startsWith("[")) return bracketReferenceParts(token.slice(1, -1));
+  if (continuesSpacedFilename(source, match.index)) return [];
   const reference = referenceFromMatch(match, source);
   return reference === null ? [] : referenceParts([reference]);
 }
@@ -580,7 +593,110 @@ function referenceParts(references: readonly RepositoryReference[]): RepositoryR
   return parts;
 }
 
+interface KnownReferenceMatch {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+  readonly reference: RepositoryReference | null;
+}
+
+function knownReferenceBoundary(source: string, start: number, end: number): boolean {
+  return (
+    boundaryBefore(source, start) &&
+    boundaryAfter(source, end) &&
+    !/^\.[\p{L}\p{N}_]/u.test(source.slice(end, end + 3))
+  );
+}
+
+function knownReferenceMatch(source: string, path: string, index: number): KnownReferenceMatch {
+  const start = source[index - 1] === "@" ? index - 1 : index;
+  const end = index + path.length;
+  const suffix = consumeRepositoryReferenceLineSuffix(path, source.slice(end, end + 160));
+  const finalEnd = end + (suffix?.length ?? 0);
+  const reference = suffix?.reference ?? parseExactRepositoryReference(path, true);
+  const boundary = knownReferenceBoundary(source, start, finalEnd);
+  const text = source.slice(start, finalEnd);
+  return {
+    start,
+    end: finalEnd,
+    text,
+    reference: reference?.path !== path || !boundary ? null : { ...reference, label: text },
+  };
+}
+
+/** Explicit brackets own the whole expression, including source qualifiers and refusal guards. */
+function outsideBracketReference(source: string): (match: KnownReferenceMatch) => boolean {
+  const brackets = [...source.matchAll(new RegExp(BRACKETED_REFERENCE_FRAGMENT, "gu"))];
+  let index = 0;
+  return (match): boolean => {
+    let bracket = brackets[index];
+    while (bracket !== undefined && bracket.index + bracket[0].length <= match.start) {
+      index += 1;
+      bracket = brackets[index];
+    }
+    return bracket === undefined || bracket.index > match.start;
+  };
+}
+
+function knownReferenceMatches(
+  source: string,
+  knownPaths: readonly string[],
+): readonly KnownReferenceMatch[] {
+  const matches: KnownReferenceMatch[] = [];
+  for (const path of new Set(knownPaths)) {
+    if (!/\s/u.test(path) || path.length > 4096) continue;
+    let index = source.indexOf(path);
+    while (index !== -1) {
+      const match = knownReferenceMatch(source, path, index);
+      matches.push(match);
+      index = source.indexOf(path, index + path.length);
+    }
+  }
+  matches.sort((left, right) => left.start - right.start || right.end - left.end);
+  const outsideBrackets = outsideBracketReference(source);
+  let end = 0;
+  return matches.filter((match) => {
+    if (match.start < end || !outsideBrackets(match)) return false;
+    end = match.end;
+    return true;
+  });
+}
+
+function sanitizeKnownEvidenceProse(source: string, knownPaths: readonly string[]): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const match of knownReferenceMatches(source, knownPaths)) {
+    parts.push(sanitizeEvidenceProse(source.slice(cursor, match.start)), match.text);
+    cursor = match.end;
+  }
+  parts.push(sanitizeEvidenceProse(source.slice(cursor)));
+  return parts.join("");
+}
+
 export function repositoryReferenceTextParts(
+  source: string,
+  knownPaths: readonly string[] = [],
+): readonly RepositoryReferenceTextPart[] {
+  const matches = knownReferenceMatches(source, knownPaths);
+  if (matches.length === 0) return unboundRepositoryReferenceTextParts(source);
+  const parts: RepositoryReferenceTextPart[] = [];
+  let cursor = 0;
+  for (const match of matches) {
+    if (match.start > cursor)
+      parts.push(...unboundRepositoryReferenceTextParts(source.slice(cursor, match.start)));
+    parts.push(
+      match.reference === null
+        ? { kind: "text", text: match.text }
+        : { kind: "reference", reference: match.reference },
+    );
+    cursor = match.end;
+  }
+  if (cursor < source.length)
+    parts.push(...unboundRepositoryReferenceTextParts(source.slice(cursor)));
+  return parts;
+}
+
+function unboundRepositoryReferenceTextParts(
   source: string,
 ): readonly RepositoryReferenceTextPart[] {
   const parts: RepositoryReferenceTextPart[] = [];

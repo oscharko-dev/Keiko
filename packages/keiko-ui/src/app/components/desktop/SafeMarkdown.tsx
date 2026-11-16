@@ -100,6 +100,7 @@ interface RenderOptions {
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly streaming: boolean;
   readonly repositoryPathLabels: ReadonlyMap<string, string>;
+  readonly repositoryKnownPaths: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -745,13 +746,13 @@ function renderRepositoryText(
 ): ReactNode {
   if (options.openRepositoryReference === undefined) {
     return renderCitationText(
-      sanitizeRepositoryEvidenceText(node.text ?? ""),
+      sanitizeRepositoryEvidenceText(node.text ?? "", options.repositoryKnownPaths),
       key,
       options.citationPreview,
       trailing,
     );
   }
-  const { text: sanitizedText, parts } = parsedRepositoryText(node);
+  const { text: sanitizedText, parts } = parsedRepositoryText(node, options.repositoryKnownPaths);
   if (parts.length === 1 && parts[0]?.kind === "text")
     return renderCitationText(sanitizedText, key, options.citationPreview, trailing);
   return (
@@ -953,18 +954,27 @@ function useMarkdownLayoutEvidence(
 interface ParsedRepositoryText {
   readonly text: string;
   readonly parts: readonly RepositoryReferenceTextPart[];
+  readonly knownPaths: readonly string[];
 }
 
 // AST nodes are immutable and disappear with their message; WeakMaps never retain old messages.
 const textReferences = new WeakMap<SafeMarkdownNode, ParsedRepositoryText>();
 const inlineReferences = new WeakMap<SafeMarkdownNode, RepositoryReference | null>();
 const EMPTY_PATH_LABELS: ReadonlyMap<string, string> = new Map();
+const EMPTY_KNOWN_PATHS: readonly string[] = [];
 
-function parsedRepositoryText(node: SafeMarkdownNode): ParsedRepositoryText {
+function parsedRepositoryText(
+  node: SafeMarkdownNode,
+  knownPaths: readonly string[],
+): ParsedRepositoryText {
   const cached = textReferences.get(node);
-  if (cached !== undefined) return cached;
-  const text = sanitizeRepositoryEvidenceText(node.text ?? "");
-  const parsed = { text, parts: repositoryReferenceTextParts(text) };
+  if (cached?.knownPaths === knownPaths) return cached;
+  const text = sanitizeRepositoryEvidenceText(node.text ?? "", knownPaths);
+  const parts =
+    knownPaths.length === 0
+      ? repositoryReferenceTextParts(text)
+      : repositoryReferenceTextParts(text, knownPaths);
+  const parsed = { text, parts, knownPaths };
   textReferences.set(node, parsed);
   return parsed;
 }
@@ -979,22 +989,28 @@ function inlineRepositoryReference(node: SafeMarkdownNode): RepositoryReference 
   return parsed;
 }
 
-function referencePathsInNode(node: SafeMarkdownNode): readonly string[] {
+function referencePathsInNode(
+  node: SafeMarkdownNode,
+  knownPaths: readonly string[],
+): readonly string[] {
   if (node.kind === "inline-code") {
     const reference = inlineRepositoryReference(node);
     return reference === null ? [] : [reference.path];
   }
   if (node.kind !== "text") return [];
-  return parsedRepositoryText(node).parts.flatMap((part) =>
+  return parsedRepositoryText(node, knownPaths).parts.flatMap((part) =>
     part.reference === undefined ? [] : [part.reference.path],
   );
 }
 
-function referencePathsInTree(tree: readonly SafeMarkdownNode[]): readonly string[] {
+function referencePathsInTree(
+  tree: readonly SafeMarkdownNode[],
+  knownPaths: readonly string[],
+): readonly string[] {
   const paths: string[] = [];
   const visit = (nodes: readonly SafeMarkdownNode[]): void => {
     for (const node of nodes) {
-      for (const path of referencePathsInNode(node)) paths.push(path);
+      for (const path of referencePathsInNode(node, knownPaths)) paths.push(path);
       if (node.children !== undefined)
         visit(adjacentRepositoryCodeLocations(tableRepositoryLocationChildren(node)));
     }
@@ -1019,6 +1035,51 @@ function useMarkdownTree(
   );
 }
 
+function useRepositoryKnownPaths(
+  evidence: RepositoryReferenceEvidence | undefined,
+): readonly string[] {
+  return useMemo(
+    () =>
+      evidence === undefined
+        ? EMPTY_KNOWN_PATHS
+        : [
+            ...new Set([
+              ...evidence.citations.map((citation) => citation.scopePath),
+              ...evidence.readPaths,
+              ...(evidence.inspectedPaths?.map((entry) => entry.scopePath) ?? []),
+            ]),
+          ],
+    [evidence],
+  );
+}
+
+function useRepositoryPathLabels(
+  tree: readonly SafeMarkdownNode[],
+  enabled: boolean,
+  knownPaths: readonly string[],
+): ReadonlyMap<string, string> {
+  return useMemo(
+    () =>
+      enabled
+        ? repositoryReferencePathLabels(referencePathsInTree(tree, knownPaths))
+        : EMPTY_PATH_LABELS,
+    [tree, enabled, knownPaths],
+  );
+}
+
+function useRepositoryPresentation(
+  tree: readonly SafeMarkdownNode[],
+  enabled: boolean,
+  evidence: RepositoryReferenceEvidence | undefined,
+): Pick<RenderOptions, "repositoryKnownPaths" | "repositoryPathLabels"> {
+  const repositoryKnownPaths = useRepositoryKnownPaths(evidence);
+  const repositoryPathLabels = useRepositoryPathLabels(tree, enabled, repositoryKnownPaths);
+  return useMemo(
+    () => ({ repositoryKnownPaths, repositoryPathLabels }),
+    [repositoryKnownPaths, repositoryPathLabels],
+  );
+}
+
 function SafeMarkdownImpl({
   source,
   literalUserInput = false,
@@ -1034,12 +1095,10 @@ function SafeMarkdownImpl({
 }: SafeMarkdownProps): ReactNode {
   const tree = useMarkdownTree(source, literalUserInput, richContent);
   useMarkdownLayoutEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
-  const repositoryPathLabels = useMemo(
-    () =>
-      literalUserInput || openRepositoryReference === undefined
-        ? EMPTY_PATH_LABELS
-        : repositoryReferencePathLabels(referencePathsInTree(tree)),
-    [tree, literalUserInput, openRepositoryReference],
+  const repositoryPresentation = useRepositoryPresentation(
+    tree,
+    !literalUserInput && openRepositoryReference !== undefined,
+    repositoryEvidence,
   );
   const options = useMemo<RenderOptions>(
     () => ({
@@ -1050,7 +1109,7 @@ function SafeMarkdownImpl({
       repositoryRoots,
       repositoryEvidence,
       openRepositoryReference,
-      repositoryPathLabels,
+      ...repositoryPresentation,
     }),
     [
       richContent,
@@ -1059,7 +1118,7 @@ function SafeMarkdownImpl({
       openRepositoryReference,
       repositoryRoots,
       repositoryEvidence,
-      repositoryPathLabels,
+      repositoryPresentation,
       streaming,
     ],
   );
