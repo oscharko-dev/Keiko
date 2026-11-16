@@ -183,7 +183,7 @@ results with the observed reason.
 | Git              | Local `HEAD` and the upstream tracking ref start at H0, with the controlled remote at H2. Fetch leaves `HEAD` at H0 and advances upstream to H2. Pull advances both to H2 and the local files match H2. Record the actual SHAs before and after each action. The UI ahead/behind counts of 0/2 and 0/0 match `git rev-list --left-right --count HEAD...@{upstream}`.                                                                                          |
 | Chat             | One short response arrives on the explicitly selected model. The same Chat, model and exact saved unsent draft return after reload. The provider or gateway request count is equal before and after transcript restoration.                                                                                                                                                                                                                                   |
 | Knowledge Pod    | The index contains the two declared fixtures, one PDF and one text file, each with a positive chunk count and zero failed documents. The answer matches their known facts and cites the declared fixtures from the selected Pod.                                                                                                                                                                                                                              |
-| Citation         | PDF activation opens the declared file and page in the viewer, with the expected title and content. The related `client.citation.activated` event has `outcome: opened`. The text-file reference opens its complete filename and exact fixture contents in Editor.                                                                                                                                                                                            |
+| Citation         | PDF activation opens the declared file and page in the viewer, with the expected title and content. A locatable passage yields `client.citation.highlighted` with `outcome: framed`. A text-file reference opens its complete filename and exact contents in Editor, with `client.citation.activated` reporting `outcome: opened`.                                                                                                                            |
 
 ### Coding Workbench
 
@@ -276,6 +276,13 @@ with 10 provider chat requests before and after reload. Sending that draft opene
 held streaming response. **Cancel response** aborted the provider request and left the
 cancelled turn visible in Chat. This used the controlled provider.
 
+In a separate model-choice journey on the same release commit, the operator clicked
+`gemma-4-31b-it` in the model picker and sent one short request. Gemma returned the
+expected reply. The picker showed `gemma-4-31b-it` selected before Send and after a
+normal Edge reload. The same Chat identity, two transcript entries and exact unsent
+draft at revision 3 were present after reload. The native Activity Log counted four
+gateway chat starts in the same observation window before and after reload.
+
 ### Knowledge Pod
 
 - Create a Pod and index a one-page PDF and a short text file. Compare the source list,
@@ -297,6 +304,13 @@ cancelled turn visible in Chat. This used the controlled provider.
 - Use duplicate basenames in distinct roots and verify the source choice reaches the
   selected root. Exercise an unavailable or removed source and verify the visible error
   and a successful return to the conversation.
+
+The answer for the primary fixture cited the three-page **Belegbericht - Grüße.pdf**.
+Its marker opened page 2 of that file, and the Activity Log recorded
+`client.citation.highlighted` with `outcome: framed` and one box. Next opened page 3
+and disabled Next. Previous returned to page 2. Entering 99 in the page field and
+moving focus clamped the viewer to page 3. Zoom, Fit width and reopening the citation
+left the viewer operable and the reopened citation returned to page 2.
 
 ### UI and UX checks for every surface
 
