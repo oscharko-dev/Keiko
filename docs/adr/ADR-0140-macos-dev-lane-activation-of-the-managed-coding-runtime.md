@@ -197,6 +197,13 @@ in both directions by the shared contract validator. Discovery failures no longe
 an unexplained `false`. The kill switch (`KEIKO_CODING_SIDECAR_DISABLED`) dominates every other
 prerequisite and reports `runtime-disabled` before discovery runs.
 
+The Workbench presents each concrete prerequisite through the same recovery mapping in setup and
+in an already-bound workspace (#4412). Missing or unverified runtime files, disabled activation,
+development setup, the protected reader and local connection remain distinct from the Windows
+gateway service. An unknown prerequisite points to the existing Activity Log instead of guessing
+the operating system or prescribing an unrelated runtime package. These messages do not change
+activation, qualification, service ownership or the server-owned Start decision.
+
 ### D5 — All modes available by default, never lane-implied
 
 The Coding Workbench makes all three product modes available without startup configuration. Its

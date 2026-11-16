@@ -914,6 +914,24 @@ describe("CodingWorkbenchSetup", () => {
     );
   });
 
+  it.each([
+    ["payload-missing", "Files required by the coding runtime are missing"],
+    ["payload-tampered", "could not verify the integrity of its coding runtime files"],
+    ["gateway-service-unqualified", "only a release-qualified Keiko package can use"],
+  ] as const)("preserves the known runtime prerequisite in setup: %s", (reason, explanation) => {
+    render(
+      <CodingWorkbenchSetup
+        selectedRoot={undefined}
+        refreshWorkspace={vi.fn(async () => true)}
+        runtimePosture="unavailable"
+        runtimeUnavailableReason={reason}
+      />,
+    );
+    const notice = screen.getByTestId("coding-workbench-setup-runtime-note");
+    expect(notice).toHaveTextContent(explanation);
+    expect(notice).not.toHaveTextContent(/npm install|darwin|Mac/u);
+  });
+
   it("derives a content-free idempotent task id from the target branch", () => {
     expect(codingWorkbenchSetupTaskId("dev")).toBe("coding-workbench-dev");
     expect(codingWorkbenchSetupTaskId("feat/Native Program")).toBe(
