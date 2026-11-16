@@ -2410,15 +2410,15 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.review.tool": "Dokumentenbewertung",
   "chat.knowledge.partial": "Teilergebnis. Nicht alle Dokumentinformationen sind enthalten.",
   "chat.knowledge.failure.cursorStale":
-    "Diese Fortsetzung ist für den angefragten Dokumentzugriff nicht mehr gültig.",
+    "Keiko kann das Lesen an der bisherigen Stelle nicht fortsetzen.",
   "chat.knowledge.failure.documentOrCursorStale":
-    "Das ausgewählte Dokument oder seine Fortsetzung ist für diese Anfrage nicht mehr gültig.",
+    "Keiko kann das ausgewählte Dokument nicht weiter lesen oder prüfen.",
   "chat.knowledge.failure.documentStaleOrOutOfScope":
     "Das ausgewählte Dokument wurde geändert oder liegt außerhalb der aktuell verbundenen Knowledge Pods.",
   "chat.knowledge.failure.sourceChanged":
     "Die verbundenen Quellen wurden während dieser Anfrage geändert.",
   "chat.knowledge.failure.restartSource":
-    "Bitte Keiko, die Dokumentliste aus den aktuell verbundenen Knowledge Pods neu zu laden und den Zugriff oder die Prüfung neu zu starten. Dabei muss es die neu zurückgegebene Fortsetzung verwenden und verbleibende Abdeckungslücken nennen.",
+    "Bitte Keiko, die Dokumente aus den aktuell verbundenen Knowledge Pods erneut zu lesen.",
   "chat.knowledge.outcome.results": "Wissensergebnisse",
   "chat.knowledge.outcome.detected": "Erkannte Anforderungen",
   "chat.knowledge.outcome.matched": "Passende Anforderungen",

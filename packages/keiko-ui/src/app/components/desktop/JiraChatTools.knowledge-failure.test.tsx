@@ -42,12 +42,12 @@ afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 describe.each(["en", "de"] as const)("Knowledge source refusal in %s", (locale) => {
   const reason =
     locale === "en"
-      ? "This continuation is no longer valid for the requested document read."
-      : "Diese Fortsetzung ist für den angefragten Dokumentzugriff nicht mehr gültig.";
+      ? "Keiko can no longer continue from the previous reading position."
+      : "Keiko kann das Lesen an der bisherigen Stelle nicht fortsetzen.";
   const recovery =
     locale === "en"
-      ? "Ask Keiko to refresh the document list from the currently connected Knowledge Pods and restart the read or review. It must use the newly returned continuation and state any remaining coverage limits."
-      : "Bitte Keiko, die Dokumentliste aus den aktuell verbundenen Knowledge Pods neu zu laden und den Zugriff oder die Prüfung neu zu starten. Dabei muss es die neu zurückgegebene Fortsetzung verwenden und verbleibende Abdeckungslücken nennen.";
+      ? "Ask Keiko to read the documents again from the currently connected Knowledge Pods."
+      : "Bitte Keiko, die Dokumente aus den aktuell verbundenen Knowledge Pods erneut zu lesen.";
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
     localStorage.setItem(I18N_STORAGE_KEY, locale);
@@ -83,8 +83,8 @@ describe.each(["en", "de"] as const)("Knowledge source refusal in %s", (locale) 
   it.each([
     [
       "document-or-cursor-stale",
-      "The selected document or its continuation is no longer valid for this request.",
-      "Das ausgewählte Dokument oder seine Fortsetzung ist für diese Anfrage nicht mehr gültig.",
+      "Keiko cannot continue reading or reviewing the selected document.",
+      "Keiko kann das ausgewählte Dokument nicht weiter lesen oder prüfen.",
     ],
     [
       "document-stale-or-out-of-scope",

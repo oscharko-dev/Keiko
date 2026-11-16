@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "74db557f8ec7c12c802325638e77d8e97680d48d16f8e130dd12f970a5579817",
+    "catalogDigest": "1323dd0e700a9c16c981290121c4e0ad3a5e0c60840729d48f6382652758fa65",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -37170,8 +37170,8 @@
         "failureClasses": ["requirement-inventory"],
         "proofIds": ["knowledge.documents.operation.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/knowledge-document-activity.ts:64",
-        "emitterSites": ["packages/keiko-server/src/knowledge-document-activity.ts:179"]
+        "registrationSite": "packages/keiko-server/src/knowledge-document-activity.ts:65",
+        "emitterSites": ["packages/keiko-server/src/knowledge-document-activity.ts:175"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -123892,7 +123892,7 @@
     {
       "op": "knowledge.documents.operation",
       "category": "search",
-      "site": "packages/keiko-server/src/knowledge-document-activity.ts:67",
+      "site": "packages/keiko-server/src/knowledge-document-activity.ts:68",
       "package": "keiko-server"
     },
     {

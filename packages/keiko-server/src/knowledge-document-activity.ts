@@ -4,10 +4,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { getServerLogger } from "./observability/index.js";
 
-import type {
-  KnowledgeStaleSourceReason,
-  KnowledgeReviewFailureStage,
-  KnowledgeReviewValidationReason,
+import {
+  KNOWLEDGE_STALE_SOURCE_REASONS,
+  type KnowledgeStaleSourceReason,
+  type KnowledgeReviewFailureStage,
+  type KnowledgeReviewValidationReason,
 } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 export {
   KNOWLEDGE_REVIEW_FAILURE_STAGES,
@@ -90,12 +91,7 @@ const OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: [
-        "cursor-stale",
-        "document-or-cursor-stale",
-        "document-stale-or-out-of-scope",
-        "source-changed",
-      ] satisfies readonly KnowledgeStaleSourceReason[],
+      values: KNOWLEDGE_STALE_SOURCE_REASONS,
     },
     requirementCount: { ...COUNT, required: false },
     readRequirementCount: { ...COUNT, required: false },
