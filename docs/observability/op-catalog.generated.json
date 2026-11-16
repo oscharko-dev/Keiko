@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a9178ca44103671cded01ffe39fb20e70143374126be4dc0ee232823f6843323",
+    "catalogDigest": "740ae67d24cfe1ea44485bb1fb604154d84ec8bf10a3eac2a4305b7e58fa465b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4208,8 +4208,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-transcript.marker-omitted.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:517",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:544"]
+        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:522",
+        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:549"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4277,7 +4277,12 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": false,
-            "values": ["no-jira-create", "tool-call-not-executed"]
+            "values": [
+              "no-jira-create",
+              "tool-call-not-executed",
+              "no-jira-approval",
+              "jira-report-not-generated"
+            ]
           },
           "turnEndReason": {
             "type": "string",
@@ -4313,7 +4318,7 @@
         "proofIds": ["chat.tool-transcript.updated.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:171",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:1273"]
+        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:1278"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4370,8 +4375,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.batch-draft-offer.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:633",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:680"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:637",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:684"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4459,7 +4464,9 @@
               "knowledge-coverage",
               "raw-report-key",
               "announced-create",
-              "tool-call-as-text"
+              "tool-call-as-text",
+              "approval-not-requested",
+              "report-download-missing"
             ]
           },
           "omittedFindingCount": {
@@ -4500,7 +4507,7 @@
         "proofIds": ["chat.tool-turn.corrected.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:465",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:615"]
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:619"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -120149,7 +120156,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:439",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:447",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -121005,7 +121012,7 @@
     {
       "op": "chat.tool-transcript.marker-omitted",
       "category": "process",
-      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:520",
+      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:525",
       "package": "keiko-server"
     },
     {
@@ -121017,7 +121024,7 @@
     {
       "op": "chat.tool-turn.batch-draft-offer",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:636",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:640",
       "package": "keiko-server"
     },
     {

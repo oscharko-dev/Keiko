@@ -313,7 +313,63 @@ export function toolCallAsTextCorrection(count: number): string {
 const CLAIMED_ACTION_KINDS: ReadonlySet<string> = new Set([
   "announced-create",
   "tool-call-as-text",
+  "approval-not-requested",
 ]);
 export function correctionRoundOffersTools(kinds: readonly string[]): boolean {
   return !kinds.some((kind) => CLAIMED_ACTION_KINDS.has(kind));
+}
+
+const APPROVAL_CLAIMS = [
+  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+(?:is ready|is prepared|has been prepared)\b/iu,
+  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+ist (?:(?:erneut|jetzt|bereits|schon) )?(?:bereit|vorbereitet)\b/iu,
+  /\b(?:approval (?:card|request)|freigabekarte|freigabeanfrage|freigabe)\s+wurde vorbereitet\b/iu,
+  /\bi(?: have|'ve)? prepared\s+(?:(?:a|an|the)\s+)?approval (?:card|request)(?=$|[,.!?])/iu,
+  /\bi(?: have|'ve)? prepared\s+(?:(?:a|an|the)\s+)?approval (?:card|request)\s+(?:for|and|so|which|that)\b/iu,
+  /\bich habe\s+(?:(?:die|eine)\s+)?(?:freigabekarte|freigabeanfrage)\s+(?:(?:jetzt|bereits|schon)\s+)?(?:vorbereitet|erstellt)\b/iu,
+  /\bplease approve\b[^.!?\n]{0,60}\bin the card\b/iu,
+  /\bbitte (?:bestätige|bestätigen|genehmige|genehmigen)\b[^.!?\n]{0,60}\b(?:in der karte|(?:die|der) freigabekarte)\b/iu,
+  /\bbitte (?:die )?freigabe in der karte (?:erteilen|bestätigen|genehmigen)\b/iu,
+] as const;
+const APPROVAL_CONTEXT_ONLY =
+  /\b(?:not|no|kein\w*|nicht|wenn|falls|once|when|if|will|werde|zuvor|earlier|previous|abgelehnt|declined)\b/iu;
+
+/** Preparation is not an approval. Only this turn's still-pending server-owned card can be one. */
+export function unsupportedApprovalClaimCount(
+  exchanges: readonly ChatToolExchange[],
+  answer: string,
+  now = Date.now(),
+): number {
+  const jira = exchanges.filter((exchange) =>
+    exchange.result?.toolRef?.canonicalId.startsWith("keiko.jira."),
+  );
+  if (jira.length === 0) return 0;
+  if (
+    jira.some((exchange) => {
+      const approval = exchange.approval;
+      return (
+        approval?.kind === "jira-chat-write" &&
+        approval.state === "pending" &&
+        approval.invocationId === exchange.call.id &&
+        approval.expiresAt > now
+      );
+    })
+  )
+    return 0;
+  return Math.min(
+    COUNT_MAX,
+    answer
+      .split(SENTENCE_END)
+      .filter(
+        (sentence) =>
+          !APPROVAL_CONTEXT_ONLY.test(sentence) &&
+          APPROVAL_CLAIMS.some((pattern) => pattern.test(sentence.replaceAll(/\*\*|__/gu, ""))),
+      ).length,
+  );
+}
+
+export function unsupportedApprovalCorrection(count: number): string {
+  return (
+    `Your answer claims ${String(count)} time(s) that an approval card is ready, but this turn has no pending Jira approval. ` +
+    "Reading fields or saving a draft does not request approval. Correct the answer to describe only the actual preparation and missing action; do not ask the person to click a nonexistent card and do not create or change anything now."
+  );
 }

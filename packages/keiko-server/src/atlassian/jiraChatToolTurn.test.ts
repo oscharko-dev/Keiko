@@ -2032,6 +2032,61 @@ describe.each([false, true])(
 // writes a tool call as text, gets ONE further round; the model writes the final answer, and the
 // log line carries only the closed kind and a count.
 describe.each([false, true])(
+  "a requested report download answered as text (stream=%s)",
+  (stream) => {
+    it.each([
+      ["repeated", "Report:\n```csv\nkey\nSYN-1\n```", "jira-report-not-generated"],
+      ["corrected", "The Jira report cannot be read with the current connection.", undefined],
+    ] as const)(
+      "offers one governed repair and records only a remaining mismatch (%s)",
+      async (scenario, after, notice) => {
+        const answer = "Report:\n```csv\nkey\nSYN-1\n```";
+        scriptedFinalAnswer.next = answer;
+        scriptedFinalAnswer.after = after;
+        vi.mocked(recordChatToolTurnCorrected).mockClear();
+        try {
+          const f = fixture();
+          const ctx = context({
+            ...sendBody(f, `report-download-${String(stream)}-${scenario}`),
+            content:
+              "Create a Jira report for exactly SYN-1 with Markdown and CSV downloads. Do not change Jira.",
+          });
+          const pending = stream
+            ? handleSendDesktopChatStream(ctx, f.deps)
+            : handleSendDesktopChat(ctx, f.deps);
+          void pending.catch(() => undefined);
+          await awaitReadGrantedForWrite(f);
+          await pending;
+          expect(f.calls).toHaveLength(4);
+          const correction = JSON.stringify(
+            f.calls[2]?.messages.filter((message) => message.role === "system").at(-1),
+          );
+          expect(correction).toContain("exact requested issue scope (JQL)");
+          expect(correction).toContain("Do not change Jira");
+          expect(f.calls[2]?.toolCatalog?.kind).toBe("bound");
+          expect(f.writes()).toBe(0);
+          const [user, assistant] = f.deps.store.listMessages(f.chatId);
+          expect(user?.turnState).toBe("completed");
+          expect(user?.toolTranscript?.claimNotice).toBe(notice);
+          expect(assistant?.content).toBe(after);
+          expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+          expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+            correctionKind: "report-download-missing",
+            announcementCount: 1,
+          });
+          expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toContain(
+            "SYN-1",
+          );
+        } finally {
+          scriptedFinalAnswer.next = undefined;
+          scriptedFinalAnswer.after = undefined;
+        }
+      },
+    );
+  },
+);
+
+describe.each([false, true])(
   "an answer that claims an action no tool performed (stream=%s)",
   (stream) => {
     it.each([
@@ -2041,6 +2096,16 @@ describe.each([false, true])(
         "no Jira issue was created in this turn",
       ],
       ["tool-call-as-text", 'jira_create({"projectId":"10000"})', "written as text"],
+      [
+        "approval-not-requested",
+        "Die Freigabekarte ist bereit. Bitte bestätige die Karte.",
+        "no pending Jira approval",
+      ],
+      [
+        "approval-not-requested",
+        "Die Freigabe ist erneut vorbereitet.",
+        "no pending Jira approval",
+      ],
     ] as const)(
       "gets one round for %s, then the model's new answer stands",
       async (kind, claim, said) => {
@@ -2111,6 +2176,12 @@ describe.each([false, true])(
         'jira_create({"projectId":"10000"})',
         { after: 'jira_create({"projectId":"10000"}) again' },
         "tool-call-not-executed",
+      ],
+      [
+        "repeats a claim about a nonexistent approval card",
+        "Die Freigabekarte ist bereit.",
+        { after: "Die Freigabekarte ist bereit. Bitte bestätigen." },
+        "no-jira-approval",
       ],
     ] as const)(
       "stores the closed marker and leaves the answer unchanged when the model %s",

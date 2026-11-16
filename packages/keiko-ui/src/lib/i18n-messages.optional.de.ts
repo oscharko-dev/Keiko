@@ -3279,6 +3279,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.turn.cancelled": "Beitrag abgebrochen",
   "chat.claimNotice.label": "Hinweis von Keiko",
   "chat.claimNotice.noJiraCreate": "In diesem Durchgang wurde kein Jira-Vorgang angelegt.",
+  "chat.claimNotice.noJiraApproval":
+    "In diesem Durchgang wartet keine Jira-Freigabe. Das Lesen von Feldern oder Speichern eines Entwurfs erzeugt keine Freigabekarte.",
+  "chat.claimNotice.jiraReportNotGenerated":
+    "In diesem Durchgang wurde kein Jira-Bericht zum Herunterladen erzeugt. Codeblöcke lassen sich kopieren, sind aber keine Berichtsexporte.",
   "chat.claimNotice.toolCallNotExecuted":
     "Ein als Text geschriebener Tool-Aufruf in dieser Antwort wurde nicht ausgeführt.",
   "chat.turnEnd.lead": "Diese Anfrage wurde nicht abgeschlossen.",

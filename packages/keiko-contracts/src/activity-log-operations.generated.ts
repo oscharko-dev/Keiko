@@ -4141,7 +4141,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["no-jira-create", "tool-call-not-executed"],
+        values: [
+          "no-jira-create",
+          "tool-call-not-executed",
+          "no-jira-approval",
+          "jira-report-not-generated",
+        ],
       },
       turnEndReason: {
         type: "string",
@@ -4318,6 +4323,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "raw-report-key",
           "announced-create",
           "tool-call-as-text",
+          "approval-not-requested",
+          "report-download-missing",
         ],
       },
       omittedFindingCount: {

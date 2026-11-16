@@ -3112,6 +3112,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.turn.cancelled": "Turn cancelled",
   "chat.claimNotice.label": "Note from Keiko",
   "chat.claimNotice.noJiraCreate": "No Jira issue was created in this turn.",
+  "chat.claimNotice.noJiraApproval":
+    "No Jira approval is waiting in this turn. Reading fields or saving a draft does not create an approval card.",
+  "chat.claimNotice.jiraReportNotGenerated":
+    "No downloadable Jira report was generated in this turn. Code blocks can be copied, but are not report exports.",
   "chat.claimNotice.toolCallNotExecuted":
     "A tool call written as text in this answer was not executed.",
   "chat.turnEnd.lead": "This request was not finished.",

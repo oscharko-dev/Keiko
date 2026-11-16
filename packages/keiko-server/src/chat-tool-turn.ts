@@ -89,6 +89,8 @@ import { fitToolContinuation, fitToolRoundOutput } from "./chat-tool-continuatio
 import {
   announcedCreateCorrection,
   announcedCreateCount,
+  unsupportedApprovalClaimCount,
+  unsupportedApprovalCorrection,
   correctionRoundOffersTools,
   toolCallAsTextCorrection,
   toolCallsWrittenAsText,
@@ -101,6 +103,8 @@ import {
   reportCoverageMismatches,
   reportEvidenceLines,
   reportFindingCorrection,
+  reportDownloadMissing,
+  reportDownloadCorrection,
   unsupportedIssueKeyCorrection,
   unsupportedIssueKeys,
 } from "./chat-tool-report-coverage.js";
@@ -192,7 +196,11 @@ type AnswerCorrectionLog =
       readonly rawReportKeyCount: number;
     }
   | {
-      readonly correctionKind: "announced-create" | "tool-call-as-text";
+      readonly correctionKind:
+        | "announced-create"
+        | "tool-call-as-text"
+        | "approval-not-requested"
+        | "report-download-missing";
       readonly announcementCount: number;
     };
 
@@ -527,7 +535,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   /** A correction about a claimed action is answered without any tool: it can never write. */
   private correctionWithoutTools = false;
   /** The claimed actions a correction round was asked about (#4355). */
-  private claimedKinds: readonly ("announced-create" | "tool-call-as-text")[] = [];
+  private claimedKinds: readonly (
+    "announced-create" | "tool-call-as-text" | "approval-not-requested" | "report-download-missing"
+  )[] = [];
   /** The text the claim detection saw: the person's words and what the turn already held. */
   private claimContext: readonly string[] = [];
   /** The turn corrected a rejected call and no round has dispatched a tool call since. */
@@ -1366,7 +1376,18 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     return this.endedAnswer;
   }
 
-  private stillClaims(kind: "announced-create" | "tool-call-as-text", content: string): boolean {
+  private stillClaims(
+    kind:
+      | "announced-create"
+      | "tool-call-as-text"
+      | "approval-not-requested"
+      | "report-download-missing",
+    content: string,
+  ): boolean {
+    if (kind === "report-download-missing")
+      return reportDownloadMissing(this.settledExchanges, this.options.message.content, content);
+    if (kind === "approval-not-requested")
+      return unsupportedApprovalClaimCount(this.settledExchanges, content) > 0;
     return kind === "announced-create"
       ? announcedCreateCount(this.settledExchanges, content, this.claimContext) > 0
       : toolCallsWrittenAsText(content) > 0;
@@ -1384,6 +1405,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const still = this.claimedKinds.filter((kind) => this.stillClaims(kind, answer.content));
     let notice: ChatClaimNotice | undefined;
     if (still.includes("announced-create")) notice = "no-jira-create";
+    else if (still.includes("approval-not-requested")) notice = "no-jira-approval";
+    else if (still.includes("report-download-missing")) notice = "jira-report-not-generated";
     else if (still.length > 0) notice = "tool-call-not-executed";
     this.storeClaimNotice(notice);
     this.storeTurnEnd(end);
@@ -2018,7 +2041,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const kinds = correction.logs.map((log) => log.correctionKind);
     this.correctionWithoutTools = !correctionRoundOffersTools(kinds);
     this.claimedKinds = correction.logs.flatMap((log) =>
-      log.correctionKind === "announced-create" || log.correctionKind === "tool-call-as-text"
+      log.correctionKind === "announced-create" ||
+      log.correctionKind === "tool-call-as-text" ||
+      log.correctionKind === "approval-not-requested" ||
+      log.correctionKind === "report-download-missing"
         ? [log.correctionKind]
         : [],
     );
@@ -2035,6 +2061,23 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   /** What the person and the turn already said: a key named there is not a claimed creation. */
   private detectionContext(request: GatewayCallRequest): readonly string[] {
     return [...request.messages, ...this.continuation].map((message) => message.content);
+  }
+
+  private reportDownloadCorrections(
+    content: string,
+  ): readonly { readonly content: string; readonly log: AnswerCorrectionLog }[] {
+    const offered = this.managed.projection.tools.some(
+      (tool) => tool.toolRef.canonicalId === "keiko.jira.report",
+    );
+    return offered &&
+      reportDownloadMissing(this.settledExchanges, this.options.message.content, content)
+      ? [
+          {
+            content: reportDownloadCorrection(),
+            log: { correctionKind: "report-download-missing", announcementCount: 1 },
+          },
+        ]
+      : [];
   }
 
   private answerCorrection(
@@ -2061,7 +2104,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         content: unsupportedIssueKeyCorrection(unsupported),
         log: { correctionKind: "unsupported-issue-key", unsupportedKeyCount: unsupported.length },
       });
-    corrections.push(...claimedActionCorrections(this.settledExchanges, answer.content, context));
+    corrections.push(
+      ...claimedActionCorrections(this.settledExchanges, answer.content, context),
+      ...this.reportDownloadCorrections(answer.content),
+    );
     const coverage = knowledgeTurnCoverage(this.settledExchanges, {
       incidentalReadCallIds: [...this.incidentalKnowledgeReadCallIds],
     });
@@ -2139,6 +2185,7 @@ function claimedActionCorrections(
 ): { readonly content: string; readonly log: AnswerCorrectionLog }[] {
   const announced = announcedCreateCount(exchanges, answer, context);
   const writtenCalls = toolCallsWrittenAsText(answer);
+  const approvals = unsupportedApprovalClaimCount(exchanges, answer);
   const rawKeys = rawReportKeys(exchanges, answer);
   return [
     ...(announced === 0
@@ -2155,6 +2202,17 @@ function claimedActionCorrections(
           {
             content: toolCallAsTextCorrection(writtenCalls),
             log: { correctionKind: "tool-call-as-text", announcementCount: writtenCalls } as const,
+          },
+        ]),
+    ...(approvals === 0
+      ? []
+      : [
+          {
+            content: unsupportedApprovalCorrection(approvals),
+            log: {
+              correctionKind: "approval-not-requested",
+              announcementCount: approvals,
+            } as const,
           },
         ]),
     ...(rawKeys.length === 0

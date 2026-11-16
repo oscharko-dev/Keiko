@@ -1645,6 +1645,24 @@ otherwise, so a marker an earlier leg stored never outlives the answer it descri
 answer shows none, because regeneration runs no tool turn. The voice dialogue reads the same note after
 the answer; its speech preparation counts are unchanged.
 
+The same truthfulness correction covers a claim that a Jira approval card is ready after only
+metadata reads or draft staging (#4401, 2026-11-16). A pending, unexpired Jira approval bound to its
+own invocation is the evidence; staging is preparation alone. The tool guidance asks the model to
+invoke the requested write through the existing governed tool once its facts are ready, without
+another prose confirmation. An unsupported claim gets the tool-less correction
+`approval-not-requested`; if it persists, the closed `no-jira-approval` notice states that no card
+is waiting. This does not synthesize an approval or execute a write to make a claim true.
+
+An explicit current request for a Markdown/CSV report download, answered only with export code
+blocks and no completed `jira.report` export, gets the existing single correction with tools
+available (#4402). `report-download-missing` asks for the exact requested JQL scope, its real export
+controls and no Jira change; a concrete limitation may be stated instead. Example and how-to
+requests are excluded. A repeated code-block substitute keeps the closed
+`jira-report-not-generated` notice. Both additions log only the closed correction kind and count
+on `chat.tool-turn.corrected`, and the closed notice on `chat.tool-transcript.updated`; no request,
+issue key, scope or answer enters the Activity Log. These narrow English/German checks do not
+promise to recognize every paraphrase or language.
+
 A turn that ends early is worded in the person's language by the same pattern (2026-11-14, #4355).
 The deterministic ending answer was server-composed English, which a German-speaking clerk read at
 the deadline, an expired token or an unfinished batch. The server never receives the UI language, so

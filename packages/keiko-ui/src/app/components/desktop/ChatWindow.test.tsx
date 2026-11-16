@@ -6036,6 +6036,8 @@ describe("Keiko's note under an answer that claimed an effect its turn did not b
   const SENTENCE_KEYS = {
     "no-jira-create": "chat.claimNotice.noJiraCreate",
     "tool-call-not-executed": "chat.claimNotice.toolCallNotExecuted",
+    "no-jira-approval": "chat.claimNotice.noJiraApproval",
+    "jira-report-not-generated": "chat.claimNotice.jiraReportNotGenerated",
   } as const;
   const CLAIM = "I created the Epic REQ-1 for you.";
   function turn(
@@ -6075,6 +6077,10 @@ describe("Keiko's note under an answer that claimed an effect its turn did not b
     ["de", "no-jira-create"],
     ["en", "tool-call-not-executed"],
     ["de", "tool-call-not-executed"],
+    ["en", "no-jira-approval"],
+    ["de", "no-jira-approval"],
+    ["en", "jira-report-not-generated"],
+    ["de", "jira-report-not-generated"],
   ] as const)(
     "shows the %s sentence for %s from the catalog, after the unchanged answer",
     async (locale, notice) => {

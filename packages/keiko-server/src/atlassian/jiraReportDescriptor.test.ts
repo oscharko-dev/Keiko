@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { jiraReportDeclaration } from "./jiraReportDescriptor.js";
 
 describe("the jira.report description (#4356)", () => {
+  it("offers actual Markdown/CSV downloads for an exact issue selection (#4402)", () => {
+    const { description } = jiraReportDeclaration().descriptor;
+    expect(description).toMatch(/Markdown.*CSV.*downloads/u);
+    expect(description).toMatch(/exact JQL/u);
+    expect(description).toMatch(/report card.*exports/u);
+    expect(description).toMatch(/Code blocks are not downloads/u);
+  });
+
   it("says that a repeated scope is harmless and a different one is refused", () => {
     const { description } = jiraReportDeclaration().descriptor;
     expect(description).toContain("names a reportId takes reportId, section, startAt");

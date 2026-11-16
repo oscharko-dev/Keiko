@@ -495,6 +495,8 @@ const CORRECTED = defineActivityLogOperation({
         "raw-report-key",
         "announced-create",
         "tool-call-as-text",
+        "approval-not-requested",
+        "report-download-missing",
       ],
     },
     omittedFindingCount: {
@@ -555,7 +557,9 @@ interface ChatToolTurnCorrectionInput {
     | "knowledge-coverage"
     | "raw-report-key"
     | "announced-create"
-    | "tool-call-as-text";
+    | "tool-call-as-text"
+    | "approval-not-requested"
+    | "report-download-missing";
   readonly omittedFindingCount?: number;
   readonly mismatchedRequirementCount?: number;
   readonly unsupportedKeyCount?: number;

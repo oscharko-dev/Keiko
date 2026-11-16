@@ -12,6 +12,8 @@ import { ClaimNoticeLine, useClaimNoticeText } from "./ClaimNoticeLine";
 const KEYS = [
   "chat.claimNotice.label",
   "chat.claimNotice.noJiraCreate",
+  "chat.claimNotice.noJiraApproval",
+  "chat.claimNotice.jiraReportNotGenerated",
   "chat.claimNotice.toolCallNotExecuted",
 ] as const;
 
@@ -33,7 +35,12 @@ describe("the claim notice texts (#4355 AC6)", () => {
   });
 
   it("covers every closed marker value with its own sentence", () => {
-    expect(CHAT_CLAIM_NOTICES).toEqual(["no-jira-create", "tool-call-not-executed"]);
+    expect(CHAT_CLAIM_NOTICES).toEqual([
+      "no-jira-create",
+      "tool-call-not-executed",
+      "no-jira-approval",
+      "jira-report-not-generated",
+    ]);
     for (const key of KEYS.slice(1)) expect(OPTIONAL_WIDGET_EN_MESSAGES).toHaveProperty(key);
   });
 

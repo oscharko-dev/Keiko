@@ -6,6 +6,8 @@ import {
   correctionRoundOffersTools,
   toolCallAsTextCorrection,
   toolCallsWrittenAsText,
+  unsupportedApprovalClaimCount,
+  unsupportedApprovalCorrection,
 } from "./chat-tool-announced-create.js";
 import { jiraMutationToolId } from "./atlassian/jiraMutationToolId.js";
 import { jiraMutationToolResult } from "./atlassian/jiraMutationResult.js";
@@ -207,5 +209,85 @@ describe("toolCallsWrittenAsText", () => {
     ["A plain answer.", 0],
   ])("counts the calls written as text in %s", (answer, count) => {
     expect(toolCallsWrittenAsText(answer)).toBe(count);
+  });
+});
+
+describe("unsupportedApprovalClaimCount (#4401)", () => {
+  const read = exchange("jira_edit_fields", {
+    result: { toolRef: { canonicalId: "keiko.jira.edit-fields", contractVersion: 1 } },
+  });
+  const claim = "Die Freigabekarte ist bereit.";
+  const now = 1000;
+
+  it.each([
+    claim,
+    "The approval card is ready. Please confirm the card.",
+    "Die **Freigabekarte** wurde vorbereitet.",
+    "I've prepared the approval card for you.",
+    "I prepared approval card.",
+    "I have prepared an approval request!",
+    "I've prepared the approval card, please review it.",
+    "I prepared an approval card and a summary.",
+    "I prepared the approval request which contains your change.",
+    "Ich habe die Freigabekarte vorbereitet.",
+    "Bitte bestätige die Änderung in der Karte.",
+    "Die Freigabe ist erneut vorbereitet.",
+    "Bitte die Freigabe in der Karte erteilen; erst danach wird die Änderung geschrieben.",
+  ])("detects %s after preparation alone", (answer) => {
+    expect(unsupportedApprovalClaimCount([read], answer, now)).toBe(1);
+  });
+
+  it.each([
+    "Die Freigabekarte ist nicht bereit.",
+    "No approval card is ready.",
+    "Once the approval card is ready, please confirm it.",
+    "Die Freigabe wurde zuvor vorbereitet und abgelehnt.",
+    "The previous approval card was prepared yesterday.",
+    "I will prepare an approval card.",
+    "Ich habe die Felder für die Freigabe gelesen.",
+    "Ich habe die Pflichtfelder für die Freigabe geprüft.",
+    "I've prepared an approval checklist.",
+    "I've prepared an approval card checklist.",
+    "I prepared the approval card-reader.",
+    "I have prepared an approval cardforreview.",
+    "The approval card checklist is ready.",
+    "Die Freigabe-Checkliste ist bereit.",
+    "Ich habe die Freigabekarte gelesen.",
+    "Bitte lies die Anleitung zur Freigabekarte.",
+    "Bitte prüfe, ob eine Freigabekarte sichtbar ist.",
+  ])("leaves truthful context alone: %s", (answer) => {
+    expect(unsupportedApprovalClaimCount([read], answer, now)).toBe(0);
+  });
+
+  it("requires an actual Jira exchange, not a tool name or a prose result", () => {
+    expect(unsupportedApprovalClaimCount(READ, claim, now)).toBe(0);
+    expect(
+      unsupportedApprovalClaimCount([exchange("jira_edit", { result: { data: {} } })], claim, now),
+    ).toBe(0);
+  });
+
+  it.each([
+    ["pending", "call-jira_edit", now + 1, 0],
+    ["pending", "another-call", now + 1, 1],
+    ["pending", "call-jira_edit", now, 1],
+    ["approved", "call-jira_edit", now + 1, 1],
+    ["declined", "call-jira_edit", now + 1, 1],
+  ])(
+    "only exempts a live pending approval of its own invocation (%s, %s, %s)",
+    (state, invocationId, expiresAt, count) => {
+      const write = exchange("jira_edit", {
+        result: { toolRef: { canonicalId: "keiko.jira.edit", contractVersion: 1 } },
+        approval: { kind: "jira-chat-write", state, invocationId, expiresAt },
+      });
+      expect(unsupportedApprovalClaimCount([read, write], claim, now)).toBe(count);
+    },
+  );
+
+  it("corrects truthfulness without permitting a write or manufacturing an approval", () => {
+    expect(correctionRoundOffersTools(["report-download-missing", "approval-not-requested"])).toBe(
+      false,
+    );
+    expect(unsupportedApprovalCorrection(1)).toContain("no pending Jira approval");
+    expect(unsupportedApprovalCorrection(1)).toContain("do not create or change anything now");
   });
 });
