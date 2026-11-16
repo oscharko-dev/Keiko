@@ -1291,7 +1291,7 @@ export const REVIEW_SEED_CASE_RESULTS = [
 ] as const;
 export type ReviewSeedCaseResult = (typeof REVIEW_SEED_CASE_RESULTS)[number];
 
-/** The whole qualification's wall-clock bound; per-run budgets bound every run's spend. */
+/** The whole qualification's wall-clock bound; each run's own limits bound that run. */
 export const REVIEW_PAIR_QUALIFICATION_DEFAULT_DEADLINE_MS = 3 * 60 * 60 * 1000;
 
 export interface ReviewPairQualificationCaseView {

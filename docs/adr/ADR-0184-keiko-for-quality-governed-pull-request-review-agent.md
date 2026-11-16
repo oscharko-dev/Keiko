@@ -64,10 +64,15 @@ pinned as server-owned configuration. The review task carries the rules (from th
 the diff package as nonce-bound, labelled untrusted data within the runtime's 64 KiB first-prompt
 bound; a larger task is refused, never truncated. A diff package larger than one task is split into
 at most `REVIEW_RUN_MAX_DIFF_PARTS` (12) parts, each within that bound (Issue #4130). Every part is
-its own Reviewer run in its own session: the run budgets (`KEIKO_REVIEW_RUN_MAX_*`, by default
-1,500,000 prompt tokens and 20 minutes) bound each session, and a part has one session, or two
-after a model failure without a report (below). A review in 12 parts may therefore start up to 24
-sessions and take up to 24 times those budgets; nothing caps the Reviewer total across parts. The task of a part names it ("Diff package part 3 of 5") and asks for
+its own Reviewer run in its own session: the time limit (`KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES`,
+by default 20 minutes, never above the coding envelope's duration) bounds each session, and a part
+has one session, or two after a model failure without a report (below). A review in 12 parts may
+therefore start up to 24 sessions and take up to 24 times that limit; nothing caps the Reviewer
+total across parts. No session has a prompt-token allowance: Keiko does not limit tokens (owner
+decision, issue #4346), so the review agent measures the tokens of each role and caps none. Until
+the merge of dev 1.5.0 a session also had a prompt allowance (`KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS`,
+1,500,000 tokens by default, 600,000 before that). The measurements below that name a prompt
+budget describe that time and are kept as the record of how the read allowance was chosen. The task of a part names it ("Diff package part 3 of 5") and asks for
 findings about the changed code in that part; a single-part task has no such line. The 2026-11-06
 holdout motivated the split: 158 of 226 measured reviews left diff files unprocessed because the
 whole package had to fit one task.
@@ -96,14 +101,15 @@ reason is the measured behaviour of a local Reviewer: every tool call resends th
 conversation, and in the 418 stored reviews of the 4-bit gate runs the 127 that ran out of prompt
 budget had made 39 to 45 model calls (first to third quartile), 73 of them without one report.
 After 26 model calls a review had used 703,000 prompt tokens at the median and 1,143,000 at most,
-which leaves room for its reports within the default prompt budget. That gave the first value,
+which left room for its reports within the prompt budget of that time. That gave the first value,
 24. Development iteration 7 then measured the allowance with one session per diff part, and 24
 proved too many: of its 100 sessions, 52 used all 24 reads, and those used 444,000 to 1,562,000
 prompt tokens (885,000 at the median). Four of them ran out of the prompt budget, and a fifth
 session did after 23 reads. The 9 sessions that made 9 to 16 reads used
 472,000 at the median and 1,011,000 at most. Half of all sessions read up to whatever the
-allowance is, so the allowance decides what they cost, and 16 keeps such a session inside the
-prompt budget with room for its reports. The figures above about the 418 stored reviews describe
+allowance is, so the allowance decides what they cost, and 16 kept such a session inside the
+prompt budget of that time with room for its reports. Without a prompt budget the read allowance
+and the time limit are what bound a session. The figures above about the 418 stored reviews describe
 the allowance of 24 and are kept as its record. The Reviewer prompt names the
 allowance and still plans for about 15 calls. The counter and its predicate live beside the layer-4
 guard (`reviewRuntimeGuard.ts`); the review runtime creates one per session and returns its counts
@@ -117,8 +123,8 @@ settled `incomplete/model-failed`. In development iteration 7 that happened in 5
 spread over 4 of the 30 reviews (3 invalid tool calls after two corrections each, 2 empty answers);
 the gateway had corrected 62 of 65 rejected tool calls in the run's log before that. Only a session
 without an accepted report is started again: it filed nothing, so the part is reviewed from the
-start. Its tokens and time stay in the Reviewer totals, and the second session has the run budgets
-of its own.
+start. Its tokens and time stay in the Reviewer totals, and the second session has the time limit
+and the read allowance of its own.
 That covers 2 of those 5 sessions. A session that already filed a candidate is not started again:
 its candidates are kept, and a second session over the same hunks would file most of them again. A
 finding with the same file, category and defect excerpt keeps its fingerprint (D7) and would merge,
@@ -301,16 +307,16 @@ the fingerprint) and ends the session; free text is ignored and a missing or inv
 120, 300 and then 600 seconds on the offline gate's development set, Issues #4138 and #4130; at
 600 seconds, 25 of the 198 checks of development iteration 7 ended undecided on the limit, while
 the 172 decided ones took 210 seconds at the median, 485 at the ninth decile and 571 at most, and
-18 of them finished in the last 120 seconds before the limit), 200,000 prompt
-tokens, and 1,200,000 prompt tokens for all counter-checks of a run for each part of its diff
-package (Issue #4130: each part's Reviewer session may file up to eight candidates, so a fixed run
-allowance left the candidates of a many-part review unchecked; the `counter-checking` phase line
-records the run's `counterCheckRunPromptAllowance`, while `counterCheckRunPromptBudget` on
-`review.run.started` is the configured amount for one part); the harness bound, the tool
-ceiling or a refused reservation ends a session `undecided/out-of-budget` and the run
+18 of them finished in the last 120 seconds before the limit). A counter-check has no prompt-token
+allowance, and neither have all counter-checks of a run together: Keiko does not limit tokens
+(issue #4346). A session's admission of a model call admits every call, because the governed
+session already cancels the harness on a stop and at its deadline. Until the merge of dev 1.5.0 one
+check had 200,000 prompt tokens and the checks of a run 1,200,000 for each part of its diff
+package, and the Activity Log named both; those fields are gone. The harness bound or the tool
+ceiling ends a session `undecided/out-of-budget` and the run
 `incomplete/budget-exhausted`, the deadline `incomplete/deadline-exceeded`, a failed or unavailable
 model `incomplete/model-failed`. Candidates are checked by severity, then in the Reviewer's order;
-candidates left when the run's allowance ran out stay unchecked and make the run incomplete.
+the phase's wall-time limit (below) is the only stop that leaves candidates unchecked.
 
 A counter-check has a read allowance of 8 read, list and search calls (Issue #4130,
 `REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS`), the mechanism the Reviewer's sessions have (D1).
@@ -318,9 +324,9 @@ Once it is used up, the three tools answer one fixed instruction to record the v
 was read, and the verdict tool works as before; the verdict tool is not counted. The task states
 the number. In development iteration 7 the number of tool calls a check made predicted how it
 ended: of 104 checks with at most 4 tool calls 1 ran out of time or tokens, of 72 with 5 to 8 calls
-12 did, and of 22 with 9 or more 13 did. Each call resends the session's conversation, so a check
-that keeps reading uses up its time or its prompt tokens before it decides, and the task's request
-for at most four calls did not hold it. A verdict recorded at the allowance is the Counter-checker's
+12 did, and of 22 with 9 or more 13 did (a check had a prompt-token allowance at that time). Each
+call resends the session's conversation, so a check that keeps reading uses up its time before it
+decides, and the task's request for at most four calls did not hold it. A verdict recorded at the allowance is the Counter-checker's
 own, including `undecided/insufficient-context`, which does not make a run incomplete; a session
 that keeps calling the refused tools still ends on the tool ceiling. `review.counter-check.completed`
 records `admittedReadCallCount` and `refusedReadCallCount`, and `review.run.started` the allowance
@@ -346,15 +352,15 @@ The `counter-checking` phase has its own wall-time limit (Issue #4130): 60 minut
 the diff package, recorded on the phase line as `counterCheckPhaseWallTimeMs`. The per-candidate
 limit alone bounded one check, so a twelve-part review with 96 candidates could spend 24 hours in
 this phase. Once the limit has passed the phase starts no further counter-check; the candidates left
-stay unchecked and the run settles `incomplete/deadline-exceeded`, or `incomplete/budget-exhausted`
-when the prompt allowance ran out as well. A check in flight is not cut and ends at its own limit,
+stay unchecked and the run settles `incomplete/deadline-exceeded`. A check in flight is not cut and
+ends at its own limit,
 so the phase overruns by at most one check: the configured per-candidate wall time (900 seconds by
 default) plus the reads that verify that check's evidence in the head commit after its session.
-60 minutes is four checks at the per-candidate limit; the run prompt allowance covers six. On
+60 minutes is four checks at the per-candidate limit. On
 the offline gate's sets the longest single-part phase of the local 4-bit pair took 54 minutes for
 eight candidates, and a 30-minute limit would have left candidates unchecked in many measured
 reviews. The settled line's `candidateCount` minus its three verdict counts and its
-`surplusCandidateCount` is the number of candidates the allowance or the limit left unchecked.
+`surplusCandidateCount` is the number of candidates the limit left unchecked.
 
 The presentation rule is one pure function (`review/service/presentation.ts`): a candidate is
 presented only when its verdict is `confirmed`, bound to its own fingerprint, every verdict evidence
@@ -407,12 +413,12 @@ limit, failed fetch) or diff (`no-merge-base`, `shallow-history`) and every work
 review runtime's `rules-file-invalid` is `skipped/rules-file-invalid`, `task-too-large`
 `skipped/diff-too-large`, `runtime-unavailable` and a Reviewer run the orchestrator refused
 `skipped/model-unavailable`, a failed read-only self-check `skipped/policy-invalid`, and a failed
-rules read `abandoned/interrupted`. A Reviewer that fails with an exhausted prompt allowance or
+rules read `abandoned/interrupted`. A Reviewer that fails with an exhausted or drifted
 authority budget is `incomplete/budget-exhausted`, and so is a Reviewer session that the read
 allowance (D1) refused a read and that filed no accepted report; with an exhausted envelope duration
 `incomplete/deadline-exceeded`, otherwise `incomplete/model-failed`; its candidates are still
 counter-checked, and findings confirmed before an incomplete settlement are presented. Candidates
-the allowance or the phase limit left unchecked make the run incomplete; surplus candidates, which
+the phase limit left unchecked make the run incomplete (`deadline-exceeded`); surplus candidates, which
 the phase skipped because the presentation was already full (D5), do not. A Reviewer
 runtime run that settled `recovery-required` is such a failed Reviewer, with one exception (#4136):
 the orchestrator's `succeededTurnReapUnproven` names a run whose turn settled `succeeded` and whose
@@ -426,7 +432,7 @@ release failure after a proven reap and every other recovery keep `incomplete/mo
 runtime stays recovery-required and quarantined exactly as before. The cleanup is a warning beside
 the settlement, never a settlement reason: the closed `runtimeCleanup` (`proven`, `unproven`; absent
 when no Reviewer run started) on `review.run.settled`, which is written at `warn` whenever it is
-`unproven`, on the run record (migration 60, `review_runs.runtime_cleanup`) and as the optional
+`unproven`, on the run record (migration 80, `review_runs.runtime_cleanup`) and as the optional
 `runtimeCleanup` of `ReviewRunView` for the review UI. An instance whose orchestrator still holds
 such a run would refuse the next start, so the next review of the repository does not reuse it: the
 instance is set aside untouched (no early release, acknowledgement or shutdown; it stays quarantined
@@ -449,7 +455,7 @@ no composition is left open and untracked. The same holds for the idle stop and 
 Every instance that cannot be started is logged as `review.run.runtime-stopped` with trigger
 `start-failed` under the review's correlation and a closed `startFailure`: the coding runtime's
 activation reason or `host-unavailable` (R4130-019). An out-of-range
-`KEIKO_REVIEW_RUN_MAX_*` value leaves the review runtime and the review run service uncomposed
+`KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES` value leaves the review runtime and the review run service uncomposed
 with one `review.runtime.budget` diagnostic; it never fails server start (R4130-018).
 The
 Reviewer's diff budget is sized per part so every part's task always fits the 64 KiB first-prompt
@@ -482,10 +488,10 @@ daily retention timer (R4130-016, R4130-021). The stale flag compares the review
 request's current head from the read-only detail (cached 30 seconds), at settlement and on every
 read; it never changes the settlement.
 
-The run records live in the server store (migrations 59, 60 and 61, after the released migrations
-55 to 58 of 1.4.0): `review_runs` (one row per run; a partial unique index allows one unsettled run
+The run records live in the server store (migrations 79, 80 and 81, after the migrations
+of dev 1.5.0, which end at 78): `review_runs` (one row per run; a partial unique index allows one unsettled run
 per repository, and the repository id and client request id are unique, so a repeated start returns
-the same run), `review_coverage` (path, list, closed reason, and since migration 61 the nullable
+the same run), `review_coverage` (path, list, closed reason, and since migration 81 the nullable
 `previous_path` of a renamed or copied file) and `review_findings` (fingerprint, report, verdict,
 verdict evidence, head anchoring, presented
 flag and rank). The routes are `POST /api/git-review/runs` (with `dryRun`), `GET
@@ -813,8 +819,8 @@ request text or user notes (ADR-0173 D4).
 - One contract module (`packages/keiko-contracts/src/pull-request-review.ts`) defines the review
   target, run, finding, counter-check verdict, settlement, finding decision and model-role shapes
   exactly once, with runtime validation, the fingerprint, the eligibility rule and seed scoring.
-- The review agent costs model spend on the customer's own gateway; budgets are the existing
-  envelope bounds.
+- The review agent costs model spend on the customer's own gateway. Time, read and tool-call limits
+  bound each session; no token allowance caps the spend (issue #4346).
 - A failed offline gate is a valid outcome that stops the surface work; it is reported with its
   measured counts.
 - Adopted PR-Agent text keeps its MIT copyright notice in Keiko's third-party notices.
