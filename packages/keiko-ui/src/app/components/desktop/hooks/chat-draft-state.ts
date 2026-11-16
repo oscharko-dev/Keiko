@@ -1,7 +1,14 @@
 import type { ChatDraft } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export type DraftPhase =
-  "loading" | "saved" | "unsaved" | "saving" | "unavailable" | "failed" | "conflict";
+  | "loading"
+  | "saved"
+  | "unsaved"
+  | "saving"
+  | "unavailable"
+  | "load-failed"
+  | "failed"
+  | "conflict";
 export interface DraftEntry {
   text: string;
   disposed: boolean;

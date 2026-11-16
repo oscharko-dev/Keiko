@@ -126,6 +126,28 @@ describe("Jira draft activity (#4178)", () => {
     expect(analyzeLogText(line).timelines).toHaveLength(1);
   });
 
+  it("records the Jira reads a staging call sent and reused, as counts through the registered line", () => {
+    const logs = createBufferedServerLogSink();
+    recordJiraDraftActivity(logs, "correlation-reads", {
+      phase: "staged",
+      newDraft: true,
+      pageItemCount: 15,
+      itemCount: 15,
+      pageCount: 1,
+      byteCount: 900,
+      unresolvedRefCount: 0,
+      violationCount: 0,
+      readCount: 3,
+      readReusedCount: 42,
+      durationMs: 9,
+    });
+    expect(expectActivityLogProof("atlassian.jira-draft.line", onlyLine(logs))).toMatchObject({
+      phase: "staged",
+      readCount: 3,
+      readReusedCount: 42,
+    });
+  });
+
   it("records a draft refused above its byte bound as a warning with a closed reason", () => {
     const logs = createBufferedServerLogSink();
     recordJiraDraftActivity(logs, "correlation-3", {

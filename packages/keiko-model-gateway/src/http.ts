@@ -11,6 +11,7 @@ import * as tls from "node:tls";
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogFieldContract,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   classifyOutboundHost,
@@ -18,7 +19,6 @@ import {
   outboundAddressBlockedReason,
   outboundTargetBlockedReason,
 } from "./egress-policy.js";
-import type { OutboundTargetClass } from "./egress-policy.js";
 import {
   activityLogErrorKind,
   logCorrelationId,
@@ -50,6 +50,22 @@ export const MAX_RESPONSE_BYTES = 10_000_000;
 const HTTPS_PROXY_TUNNEL_IDLE_TTL_MS = 30_000;
 const MAX_IDLE_HTTPS_PROXY_TUNNELS_PER_KEY = 2;
 
+const HTTP_ENDPOINT_CLASS_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: [
+    "hostname",
+    "public",
+    "loopback",
+    "private",
+    "link-local",
+    "metadata",
+    "multicast",
+    "unspecified",
+  ],
+} as const satisfies ActivityLogFieldContract;
+
 const HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -58,12 +74,7 @@ const HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.tlsTrustFailure",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
     afterCaBundleFallback: {
       type: "boolean",
       dataClass: "closed-enum",
@@ -86,12 +97,7 @@ const HTTP_GATEWAY_TLS_CA_FALLBACK_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.fetchDirectWithCaFallback",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
   },
   causal: "none",
   lifecycle: "state",
@@ -109,23 +115,13 @@ const HTTP_GATEWAY_EGRESS_PLANNED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.planGatewayProxy",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
     proxied: {
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
     },
-    proxyEndpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    proxyEndpointClass: HTTP_ENDPOINT_CLASS_FIELD,
     transport: {
       type: "string",
       dataClass: "closed-enum",
@@ -149,12 +145,7 @@ const HTTP_GATEWAY_FETCH_STARTED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.logFetchStarted",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
     method: { type: "string", dataClass: "opaque-id", required: true, maxLength: 32 },
     requestBytes: { type: "integer", dataClass: "count", required: false },
     timeoutMs: { type: "number", dataClass: "duration", required: false },
@@ -175,12 +166,7 @@ const HTTP_GATEWAY_FETCH_COMPLETED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.logFetchCompleted",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
   },
   causal: "none",
   lifecycle: "end",
@@ -198,12 +184,7 @@ const HTTP_GATEWAY_FETCH_FAILED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.gatewayFetch",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
     policyReason: {
       type: "string",
       dataClass: "closed-enum",
@@ -219,7 +200,7 @@ const HTTP_GATEWAY_FETCH_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-type LogEndpointClass = OutboundTargetClass | "hostname";
+type LogEndpointClass = (typeof HTTP_ENDPOINT_CLASS_FIELD.values)[number];
 
 function logEndpointClass(url: string | URL | undefined): LogEndpointClass | undefined {
   if (url === undefined) return undefined;
@@ -234,6 +215,9 @@ function logEndpointClass(url: string | URL | undefined): LogEndpointClass | und
 export interface GatewayFetchOptions extends RequestInit {
   /** Trusted synchronous admission/header factory, run immediately before each physical request. */
   readonly prepareHeaders?: (() => Headers) | undefined;
+  /** Trusted one-use secret JSON body factory, after final header/admission preparation.
+   * Requires singleAttempt and no static body. Never a model/request-data option. */
+  readonly prepareBody?: (() => string) | undefined;
   /** Use configured native TLS trust initially and never perform an automatic fallback attempt. */
   readonly singleAttempt?: boolean | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
@@ -254,7 +238,8 @@ export interface GatewayFetchOptions extends RequestInit {
   readonly logContext?: ModelGatewayLogContext | undefined;
 }
 
-type PreparedRequestInit = RequestInit & Pick<GatewayFetchOptions, "prepareHeaders">;
+type PreparedRequestInit = RequestInit &
+  Pick<GatewayFetchOptions, "prepareHeaders" | "prepareBody">;
 
 function dispatchHeaderRecord(init: PreparedRequestInit): Record<string, string> {
   init.signal?.throwIfAborted();
@@ -267,9 +252,33 @@ function dispatchHeaderRecord(init: PreparedRequestInit): Record<string, string>
 }
 
 function preparedFetchInit(init: PreparedRequestInit): RequestInit {
-  const { prepareHeaders: _prepareHeaders, ...rest } = init;
+  const { prepareHeaders: _prepareHeaders, prepareBody: _prepareBody, ...rest } = init;
   if (_prepareHeaders === undefined) return rest;
-  return { ...rest, headers: dispatchHeaderRecord(init) };
+  const headers = dispatchHeaderRecord(init);
+  return { ...rest, headers, ...(_prepareBody === undefined ? {} : { body: preparedBody(init) }) };
+}
+
+function preparedBody(init: PreparedRequestInit): string {
+  init.signal?.throwIfAborted();
+  const body = init.prepareBody?.();
+  if (typeof body !== "string")
+    throw new TypeError("Request body preparation must return a string synchronously.");
+  init.signal?.throwIfAborted();
+  return body;
+}
+
+async function preparedWire(init: PreparedRequestInit): Promise<{
+  readonly headers: Record<string, string>;
+  readonly body: Awaited<ReturnType<typeof bodyToWire>>;
+}> {
+  // Preserve static-body validation before credential materialization for every existing caller.
+  if (init.prepareBody === undefined) {
+    const body = await bodyToWire(init.body);
+    return { body, headers: dispatchHeaderRecord(init) };
+  }
+  const headers = dispatchHeaderRecord(init);
+  const body = await bodyToWire(preparedBody(init));
+  return { body, headers };
 }
 
 export type OutboundHttpEgressErrorCode =
@@ -635,8 +644,7 @@ async function fetchWithCaBundle(
   maxResponseBytes?: number,
   lookup?: LookupFunction,
 ): Promise<Response> {
-  const body = await bodyToWire(init.body);
-  const headers = dispatchHeaderRecord(init);
+  const { body, headers } = await preparedWire(init);
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
     const req = httpsRequest(
@@ -669,8 +677,7 @@ async function fetchDirectPinned(
   addresses: readonly LookupAddress[],
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const body = await bodyToWire(init.body);
-  const headers = dispatchHeaderRecord(init);
+  const { body, headers } = await preparedWire(init);
   const request = usesHttps(url) ? httpsRequest : httpRequest;
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
@@ -826,7 +833,7 @@ async function enforceOutboundTargetPolicy(
   const literalReason = outboundTargetBlockedReason(target, egress);
   if (literalReason !== undefined) throw blockedTargetError(literalReason);
   if (!options.resolveDns) return undefined;
-  const addresses = await boundedDnsLookup(target.hostname, options.signal);
+  const addresses = await boundedDnsLookup(normalizeHost(target.hostname), options.signal);
   for (const address of addresses) {
     const reason = outboundAddressBlockedReason(
       address.address,
@@ -886,7 +893,7 @@ function joinDnsLookup(hostname: string): PendingDnsLookup {
   return pending;
 }
 
-async function boundedDnsLookup(
+export async function boundedDnsLookup(
   hostname: string,
   signal: AbortSignal | undefined,
 ): Promise<LookupAddress[]> {
@@ -1348,8 +1355,7 @@ async function fetchHttpViaProxy(
   maxResponseBytes: number | undefined,
   pinnedAddress: LookupAddress | undefined,
 ): Promise<Response> {
-  const body = await bodyToWire(init.body);
-  const headers = dispatchHeaderRecord(init);
+  const { body, headers } = await preparedWire(init);
   assertNoForwardedCredentialHeader(headers);
   // Ensure Host header omits the default port (fixes SigV4 pre-signed S3 URLs). Read from the
   // ORIGINAL target even when pinned, so the origin server's virtual-hosting still sees the real
@@ -1383,7 +1389,57 @@ async function fetchHttpViaProxy(
   });
 }
 
-// eslint-disable-next-line max-lines-per-function
+function httpsTunnelResponse(
+  target: URL,
+  init: PreparedRequestInit,
+  socket: tls.TLSSocket,
+  headers: Record<string, string>,
+  body: Awaited<ReturnType<typeof bodyToWire>>,
+  tunnelKey: string,
+  cap: number,
+): Promise<Response> {
+  return responseFromClientRequest((resolve, reject) => {
+    const req = httpRequest(
+      {
+        method: init.method ?? "GET",
+        hostname: target.hostname,
+        port: Number(targetPort(target)),
+        path: `${target.pathname}${target.search}`,
+        headers,
+        signal: init.signal ?? undefined,
+        createConnection: () => socket,
+      },
+      (res) => {
+        const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
+        resolveNodeResponse(
+          res,
+          resolve,
+          reject,
+          () => {
+            socket.destroy();
+            req.destroy();
+          },
+          cap,
+          () => {
+            if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
+            else socket.destroy();
+          },
+        );
+      },
+    );
+    req.on("error", (error) => {
+      socket.destroy();
+      reject(mapProxyError(error));
+    });
+    req.end(body);
+  });
+}
+
+function prepareTunnelHeaders(headers: Record<string, string>, target: URL): void {
+  if (!Object.hasOwn(headers, "connection")) headers.connection = "keep-alive";
+  // Match the direct transport's Host spelling, including pre-signed SigV4 URLs.
+  if (!Object.hasOwn(headers, "host")) headers.host = hostHeader(target);
+}
 async function fetchHttpsViaProxy(
   target: URL,
   init: PreparedRequestInit,
@@ -1392,7 +1448,7 @@ async function fetchHttpsViaProxy(
   maxResponseBytes: number | undefined,
   pinnedAddress: LookupAddress | undefined,
 ): Promise<Response> {
-  const body = await bodyToWire(init.body);
+  const staticBody = init.prepareBody === undefined ? await bodyToWire(init.body) : undefined;
   const originalHeaders =
     init.prepareHeaders === undefined ? dispatchHeaderRecord(init) : undefined;
   const tunnelKey = httpsProxyTunnelKey(target, proxy, ca, pinnedAddress);
@@ -1406,51 +1462,11 @@ async function fetchHttpsViaProxy(
   try {
     init.signal?.throwIfAborted();
     const headers = originalHeaders ?? dispatchHeaderRecord(init);
-    if (!Object.hasOwn(headers, "connection")) {
-      headers.connection = "keep-alive";
-    }
-    // Ensure Host header omits :443 so it matches what undici sends directly and
-    // satisfies SigV4 pre-signed S3 URLs behind a proxy.
-    if (!Object.hasOwn(headers, "host")) {
-      headers.host = hostHeader(target);
-    }
+    const body = init.prepareBody === undefined ? staticBody : await bodyToWire(preparedBody(init));
+    prepareTunnelHeaders(headers, target);
     socket.setKeepAlive(true);
     const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
-    return await responseFromClientRequest((resolve, reject) => {
-      const req = httpRequest(
-        {
-          method: init.method ?? "GET",
-          hostname: target.hostname,
-          port: Number(targetPort(target)),
-          path: `${target.pathname}${target.search}`,
-          headers,
-          signal: init.signal ?? undefined,
-          createConnection: () => socket,
-        },
-        (res) => {
-          const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
-          resolveNodeResponse(
-            res,
-            resolve,
-            reject,
-            () => {
-              socket.destroy();
-              req.destroy();
-            },
-            cap,
-            () => {
-              if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
-              else socket.destroy();
-            },
-          );
-        },
-      );
-      req.on("error", (error) => {
-        socket.destroy();
-        reject(mapProxyError(error));
-      });
-      req.end(body);
-    });
+    return await httpsTunnelResponse(target, init, socket, headers, body, tunnelKey, cap);
   } catch (error) {
     socket.destroy();
     throw error;
@@ -1803,6 +1819,7 @@ function gatewayRequestInit(
   rest: RequestInit,
   timeoutMs: number | undefined,
   prepareHeaders: GatewayFetchOptions["prepareHeaders"],
+  prepareBody: GatewayFetchOptions["prepareBody"],
 ): PreparedRequestInit {
   const composedSignal = composeSignal(rest.signal, timeoutMs);
   return {
@@ -1810,6 +1827,27 @@ function gatewayRequestInit(
     redirect: "manual",
     ...(composedSignal === undefined ? {} : { signal: composedSignal }),
     ...(prepareHeaders === undefined ? {} : { prepareHeaders }),
+    ...(prepareBody === undefined ? {} : { prepareBody }),
+  };
+}
+
+function oneUseBody(options: GatewayFetchOptions): GatewayFetchOptions["prepareBody"] {
+  const prepare = options.prepareBody;
+  if (prepare === undefined) return undefined;
+  if (
+    typeof prepare !== "function" ||
+    typeof options.prepareHeaders !== "function" ||
+    options.singleAttempt !== true ||
+    (options.body !== undefined && options.body !== null)
+  )
+    throw new TypeError(
+      "Private body preparation requires one admitted attempt and no static body.",
+    );
+  let consumed = false;
+  return () => {
+    if (consumed) throw new TypeError("Private request body was already prepared.");
+    consumed = true;
+    return prepare();
   };
 }
 
@@ -1821,6 +1859,7 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
     useCaFallback = fetchImpl === undefined,
     singleAttempt = false,
     prepareHeaders,
+    prepareBody,
     egress,
     timeoutMs,
     maxResponseBytes,
@@ -1828,7 +1867,12 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
     ...rest
   } = options;
   const log = resolveLogSink(logOption);
-  const init = gatewayRequestInit(rest, timeoutMs, prepareHeaders);
+  const init = gatewayRequestInit(
+    rest,
+    timeoutMs,
+    prepareHeaders,
+    oneUseBody({ ...options, prepareBody }),
+  );
   const plan = planGatewayProxy(url, fetchImpl, egress, log);
   refuseUndelegatedProxiedHostnameEgress(plan.target, plan.proxy, egress);
   refuseUnpinnableResearchEgress(plan.proxy, egress);
@@ -2098,7 +2142,9 @@ function splitSseBuffer(buffer: string): {
   readonly lines: readonly string[];
   readonly rest: string;
 } {
-  const segments = buffer.split("\n");
+  // Every SSE line ending counts: CRLF, a bare CR and LF. A CR that ends a chunk is a complete line
+  // ending whether or not an LF follows, and the LF that arrives later is only a blank line.
+  const segments = buffer.split(/\r\n|\r|\n/);
   const rest = segments.pop() ?? "";
   return { lines: segments, rest };
 }
@@ -2115,7 +2161,9 @@ function parseSseLine(rawLine: string): SseLineResult {
   if (line.length === 0 || !line.startsWith("data:")) {
     return { kind: "skip" };
   }
-  const payload = line.slice("data:".length).trimStart();
+  const payload = line.slice("data:".length).trim();
+  // An empty data field carries no event (WHATWG SSE: an empty data buffer dispatches nothing).
+  if (payload.length === 0) return { kind: "skip" };
   if (payload === "[DONE]") {
     return { kind: "done" };
   }

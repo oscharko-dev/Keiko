@@ -62,6 +62,7 @@ import { ingestInlineSourcesAsync, QiIngestionError } from "./runIngestion.js";
 import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
 import { migrateReviewStateForRegeneration } from "./reviewStore.js";
 import { newReferenceId } from "../reference-id.js";
+import { strictRedactor } from "../content-redactor.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const REQUIREMENTS_ENVELOPE_PREFIX = "qi-src-req-";
@@ -1441,7 +1442,7 @@ function recordMergedCandidatesArtifact(args: {
     candidates: args.mergedCandidates,
     editedRevisions: args.preservedEditedRevisions,
     evidenceDir: args.evidenceDir,
-    redact: args.deps.redactor,
+    redact: strictRedactor(args.deps),
   });
 }
 
@@ -1641,7 +1642,7 @@ function persistRegenerationResult(args: {
     staleCandidateIds: [...args.narrowed.staleIds],
     allCandidateIds: mergedCandidateIds,
     now: args.regenerated.completedAt,
-    redact: args.deps.redactor,
+    redact: strictRedactor(args.deps),
   });
 }
 

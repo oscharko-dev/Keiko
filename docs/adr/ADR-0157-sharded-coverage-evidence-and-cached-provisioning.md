@@ -58,10 +58,12 @@ kind of evidence.
 ## Decision
 
 **D1 — A coverage shard measures; the finalizing job judges.** The package coverage suite runs as
-three parallel shards that each write a vitest blob report and reach no verdict. The
-`coverage-sonar` job merges the blobs with vitest's own `--mergeReports` — which merges the shards'
-coverage maps and re-runs the reporters — so every floor is evaluated exactly once, on complete
-coverage.
+four parallel shards, and (since #4288) the scripts suite as three, that each write a vitest blob
+report and reach no verdict. The `coverage-sonar` job merges each suite's blobs with vitest's own
+`--mergeReports`, from separate directories (`.vitest-reports`, `.vitest-reports-scripts`) so a
+merge never absorbs the other suite's blobs — which merges the shards' coverage maps and re-runs
+the reporters — so every floor is evaluated exactly once, on complete coverage. Each suite has its
+own fail-closed shard-count guard.
 
 > **Amended by [ADR-0158](ADR-0158-one-coverage-ruler-per-question.md) D5 — read this before the
 > paragraph below.** As adopted, this decision achieved "a shard must not judge" with a second
@@ -187,8 +189,11 @@ of one, `ci-sonar-<run_id>`, for the reason the previous paragraph gives.
 ## Consequences
 
 The critical path is set by the slowest coverage job plus the finalizer, instead of by their sum.
-Three shards put the package suite at roughly the keiko-ui suite's duration, which is where further
-package sharding stops paying without also splitting keiko-ui — deliberate headroom left to the
+Four shards put the package suite at roughly the keiko-ui suite's duration, which is where further
+package sharding stops paying without also splitting keiko-ui. The scripts suite was sharded three
+ways in #4288 after its single 30-minute job was cancelled at the limit; shards hold whole files
+assigned by path hash, so they are not equal thirds and the longest is bounded by the single longest
+test file; the 30-minute timeout per shard was not raised — deliberate headroom left to the
 child that owns coverage-truth consolidation.
 
 Nothing about the verdict changed. The same test files execute, at the same `maxWorkers: 2` per

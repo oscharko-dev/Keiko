@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -206,6 +214,45 @@ describe("the continuity service over a state directory", () => {
       extra: { action: "prune", outcome: "failed", reason: "copy-failed" },
     });
     expect(Array.isArray((event?.extra as { frames?: unknown } | undefined)?.frames)).toBe(true);
+    expect(JSON.stringify(event)).not.toContain(dir);
+  });
+
+  it("records a failed startup prune without deleting entries through a redirected root", () => {
+    const dir = stateDir();
+    const target = join(dir, "outside-retention");
+    const entry = join(target, retainedSessionKey("task-without-manifest"));
+    mkdirSync(entry, { recursive: true });
+    const canary = join(entry, "canary.txt");
+    writeFileSync(canary, "untouched");
+    mkdirSync(join(dir, "coding-runtime"));
+    symlinkSync(
+      target,
+      retainedSessionRoot(dir),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const log = createBufferedServerLogSink();
+
+    createStateCodingSessionContinuity({
+      stateDir: dir,
+      retention: undefined,
+      history: undefined,
+      activityLog: log,
+    });
+
+    expect(readFileSync(canary, "utf8")).toBe("untouched");
+    expect(log.events).toHaveLength(1);
+    const [event] = log.events;
+    expect(event).toMatchObject({
+      op: "coding-runtime.session-continuity",
+      level: "warn",
+      correlationId: "session-retention-startup",
+      errorKind: "internal",
+      extra: { action: "prune", outcome: "failed", reason: "copy-failed" },
+    });
+    expectActivityLogProof(
+      "coding-runtime.session-continuity.emitted-line",
+      formatActivityLogProofLine(event ?? {}),
+    );
     expect(JSON.stringify(event)).not.toContain(dir);
   });
 

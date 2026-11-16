@@ -6,6 +6,11 @@ import {
   applyChatWriteApproval,
 } from "@/lib/chat-tool-events";
 import { watchChatToolConsent } from "@/lib/chat-tool-consent";
+import {
+  restoredPendingToolTurn,
+  restoredTurnSnapshot,
+  useRestoredToolTurn,
+} from "./useRestoredToolTurn";
 import { useChatDraft, useChatDraftUnloadGuard, type ChatDraftPersistence } from "./useChatDraft";
 import type { ChatCreationModelChoice } from "./chatCreationModelChoice";
 import {
@@ -38,10 +43,14 @@ import {
 import {
   ATTACHMENT_CLEANUP_DEFERRED_ERROR,
   DRAFT_ATTACHMENTS_UNSAVED_ERROR,
+  MODEL_CHECKING_ERROR,
+  MODEL_CHECK_COOLDOWN_ERROR,
+  MODEL_NOT_READY_ERROR,
   SKILL_SELECTION_UNAVAILABLE_ERROR,
 } from "@/lib/chat-session-error";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
+  type GatewayModelsResponseWire,
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   MAX_DESKTOP_CHAT_INPUT_CHARS,
@@ -53,6 +62,7 @@ import {
   StreamingUnavailableError,
   askGrounded,
   createDesktopChat,
+  cancelDesktopChatTurn,
   createProject,
   fetchChatMessages,
   fetchChats,
@@ -66,6 +76,7 @@ import {
   regenerateDesktopChat,
   sendDesktopChat,
   sendDesktopChatStream,
+  startChatModelSelectionCheck,
   uploadConversationAttachment,
   deleteConversationAttachment,
   updateChat,
@@ -85,7 +96,6 @@ import {
   notifyGatewayModelCatalogUpdated,
 } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
-import { createVisibilityPoller } from "@/lib/visibility-poller";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
@@ -479,24 +489,21 @@ export const EMPTY_MODEL_RESPONSE_USER_MESSAGE =
 // its own localized notice (format-error), which tells the user to shorten the attachment instead
 // of resending a request that fails the same way (PR #3678 review).
 const CONTEXT_OVERSIZED_API_CODES = new Set(["GATEWAY_CONTEXT_OVERFLOW"]);
-const CONTEXT_OVERSIZED_PHRASES = [
-  "context length",
-  "context_length_exceeded",
-  "max_tokens",
-  "too many tokens",
-] as const;
 const EMPTY_MODEL_RESPONSE_PHRASES = [
   "empty assistant response",
   "empty grounded answer",
   "without assistant content",
 ] as const;
 
+// The code decides, never the text (#4355): the gateway classifies a provider's context-window
+// refusal into GATEWAY_CONTEXT_OVERFLOW on the server (openai-adapter), and every error that reaches
+// this hook as an ApiError carries its code, so no real provider path arrives without one. A message
+// that merely mentions "max_tokens" or "context length" under another code (a caller's own attempt
+// grant, a provider error that names a parameter) is that code's error and takes its notice.
+// Residual gap: a provider that signals a context overflow with a status the adapter does not read
+// (it classifies HTTP 400, 413 and 422, streamed frames included) gets the generic text.
 function isContextOversizedError(error: unknown): boolean {
-  if (error instanceof ApiError && error.code === "GATEWAY_ATTEMPT_ADMISSION_DENIED") return false;
-  if (error instanceof ApiError && CONTEXT_OVERSIZED_API_CODES.has(error.code)) return true;
-  const text = error instanceof Error ? error.message.toLowerCase() : "";
-  if (text.length === 0) return false;
-  return CONTEXT_OVERSIZED_PHRASES.some((phrase) => text.includes(phrase));
+  return error instanceof ApiError && CONTEXT_OVERSIZED_API_CODES.has(error.code);
 }
 
 function isEmptyModelResponseError(error: unknown): boolean {
@@ -775,10 +782,11 @@ export function notifyChatDeleted(chatId: string): void {
 // available. Callers must NOT fall back to a placeholder id — downstream
 // surfaces branch on undefined to show a clear "no model" error (AC #1 / #4).
 // `conversationReady` is TRI-STATE on the wire: absent means "never probed in this server
-// process" (the store is volatile — after every restart everything is unknown), and the server
-// verifies unknown models on demand at create/send. Treating unknown as unusable dead-locked the
-// whole picker after each restart until a manual probe plus reload (customer field incident,
-// 0.3.11). Preference: verified models first, then unknown — both in the shared
+// process" (the store is volatile — after every restart everything is unknown). The server checks
+// only the model in use at startup; a model nobody has checked is checked once when a person
+// explicitly picks it (`startChatModelSelectionCheck`), never at create or send. Treating unknown as
+// unusable dead-locked the whole picker after each restart until a manual probe plus reload
+// (customer field incident, 0.3.11). Preference: verified models first, then unknown — both in the shared
 // conversationDefaultRank order, so a mode-less OCR model never outranks a declared chat model.
 export function pickChatModelId(models: readonly ModelCapability[]): string | undefined {
   return electConversationDefault(
@@ -788,14 +796,14 @@ export function pickChatModelId(models: readonly ModelCapability[]): string | un
 }
 
 // Usable = conversation-eligible and not OBSERVED unready. Only an explicit false blocks; the
-// server's on-demand probe is the honest authority for unknown models.
+// server admits from its stored startup or explicit Settings observation; no request-time probe.
 function isUsableConversationModel(model: ModelCapability): boolean {
   return isConversationEligibleModel(model) && model.conversationReady !== false;
 }
 
 // Create-chat inputs preserve WHO chose the model (review finding on #3220): an AUTOMATIC
 // election (bootstrap default, fallback after a stale selection) is sent WITHOUT a modelId so
-// the server's bounded readiness walk can route around a failing preferred model, while a
+// the server can elect from stored readiness when the preferred model is unavailable, while a
 // user-selected or persisted model stays an explicit request the server validates as such.
 function createChatInput(
   modelId: string,
@@ -960,6 +968,7 @@ interface CanonicalChatProjectTarget {
 }
 
 interface UngroundedSendRequest {
+  readonly retainPendingApproval: boolean;
   readonly expectedSkillSelectionRevision?: number | null | undefined;
   readonly chat: Chat;
   readonly project: CanonicalChatProjectTarget;
@@ -1024,6 +1033,7 @@ interface GroundedSendRequest extends Pick<
 > {
   readonly memory: ConversationMemoryRequestWire;
   readonly correlationId: SendAttemptRequest["correlationId"];
+  readonly retainPendingApproval: boolean;
 }
 
 function expectedGroundedScopeIdentity(
@@ -1580,6 +1590,7 @@ export interface UseChatSessionResult {
   readonly configuredModelsAvailable?: boolean | undefined;
   readonly configuredModelIds?: readonly string[] | undefined;
   readonly modelCatalogRead?: ChatModelCatalogRead | undefined;
+  readonly modelCatalogStatus?: "unknown" | "loading" | "ready" | "failed" | undefined;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   // Undefined when no usable model is offered or a deliberate choice is temporarily held.
@@ -1698,6 +1709,8 @@ interface SessionState {
   catalogCapabilities: readonly ModelCapability[];
   catalogSource: ClientModelCatalogEvidence["source"];
   catalogCorrelationId: string | undefined;
+  modelCatalogStatus: "unknown" | "loading" | "ready" | "failed";
+  startupReadinessPending?: boolean;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   selectedModel: string | undefined;
@@ -1791,6 +1804,7 @@ const INITIAL_STATE: SessionState = {
   catalogCapabilities: [],
   catalogSource: "bootstrap",
   catalogCorrelationId: undefined,
+  modelCatalogStatus: "unknown",
   activeProject: undefined,
   activeChat: undefined,
   selectedModel: undefined,
@@ -1840,39 +1854,255 @@ type GatewayModelRefreshResult =
       readonly models: readonly ModelCapability[];
       readonly source: "foreground" | "background";
       readonly correlationId: string;
+      readonly startupReadinessPending?: boolean;
     }
-  | { readonly kind: "failure"; readonly message: string };
+  | { readonly kind: "failure"; readonly message: string }
+  | { readonly kind: "startup-observation-unavailable" };
 const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
 let gatewayModelRefreshGeneration = 0;
-let gatewayModelRefreshPoller: ReturnType<typeof createVisibilityPoller> | undefined;
-let backgroundGatewayReadInflight = false;
-let backgroundGatewayNextReadAt = 0;
-let backgroundGatewayFailureCount = 0;
-let backgroundGatewayFastUntil = 0;
-let backgroundGatewayModelSnapshot: string | undefined;
+let gatewayModelSnapshot: string | undefined;
 
-// Read only the BFF projection; provider verification belongs to server startup checks.
-function refreshGatewayModelsInBackground(): void {
-  if (backgroundGatewayReadInflight || document.visibilityState === "hidden") return;
-  const generation = gatewayModelRefreshGeneration;
+interface StartupModelSettlement {
+  readonly controller: AbortController;
+  readonly generation: number;
+  subscribers: number;
+}
+let startupModelSettlement: StartupModelSettlement | undefined;
+
+function stopStartupModelSettlement(): void {
+  startupModelSettlement?.controller.abort();
+  startupModelSettlement = undefined;
+}
+
+function adoptStartupModelSettlement(
+  entry: StartupModelSettlement,
+  payload: GatewayModelsResponseWire,
+  correlationId: string,
+  startedAt: number,
+): void {
+  if (entry.controller.signal.aborted || entry.generation !== gatewayModelRefreshGeneration) return;
+  invalidateSharedBootstrap();
+  recordCatalogAdoption(
+    payload.models,
+    "background",
+    "adopted",
+    correlationId,
+    performance.now() - startedAt,
+  );
+  publishGatewayModelRefresh({
+    kind: "success",
+    models: payload.models,
+    source: "background",
+    correlationId,
+  });
+}
+
+// One shared follow-up consumes already-running startup observations. No timer, focus listener,
+// provider check or retry is introduced, and configuration changes discard this observation.
+type ModelCheckOutcome = "ready" | "refused" | "cooldown" | "cancelled" | "failed";
+
+// What the local model list says once the check answered: a ready answer is recorded, so the next
+// Send costs no round trip. A refusal only ends the "being checked" state: marking the model unready
+// here would make Chat send the next message to another model, which is the server's published
+// verdict to give, not this window's guess.
+function applyModelCheckResult(
+  setState: Dispatch<SetStateAction<SessionState>>,
+  modelId: string,
+  ready: boolean,
+): void {
+  setState((previous) => ({
+    ...previous,
+    models: previous.models.map((model) => {
+      if (model.id !== modelId) return model;
+      const { conversationCheckPending: _settled, ...rest } = model;
+      return ready ? { ...rest, conversationReady: true } : rest;
+    }),
+  }));
+}
+
+/**
+ * The first use of a model that was never checked (#4351): ask the server for the one check, show
+ * that the model is being checked, join the shared settlement read and report whether the model
+ * answered. An HTTP failure is thrown to the caller, which shows its reason; nothing is swallowed.
+ * The signal ends the wait (a model switch or a closed chat); the server's check runs on.
+ */
+async function checkModelOnFirstUse(
+  modelId: string,
+  setState: Dispatch<SetStateAction<SessionState>>,
+  signal: AbortSignal = new AbortController().signal,
+): Promise<ModelCheckOutcome> {
   const correlationId = newClientCorrelationId();
-  const startedAt = performance.now();
-  backgroundGatewayReadInflight = true;
-  void fetchModels(correlationId)
-    .then(
-      ({ models }): void => {
-        if (generation !== gatewayModelRefreshGeneration) return;
-        adoptBackgroundGatewayModels(models, correlationId, performance.now() - startedAt);
-      },
-      (error: unknown): void => {
-        if (generation === gatewayModelRefreshGeneration) {
-          reportBackgroundGatewayFailure(error, correlationId);
-        }
-      },
-    )
-    .finally(() => {
-      backgroundGatewayReadInflight = false;
+  const { state, outcome } = await startChatModelSelectionCheck(modelId, correlationId);
+  if (signal.aborted) return "cancelled";
+  // A cooldown means the last attempt was too recent to repeat and nothing was sent. The server
+  // answers it with the model's last state (not-ready, or unchecked after a verdict-less attempt),
+  // so the outcome is read first and the state is never taken for a check that is running.
+  if (outcome === "cooldown") {
+    applyModelCheckResult(setState, modelId, false);
+    return "cooldown";
+  }
+  if (state === "ready") {
+    applyModelCheckResult(setState, modelId, true);
+    return "ready";
+  }
+  if (state === "not-ready") {
+    applyModelCheckResult(setState, modelId, false);
+    return "refused";
+  }
+  // The server marks the model while its check runs; the shared settlement read adopts the result.
+  setState((previous) => ({
+    ...previous,
+    models: previous.models.map((model) =>
+      model.id === modelId ? { ...model, conversationCheckPending: true } : model,
+    ),
+    startupReadinessPending: true,
+  }));
+  const payload = await fetchModels(correlationId, false, { waitForStartup: true, signal });
+  publishGatewayModelRefresh({
+    kind: "success",
+    models: payload.models,
+    source: "background",
+    correlationId,
+  });
+  const ready = payload.models.find((model) => model.id === modelId)?.conversationReady === true;
+  applyModelCheckResult(setState, modelId, ready);
+  return ready ? "ready" : "refused";
+}
+
+async function requestModelSelectionCheck(
+  modelId: string,
+  setState: Dispatch<SetStateAction<SessionState>>,
+  setError: (message: string) => void,
+  stillSelected: () => boolean,
+): Promise<void> {
+  try {
+    const outcome = await checkModelOnFirstUse(modelId, setState);
+    // A pick that was refused, or held back by the cooldown, tells the person at once, not only on
+    // the next Send; a pick the person has since replaced says nothing about the new model.
+    if (!stillSelected()) return;
+    if (outcome === "refused") setError(MODEL_NOT_READY_ERROR);
+    if (outcome === "cooldown") setError(MODEL_CHECK_COOLDOWN_ERROR);
+  } catch (error) {
+    reportClientDiagnostic("The selection check of a chat model could not be started.", {
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
     });
+    // The person sees the reason; a check that failed to start is not a silent refusal.
+    setError(errorMessage(error));
+  }
+}
+
+// The first Send on a model nobody checked: "ready" goes ahead, anything else leaves the person the
+// reason (the gateway's refusal, the cooldown after a recent attempt, or why the check could not
+// run) and the draft untouched. An ended wait (switch of model or chat) says nothing.
+async function checkModelBeforeSend(
+  modelId: string,
+  setState: Dispatch<SetStateAction<SessionState>>,
+  setError: (message: string) => void,
+  signal: AbortSignal,
+): Promise<ModelCheckOutcome> {
+  try {
+    const outcome = await checkModelOnFirstUse(modelId, setState, signal);
+    if (outcome === "refused") setError(MODEL_NOT_READY_ERROR);
+    if (outcome === "cooldown") setError(MODEL_CHECK_COOLDOWN_ERROR);
+    return outcome;
+  } catch (error) {
+    if (signal.aborted) return "cancelled";
+    reportClientDiagnostic("The first-use check of a chat model could not be completed.", {
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+    setError(errorMessage(error));
+    return "failed";
+  }
+}
+
+// A switch of model or chat ends the wait of a Send that was checking the old one, and the Send
+// that follows must not read "still being checked" for the other model.
+function endFirstUseCheck(checkRef: { current: AbortController | null }): void {
+  checkRef.current?.abort();
+  checkRef.current = null;
+}
+
+// What a Send was admitted under. The wait for a first-use check can be long, so the message goes
+// out only while all of it still holds; the composer's text is part of it whenever the send clears
+// the draft, and so is the set of staged attachments.
+interface SendAdmissionSnapshot {
+  readonly chatId: string | undefined;
+  readonly selectedModel: string | undefined;
+  readonly draftRevision: number;
+  readonly attachmentKey: string;
+}
+
+function attachmentSetKey(attachments: readonly PendingAttachment[]): string {
+  return attachments.map((attachment) => attachment.id).join("\u0000");
+}
+
+function sendAdmissionUnchanged(
+  admitted: SendAdmissionSnapshot,
+  current: SendAdmissionSnapshot,
+  clearsDraft: boolean,
+): boolean {
+  return (
+    admitted.chatId === current.chatId &&
+    admitted.selectedModel === current.selectedModel &&
+    admitted.attachmentKey === current.attachmentKey &&
+    (!clearsDraft || admitted.draftRevision === current.draftRevision)
+  );
+}
+
+function modelNeedsFirstUseCheck(models: readonly ModelCapability[], modelId: string): boolean {
+  const model = models.find((candidate) => candidate.id === modelId);
+  return model?.kind === "chat" && model.conversationReady !== true;
+}
+
+function joinStartupModelSettlement(): () => void {
+  let entry = startupModelSettlement;
+  if (entry === undefined) {
+    entry = {
+      controller: new AbortController(),
+      generation: gatewayModelRefreshGeneration,
+      subscribers: 0,
+    };
+    startupModelSettlement = entry;
+    const current = entry;
+    const correlationId = newClientCorrelationId();
+    const startedAt = performance.now();
+    void fetchModels(correlationId, false, {
+      waitForStartup: true,
+      signal: current.controller.signal,
+    })
+      .then(
+        (payload): void => {
+          adoptStartupModelSettlement(current, payload, correlationId, startedAt);
+        },
+        (error_: unknown): void => {
+          if (
+            !current.controller.signal.aborted &&
+            current.generation === gatewayModelRefreshGeneration
+          ) {
+            reportClientDiagnostic("Startup model readiness observation failed.", {
+              correlationId,
+              errorKind: bffRequestErrorKind(error_),
+              errorEvidence: clientErrorEvidence(error_),
+            });
+            publishGatewayModelRefresh({ kind: "startup-observation-unavailable" });
+          }
+        },
+      )
+      .finally(() => {
+        if (startupModelSettlement === current) startupModelSettlement = undefined;
+      });
+  }
+  const current = entry;
+  current.subscribers += 1;
+  return (): void => {
+    current.subscribers -= 1;
+    if (current.subscribers === 0 && startupModelSettlement === current)
+      stopStartupModelSettlement();
+  };
 }
 
 // `readMs` is the catalog read the adoption waited for (#3905): request sent to catalog adopted.
@@ -1883,7 +2113,9 @@ function recordCatalogAdoption(
   correlationId: string,
   readMs: number,
 ): void {
-  backgroundGatewayModelSnapshot = JSON.stringify(models);
+  const snapshot = JSON.stringify(models);
+  const changed = gatewayModelSnapshot !== undefined && snapshot !== gatewayModelSnapshot;
+  gatewayModelSnapshot = snapshot;
   reportModelCatalogStage(
     "gateway catalog adoption",
     {
@@ -1896,68 +2128,7 @@ function recordCatalogAdoption(
     correlationId,
     readMs,
   );
-}
-
-function adoptBackgroundGatewayModels(
-  models: readonly ModelCapability[],
-  correlationId: string,
-  readMs: number,
-): void {
-  const snapshot = JSON.stringify(models);
-  const changed =
-    backgroundGatewayModelSnapshot !== undefined && snapshot !== backgroundGatewayModelSnapshot;
-  backgroundGatewayFailureCount = 0;
-  const fast = changed || Date.now() < backgroundGatewayFastUntil;
-  backgroundGatewayNextReadAt = Date.now() + (fast ? 5_000 : 60_000);
-  backgroundGatewayModelSnapshot = snapshot;
-  publishGatewayModelRefresh({ kind: "success", models, source: "background", correlationId });
-  if (!changed) return;
-  invalidateSharedBootstrap();
-  recordCatalogAdoption(models, "background", "changed", correlationId, readMs);
-  notifyGatewayModelCatalogUpdated(correlationId);
-}
-
-function reportBackgroundGatewayFailure(error: unknown, correlationId: string): void {
-  backgroundGatewayFailureCount += 1;
-  backgroundGatewayNextReadAt =
-    Date.now() + Math.min(5_000 * 2 ** Math.min(backgroundGatewayFailureCount - 1, 4), 60_000);
-  if (backgroundGatewayFailureCount !== 1) return;
-  reportClientDiagnostic(
-    `Background model catalog refresh failed (${clientErrorSummary(error)}).`,
-    {
-      correlationId: correlationIdOf(error) ?? correlationId,
-      kind: "other",
-      errorKind: bffRequestErrorKind(error),
-      errorEvidence: clientErrorEvidence(error),
-    },
-  );
-}
-
-function pollGatewayModels(): void {
-  if (Date.now() >= backgroundGatewayNextReadAt) refreshGatewayModelsInBackground();
-}
-
-function resumeGatewayModelReads(): void {
-  backgroundGatewayNextReadAt = 0;
-  gatewayModelRefreshPoller?.sync();
-}
-
-function startGatewayModelReads(): void {
-  backgroundGatewayNextReadAt = 0;
-  backgroundGatewayFastUntil = Date.now() + 120_000;
-  backgroundGatewayFailureCount = 0;
-  gatewayModelRefreshPoller = createVisibilityPoller(pollGatewayModels, 5_000);
-  gatewayModelRefreshPoller.start();
-  window.addEventListener("focus", resumeGatewayModelReads);
-  document.addEventListener("visibilitychange", resumeGatewayModelReads);
-}
-
-function stopGatewayModelReads(): void {
-  gatewayModelRefreshGeneration += 1;
-  gatewayModelRefreshPoller?.stop();
-  gatewayModelRefreshPoller = undefined;
-  window.removeEventListener("focus", resumeGatewayModelReads);
-  document.removeEventListener("visibilitychange", resumeGatewayModelReads);
+  if (changed) notifyGatewayModelCatalogUpdated(correlationId);
 }
 
 function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
@@ -1966,10 +2137,32 @@ function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
 
 // A person's own step (the Workbench or a model picker opened) also checks again the models that
 // are not ready; every other refresh only rereads the catalog (customer 1.3.4).
+//
+// A catalog refresh REQUEST (a window or picker opening) that arrives while an equal-or-stronger
+// request is already reading the catalog joins it: every subscriber receives that read's result,
+// so a second read would only re-clear the picker and repeat the GETs. A configuration or readiness
+// change always restarts the read, because the one in flight predates it.
+let foregroundRefreshInflight: { readonly generation: number; readonly check: boolean } | undefined;
+
+function joinsForegroundRefresh(event: Event | undefined, check: boolean): boolean {
+  const inflight = foregroundRefreshInflight;
+  if (inflight === undefined || event?.type !== GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT) {
+    return false;
+  }
+  return inflight.generation === gatewayModelRefreshGeneration && (inflight.check || !check);
+}
+
+function settleForegroundRefresh(generation: number): void {
+  if (foregroundRefreshInflight?.generation === generation) foregroundRefreshInflight = undefined;
+}
+
 function refreshGatewayModels(event?: Event): void {
+  stopStartupModelSettlement();
   const check = event !== undefined && gatewayModelCatalogCheckRequested(event);
+  if (joinsForegroundRefresh(event, check)) return;
   const generation = gatewayModelRefreshGeneration + 1;
   gatewayModelRefreshGeneration = generation;
+  foregroundRefreshInflight = { generation, check };
   invalidateSharedBootstrap();
   resetModelRequestCache();
   // A gateway change makes the prior catalog untrustworthy immediately. Keep the picker empty
@@ -1979,7 +2172,8 @@ function refreshGatewayModels(event?: Event): void {
   const correlationId = newClientCorrelationId();
   const startedAt = performance.now();
   void fetchModels(correlationId, check).then(
-    ({ models }): void => {
+    ({ models, startupReadinessPending }): void => {
+      settleForegroundRefresh(generation);
       if (generation === gatewayModelRefreshGeneration) {
         recordCatalogAdoption(
           models,
@@ -1993,10 +2187,12 @@ function refreshGatewayModels(event?: Event): void {
           models,
           source: "foreground",
           correlationId,
+          ...(startupReadinessPending === true ? { startupReadinessPending: true } : {}),
         });
       }
     },
     (error_: unknown): void => {
+      settleForegroundRefresh(generation);
       if (generation === gatewayModelRefreshGeneration) {
         publishGatewayModelRefresh({ kind: "failure", message: errorMessage(error_) });
       }
@@ -2011,13 +2207,12 @@ function subscribeGatewayModelRefresh(
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
     window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, refreshGatewayModels);
     window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshGatewayModels);
-    startGatewayModelReads();
   }
   gatewayModelRefreshSubscribers.add(subscriber);
   return (): void => {
     gatewayModelRefreshSubscribers.delete(subscriber);
     if (gatewayModelRefreshSubscribers.size === 0) {
-      stopGatewayModelReads();
+      gatewayModelRefreshGeneration += 1;
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
       window.removeEventListener(
         GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
@@ -2037,6 +2232,7 @@ export function useGatewayModelCatalogSettled(): boolean {
   useEffect(
     () =>
       subscribeGatewayModelRefresh((result): void => {
+        if (result.kind === "startup-observation-unavailable") return;
         setSettled(result.kind === "success");
       }),
     [],
@@ -2164,9 +2360,10 @@ function sharedFetchChatMessages(
 }
 
 export function clearChatSessionBootstrapCacheForTests(): void {
+  stopStartupModelSettlement();
   invalidateSharedBootstrap();
   gatewayBootstrapRefreshRequested = false;
-  backgroundGatewayModelSnapshot = undefined;
+  gatewayModelSnapshot = undefined;
   gatewayModelRefreshGeneration += 1;
   sharedChatListInflight.clear();
   sharedChatMessagesInflight.clear();
@@ -2411,11 +2608,14 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
     correlationId,
     performance.now() - startedAt,
   );
-  const catalog = sessionCatalogState(modelPayload.models, "bootstrap", correlationId);
+  const catalog = {
+    ...sessionCatalogState(modelPayload.models, "bootstrap", correlationId),
+    startupReadinessPending: modelPayload.startupReadinessPending === true,
+  };
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
   // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown. Models the server
-  // never probed (tri-state: conversationReady ABSENT) stay usable — the on-demand probe at
-  // create/send decides honestly; only an observed `false` filters out.
+  // not yet observed (tri-state: conversationReady ABSENT) stay visible. Create/send admits only
+  // from stored startup or explicit Settings results; only an observed `false` filters the picker.
   const chatModels = modelPayload.models.filter(isUsableConversationModel);
   const defaultModel = pickChatModelId(chatModels);
 
@@ -2571,6 +2771,8 @@ function sessionCatalogState(
   | "catalogCapabilities"
   | "catalogSource"
   | "catalogCorrelationId"
+  | "modelCatalogStatus"
+  | "startupReadinessPending"
 > {
   return {
     models: capabilities.filter(isUsableConversationModel),
@@ -2582,6 +2784,8 @@ function sessionCatalogState(
     catalogCapabilities: capabilities,
     catalogSource: source,
     catalogCorrelationId: correlationId,
+    modelCatalogStatus: "ready",
+    startupReadinessPending: false,
   };
 }
 
@@ -2608,6 +2812,7 @@ function refreshSessionModels(
   return {
     ...previous,
     ...catalog,
+    startupReadinessPending: result.startupReadinessPending === true,
     ...selectSessionModel(
       remembered.id,
       remembered.elected,
@@ -2704,6 +2909,8 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
     ...previous,
     models: [],
     catalogCorrelationId: undefined,
+    modelCatalogStatus: "loading",
+    startupReadinessPending: false,
     // Pinned choreography: the selection is invalidated synchronously so no send can target
     // a model that may no longer exist — but the id is remembered so the success path can
     // restore it against the refreshed catalog instead of falling back to the first ready
@@ -2714,6 +2921,10 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
     restorableModelId: remembered.id,
     restorableModelElected: remembered.elected,
   };
+}
+
+function noEligibleSessionModels(state: SessionState, loading: boolean): boolean {
+  return !loading && state.modelCatalogStatus === "ready" && state.models.length === 0;
 }
 
 // Sonar S2004 — extracted out of streamUngrounded's `.catch` handler (itself already nested
@@ -2891,12 +3102,11 @@ function settledSendMessageOutcome(input: {
   return settled.status === "completed" ? settled : { status: "failed" };
 }
 
-export async function canonicalTurnReferenceForClient(
+export function canonicalTurnReferenceForClient(
   chatId: string,
   clientTurnId: string,
 ): Promise<string> {
-  const runtime = await import("./canonical-voice-hasher-runtime");
-  return runtime.sha256Hex(canonicalDesktopChatTurnReferenceSeed(chatId, clientTurnId));
+  return Promise.resolve(sha256Hex(canonicalDesktopChatTurnReferenceSeed(chatId, clientTurnId)));
 }
 
 function isExactCanonicalUserMessage(message: ChatMessage, canonicalTurnRef: string): boolean {
@@ -2920,6 +3130,46 @@ function exactCanonicalAssistant(
     (message): boolean =>
       message.role === "assistant" && message.canonicalTurnRef === canonicalTurnRef,
   );
+}
+
+/** Cancellation may finish locally before the server settles its accepted canonical turn. */
+async function canonicalReconciliationPayload(input: {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly canonicalTurnRef: string;
+  readonly signal: AbortSignal;
+  readonly waitForTerminal: boolean;
+  readonly current: () => boolean;
+}): Promise<Awaited<ReturnType<typeof fetchChatMessages>>> {
+  const read = (): Promise<Awaited<ReturnType<typeof fetchChatMessages>>> =>
+    raceUiAbort(fetchChatMessages(input.chatId, input.projectPath, input.signal), input.signal);
+  let payload = await read();
+  while (
+    input.waitForTerminal &&
+    input.current() &&
+    payload.messages.some(
+      (message) =>
+        isExactCanonicalUserMessage(message, input.canonicalTurnRef) &&
+        message.turnState === "pending",
+    )
+  ) {
+    try {
+      await abortableSleep(CANONICAL_VOICE_RECONCILE_INTERVAL_MS, input.signal);
+      if (!input.current()) return payload;
+      payload = await read();
+    } catch (error) {
+      if (!input.signal.aborted && input.current())
+        reportClientDiagnostic("Canonical chat reconciliation failed.", {
+          correlationId: correlationIdOf(error) ?? newClientCorrelationId(),
+          kind: "other",
+          errorKind: bffRequestErrorKind(error),
+          errorEvidence: clientErrorEvidence(error),
+        });
+      // The last server observation remains authoritative when a bounded retry cannot settle.
+      return payload;
+    }
+  }
+  return payload;
 }
 
 function canonicalTurnPresentation(
@@ -3097,6 +3347,125 @@ function awaitsToolDecision(message: ChatMessage): boolean {
     ) === true
   );
 }
+function leasedTurnIdentity(
+  chatId: string,
+  clientTurnId: string | undefined,
+  retain = true,
+): {
+  readonly chatId: string;
+  readonly clientTurnId: string;
+} | null {
+  return clientTurnId === undefined || !retain ? null : { chatId, clientTurnId };
+}
+/** Canonical Voice keeps request-owned cancellation, including its grounded route. */
+function pendingLeaseOptOut(retain: boolean): [] | [false] {
+  return retain ? [] : [false];
+}
+interface PendingToolStopAttempt {
+  readonly chatId: string;
+  readonly controller: AbortController | null;
+  readonly canonicalTurnRef?: string;
+  pending: boolean;
+}
+
+interface PendingToolStopOwner {
+  attempt?: PendingToolStopAttempt;
+}
+
+function matchesPendingToolStop(
+  current: PendingToolStopAttempt | undefined,
+  target: Omit<PendingToolStopAttempt, "pending">,
+): boolean {
+  return (
+    current?.pending === true &&
+    current.chatId === target.chatId &&
+    current.canonicalTurnRef === target.canonicalTurnRef
+  );
+}
+
+function launchChatWork(work: Promise<void>): void {
+  work.catch((error: unknown) => {
+    reportClientDiagnostic("Chat background work failed.", {
+      kind: "other",
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+  });
+}
+interface PendingStopInput {
+  readonly awaitingDecision: boolean;
+  readonly live: { readonly chatId: string; readonly clientTurnId: string } | null;
+  readonly uncertain: { readonly chatId: string; readonly canonicalTurnRef: string } | null;
+  readonly saved: ChatMessage | undefined;
+  readonly activeChatId: string | undefined;
+}
+/**
+ * The turn whose retained server worker Stop must acknowledge. Only a turn visibly waiting for the
+ * human's decision, a Stop that could not be confirmed, or a restored review qualifies; every other
+ * in-flight send stops by aborting its transport.
+ */
+function pendingStopTarget(
+  input: PendingStopInput,
+): { readonly chatId: string; readonly reference: Promise<string> } | undefined {
+  const { live, uncertain, saved } = input;
+  if (input.awaitingDecision && live !== null)
+    return {
+      chatId: live.chatId,
+      reference: canonicalTurnReferenceForClient(live.chatId, live.clientTurnId),
+    };
+  if (uncertain !== null && uncertain.chatId === input.activeChatId)
+    return { chatId: uncertain.chatId, reference: Promise.resolve(uncertain.canonicalTurnRef) };
+  if (saved?.canonicalTurnRef !== undefined)
+    return { chatId: saved.chatId, reference: Promise.resolve(saved.canonicalTurnRef) };
+  return undefined;
+}
+interface SettledStopTurn {
+  readonly message: ChatMessage;
+  readonly persisted: readonly ChatMessage[];
+}
+/** After a Stop that found no running worker, the saved turn may already be decided elsewhere. */
+async function readSettledStopTurn(
+  chat: Chat | undefined,
+  chatId: string,
+  canonicalTurnRef: string,
+): Promise<SettledStopTurn | undefined> {
+  if (chat?.id !== chatId) return undefined;
+  try {
+    const snapshot = await restoredTurnSnapshot(chat, canonicalTurnRef, AbortSignal.timeout(5000));
+    const { message, persisted } = snapshot ?? {};
+    return message === undefined || persisted === undefined || message.turnState === "cancelled"
+      ? undefined
+      : { message, persisted };
+  } catch (error) {
+    reportClientDiagnostic("Chat settled turn read after Stop failed.", {
+      kind: "other",
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+    return undefined;
+  }
+}
+/** Tells the server to stop a leased turn the browser has already detached from. */
+async function noticeServerOfStop(chatId: string, clientTurnId: string): Promise<void> {
+  try {
+    const canonicalTurnRef = await canonicalTurnReferenceForClient(chatId, clientTurnId);
+    await cancelDesktopChatTurn({ chatId, canonicalTurnRef });
+  } catch (error) {
+    reportClientDiagnostic("Chat stop notice failed.", {
+      kind: "other",
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+  }
+}
+function restoredToolTurnStatus(message: ChatMessage): SendStatus {
+  if (message.turnState === "pending")
+    return awaitsToolDecision(message) ? "awaiting-decision" : "contacting";
+  return message.turnState ?? "contacting";
+}
 function applyStreamWriteApproval(
   previous: SessionState,
   event: Parameters<typeof applyChatWriteApproval>[1],
@@ -3138,6 +3507,20 @@ function applyStreamReadConsent(
         : message,
     ),
   };
+}
+
+// Closing the chat, opening another or leaving the window ends the wait of a first-use check.
+function useEndFirstUseCheckOnChatChange(
+  checkRef: { current: AbortController | null },
+  activeChat: { readonly id: string } | null | undefined,
+): void {
+  const identity = activeChat?.id;
+  useEffect(
+    () => (): void => {
+      endFirstUseCheck(checkRef);
+    },
+    [identity, checkRef],
+  );
 }
 
 export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
@@ -3184,6 +3567,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // cancellation paths (grounded uses the controller as signal; ungrounded
   // adds signal support to sendDesktopChat in this issue).
   const sendControllerRef = useRef<AbortController | null>(null);
+  const stoppedToolTurnRef = useRef<string | undefined>(undefined);
+  const pendingToolStopOwnerRef = useRef<PendingToolStopOwner>({});
+  const unconfirmedStopSignalRef = useRef<AbortSignal | null>(null);
+  const unconfirmedStopTargetRef = useRef<{
+    readonly chatId: string;
+    readonly canonicalTurnRef: string;
+  } | null>(null);
+  const sendCanonicalIdentityRef = useRef<{
+    readonly chatId: string;
+    readonly clientTurnId: string;
+  } | null>(null);
   const sendControllerOwnerRef = useRef<{
     readonly kind: "composer" | "canonical-voice";
     readonly conversationId: string;
@@ -3201,6 +3595,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     new Map<AbortController, ReturnType<typeof setTimeout>>(),
   );
   const sendMessageRef = useRef<SendMessage | null>(null);
+  // The first-use model check that is running, if any: a second Send is told so instead of starting
+  // another, and a switch of model or chat ends its wait.
+  const firstUseCheckRef = useRef<AbortController | null>(null);
+  // The selection and draft a send was admitted under: if either changes during a model check, the
+  // message is not sent and nothing is cleared.
+  const latestSelectedModelRef = useRef<string | undefined>(undefined);
   const canonicalVoiceQueueRef = canonicalVoicePageOutbox.queueRef;
   const canonicalVoiceQueueOwnerRef = useRef(Symbol("canonical-voice-page-outbox-owner"));
   const canonicalVoiceQueueControllerRef = useRef(new AbortController());
@@ -3546,6 +3946,49 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     sendSlotWaitersRef.current.clear();
   }, []);
 
+  const publishRestoredToolTurn = useCallback(
+    (message: ChatMessage, persisted?: readonly ChatMessage[]): void => {
+      if (activeChatIdRef.current !== message.chatId || sendControllerRef.current !== null) return;
+      const owner = restoredPendingToolTurn(sessionStateRef.current.messages, message.chatId);
+      if (owner?.canonicalTurnRef !== message.canonicalTurnRef) return;
+      setState((previous) => ({
+        ...previous,
+        messages:
+          persisted === undefined
+            ? previous.messages.map((entry) => (entry.id === message.id ? message : entry))
+            : replaceCanonicalTurnMessages(
+                previous.messages,
+                [message.id],
+                persisted.filter(
+                  (entry) =>
+                    entry.chatId === message.chatId &&
+                    entry.canonicalTurnRef === message.canonicalTurnRef,
+                ),
+              ),
+      }));
+      if (
+        message.turnState === "pending" &&
+        stoppedToolTurnRef.current === message.canonicalTurnRef
+      )
+        return;
+      updateSendStatus(restoredToolTurnStatus(message));
+    },
+    [updateSendStatus],
+  );
+  useEffect(() => {
+    if (sendControllerRef.current === null) updateSendStatus("idle");
+  }, [state.activeChat?.id, updateSendStatus]);
+  const onObservationAbandoned = useCallback((): void => {
+    setError(t("chat.pendingObservation.unknown"));
+  }, [t]);
+  useRestoredToolTurn(
+    state.activeChat,
+    state.messages,
+    sendControllerRef.current !== null,
+    publishRestoredToolTurn,
+    onObservationAbandoned,
+  );
+
   const waitForCanonicalVoiceSendSlot = useCallback((signal: AbortSignal): Promise<void> => {
     if (signal.aborted) return Promise.reject(new DOMException("cancelled", "AbortError"));
     if (!isInFlight(sendStatusRef.current)) return Promise.resolve();
@@ -3574,7 +4017,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const updateOwnedSendStatus = useCallback(
     (signal: AbortSignal, next: SendStatus): void => {
-      if (latestSendSignalRef.current === signal) updateSendStatus(next);
+      if (latestSendSignalRef.current === signal)
+        updateSendStatus(
+          unconfirmedStopSignalRef.current === signal && next === "cancelled"
+            ? "awaiting-decision"
+            : next,
+        );
     },
     [updateSendStatus],
   );
@@ -3595,10 +4043,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       reconciliationControllersRef.current.set(controller, timer);
       try {
         const canonicalTurnRef = await canonicalTurnReferenceForClient(chatId, clientTurnId);
-        const payload = await raceUiAbort(
-          fetchChatMessages(chatId, projectPath, controller.signal),
-          controller.signal,
-        );
+        const payload = await canonicalReconciliationPayload({
+          chatId,
+          projectPath,
+          canonicalTurnRef,
+          signal: controller.signal,
+          waitForTerminal: signal.aborted,
+          current: () =>
+            mountedRef.current &&
+            activeChatIdRef.current === chatId &&
+            latestSendSignalRef.current === signal,
+        });
         const persistence = hasExactCanonicalUserMessage(payload.messages, canonicalTurnRef)
           ? "persisted"
           : "missing";
@@ -3740,9 +4195,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setState((previous) => clearSessionModelsForPendingRefresh(previous));
         return;
       }
+      if (result.kind === "startup-observation-unavailable") {
+        setState((previous) => ({ ...previous, startupReadinessPending: false }));
+        return;
+      }
       if (result.kind === "failure") {
         catalogError = result.message;
         setError(result.message);
+        setState((previous) => ({
+          ...previous,
+          modelCatalogStatus: "failed",
+          startupReadinessPending: false,
+        }));
         return;
       }
       const recoveredError = catalogError;
@@ -3751,6 +4215,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setState((previous) => refreshSessionModels(previous, result));
     });
   }, []);
+
+  useEndFirstUseCheckOnChatChange(firstUseCheckRef, state.activeChat);
+
+  useEffect(() => {
+    if (state.startupReadinessPending !== true) return;
+    return joinStartupModelSettlement();
+  }, [state.startupReadinessPending]);
 
   useEffect(() => {
     return subscribeChatMutations((mutation) => {
@@ -3820,12 +4291,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // GEN-PERF-CHAT-011 — do not re-arm a poll cycle that already completed without settling.
       if (runSummaryParkedRef.current.has(syncKey)) continue;
       runSummarySyncingRef.current.add(syncKey);
-      void syncRunSummaryMessage(chat, project.path, message, syncKey);
+      launchChatWork(syncRunSummaryMessage(chat, project.path, message, syncKey));
     }
   }, [state.activeChat, state.activeProject, state.messages, syncRunSummaryMessage]);
 
   const setSelectedModel = useCallback((id: string) => {
     setError(undefined);
+    // A new model ends the wait of a Send that was checking the old one.
+    endFirstUseCheck(firstUseCheckRef);
+    // The pick is current at once, not only after the next render: its own check's answer is read
+    // against it.
+    latestSelectedModelRef.current = id;
     // Capture pre-update snapshot so the optimistic write can be rolled back if
     // the PATCH fails — without this the server and UI diverge permanently.
     let snapshot:
@@ -3858,6 +4334,25 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         ),
       };
     });
+    // #4351: a model that nobody has checked is checked once, because a person picked it. The request
+    // answers at once; the settlement follow-up below joins the running check and adopts its result.
+    const picked = modelsRef.current.find((model) => model.id === id);
+    if (
+      picked?.kind === "chat" &&
+      picked.conversationReady === undefined &&
+      picked.conversationCheckPending !== true
+    ) {
+      launchChatWork(
+        requestModelSelectionCheck(
+          id,
+          setState,
+          (message) => {
+            setError(message);
+          },
+          () => latestSelectedModelRef.current === id,
+        ),
+      );
+    }
     // COMP-5: drop pending attachments the newly selected model can no longer
     // accept so an image chip queued under an image-capable model doesn't persist
     // after switching to a text-only model (the "blocked" invariant).
@@ -3925,6 +4420,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, []);
 
   const selectedSessionModelId = currentSessionModelId(state);
+  latestSelectedModelRef.current = state.selectedModel;
   const selectionUnavailable = sessionSelectionUnavailable(state);
   useSessionSelectionEvidence(state);
   const refuseHeldSelection = useCallback((): void => {
@@ -4398,6 +4894,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const sendUngroundedBuffered = useCallback(
     async (request: UngroundedSendRequest): Promise<SendAttemptOutcome> => {
       const { chat, optimisticId, signal } = request;
+      sendCanonicalIdentityRef.current = leasedTurnIdentity(
+        chat.id,
+        request.clientTurnId,
+        request.retainPendingApproval,
+      );
       const stopConsentWatch = watchBufferedConsent(request);
       try {
         updateOwnedSendStatus(signal, "contacting");
@@ -4406,6 +4907,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           desktopChatInputForUngrounded(request),
           signal,
           request.correlationId,
+          ...pendingLeaseOptOut(request.retainPendingApproval),
         );
         if (signal.aborted) return { status: "cancelled" };
         const outcome = completedSendOutcome(result.messages, result.attachmentDeliveries);
@@ -4450,12 +4952,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return sendUngroundedBuffered(request);
       }
       updateOwnedSendStatus(signal, "contacting");
+      sendCanonicalIdentityRef.current = leasedTurnIdentity(
+        request.chat.id,
+        request.clientTurnId,
+        request.retainPendingApproval,
+      );
       try {
         return await streamUngrounded(request);
       } catch (error_) {
         // StreamingUnavailableError before SSE headers — fall back to buffered.
         if (!(error_ instanceof StreamingUnavailableError)) throw error_;
       }
+      sendCanonicalIdentityRef.current = null;
       return sendUngroundedBuffered(request);
     },
     [state.models, sendUngroundedBuffered, streamUngrounded, updateOwnedSendStatus],
@@ -4477,10 +4985,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       clientTurnId,
       correlationId,
       expectedSkillSelectionRevision,
+      retainPendingApproval,
     }: GroundedSendRequest): Promise<SendAttemptOutcome> => {
       // Copilot PR #258 finding: clear the previous answer at the START of a new send so a
       // stale citation block doesn't briefly flash next to the new question.
       setLatestGrounded(undefined);
+      sendCanonicalIdentityRef.current = leasedTurnIdentity(
+        chat.id,
+        clientTurnId,
+        retainPendingApproval,
+      );
       const stopConsentWatch = watchBufferedConsent({ chat, clientTurnId, signal, optimisticId });
       try {
         updateOwnedSendStatus(signal, "contacting");
@@ -4496,6 +5010,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           },
           signal,
           correlationId,
+          ...pendingLeaseOptOut(retainPendingApproval),
         );
         if (!isStillActiveChat(chat.id)) {
           return { status: "completed", assistantMessageId: result.assistantMessageId };
@@ -4586,6 +5101,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (grounded && staged.length > 0) setError(GROUNDED_ATTACHMENT_DROPPED_NOTICE);
       if (hasGroundedRouteScope(chat)) {
         const terminal = await sendGrounded({
+          retainPendingApproval: canonicalTarget === undefined,
           chat,
           expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
           content: request.content,
@@ -4599,6 +5115,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return { terminal, disclosures: documentBundle.disclosures, consumedAttachmentIds };
       }
       const ungroundedRequest: UngroundedSendRequest = {
+        retainPendingApproval: canonicalTarget === undefined,
         chat,
         expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
         project: request.project,
@@ -4705,21 +5222,159 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   // Issue #152 — unified cancel that aborts any in-flight send (grounded OR
   // ungrounded). Replaces the prior `cancelGrounded`-only surface. When no
-  // request is in flight this is a safe no-op. We flip sendStatus to
-  // "cancelled" immediately so the UI re-renders out of the in-flight state
-  // even before the fetch rejection reaches the awaited site.
+  // request is in flight this is a safe no-op. Unleased requests abort at once.
+  // A leased turn needs an authenticated Stop acknowledgement before the UI
+  // publishes "cancelled"; a detached transport alone does not stop native work.
   const releaseCancelledSendController = useCallback((): void => {
     sendControllerRef.current = null;
     sendControllerOwnerRef.current = null;
+    sendCanonicalIdentityRef.current = null;
     setRegeneratingMessageId(undefined);
     updateSendStatus("cancelled");
   }, [updateSendStatus]);
 
+  const ownsStoppedTurn = useCallback(
+    (owner: PendingToolStopOwner, attempt: PendingToolStopAttempt): boolean =>
+      pendingToolStopOwnerRef.current === owner &&
+      owner.attempt === attempt &&
+      activeChatIdRef.current === attempt.chatId &&
+      sendControllerRef.current === attempt.controller,
+    [],
+  );
+
+  const claimStoppedTurn = useCallback(
+    (
+      owner: PendingToolStopOwner,
+      predecessor: PendingToolStopAttempt | undefined,
+      target: Omit<PendingToolStopAttempt, "pending">,
+    ): PendingToolStopAttempt | undefined => {
+      if (matchesPendingToolStop(owner.attempt, target)) return undefined;
+      if (
+        pendingToolStopOwnerRef.current !== owner ||
+        owner.attempt !== predecessor ||
+        activeChatIdRef.current !== target.chatId ||
+        sendControllerRef.current !== target.controller
+      )
+        return undefined;
+      const attempt = { ...target, pending: true };
+      owner.attempt = attempt;
+      return attempt;
+    },
+    [],
+  );
+
+  const settleStoppedToolTurn = useCallback(
+    (owner: PendingToolStopOwner, attempt: PendingToolStopAttempt, failed: boolean): void => {
+      attempt.pending = false;
+      if (!ownsStoppedTurn(owner, attempt)) return;
+      const controller = attempt.controller;
+      if (failed && controller !== null && latestSendSignalRef.current === controller.signal)
+        unconfirmedStopSignalRef.current = controller.signal;
+      controller?.abort();
+      releaseCancelledSendController();
+      if (failed) updateSendStatus("awaiting-decision");
+    },
+    [releaseCancelledSendController, updateSendStatus, ownsStoppedTurn],
+  );
+
+  const presentSettledStop = useCallback(
+    (owner: PendingToolStopOwner, settled: SettledStopTurn): void => {
+      const { message, persisted } = settled;
+      if (
+        pendingToolStopOwnerRef.current !== owner ||
+        sendControllerRef.current !== null ||
+        activeChatIdRef.current !== message.chatId
+      )
+        return;
+      const owns = (entry: ChatMessage): boolean =>
+        entry.chatId === message.chatId && entry.canonicalTurnRef === message.canonicalTurnRef;
+      setState((previous) => ({
+        ...previous,
+        messages: replaceCanonicalTurnMessages(
+          previous.messages,
+          [message.id, ...previous.messages.filter(owns).map((entry) => entry.id)],
+          persisted.filter(owns),
+        ),
+      }));
+      updateSendStatus(restoredToolTurnStatus(message));
+    },
+    [updateSendStatus],
+  );
+
+  const stopPendingToolTurn = useCallback(
+    async (
+      chatId: string,
+      reference: Promise<string>,
+      controller: AbortController | null,
+    ): Promise<void> => {
+      const owner = pendingToolStopOwnerRef.current;
+      const predecessor = owner.attempt;
+      let attempt: PendingToolStopAttempt | undefined;
+      let failed = false;
+      let settled: SettledStopTurn | undefined;
+      try {
+        const canonicalTurnRef = await reference;
+        attempt = claimStoppedTurn(owner, predecessor, { chatId, controller, canonicalTurnRef });
+        if (attempt === undefined) return;
+        stoppedToolTurnRef.current = canonicalTurnRef;
+        unconfirmedStopTargetRef.current = { chatId, canonicalTurnRef };
+        // The server answers every authenticated Stop with 200. `cancelled: false` means no
+        // worker of this session is running that turn any more, which is the Stop's goal.
+        const outcome = await cancelDesktopChatTurn({ chatId, canonicalTurnRef });
+        if (ownsStoppedTurn(owner, attempt)) {
+          unconfirmedStopTargetRef.current = null;
+          setError(undefined);
+        }
+        // No running worker: the review may have been decided elsewhere, so show the saved state.
+        if (!outcome.cancelled)
+          settled = await readSettledStopTurn(
+            sessionStateRef.current.activeChat,
+            chatId,
+            canonicalTurnRef,
+          );
+      } catch (error_) {
+        failed = true;
+        attempt ??= claimStoppedTurn(owner, predecessor, { chatId, controller });
+        if (attempt !== undefined && ownsStoppedTurn(owner, attempt))
+          setError(t("chat.pendingCancellation.unconfirmed"));
+        reportClientDiagnostic("Chat pending turn cancellation failed.", {
+          kind: "other",
+          correlationId: correlationIdOf(error_),
+          errorKind: bffRequestErrorKind(error_),
+          errorEvidence: clientErrorEvidence(error_),
+        });
+      } finally {
+        if (attempt !== undefined) settleStoppedToolTurn(owner, attempt, failed);
+        if (settled !== undefined) presentSettledStop(owner, settled);
+      }
+    },
+    [claimStoppedTurn, settleStoppedToolTurn, ownsStoppedTurn, presentSettledStop, t],
+  );
+
   const cancelSend = useCallback(() => {
     if (!isInFlight(sendStatusRef.current)) return;
-    sendControllerRef.current?.abort();
+    const controller = sendControllerRef.current;
+    const target = pendingStopTarget({
+      awaitingDecision: sendStatusRef.current === "awaiting-decision",
+      live: sendCanonicalIdentityRef.current,
+      uncertain: unconfirmedStopTargetRef.current,
+      saved:
+        controller === null
+          ? restoredPendingToolTurn(sessionStateRef.current.messages, activeChatIdRef.current)
+          : undefined,
+      activeChatId: activeChatIdRef.current,
+    });
+    if (target !== undefined) {
+      launchChatWork(stopPendingToolTurn(target.chatId, target.reference, controller));
+      return;
+    }
+    // The transport aborts at once. A turn that carried the bounded lease may still have a review
+    // the browser has not seen yet, so the server is told as well, without waiting for it.
+    const leased = sendCanonicalIdentityRef.current;
+    controller?.abort();
     releaseCancelledSendController();
-  }, [releaseCancelledSendController]);
+    if (leased !== null) launchChatWork(noticeServerOfStop(leased.chatId, leased.clientTurnId));
+  }, [releaseCancelledSendController, stopPendingToolTurn]);
 
   // ADR-0154 D4 barge-in. Unlike cancelSend (the visible stop control, which cancels whatever the
   // user can see in flight) this is scoped by send owner exactly like openChat's abort: a typed
@@ -4810,8 +5465,73 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [setDraft, ownsRefusedDraft],
   );
 
+  const presentSendAdmissionRefusal = useCallback(
+    (
+      admission: Extract<SendMessageAdmission, { readonly kind: "rejected" }>,
+      options: SendMessageOptions | undefined,
+    ): void => {
+      if (selectionUnavailable && options?.canonicalVoiceTarget === undefined)
+        refuseHeldSelection();
+      if (admission.error !== undefined) setError(admission.error);
+    },
+    [selectionUnavailable, refuseHeldSelection],
+  );
+
+  // #4351: pressing Send on a model nobody checked is the first use that checks it. The check shows
+  // the model as "being checked", the message goes out when the model answers, and a refusal or a
+  // failure shows its reason instead; the draft stays untouched either way. True: the send may go on.
+  const passFirstUseCheck = useCallback(
+    async (
+      options: SendMessageOptions | undefined,
+      chatId: string,
+      selectedModel: SendAdmissionSnapshot["selectedModel"],
+      modelId: string,
+    ): Promise<boolean> => {
+      const controller = new AbortController();
+      firstUseCheckRef.current = controller;
+      const admitted: SendAdmissionSnapshot = {
+        chatId,
+        selectedModel,
+        draftRevision: draftRevisionRef.current,
+        attachmentKey: attachmentSetKey(pendingAttachmentsRef.current),
+      };
+      let outcome: ModelCheckOutcome;
+      try {
+        outcome = await checkModelBeforeSend(modelId, setState, setError, controller.signal);
+      } finally {
+        if (firstUseCheckRef.current === controller) firstUseCheckRef.current = null;
+        // The "being checked" notice belongs to this wait only: once it ends it must not stay.
+        setError((current) => (current === MODEL_CHECKING_ERROR ? undefined : current));
+      }
+      if (outcome !== "ready") return false;
+      // The message goes out only if the chat, the selected model, the staged attachments and
+      // (for a send that clears the composer) the draft are still what they were when it was
+      // admitted; otherwise nothing is sent and nothing is cleared, and the person sends again
+      // from where they now are.
+      return (
+        !controller.signal.aborted &&
+        sendAdmissionUnchanged(
+          admitted,
+          {
+            chatId: activeChatIdRef.current,
+            selectedModel: latestSelectedModelRef.current,
+            draftRevision: draftRevisionRef.current,
+            attachmentKey: attachmentSetKey(pendingAttachmentsRef.current),
+          },
+          clearsComposerDraft(options),
+        )
+      );
+    },
+    [],
+  );
+
   const sendMessage = useCallback(
     async (options?: SendMessageOptions): Promise<SendMessageOutcome> => {
+      // A Send while the first-use check of the model runs is told why, not silently dropped.
+      if (firstUseCheckRef.current !== null && options?.canonicalVoiceTarget === undefined) {
+        setError(MODEL_CHECKING_ERROR);
+        return { status: "not-sent" };
+      }
       const admission = admitCurrentSource(
         resolveSendMessageAdmission({
           options,
@@ -4825,12 +5545,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }),
       );
       if (admission.kind === "rejected") {
-        if (selectionUnavailable && options?.canonicalVoiceTarget === undefined)
-          refuseHeldSelection();
-        if (admission.error !== undefined) setError(admission.error);
+        presentSendAdmissionRefusal(admission, options);
         return { status: "not-sent" };
       }
       const { canonicalTarget, chat, project, content, modelId } = admission;
+      // #4351: pressing Send on a model nobody checked is the first use that checks it.
+      if (
+        canonicalTarget === undefined &&
+        modelNeedsFirstUseCheck(state.models, modelId) &&
+        !(await passFirstUseCheck(options, chat.id, state.selectedModel, modelId))
+      ) {
+        return { status: "not-sent" };
+      }
       if (skillSelectionBlocksSend(markdownSkill, chat.id, canonicalTarget)) {
         setError(SKILL_SELECTION_UNAVAILABLE_ERROR);
         return { status: "not-sent" };
@@ -4864,6 +5590,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // any) was either already settled or already aborted via cancelSend.
       const controller = new AbortController();
       sendControllerRef.current = controller;
+      sendCanonicalIdentityRef.current = null;
+      unconfirmedStopTargetRef.current = null;
+      pendingToolStopOwnerRef.current = {};
       sendControllerOwnerRef.current = {
         kind: canonicalTarget === undefined ? "composer" : "canonical-voice",
         conversationId: chat.id,
@@ -4940,7 +5669,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       draftState,
       markdownSkill,
       selectionUnavailable,
-      refuseHeldSelection,
+      presentSendAdmissionRefusal,
+      passFirstUseCheck,
       state.activeChat,
       state.selectedModel,
       state.models,
@@ -5146,7 +5876,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   ]);
 
   drainCanonicalVoiceQueueRef.current = (): void => {
-    void drainCanonicalVoiceQueue();
+    launchChatWork(drainCanonicalVoiceQueue());
   };
 
   useEffect(() => {
@@ -5302,7 +6032,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           ? previous
           : { ...previous, messages: [...previous.messages, optimistic] },
       );
-      if (!canonicalVoicePageOutboxSuspended()) void drainCanonicalVoiceQueue();
+      if (!canonicalVoicePageOutboxSuspended()) launchChatWork(drainCanonicalVoiceQueue());
       return promise;
     },
     [
@@ -5320,7 +6050,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     if (!canonicalVoicePageOutboxSuspended() || canonicalVoiceQueueRef.current.length === 0) return;
     setError(undefined);
     setCanonicalVoicePageOutboxSuspended(undefined);
-    void drainCanonicalVoiceQueue();
+    launchChatWork(drainCanonicalVoiceQueue());
   }, [canonicalVoiceQueueRef, drainCanonicalVoiceQueue]);
 
   const discardPendingCanonicalVoiceTurn = useCallback((): void => {
@@ -5335,7 +6065,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     setError(undefined);
     // A head-of-line wedge in another chat leaves the outbox suspended and this drain returns
     // immediately; otherwise the queue resumes with the remaining turns.
-    void drainCanonicalVoiceQueue();
+    launchChatWork(drainCanonicalVoiceQueue());
   }, [drainCanonicalVoiceQueue, interruptCanonicalVoiceDelivery]);
 
   const canonicalVoiceCaptureMustPause = useCallback((): boolean => {
@@ -5370,6 +6100,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setLatestMemory(undefined);
       const controller = new AbortController();
       sendControllerRef.current = controller;
+      sendCanonicalIdentityRef.current = null;
+      unconfirmedStopTargetRef.current = null;
+      pendingToolStopOwnerRef.current = {};
       sendControllerOwnerRef.current = { kind: "composer", conversationId: chat.id };
       latestSendSignalRef.current = controller.signal;
       try {
@@ -5467,7 +6200,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           },
     [state.catalogCapabilities, state.catalogSource, state.catalogCorrelationId],
   );
-  const noEligibleModels = !loading && state.models.length === 0;
+  const noEligibleModels = noEligibleSessionModels(state, loading);
   const draftRevision = draftRevisionRef.current;
 
   return useMemo<UseChatSessionResult>(
@@ -5480,6 +6213,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       configuredModelsAvailable: state.configuredModelsAvailable,
       configuredModelIds: state.configuredModelIds,
       modelCatalogRead,
+      modelCatalogStatus: state.modelCatalogStatus,
       activeProject: state.activeProject,
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
@@ -5541,6 +6275,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.configuredModelsAvailable,
       state.configuredModelIds,
       modelCatalogRead,
+      state.modelCatalogStatus,
       state.activeProject,
       state.activeChat,
       state.selectedModel,

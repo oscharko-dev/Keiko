@@ -1,3 +1,5 @@
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { CODING_JIRA_SERVER_NAME } from "./codingJiraPodBinding.js";
 import {
   bindNativeMcpHumanTurn,
   type NativeMcpMutationJournal,
@@ -9,6 +11,10 @@ import {
   type NativeWebSearchRequest,
 } from "./nativeWebSearch.js";
 import { createHash, timingSafeEqual } from "node:crypto";
+import {
+  inheritWindowsParentDacl,
+  protectWindowsOwnerPrivateFile,
+} from "@oscharko-dev/keiko-security/windows-owner-private";
 import {
   openCodeAgentModelBinding,
   type OpenCodeAgentModelBinding,
@@ -28,9 +34,20 @@ import {
   writeFileSync,
 } from "node:fs";
 import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+  nativeBuildCacheReadRoots,
+  nativeBuildWrapperReadRoots,
+} from "@oscharko-dev/keiko-sandbox";
+import {
+  nativeBuildCacheAdmitted,
+  prepareNativeBuildSettings,
+  type NativeBuildSettingsResult,
+} from "./nativeBuildSettings.js";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  CodingWorkbenchNativeJiraWriteReview,
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
   CodingWorkbenchActionClass,
@@ -47,9 +64,10 @@ import {
   contentFreeErrorClass,
   describeError,
   emitServerDiagnostic,
+  serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
-import { isValidCorrelationId } from "../correlation.js";
+import { actionCorrelationId } from "./codingToolFacadeFailure.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createCodingRuntimeManager,
@@ -63,6 +81,7 @@ import {
   type OpenCodeLifecyclePrepareResult,
 } from "./codingRuntimeManager.js";
 import type { CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
+import { holdRunScheduler, startScheduledWakeTurn } from "./opencodeScheduledWakeTurn.js";
 import type { CodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import {
   CODING_TOOL_MAX_BODY_BYTES,
@@ -93,6 +112,7 @@ import type {
 } from "./codingToolFacadePorts.js";
 import {
   codingToolEditPresentation,
+  codingToolGitPresentation,
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
@@ -105,12 +125,12 @@ import {
 import {
   isCodingSafeActivityPresentationPath,
   type CodingSafeActivityToolPresentation,
-  type CodingSafeActivityVerificationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
   classifyOpenCodeV2PromptFailure,
   createOpenCodeV2HttpClient,
+  OpenCodeV2HttpStatusError,
   parseOpenCodeV2ChildEndpoint,
   type OpenCodeV2HttpClient,
   type OpenCodeV2MessageWindow,
@@ -155,6 +175,7 @@ import {
   commandDisplayText,
   createOpenCodeCommandPresentation,
   createOpenCodeCommandsRunPort,
+  readOnceLocationActivated,
   recordCommandPostRefused,
   type OpenCodeCommandPresentation,
   type OpenCodeCommandsRunPort,
@@ -190,6 +211,7 @@ import {
 import { openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
   decideOpenCodeNativePolicy,
+  nativeAuthorityRefusalMessage,
   openCodeNativeEditFiles,
   openCodeNativeVerificationKind,
   parseOpenCodeNativePolicyRequest,
@@ -285,12 +307,15 @@ import { type OpenCodeToolProfile, openCodeVisibleToolNames } from "./opencodeTo
 import { composedRuntimePurpose, refuseReviewBridgeTransport } from "./reviewRuntimeGuard.js";
 import { reviewConfigurationIsExact, reviewPluginSetIsExact } from "../review/runtime/selfCheck.js";
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
-import { processServerLogSink } from "../process-log-sink.js";
+import { javaToolOptions } from "./javaToolOptions.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink, processServerLogSinkFor } from "../process-log-sink.js";
 import {
   openCodeCatalogAliasFor,
   openCodeCatalogSettlementBudgetMs,
 } from "../tool-catalog/catalogToolFacadeBridge.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -390,6 +415,31 @@ const NATIVE_FORMATTER_BOUND_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["coding-runtime-native-policy"],
   proofIds: ["coding-runtime.native-formatter.bound.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const NATIVE_MCP_LOCAL_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.native-mcp-local.refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeMcpLocalRefused",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["no-env-scrubbing-launcher"],
+    },
+    refusedServerCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-native-policy"],
+  proofIds: ["coding-runtime.native-mcp-local.refused.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -503,6 +553,12 @@ export type McpOAuthIssuerPort = (
 
 export interface OpenCodeRuntimeCompositionInput {
   readonly mcpMutations?: NativeMcpMutationJournal | undefined;
+  /**
+   * The user's real home that a native run's sanitized build settings (`~/.m2/settings.xml`,
+   * `~/.npmrc`, `~/.gradle/gradle.properties`) are read from (#4271, `nativeBuildSettings.ts`).
+   * Absent uses the process's home; tests inject a fixture directory.
+   */
+  readonly buildSettingsHome?: string | undefined;
   /** Captured server-only observation profile. Absent retains the direct native history contract. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
   /**
@@ -557,6 +613,27 @@ export interface OpenCodeRuntimeCompositionInput {
    */
   readonly nativeWebSearch?: NativeWebSearch | undefined;
   /**
+   * Native profile only, a run with a bound Jira Pod (#4354 L4): the dry run of a managed Jira
+   * write the human is about to be asked about. A returned string is the model-facing refusal and
+   * no approval card is raised; `undefined` admits the card. The executor gate stays authoritative.
+   */
+  readonly jiraWritePreflight?:
+    | ((call: {
+        readonly tool: string;
+        readonly arguments: CatalogJsonObject;
+      }) => Promise<string | undefined>)
+    | undefined;
+  /**
+   * Native profile only, a run with a bound Jira Pod (#4359): the plain facts of a managed Jira
+   * write the human is asked about, so the card reads like Chat's approval of the same write.
+   */
+  readonly jiraWriteReview?:
+    | ((call: {
+        readonly tool: string;
+        readonly arguments: CatalogJsonObject;
+      }) => CodingWorkbenchNativeJiraWriteReview)
+    | undefined;
+  /**
    * Native profile only: the user's global and the project's OpenCode configuration documents for
    * one run, in merge order (#3900 AC4, `opencodeConfigDocuments.ts`), read before its launch
    * profile is built. Absent reads none.
@@ -603,8 +680,21 @@ export interface OpenCodeRuntimeCompositionInput {
    * is the grant of their read tools, in every mode. Absent, the run grants nothing.
    */
   readonly mcpGrantedServers?: ReadonlySet<string> | undefined;
+  /** The platform deciding whether a local MCP server has an env-scrubbing launcher; default this process's. */
+  readonly mcpPlatform?: NodeJS.Platform | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
+  /**
+   * How a run's state directory is kept private to this account (#4068): the directory itself, and
+   * a resumed run's database copy, which then inherits from it. Absent, the Windows default applies
+   * and every other host keeps its 0700 and 0600 mode bits.
+   */
+  readonly runStateAccess?:
+    | {
+        readonly protectRoot: (runRoot: string) => void;
+        readonly adoptCopy: (path: string) => void;
+      }
+    | undefined;
   readonly contextGeometry: OpenCodeContextGeometry;
   readonly capabilities: {
     readonly modelGatewayCapability: string;
@@ -703,6 +793,7 @@ export interface OpenCodeRuntimeCompositionInput {
     | {
         readonly service: CodingSessionContinuity;
         readonly workspaceId: string;
+        readonly freshReasoningHistory?: boolean | undefined;
         /** The workspace the run's own one was provisioned from (#3903 AC4); see the context. */
         readonly forkSource?: SessionContinuationContext["forkSource"];
       }
@@ -826,6 +917,8 @@ export interface OpenCodeRunPort {
    * abandoned, `"interrupted"` the runtime ended it at a human's refusal of a question.
    */
   readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<OpenCodeTurnOutcome>;
+  /** Whether the run's last failed turn wait ran out of its envelope duration (W9, #4068). */
+  readonly turnWaitExpired?: (runId: string) => boolean;
   readonly listQuestions: (runId: string) => Promise<readonly OpenCodeQuestionRequest[]>;
   readonly answerQuestion: (
     runId: string,
@@ -988,6 +1081,10 @@ function compositionToolBridgeDeps(
       ? {}
       : { externalReadRoots: input.externalReadRoots }),
     ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
+    ...(input.jiraWritePreflight === undefined
+      ? {}
+      : { jiraWritePreflight: input.jiraWritePreflight }),
+    ...(input.jiraWriteReview === undefined ? {} : { jiraWriteReview: input.jiraWriteReview }),
   };
 }
 
@@ -1174,7 +1271,7 @@ async function finishNativeTurn(
     await profile.mcpRecovery(run.runId);
     return false;
   }
-  if (outcome === false && !signal.aborted) recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+  if (outcome === false && !signal.aborted) recordFailedTurnEnd(diagnostics, run);
   if (profile.snapshots) recordOpenCodeTurnImage(run, activityLog);
   return outcome;
 }
@@ -1218,6 +1315,7 @@ function createRunPort(
       if (run === undefined) return false;
       return finishNativeTurn(run, signal, profile, diagnostics, activityLog);
     },
+    turnWaitExpired: (runId) => readyRun(runId)?.runtimeAdapter.turnWaitExpired?.() === true,
     replyPermission: createReplyPermission(readyRun, diagnostics, approvals),
     ...createQuestionRunPort(readyRun, diagnostics, activityLog),
   };
@@ -1297,12 +1395,26 @@ function createSubmitTask(
     }
     if (!(await synchronizeTurnBaseline(run))) return false;
     await refreshedInstructions(run, sinks.refreshInstructions);
-    if (!run.runtimeAdapter.armTurn()) return false;
-    // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
-    // continuation of the human's request keeps that request's images: its undo reaches back to it.
-    if (origin === undefined) beginOpenCodeTurnImages(run);
-    return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
+    return armAndPostTurn(run, text, initialContext, inputs, sinks, origin);
   };
+}
+
+async function armAndPostTurn(
+  run: ReadyRun,
+  text: string,
+  initialContext: string | undefined,
+  inputs: AdmittedPromptInputs | undefined,
+  sinks: Parameters<typeof postTurnPrompt>[4],
+  origin: CodingRuntimeTurnOrigin | undefined,
+): Promise<boolean> {
+  if (!run.runtimeAdapter.armTurn()) return false;
+  // A scheduled wake posts nothing: the runtime fires the due schedule into the armed turn.
+  if (origin === "schedule-wake")
+    return startScheduledWakeTurn(run, { activityLog: sinks.activityLog }) && run.ready;
+  // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
+  // continuation of the human's request keeps that request's images: its undo reaches back to it.
+  if (origin === undefined) beginOpenCodeTurnImages(run);
+  return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
 }
 
 /**
@@ -1374,12 +1486,15 @@ function releaseUnsentTurnInputs(
 // What separates a turn's hidden context from the operator's own text in the sent prompt.
 const PROMPT_CONTEXT_SEPARATOR = "\n\n";
 
+/** A turn Keiko posts a prompt for; a scheduled wake posts none. */
+type PostedTurnOrigin = Exclude<CodingRuntimeTurnOrigin, "schedule-wake">;
+
 /** The sent turn's own id, origin and inputs; a hidden context moves the mentions by its length. */
 function turnPromptInputs(
   id: string,
   inputs: AdmittedPromptInputs | undefined,
   initialContext: string | undefined,
-  origin: CodingRuntimeTurnOrigin | undefined,
+  origin: PostedTurnOrigin | undefined,
 ): OpenCodeV2PromptInputs {
   const offset =
     initialContext === undefined ? 0 : initialContext.length + PROMPT_CONTEXT_SEPARATOR.length;
@@ -1400,7 +1515,7 @@ async function postTurnPrompt(
     readonly activityLog: ServerLogSink | undefined;
     readonly mcpMutations?: NativeMcpMutationJournal | undefined;
   },
-  origin?: CodingRuntimeTurnOrigin,
+  origin?: PostedTurnOrigin,
 ): Promise<boolean> {
   const { diagnostics, activityLog, mcpMutations } = sinks;
   // A turn that is not a command must never take a command's presentation.
@@ -1492,7 +1607,7 @@ async function selectPrimaryAgent(
   }
   const current = run.agent ?? DEFAULT_CODING_WORKBENCH_AGENT;
   if (requested === undefined || requested === current) return true;
-  if (!(await customAgentListed(run, requested, diagnostics))) return false;
+  if (!(await customAgentListed(run, requested, diagnostics, activityLog))) return false;
   try {
     await run.client.switchAgent(run.sessionId, requested);
   } catch (error) {
@@ -1513,10 +1628,13 @@ async function customAgentListed(
   run: ReadyRun,
   requested: CodingWorkbenchAgent,
   diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
 ): Promise<boolean> {
   if (isCodingWorkbenchBuiltInAgent(requested)) return true;
   try {
-    const listed = await run.client.primaryAgents(run.workspaceRoot);
+    const listed = await readOnceLocationActivated({ activityLog }, run.runId, () =>
+      run.client.primaryAgents(run.workspaceRoot),
+    );
     if (listed.some((agent) => agent.name === requested)) return true;
     recordOpenCodeTurnFailure(diagnostics, run, "agent-unsupported");
     return false;
@@ -1604,7 +1722,33 @@ function recordOpenCodeTurnFailure(
   });
 }
 
-function openCodeTurnFailureCode(runRoot: string, stage: OpenCodeTurnFailureStage): string {
+/**
+ * A turn wait that ran out of its own deadline is the run's envelope duration ending (the wait
+ * counts the same `maxRuntimeMs` from a later start), not a runtime failure: it stays on the
+ * timeline as a routine observation, and the run's settlement records the bound with its
+ * `timeout` error kind (W9, #4068). Any other failed turn keeps the failure channel.
+ */
+function recordFailedTurnEnd(diagnostics: ServerDiagnosticSink | undefined, run: ReadyRun): void {
+  if (run.runtimeAdapter.turnWaitExpired?.() !== true) {
+    recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+    return;
+  }
+  emitServerDiagnostic(diagnostics, {
+    correlationId: run.runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: "opencode.turn",
+    errorClass: "OpenCodeTurnWaitExpired",
+    message: "runtime-turn-expired",
+    diagnosticOutcome: "routine",
+    code: openCodeTurnFailureCode(run.runRoot, "terminal-expired"),
+  });
+}
+
+function openCodeTurnFailureCode(
+  runRoot: string,
+  stage: OpenCodeTurnFailureStage | "terminal-expired",
+): string {
   const database = projectOpenCodeRuntimeDatabase(join(runRoot, "state", "opencode.db"));
   return `stage=${stage}:${database}`;
 }
@@ -1880,6 +2024,7 @@ function retainOnDispose(
       runRoot: run.runRoot,
       workspaceRoot: run.workspaceRoot,
       sessionId: run.sessionId,
+      mode: run.mode,
     },
     settlement?.terminalStatus,
   );
@@ -1924,6 +2069,26 @@ function recordCompositionDisposalFailure(
   });
 }
 
+/** The run never starts; without this line its cause would leave no trace on the Activity Log. */
+function recordPrepareFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  const detail = describeError(error);
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: "opencode-runtime-composition.prepare",
+    errorClass: contentFreeErrorClass(error),
+    message: "runtime-start-failed",
+    code: "config-materialization-failed",
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  });
+}
+
 async function disposeFailedPrepare(
   bridge: ToolBridgeController,
   runRoot: string,
@@ -1955,7 +2120,7 @@ async function materializePrepare(
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
 ): Promise<OpenCodeLifecyclePrepareResult> {
-  createPrivateState(runRoot);
+  createPrivateState(runRoot, runStateAccessOf(input).protectRoot);
   if (input.ripgrepVerified === false) refuseRipgrepDownload(runRoot);
   const continuation = seedRun(input, request, runRoot);
   await bridge.start();
@@ -1981,7 +2146,7 @@ async function materializePrepare(
   const result = preparedLaunch(
     input,
     bridge,
-    preparedEnvironment(profile.env, request.env, runRoot),
+    preparedRunEnvironment(input, request, profile.env, runRoot),
   );
   persistPreparedRun(runs, request, runRoot, password, configDigest, {
     continuation,
@@ -2016,6 +2181,47 @@ function launchPlugins(
   return plugins;
 }
 
+/** The launch environment: the profile's, the run's sanitized build settings and the inherited names. */
+function preparedRunEnvironment(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  profileEnv: Readonly<Record<string, string>>,
+  runRoot: string,
+): Readonly<Record<string, string>> {
+  const settings = admitNativeBuildSettings(input, request, runRoot);
+  return preparedEnvironment(
+    { ...profileEnv, ...settings.env },
+    request.env,
+    runRoot,
+    settings.javaProperties,
+  );
+}
+
+/**
+ * The sanitized build settings of a native run (#4271): the environment that binds them, empty for
+ * the mapped profiles. The Maven cache and the Maven wrapper's distributions are bound read-only
+ * below Full access, matching the kernel read roots the backend opens for them.
+ */
+function admitNativeBuildSettings(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): Pick<NativeBuildSettingsResult, "env" | "javaProperties"> {
+  if (input.toolProfile !== "native") return { env: {}, javaProperties: {} };
+  const realHome = input.buildSettingsHome ?? homedir();
+  const mode = request.env.KEIKO_CODING_MODE;
+  const offline = nativeBuildCacheAdmitted(mode);
+  return prepareNativeBuildSettings({
+    runId: request.runId,
+    mode,
+    realHome,
+    stateRoot: runRoot,
+    readOnlyMavenRepository: offline ? nativeBuildCacheReadRoots(realHome)[0] : undefined,
+    readOnlyMavenWrapperDists: offline ? nativeBuildWrapperReadRoots(realHome)[0] : undefined,
+    activityLog: input.activityLog,
+  });
+}
+
 /** The run's launch profile, with the MCP servers the operator's registry admits for it. */
 function runLaunchProfile(
   input: OpenCodeRuntimeCompositionInput,
@@ -2031,6 +2237,7 @@ function runLaunchProfile(
   readonly mcp: OpenCodeNativeMcpAdmission | undefined;
 } {
   const mcp = nativeMcpAdmission(input, request, runRoot, mcpChecks);
+  recordNativeMcpLocalRefused(input.activityLog, request, mcp);
   const profile = buildOpenCodeLaunchProfile({
     executable: request.executablePath,
     stateRoot: runRoot,
@@ -2070,6 +2277,7 @@ function nativeMcpAdmission(
     relays: checks.relays,
     managed: input.mcpRelay?.managed !== undefined,
     grantedServers: input.mcpGrantedServers,
+    platform: input.mcpPlatform,
   });
 }
 
@@ -2158,13 +2366,12 @@ function preparedEnvironment(
   profile: Readonly<Record<string, string>>,
   inherited: Readonly<Record<string, string>>,
   runRoot: string,
+  javaProperties: Readonly<Record<string, string>> = {},
 ): Readonly<Record<string, string>> {
-  const temporary = join(runRoot, "tmp");
-  // These are JVM environment-option quotes, not a shell command; retain literal path characters.
-  const javaTemporary = "'-Djava.io.tmpdir=" + temporary.replaceAll("'", "'\"'\"'") + "'";
+  const properties = { "java.io.tmpdir": join(runRoot, "tmp"), ...javaProperties };
   return {
     ...profile,
-    JAVA_TOOL_OPTIONS: [inherited.JAVA_TOOL_OPTIONS, javaTemporary].filter(Boolean).join(" "),
+    JAVA_TOOL_OPTIONS: javaToolOptions(inherited.JAVA_TOOL_OPTIONS, properties),
   };
 }
 
@@ -2277,8 +2484,12 @@ function continuationContext(
   return {
     service: continuity.service,
     workspaceId: continuity.workspaceId,
+    freshReasoningHistory: continuity.freshReasoningHistory,
     runtimeVersion: input.portable.verification.summary.upstreamVersion,
     maxInputTokens: input.contextGeometry.maxInputTokens,
+    ...(input.contextGeometry.continuationRouteDigest === undefined
+      ? {}
+      : { continuationRouteDigest: input.contextGeometry.continuationRouteDigest }),
     activityLog: input.activityLog,
     ...(continuity.forkSource === undefined ? {} : { forkSource: continuity.forkSource }),
   };
@@ -2292,11 +2503,13 @@ function seedRun(
 ): RunContinuation | undefined {
   const context = continuationContext(input);
   if (context === undefined) return undefined;
-  return seedContinuation(context, {
+  const continuation = seedContinuation(context, {
     runId: request.runId,
     runRoot,
     workspaceRoot: request.env.KEIKO_CODING_WORKSPACE_ROOT ?? "",
   });
+  if (continuation !== undefined) runStateAccessOf(input).adoptCopy(runtimeDatabasePath(runRoot));
+  return continuation;
 }
 
 /** A native run's built-in formatter decision, once per prepared run (parity row C07). */
@@ -2374,6 +2587,26 @@ function recordNativeFormatterBound(
         ...(entries === undefined
           ? {}
           : { configuredEntryCount: entries.admitted, refusedEntryCount: entries.refused }),
+      },
+    ),
+  );
+}
+
+/** A native run left local MCP servers out for want of an env-scrubbing launcher: a count only. */
+function recordNativeMcpLocalRefused(
+  activityLog: ServerLogSink | undefined,
+  request: OpenCodeLifecyclePrepareRequest,
+  mcp: OpenCodeNativeMcpAdmission | undefined,
+): void {
+  if (mcp === undefined || mcp.refusedLocalServerCount === 0) return;
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      NATIVE_MCP_LOCAL_REFUSED_OPERATION,
+      { correlationId: request.runId },
+      {
+        runId: request.runId,
+        reason: "no-env-scrubbing-launcher",
+        refusedServerCount: mcp.refusedLocalServerCount,
       },
     ),
   );
@@ -2468,7 +2701,10 @@ async function prepare(
   const runRoot = join(input.stateBaseRoot, request.runId);
   try {
     return await materializePrepare(input, bridge, runs, request, runRoot);
-  } catch {
+  } catch (error) {
+    // A start the caller abandoned is no failure; the start's own outcome records it.
+    if (request.signal?.aborted !== true)
+      recordPrepareFailure(input.diagnostics, request.runId, error);
     await disposeFailedPrepare(
       bridge,
       runRoot,
@@ -2788,7 +3024,9 @@ function readinessV2Ports(
           // Every event reaches the live text overlay as it arrives, before coalescing can fold it
           // into a hint: the deltas are the content, and only the reads are coalesced.
           history.observeLiveEvent(sessionId, event);
-          return v2SyncHint(event, sessionId, input.onQuestionObserved);
+          return v2SyncHint(event, sessionId, input.onQuestionObserved, (identity, other) => {
+            observeChildQuestion(input, run, identity, other, combined);
+          });
         },
         (merged) => {
           mergedEvents += merged;
@@ -3007,18 +3245,21 @@ function pullSyncHint(pump: SyncHintPump): void {
   void pump.source.next().then(onNext).then(undefined, settle);
 }
 
+/**
+ * The hint one live event gives. A form of the run's own session signals a question at once; a form
+ * of any other session goes to `onOtherSessionQuestion`, which signals only once the run's session
+ * tree proves that session a child of the run (a subagent's question, #4271).
+ */
 export function v2SyncHint(
   event: Readonly<Record<string, unknown>>,
   fixedSessionId: string,
   onQuestionObserved: ((identity: string) => void) | undefined,
+  onOtherSessionQuestion?: (identity: string, sessionID: string) => void,
 ): OpenCodeSyncHint {
   const data = v2Record(event.data);
-  if (
-    event.type === "form.created" &&
-    typeof event.id === "string" &&
-    v2Record(data?.form)?.sessionID === fixedSessionId
-  )
-    onQuestionObserved?.(event.id);
+  const asked = v2QuestionFrame(event, data);
+  if (asked?.sessionID === fixedSessionId) onQuestionObserved?.(asked.identity);
+  else if (asked !== undefined) onOtherSessionQuestion?.(asked.identity, asked.sessionID);
   const state = v2ExecutionState(event.type);
   return {
     requiresHistoryIdentity: false,
@@ -3026,6 +3267,19 @@ export function v2SyncHint(
       ? { control: { sessionId: fixedSessionId, state } }
       : {}),
   };
+}
+
+/** A live `form.created` frame's identity and asking session, or nothing for any other frame. */
+function v2QuestionFrame(
+  event: Readonly<Record<string, unknown>>,
+  data: Readonly<Record<string, unknown>> | undefined,
+): { readonly identity: string; readonly sessionID: string } | undefined {
+  const sessionID = v2Record(data?.form)?.sessionID;
+  if (event.type !== "form.created" || typeof event.id !== "string" || event.id === "")
+    return undefined;
+  return typeof sessionID === "string" && sessionID !== ""
+    ? { identity: event.id, sessionID }
+    : undefined;
 }
 
 const KNOWN_V2_HISTORY_FAILURES = new Set([
@@ -3101,6 +3355,22 @@ function recordOpenCodeV2HistoryFailure(
  * replaced by a fresh one inside a database that still holds the other.
  */
 async function bindRunSession(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  client: OpenCodeV2HttpClient,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  const sessionId = await bindRunSessionOnce(input, run, client, signal);
+  // Before the first turn can create a schedule: the runtime never fires one inside this run unless
+  // it is the wake run that releases the lease (`opencodeScheduleLease.ts`). A hold that cannot be
+  // written fails the readiness, and so does a native run whose database is missing: its runtime
+  // loads the schedule tool, so an unheld database would let it fire schedules unguarded.
+  if (sessionId !== "")
+    holdRunScheduler(input.activityLog, run, "hold", { required: input.toolProfile === "native" });
+  return sessionId;
+}
+
+async function bindRunSessionOnce(
   input: OpenCodeRuntimeCompositionInput,
   run: PreparedRun,
   client: OpenCodeV2HttpClient,
@@ -3254,7 +3524,7 @@ async function challengeV2Gateway(
     return false;
   }
   const signal = request.signal ?? AbortSignal.timeout(request.timeoutMs);
-  if (run.continuation === undefined) {
+  if (run.continuation === undefined && input.sessionContinuity?.freshReasoningHistory !== true) {
     return runGatewayChallenge(input, run, client, sessionId, signal);
   }
   return challengeInScratchSession(input, run, client, signal);
@@ -3318,8 +3588,8 @@ async function runGatewayChallenge(
         accepted || signal.aborted ? "live-verification-failed" : "gateway-refused",
       );
     return verified;
-  } catch {
-    recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed");
+  } catch (error) {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed", error);
     return false;
   } finally {
     input.gatewayReadiness.clear(run.runId, verified);
@@ -3344,10 +3614,13 @@ function gatewayChallengePrecondition(
   return input.capabilities.modelGatewayCapability.length < 32 ? "capability-invalid" : undefined;
 }
 
+// #4068: a challenge that threw keeps its frames, cause classes and the runtime's HTTP status, so a
+// refused prompt reads apart from a broken route; the error's own text is never recorded.
 function recordGatewayChallengeFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   reason: GatewayChallengePreconditionFailure,
+  error?: unknown,
 ): void {
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
@@ -3357,6 +3630,10 @@ function recordGatewayChallengeFailure(
     errorClass: "OpenCodeGatewayChallengeFailure",
     message: "runtime-handshake-failed",
     code: `stage=gateway-challenge:reason=${reason}`,
+    ...(error === undefined
+      ? {}
+      : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+    ...(error instanceof OpenCodeV2HttpStatusError ? { httpStatus: error.status } : {}),
   });
 }
 
@@ -3439,9 +3716,10 @@ function distinctCapabilities(
   );
 }
 
-function createPrivateState(runRoot: string): void {
+function createPrivateState(runRoot: string, protectRunState: (path: string) => void): void {
   mkdirSync(runRoot, { recursive: true, mode: 0o700 });
   chmodSync(runRoot, 0o700);
+  protectRunState(runRoot);
   for (const name of ["config", "state", "home", "tmp"]) {
     const path = join(runRoot, name);
     mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -3457,6 +3735,44 @@ function createPrivateState(runRoot: string): void {
     mkdirSync(path, { recursive: true, mode: 0o700 });
     chmodSync(path, 0o700);
   }
+}
+
+type RunStateAccess = NonNullable<OpenCodeRuntimeCompositionInput["runStateAccess"]>;
+
+/**
+ * Windows reports synthesized mode bits, so `chmod` keeps nobody out: a run's database, history and
+ * configuration would inherit whatever the state directory's parents grant (#4068). The run root is
+ * made owner-private with inheritable entries before anything is written below it, so every file
+ * the runtime or Keiko writes there is private too. The confined tree's own grant is added to this
+ * directory at launch (ADR-0043 D18) and is inherited the same way.
+ *
+ * A resumed run's database arrives as the retained store's owner-only copy, whose protected DACL
+ * would keep that grant out, so the runtime could not open it and every resumed run on Windows ended
+ * before its first turn. The copy is handed to the run root's inherited DACL instead: exactly as
+ * private as the run root, and reachable by the tree.
+ */
+const WINDOWS_RUN_STATE_ACCESS: RunStateAccess = Object.freeze({
+  protectRoot: (runRoot: string): void => {
+    if (process.platform === "win32") {
+      protectWindowsOwnerPrivateFile(runRoot, {
+        inheritToChildren: true,
+        securityLogSink: processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
+      });
+    }
+  },
+  // Without a copy there is nothing to hand over: the runtime creates its database below the root.
+  adoptCopy: (path: string): void => {
+    if (process.platform === "win32" && existsSync(path))
+      inheritWindowsParentDacl(path, {
+        securityLogSink: processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
+      });
+  },
+});
+
+function runStateAccessOf(
+  input: Pick<OpenCodeRuntimeCompositionInput, "runStateAccess">,
+): RunStateAccess {
+  return input.runStateAccess ?? WINDOWS_RUN_STATE_ACCESS;
 }
 
 // OpenCode looks for `rg` on PATH, then in `<data home>/opencode/bin`, and only then downloads one
@@ -3599,6 +3915,8 @@ interface ToolBridgeExecutionDeps {
    * transports; any other purpose leaves the bridge's dispatch unchanged.
    */
   readonly runtimePurpose: CodingRuntimePurpose | undefined;
+  readonly jiraWritePreflight?: OpenCodeRuntimeCompositionInput["jiraWritePreflight"];
+  readonly jiraWriteReview?: OpenCodeRuntimeCompositionInput["jiraWriteReview"];
 }
 
 /** Where a delivered tool result's model-facing rendering is recorded (#3873). */
@@ -3993,21 +4311,23 @@ function handleDirectToolRequest(
   if (preflight.outcome === "rejected") {
     return Promise.resolve({ status: preflight.status, body: preflight.body });
   }
-  if (reviewBridgeRefusesTransport(deps, runs, input.body)) {
+  // The body is parsed once; every transport recognizer below reads that one value.
+  const body = parsedToolBody(input.body, deps.diagnostics);
+  if (reviewBridgeRefusesTransport(deps, runs, body)) {
     return Promise.resolve({ status: 403, body: "", rejection: "approval-unavailable" });
   }
-  const read = nativeReadTransportValue(input.body);
+  const read = nativeReadTransportValue(body);
   if (read !== undefined)
     return handleNativeReadTransport(read, input.signal, deps, runs, nativeRead);
-  const permission = parseV2PermissionRequest(input.body);
+  const permission = parseV2PermissionRequest(body);
   if (permission !== undefined) {
     return handleV2PermissionRequest(permission, input.signal, deps, approvals, runs);
   }
-  const nativePolicy = parseNativePolicyBody(input.body);
+  const nativePolicy = parseNativePolicyBody(body);
   if (nativePolicy !== undefined) {
     return handleNativePolicyRequest(nativePolicy, input.signal, deps, approvals, runs);
   }
-  const webSearch = nativeWebSearchTransportValue(input.body);
+  const webSearch = nativeWebSearchTransportValue(body);
   if (webSearch !== undefined) {
     const run = runs.get(webSearch.runId);
     return answerNativeWebSearch(
@@ -4022,9 +4342,38 @@ function handleDirectToolRequest(
   );
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
   const detachExternalAbort = bindExternalAbort(input.signal, admission);
-  return executeToolRequest(deps, input.headers, input.body, admission).finally(
+  return executeToolRequest(deps, input.headers, input.body, body !== undefined, admission).finally(
     detachExternalAbort,
   );
+}
+
+/** A request body that parsed as JSON, wrapped so a JSON `null` or `false` stays distinguishable. */
+interface ParsedToolBody {
+  readonly value: unknown;
+}
+
+// A body that is not JSON is answered 400 downstream; the record keeps that it happened, under the
+// marker correlation (no action could be read from it), never the body.
+function parsedToolBody(
+  body: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): ParsedToolBody | undefined {
+  try {
+    return { value: JSON.parse(body) as unknown };
+  } catch (error) {
+    emitServerDiagnostic(
+      diagnostics,
+      serverDiagnosticFromError({
+        correlationId: actionCorrelationId(undefined),
+        operation: "coding-runtime.tool-bridge",
+        source: "opencode-runtime-composition.request-body",
+        error,
+        summary: "tool-bridge-request-body-invalid",
+        redact: () => "tool-bridge-request-body-invalid",
+      }),
+    );
+    return undefined;
+  }
 }
 
 /**
@@ -4037,10 +4386,10 @@ function handleDirectToolRequest(
 function reviewBridgeRefusesTransport(
   deps: ToolBridgeExecutionDeps,
   runs: ReadonlyMap<string, PreparedRun>,
-  body: string,
+  body: ParsedToolBody | undefined,
 ): boolean {
-  if (deps.runtimePurpose !== "review" || !validJson(body)) return false;
-  const record = v2Record(JSON.parse(body));
+  if (deps.runtimePurpose !== "review" || body === undefined) return false;
+  const record = v2Record(body.value);
   const runId =
     typeof record?.runId === "string" && runs.has(record.runId) ? record.runId : undefined;
   return refuseReviewBridgeTransport(deps.runtimePurpose, record?.action, {
@@ -4049,11 +4398,11 @@ function reviewBridgeRefusesTransport(
   });
 }
 
-function parseNativePolicyBody(body: string): OpenCodeNativePolicyRequest | undefined {
-  if (!validJson(body)) return undefined;
-  const parsed: unknown = JSON.parse(body);
-  return v2Record(parsed)?.action === OPENCODE_NATIVE_POLICY_ACTION
-    ? parseOpenCodeNativePolicyRequest(parsed)
+function parseNativePolicyBody(
+  body: ParsedToolBody | undefined,
+): OpenCodeNativePolicyRequest | undefined {
+  return v2Record(body?.value)?.action === OPENCODE_NATIVE_POLICY_ACTION
+    ? parseOpenCodeNativePolicyRequest(body?.value)
     : undefined;
 }
 
@@ -4078,20 +4427,25 @@ async function handleNativePolicyRequest(
   if (run?.ready !== true || sessionRelation === undefined) {
     return { status: 403, body: "", rejection: "approval-unavailable" };
   }
-  const decided = decideOpenCodeNativePolicy({
+  const policyInput = {
     mode: run.mode,
     workspaceRoot: run.workspaceRoot,
     planRoot: openCodePlanDirectory(run.runRoot),
     request,
-    nowMs: Date.now(),
     ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
     ...(deps.externalReadRoots === undefined ? {} : { externalRoots: deps.externalReadRoots }),
     webSearch: deps.nativeWebSearch?.admitted === true,
-  });
+    codeModeNestedEffectsDecided:
+      openCodeRuntimeVersionPin(run.verification.summary.upstreamVersion)?.decidesNestedEffects ===
+      true,
+  };
+  const decided = decideOpenCodeNativePolicy({ ...policyInput, nowMs: Date.now() });
   const decision = admittedSessionMove(run, request, decided);
   const settled = await settleNativePolicyOutcome(run, decision, request, signal, deps, {
     approvals,
     sessionRelation,
+    // A human may take minutes to decide; the files may change meanwhile (a link swapped in).
+    recheck: () => decideOpenCodeNativePolicy({ ...policyInput, nowMs: Date.now() }),
   });
   return answerNativePolicy(run, request, decision, { ...settled, sessionRelation }, deps);
 }
@@ -4132,7 +4486,7 @@ async function answerNativePolicy(
     ...(worktree === undefined ? {} : { worktree: worktree.disposition }),
   });
   return worktree === undefined
-    ? nativePolicyResult(outcome, decision)
+    ? nativePolicyResult(settled, decision)
     : nativePolicyResponse("deny", worktree.message);
 }
 
@@ -4202,21 +4556,20 @@ function noteNativeCallRefused(
 }
 
 function nativePolicyResult(
-  outcome: OpenCodeNativePolicyOutcome,
+  settled: NativePolicySettlement,
   decision: OpenCodeNativePolicyDecision,
 ): OpenCodeToolBridgeResponse {
+  const { outcome } = settled;
   if (outcome === "allowed" || outcome === "approved") return nativePolicyResponse("allow");
   if (outcome === "authority-refused" || outcome === "cancelled")
-    return nativePolicyResponse("deny", NATIVE_AUTHORITY_REFUSED_MESSAGE);
+    return nativePolicyResponse("deny", nativeAuthorityRefusalMessage(settled.authority?.reason));
+  if (settled.refusal !== undefined) return nativePolicyResponse("deny", settled.refusal);
   if (decision.effect === "deny") return nativePolicyResponse("deny", decision.message);
   return nativePolicyResponse(
     "deny",
     humanDecisionFeedback(outcome === "denied" ? "denied" : "expired"),
   );
 }
-
-const NATIVE_AUTHORITY_REFUSED_MESSAGE =
-  "Keiko refused this action: the run's authority is no longer valid or its budget is exhausted.";
 
 /**
  * The policy's answer, revalidated against live authority before an effect is released (#3897
@@ -4271,19 +4624,17 @@ async function settleNativePolicyOutcome(
   context: {
     readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
     readonly sessionRelation: OpenCodeNativeSessionRelation;
+    readonly recheck: () => OpenCodeNativePolicyDecision;
   },
 ): Promise<NativePolicySettlement> {
-  const { approvals, sessionRelation } = context;
+  const { sessionRelation } = context;
   if (signal?.aborted === true) return { outcome: "cancelled" };
   if (decision.effect === "deny") return { outcome: decision.reason };
   if (!hasRequiredMcpIdentity(decision.classification, request))
     return { outcome: "authority-refused", authority: { reason: "unavailable" } };
-  const outcome: OpenCodeNativePolicyOutcome =
-    decision.effect === "ask"
-      ? await nativePolicyHumanDecision(run, decision, signal, deps, approvals)
-      : "allowed";
-  noteDeniedVerification(deps, request, outcome);
-  if (outcome !== "allowed" && outcome !== "approved") return { outcome };
+  const decided = await humanDecidedOutcome(run, decision, request, signal, deps, context);
+  if (decided.outcome !== "allowed" && decided.outcome !== "approved") return decided;
+  const { outcome } = decided;
   const admission = nativeEffectAdmission(
     deps,
     decision.classification.actionClass,
@@ -4298,6 +4649,116 @@ async function settleNativePolicyOutcome(
   noteAdmittedEditEvidence(run, request, decision.classification, { deps, sessionRelation });
   noteAdmittedVerification(run, deps, request);
   return { outcome, authority: { charge: admission.charge } };
+}
+
+/**
+ * A managed Jira write the human would be asked about is dry-run first (#4354 L4), so a write that
+ * breaks the customer's issue templates ends as the model's refusal and no card is raised for it.
+ * Only a write of the Jira Pod bound to this run is checked; every other action, a Pod read and a
+ * run without a preflight take the ordinary path, and the executor gate refuses after approval.
+ */
+async function jiraTemplateRefusal(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  deps: ToolBridgeExecutionDeps,
+): Promise<string | undefined> {
+  const mutation = run.mcp?.actions.get(request.permission)?.mutation;
+  if (
+    deps.jiraWritePreflight === undefined ||
+    mutation?.serverName !== CODING_JIRA_SERVER_NAME ||
+    request.mcpInput === undefined
+  )
+    return undefined;
+  const args = jsonArguments(request.mcpInput);
+  return args === undefined
+    ? undefined
+    : deps.jiraWritePreflight({ tool: mutation.toolName, arguments: args });
+}
+
+/**
+ * The ask of a managed Jira write names the write in plain facts: the call the model sent and the
+ * names this run's reads gave its ids, which the card renders as Chat's approval does (#4359). Any
+ * other ask, and a run without a review, keep the ask as it is.
+ */
+export function withJiraWriteReview(
+  decision: Extract<OpenCodeNativePolicyDecision, { readonly effect: "ask" }>,
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  deps: ToolBridgeExecutionDeps,
+): Extract<OpenCodeNativePolicyDecision, { readonly effect: "ask" }> {
+  const mutation = run.mcp?.actions.get(request.permission)?.mutation;
+  const args = request.mcpInput === undefined ? undefined : jsonArguments(request.mcpInput);
+  const nativeAction = decision.event.nativeAction;
+  if (
+    deps.jiraWriteReview === undefined ||
+    mutation?.serverName !== CODING_JIRA_SERVER_NAME ||
+    args === undefined ||
+    nativeAction === undefined
+  )
+    return decision;
+  const jira = deps.jiraWriteReview({ tool: mutation.toolName, arguments: args });
+  return {
+    ...decision,
+    event: { ...decision.event, nativeAction: { ...nativeAction, jira } },
+  };
+}
+
+/**
+ * The runtime's decoded MCP arguments as plain JSON. They were parsed from the request body, so
+ * the copy cannot fail; a value that is not an object is left unchecked.
+ */
+function jsonArguments(value: Readonly<Record<string, unknown>>): CatalogJsonObject | undefined {
+  const copy: unknown = structuredClone(value);
+  return typeof copy === "object" && copy !== null && !Array.isArray(copy)
+    ? (copy as CatalogJsonObject)
+    : undefined;
+}
+
+/**
+ * An allowed action as it is, an asked one after the human's decision and the re-check of its
+ * paths: a refusal found by the re-check, or the decision itself.
+ */
+async function humanDecidedOutcome(
+  run: PreparedRun,
+  decision: OpenCodeNativePolicyDecision,
+  request: OpenCodeNativePolicyRequest,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  context: {
+    readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
+    readonly recheck: () => OpenCodeNativePolicyDecision;
+  },
+): Promise<NativePolicySettlement> {
+  const templateRefusal =
+    decision.effect === "ask" ? await jiraTemplateRefusal(run, request, deps) : undefined;
+  if (templateRefusal !== undefined)
+    return { outcome: "template-refused", refusal: templateRefusal };
+  const outcome: OpenCodeNativePolicyOutcome =
+    decision.effect === "ask"
+      ? await nativePolicyHumanDecision(
+          run,
+          withJiraWriteReview(decision, run, request, deps),
+          signal,
+          deps,
+          context.approvals,
+        )
+      : "allowed";
+  noteDeniedVerification(deps, request, outcome);
+  if (outcome !== "allowed" && outcome !== "approved") return { outcome };
+  return staleAfterHumanDecision(decision, context.recheck) ?? { outcome };
+}
+
+/**
+ * The human decided on the facts at ask time; the files may have changed while they read the card
+ * (a symbolic link swapped in). The policy runs once more and a hard denial then wins.
+ */
+function staleAfterHumanDecision(
+  decision: OpenCodeNativePolicyDecision,
+  recheck: () => OpenCodeNativePolicyDecision,
+): NativePolicySettlement | undefined {
+  if (decision.effect !== "ask") return undefined;
+  const again = recheck();
+  return again.effect === "deny" ? { outcome: again.reason, refusal: again.message } : undefined;
 }
 
 /** A human refused a project check: the run's verification is blocked, as for the governed one. */
@@ -4507,6 +4968,8 @@ function recordNativeStepChanged(
 interface NativePolicySettlement {
   readonly outcome: OpenCodeNativePolicyOutcome;
   readonly authority?: OpenCodeNativeAuthorityEvidence;
+  /** The model-facing reason of a refusal found after the human's decision (a re-check). */
+  readonly refusal?: string;
 }
 
 function nativeEffectAdmission(
@@ -4571,6 +5034,39 @@ async function nativeSessionRelation(
     });
     return undefined;
   }
+}
+
+/**
+ * A subagent's question is the run's question too (#4271): the read already lists the forms of the
+ * run's proven children (`opencodeNativeQuestions.ts`), so the live signal that prompts that read
+ * follows the same proof. The run's session tree decides; an unproven, foreign or unreadable session
+ * signals nothing, and a failed proof is recorded by `nativeSessionRelation`. The signal carries no
+ * content, only the frame's identity.
+ */
+function observeChildQuestion(
+  input: Pick<OpenCodeRuntimeCompositionInput, "onQuestionObserved" | "diagnostics">,
+  run: PreparedRun,
+  identity: string,
+  sessionID: string,
+  signal: AbortSignal,
+): void {
+  const observe = input.onQuestionObserved;
+  if (observe === undefined || signal.aborted) return;
+  void nativeSessionRelation(run, sessionID, signal, input.diagnostics).then(
+    (relation) => {
+      if (relation === "child" && !signal.aborted) observe(identity);
+    },
+    (error: unknown) => {
+      emitServerDiagnostic(input.diagnostics, {
+        correlationId: run.runId,
+        timestamp: new Date().toISOString(),
+        operation: "coding-runtime.tool-bridge",
+        source: "opencode-runtime-composition.child-question",
+        errorClass: contentFreeErrorClass(error),
+        message: "child-question-signal-failed",
+      });
+    },
+  );
 }
 
 /** The run's session tree, sharing the run's admission cache of proven children. */
@@ -4645,10 +5141,10 @@ function nativePolicyResponse(
   };
 }
 
-function parseV2PermissionRequest(body: string): Readonly<Record<string, unknown>> | undefined {
-  if (!validJson(body)) return undefined;
-  const parsed: unknown = JSON.parse(body);
-  const value = v2Record(parsed);
+function parseV2PermissionRequest(
+  body: ParsedToolBody | undefined,
+): Readonly<Record<string, unknown>> | undefined {
+  const value = v2Record(body?.value);
   return value?.action === "permission-request" ? value : undefined;
 }
 
@@ -4783,32 +5279,40 @@ function toolBridgeDrainWait(signal: AbortSignal, clear: () => void): ToolBridge
 function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmissionGate {
   let pendingDrain: ToolBridgeDrainWait | undefined;
   const requests = new Set<AdmittedToolRequest>();
+  // Requests admitted under a deadline past the default may park on a human decision (verification
+  // and the proposal tools); they hold a lane of their own with the same bound.
+  const operatorRequests = new Set<AdmittedToolRequest>();
   const release = (controller: AbortController): void => {
+    for (const request of operatorRequests) {
+      if (request.controller === controller) operatorRequests.delete(request);
+    }
     for (const request of requests) {
       if (request.controller === controller) requests.delete(request);
     }
-    if (requests.size === 0) pendingDrain?.finish(true);
+    if (requests.size === 0 && operatorRequests.size === 0) pendingDrain?.finish(true);
   };
   return {
     limits,
     admit: (requestDeadlineMs): AdmittedToolRequest | undefined => {
-      if (requests.size >= limits.maxInFlight) return undefined;
+      const lane = requestDeadlineMs > limits.requestDeadlineMs ? operatorRequests : requests;
+      if (lane.size >= limits.maxInFlight) return undefined;
       const request = admittedToolRequest(new AbortController(), requestDeadlineMs, release);
-      requests.add(request);
+      lane.add(request);
       return request;
     },
     abortNativeRead: (identity): void => {
-      for (const request of requests) {
+      for (const request of [...requests, ...operatorRequests]) {
         if (sameNativeReadIdentity(request.nativeReadIdentity, identity))
           request.controller.abort(new Error(DISCONNECT_ABORT));
       }
     },
     abortAll: (): void => {
-      for (const request of requests) request.controller.abort(new Error(CLOSE_ABORT));
+      for (const request of [...requests, ...operatorRequests])
+        request.controller.abort(new Error(CLOSE_ABORT));
     },
-    drained: (): boolean => requests.size === 0,
+    drained: (): boolean => requests.size === 0 && operatorRequests.size === 0,
     drain: (signal): Promise<boolean> => {
-      if (requests.size === 0) return Promise.resolve(true);
+      if (requests.size === 0 && operatorRequests.size === 0) return Promise.resolve(true);
       if (signal.aborted) return Promise.resolve(false);
       pendingDrain ??= toolBridgeDrainWait(signal, (): void => {
         pendingDrain = undefined;
@@ -4912,10 +5416,11 @@ async function executeToolRequest(
   deps: ToolBridgeExecutionDeps,
   headers: Headers,
   body: string,
+  bodyIsJson: boolean,
   admission: AdmittedToolRequest,
 ): Promise<{ readonly status: number; readonly body: string }> {
   const { facade, capability, settleTool, diagnostics } = deps;
-  if (!validJson(body)) {
+  if (!bodyIsJson) {
     admission.release();
     return { status: 400, body: "" };
   }
@@ -5019,8 +5524,7 @@ function responseForToolResult(
       deps.diagnostics,
       actionId,
       result,
-      presentation.bridgeDurationMs,
-      presentation.verificationOutcome,
+      presentation,
     );
   }
   return { status: 200, body: responseBody };
@@ -5037,16 +5541,16 @@ function recordRenderedToolResult(
   diagnostics: ServerDiagnosticSink | undefined,
   actionId: string | undefined,
   result: CodingToolResult,
-  bridgeDurationMs: number | undefined,
-  verificationOutcome: CodingSafeActivityVerificationOutcome | undefined,
+  presentation: CodingSafeActivityToolPresentation,
 ): void {
   try {
     recordGovernedToolModelContent(
       rendered.sink,
       rendered.correlationId,
       result,
-      bridgeDurationMs,
-      verificationOutcome,
+      presentation.bridgeDurationMs,
+      presentation.verificationOutcome,
+      presentation.gitOutcome,
     );
   } catch (error) {
     emitServerDiagnostic(diagnostics, {
@@ -5097,18 +5601,8 @@ function startFacadeExecution(
 // valid as-is (the canonical shape admits no `:`), so it is mapped onto `tool-<callId>` — a fixed,
 // documented prefix swap an analyzer joins back to the evidence's `actionId`. Prose, whitespace,
 // overlength and too-short values degrade to the marker.
-const TOOL_ACTION_ID_PREFIX = "tool:";
-const TOOL_ACTION_CORRELATION_PREFIX = "tool-";
-const UNPARSED_ACTION_CORRELATION_ID = "tool-bridge-unparsed-action";
-
-function actionCorrelationId(actionId: string | undefined): string {
-  if (actionId === undefined) return UNPARSED_ACTION_CORRELATION_ID;
-  const candidate = actionId.startsWith(TOOL_ACTION_ID_PREFIX)
-    ? `${TOOL_ACTION_CORRELATION_PREFIX}${actionId.slice(TOOL_ACTION_ID_PREFIX.length)}`
-    : actionId;
-  return isValidCorrelationId(candidate) ? candidate : UNPARSED_ACTION_CORRELATION_ID;
-}
-
+// The derivation itself lives in codingToolFacadeFailure.ts, shared with the facade's own failure
+// record.
 function emitFacadeFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   actionId: string | undefined,
@@ -5182,12 +5676,17 @@ function bridgeServicePresentation(
   });
 }
 
+function isGitStepRequest(request: CodingToolActionRequest): boolean {
+  return request.action === "git" || request.action === "delivery";
+}
+
 function governedToolPresentation(
   request: CodingToolActionRequest,
   result: CodingToolResult,
 ): CodingSafeActivityToolPresentation {
   if (request.action === "edit") return codingToolEditPresentation(result);
   if (request.action === "verification") return codingToolVerificationPresentation(result);
+  if (isGitStepRequest(request)) return codingToolGitPresentation(result);
   if (result.status !== "completed" || !("read" in result)) return {};
   if (request.action === "discover") {
     return "returnedPathCount" in result.read && typeof result.read.returnedPathCount === "number"
@@ -5217,15 +5716,6 @@ function safeToolState(result: CodingToolResult): OpenCodeToolSettlementState {
   if (result.status === "denied") return "denied";
   if (result.status === "cancelled") return "cancelled";
   return "failed";
-}
-
-function validJson(body: string): boolean {
-  try {
-    JSON.parse(body);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -5389,14 +5879,14 @@ type NativeReadTransportPacket = Readonly<{
       }>
   );
 
-function nativeWebSearchTransportValue(body: string): NativeWebSearchRequest | undefined {
-  return validJson(body) ? parseNativeWebSearchRequest(JSON.parse(body)) : undefined;
+function nativeWebSearchTransportValue(
+  body: ParsedToolBody | undefined,
+): NativeWebSearchRequest | undefined {
+  return body === undefined ? undefined : parseNativeWebSearchRequest(body.value);
 }
 
-function nativeReadTransportValue(body: string): unknown {
-  if (!validJson(body)) return undefined;
-  const value: unknown = JSON.parse(body);
-  return v2Record(value)?.action === "native-read-invocation" ? value : undefined;
+function nativeReadTransportValue(body: ParsedToolBody | undefined): unknown {
+  return v2Record(body?.value)?.action === "native-read-invocation" ? body?.value : undefined;
 }
 
 /** Capture transport data only; the existing parent owns authority, replay and physical work. */

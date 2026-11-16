@@ -24,6 +24,39 @@ afterEach(() => {
 });
 
 describe("DiagnosticReadinessNotice", () => {
+  it.each([
+    {
+      locale: "en",
+      reason: "vault-migration-failed",
+      message: "Memory is unavailable until its local vault is repaired.",
+    },
+    {
+      locale: "de",
+      reason: "vault-migration-failed",
+      message: "Memory ist bis zur Reparatur des lokalen Tresors nicht verfügbar.",
+    },
+    {
+      locale: "en",
+      reason: "vault-unreadable",
+      message: "The saved Memory vault could not be opened.",
+    },
+    {
+      locale: "de",
+      reason: "vault-unreadable",
+      message: "Der gespeicherte Memory-Tresor konnte nicht geöffnet werden.",
+    },
+  ] as const)(
+    "explains withheld Memory for $locale and $reason while Chat remains available",
+    async ({ locale, reason, message }) => {
+      window.localStorage.setItem("keiko.locale", locale);
+      renderNotice({
+        state: "loaded",
+        health: { status: "ok", version: "1.2.3", memory: { readiness: "withheld", reason } },
+      });
+      expect(await screen.findByText((text) => text.startsWith(message))).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
+    },
+  );
   it.each([undefined, "observed-readiness-request-123"])(
     "does not invent failure facts or select an unrelated incident for readiness %s",
     async (correlationId) => {

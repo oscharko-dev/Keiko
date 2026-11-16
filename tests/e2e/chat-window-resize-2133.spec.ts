@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -90,9 +91,9 @@ async function seedLongTranscript(request: APIRequestContext, fixture: ChatFixtu
 
 async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<void> {
   await page.addInitScript(
-    ({ chatId, title }) => {
+    ({ argument: { chatId, title }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "e2e-chat-resize-window",
@@ -107,9 +108,9 @@ async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<v
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { chatId: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, { chatId: chat.id, title: chat.title }),
   );
 }
 
@@ -177,4 +178,107 @@ test("chat resize keeps the outer window body clipped and the transcript scrollb
   expect(metrics.bodyScrollRange).toBeLessThanOrEqual(1);
   expect(metrics.chatScrollRange).toBeGreaterThan(120);
   expect(metrics.clampedChatScrollTop).toBeLessThanOrEqual(metrics.chatScrollRange + 1);
+});
+
+test("browser resize keeps the complete shell fitted with Settings open (#4184)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.locator("main.workspace")).toBeVisible();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const settings = page.locator('.window[data-window-id="settings"]');
+  await expect(settings).toBeVisible();
+  for (const [width, height] of [
+    [1280, 720],
+    [2288, 1246],
+    [900, 600],
+    [1600, 900],
+    [720, 1000],
+    [2288, 1246],
+    [1000, 700],
+    [2288, 1246],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const app = document.querySelector(".app")?.getBoundingClientRect();
+          const header = document.querySelector(".header")?.getBoundingClientRect();
+          const footer = document.querySelector(".footer")?.getBoundingClientRect();
+          return {
+            appWidth: app?.width,
+            appHeight: app?.height,
+            headerWidth: header?.width,
+            footerBottom: footer?.bottom,
+            scrollWidth: document.documentElement.scrollWidth,
+            scrollHeight: document.documentElement.scrollHeight,
+          };
+        }),
+      )
+      .toEqual({
+        appWidth: width,
+        appHeight: height,
+        headerWidth: width,
+        footerBottom: height,
+        scrollWidth: width,
+        scrollHeight: height,
+      });
+    await expect(settings).toBeVisible();
+  }
+});
+
+test("trusted Ctrl-wheel zooms active window content without camera or browser zoom (#3657)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const settings = page.locator('.window[data-window-id="settings"]');
+  const content = settings.locator(".win-content-zoom");
+  await expect(content).toBeVisible();
+  const before = await page.evaluate(() => ({
+    scene: document.querySelector<HTMLElement>(".ws-scene")?.style.cssText,
+    dpr: window.devicePixelRatio,
+    width: window.innerWidth,
+    scale: window.visualViewport?.scale,
+  }));
+  const zoomBefore = await content.evaluate(
+    (element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).a,
+  );
+  await settings.locator(".win-body").hover();
+  const receipt = page.evaluate(
+    () =>
+      new Promise<{ trusted: boolean; prevented: boolean; control: boolean }>((resolve) => {
+        window.addEventListener(
+          "wheel",
+          (event) => {
+            resolve({
+              trusted: event.isTrusted,
+              prevented: event.defaultPrevented,
+              control: event.ctrlKey,
+            });
+          },
+          { once: true },
+        );
+      }),
+  );
+  await page.keyboard.down("Control");
+  try {
+    for (let index = 0; index < 3; index++) await page.mouse.wheel(0, -40);
+  } finally {
+    await page.keyboard.up("Control");
+  }
+  await expect
+    .poll(() =>
+      content.evaluate((element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).a),
+    )
+    .toBeGreaterThan(zoomBefore);
+  expect(await receipt).toEqual({ trusted: true, prevented: true, control: true });
+  expect(
+    await page.evaluate(() => ({
+      scene: document.querySelector<HTMLElement>(".ws-scene")?.style.cssText,
+      dpr: window.devicePixelRatio,
+      width: window.innerWidth,
+      scale: window.visualViewport?.scale,
+    })),
+  ).toEqual(before);
 });

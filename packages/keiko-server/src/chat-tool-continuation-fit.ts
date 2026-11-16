@@ -1,8 +1,16 @@
-import type { ChatMessage as GatewayMessage } from "@oscharko-dev/keiko-contracts";
+import type {
+  ChatMessage as GatewayMessage,
+  ContextProfile,
+  ToolDefinition,
+} from "@oscharko-dev/keiko-contracts";
+import type { GatewayCallRequest } from "@oscharko-dev/keiko-model-gateway";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { knowledgeCoverageReceipt } from "./chat-tool-knowledge-coverage.js";
 import {
   chatToolDraftReceipts,
+  chatToolStagedDraftReceipt,
   chatToolIssueKey,
   chatToolRequirementReceipts,
 } from "./chat-tool-receipts.js";
@@ -25,6 +33,8 @@ function receiptsOf(exchange: ChatToolExchange): object {
   const items = chatToolDraftReceipts(exchange);
   const requirements = chatToolRequirementReceipts(data);
   return {
+    ...knowledgeCoverageReceipt(exchange),
+    ...chatToolStagedDraftReceipt(exchange),
     ...(issueKey === undefined ? {} : { issueKey }),
     ...(items === undefined ? {} : { items }),
     ...(requirements === undefined ? {} : { requirements }),
@@ -81,4 +91,34 @@ export function fitToolContinuation(
     elidedCount++;
   }
   return { messages, elidedCount };
+}
+
+/** Preserve the complete turn when its maximum answer reserve alone would overflow the window.
+ * The gateway still owns exact/provider admission; this only lowers the caller's maximum output.
+ */
+export function fitToolRoundOutput(
+  request: GatewayCallRequest,
+  profile: ContextProfile,
+  tools: readonly ToolDefinition[],
+  limits: {
+    readonly maxOutputTokens: number;
+    readonly reasoningHistoryField?: "reasoning_content" | "reasoning" | undefined;
+  },
+): GatewayCallRequest {
+  const requested = request.maxOutputTokens ?? profile.reservedOutputTokens;
+  if (
+    !Number.isSafeInteger(requested) ||
+    requested < 256 ||
+    (limits.maxOutputTokens > 0 && requested > limits.maxOutputTokens)
+  )
+    return request;
+  const promptTokens = countGatewayPromptTokens({ ...request, tools }, profile.tokenAccounting, {
+    contextWindow: profile.maxInputTokens,
+    reasoningHistoryField: limits.reasoningHistoryField,
+  });
+  if (promptTokens > (profile.inputTokenLimit ?? Number.POSITIVE_INFINITY)) return request;
+  const available = Math.floor(profile.maxInputTokens - profile.safetyMarginTokens - promptTokens);
+  return available >= 256 && available < requested
+    ? { ...request, maxOutputTokens: available }
+    : request;
 }

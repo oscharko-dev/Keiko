@@ -36,7 +36,6 @@ const GATED_JOBS = Object.freeze([
   "coverage-sonar",
   "build-scan-sbom-smoke",
   "cross-platform-smoke",
-  "node-26-compatibility",
   "portable-secure-read",
   "firefox-smoke",
   "ui",
@@ -55,7 +54,7 @@ const AGGREGATOR_DEFAULTS = Object.freeze({
   UI_RESULT: "success",
   BUILD_SCAN_SBOM_SMOKE_RESULT: "success",
   CROSS_PLATFORM_RESULT: "success",
-  NODE_26_COMPATIBILITY_RESULT: "success",
+  FIREFOX_RESULT: "success",
   PORTABLE_SECURE_READ_RESULT: "success",
   SBOM_PROVENANCE_RESULT: "skipped",
   DOCUMENTATION_ONLY: "false",
@@ -79,7 +78,7 @@ const REUSING = Object.freeze({
   UI_RESULT: "skipped",
   BUILD_SCAN_SBOM_SMOKE_RESULT: "skipped",
   CROSS_PLATFORM_RESULT: "skipped",
-  NODE_26_COMPATIBILITY_RESULT: "skipped",
+  FIREFOX_RESULT: "skipped",
   PORTABLE_SECURE_READ_RESULT: "skipped",
 });
 
@@ -154,7 +153,6 @@ const EXPECTED_CONDITIONS = Object.freeze({
   "coverage-sonar": COND_OR_DEV_PUSH(),
   "build-scan-sbom-smoke": COND(EDITOR_CLAUSE),
   "cross-platform-smoke": COND(DOC_ONLY_CLAUSE),
-  "node-26-compatibility": COND(DOC_ONLY_CLAUSE),
   "portable-secure-read": COND(DOC_ONLY_CLAUSE),
   "firefox-smoke": COND(EDITOR_CLAUSE),
   ui: COND(),
@@ -327,107 +325,102 @@ describe("complete Firefox smoke shards", () => {
     expect(jobs.ui.steps.some((step) => step.name === smoke.name)).toBe(false);
   });
 
-  it("keeps ui required and checks both shard results before candidate work", () => {
-    expect(jobs.ui.needs).toEqual(["verified-tree", "firefox-smoke"]);
+  it("runs ui independently while required ci joins both browser results", () => {
+    expect(jobs.ui.needs).toEqual(["verified-tree"]);
     expect(pullRequestJobNames(jobs.ui.name)?.admitted).toBe("ui");
+    expect(jobs.ci.needs).toEqual(expect.arrayContaining(["ui", "firefox-smoke"]));
+    expect(jobs.ci.steps[0].env.FIREFOX_RESULT).toBe("${{ needs.firefox-smoke.result }}");
     expect(jobs.ui.steps[0]).toMatchObject({
-      name: "Verify required Firefox smoke shards",
-      env: {
-        VERIFIED_TREE_RESULT: "${{ needs.verified-tree.result }}",
-        FIREFOX_RESULT: "${{ needs.firefox-smoke.result }}",
-        FIREFOX_REQUIRED:
-          "${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}",
-      },
+      name: "Require verified-tree resolution",
+      env: { VERIFIED_TREE_RESULT: "${{ needs.verified-tree.result }}" },
     });
     expect(jobs.ui.steps[0].if).toBeUndefined();
     expect(jobs.ui.steps[0]["continue-on-error"]).toBeUndefined();
   });
 
-  it.each(["success", "failure", "cancelled", "skipped", ""])(
-    "executes the real ui guard for Firefox result %j",
+  it.each(["success", "failure", "cancelled", "skipped", "", "unknown"])(
+    "executes the required ci verdict for Firefox result %j",
     (result) => {
+      expect(runAggregator({ FIREFOX_RESULT: result })).toBe(result === "success" ? 0 : 1);
+      expect(runAggregator({ ...REUSING, FIREFOX_RESULT: result })).toBe(
+        result === "success" || result === "skipped" ? 0 : 1,
+      );
+      expect(runAggregator({ EDITOR_FAST_PR: "true", FIREFOX_RESULT: result })).toBe(
+        result === "success" || result === "skipped" ? 0 : 1,
+      );
       const guard = jobs.ui.steps[0].run;
-      const run = (treeResult, required = "true") =>
-        spawnSync("/bin/sh", ["-eu", "-c", guard], {
-          env: {
-            VERIFIED_TREE_RESULT: treeResult,
-            FIREFOX_RESULT: result,
-            FIREFOX_REQUIRED: required,
-          },
-          encoding: "utf8",
-        });
-      expect(run("success").status).toBe(result === "success" ? 0 : 1);
-      for (const treeResult of ["failure", "cancelled", "skipped", ""]) {
-        expect(run(treeResult).status).toBe(1);
-        expect(run(treeResult, "false").status).toBe(1);
-      }
-      expect(run("success", "false").status).toBe(0);
+      const verified = spawnSync("/bin/sh", ["-eu", "-c", guard], {
+        env: { VERIFIED_TREE_RESULT: result },
+        encoding: "utf8",
+      });
+      expect(verified.status).toBe(result === "success" ? 0 : 1);
     },
   );
 });
 
-describe("complete Node 26 qualification shards", () => {
-  it("retains both mandatory shards, limits and every qualification step", () => {
-    const job = jobs["node-26-compatibility"];
-    expect(job.strategy).toEqual({ "fail-fast": false, matrix: { shard: [1, 2] } });
+describe("complete test coverage on the sole Node 26 baseline", () => {
+  it("uses the four required coverage jobs for both ordinary and editor fast-path PRs", () => {
+    expect(jobs["node-26-compatibility"]).toBeUndefined();
+    expect(jobs["runtime-qualification"]).toBeUndefined();
+    const job = jobs["coverage-packages"];
+    expect(job.strategy).toEqual({ "fail-fast": false, matrix: { shard: [1, 2, 3, 4] } });
     expect(job["timeout-minutes"]).toBe(45);
     expect(job["continue-on-error"]).toBeUndefined();
-    const runs = job.steps.filter((step) => typeof step.run === "string").map((step) => step.run);
-    expect(runs).toEqual([
-      "node scripts/check-ci-merge-candidate.mjs",
-      "node scripts/check-runtime-toolchain.mjs --exact",
-      "npm ci --ignore-scripts",
-      "npm run provision:usearch",
-      "npm run typecheck",
-      "npm test -- --shard=${{ matrix.shard }}/2",
-      "npm run prepare:bin",
-      "npm run build:ui",
-      expect.stringContaining("npm run provision:smoke"),
-      "npm run smoke:install:optional",
-    ]);
-    expect(
-      job.steps.find((step) => step.run?.includes("npm run provision:smoke"))["timeout-minutes"],
-    ).toBe(10);
+    const coverage = job.steps.find((step) => step.name === "Measure package coverage shard");
+    const plain = job.steps.find(
+      (step) => step.name === "Run complete test shard for editor fast-path PRs",
+    );
+    expect(coverage.run).toBe(
+      "npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/4 --reporter=github-actions",
+    );
+    expect(coverage.if).toBe(
+      "${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}",
+    );
+    expect(plain.run).toBe("npm test -- --shard=${{ matrix.shard }}/4");
+    expect(plain.if).toBe(
+      "${{ github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor' }}",
+    );
+    for (const step of [coverage, plain]) expect(step["continue-on-error"]).toBeUndefined();
     expect(
       job.steps.find((step) => step.uses === "./.github/actions/setup-sandbox-isolation"),
     ).toBeDefined();
-    for (const step of job.steps) {
-      expect(step["continue-on-error"]).toBeUndefined();
-      if (step.name !== "Verify pull-request merge candidate consistency") {
-        expect(step.if).toBeUndefined();
-      }
-    }
-    const testScript = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).scripts
-      .test;
-    expect(testScript).toMatch(/&& vitest run$/u);
-    expect(gatedDisplayNames("node-26-compatibility")).toEqual([
-      "Node 26 compatibility (shard 1/2)",
-      "Node 26 compatibility (shard 2/2)",
+    expect(job.steps.find((step) => step.run === "npm run provision:usearch")).toBeDefined();
+    expect(jobs["coverage-sonar"].needs).toContain("coverage-packages");
+    expect(jobs.ci.needs).toContain("coverage-sonar");
+    expect(gatedDisplayNames("coverage-packages")).toEqual([
+      "Coverage shard (packages 1/4)",
+      "Coverage shard (packages 2/4)",
+      "Coverage shard (packages 3/4)",
+      "Coverage shard (packages 4/4)",
     ]);
   });
 
-  it("partitions the actual configured root inventory exactly once", () => {
+  it("partitions the identical actual root and coverage inventories exactly once", () => {
     const code = `
       import { createVitest, parseCLI } from "vitest/node";
-      const ctx = await createVitest("test", { watch: false, run: true });
-      try {
-        const specs = await ctx.globTestSpecifications();
-        const Sequencer = ctx.config.sequence.sequencer;
-        const shards = [];
-        for (const index of ${JSON.stringify(jobs["node-26-compatibility"].strategy.matrix.shard)}) {
-          const cli = parseCLI("vitest run --shard=" + index + "/2");
-          if (cli.options.shard !== index + "/2") throw new Error("Shard forwarding failed");
-          ctx.config.shard = { index, count: 2 };
-          shards.push((await new Sequencer(ctx).shard(Array.from(specs))).map(s => s.moduleId));
-        }
-        process.stdout.write(JSON.stringify({ full: specs.map(s => s.moduleId), shards }));
-      } finally { await ctx.close(); }
+      const inventories = [];
+      for (const config of ["vitest.config.ts", "vitest.coverage.packages.config.ts"]) {
+        const ctx = await createVitest("test", { watch: false, run: true, config });
+        try {
+          const specs = await ctx.globTestSpecifications();
+          const Sequencer = ctx.config.sequence.sequencer;
+          const shards = [];
+          for (const index of ${JSON.stringify(jobs["coverage-packages"].strategy.matrix.shard)}) {
+            const cli = parseCLI("vitest run --shard=" + index + "/4");
+            if (cli.options.shard !== index + "/4") throw new Error("Shard forwarding failed");
+            ctx.config.shard = { index, count: 4 };
+            shards.push((await new Sequencer(ctx).shard(Array.from(specs))).map(s => s.moduleId));
+          }
+          inventories.push({ full: specs.map(s => s.moduleId), shards });
+        } finally { await ctx.close(); }
+      }
+      process.stdout.write(JSON.stringify(inventories));
     `;
-    const proof = JSON.parse(
+    const inventories = JSON.parse(
       execFileSync(process.execPath, ["--input-type=module", "-e", code], {
         cwd: repoRoot,
         encoding: "utf8",
-        // Every spec path is listed three times (full inventory plus both shards), so the output
+        // Both configs report each path twice (full inventory plus its assigned shard), so the output
         // grows with the checkout path: a deep worktree path exceeds the 1 MiB default.
         maxBuffer: 64 * 1024 * 1024,
         timeout: 10_000,
@@ -435,21 +428,25 @@ describe("complete Node 26 qualification shards", () => {
         stdio: ["ignore", "pipe", "pipe"],
       }),
     );
-    const selected = proof.shards.flat();
-    expect(proof.full.length).toBeGreaterThan(0);
-    expect(proof.shards.every((shard) => shard.length > 0)).toBe(true);
-    expect(new Set(selected).size).toBe(selected.length);
-    expect(selected.toSorted()).toEqual(proof.full.toSorted());
+    expect(inventories).toHaveLength(2);
+    expect(inventories[0].full.toSorted()).toEqual(inventories[1].full.toSorted());
+    for (const proof of inventories) {
+      const selected = proof.shards.flat();
+      expect(proof.full.length).toBeGreaterThan(0);
+      expect(proof.shards.every((shard) => shard.length > 0)).toBe(true);
+      expect(new Set(selected).size).toBe(selected.length);
+      expect(selected.toSorted()).toEqual(proof.full.toSorted());
+    }
   });
 });
 
 describe("the aggregator still fails closed", () => {
   it.each(["failure", "cancelled", "skipped", "", "unknown"])(
-    "rejects unsuccessful Node 26 qualification result %s for a code change",
+    "rejects unsuccessful required coverage/test result %s for a code change",
     (result) => {
-      expect(runAggregator({ NODE_26_COMPATIBILITY_RESULT: result })).toBe(1);
+      expect(runAggregator({ COVERAGE_SONAR_RESULT: result })).toBe(1);
       if (result !== "skipped") {
-        expect(runAggregator({ ...REUSING, NODE_26_COMPATIBILITY_RESULT: result })).toBe(1);
+        expect(runAggregator({ ...REUSING, COVERAGE_SONAR_RESULT: result })).toBe(1);
       }
     },
   );
@@ -529,7 +526,6 @@ describe("the aggregator still fails closed", () => {
       "cross-platform skipped for a documentation-only change",
       {
         CROSS_PLATFORM_RESULT: "skipped",
-        NODE_26_COMPATIBILITY_RESULT: "skipped",
         DOCUMENTATION_ONLY: "true",
       },
       0,

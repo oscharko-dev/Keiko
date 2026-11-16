@@ -19,7 +19,6 @@ export function tightenedCiRepairBudget(
   const limits = {
     maxRuntimeMs: Math.min(record.limits.maxRuntimeMs, accepted.maxRuntimeMs),
     maxToolCalls: Math.min(record.limits.maxToolCalls, accepted.maxToolCalls),
-    maxPromptTokens: Math.min(record.limits.maxPromptTokens, accepted.maxPromptTokens),
   };
   return { ...record, limits, deadlineMs: record.startedAtMs + limits.maxRuntimeMs };
 }
@@ -31,7 +30,6 @@ export function ciRepairExhaustion(
   if (now >= record.deadlineMs) return "deadline-exhausted";
   if (record.failedAttempts >= CI_REPAIR_MAX_FAILED_ATTEMPTS) return "attempt-budget-exhausted";
   if (record.toolCalls >= record.limits.maxToolCalls) return "tool-budget-exhausted";
-  if (record.promptTokens >= record.limits.maxPromptTokens) return "prompt-budget-exhausted";
   // Admission retains room for one maximum-size attempt plus its next usage receipt. The
   // already-admitted delta can therefore be recorded before capacity stops the next effect.
   if (
@@ -65,7 +63,6 @@ export function newCiRepairAttempt(
     startedAtMs: now,
     finishedAtMs: null,
     toolCalls: 0,
-    promptTokens: 0,
     charges: [],
   };
 }
@@ -74,15 +71,14 @@ export function chargeCiRepairAttempt(
   charge: CiRepairChargeInput,
   now: number,
 ): CiRepairBudgetRecord {
-  const { chargeId, toolCalls, promptTokens } = charge;
+  const { chargeId, toolCalls } = charge;
   const attempts = record.attempts.map((attempt): CiRepairAttempt =>
     attempt.attemptId !== charge.attemptId
       ? attempt
       : {
           ...attempt,
           toolCalls: attempt.toolCalls + toolCalls,
-          promptTokens: attempt.promptTokens + promptTokens,
-          charges: [...attempt.charges, { chargeId, toolCalls, promptTokens }],
+          charges: [...attempt.charges, { chargeId, toolCalls }],
         },
   );
   return {
@@ -91,7 +87,6 @@ export function chargeCiRepairAttempt(
     updatedAtMs: now,
     attempts,
     toolCalls: record.toolCalls + toolCalls,
-    promptTokens: record.promptTokens + promptTokens,
   };
 }
 export function settleCiRepairAttempt(

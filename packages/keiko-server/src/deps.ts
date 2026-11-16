@@ -1,3 +1,8 @@
+import {
+  installKnowledgeChatCatalogRuntime,
+  type KnowledgeChatCatalogRuntime,
+} from "./knowledge-chat-catalog.js";
+import { presentCodingReasoning } from "./coding-reasoning-continuation.js";
 import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { createNativeMcpMutationJournal } from "./coding-runtime/opencodeNativeMcpMutationJournal.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
@@ -17,13 +22,16 @@ import type {
   JiraReportComplianceChecker,
   JiraReportStore,
 } from "@oscharko-dev/keiko-connectors";
+import { currentJiraChatConnectionFingerprint } from "./atlassian/jiraChatConnectionIdentity.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import {
   installJiraChatCatalogRuntime,
   type JiraChatCatalogRuntime,
 } from "./atlassian/jiraChatCatalogRuntime.js";
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import type { CodingRuntimeConversation } from "./coding-runtime/codingRuntimeContextUsage.js";
 import { createCodingJiraPods, type CodingJiraPods } from "./coding-runtime/codingJiraPodMcp.js";
+import { jiraEmailTemplateInspection } from "./atlassian/jiraEmailTemplateComposition.js";
 import {
   createStateCodingSessionContinuity,
   KEIKO_CODING_SESSION_RETENTION_ENV,
@@ -59,7 +67,6 @@ import {
 
 import {
   configuredRuntimeMaxDurationMinutes,
-  configuredRuntimePromptTokenBudget,
   runtimeMaxDurationMs,
 } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import {
@@ -129,6 +136,7 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import {
   bindSecurityLogCorrelation,
+  installJavaParserLogSink,
   keikoApiKeySecretValues,
   redact,
   redactContent,
@@ -179,7 +187,10 @@ import { basename, delimiter, dirname, join } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
-import { gatewaySpendBudgetForEnv } from "./gateway-spend-budget.js";
+import {
+  acquireGatewaySpendBudgetForEnv,
+  gatewaySpendBudgetForEnv,
+} from "./gateway-spend-budget.js";
 import { gatewayForConfig, gatewayForRuntimeConfig } from "./gateway-instance-cache.js";
 import {
   createConversationAttachmentStore,
@@ -226,7 +237,11 @@ import {
   REVIEW_WORKTREE_ROOT_NAME,
   type ReviewServices,
 } from "./review/services.js";
-import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
+import {
+  recordWorkspaceRootDenial,
+  recordWorkspaceRootDenied,
+} from "./workspace-root-denial-log.js";
+import { pathIsDenied } from "./files-deny.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -304,7 +319,8 @@ import {
   type ContainerRunnerManager,
 } from "./runtime/containerRunner.js";
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
-import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { MemoryStorageError, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { CapturePolicyOptions } from "@oscharko-dev/keiko-memory-capture";
 import type {
   MemoryRecord,
@@ -459,6 +475,7 @@ import {
 } from "./coding-runtime/codingRuntimeEvidenceAggregator.js";
 import type { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./coding-runtime/codingRuntimeOrchestrator.js";
+import type { CodingScheduledWakes } from "./coding-runtime/codingScheduledWakes.js";
 import {
   createCodingRuntimeProjectMemoryPort,
   type CodingRuntimeProjectMemoryPort,
@@ -539,6 +556,10 @@ import {
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import { createBrowserApprovalService } from "./coding-app-session/browserApproval.js";
 import type { SessionPairingPort } from "./coding-app-session/sessionPairingPort.js";
+import {
+  resolveLauncherBrowser,
+  type LauncherBrowser,
+} from "./coding-app-session/launcherBrowser.js";
 import { resolveLauncherSessionPairingPort } from "./coding-app-session/launcherSessionPairingPort.js";
 import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindows.js";
 import { abortCodingRunSessionLeases } from "./coding-app-session/codingRunSessionLease.js";
@@ -591,6 +612,7 @@ import {
   REVIEW_QUALIFICATION_DIR,
   createPairQualificationService,
 } from "./review/qualification/service.js";
+import type { WindowsGatewayServiceProbe } from "./coding-runtime/windowsGatewayServiceProbe.js";
 import { createNativeWorktreeProvisionPort } from "./coding-runtime/opencodeNativeWorktree.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
@@ -661,6 +683,11 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 export interface RuntimeGatewayConfig {
   readonly subscribe?: (listener: (correlationId?: string) => void) => () => void;
   readonly spendBudget?: GatewaySpendBudget | undefined;
+  /**
+   * Set only by the graph that acquired `spendBudget` from the environment's shared cache; its
+   * disposal calls it. An injected budget has none and is never closed by a graph that did not open it.
+   */
+  readonly releaseSpendBudget?: (() => void) | undefined;
   /** Provider-stated context windows observed by this source's gateways. Never throws. */
   readonly onContextWindowReported?: ((report: ContextWindowReport) => void) | undefined;
   /** Binds the host's adoption path (gateway-context-window.ts) once the handler deps exist. */
@@ -845,6 +872,9 @@ interface AgentAuthorityRegistryDependency {
 }
 
 export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
+  /** Revalidates the held native Jira call; secrets remain in credential custody. */
+  readonly codingJiraInputContext?: import("./coding-runtime/codingJiraHumanInput.js").CodingJiraCurrentInputResolver;
+
   readonly mcpSettings?: McpSettingsStore;
   readonly mcpAuthorization?: McpAuthorization;
   readonly mcpConnections?: ConfiguredMcpConnections;
@@ -862,7 +892,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly env: EnvSource;
   // Resolved outbound HTTP egress policy, including config-file-only Figma egress.
   readonly egress?: GatewayEgressConfig | undefined;
-  // Live-payload redactor (D9). Applied to run reports, projections, and SSE event data.
+  // Live-payload redactor (D9). Applied to run reports, projections, and SSE event data: what a person
+  // reads. It follows the deployment content policy; evidence, audit and memory use `strictRedactor`.
   readonly redactor: Redactor;
   // #4098: the Chat content policy resolved once at startup from `KEIKO_CONTENT_REDACTION`. Absent
   // means `redact`; only Chat reads it, never diagnostics, evidence or another surface.
@@ -894,17 +925,28 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
           capability: string,
           audience: "model-gateway" | "tool-facade",
         ) => unknown;
-        readonly reservePromptTokens?:
-          ((capability: string, promptTokens: number) => unknown) | undefined;
-        // #3384 wave-3 W3-3 "needs": reconciles a prompt-token reservation above against the
-        // provider's real reported usage once known, mirroring `reservePromptTokens`. An admitted
-        // reservation may answer an opaque `modelCallId` (#3873 run effort roll-up); the settlement
-        // of that call names it, so the call is timed from its own reservation.
+        // Admits one model call of the run before provider dispatch; books no tokens (#4346).
+        readonly admitModelCall?:
+          ((capability: string, estimatedPromptTokens: number) => unknown) | undefined;
+        // #3384 wave-3 W3-3 "needs": records the provider's real reported usage of an admitted
+        // call once known. An admitted call may answer an opaque `modelCallId` (#3873 run effort
+        // roll-up); the settlement of that call names it, so the call is timed from its own
+        // admission.
         readonly settlePromptTokens?:
           | ((
               capability: string,
               reservedPromptTokens: number,
               actualPromptTokens: number,
+              modelCallId?: number,
+            ) => unknown)
+          | undefined;
+        // A prompt size the provider itself reported for an admitted call (never an estimate): the
+        // run's context usage reads it (#4359).
+        readonly observeProviderPromptTokens?:
+          | ((
+              capability: string,
+              providerPromptTokens: number,
+              conversation: CodingRuntimeConversation,
               modelCallId?: number,
             ) => unknown)
           | undefined;
@@ -936,6 +978,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
     | {
         /** Server-owned tool profile the runtime was composed with; read by the readiness route. */
         readonly toolProfile?: OpenCodeToolProfile;
+        readonly bindContinuationRoute: (runId: string, digest: string | undefined) => void;
+        readonly matchesContinuationRoute: (runId: string, digest: string | undefined) => boolean;
         readonly claim: (runId: string) => boolean;
         readonly isVerified: (runId: string) => boolean;
         readonly verifyObserved: (runId: string) => void;
@@ -994,6 +1038,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly codingRuntimeEvidenceAggregator?: CodingRuntimeEvidenceAggregator | undefined;
   /** Optional singleton lifecycle aggregate; runtime routes fail closed when it is not composed. */
   readonly codingRuntimeOrchestrator?: CodingRuntimeOrchestrator | undefined;
+  /** Scheduled continuations of Coding History tasks (#4271); absent without retained sessions. */
+  readonly codingScheduledWakes?: CodingScheduledWakes | undefined;
   /** Server-owned bounded replay/fan-out source for the runtime SSE route. */
   readonly codingRuntimeEventHub?: CodingRuntimeEventHub | undefined;
   /**
@@ -1002,6 +1048,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
    * present, in which case it fails closed to a content-free projection.
    */
   readonly codingAppSessionChannel?: CodingAppSessionChannel | undefined;
+  /** Content-free native handoff; never returns proof or cookies to its requester. */
+  readonly launcherBrowser?: LauncherBrowser | undefined;
   // KEIKO-0838 follow-up (#2906 round 3): graph-scoped pairing/rotate denial-window counters for
   // the aggregate diagnostic in codingAppSessionRoutes.ts. One instance per composed deps graph
   // (see assembleUiHandlerDeps), reset on disposal, so two independently composed `UiHandlerDeps`
@@ -1014,6 +1062,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly codingRuntimeHostQualified?: boolean | undefined;
   /** Content-free reason naming the first failed activation prerequisite when unqualified. */
   readonly codingRuntimeUnavailableReason?: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  /** Live broker state of a released Windows runtime; absent everywhere else (#4068). */
+  readonly codingRuntimeGatewayService?: WindowsGatewayServiceProbe | undefined;
   /**
    * Available-branch twin of the reason above: how strong the qualified runtime's evidence is.
    * Every default along this path resolves to the WEAK value, so an unthreaded path degrades to
@@ -1025,8 +1075,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Server-owned deployment ceiling for coding-runtime authority. Undefined fails closed to
   // governed-assist; the readiness projection reports the same ceiling the mint clamp enforces.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
-  // Memory retains its explicitly configured ceiling or the approval baseline. Coding's all-mode
-  // availability is not permission to auto-accept memories or widen standing maintenance.
+  // Memory retains its explicitly configured ceiling or the `governed-assist` baseline for its
+  // modes and standing maintenance. Coding's all-mode availability does not widen either.
   readonly memoryDeploymentCeiling?: CodingWorkbenchMode | undefined;
   // KEIKO-0565: DI-scoped Atlassian connector approval and sync registries. Optional so
   // pre-existing fixture-heavy test wiring stays byte-for-byte compatible; production wiring in
@@ -1041,6 +1091,7 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
   /** Lazy application-owned managed host; shared by ordinary Chat turns and bound Pods. */
   readonly jiraChatCatalog?: JiraChatCatalogRuntime;
+  readonly knowledgeChatCatalog?: KnowledgeChatCatalogRuntime;
   /** In-memory Jira reports (#4181): the tool resumes them and the export route reads them. */
   readonly jiraReportStore?: JiraReportStore;
   /** In-memory staged backlog drafts (#4178): the staging tool appends, approval and runs read. */
@@ -1052,6 +1103,10 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly mcpChatCatalog?: McpChatCatalogRuntime;
   /** Projection of the existing Memory admission for the productive grounded phase only. */
   readonly groundedMemoryContextAvailable?: boolean;
+  // Whether an operator configured the memory deployment ceiling. Only a configured
+  // `governed-assist` ceiling keeps routine facts for review; the absent baseline accepts them in
+  // every mode (#4206).
+  readonly memoryDeploymentCeilingConfigured?: boolean | undefined;
   // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
   // fail closed instead of accepting any request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
@@ -1141,6 +1196,7 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Issue #211 — MemoriaViva vault. Optional so legacy tests that do not exercise /api/memory/*
   // keep their fixtures unchanged. Production wiring creates one at buildUiHandlerDeps time.
   readonly memoryVault?: MemoryVaultStore | undefined;
+  readonly memoryReadiness?: MemoryReadinessSnapshot | undefined;
   // Server-private, single-use content attestations minted only by a trusted transcript observer.
   // Without this port, recap submissions remain review-gated and can never auto-accept.
   readonly voiceRecapContentAttestations?: VoiceRecapContentAttestationStore | undefined;
@@ -1184,6 +1240,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
   /** Starts a shared background catalog check; callers keep reading the current projection. */
   readonly refreshGatewayCatalog?: ((correlationId?: string) => void) | undefined;
+  /** Joins only current startup catalog discovery; never starts provider checks. */
+  readonly waitForStartupGatewayCatalog?: (() => Promise<void>) | undefined;
   // Test seam for first-run setup. Production uses the real OpenAI-compatible gateway call.
   readonly gatewaySetupTester?:
     | ((
@@ -1428,6 +1486,7 @@ export interface BuildHandlerDepsOptions extends AgentAuthorityRegistryDependenc
    * composition must never construct or fall back to the fake — a missing port fails closed.
    */
   readonly sessionPairingPort?: SessionPairingPort | undefined;
+  readonly launcherBrowser?: LauncherBrowser | undefined;
   /**
    * Bounded content source the app-session channel projects to a paired session. Absent in this
    * wave's production composition (content routing is W1.5+); tests inject a deterministic payload.
@@ -1893,10 +1952,12 @@ function createRuntimeGatewayConfig(
     observations: new Map(),
     listeners: gatewayConfigListeners(),
   };
+  const spend = acquireGatewaySpendBudgetForEnv(env);
   return {
     storagePath,
     initializationCorrelationId: bootstrapCorrelationId,
-    spendBudget: gatewaySpendBudgetForEnv(env),
+    spendBudget: spend.budget,
+    releaseSpendBudget: spend.release,
     ...contextWindowReporterSlot(),
     current: (): GatewayConfig | undefined => state.config,
     ...runtimeCatalogFacets(state),
@@ -2010,8 +2071,44 @@ export function currentGatewayVerification(
   return deps.gatewayConfig?.verification() ?? UNVERIFIED_GATEWAY;
 }
 
-/** A live success must be renewed; configuration alone cannot keep it ready indefinitely. */
-export const CONVERSATION_READINESS_MAX_AGE_MS = 5 * 60_000;
+// Models a person explicitly verified in Settings, per configuration holder and generation (#4351).
+const explicitModelUse = new WeakMap<
+  object,
+  { readonly generation: number; readonly models: Set<string> }
+>();
+
+/**
+ * An explicit Settings verification of this model passed: a person asked for the model, and it
+ * answered. Dropped with the configuration generation it was observed under, never persisted.
+ */
+export function recordExplicitModelUse(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+  observedGeneration: number | undefined,
+): void {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined || observedGeneration !== holder.generation()) return;
+  const current = explicitModelUse.get(holder);
+  if (current?.generation === observedGeneration) current.models.add(modelId);
+  else explicitModelUse.set(holder, { generation: observedGeneration, models: new Set([modelId]) });
+}
+
+/**
+ * Whether a person has used this model in the current configuration generation: an actual model call
+ * (a Chat or Coding turn) completed through the generation's gateway, or an explicit Settings
+ * verification passed. A startup observation is not use. Passive reads gate any provider request on
+ * this, so opening a Chat saved on a model nobody used never loads that model.
+ */
+export function modelUsedByPerson(deps: UiHandlerDeps, modelId: string): boolean {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return false;
+  const explicit = explicitModelUse.get(holder);
+  if (explicit?.generation === holder.generation() && explicit.models.has(modelId)) return true;
+  return currentGateway(deps)?.hasServedModel(modelId) === true;
+}
+
+/** Legacy freshness window used only to describe the age of observed readiness in diagnostics. */
+export const CONVERSATION_READINESS_CACHED_AFTER_MS = 5 * 60_000;
 
 export function conversationReadinessAgeMs(
   observation: VerifiedModelCapabilityObservation,
@@ -2019,7 +2116,7 @@ export function conversationReadinessAgeMs(
   return Date.now() - Date.parse(observation.conversationCheckedAt ?? observation.checkedAt);
 }
 
-/** Returns true only for a fresh basic-chat success bound to the current generation. */
+/** A checked success remains usable for its configuration generation; no per-chat expiry. */
 export function currentConversationReady(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
   modelId: string,
@@ -2028,13 +2125,9 @@ export function currentConversationReady(
 }
 
 /**
- * Tri-state view for the models wire: `true`/`false` only when the CURRENT generation holds an
- * actual basic-chat observation, `undefined` when this process never probed the model or its
- * successful observation expired. Configuration reloads also invalidate observations. The observation store is process-local by design, so collapsing
- * "unknown" into "not ready" told the UI after every restart that no model was usable until a
- * manual probe plus reload (customer field incident, 0.3.11). Admission guards keep using the
- * strict boolean `currentConversationReady` — unknown never admits, it only defers to the
- * configuration-initialization probe already running before conversation admission.
+ * Process-local result of the startup or explicit Settings check. A configuration replacement
+ * invalidates it. Age alone never schedules provider work or turns a known success into unknown;
+ * malformed and future timestamps remain unavailable. Actual calls still surface provider errors.
  */
 export function currentConversationReadinessObservation(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
@@ -2043,29 +2136,11 @@ export function currentConversationReadinessObservation(
   const holder = deps.gatewayConfig;
   if (holder === undefined) return undefined;
   const observation = holder.verifiedCapability(modelId);
-  if (observation?.generation !== holder.generation()) return undefined;
+  if (observation?.generation !== holder.generation() || observation.modelId !== modelId)
+    return undefined;
   if (observation.fields.conversationReady !== true) return observation.fields.conversationReady;
   const ageMs = conversationReadinessAgeMs(observation);
-  return ageMs >= 0 && ageMs < CONVERSATION_READINESS_MAX_AGE_MS ? true : undefined;
-}
-
-/**
- * True when the CURRENT generation holds a successful basic-chat observation that has aged past
- * `CONVERSATION_READINESS_MAX_AGE_MS`. `currentConversationReadinessObservation` folds that case
- * into `undefined`, exactly like a model nobody probed; this is the one place that tells them apart
- * (#3905), and the models wire carries it as `conversationReadinessStale`. A failed observation
- * never goes stale, and a malformed or future timestamp stays unknown.
- */
-export function currentConversationReadinessStale(
-  deps: Pick<UiHandlerDeps, "gatewayConfig">,
-  modelId: string,
-): boolean {
-  const holder = deps.gatewayConfig;
-  if (holder === undefined) return false;
-  const observation = holder.verifiedCapability(modelId);
-  if (observation?.generation !== holder.generation()) return false;
-  if (observation.fields.conversationReady !== true) return false;
-  return conversationReadinessAgeMs(observation) >= CONVERSATION_READINESS_MAX_AGE_MS;
+  return Number.isFinite(ageMs) && ageMs >= 0 ? true : undefined;
 }
 
 function configuredChatContextProfile(
@@ -2282,8 +2357,9 @@ export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor 
   return (value: unknown): unknown => deepRedactStrings(value, redactString);
 }
 
-// #4098: the private Chat history redactor. Under the default policy it is the live redactor
-// itself; only the deployment opt-out keeps authorized content and removes the credential floor.
+// #4098, owner decision 2026-11-04: what a person reads and what the model receives. By default it
+// removes only the credential floor; `KEIKO_CONTENT_REDACTION=on` lowers the threshold back to the
+// strict live redactor.
 function runtimeContentRedactString(
   env: EnvSource,
   runtimeConfig: RuntimeGatewayConfig,
@@ -2680,29 +2756,41 @@ export function redactEvidenceString(redactor: Redactor, value: string): string 
   return redacted;
 }
 
+type MemoryWithheldReason = Extract<
+  MemoryReadinessSnapshot,
+  { readonly readiness: "withheld" }
+>["reason"];
+
 function buildMemoryVault(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
   env: EnvSource,
   diagnostics: ServerDiagnosticSink | undefined,
   bootstrapCorrelationId: string,
-): MemoryVaultStore {
+  onWithheld?: (reason: MemoryWithheldReason) => void,
+): MemoryVaultStore | undefined {
   const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });
-  const vault = createBffMemoryVault(
-    redactString,
-    // #214 — wire every successful vault mutation into the audit ledger. The handler
-    // shares the same redactString closure as the live-payload redactor so audit
-    // summaries inherit the same secret-shape scrubbing as wire traffic.
-    (event) => {
-      if (event.kind === "memory:deleted" || event.kind === "memory:tombstoned") {
-        return;
-      }
-      postCommitAudit(event);
-    },
-    createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
-    env,
-    bootstrapCorrelationId,
+  const vault = openMemoryVaultOrWithhold(
+    diagnostics,
+    () =>
+      createBffMemoryVault(
+        redactString,
+        // #214 — wire every successful vault mutation into the audit ledger. The handler
+        // shares the same redactString closure as the live-payload redactor so audit
+        // summaries inherit the same secret-shape scrubbing as wire traffic.
+        (event) => {
+          if (event.kind === "memory:deleted" || event.kind === "memory:tombstoned") {
+            return;
+          }
+          postCommitAudit(event);
+        },
+        createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
+        env,
+        bootstrapCorrelationId,
+      ),
+    onWithheld,
   );
+  if (vault === undefined) return undefined;
   // Issue #3189 — seed only the transition classifier's body-free pre-image fields after the
   // vault exists and before this composition returns it to mutation routes. This keeps the first
   // post-restart archive/accept/reject/pin mutation semantically classified without retaining
@@ -2750,9 +2838,43 @@ function serverOperatorPrincipal(options: BuildHandlerDepsOptions): () => string
   );
 }
 
+/**
+ * A stored vault that the available key cannot open (a changed or withheld keychain entry, a state
+ * directory moved to another device) leaves memory unavailable for this process instead of making
+ * the whole local server crash-loop at startup. Memory routes then answer 503 `MEMORY_UNAVAILABLE`
+ * and Chat runs without memory, while the vault stays untouched for the key that opens it. Every
+ * classified migration/open failure withholds only Memory too. Unrelated failures still propagate.
+ */
+function openMemoryVaultOrWithhold(
+  diagnostics: ServerDiagnosticSink | undefined,
+  open: () => MemoryVaultStore,
+  onWithheld?: (reason: MemoryWithheldReason) => void,
+): MemoryVaultStore | undefined {
+  try {
+    return open();
+  } catch (error) {
+    if (
+      !(error instanceof MemoryStorageError) ||
+      (error.code !== "vault-unreadable" && error.code !== "vault-migration-failed")
+    )
+      throw error;
+    onWithheld?.(error.code);
+    emitCompositionDiagnostic(
+      diagnostics,
+      "memory-vault.open",
+      error.code === "vault-unreadable"
+        ? "The memory vault could not be opened with the available key."
+        : "The memory vault could not be opened or migrated. Memory is withheld.",
+      error,
+    );
+    return undefined;
+  }
+}
+
 function buildLoopbackMemoryAuthorization(
-  memoryVault: MemoryVaultStore,
-): MemoryAuthorizationContext {
+  memoryVault: MemoryVaultStore | undefined,
+): MemoryAuthorizationContext | undefined {
+  if (memoryVault === undefined) return undefined;
   return {
     reviewerId: DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID,
     authorizedScopes: () => memoryVault.listMemoryScopes(),
@@ -3402,6 +3524,17 @@ function seedInitialProject(
   }
   const normalizedPath = validateProjectPath(initialProjectPath, { mustExist: true });
   assertUiDbOutsideProject(uiDbPath, normalizedPath);
+  // A launch directory the read surface refuses (Keiko's own tool-state area) is no project: every
+  // Git and Files read of it is denied, so offering it only starts the person on a refused folder.
+  // It is the very predicate the Files and Git routes apply to a requested root (#4371). The
+  // decision is recorded body-free on the existing denial line: closed reason, no path.
+  if (pathIsDenied(normalizedPath)) {
+    recordWorkspaceRootDenied(
+      { reason: "denied-locus", failureKind: "DENIED", errorKind: "authority-denied" },
+      { correlationId },
+    );
+    return undefined;
+  }
   const project = store.createProject(normalizedPath);
   if (trustSource === "explicit-launcher-selection") {
     workspaceScriptTrust.grant(project.path, correlationId);
@@ -3424,7 +3557,8 @@ interface PeripheralManagers {
   readonly updateRemediation: UpdateRemediationManager;
   readonly containerRunner: ContainerRunnerManager;
   readonly browser: BrowserSessionManager;
-  readonly memoryVault: MemoryVaultStore;
+  readonly memoryVault: MemoryVaultStore | undefined;
+  readonly memoryReadiness: MemoryReadinessSnapshot;
   readonly editorHotExitStore: EditorHotExitStore;
   readonly editorLocalHistoryStore: EditorLocalHistoryStore;
   readonly managedLspControl: ManagedLspControlService;
@@ -3433,7 +3567,7 @@ interface PeripheralManagers {
   readonly editorSettingsEvents: EditorSettingsEventBus;
   readonly workspaceWatchService: WorkspaceWatchService;
   readonly workspaceSnippets: WorkspaceSnippetsService;
-  readonly memoryAuthorization: MemoryAuthorizationContext;
+  readonly memoryAuthorization: MemoryAuthorizationContext | undefined;
 }
 
 interface DapRuntimeReference {
@@ -3985,6 +4119,8 @@ function resolvedUpdatePreflight(
               { ...args.options.env },
               undefined,
               bindSecurityLogCorrelation(processServerLogSink(), UNKNOWN_CORRELATION_ID),
+              // The preflight service only reads availability; the update session checks fresh.
+              "passive-read",
             ),
         }),
     ...(args.options.updatePreflightCatalog === undefined
@@ -4012,12 +4148,16 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     diagnostics: args.options.diagnostics,
     redactString: args.redactString,
   });
+  let memoryReadiness: MemoryReadinessSnapshot = { readiness: "ready", reason: "none" };
   const memoryVault = buildMemoryVault(
     args.redactString,
     args.evidenceStore,
     args.options.env,
     args.options.diagnostics,
     args.bootstrapCorrelationId,
+    (reason): void => {
+      memoryReadiness = { readiness: "withheld", reason };
+    },
   );
   const { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge } =
     resolveTrustAndManagedLspControl(args);
@@ -4102,6 +4242,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       diagnostics: args.options.diagnostics,
     }),
     memoryVault,
+    memoryReadiness,
     editorHotExitStore:
       args.options.editorHotExitStore ??
       createEditorHotExitStore({
@@ -4605,6 +4746,7 @@ interface UiHandlerDepsAssemblyArgs {
   readonly codingWorkbenchEvidenceStore: EvidenceStore;
   readonly redactString: (value: string) => string;
   readonly liveRedactor: Redactor;
+  readonly contentRedactor: Redactor;
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
   readonly bundle: PersistenceBundle;
   readonly contextProfileForModel: ContextProfileResolver;
@@ -4689,10 +4831,16 @@ function atlassianConnectorCredentialFields(
 ): Pick<UiHandlerDeps, "atlassianConnectorCredentials"> {
   return {
     atlassianConnectorCredentials: buildAtlassianConnectorCredentialDeps({
-      onLivePodInvalidated: (podId, generation, correlationId) => {
-        invalidateJiraPodChats(args.bundle.uiStore, podId, generation, correlationId, accessOwners);
+      onLivePodInvalidated: (podId, generation, correlationId, reason) => {
+        invalidateJiraPodChats(
+          args.bundle.uiStore,
+          podId,
+          generation,
+          correlationId,
+          accessOwners,
+          reason,
+        );
       },
-      networkConfig: () => args.runtimeConfig.current()?.atlassian,
       configPath: args.runtimeConfig.storagePath,
       env: args.options.env,
       egress: () => args.runtimeConfig.current()?.egress ?? args.egress,
@@ -4933,12 +5081,16 @@ function gatewayOutcomeFailureCode(
 
 function safeActivityContentSource(
   projection: CodingSafeActivityProjection | undefined,
+  visible: () => boolean,
 ): CodingAppSessionContentSource | undefined {
   return projection === undefined
     ? undefined
     : {
-        contentFor: () => projection.currentContent(),
-        subscribeContent: (listener) => projection.subscribeContent(listener),
+        contentFor: () => presentCodingReasoning(projection.currentContent(), visible()),
+        subscribeContent: (listener) =>
+          projection.subscribeContent((content) => {
+            listener(presentCodingReasoning(content, visible()));
+          }),
       };
 }
 
@@ -4966,6 +5118,7 @@ function activityAwareWorkspaceLifecycle(
   return {
     list: lifecycle.list,
     listAll: lifecycle.listAll,
+    selectable: lifecycle.selectable,
     getActive: lifecycle.getActive,
     selectLocal: purgingSelection(lifecycle.selectLocal, purge),
     selectFolder: purgingSelection(lifecycle.selectFolder, purge),
@@ -5303,9 +5456,13 @@ function installCodingJiraPods(
   pods: CodingJiraPods | undefined,
 ): UiHandlerDeps {
   if (pods === undefined) return deps;
-  pods.attach(deps);
+  pods.attach({
+    ...deps,
+    emailTemplateInspection: (signal) => jiraEmailTemplateInspection(deps, signal),
+  });
   const previousDispose = deps.dispose;
   return Object.assign(deps, {
+    codingJiraInputContext: pods.currentInputContext,
     dispose: async (): Promise<void> => {
       try {
         await pods.close();
@@ -5513,7 +5670,12 @@ function installChatToolCatalogs(
     primary: options.activityLog ?? processServerLogSink(),
     diagnostics: options.diagnostics ?? defaultServerDiagnosticSink,
   };
-  return installMcpChatCatalogRuntime(installJiraChatCatalogRuntime(deps, log), log);
+  const installed = installJiraChatCatalogRuntime(deps, log);
+  // A staged draft resolves only on the connection it was stored with (#4354, #4353 AC4).
+  installed.jiraDraftStore?.bindConnection((chatId) =>
+    currentJiraChatConnectionFingerprint(installed, chatId),
+  );
+  return installKnowledgeChatCatalogRuntime(installMcpChatCatalogRuntime(installed, log), log);
 }
 
 /**
@@ -5542,6 +5704,7 @@ export function installConversationReadinessInitialization(deps: UiHandlerDeps):
   const disposeServices = deps.dispose;
   return Object.assign(deps, {
     refreshGatewayCatalog: startup.refresh,
+    waitForStartupGatewayCatalog: startup.catalogSettled,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
       await stopChatCompactionWork(deps);
@@ -5586,6 +5749,7 @@ function assembleUiHandlerRuntimeServices(
     codingRuntimeEvidenceAggregator,
     codingRuntimeHost,
     peripherals.memoryVault,
+    runtimeComposition.runtimeVersion,
   );
   const gitChangeSnapshotService = createGitChangeSnapshotService({
     logSink: processServerLogSink(),
@@ -5629,7 +5793,10 @@ function buildAssemblyCodingAppSessionChannel(
       args.options.sessionPairingPort ?? resolveLauncherSessionPairingPort(args.options.env),
     contentSource:
       args.options.codingAppSessionContentSource ??
-      safeActivityContentSource(codingRuntimeControlPlane?.safeActivityProjection),
+      safeActivityContentSource(
+        codingRuntimeControlPlane?.safeActivityProjection,
+        () => args.runtimeConfig.current()?.codingReasoningDisplay !== "off",
+      ),
     // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE listener failures
     // (bare catch, backpressure `false`) surface as one redacted record per subscriber instead
     // of being silently swallowed.
@@ -5656,10 +5823,12 @@ function buildUiCodingRuntimeControlPlane(
   args: UiHandlerDepsAssemblyArgs,
   codingRuntimeEvidenceAggregator: ReturnType<typeof createCodingRuntimeEvidenceAggregator>,
   codingRuntimeHost: NonNullable<BuildHandlerDepsOptions["codingRuntimeHost"]> | undefined,
-  memoryVault: MemoryVaultStore,
+  memoryVault: MemoryVaultStore | undefined,
+  runtimeVersion?: CodingWorkbenchRuntimeVersion,
 ): ReturnType<typeof createCodingRuntimeControlPlane> | undefined {
   if (!args.bundle.codingRuntimeSnapshotStore || !args.bundle.workspaceLifecycle) return undefined;
-  const projectMemory = createUiCodingRuntimeProjectMemory(args, memoryVault);
+  const projectMemory =
+    memoryVault === undefined ? undefined : createUiCodingRuntimeProjectMemory(args, memoryVault);
   const repositoryInstructions = createUiCodingRuntimeRepositoryInstructions(
     args,
     codingRuntimeHost,
@@ -5674,12 +5843,13 @@ function buildUiCodingRuntimeControlPlane(
       activityLog: processServerLogSink(),
     }),
     deploymentCeiling: resolveCodingRuntimeDeploymentCeiling(args.options),
+    ...(runtimeVersion === undefined ? {} : { runtimeVersion }),
     snapshots: args.bundle.codingRuntimeSnapshotStore,
     evidence: codingRuntimeEvidenceAggregator,
     workspaceLifecycle: args.bundle.workspaceLifecycle,
     serverPrincipal: serverOperatorPrincipal(args.options),
     ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
-    projectMemory,
+    ...(projectMemory === undefined ? {} : { projectMemory }),
     repositoryInstructions,
     // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE fan-out write failures
     // surface as one redacted record per subscriber instead of being silently swallowed.
@@ -5705,7 +5875,7 @@ function createUiCodingRuntimeProjectMemory(
 // The task workspace's own AGENTS.md as bounded untrusted initial context (ADR-0137 D1). Default
 // on; the explicit `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` opt-out is read once here,
 // and any other explicit value fails composition closed exactly like the neighbouring
-// `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`. The loader reads through the runtime host's own secure
+// `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`. The loader reads through the runtime host's own secure
 // workspace read helper, never a second filesystem path; an unqualified host leaves it no source.
 function createUiCodingRuntimeRepositoryInstructions(
   args: UiHandlerDepsAssemblyArgs,
@@ -6052,7 +6222,7 @@ function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerD
     evidenceDir: args.resolvedEvidenceDir,
     env: args.options.env,
     egress: args.egress,
-    redactor: args.liveRedactor,
+    redactor: args.contentRedactor,
     contentRedaction: args.contentPolicy.policy,
     diagnostics: args.options.diagnostics,
     activityLog: args.options.activityLog ?? processServerLogSink(),
@@ -6075,12 +6245,14 @@ type RuntimeUiHandlerDeps = ReturnType<typeof codingSidecarGatewayModelSourceFie
   Pick<
     UiHandlerDeps,
     | "codingAppSessionChannel"
+    | "launcherBrowser"
     | "registry"
     | "modelPortFactory"
     | "codingWorkbenchEvidenceStore"
     | "codingRuntimeEvidenceAggregator"
     | "codingRuntimeDeploymentCeiling"
     | "memoryDeploymentCeiling"
+    | "memoryDeploymentCeilingConfigured"
     | "codingSidecarGatewayEvidenceAggregator"
   >;
 
@@ -6094,13 +6266,14 @@ function buildRuntimeUiHandlerDeps(
   );
   return {
     codingAppSessionChannel: services.codingAppSessionChannel,
+    launcherBrowser: args.options.launcherBrowser ?? resolveLauncherBrowser(args.options.env),
     registry: args.options.registry ?? createRunRegistry(),
     modelPortFactory: args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
     ...codingSidecarGatewayModelSourceFields(args),
     codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
     codingRuntimeEvidenceAggregator: services.codingRuntimeEvidenceAggregator,
     codingRuntimeDeploymentCeiling: services.codingRuntimeCeiling,
-    memoryDeploymentCeiling: resolveConfiguredDeploymentCeiling(args.options) ?? "governed-assist",
+    ...memoryDeploymentCeilingFields(resolveConfiguredDeploymentCeiling(args.options)),
     ...buildRuntimeMutationLeaseDependency(args.options, services.runtimeComposition),
     ...codingRuntimeControlPlaneDeps,
     codingSidecarGatewayEvidenceAggregator: codingSidecarGatewayEvidenceRecorder(
@@ -6379,10 +6552,31 @@ async function disposeRuntimeServices(
     (): void => {
       codingAppSessionDenialWindows.reset();
     },
+    ...graphStoreTeardownSteps(args, services),
+  ]);
+}
+
+// The SQLite stores this graph opened itself, closed before the persistence bundle. Left open, a
+// file stays locked after dispose, which on Windows keeps the state directory from being removed.
+function graphStoreTeardownSteps(
+  args: UiHandlerDepsAssemblyArgs,
+  services: UiHandlerRuntimeServices,
+): readonly (() => void)[] {
+  return [
+    // #4068 (W9): the graph opens the memory vault's node:sqlite handle in `buildPeripherals`, so it
+    // closes it too, and the WAL is checkpointed on a graceful shutdown. A graph that started
+    // without memory has no vault to close.
+    (): void => {
+      services.peripherals.memoryVault?.close();
+    },
+    // #4068: the qualification spend ledger opens lazily on the first budgeted model call.
+    (): void => {
+      args.runtimeConfig.releaseSpendBudget?.();
+    },
     (): void => {
       args.bundle.dispose?.();
     },
-  ]);
+  ];
 }
 
 // `dispose` writes the runtime shutdown lines last. A process that owns its Activity Log seals it
@@ -6398,7 +6592,41 @@ async function thenSealActivityLog(
   }
 }
 
-type RuntimeShutdownOutcome = "not-applicable" | "ended" | "refused" | "faulted";
+export type RuntimeShutdownOutcome = "not-applicable" | "ended" | "refused" | "faulted";
+
+/**
+ * The live run stops first, while the MCP connections it may still call are open. Closing them is
+ * attempted whatever the run's stop did, so a failed close never leaves a runtime running and a
+ * failed stop never leaves connections open. The caller rethrows the first failure after both ran;
+ * the outcome names the runtime's own result, never the connections'.
+ */
+export async function stopRuntimeThenMcp(
+  stopRuntime: () => Promise<RuntimeShutdownOutcome>,
+  closeMcp: () => Promise<void>,
+): Promise<{ readonly outcome: RuntimeShutdownOutcome; readonly failure?: Error }> {
+  const [runtime] = await Promise.allSettled([stopRuntime()]);
+  const [mcp] = await Promise.allSettled([closeMcp()]);
+  if (runtime.status === "rejected")
+    return { outcome: "faulted", failure: asTeardownError(runtime.reason) };
+  if (mcp.status === "rejected")
+    return { outcome: runtime.value, failure: asTeardownError(mcp.reason) };
+  return { outcome: runtime.value };
+}
+
+function stopForDispose(
+  services: UiHandlerRuntimeServices,
+  mcpConnections: ConfiguredMcpConnections,
+  correlationId: string,
+): ReturnType<typeof stopRuntimeThenMcp> {
+  return stopRuntimeThenMcp(
+    () => shutdownCodingRuntime(services, correlationId),
+    () => mcpConnections.close(),
+  );
+}
+
+function asTeardownError(reason: unknown): Error {
+  return reason instanceof Error ? reason : new Error("Teardown failed.", { cause: reason });
+}
 
 async function shutdownCodingRuntime(
   services: UiHandlerRuntimeServices,
@@ -6449,11 +6677,9 @@ async function disposeUiHandler(
   // there was nothing to stop, which is not the same as stopping cleanly.
   let runtimeShutdown: RuntimeShutdownOutcome = "not-applicable";
   try {
-    await mcpConnections.close();
-    runtimeShutdown = await shutdownCodingRuntime(services, correlationId);
-  } catch (error) {
-    runtimeShutdown = "faulted";
-    throw error;
+    const stopped = await stopForDispose(services, mcpConnections, correlationId);
+    runtimeShutdown = stopped.outcome;
+    if (stopped.failure !== undefined) throw stopped.failure;
   } finally {
     await thenSealActivityLog(args.options, () =>
       disposeRuntimeServicesRecorded(
@@ -6517,6 +6743,7 @@ interface CodingRuntimeControlPlaneDeps {
   codingRuntimeHostQualified?: UiHandlerDeps["codingRuntimeHostQualified"];
   codingSafeActivityProjection?: UiHandlerDeps["codingSafeActivityProjection"];
   codingRuntimeUnavailableReason?: UiHandlerDeps["codingRuntimeUnavailableReason"];
+  codingRuntimeGatewayService?: UiHandlerDeps["codingRuntimeGatewayService"];
   codingRuntimeEvidenceClass?: UiHandlerDeps["codingRuntimeEvidenceClass"];
   codingRuntimeVersion?: UiHandlerDeps["codingRuntimeVersion"];
   codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
@@ -6527,6 +6754,7 @@ interface CodingRuntimeControlPlaneDeps {
   mintDescriptionAuthority?: UiHandlerDeps["mintDescriptionAuthority"];
   openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
   toolFacadeBridge?: UiHandlerDeps["toolFacadeBridge"];
+  codingScheduledWakes?: UiHandlerDeps["codingScheduledWakes"];
 }
 
 // Same-named pass-throughs from `CodingRuntimeControlPlane` onto `CodingRuntimeControlPlaneDeps`:
@@ -6544,6 +6772,7 @@ const CODING_RUNTIME_CONTROL_PLANE_PASSTHROUGH_KEYS = [
   "mintDescriptionAuthority",
   "openCodeGatewayReadinessRegistry",
   "toolFacadeBridge",
+  "codingScheduledWakes",
 ] as const;
 
 type CodingRuntimeControlPlanePassthroughDeps = Pick<
@@ -6566,11 +6795,11 @@ function buildCodingRuntimeControlPlaneDeps(
   controlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
   composition: Pick<
     ProductionRuntimeComposition,
-    "unavailableReason" | "evidenceClass" | "runtimeVersion"
+    "unavailableReason" | "evidenceClass" | "runtimeVersion" | "windowsGatewayService"
   >,
 ): CodingRuntimeControlPlaneDeps {
   if (controlPlane === undefined) return {};
-  const { unavailableReason, evidenceClass, runtimeVersion } = composition;
+  const { unavailableReason, evidenceClass, runtimeVersion, windowsGatewayService } = composition;
   return {
     codingRuntimeOrchestrator: controlPlane.orchestrator,
     codingRuntimeEventHub: controlPlane.eventHub,
@@ -6583,6 +6812,9 @@ function buildCodingRuntimeControlPlaneDeps(
       : {
           codingRuntimeEvidenceClass: evidenceClass ?? "functional-not-platform-qualified",
           ...(runtimeVersion === undefined ? {} : { codingRuntimeVersion: runtimeVersion }),
+          ...(windowsGatewayService === undefined
+            ? {}
+            : { codingRuntimeGatewayService: windowsGatewayService }),
         }),
     ...(controlPlane.cancellationRegistry !== undefined
       ? {
@@ -6637,6 +6869,15 @@ function resolveCodingRuntimeDeploymentCeiling(
   );
 }
 
+function memoryDeploymentCeilingFields(
+  configured: CodingWorkbenchMode | undefined,
+): Pick<UiHandlerDeps, "memoryDeploymentCeiling" | "memoryDeploymentCeilingConfigured"> {
+  return {
+    memoryDeploymentCeiling: configured ?? "governed-assist",
+    memoryDeploymentCeilingConfigured: configured !== undefined,
+  };
+}
+
 function resolveConfiguredDeploymentCeiling(
   options: BuildHandlerDepsOptions,
 ): CodingWorkbenchMode | undefined {
@@ -6657,6 +6898,7 @@ interface ProductionRuntimeComposition {
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+  readonly windowsGatewayService?: WindowsGatewayServiceProbe | undefined;
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
   readonly materializedPatches?: MaterializedPatchRegistry | undefined;
   readonly dispose?: (() => void) | undefined;
@@ -6667,8 +6909,14 @@ interface ProductionRuntimePortResolution {
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+  readonly windowsGatewayService?: WindowsGatewayServiceProbe | undefined;
   readonly activated: boolean;
 }
+
+type ActivatedRuntimeFacts = Pick<
+  ProductionRuntimeComposition,
+  "evidenceClass" | "runtimeVersion" | "windowsGatewayService"
+>;
 
 function unqualifiedComposition(
   unavailableReason: CodingWorkbenchRuntimeUnavailableReason,
@@ -6677,25 +6925,39 @@ function unqualifiedComposition(
 }
 
 /**
- * ADR-0137 D2 (#3873): the two Authority Envelope bounds are operator settings. Both are parsed
+ * ADR-0137 D2 (#3873): the Authority Envelope duration is an operator setting. It is parsed
  * ONCE here, before runtime activation, so an invalid value fails the composition closed at
  * startup, and the same numbers reach every newly minted envelope and the safe-activity
  * retention that must outlive it.
  */
 interface RuntimeEnvelopeBounds {
-  readonly promptTokenBudget: number;
   readonly maxDurationMinutes: number;
 }
 
 function configuredRuntimeEnvelopeBounds(env: EnvSource): RuntimeEnvelopeBounds {
+  recordRetiredPromptTokenSetting(env);
   return {
-    promptTokenBudget: configuredRuntimePromptTokenBudget(
-      env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS,
-    ),
     maxDurationMinutes: configuredRuntimeMaxDurationMinutes(
       env.KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES,
     ),
   };
+}
+
+// Keiko does not cap prompt tokens (#4346): an operator who still sets the retired
+// `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` gets no cap, so composition records once, body-free,
+// that the setting is ignored instead of leaving the operator to believe it applies.
+function recordRetiredPromptTokenSetting(env: EnvSource): void {
+  if (env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS === undefined) return;
+  emitServerDiagnostic(undefined, {
+    correlationId: "coding-runtime-composition",
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.composition.retired-setting",
+    source: "coding-runtime.composition",
+    errorClass: "RetiredSettingIgnored",
+    message: "retired-setting-ignored",
+    diagnosticOutcome: "routine",
+    code: "setting=prompt-token-allowance",
+  });
 }
 
 // #3903 AC4: an approved Code Mode `worktree_create` becomes a managed task workspace through the
@@ -6792,6 +7054,7 @@ function resolveProductionRuntimePorts(
       });
       return result.status === "available" ? result.runMetadata : undefined;
     },
+    requiresCompleteReasoningHistory: completeReasoningHistoryPolicy(args.runtimeConfig),
     // #3903 AC1: the chat models a native run's agents may use; each one still has to resolve.
     gatewayCodingModelIds: (): readonly string[] => configuredChatModelIds(args),
     activityLog: processServerLogSink(),
@@ -6804,8 +7067,21 @@ function resolveProductionRuntimePorts(
     unavailableReason: activation.unavailableReason,
     evidenceClass: activation.evidenceClass,
     runtimeVersion: activation.runtimeVersion,
+    windowsGatewayService: activation.windowsGatewayService,
     activated: activation.ports !== undefined,
   };
+}
+
+function completeReasoningHistoryPolicy(
+  config: RuntimeGatewayConfig,
+): (modelId: string) => boolean {
+  return (modelId): boolean =>
+    config
+      .current()
+      ?.providers.some(
+        (provider) =>
+          provider.modelId === modelId && provider.reasoningHistory === "required-with-tools",
+      ) === true;
 }
 
 /**
@@ -6818,6 +7094,7 @@ function resolveProductionRuntimePorts(
  * read-only-volume problem on the one directory the Coding runtime cannot work without had no
  * observable reason anywhere. Content-free: the error class only — never the path.
  */
+
 function materializedManagedRoot(
   managedTaskWorkspaceRoot: string,
   diagnostics: ServerDiagnosticSink | undefined,
@@ -6847,7 +7124,6 @@ function runtimeWorkspaceAuthority(
     workspaceLifecycle,
     managedTaskWorkspaceRoot,
     deploymentCeiling,
-    promptTokenBudget: envelopeBounds.promptTokenBudget,
     maxDurationMinutes: envelopeBounds.maxDurationMinutes,
     readWorkspaceHead: readProductionWorkspaceHead,
     verifiedCommitResult: (runId) =>
@@ -6930,13 +7206,12 @@ function productionRuntimeResolver(
   );
 }
 
-function activatedRuntimeFacts(
-  resolution: ProductionRuntimePortResolution,
-): Pick<ProductionRuntimeComposition, "evidenceClass" | "runtimeVersion"> {
+function activatedRuntimeFacts(resolution: ProductionRuntimePortResolution): ActivatedRuntimeFacts {
   return {
     // Fail-closed default: an unthreaded activation degrades to the weak class, never to verified.
     evidenceClass: resolution.evidenceClass ?? "functional-not-platform-qualified",
     runtimeVersion: resolution.runtimeVersion,
+    windowsGatewayService: resolution.windowsGatewayService,
   };
 }
 
@@ -7096,7 +7371,7 @@ function qualifiedProductionRuntimeComposition(
   resolver: ProductionCodingRuntimeResolver,
   readiness: OpenCodeGatewayReadinessRegistry,
   mutationPorts: RuntimeMutationPorts,
-  evidence: Pick<ProductionRuntimeComposition, "evidenceClass" | "runtimeVersion">,
+  evidence: ActivatedRuntimeFacts,
 ): ProductionRuntimeComposition {
   const { runtimeMutationLeaseBroker, materializedPatches } = mutationPorts;
   return {
@@ -7170,7 +7445,7 @@ function localKnowledgeKeys(env: EnvSource): ReturnType<typeof createLocalKnowle
 }
 
 // #4098: the Chat content policy is resolved once per deps graph and recorded on the startup
-// correlation, so a misspelled opt-out is visible as a warning instead of a silent default.
+// correlation, so a misspelled value is visible as a warning instead of a silent default.
 function resolveLoggedContentPolicy(
   env: EnvSource,
   correlationId: string,
@@ -7178,6 +7453,42 @@ function resolveLoggedContentPolicy(
   const policy = resolveContentRedactionPolicy(env);
   logChatContentPolicyResolved(processServerLogSink(), correlationId, policy);
   return policy;
+}
+
+interface RedactionProjections {
+  readonly redactString: (value: string) => string;
+  readonly liveRedactor: Redactor;
+  readonly contentPolicy: ResolvedContentRedactionPolicy;
+  readonly contentRedactString: (value: string) => string;
+  readonly contentRedactor: Redactor;
+}
+
+// The two projections of one running configuration: the strict one evidence and audit keep, and the
+// content one that people and models read under the deployment policy.
+function buildRedactionProjections(
+  env: EnvSource,
+  runtimeConfig: RuntimeGatewayConfig,
+  egress: GatewayConfig["egress"],
+  correlationId: string,
+): RedactionProjections {
+  // Redaction parses Java in a bounded worker; its starts and retirements reach this log.
+  installJavaParserLogSink(processServerLogSink());
+  const redactString = runtimeRedactString(env, runtimeConfig, egress);
+  const contentPolicy = resolveLoggedContentPolicy(env, correlationId);
+  const contentRedactString = runtimeContentRedactString(
+    env,
+    runtimeConfig,
+    egress,
+    redactString,
+    contentPolicy,
+  );
+  return {
+    redactString,
+    liveRedactor: (value: unknown): unknown => deepRedactStrings(value, redactString),
+    contentPolicy,
+    contentRedactString,
+    contentRedactor: (value: unknown): unknown => deepRedactStrings(value, contentRedactString),
+  };
 }
 
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
@@ -7191,24 +7502,21 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bootstrapCorrelationId,
   );
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
-  const codingWorkbenchEvidenceStore =
-    options.codingWorkbenchEvidenceStore ??
-    createNodeEvidenceStore(join(resolvedEvidenceDir, "coding-workbench"));
-  const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
-  const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
-  const localKnowledgeKeyProvider = localKnowledgeKeys(options.env);
-  const contentPolicy = resolveLoggedContentPolicy(options.env, bootstrapCorrelationId);
+  const projections = buildRedactionProjections(
+    options.env,
+    runtimeConfig,
+    egress,
+    bootstrapCorrelationId,
+  );
   const bundle = buildPersistenceBundle(
     options,
     resolvedUiDbPath,
-    redactString,
+    projections.redactString,
     evidenceStore,
     bootstrapCorrelationId,
-    runtimeContentRedactString(options.env, runtimeConfig, egress, redactString, contentPolicy),
+    projections.contentRedactString,
   );
-  const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
-  const codingSessionContinuity = buildCodingSessionContinuity(options, resolvedUiDbPath, bundle);
   return assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,
@@ -7218,15 +7526,18 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     runtimeConfig,
     egress,
     evidenceStore,
-    codingWorkbenchEvidenceStore,
-    redactString,
-    liveRedactor,
-    localKnowledgeKeyProvider,
+    codingWorkbenchEvidenceStore:
+      options.codingWorkbenchEvidenceStore ??
+      createNodeEvidenceStore(join(resolvedEvidenceDir, "coding-workbench")),
+    redactString: projections.redactString,
+    liveRedactor: projections.liveRedactor,
+    contentRedactor: projections.contentRedactor,
+    localKnowledgeKeyProvider: localKnowledgeKeys(options.env),
     bundle,
-    contextProfileForModel,
+    contextProfileForModel: buildContextProfileResolver(() => runtimeConfig.current()),
     bootstrapCorrelationId,
-    contentPolicy,
-    codingSessionContinuity,
+    contentPolicy: projections.contentPolicy,
+    codingSessionContinuity: buildCodingSessionContinuity(options, resolvedUiDbPath, bundle),
     mcpCredentialRelay: createMcpCredentialRelay(),
   });
 }

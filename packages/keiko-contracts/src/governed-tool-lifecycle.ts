@@ -179,7 +179,16 @@ interface ToolLifecycleSettlement {
   readonly outputBytes?: number;
   readonly resultCount?: number;
   readonly truncated?: boolean;
+  /** The provider's own closed refusal word behind a provider-reported error; never a body. */
+  readonly providerReason?: ToolProviderReason;
 }
+export const TOOL_PROVIDER_REASONS = Object.freeze([
+  "budget-exhausted",
+  "selection-unavailable",
+  "selection-too-large",
+  "invalid-arguments",
+] as const);
+export type ToolProviderReason = (typeof TOOL_PROVIDER_REASONS)[number];
 export interface ToolLifecycleFailureDiagnostics {
   readonly errorKind: string;
   readonly frames: readonly string[];

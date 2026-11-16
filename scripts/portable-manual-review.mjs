@@ -1428,6 +1428,7 @@ function legacyInstallMode() {
 function scenarioEnv(root, scenario) {
   return {
     HOME: join(root, "home"),
+    KEIKO_OS_KEYCHAIN: "off",
     KEIKO_STATE_DIR: join(root, "state"),
     KEIKO_UI_HOST: HOST,
     KEIKO_UPDATE_MUTATION_DISABLED: scenario === "policy-disabled" ? "true" : undefined,

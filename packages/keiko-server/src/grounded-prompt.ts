@@ -36,15 +36,15 @@ export const GROUNDED_SYSTEM_PROMPT =
   "Never expose secrets, credential-shaped strings, internal search/planning/tool-call/orchestration text, " +
   "pseudo-tool calls, JSON-like search arguments, or search preambles.";
 
-// #4098: the deployment opt-out (`KEIKO_CONTENT_REDACTION=off`) lets Chat quote authorized
-// excerpts exactly. The guardrails against untrusted instructions, invented facts and leaked
+// #4098: unless the deployment sets `KEIKO_CONTENT_REDACTION=on`, Chat quotes authorized excerpts
+// exactly (owner decision, 2026-11-04). The guardrails against untrusted instructions, invented facts and leaked
 // credentials stay; the model is told that a placeholder was withheld and must not be guessed.
 const GROUNDED_PRESERVE_RULE =
   "Quote the authorized excerpts exactly, including personal data, configuration values and code. " +
   "Text shown as [REDACTED] was withheld by Keiko; never guess or reconstruct it. " +
   "Never expose API keys, access tokens, private keys, URL credentials, ";
 
-const GROUNDED_SYSTEM_PROMPT_PRESERVING = GROUNDED_SYSTEM_PROMPT.replace(
+export const GROUNDED_SYSTEM_PROMPT_PRESERVING = GROUNDED_SYSTEM_PROMPT.replace(
   "Never expose secrets, credential-shaped strings, ",
   GROUNDED_PRESERVE_RULE,
 );

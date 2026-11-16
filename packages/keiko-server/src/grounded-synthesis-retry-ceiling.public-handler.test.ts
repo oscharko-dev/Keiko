@@ -386,50 +386,24 @@ function connectPluralFolders(deps: UiHandlerDeps, chatId: string): void {
 function assertActualCallerInputPremise(
   deps: UiHandlerDeps,
   budget: GroundedSynthesisCallBudget,
-  requestBody: string,
+  requestBodies: readonly string[],
   inputGrant: number,
-  question: string,
 ): void {
-  expect(budget.remaining()).toBe(1);
-  const charged = vi.mocked(budget.recordUsage).mock.calls[0]?.[0];
-  if (charged === undefined) throw new TypeError("Expected the actual dispatched input charge");
-  const first = JSON.parse(requestBody) as GatewayPromptTokenInput;
-  expect(charged.promptTokens).toBe(countGatewayPromptTokens(first));
-  expect(charged.completionTokens).toBe(0);
+  expect(budget.remaining()).toBe(0);
+  const charges = vi.mocked(budget.recordUsage).mock.calls.map(([usage]) => usage);
+  expect(charges).toHaveLength(2);
+  expect(charges.map((usage) => usage.completionTokens)).toEqual([0, 1]);
+  const requests = requestBodies.map((body) => JSON.parse(body) as GatewayPromptTokenInput);
+  const sentTokens = requests.map((request) => countGatewayPromptTokens(request));
+  expect(charges.map((usage) => usage.promptTokens)).toEqual(sentTokens);
+  expect(sentTokens.reduce((total, tokens) => total + tokens, 0)).toBeGreaterThan(inputGrant);
   const modelCap = modelWindowAwareBudget(deps, MODEL).modelInputTokensMax;
-  expect(countGatewayPromptTokens(first)).toBeLessThanOrEqual(modelCap);
-  expect(
-    Buffer.byteLength(first.messages.map((message) => message.content).join("\n")),
-  ).toBeLessThanOrEqual(modelInputPromptByteLimit(modelCap));
-  expect(inputGrant - charged.promptTokens).toBeLessThan(
-    countGatewayPromptTokens({ messages: [{ role: "user", content: question }] }),
-  );
-}
-
-function evaluatedOverheadBytes(result: RouteResult): number {
-  const body = result.body as { readonly error?: { readonly message?: unknown } };
-  const message = body.error?.message;
-  const match =
-    typeof message === "string" ? /prompt overhead \((\d+) bytes\)/iu.exec(message) : null;
-  if (match?.[1] === undefined) throw new TypeError("Expected the actual prompt overhead refusal");
-  return Number(match[1]);
-}
-
-function assertEvaluatedOverheadFitsModel(
-  result: RouteResult,
-  deps: UiHandlerDeps,
-  budget: GroundedSynthesisCallBudget,
-  inputGrant: number,
-): void {
-  const charged = vi.mocked(budget.recordUsage).mock.calls[0]?.[0];
-  if (charged === undefined) throw new TypeError("Expected the actual dispatched input charge");
-  const overheadBytes = evaluatedOverheadBytes(result);
-  expect(overheadBytes).toBeLessThanOrEqual(
-    modelInputPromptByteLimit(modelWindowAwareBudget(deps, MODEL).modelInputTokensMax),
-  );
-  expect(overheadBytes).toBeGreaterThan(
-    modelInputPromptByteLimit(inputGrant - charged.promptTokens),
-  );
+  for (const request of requests) {
+    expect(countGatewayPromptTokens(request)).toBeLessThanOrEqual(modelCap);
+    expect(
+      Buffer.byteLength(request.messages.map((message) => message.content).join("\n")),
+    ).toBeLessThanOrEqual(modelInputPromptByteLimit(modelCap));
+  }
 }
 
 async function scriptedProviderTurn(
@@ -506,7 +480,7 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
   );
 
   it.each(["single", "plural"])(
-    "keeps %s caller input refusal distinct after one charged adopted-window attempt",
+    "retries an individually fitting %s prompt after adopting the provider window",
     async (sourceMode) => {
       const requests = installProvider([OVERFLOW, CITED]);
       const { deps, chatId } = configuredRuntime(0, undefined, undefined, 1024, 8193);
@@ -518,32 +492,31 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
       const reserve = vi.spyOn(spend, "reserve");
       const question = callerInputQuestion();
       const result = await handleGroundedAsk(route(chatId, question), deps);
-      expect(requests).toHaveLength(1);
-      expect(reserve).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ content: CITED });
+      expect(requests).toHaveLength(2);
+      expect(reserve).toHaveBeenCalledTimes(2);
       expect(budgets).toHaveLength(1);
       const budget = budgets[0];
       if (budget === undefined) throw new TypeError("Expected the actual synthesis budget");
-      assertActualCallerInputPremise(deps, budget, requests[0] ?? "", inputGrant, question);
-      assertEvaluatedOverheadFitsModel(result, deps, budget, inputGrant);
+      assertActualCallerInputPremise(deps, budget, requests, inputGrant);
       const records = readPersistedActivityLog(stateDir);
       expect(records).toContain('"op":"gateway.context-window.retry"');
       expect(records).toContain('"state":"adopted"');
-      expect(result.status).toBe(403);
-      expect(result.body).toMatchObject({ error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" } });
-      expect(records).toContain('"diagnosticErrorClass":"CallerAttemptAdmissionError"');
+      expect(records).not.toContain('"diagnosticErrorClass":"CallerAttemptAdmissionError"');
     },
   );
 
-  it("retains a completed plural answer when its caller input grant cannot fund marker repair", async () => {
+  it("repairs a plural answer when both prompts individually fit the model window", async () => {
     const requests = installProvider([UNCITED, CITED]);
     const { deps, chatId } = configuredRuntime(0, undefined, undefined, 1024, 8193);
     connectPluralFolders(deps, chatId);
     const result = await handleGroundedAsk(route(chatId, callerInputQuestion()), deps);
-    expect(requests).toHaveLength(1);
+    expect(requests).toHaveLength(2);
     expect(result.status).toBe(200);
-    expect(result.body).toMatchObject({ content: UNCITED });
+    expect(result.body).toMatchObject({ content: CITED });
     const answer = result.body as GroundedAnswer;
-    expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(true);
+    expect(answer.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(false);
   });
 
   it("keeps the single-source answerer allowance refusal distinct after actual window adoption", async () => {
@@ -850,6 +823,50 @@ describe("the shared two-call ceiling across actual configured gateway synthesis
     expect(turn.completedCount).toBe(1);
     expect(turn.report).toContain("1 request(s)");
   });
+
+  it.each(["single", "plural"])(
+    "retries two individually fitting large prompts without a cumulative input quota (%s)",
+    async (sourceMode) => {
+      const requests = installProvider([TRANSIENT, CITED]);
+      const { deps, chatId } = configuredRuntime(1, undefined, undefined, 1024, 8193);
+      if (sourceMode === "plural") connectPluralFolders(deps, chatId);
+      const grants = modelWindowAwareBudget(deps, MODEL);
+      const budgets = observeActualSynthesisBudgets();
+      const spend = deps.gatewayConfig?.spendBudget;
+      if (spend === undefined) throw new TypeError("Expected the real durable spend budget");
+      const reserve = vi.spyOn(spend, "reserve");
+      const result = await handleGroundedAsk(route(chatId, callerInputQuestion()), deps);
+      const sentTokens = requests.map((body) =>
+        countGatewayPromptTokens(JSON.parse(body) as GatewayPromptTokenInput),
+      );
+      expect(sentTokens[0]).toBeGreaterThan(grants.modelInputTokensMax / 2);
+      expect(sentTokens.every((tokens) => tokens <= grants.modelInputTokensMax)).toBe(true);
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ content: CITED });
+      expect(requests).toHaveLength(2);
+      expect(reserve).toHaveBeenCalledTimes(2);
+      expect(budgets).toHaveLength(1);
+      const budget = budgets[0];
+      if (budget === undefined) throw new TypeError("Expected the actual synthesis budget");
+      assertActualCallerInputPremise(deps, budget, requests, grants.modelInputTokensMax);
+      const totalInput = sentTokens.reduce((total, tokens) => total + tokens, 0);
+      expect(totalInput).toBeGreaterThan(grants.modelInputTokensMax);
+      expect(requests.map(requestedOutputTokens)).toEqual([
+        grants.modelOutputTokensMax,
+        grants.modelOutputTokensMax,
+      ]);
+      const answer = result.body as GroundedAnswer;
+      if (answer.groundingKind !== "connected-context")
+        throw new TypeError("Expected folder grounding");
+      if (sourceMode === "single")
+        expect(answer.contextPack.usage.modelInputTokens).toBeLessThanOrEqual(
+          answer.contextPack.budget.modelInputTokensMax,
+        );
+      else expect(answer.contextPack.usage.modelInputTokens).toBeGreaterThanOrEqual(totalInput);
+      expect(answer.contextPack.usage.modelOutputTokens).toBe(1);
+      expect(readPersistedActivityLog(stateDir)).toContain('"op":"gateway.retry.scheduled"');
+    },
+  );
 
   it("preserves unrelated buffered gateway recovery under the configured retry policy", async () => {
     const requests = installProvider([TRANSIENT, CITED]);

@@ -248,7 +248,7 @@ describe("CodingToolAuthorityPort", () => {
     expect(delegationFits).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: "capability",
-        usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        usage: { toolCalls: 1, patchBytes: 0 },
       }),
     );
     delegationFits.mockReturnValue(false);
@@ -1164,7 +1164,7 @@ describe("CodingToolAuthorityPort", () => {
         capability: "runtime-capability-secret",
         delegationId: "action-1",
         idempotencyKey: "key-1",
-        usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        usage: { toolCalls: 1, patchBytes: 0 },
         liveFacts,
       }),
     );
@@ -2159,7 +2159,7 @@ describe("CodingToolAuthorityPort", () => {
       expect(fixture.delegations[1]).toMatchObject({
         delegationId: expect.stringMatching(/^materialized-patch:[a-f0-9]{64}$/u) as string,
         idempotencyKey: expect.stringMatching(/^materialized-patch:[a-f0-9]{64}$/u) as string,
-        usage: { toolCalls: 0, promptTokens: 0 },
+        usage: { toolCalls: 0 },
       });
     });
 
@@ -2587,8 +2587,7 @@ function nativeInvocationAuthorityFixture(nativeFileIO?: GovernedNativeFileIO): 
     catalogActivityLog: log,
     ciRepairBudget: {
       admitTool: charges,
-      canChargePrompt: () => ({ accepted: true }),
-      chargePrompt: () => ({ accepted: true }),
+      admitModelCall: () => ({ accepted: true }),
       observed: () => undefined,
     },
   });
@@ -3409,7 +3408,7 @@ describe("native effect admission (#3897 review)", () => {
       expect.objectContaining({
         capability: "runtime-capability-secret",
         delegationId: expect.stringMatching(/^native-invocation-[a-f0-9]{64}$/u) as string,
-        usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        usage: { toolCalls: 1, patchBytes: 0 },
         workspaceRoot: "/managed/workspace",
         deploymentCeiling: "autonomous-delivery",
       }),

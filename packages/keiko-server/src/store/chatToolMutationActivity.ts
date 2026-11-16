@@ -7,13 +7,17 @@ import {
 import type { ServerLogSink } from "../observability/index.js";
 import type {
   ChatToolMutationLinkCounts,
+  ChatToolMutationMetrics,
   ChatToolMutationLocalRefusal,
   ChatToolMutationRecord,
 } from "./chatToolMutationTypes.js";
 // Keiko's closed write-failure and field-validation vocabularies. `localRefusal` assigns the
 // contract types to them, so a reason the contracts add fails the type check until it is listed.
 const REFUSAL_REASONS = [
+  "effect-denied",
+  "cancelled",
   "auth-failed",
+  "auth-unverified",
   "permission-denied",
   "not-found",
   "rate-limited",
@@ -31,6 +35,7 @@ const FIELD_VALIDATIONS = [
   "invalid-field",
   "invalid-operation",
   "bounds-exceeded",
+  "invalid-epic-link",
 ] as const;
 const MUTATION_STATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -94,6 +99,13 @@ const MUTATION_STATE = defineActivityLogOperation({
     linkRequestedCount: { type: "integer", dataClass: "count", required: false },
     linkCreatedCount: { type: "integer", dataClass: "count", required: false },
     linkFailedCount: { type: "integer", dataClass: "count", required: false },
+    descriptionConvertedHeadingCount: { type: "integer", dataClass: "count", required: false },
+    descriptionProjection: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["supported-markdown"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -129,12 +141,30 @@ function remoteRejection(
     ? { rejection: "jira-error-document" }
     : {};
 }
+function serializationMetrics(
+  event: string,
+  metrics: ChatToolMutationMetrics | undefined,
+): ChatToolMutationMetrics {
+  const count = metrics?.descriptionConvertedHeadingCount;
+  if (event !== "settled") return {};
+  const headingCount =
+    typeof count === "number" && Number.isInteger(count) && count > 0 && count <= 32768
+      ? { descriptionConvertedHeadingCount: count }
+      : {};
+  return {
+    ...headingCount,
+    ...(metrics?.descriptionProjection === "supported-markdown"
+      ? { descriptionProjection: "supported-markdown" }
+      : {}),
+  };
+}
 export function recordChatToolMutation(
   log: ServerLogSink,
   record: ChatToolMutationRecord,
   event: "prepared" | "replayed" | "dispatched" | "response" | "settled",
   links?: ChatToolMutationLinkCounts,
   refusal?: ChatToolMutationLocalRefusal,
+  metrics?: ChatToolMutationMetrics,
 ): void {
   try {
     log.write(
@@ -153,6 +183,7 @@ export function recordChatToolMutation(
           outcome: record.outcome ?? "none",
           ...remoteRejection(event, record),
           ...localRefusal(record, refusal),
+          ...serializationMetrics(event, metrics),
           ...(links === undefined
             ? {}
             : {

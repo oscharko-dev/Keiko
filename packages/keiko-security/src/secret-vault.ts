@@ -25,6 +25,7 @@ import { execFileSync } from "node:child_process";
 import {
   closeSync,
   existsSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   openSync,
@@ -35,7 +36,7 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -45,6 +46,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isSealed, openString, sealString } from "./secretbox.js";
 import { atomicPublishRename } from "./fs-atomic-rename.js";
+import { serializedSecretVault } from "./secret-vault-serialization.js";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: this package now owns the 0o700/0o600 hardening
 // pair; import it from the sibling module (relative — we ARE keiko-security).
 import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js";
@@ -52,9 +54,17 @@ import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js"
 // `emitKeychainFallback` is the shared `security.keychain.fallback` reporter so this file's own
 // keychain reader (below) reports the identical shape as `readMacosKeychainSecret`'s.
 import {
+  createKeychainSecretMemo,
   emitKeychainFallback,
   KEYCHAIN_SPAWN_TIMEOUT_MS,
+  emitKeychainWithheld,
+  KEYCHAIN_SPAWN_WITHOUT_TERMINAL,
   keychainItemNotFound,
+  keychainWithheldReason,
+  MACOS_SECURITY_EXECUTABLE,
+  processKeychainSecretMemo,
+  realKeychainWithheld,
+  type KeychainSecretMemo,
 } from "./macos-keychain.js";
 // Independent activity-log seam (ADR-0019, w4a-security-log-port).
 import {
@@ -63,10 +73,14 @@ import {
   startSecurityLogTimer,
   type SecurityLogSink,
 } from "./log-port.js";
+import {
+  attestWindowsVaultCustody,
+  secureWindowsVaultDirectory,
+  type WindowsVaultCustodyPorts,
+} from "./windows-vault-custody.js";
 
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
-const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
 const MAX_VAULT_STACK_CHARS = 16 * 1024;
 const MAX_VAULT_STACK_LINES = 64;
 const MAX_VAULT_FRAMES = 8;
@@ -260,7 +274,12 @@ const SECURITY_VAULT_ENTRIES_DELETED_OPERATION = defineActivityLogOperation({
   category: "security",
   owner: "keiko-security",
   emitter: "secret-vault.emitEntriesDeleted",
-  fields: { count: { type: "integer", dataClass: "count", required: true } },
+  fields: {
+    count: { type: "integer", dataClass: "count", required: true },
+    // Entries of other owners the caller left untouched on purpose (a seal prunes only what its own
+    // previous version named); present only when the caller reports it. Count only.
+    foreignRetainedCount: { type: "integer", dataClass: "count", required: false },
+  },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -374,9 +393,28 @@ export interface ResolveLocalVaultKeyOptions {
    * Omitted or `undefined` keeps this resolver exactly as silent as before.
    */
   readonly sink?: SecurityLogSink | undefined;
+  /**
+   * Test seam for the Windows custody attestation of the keyfile tier (#4358). On Windows the key
+   * file and its directory are attested as private to the current principal before the key is
+   * used (windows-vault-custody.ts); `platform` lets a test on another host exercise that path
+   * with injected inspection and protection. Production callers pass none.
+   */
+  readonly windowsCustody?:
+    (WindowsVaultCustodyPorts & { readonly platform?: NodeJS.Platform | undefined }) | undefined;
 }
 
 export interface LocalSecretVault {
+  /** Atomic across all writers of this vault, including other processes. No implicit retry. */
+  readonly compareAndSet?: (
+    reference: string,
+    expected: string | undefined,
+    next: string | undefined,
+  ) => boolean;
+  /** Private asynchronous-use lease. Kernel-owned until release/process exit, no stored payload. */
+  readonly acquireLease?: (
+    reference: string,
+    scope?: "record" | "collection",
+  ) => (() => void) | undefined;
   // Returns the decrypted secret for `reference`, or undefined when no entry exists. Throws a
   // SecretboxError when an entry exists but cannot be opened (wrong key or tampered store).
   readonly get: (reference: string) => string | undefined;
@@ -396,10 +434,16 @@ export interface LocalSecretVault {
   readonly delete: (reference: string) => void;
   // Removes every named reference in one read-merge-write (single-file) or after preflighting
   // every shard path (sharded). Empty lists are a no-op.
-  readonly deleteMany: (references: readonly string[]) => void;
+  readonly deleteMany: (references: readonly string[], options?: VaultDeleteOptions) => void;
   readonly has: (reference: string) => boolean;
   // Lists the stored references (NON-SECRET identifiers only; never decrypts).
   readonly list: () => readonly string[];
+}
+
+/** What a caller that prunes by ownership can report on the one deletion line. */
+export interface VaultDeleteOptions {
+  /** Stored entries the caller does not own and therefore left in place; a count, never a name. */
+  readonly foreignRetainedCount?: number;
 }
 
 export interface LocalSecretVaultDeps {
@@ -432,8 +476,9 @@ function keyFromEnv(
 }
 
 // The macOS `security` CLI invocation, isolated behind a one-line seam so the keychain reader logic
-// (read-hit, read-miss-then-generate, generate-failure) is unit-testable with a fake runner.
-export type KeychainCommandRunner = (args: readonly string[]) => string;
+// (read-hit, read-miss-then-generate, generate-failure) is unit-testable with a fake runner. `input`
+// is written to the command's stdin; a key travels there, never in the argument vector.
+export type KeychainCommandRunner = (args: readonly string[], input?: string) => string;
 
 // The spawn is bounded for the reason the shared owner documents [GEN-MAINT-COUPLING-006]: a locked,
 // absent, or policy-withheld keychain makes `security` raise a modal dialog instead of returning, and
@@ -443,16 +488,38 @@ export function createKeychainCommandRunner(
   executable = MACOS_SECURITY_EXECUTABLE,
   timeoutMs = KEYCHAIN_SPAWN_TIMEOUT_MS,
 ): KeychainCommandRunner {
-  return (args: readonly string[]): string =>
-    execFileSync(executable, args, {
+  return (args: readonly string[], input?: string): string => {
+    if (executable === MACOS_SECURITY_EXECUTABLE && realKeychainWithheld()) {
+      throw new Error("The real keychain is withheld from this process.");
+    }
+    return execFileSync(executable, args, {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+      ...(input === undefined ? {} : { input }),
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
+      // Without a controlling terminal: `getpass` would otherwise read a foreground launch's
+      // terminal instead of the piped key (see the constant).
+      ...KEYCHAIN_SPAWN_WITHOUT_TERMINAL,
       timeout: timeoutMs,
       killSignal: "SIGKILL",
     });
+  };
 }
 
 const defaultKeychainCommandRunner = createKeychainCommandRunner();
+
+// The production runner shares the process memo with `readMacosKeychainSecret`; an injected runner
+// gets a memo of its own, so a test proves the reuse without the real keychain.
+const injectedRunnerMemos = new WeakMap<KeychainCommandRunner, KeychainSecretMemo>();
+
+function keychainMemoFor(runCommand: KeychainCommandRunner): KeychainSecretMemo {
+  if (runCommand === defaultKeychainCommandRunner) return processKeychainSecretMemo;
+  let memo = injectedRunnerMemos.get(runCommand);
+  if (memo === undefined) {
+    memo = createKeychainSecretMemo();
+    injectedRunnerMemos.set(runCommand, memo);
+  }
+  return memo;
+}
 
 // Builds the default keychain-backed key access for a service. Exported with an injectable runner so
 // the reader/generate branches are deterministically testable without the real login keychain.
@@ -460,10 +527,20 @@ export function createKeychainVaultKeyAccess(
   keychainService: string,
   runCommand: KeychainCommandRunner = defaultKeychainCommandRunner,
   sink?: SecurityLogSink,
+  env?: Readonly<Record<string, string | undefined>>,
 ): LocalVaultKeychainAccess {
   return (): Buffer | undefined => {
     if (process.platform !== "darwin") return undefined;
+    const withheld =
+      runCommand === defaultKeychainCommandRunner ? keychainWithheldReason(env) : undefined;
+    if (withheld !== undefined) {
+      emitKeychainWithheld(sink, withheld);
+      return undefined;
+    }
     const account = userInfo().username;
+    const memo = keychainMemoFor(runCommand);
+    const remembered = memo.get(keychainService, account);
+    if (remembered !== undefined) return Buffer.from(remembered, "base64");
     const elapsedMs = startSecurityLogTimer();
     let found: string;
     try {
@@ -485,12 +562,15 @@ export function createKeychainVaultKeyAccess(
       emitKeychainFallback(sink, error, elapsedMs);
       return undefined;
     }
+    let key: Buffer;
     try {
-      return decodeKeyOrThrow(found);
+      key = decodeKeyOrThrow(found);
     } catch {
       // A stored value we cannot decode is replaced, as before.
       return generateKeychainKey(keychainService, account, runCommand);
     }
+    memo.remember(keychainService, account, found);
+    return key;
   };
 }
 
@@ -500,39 +580,73 @@ function generateKeychainKey(
   runCommand: KeychainCommandRunner,
 ): Buffer | undefined {
   const key = randomBytes(KEY_BYTES);
+  // Not remembered: the next read asks the keychain which key won (see `KeychainSecretMemo`).
+  keychainMemoFor(runCommand).forget(keychainService, account);
+  const encoded = key.toString("base64");
   try {
-    runCommand([
-      "add-generic-password",
-      // `-U` updates an existing item; without it `security` rejects a duplicate (status 45) and
-      // the "replace an undecodable stored key" path above would never actually replace anything.
-      "-U",
-      "-s",
-      keychainService,
-      "-a",
-      account,
-      "-w",
-      key.toString("base64"),
-    ]);
+    // The key goes over stdin, never in the argument vector, which every process of the same user
+    // can read; bare `-w` makes `security` read it twice, as `writeMacosKeychainSecret` documents.
+    // `-U` updates an existing item; without it `security` rejects a duplicate (status 45) and
+    // the "replace an undecodable stored key" path above would never actually replace anything.
+    runCommand(
+      ["add-generic-password", "-U", "-s", keychainService, "-a", account, "-w"],
+      `${encoded}\n${encoded}\n`,
+    );
     return key;
   } catch {
     return undefined;
   }
 }
 
-function keyFromKeyfile(vaultDir: string, keyfileName: string): Buffer {
-  const keyfile = resolve(vaultDir, keyfileName);
+function keyFromKeyfile(options: ResolveLocalVaultKeyOptions): Buffer {
+  const keyfile = resolve(options.vaultDir, options.keyfileName);
   // Refuse to read or write the key through a symlinked path segment so a hostile symlink cannot
   // redirect key material outside the hardened vault directory.
   assertNoSymlinkedPathSegments(keyfile);
   ensureDirHardened(dirname(keyfile));
   assertNoSymlinkedPathSegments(keyfile);
-  if (existsSync(keyfile)) {
-    return decodeKeyOrThrow(readFileSync(keyfile, "utf8").trim());
+  const windows = (options.windowsCustody?.platform ?? process.platform) === "win32";
+  let created: Buffer | undefined;
+  if (!existsSync(keyfile)) {
+    // A new file inherits its directory's permissions on Windows: the directory is made private
+    // and verified first, so the key is never readable by another principal (#4358).
+    if (windows) {
+      secureWindowsVaultDirectory(
+        { directory: dirname(keyfile), sink: options.sink },
+        options.windowsCustody,
+      );
+    }
+    created = randomBytes(KEY_BYTES);
+    writeDurableTextFile(keyfile, created.toString("base64"), FILE_MODE);
+    chmodIfPresent(keyfile, FILE_MODE);
   }
-  const key = randomBytes(KEY_BYTES);
-  writeDurableTextFile(keyfile, key.toString("base64"), FILE_MODE);
-  chmodIfPresent(keyfile, FILE_MODE);
-  return key;
+  if (windows) return readWindowsAttestedKey(keyfile, options);
+  return created ?? decodeKeyOrThrow(readFileSync(keyfile, "utf8").trim());
+}
+
+// Windows has no mode bits: 0o700/0o600 above change nothing there. The key is therefore read
+// from ONE open descriptor whose identity the attestation is bound to, after the key file and its
+// directory were attested (and, when needed, made) private to the current principal (#4358). A
+// refusal throws before the key is read. The outcome is recorded by the custody owner, on the
+// Activity Log and in the process summary that `/api/health` and `keiko status` show: an
+// inspection that cannot run stays `unattested` there and is never read as attested.
+function readWindowsAttestedKey(keyfile: string, options: ResolveLocalVaultKeyOptions): Buffer {
+  const fd = openSync(keyfile, "r");
+  try {
+    const stat = fstatSync(fd, { bigint: true });
+    attestWindowsVaultCustody(
+      {
+        directory: dirname(keyfile),
+        keyfile,
+        keyfileIdentity: { dev: stat.dev, ino: stat.ino },
+        sink: options.sink,
+      },
+      options.windowsCustody,
+    );
+    return decodeKeyOrThrow(readFileSync(fd, "utf8").trim());
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function emitKeyResolutionFailed(sink: SecurityLogSink | undefined, error: unknown): void {
@@ -554,15 +668,15 @@ export function resolveLocalVaultKey(options: ResolveLocalVaultKeyOptions): Reso
     emitKeyResolutionFailed(options.sink, error);
     throw error;
   }
-  emitSecurityLogEvent(
-    options.sink,
-    activityLogEvent(
-      SECURITY_VAULT_KEY_RESOLVED_OPERATION,
-      { level: "info" },
-      { source: resolved.source },
-    ),
-  );
+  emitKeyResolved(options.sink, resolved.source);
   return resolved;
+}
+
+function emitKeyResolved(sink: SecurityLogSink | undefined, source: LocalVaultKeySource): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(SECURITY_VAULT_KEY_RESOLVED_OPERATION, { level: "info" }, { source }),
+  );
 }
 
 function computeLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLocalVaultKey {
@@ -570,10 +684,10 @@ function computeLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLoc
   if (fromEnv !== undefined) return { key: fromEnv, source: "env" };
   const keychainAccess =
     options.keychainAccess ??
-    createKeychainVaultKeyAccess(options.keychainService, undefined, options.sink);
+    createKeychainVaultKeyAccess(options.keychainService, undefined, options.sink, options.env);
   const fromKeychain = keychainAccess();
   if (fromKeychain !== undefined) return { key: fromKeychain, source: "keychain" };
-  return { key: keyFromKeyfile(options.vaultDir, options.keyfileName), source: "keyfile" };
+  return { key: keyFromKeyfile(options), source: "keyfile" };
 }
 
 function assertNoSymlinkedPathSegments(resolvedPath: string): void {
@@ -864,13 +978,19 @@ function emitEntriesDeleted(
   sink: SecurityLogSink | undefined,
   count: number,
   elapsedMs: () => number,
+  options: VaultDeleteOptions | undefined,
 ): void {
   emitSecurityLogEvent(
     sink,
     activityLogEvent(
       SECURITY_VAULT_ENTRIES_DELETED_OPERATION,
       { durationMs: elapsedMs() },
-      { count },
+      {
+        count,
+        ...(options?.foreignRetainedCount === undefined
+          ? {}
+          : { foreignRetainedCount: options.foreignRetainedCount }),
+      },
     ),
   );
 }
@@ -879,11 +999,13 @@ function deleteManyWithLog(
   sink: SecurityLogSink | undefined,
   references: readonly string[],
   run: () => void,
+  options?: VaultDeleteOptions,
 ): void {
-  if (references.length === 0) return;
+  // Nothing to delete is no storage work, but a caller that left foreign entries alone says so.
+  if (references.length === 0 && (options?.foreignRetainedCount ?? 0) === 0) return;
   const elapsedMs = startSecurityLogTimer();
   try {
-    run();
+    if (references.length > 0) run();
   } catch (error) {
     emitSecurityLogEvent(
       sink,
@@ -899,7 +1021,7 @@ function deleteManyWithLog(
     );
     throw error;
   }
-  emitEntriesDeleted(sink, references.length, elapsedMs);
+  emitEntriesDeleted(sink, references.length, elapsedMs, options);
 }
 
 function setManyWithLog(
@@ -1192,6 +1314,39 @@ function replaceAllShards(
  * `list` reads only filenames and never decrypts, which is what lets a caller reconcile stored
  * bodies against its own index.
  */
+
+type VaultGuard = <T>(operation: () => T) => T;
+
+function guardedSetMany(
+  guarded: VaultGuard,
+  sink: SecurityLogSink | undefined,
+  next: ReadonlyMap<string, string>,
+  merge: (entries: ReadonlyMap<string, string>) => void,
+): void {
+  setManyWithLog(sink, next, (entries) => {
+    guarded(() => {
+      merge(entries);
+    });
+  });
+}
+
+function guardedDeleteMany(
+  guarded: VaultGuard,
+  sink: SecurityLogSink | undefined,
+  references: readonly string[],
+  remove: () => void,
+  options?: VaultDeleteOptions,
+): void {
+  deleteManyWithLog(
+    sink,
+    references,
+    () => {
+      guarded(remove);
+    },
+    options,
+  );
+}
+
 export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps): LocalSecretVault {
   const { key, sink } = deps;
   const storeDir = resolve(deps.storeDir);
@@ -1203,8 +1358,9 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
     const filePath = optionalShardPath(storeDir, reference);
     return filePath === undefined ? undefined : readShardEnvelope(filePath, sink);
   };
+  const shardPathFor = (reference: string): string => requiredShardPath(storeDir, reference);
 
-  return {
+  return serializedSecretVault(storeDir, assertNoSymlinkedPathSegments, (guarded) => ({
     get: (reference): string | undefined => {
       const envelope = envelopeFor(reference);
       return envelope === undefined ? undefined : openString(key, envelope);
@@ -1213,14 +1369,8 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
       writeShard(storeDir, requiredShardPath(storeDir, reference), sealString(key, secret), sink);
     },
     setMany: (next): void => {
-      setManyWithLog(sink, next, (entries) => {
-        mergeShardEntries(
-          storeDir,
-          (reference) => requiredShardPath(storeDir, reference),
-          key,
-          entries,
-          sink,
-        );
+      guardedSetMany(guarded, sink, next, (entries) => {
+        mergeShardEntries(storeDir, shardPathFor, key, entries, sink);
       });
     },
     replaceAll: (next): void => {
@@ -1229,21 +1379,27 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
     delete: (reference): void => {
       removeShard(storeDir, reference);
     },
-    deleteMany: (references): void => {
-      deleteManyWithLog(sink, references, () => {
-        deleteShardEntries(storeDir, references);
-      });
+    deleteMany: (references, options): void => {
+      guardedDeleteMany(
+        guarded,
+        sink,
+        references,
+        () => {
+          deleteShardEntries(storeDir, references);
+        },
+        options,
+      );
     },
     has: (reference): boolean => envelopeFor(reference) !== undefined,
     list: (): readonly string[] => listShardReferences(storeDir),
-  };
+  }));
 }
 
 export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretVault {
   const { key, sink } = deps;
   const resolvedStorePath = resolve(deps.storePath);
 
-  return {
+  return serializedSecretVault(resolvedStorePath, assertNoSymlinkedPathSegments, (guarded) => ({
     get: (reference): string | undefined => {
       const envelope = readStore(resolvedStorePath)[reference];
       if (envelope === undefined || !isSealed(envelope)) return undefined;
@@ -1253,7 +1409,7 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
       mergeStoreEntries(resolvedStorePath, key, new Map([[reference, secret]]), sink);
     },
     setMany: (next): void => {
-      setManyWithLog(sink, next, (entries) => {
+      guardedSetMany(guarded, sink, next, (entries) => {
         mergeStoreEntries(resolvedStorePath, key, entries, sink);
       });
     },
@@ -1263,12 +1419,128 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
     delete: (reference): void => {
       deleteStoreEntry(resolvedStorePath, reference, sink);
     },
-    deleteMany: (references): void => {
-      deleteManyWithLog(sink, references, () => {
-        deleteStoreEntries(resolvedStorePath, references, sink);
-      });
+    deleteMany: (references, options): void => {
+      guardedDeleteMany(
+        guarded,
+        sink,
+        references,
+        () => {
+          deleteStoreEntries(resolvedStorePath, references, sink);
+        },
+        options,
+      );
     },
     has: (reference): boolean => reference in readStore(resolvedStorePath),
     list: (): readonly string[] => Object.keys(readStore(resolvedStorePath)),
-  };
+  }));
+}
+
+interface RememberedKey {
+  readonly key: Buffer;
+  readonly source: LocalVaultKeySource;
+  /** Sinks that already received this key's `security.vault.key-resolved` line. */
+  readonly announcedTo: WeakSet<object>;
+}
+
+const resolvedKeyCache = new Map<string, RememberedKey>();
+const keychainAccessIds = new WeakMap<LocalVaultKeychainAccess, number>();
+let nextKeychainAccessId = 1;
+
+function keychainAccessCacheId(access: LocalVaultKeychainAccess | undefined): string {
+  if (access === undefined) return "default";
+  let id = keychainAccessIds.get(access);
+  if (id === undefined) {
+    id = nextKeychainAccessId;
+    nextKeychainAccessId += 1;
+    keychainAccessIds.set(access, id);
+  }
+  return String(id);
+}
+
+function resolvedKeyCacheKey(options: ResolveLocalVaultKeyOptions): string {
+  // The operator override value only enters as a digest, so no key material is held as a map key.
+  const envDigest = createHash("sha256")
+    .update(options.env[options.envVarName] ?? "")
+    .digest("hex");
+  return JSON.stringify([
+    resolve(options.vaultDir),
+    options.envVarName,
+    options.keychainService,
+    options.keyfileName,
+    keychainAccessCacheId(options.keychainAccess),
+    // Whether the real keychain is reachable at all changes which tier answers.
+    keychainWithheldReason(options.env) ?? "",
+    envDigest,
+  ]);
+}
+
+/**
+ * A keyfile answer is provisional when the real keychain was asked and gave none: a locked or slow
+ * keychain may answer next time, and the key must then return to it. A withheld keychain, another
+ * platform or an injected seam answers the same way every time and is remembered.
+ */
+export function resolvedKeyIsFinal(
+  options: ResolveLocalVaultKeyOptions,
+  resolved: ResolvedLocalVaultKey,
+): boolean {
+  if (resolved.source !== "keyfile") return true;
+  return (
+    options.keychainAccess !== undefined ||
+    process.platform !== "darwin" ||
+    keychainWithheldReason(options.env) !== undefined
+  );
+}
+
+function rememberedKeyIsCurrent(
+  options: ResolveLocalVaultKeyOptions,
+  remembered: RememberedKey,
+): boolean {
+  // A wiped state directory must not leave a key in use that no file holds any more.
+  return (
+    remembered.source !== "keyfile" || existsSync(resolve(options.vaultDir, options.keyfileName))
+  );
+}
+
+function announceOnce(remembered: RememberedKey, sink: SecurityLogSink | undefined): void {
+  if (sink === undefined || remembered.announcedTo.has(sink)) return;
+  remembered.announcedTo.add(sink);
+  emitKeyResolved(sink, remembered.source);
+}
+
+/**
+ * Resolves a vault key once per process, vault directory and key namespace, and reuses it on every
+ * later call. A key does not change while the process runs, and each uncached resolution can run a
+ * synchronous `security` child process on the event loop, which a per-request caller must not pay
+ * on every request. `security.vault.key-resolved` is written once per key and sink, so the winning
+ * tier stays visible once. A failed resolution is not cached and is retried by the next call, and
+ * so is a keyfile answer given while the real keychain was reachable but silent.
+ */
+export function resolveLocalVaultKeyOnce(
+  options: ResolveLocalVaultKeyOptions,
+): ResolvedLocalVaultKey {
+  const cacheKey = resolvedKeyCacheKey(options);
+  const remembered = resolvedKeyCache.get(cacheKey);
+  if (remembered !== undefined) {
+    if (rememberedKeyIsCurrent(options, remembered)) {
+      announceOnce(remembered, options.sink);
+      return { key: Buffer.from(remembered.key), source: remembered.source };
+    }
+    resolvedKeyCache.delete(cacheKey);
+  }
+  const resolved = resolveLocalVaultKey(options);
+  if (resolvedKeyIsFinal(options, resolved)) {
+    const entry: RememberedKey = {
+      key: Buffer.from(resolved.key),
+      source: resolved.source,
+      announcedTo: new WeakSet(),
+    };
+    if (options.sink !== undefined) entry.announcedTo.add(options.sink);
+    resolvedKeyCache.set(cacheKey, entry);
+  }
+  return resolved;
+}
+
+/** Test seam: forgets every remembered key so a test starts from a cold process. */
+export function resetResolvedLocalVaultKeysForTest(): void {
+  resolvedKeyCache.clear();
 }

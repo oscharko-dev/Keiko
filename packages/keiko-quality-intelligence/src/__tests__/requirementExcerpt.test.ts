@@ -6,6 +6,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  LINEAR_RATIO_MAX,
+  measureScaling,
+  scalingRatio,
+} from "../../../../tests/support/property-testing.js";
+import {
   buildRequirementExcerpt,
   REQUIREMENT_EXCERPT_MAX_CHARS,
 } from "../domain/requirementExcerpt.js";
@@ -102,6 +107,32 @@ describe("buildRequirementExcerpt", () => {
     expect(excerpt).not.toContain(ZWSP);
     expect(excerpt).toContain("for S3");
   });
+
+  it("redacts each of several adjacent addresses and keeps what stands between them", () => {
+    expect(buildRequirementExcerpt("an a.b@x.de.c-@mail.org and z@q.io")).toBe(
+      "an [REDACTED][REDACTED] and [REDACTED]",
+    );
+    expect(buildRequirementExcerpt("keep .-@x.de, @x.de and a@b")).toBe(
+      "keep .-@x.de, @x.de and a@b",
+    );
+  });
+
+  // "1.1.1." and "z.B.z.B." once cost quadratic time: the address pattern read the rest of the
+  // text from every position before it found no "@".
+  it.each(["1.", "z.B.", "x.x@", "a@b.cd "])(
+    "redacts a long run of %j in linear time",
+    { timeout: 60_000 },
+    (piece) => {
+      const scaling = measureScaling({
+        build: (size) => piece.repeat(Math.ceil(size / piece.length)),
+        run: (text) => buildRequirementExcerpt(text),
+        size: 1_000,
+        maximumSize: 4_000,
+      });
+      expect(scaling.measurable, JSON.stringify(scaling)).toBe(true);
+      expect(scalingRatio(scaling), JSON.stringify(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
+    },
+  );
 
   it("is deterministic", () => {
     const text = "The same input must always produce the same excerpt.";

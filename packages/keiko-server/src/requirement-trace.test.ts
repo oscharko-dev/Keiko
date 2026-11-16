@@ -11,6 +11,8 @@ import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
+import { descriptionWithFooter } from "@oscharko-dev/keiko-connectors";
+import { resolveJiraCitationMarkers } from "./atlassian/jiraCitationMarkers.js";
 import { podFixture, specification, type PodFixture } from "./_requirementSupport.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { resetRequirementTurnCache } from "./requirement-inventory.js";
@@ -58,6 +60,396 @@ async function session(
 function scopeOf(references: string): string {
   return references;
 }
+
+describe("source acceptance criteria before a Jira draft can be staged or approved", () => {
+  it("binds complete source revisions even when displayed short digests stay equal", async () => {
+    const { f: source, open } = await session([
+      { capsuleId: "cap-revision", text: specification(1).text },
+    ]);
+    const update = (suffix: string): void => {
+      source.withStore((store) => {
+        store._internal.db
+          .prepare("UPDATE documents SET content_hash = ? WHERE capsule_id = ?")
+          .run("a".repeat(12) + suffix.repeat(52), "cap-revision");
+        store._internal.db
+          .prepare("UPDATE capsules SET updated_at = updated_at + 1000 WHERE id = ?")
+          .run("cap-revision");
+      });
+    };
+    const resolve = (): Extract<TraceResolution, { ok: true }> => {
+      const trace = open();
+      try {
+        const result = trace.resolve(["LH-001"]);
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new TypeError("Expected synthetic requirement trace");
+        return result;
+      } finally {
+        trace.close();
+      }
+    };
+    update("b");
+    const first = resolve();
+    update("c");
+    const second = resolve();
+    expect(first.trace).toEqual(second.trace);
+    expect(first.sourceDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(second.sourceDigest).not.toBe(first.sourceDigest);
+  });
+
+  it("matches exact source punctuation after the canonical Markdown-to-wiki projection", async () => {
+    const text = specification(1).text.replace(
+      "Thema 1 ist verfügbar.",
+      "Datei_a [42] ist verfügbar.",
+    );
+    const { open } = await session([{ capsuleId: "cap-criteria", text }]);
+    const trace = open();
+    try {
+      expect(
+        trace.resolve(["LH-001"], {
+          description: {
+            format: "markdown",
+            text: "## Criteria\n- Datei_a [42] ist verfügbar.\n- Fehler zu Thema 1 werden gemeldet.",
+          },
+        }).ok,
+      ).toBe(true);
+      // Criteria copied only into a code block are not evidence: Keiko writes them itself.
+      const inCode = trace.resolve(["LH-001"], {
+        description: {
+          format: "markdown",
+          text: "## Criteria\n```\nDatei_a [42] ist verfügbar.\nFehler zu Thema 1 werden gemeldet.\n```",
+        },
+      });
+      if (!inCode.ok) throw new TypeError("Expected Keiko to complete the criteria");
+      expect(inCode.trace.footer).toContain("Acceptance criteria (verbatim from the source):");
+      expect(inCode.trace.footer).toContain("Fehler zu Thema 1 werden gemeldet.");
+    } finally {
+      trace.close();
+    }
+  });
+  it("writes an omitted original acceptance criterion into Keiko's own trace block instead of refusing", async () => {
+    const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+    const trace = open();
+    try {
+      for (const description of [
+        "Thema 1 ist verfügbar.",
+        "Thema 1 ist verfügbar. Fehler zu Thema 1 werden nicht gemeldet.",
+        { format: "markdown", text: "## Ziel\nKurz." },
+      ]) {
+        const completed = trace.resolve(["LH-001"], { description });
+        if (!completed.ok) throw new TypeError("Expected Keiko to complete the criteria");
+        const footer = completed.trace.footer;
+        expect(footer).toContain("Acceptance criteria (verbatim from the source):");
+        expect(footer).toContain("Fehler zu Thema 1 werden gemeldet.");
+        // The block sits inside the replaceable trace block, before the source reference lines.
+        expect(footer.indexOf(completed.trace.footerStart)).toBeLessThan(
+          footer.indexOf("Acceptance criteria (verbatim from the source):"),
+        );
+      }
+    } finally {
+      trace.close();
+    }
+  });
+
+  it("writes a criterion that holds replacement patterns such as $$ and $& exactly as the source has it (#4335)", async () => {
+    const criterion = "Der Preis in $$ wird mit $& und $' je Monat ausgewiesen.";
+    const text = [
+      "# Lastenheft",
+      "",
+      "### LH-001 Preise",
+      "",
+      "Das Portal zeigt Preise.",
+      "",
+      "Abnahmekriterien:",
+      `- ${criterion}`,
+      "",
+    ].join("\n");
+    const { open } = await session([{ capsuleId: "cap-dollar", text }]);
+    const trace = open();
+    try {
+      const completed = trace.resolve(["LH-001"], { description: "Das Portal zeigt Preise." });
+      if (!completed.ok) throw new TypeError("Expected Keiko to complete the criterion");
+      expect(completed.trace.footer).toContain(criterion);
+      expect(completed.trace.completedCriteriaCount).toBe(1);
+    } finally {
+      trace.close();
+    }
+  });
+
+  it("writes no criteria block when the description already carries every criterion", async () => {
+    const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+    const trace = open();
+    try {
+      const complete = trace.resolve(["LH-001"], {
+        description: "Thema 1 ist verfügbar. Fehler zu Thema 1 werden gemeldet.",
+      });
+      if (!complete.ok) throw new TypeError("Expected the complete description to resolve");
+      expect(complete.trace.footer).not.toContain("verbatim from the source");
+    } finally {
+      trace.close();
+    }
+  });
+
+  it("binds the same digest and block when a prepared description, footer included, is checked again", async () => {
+    const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+    const trace = open();
+    try {
+      const first = trace.resolve(["LH-001"], { description: "Thema 1 ist verfügbar." });
+      if (!first.ok) throw new TypeError("Expected the first preparation to complete");
+      const prepared = descriptionWithFooter("Thema 1 ist verfügbar.", first.trace);
+      expect(prepared).toContain(first.trace.footerStart);
+      const again = trace.resolve(["LH-001"], { description: prepared });
+      if (!again.ok) throw new TypeError("Expected the prepared description to resolve again");
+      expect(again.sourceDigest).toBe(first.sourceDigest);
+      expect(again.trace.footer).toBe(first.trace.footer);
+    } finally {
+      trace.close();
+    }
+  });
+
+  it.each(["native", "markdown"] as const)(
+    "accepts all original criteria in %s descriptions with only whitespace normalized",
+    async (format) => {
+      const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+      const trace = open();
+      const text = "Thema 1 ist verfügbar.\r\nFehler zu Thema 1\nwerden gemeldet.";
+      try {
+        const description = format === "native" ? text : { format: "markdown", text };
+        expect(trace.resolve(["LH-001"], { description }).ok).toBe(true);
+      } finally {
+        trace.close();
+      }
+    },
+  );
+
+  it("validates the exact criterion an explicit criterion reference implements", async () => {
+    const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+    const trace = open();
+    try {
+      expect(trace.resolve(["LH-001/AC1"], { description: "Thema 1 ist verfügbar." }).ok).toBe(
+        true,
+      );
+      // Only the referenced criterion is completed; AC2 is not part of this reference.
+      const other = trace.resolve(["LH-001/AC1"], {
+        description: "Fehler zu Thema 1 werden gemeldet.",
+      });
+      if (!other.ok) throw new TypeError("Expected Keiko to complete the referenced criterion");
+      expect(other.trace.footer).toContain("Thema 1 ist verfügbar.");
+      expect(other.trace.footer).not.toContain("Fehler zu Thema 1");
+    } finally {
+      trace.close();
+    }
+  });
+});
+
+describe("criteria that carry Keiko's own source labels (LIM32)", () => {
+  // A grounded model cites `[n]` after each criterion; before review Keiko itself replaces each
+  // marker with its source label. The criterion check must read that text as the criterion plus
+  // a citation, or Keiko refuses the description it wrote itself.
+  const labels = new Map([
+    [1, "cap-criteria.md · Lastenheft > LH-001 Thema 1"],
+    [2, "cap-criteria.md · Seite 3"],
+  ]);
+  const cited = (body: string): unknown =>
+    resolveJiraCitationMarkers({ description: body }, labels).arguments.description;
+
+  it("accepts each criterion followed by the labels the citation rewrite wrote", async () => {
+    const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+    const trace = open();
+    try {
+      const description = cited(
+        "h2. Abnahmekriterien\n# Thema 1 ist verfügbar. [1]\n# Fehler zu Thema 1 werden gemeldet. [1][2]",
+      );
+      expect(description).toContain("(cap-criteria.md · Lastenheft > LH-001 Thema 1)");
+      expect(trace.resolve(["LH-001"], { description }).ok).toBe(true);
+    } finally {
+      trace.close();
+    }
+  });
+
+  it.each([
+    "# Thema 1 ist verfügbar. (nur montags)\n# Fehler zu Thema 1 werden gemeldet.",
+    "# Thema 1 ist verfügbar. (fremd.md · Seite 2)\n# Fehler zu Thema 1 werden gemeldet.",
+    "# Thema 1 ist verfügbar. (cap-criteria.md · Seite 3) außer montags\n# Fehler zu Thema 1 werden gemeldet.",
+    "# Thema 1 ist verfügbar. (cap-criteria.md · Seite 3; nur montags)\n# Fehler zu Thema 1 werden gemeldet.",
+  ])(
+    "does not read trailing text that is not a label of this Chat's documents as the criterion, so Keiko writes it: %s",
+    async (body) => {
+      const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+      const trace = open();
+      try {
+        const resolved = trace.resolve(["LH-001"], {
+          description: `h2. Abnahmekriterien\n${body}`,
+        });
+        if (!resolved.ok) throw new TypeError("Expected Keiko to complete the criterion");
+        // The criterion with foreign trailing text is missing, the clean second one is present.
+        expect(resolved.trace.footer).toContain("Thema 1 ist verfügbar.");
+        expect(resolved.trace.footer).not.toContain("Fehler zu Thema 1");
+      } finally {
+        trace.close();
+      }
+    },
+  );
+});
+
+describe("criterion text is active content, not a substring or quotation", () => {
+  it.each([
+    "Not: Thema 1 ist verfügbar.",
+    "Not:\nThema 1 ist verfügbar.",
+    "> Thema 1 ist verfügbar.",
+    "{quote}\nThema 1 ist verfügbar.\n{quote}",
+    "{code}\nThema 1 ist verfügbar.\n{code}",
+  ])(
+    "does not count a criterion copied only into non-evidence content, Keiko writes it: %s",
+    async (description) => {
+      const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+      const trace = open();
+      try {
+        const resolved = trace.resolve(["LH-001/AC1"], { description });
+        if (!resolved.ok) throw new TypeError("Expected Keiko to complete the criterion");
+        expect(resolved.trace.footer).toContain("Thema 1 ist verfügbar.");
+      } finally {
+        trace.close();
+      }
+    },
+  );
+});
+
+const FORMATTED_CRITERIA = [
+  "Der **Status** wird angezeigt.",
+  "Der *Status* wird angezeigt.",
+  "Der Wert `max` wird angezeigt.",
+  "Siehe [Hilfe](https://example.test/hilfe) dazu.",
+] as const;
+
+function formattedSpecification(criterion: string): string {
+  return [
+    "# Lastenheft",
+    "",
+    "### LH-001 Thema",
+    "",
+    "Das Portal unterstützt das Thema; die Bearbeitung ist innerhalb von 10 Minuten abgeschlossen.",
+    "",
+    "Abnahmekriterien:",
+    `- ${criterion}`,
+    "",
+    "Priorität: Muss.",
+    "",
+  ].join("\n");
+}
+
+describe("criteria with Markdown formatting survive the Markdown-to-wiki conversion", () => {
+  it.each(FORMATTED_CRITERIA)("accepts %s written as a Markdown bullet", async (criterion) => {
+    const { open } = await session([
+      { capsuleId: "cap-fmt", text: formattedSpecification(criterion) },
+    ]);
+    const trace = open();
+    try {
+      const collapsed = criterion.replace(/\s+/gu, " ");
+      expect(
+        trace.resolve(["LH-001"], { description: { format: "markdown", text: `- ${collapsed}` } })
+          .ok,
+      ).toBe(true);
+      // Unrelated text does not carry the criterion: Keiko writes the source's own words.
+      const unrelated = trace.resolve(["LH-001"], {
+        description: { format: "markdown", text: "- Etwas ganz anderes." },
+      });
+      if (!unrelated.ok) throw new TypeError("Expected Keiko to complete the criterion");
+      expect(unrelated.trace.footer).toContain("Acceptance criteria (verbatim from the source):");
+      expect(unrelated.trace.footer).not.toContain("Etwas ganz anderes");
+    } finally {
+      trace.close();
+    }
+  });
+
+  it("accepts a multi-line criterion collapsed to one bullet and writes the source words for a paraphrase", async () => {
+    const { open } = await session([
+      { capsuleId: "cap-fmt", text: formattedSpecification("Der Status\nwird angezeigt.") },
+    ]);
+    const trace = open();
+    try {
+      const accepted = { format: "markdown", text: "- Der Status wird angezeigt." };
+      expect(trace.resolve(["LH-001"], { description: accepted }).ok).toBe(true);
+      const paraphrase = { format: "markdown", text: "- Der Status wird dargestellt." };
+      const completed = trace.resolve(["LH-001"], { description: paraphrase });
+      if (!completed.ok) throw new TypeError("Expected Keiko to complete the criterion");
+      expect(completed.trace.footer).toContain("Der Status wird angezeigt.");
+      const exact = trace.resolve(["LH-001"], { description: accepted });
+      if (!exact.ok) throw new TypeError("Expected the exact criterion to resolve");
+      expect(exact.trace.footer).not.toContain("verbatim from the source");
+    } finally {
+      trace.close();
+    }
+  });
+});
+
+function macroSpecification(macro: string, second: boolean): string {
+  return [
+    "# Lastenheft",
+    "",
+    "### LH-001 Thema",
+    "",
+    "Das Portal unterstützt das Thema; die Bearbeitung ist innerhalb von 10 Minuten abgeschlossen.",
+    "",
+    "Abnahmekriterien:",
+    `- ${macro}`,
+    ...(second ? ["- Fehler zu Thema 1 werden gemeldet."] : []),
+    "",
+    "Priorität: Muss.",
+    "",
+  ].join("\n");
+}
+
+describe("a criterion without a checkable representation is refused (F16)", () => {
+  const MACROS = [
+    "{code} Return an error if authentication fails.",
+    "{noformat} Reject an invalid signature.",
+  ] as const;
+
+  it.each(MACROS)("refuses a description that omits the macro criterion: %s", async (macro) => {
+    const { open } = await session([
+      { capsuleId: "cap-macro", text: macroSpecification(macro, false) },
+    ]);
+    const trace = open();
+    try {
+      const omitted = trace.resolve(["LH-001"], {
+        description: {
+          format: "markdown",
+          text: "## Acceptance criteria\n\n- Unrelated description.",
+        },
+      });
+      expect(omitted).toMatchObject({
+        ok: false,
+        reason: "references",
+        problems: [{ reason: "acceptance-criteria-missing" }],
+      });
+    } finally {
+      trace.close();
+    }
+  });
+
+  it.each(MACROS)(
+    "does not let the ordinary second criterion establish the macro one: %s",
+    async (macro) => {
+      const { open } = await session([
+        { capsuleId: "cap-macro", text: macroSpecification(macro, true) },
+      ]);
+      const trace = open();
+      try {
+        const omitted = trace.resolve(["LH-001"], {
+          description: { format: "markdown", text: "- Fehler zu Thema 1 werden gemeldet." },
+        });
+        expect(omitted).toMatchObject({
+          ok: false,
+          problems: [{ reason: "acceptance-criteria-missing" }],
+        });
+        if (omitted.ok) throw new TypeError("Expected the macro criterion refusal");
+        expect(omitted.problems[0]?.reference).toMatch(/:LH-001\/AC1$/u);
+      } finally {
+        trace.close();
+      }
+    },
+  );
+});
 
 describe("trace session", () => {
   it("resolves a scoped reference to doc-scoped labels and a footer with the document and revision", async () => {
@@ -184,6 +576,24 @@ describe("trace session", () => {
 });
 
 describe("trace results and evidence", () => {
+  it("tells the model to preserve literal missing acceptance criteria in the description (S16)", () => {
+    const refusal = traceRefusalData(
+      {
+        ok: false,
+        reason: "references",
+        problems: [{ reference: "document:LH-001/AC2", reason: "acceptance-criteria-missing" }],
+      },
+      "traced",
+    );
+    expect(refusal.guidance).toContain(
+      "Copy each missing acceptance criterion verbatim into fields.description.",
+    );
+    expect(refusal.guidance).toContain("Keep requirementIds");
+    expect(refusal.requirementProblems).toEqual([
+      { ref: "traced", reference: "document:LH-001/AC2", reason: "acceptance-criteria-missing" },
+    ]);
+  });
+
   it("shapes refusals and outcomes for the tool result without echoing long input", () => {
     const refusal = traceRefusalData(
       {
@@ -220,7 +630,10 @@ describe("trace results and evidence", () => {
     tallyRefusal(tally, {
       ok: false,
       reason: "references",
-      problems: [{ reference: "LH-9", reason: "unknown" }],
+      problems: [
+        { reference: "LH-9", reason: "unknown" },
+        { reference: "1234abcd:LH-1/AC1", reason: "acceptance-criteria-missing" },
+      ],
     });
 
     logTrace("req-trace-0002", "draft", tally);
@@ -237,12 +650,14 @@ describe("trace results and evidence", () => {
       tracedItemCount: 3,
       refusedItemCount: 1,
       referenceProblemCount: 1,
+      acceptanceCriteriaMissingCount: 1,
       labelsAppliedCount: 1,
       footerAppliedCount: 2,
       droppedLabelCount: 1,
       unavailable: false,
     });
-    expect(JSON.stringify(line)).not.toContain("LH-9");
+    expect(tally.problems).toBe(2);
+    expect(JSON.stringify(line)).not.toMatch(/LH-9|1234abcd|LH-1|AC1/u);
   });
 
   it("writes nothing when no item named a requirement", () => {

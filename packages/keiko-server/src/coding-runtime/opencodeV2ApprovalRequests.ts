@@ -35,7 +35,15 @@ export interface OpenCodeV2ApprovalDecision {
 
 interface Pending {
   readonly runId: string;
+  /**
+   * What the ask asks for, without its per-ask identity: equal asks of one run share one prompt.
+   * Absent for an ask bound to its own action by an approval digest, which only ever approves that
+   * one call.
+   */
+  readonly contentKey: string | undefined;
+  /** Settles the prompt and every waiter that joined it. */
   readonly resolve: (outcome: OpenCodeV2ApprovalOutcome) => void;
+  readonly join: (signal: AbortSignal) => Promise<OpenCodeV2ApprovalOutcome>;
 }
 
 export interface OpenCodeV2ApprovalRequests {
@@ -66,7 +74,19 @@ interface ParsedAsk {
   readonly actionId: string;
 }
 
+// One run may keep this many prompts open, so a run that asks in a loop cannot use the whole
+// registry up for the others; the global ceiling still bounds the process.
+const MAX_PENDING_ASKS_PER_RUN = 16;
 const MAX_PENDING_ASKS = 64;
+// Per-ask identity: it differs between two asks for the same thing and says nothing about what is
+// asked, so it stays out of the key that decides whether two asks are the same prompt.
+const ASK_IDENTITY_FIELDS: ReadonlySet<string> = new Set([
+  "requestId",
+  "actionId",
+  "idempotencyKey",
+  "approvalId",
+  "expiresAt",
+]);
 const ASK_KEYS: readonly string[] = ["action", "runId", "actionId", "properties"];
 // The call id shape the safe-activity settlement accepts (productionOpenCodeBackend.ts).
 const CALL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -149,8 +169,64 @@ function dispatchPermission(
   }
 }
 
-// Puts the ask to the human and settles it once: the decision, the one human-decision wait, or the
-// caller going away, whichever comes first.
+// Code-unit order, as `Array#sort` without a comparator: the canonical form must not depend on a
+// locale, which `localeCompare` would bring in.
+function compareCodeUnits(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  const entries = record(value);
+  if (entries === undefined) return value;
+  return Object.fromEntries(
+    Object.keys(entries)
+      .sort(compareCodeUnits)
+      .map((key) => [key, canonicalValue(entries[key])]),
+  );
+}
+
+function askContentKey(runId: string, event: SidecarPermissionEvent): string | undefined {
+  if (event.approvalDigest !== undefined) return undefined;
+  const content = Object.fromEntries(
+    Object.entries(event).filter(([key]) => !ASK_IDENTITY_FIELDS.has(key)),
+  );
+  return createHash("sha256")
+    .update(JSON.stringify([runId, canonicalValue(content)]), "utf8")
+    .digest("hex");
+}
+
+// A waiter that joined an open prompt: it gets the prompt's decision, or its own cancellation when
+// its caller goes away first, without disturbing the prompt or the other waiters. `left` runs after
+// a waiter went away on its own, so a prompt nobody waits for any more can be withdrawn.
+function joinedWaiter(
+  waiters: Set<(outcome: OpenCodeV2ApprovalOutcome) => void>,
+  joinerSignal: AbortSignal,
+  left: () => void,
+): Promise<OpenCodeV2ApprovalOutcome> {
+  return new Promise<OpenCodeV2ApprovalOutcome>((joined) => {
+    const finish = (outcome: OpenCodeV2ApprovalOutcome): void => {
+      joinerSignal.removeEventListener("abort", onJoinerAbort);
+      waiters.delete(finish);
+      joined(outcome);
+    };
+    const onJoinerAbort = (): void => {
+      finish("cancelled");
+      left();
+    };
+    if (joinerSignal.aborted) {
+      finish("cancelled");
+      return;
+    }
+    waiters.add(finish);
+    joinerSignal.addEventListener("abort", onJoinerAbort, { once: true });
+  });
+}
+
+// Puts the ask to the human and settles it once: the decision, the one human-decision wait, or every
+// caller going away, whichever comes first. The asker that opened the prompt going away cancels only
+// its own wait while a joined asker still waits for the same decision.
 function humanDecision(
   pending: Map<string, Pending>,
   runId: string,
@@ -160,20 +236,36 @@ function humanDecision(
   diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<OpenCodeV2ApprovalOutcome> {
   return new Promise<OpenCodeV2ApprovalOutcome>((resolve) => {
+    const waiters = new Set<(outcome: OpenCodeV2ApprovalOutcome) => void>();
+    let openerWaits = true;
     const settle = (outcome: OpenCodeV2ApprovalOutcome): void => {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
       pending.delete(event.requestId);
       resolve(outcome);
+      for (const waiter of waiters) waiter(outcome);
+      waiters.clear();
     };
+    const withdrawUnwaited = (): void => {
+      if (!openerWaits && waiters.size === 0) settle("cancelled");
+    };
+    const join = (joinerSignal: AbortSignal): Promise<OpenCodeV2ApprovalOutcome> =>
+      joinedWaiter(waiters, joinerSignal, withdrawUnwaited);
     const onAbort = (): void => {
-      settle("cancelled");
+      openerWaits = false;
+      resolve("cancelled");
+      withdrawUnwaited();
     };
     const timer = setTimeout(() => {
       settle("expired");
     }, GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS);
     timer.unref();
-    pending.set(event.requestId, { runId, resolve: settle });
+    pending.set(event.requestId, {
+      runId,
+      contentKey: askContentKey(runId, event),
+      resolve: settle,
+      join,
+    });
     signal.addEventListener("abort", onAbort, { once: true });
     dispatchPermission(runId, event, onPermission, settle, diagnostics);
   });
@@ -186,21 +278,78 @@ interface RegistryState {
 
 type ApprovalRequestInput = Parameters<OpenCodeV2ApprovalRequests["request"]>[0];
 
-// Puts one parsed ask to the human, within the 64 asks that may wait at once.
-function decideAsk(
+// The prompt already open for the same thing in the same run, if any: its decision is this ask's.
+function openPromptFor(
+  pending: ReadonlyMap<string, Pending>,
+  runId: string,
+  event: SidecarPermissionEvent,
+): Pending | undefined {
+  const contentKey = askContentKey(runId, event);
+  if (contentKey === undefined) return undefined;
+  for (const item of pending.values()) {
+    if (item.runId === runId && item.contentKey === contentKey) return item;
+  }
+  return undefined;
+}
+
+function pendingForRun(pending: ReadonlyMap<string, Pending>, runId: string): number {
+  let count = 0;
+  for (const item of pending.values()) if (item.runId === runId) count += 1;
+  return count;
+}
+
+// Body-free bookkeeping of the registry's two new decisions: counts nothing, names no ask.
+function recordAskBookkeeping(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  message: "approval-ask-coalesced" | "approval-ask-run-bound-refused",
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: "opencode.permission",
+    errorClass: "ApprovalAskBookkeeping",
+    message,
+    diagnosticOutcome: message === "approval-ask-coalesced" ? "routine" : "request-refused",
+  });
+}
+
+// Asks one human decision for an ask: it joins the open prompt for the same thing, or opens its own
+// within the per-run and global bounds, or is `unavailable`.
+function askHuman(
+  state: RegistryState,
+  input: {
+    readonly runId: string;
+    readonly onPermission: (event: SidecarPermissionEvent) => void;
+    readonly signal: AbortSignal;
+  },
+  event: SidecarPermissionEvent,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<OpenCodeV2ApprovalOutcome> | "unavailable" {
+  const { runId, onPermission, signal } = input;
+  if (state.pending.has(event.requestId)) return "unavailable";
+  const open = openPromptFor(state.pending, runId, event);
+  if (open !== undefined) {
+    recordAskBookkeeping(diagnostics, runId, "approval-ask-coalesced");
+    return open.join(signal);
+  }
+  if (pendingForRun(state.pending, runId) >= MAX_PENDING_ASKS_PER_RUN) {
+    recordAskBookkeeping(diagnostics, runId, "approval-ask-run-bound-refused");
+    return "unavailable";
+  }
+  if (state.pending.size >= MAX_PENDING_ASKS) return "unavailable";
+  return humanDecision(state.pending, runId, event, onPermission, signal, diagnostics);
+}
+
+// Puts one parsed ask to the human.
+async function decideAsk(
   state: RegistryState,
   input: ApprovalRequestInput,
   ask: ParsedAsk,
   diagnostics: ServerDiagnosticSink | undefined,
-): Promise<OpenCodeV2ApprovalDecision> | OpenCodeV2ApprovalDecision {
-  const { runId, onPermission, signal } = input;
-  const { event } = ask;
-  if (state.pending.size >= MAX_PENDING_ASKS || state.pending.has(event.requestId)) {
-    return decided(ask, "unavailable");
-  }
-  return humanDecision(state.pending, runId, event, onPermission, signal, diagnostics).then(
-    (outcome) => decided(ask, outcome),
-  );
+): Promise<OpenCodeV2ApprovalDecision> {
+  return decided(ask, await askHuman(state, input, ask.event, diagnostics));
 }
 
 /** The existing Keiko approval lane owns the decision; V2 plugin tools have no native ask API. */
@@ -218,18 +367,7 @@ export function createOpenCodeV2ApprovalRequests(
     requestNative: async (input): Promise<OpenCodeV2ApprovalDecision> => {
       const ask: ParsedAsk = { event: input.event, actionId: input.actionId ?? "" };
       if (input.signal.aborted || state.closed) return nativeDecided(ask, "cancelled");
-      const { runId, onPermission, signal } = input;
-      if (state.pending.size >= MAX_PENDING_ASKS || state.pending.has(ask.event.requestId))
-        return nativeDecided(ask, "unavailable");
-      const outcome = await humanDecision(
-        state.pending,
-        runId,
-        ask.event,
-        onPermission,
-        signal,
-        diagnostics,
-      );
-      return nativeDecided(ask, outcome);
+      return nativeDecided(ask, await askHuman(state, input, ask.event, diagnostics));
     },
     resolve: (runId, requestId, approved): boolean => {
       const item = state.pending.get(requestId);

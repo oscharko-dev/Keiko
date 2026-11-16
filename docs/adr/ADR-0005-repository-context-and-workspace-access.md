@@ -91,6 +91,13 @@ advisory metadata instead of falling back to an unbounded raw content read.
 
 ### D2 — Lexical containment plus canonical identity at guarded content-read IO edges
 
+**Content threshold amendment (owner decision, 2026-11-04).** Keiko runs on the user's own device and
+its stores never leave it, so what a person reads and what the model receives lose only the credential
+floor by default. An absent or empty `KEIKO_CONTENT_REDACTION` now preserves like `off`; `on` lowers the
+threshold back to the strict projection, and an unrecognized value still warns and keeps redaction.
+The BFF therefore sets `contentRedaction: "preserve"` on the Chat connected-context workspace unless the
+deployment chose `on`. Path, root, descriptor, deny-list and byte-budget checks are unchanged.
+
 **Authorized content amendment (2026-10-27, #4098).** The existing public read remains the guarded
 content lane. It preserves authorized source bytes only for a `WorkspaceInfo` that carries
 `contentRedaction: "preserve"`; the workspace package never reads the deployment environment. The
@@ -210,7 +217,14 @@ Filtering has two independent tiers:
    so a denied path answers `denied` before the filesystem or the helper is touched, whether or not
    the path exists (2026-10-07, F27, #3876). A consumer that passes a model-chosen path straight
    through, such as the read-only child, therefore cannot read a denied file, and the answer cannot
-   be used to probe for one.
+   be used to probe for one. Windows resolves one entry by spellings other than its stored name: an
+   alternate data stream suffix (`.env::$DATA`, `dir::$INDEX_ALLOCATION`) and trailing dots or
+   spaces are removed before the lookup, so the verdict also reads the name the filesystem would
+   resolve (the suffix after the first `:` and trailing `.`/` ` removed), on every host, and a
+   segment resolving to `.env.example` keeps the documented exception (2026-11-03, W7 of #4068;
+   observed on NTFS: `.env::$DATA` opened `.env` while the previous predicate answered "not denied").
+   8.3 short names (`ENV~1` for `.env`) cannot be resolved lexically and remain an open Windows
+   blocker: they need a filesystem short-name resolution or disabled 8.3 generation.
 
 2. **`compileIgnore` / `isIgnored` — best-effort noise reduction.** A DOCUMENTED, bounded subset
    of `.gitignore`: blank/comment lines, plain `name`, directory `dir/`, extension `*.ext`,

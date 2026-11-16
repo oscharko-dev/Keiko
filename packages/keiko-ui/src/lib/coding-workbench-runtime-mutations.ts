@@ -128,6 +128,7 @@ function startRequest(
     ...startAgentSelection(current),
     ...startPromptInputs(options),
     ...(options.jiraPodId === undefined ? {} : { jiraPodId: options.jiraPodId }),
+    ...(options.connectorScopes === undefined ? {} : { connectorScopes: options.connectorScopes }),
     ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
   };
   if (options.issue === undefined) return request;

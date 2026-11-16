@@ -1,12 +1,4 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  statSync,
-  symlinkSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +9,11 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+  WINDOWS_HOST,
+} from "../../../../tests/support/symlink-fixture.js";
 import {
   beginOpenCodeTurnImages,
   createOpenCodeRevertRunPort,
@@ -476,7 +473,9 @@ describe("undo of the newest turn", () => {
     const { port, run, log } = subject({ root, busy: true, image: false });
     const key = openCodeNativeCallKey("msg_turn_reply", "call_edit");
     noteOpenCodeEditTargets(run, key, ["a.txt"]);
-    const broken = { ...run, workspaceRoot: join(root, "a.txt") };
+    // A file as the workspace root makes the probe fail with ENOTDIR on POSIX. Windows reports a
+    // path through a file as ENOENT, i.e. "absent", so there a NUL byte makes the probe throw.
+    const broken = { ...run, workspaceRoot: WINDOWS_HOST ? `${root}\0` : join(root, "a.txt") };
     recordOpenCodeEditSettled(broken, key, log);
     await run.agentImages?.work;
 
@@ -520,6 +519,25 @@ describe("undo of the newest turn", () => {
     expect(log.events).toMatchObject([
       { errorKind: "unavailable", extra: { reason: "run-unavailable" } },
     ]);
+  });
+
+  // #4271: a server stop that disposes the runtime under an undo is no runtime failure.
+  it("refuses an undo the run's teardown overtook as run-unavailable, without a revert-failed warning", async () => {
+    const { port, log } = subject({ disposedDuringDiff: true });
+
+    await expect(port.revertTurn(RUN_ID, "undo", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "run-unavailable",
+    });
+    expect(log.events).toMatchObject([
+      {
+        op: "coding-runtime.revert.refused",
+        correlationId: CORRELATION_ID,
+        errorKind: "unavailable",
+        extra: { runId: RUN_ID, operation: "undo", reason: "run-unavailable" },
+      },
+    ]);
+    expect(JSON.stringify(log.events)).not.toContain(SECRET);
   });
 
   it("answers a failing runtime with a refusal that carries frames, never the error text", async () => {
@@ -629,7 +647,7 @@ describe("restore of an undo", () => {
     expect(client.clearRevert).not.toHaveBeenCalled();
   });
 
-  it("never proves a file a link replaced, even one pointing at identical bytes", async () => {
+  it("never proves a file a link replaced, even one pointing at identical bytes", async (context) => {
     const root = workspace({
       "a.txt": "as the undo left it\n",
       "copy.txt": "as the undo left it\n",
@@ -637,7 +655,21 @@ describe("restore of an undo", () => {
     const { port, client } = subject({ root });
     await port.revertTurn(RUN_ID, "undo");
     rmSync(join(root, "a.txt"));
-    symlinkSync(join(root, "copy.txt"), join(root, "a.txt"));
+    plantSymlinkOrSkip(context, join(root, "copy.txt"), join(root, "a.txt"));
+
+    await expect(port.revertTurn(RUN_ID, "restore")).resolves.toMatchObject({
+      reason: "workspace-changed",
+    });
+    expect(client.clearRevert).not.toHaveBeenCalled();
+  });
+
+  // The directory form: a junction on Windows (no privilege), a directory symlink elsewhere.
+  it("never proves a file a directory redirection replaced", async () => {
+    const root = workspace({ "a.txt": "as the undo left it\n", "elsewhere/b.txt": "b\n" });
+    const { port, client } = subject({ root });
+    await port.revertTurn(RUN_ID, "undo");
+    rmSync(join(root, "a.txt"));
+    plantDirectoryRedirect(join(root, "elsewhere"), join(root, "a.txt"));
 
     await expect(port.revertTurn(RUN_ID, "restore")).resolves.toMatchObject({
       reason: "workspace-changed",

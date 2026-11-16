@@ -912,8 +912,20 @@ describe("runLifecycleCli", () => {
       /\\system32\\windowspowershell\\v1\.0\\powershell\.exe$/u,
     );
     expect(win.args).not.toContain(url);
-    const encoded = win.args.at(-1) ?? "";
-    expect(Buffer.from(encoded, "base64").toString("utf16le")).toBe(`Start-Process '${url}'`);
+    // #4358: the opener announces its first statement and bounds `Start-Process` to 5 s from there;
+    // the caller waits for the 60 s host start allowance plus that limit. The whole program is
+    // pinned: nothing but these four statements may reach PowerShell.
+    expect(Buffer.from(win.args.at(-1) ?? "", "base64").toString("utf16le")).toBe(
+      [
+        "[Console]::Out.Write('KEIKO_PROGRAM_STARTED' + [char]10); [Console]::Out.Flush()",
+        "$keikoWatchdog = [Threading.CancellationTokenSource]::new(5000)",
+        "$null = $keikoWatchdog.Token.Register([Action][Delegate]::CreateDelegate([Action], [Diagnostics.Process]::GetCurrentProcess(), 'Kill'))",
+        `Start-Process '${url}'`,
+      ].join("\n"),
+    );
+    expect(win.args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-EncodedCommand"]);
+    expect(win.args).toHaveLength(4);
+    expect(win.timeoutMs).toBe(65_000);
     expect(resolveExternalOpener(url, "darwin")).toEqual({ command: "open", args: [url] });
     expect(resolveExternalOpener(url, "linux")).toEqual({ command: "xdg-open", args: [url] });
   });
@@ -1109,6 +1121,8 @@ describe("runLifecycleCli", () => {
           isProcessAlive: () => true,
           isPortAvailable: () => Promise.resolve(true),
           killProcess,
+          // POSIX semantics on every host: on Windows the stop path would run a real taskkill.
+          platform: () => "linux",
           sleep: () => Promise.resolve(),
         },
       );
@@ -1191,6 +1205,8 @@ describe("runLifecycleCli", () => {
         isProcessAlive: (pid) => (pid === 12345 ? oldProcessAlive : true),
         isPortAvailable: () => Promise.resolve(true),
         killProcess,
+        // POSIX semantics on every host: on Windows the stop path would run a real taskkill.
+        platform: () => "linux",
         sleep: () => Promise.resolve(),
       },
     );
@@ -1242,6 +1258,8 @@ describe("runLifecycleCli", () => {
         isProcessAlive: (pid) => (pid === 12345 ? oldProcessAlive : true),
         isPortAvailable: () => Promise.resolve(true),
         killProcess,
+        // POSIX semantics on every host: on Windows the stop path would run a real taskkill.
+        platform: () => "linux",
         sleep: () => Promise.resolve(),
       },
     );
@@ -1288,6 +1306,8 @@ describe("runLifecycleCli", () => {
         isProcessAlive: (pid) => (pid === 12345 ? oldProcessAlive : true),
         isPortAvailable: () => Promise.resolve(true),
         killProcess,
+        // POSIX semantics on every host: on Windows the stop path would run a real taskkill.
+        platform: () => "linux",
         sleep: () => Promise.resolve(),
       },
     );
@@ -1361,6 +1381,8 @@ describe("runLifecycleCli", () => {
         isProcessAlive: () => false,
         isPortAvailable: () => Promise.resolve(true),
         killProcess,
+        // POSIX semantics on every host: on Windows the stop path would run a real taskkill.
+        platform: () => "linux",
         sleep: () => Promise.resolve(),
       },
     );
@@ -1417,6 +1439,8 @@ describe("runLifecycleCli", () => {
           },
           isPortAvailable: () => Promise.resolve(true),
           killProcess,
+          // POSIX semantics on every host: on Windows the stop path would run a real taskkill.
+          platform: () => "linux",
           sleep: (ms): Promise<void> => {
             now += ms;
             return Promise.resolve();
@@ -1700,6 +1724,8 @@ describe("runLifecycleCli", () => {
           cwd: root,
           isProcessAlive: () => alive,
           killProcess,
+          // POSIX semantics on every host: on Windows the stop path would run a real taskkill.
+          platform: () => "linux",
           sleep: () => Promise.resolve(),
         },
       );
@@ -1736,6 +1762,8 @@ describe("runLifecycleCli", () => {
           cwd: root,
           isProcessAlive: () => true,
           killProcess,
+          // POSIX semantics on every host: on Windows the stop path would run a real taskkill.
+          platform: () => "linux",
           sleep: () => Promise.resolve(),
         },
       );
@@ -1787,6 +1815,8 @@ describe("runLifecycleCli", () => {
           isProcessAlive: () => true,
           isPortAvailable: () => Promise.resolve(true),
           killProcess,
+          // POSIX semantics on every host: on Windows the stop path would run a real taskkill.
+          platform: () => "linux",
           sleep: () => Promise.resolve(),
         },
       );

@@ -10,6 +10,7 @@ import {
 // negative gates (not applicable, lock contention, unknown workspace, invalid strategy).
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { rewriteGitPointerInPlace } from "../test-support/git-pointer-fixture.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -882,7 +883,7 @@ describe("require manual intervention where needed", () => {
 
   it("returns operator-required for a corrupt git pointer (no safe auto-repair)", async () => {
     const instance = await provisionTask("t1");
-    writeFileSync(join(instance.managedWorktreePath, ".git"), "garbage\n");
+    rewriteGitPointerInPlace(join(instance.managedWorktreePath, ".git"), "garbage\n");
     const result = await repair(instance.workspaceId, "operator-repair", true);
     expect(result.applied).toBe(false);
     expect(result.outcome).toBe("operator-required");

@@ -70,6 +70,7 @@ import {
   type PostApplyVerificationPort,
 } from "./postApplyVerification.js";
 import { editorAiStatusActive, resolveEditorAiAssistStatusForRoot } from "./aiAssistActivation.js";
+import { strictRedactor } from "../content-redactor.js";
 
 // A unified diff plus the apply envelope; bounded generously (validatePatch enforces the real patch
 // byte/line/file limits). The diff is held to the shared governed patch cap, so the body must carry a
@@ -310,7 +311,7 @@ function conflictOutcome(
   const rejections = toRejections(validation);
   const applyRunId = recordPatchApplyEvidence(
     ctx.deps.evidenceStore,
-    ctx.deps.redactor,
+    strictRedactor(ctx.deps),
     {
       patchId: ctx.request.patchId,
       decision: "apply",
@@ -327,7 +328,7 @@ function conflictOutcome(
 function failureOutcome(ctx: ApplyContext): EditorPatchApplyWireResponse {
   const applyRunId = recordPatchApplyEvidence(
     ctx.deps.evidenceStore,
-    ctx.deps.redactor,
+    strictRedactor(ctx.deps),
     {
       patchId: ctx.request.patchId,
       decision: "apply",
@@ -358,7 +359,7 @@ async function verificationPreflightOutcome(
   }
   const applyRunId = recordPatchApplyEvidence(
     ctx.deps.evidenceStore,
-    ctx.deps.redactor,
+    strictRedactor(ctx.deps),
     {
       patchId: ctx.request.patchId,
       decision: "apply",
@@ -370,7 +371,7 @@ async function verificationPreflightOutcome(
   );
   const verificationRunId = recordPatchVerificationEvidence(
     ctx.deps.evidenceStore,
-    ctx.deps.redactor,
+    strictRedactor(ctx.deps),
     {
       patchId: ctx.request.patchId,
       rootRealPath: ctx.realRoot,
@@ -391,7 +392,7 @@ async function appliedOutcome(
   const counts = changeCounts(result);
   const applyRunId = recordPatchApplyEvidence(
     deps.evidenceStore,
-    deps.redactor,
+    strictRedactor(deps),
     {
       patchId: request.patchId,
       decision: "apply",
@@ -405,7 +406,7 @@ async function appliedOutcome(
   const { summary, command } = await runVerificationPhase(ctx, result);
   const verificationRunId = recordPatchVerificationEvidence(
     deps.evidenceStore,
-    deps.redactor,
+    strictRedactor(deps),
     { patchId: request.patchId, rootRealPath: ctx.realRoot, command, summary },
     nowMs,
   );
@@ -496,7 +497,7 @@ function rejectedDecisionRouteResult(
 ): RouteResult {
   const applyRunId = recordPatchApplyEvidence(
     deps.evidenceStore,
-    deps.redactor,
+    strictRedactor(deps),
     {
       patchId: request.patchId,
       decision: "reject",

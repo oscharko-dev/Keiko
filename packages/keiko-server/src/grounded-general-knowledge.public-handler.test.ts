@@ -647,12 +647,15 @@ describe("an admitted source answer retains its bounded citation repair", () => 
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(startedAt);
         recordReadiness(admitted.setup, true);
+        const generation = admitted.setup.deps.gatewayConfig?.generation();
+        expect(generation).toBeDefined();
         expect(currentConversationReady(admitted.setup.deps, MODEL)).toBe(true);
         const answer = await ask(admitted.setup, "Explain src/Feature.ts");
         if (answer.groundingKind === "local-knowledge")
           throw new TypeError("Expected connected source answer");
         expect(Date.now() - startedAt).toBe(300_001);
-        expect(currentConversationReady(admitted.setup.deps, MODEL)).toBe(false);
+        expect(admitted.setup.deps.gatewayConfig?.generation()).toBe(generation);
+        expect(currentConversationReady(admitted.setup.deps, MODEL)).toBe(true);
         expect(synthesisCalls(admitted.setup)).toHaveLength(2);
         expect(answer.content.replace(/\s*\[[^\]]+\]/gu, "").trim()).toBe("Feature is true.");
         expect(sourceCitationCount(answer)).toBe(1);

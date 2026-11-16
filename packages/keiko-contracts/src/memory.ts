@@ -57,7 +57,12 @@ export type {
   MemoryUpdatePreImage,
   MemoryValidityInterval,
 } from "./memory-records.js";
-export { MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";
+export {
+  MEMORY_STRUCTURED_PAYLOAD_KINDS,
+  PROFILE_EXCLUDED_MEMORY_TAG,
+  STANDING_FACT_RETENTION_POLICY_KEY,
+  personMemoryTags,
+} from "./memory-records.js";
 
 // ─── Operation envelopes ──────────────────────────────────────────────────────
 export type {
@@ -158,3 +163,5 @@ export {
   isMemoryRecord,
   validateMemoryRecord,
 } from "./memory-record-validation.js";
+
+export { normalizeMemoryText, sameMemoryWord, tokenizeMemoryText } from "./memory-text.js";

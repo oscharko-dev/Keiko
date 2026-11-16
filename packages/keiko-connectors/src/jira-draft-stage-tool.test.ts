@@ -7,11 +7,17 @@ import {
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { field, LINKS_FIELD, response } from "../../../tests/support/jira-managed-remote.js";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+} from "../../../tests/support/jira-test-templates.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { parseJiraDraft } from "./jira-draft.js";
+import { connectionFingerprint } from "./jira-report-tool.js";
 import { createJiraDraftStore, type JiraDraftStoreOptions } from "./jira-draft-store.js";
 import {
   executeJiraDraftStageTool,
+  JIRA_DRAFT_READY_GUIDANCE,
   JIRA_DRAFT_TOO_LARGE_GUIDANCE,
   resolveJiraDraftArguments,
   type JiraDraftActivity,
@@ -54,15 +60,36 @@ function template(...frontMatter: readonly string[]): JiraIssueTemplate {
   if (!result.ok) throw new Error("fixture template must parse");
   return result.template;
 }
+type ExtraRoute = (path: string) => ReturnType<typeof response> | undefined;
 function connection(
   templates?: JiraIssueTemplateSet,
   fields: readonly unknown[] = CREATE_FIELDS,
+  extraRoute?: ExtraRoute,
 ): Parameters<typeof executeJiraDraftStageTool>[2] {
   const http = vi.fn<AtlassianHttpBodyPort>((request) => {
     const path = new URL(request.url).pathname;
-    if (path.endsWith("/project/10000")) return Promise.resolve(response({ key: "SYN" }));
+    const extra = extraRoute?.(path);
+    if (extra !== undefined) return Promise.resolve(extra);
+    if (path.endsWith("/project/10000"))
+      return Promise.resolve(response({ id: "10000", key: "SYN" }));
     if (path.endsWith("/issuetype/10001"))
       return Promise.resolve(response({ id: "10001", name: "Story" }));
+    if (path.endsWith("/issue/SYN-3"))
+      return Promise.resolve(
+        response({
+          id: "20003",
+          key: "SYN-3",
+          fields: { issuetype: { id: "10002", name: "Task" } },
+        }),
+      );
+    if (path.endsWith("/issue/SYN-4"))
+      return Promise.resolve(
+        response({
+          id: "20004",
+          key: "SYN-4",
+          fields: { issuetype: { id: "10001", name: "Story" } },
+        }),
+      );
     if (path.includes("createmeta"))
       return Promise.resolve(
         response({
@@ -80,7 +107,8 @@ function connection(
     baseUrl: "https://jira.example.invalid/context",
     identity: "credential-1",
     http,
-    ...(templates === undefined ? {} : { issueTemplates: (): JiraIssueTemplateSet => templates }),
+    issueTemplates: (): JiraIssueTemplateSet =>
+      templates ?? permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
   };
 }
 function harness(
@@ -93,9 +121,13 @@ function harness(
     args: CatalogJsonObject,
     owner?: string,
     fields?: readonly unknown[],
+    extraRoute?: ExtraRoute,
   ) => ReturnType<typeof executeJiraDraftStageTool>;
 } {
   const store = createJiraDraftStore(storeOptions);
+  // The harness is on one connection: staged drafts resolve under the fingerprint they are stored with.
+  const current = connectionFingerprint(connection());
+  store.bindConnection(() => current);
   const activity: JiraDraftActivity[] = [];
   const base: JiraDraftToolDeps<ManagedMcpInvocationContext> = {
     store,
@@ -105,8 +137,8 @@ function harness(
   return {
     activity,
     deps: base,
-    stage: (args, owner = "chat-1", fields) =>
-      executeJiraDraftStageTool(args, CONTEXT, connection(templates, fields), {
+    stage: (args, owner = "chat-1", fields, extraRoute) =>
+      executeJiraDraftStageTool(args, CONTEXT, connection(templates, fields, extraRoute), {
         ...base,
         owner: () => owner,
       }),
@@ -117,7 +149,7 @@ function item(ref: string, extra: Record<string, unknown> = {}): Record<string, 
     ref,
     projectId: "10000",
     issueTypeId: "10001",
-    fields: { summary: `Item ${ref}`, description: "## Acceptance criteria\n* works" },
+    fields: { summary: `Item ${ref}`, description: "h2. Acceptance criteria\n* works" },
     ...extra,
   };
 }
@@ -136,6 +168,294 @@ function text(value: unknown): string {
 }
 
 describe("jira.draft-stage (#4178)", () => {
+  it("refuses unsupported source labels before storing a draft or dispatching a write", async () => {
+    const h = harness();
+    const target = connection();
+    const append = vi.spyOn(h.deps.store, "append");
+    const result = await executeJiraDraftStageTool(
+      {
+        items: [
+          {
+            ref: "source",
+            projectId: "10000",
+            issueTypeId: "10001",
+            fields: { summary: "Source", labels: ["keiko-source-revision"] },
+          },
+        ],
+      },
+      CONTEXT,
+      target,
+      h.deps,
+    );
+
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        ref: "source",
+        fieldId: "labels",
+        validation: "invalid-field",
+      },
+    });
+    expect(append).not.toHaveBeenCalled();
+    expect(vi.mocked(target.http).mock.calls.every(([request]) => request.method === "GET")).toBe(
+      true,
+    );
+    expect(h.activity).toMatchObject([
+      { phase: "refused", refusal: "invalid-fields", violationCount: 1 },
+    ]);
+  });
+
+  it("refuses source-criterion failure before Jira metadata reads or a staged digest", async () => {
+    const h = harness();
+    const target = connection();
+    const append = vi.spyOn(h.deps.store, "append");
+    const checkRequirements = vi.fn(() => ({
+      data: { outcome: "rejected", reason: "field-validation" },
+      violationCount: 1,
+    }));
+    const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, target, {
+      ...h.deps,
+      checkRequirements,
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      data: { outcome: "rejected", reason: "field-validation" },
+    });
+    expect(checkRequirements).toHaveBeenCalledExactlyOnceWith(pageOf("source").items, CONTEXT);
+    expect(target.http).not.toHaveBeenCalled();
+    expect(append).not.toHaveBeenCalled();
+    expect(h.activity).toMatchObject([
+      { phase: "refused", refusal: "invalid-fields", violationCount: 1 },
+    ]);
+  });
+
+  it("stages the prepared description and labels before validation and binds private revisions", async () => {
+    const h = harness({ templates: [template()], unreadable: 0 });
+    const sourceDigest = "a".repeat(64);
+    const description = "h2. Acceptance criteria\n* works\n\nh2. Source\nRevision A";
+    const prepareRequirements = vi.fn((items: readonly Record<string, unknown>[]) => ({
+      ok: true as const,
+      items: items.map((entry) => ({
+        ...entry,
+        fields: { summary: "Prepared", description, labels: ["keiko-source-revision"] },
+      })),
+      sourceBindings: [{ ref: "source", sourceDigest }],
+    }));
+    const result = await executeJiraDraftStageTool(
+      pageOf("source"),
+      CONTEXT,
+      connection(undefined, [
+        ...CREATE_FIELDS,
+        {
+          ...field("labels", "array"),
+          schema: { type: "array", items: "string", system: "labels" },
+        },
+      ]),
+      { ...h.deps, prepareRequirements },
+    );
+    expect(result.isError).toBeUndefined();
+    const held = h.deps.store.get(text(result.data.draftId), "chat-1");
+    expect(prepareRequirements).toHaveBeenCalledExactlyOnceWith(pageOf("source").items, CONTEXT);
+    expect(held).toMatchObject({
+      items: [{ fields: { description, labels: ["keiko-source-revision"] } }],
+      sourceBindings: [{ ref: "source", sourceDigest }],
+    });
+    expect(
+      resolveJiraDraftArguments(
+        {
+          draftId: result.data.draftId,
+          draftDigest: result.data.draftDigest,
+        },
+        () => held,
+        h.deps.store.connectionOf("chat-1"),
+      ),
+    ).toEqual({ ok: true, arguments: { items: held?.items } });
+    expect(result.data).not.toHaveProperty("sourceBindings");
+  });
+
+  it("checks template sections against prepared fields rather than the original page", async () => {
+    const h = harness();
+    const result = await executeJiraDraftStageTool(
+      pageOf("source"),
+      CONTEXT,
+      connection({ templates: [template()], unreadable: 0 }),
+      {
+        ...h.deps,
+        prepareRequirements: () => ({
+          ok: true,
+          items: [
+            item("source", { fields: { summary: "Prepared", description: "No required section" } }),
+          ],
+          sourceBindings: [{ ref: "source", sourceDigest: "a".repeat(64) }],
+        }),
+      },
+    );
+    expect(result).toMatchObject({ isError: true, data: { reason: "field-validation" } });
+    expect(h.deps.store.size()).toBe(0);
+  });
+
+  it("refuses source preparation before metadata reads and never appends a failed page", async () => {
+    const h = harness();
+    const remote = connection();
+    const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, remote, {
+      ...h.deps,
+      prepareRequirements: () => ({
+        ok: false,
+        data: { outcome: "rejected", reason: "field-validation" },
+        violationCount: 2,
+      }),
+    });
+    expect(result).toMatchObject({ isError: true, data: { reason: "field-validation" } });
+    expect(remote.http).not.toHaveBeenCalled();
+    expect(h.deps.store.size()).toBe(0);
+    expect(h.activity).toMatchObject([{ phase: "refused", violationCount: 2 }]);
+  });
+
+  it.each(["different-ref", "unknown-binding"])(
+    "refuses a prepared page with %s before metadata reads",
+    async (fault) => {
+      const h = harness();
+      const remote = connection();
+      const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, remote, {
+        ...h.deps,
+        prepareRequirements: () => ({
+          ok: true,
+          items: [item(fault === "different-ref" ? "different" : "source")],
+          sourceBindings: [
+            {
+              ref: fault === "unknown-binding" ? "unknown" : "source",
+              sourceDigest: "a".repeat(64),
+            },
+          ],
+        }),
+      });
+      expect(result).toMatchObject({ isError: true, data: { reason: "invalid-input" } });
+      expect(remote.http).not.toHaveBeenCalled();
+      expect(h.deps.store.size()).toBe(0);
+    },
+  );
+
+  it("captures prepared fields before asynchronous metadata reads can change their source", async () => {
+    const h = harness();
+    const prepared = {
+      ref: "source",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Reviewed", description: "h2. Acceptance criteria\n* reviewed" },
+    };
+    const binding = { ref: "source", sourceDigest: "a".repeat(64) };
+    const remote = connection();
+    const delegate = vi.mocked(remote.http).getMockImplementation();
+    if (delegate === undefined) throw new Error("expected fixture HTTP");
+    vi.mocked(remote.http).mockImplementation((request) => {
+      prepared.fields.description = "Changed while checking metadata";
+      binding.sourceDigest = "b".repeat(64);
+      return delegate(request);
+    });
+    const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, remote, {
+      ...h.deps,
+      prepareRequirements: () => ({ ok: true, items: [prepared], sourceBindings: [binding] }),
+    });
+    expect(result.isError).toBeUndefined();
+    const held = h.deps.store.get(text(result.data.draftId), "chat-1");
+    expect(held).toMatchObject({
+      items: [{ fields: { description: "h2. Acceptance criteria\n* reviewed" } }],
+      sourceBindings: [{ sourceDigest: "a".repeat(64) }],
+    });
+    expect(
+      resolveJiraDraftArguments(
+        { draftId: result.data.draftId, draftDigest: result.data.draftDigest },
+        () =>
+          held === undefined
+            ? undefined
+            : {
+                ...held,
+                sourceBindings: [{ ref: "source", sourceDigest: "b".repeat(64) }],
+              },
+        h.deps.store.connectionOf("chat-1"),
+      ),
+    ).toEqual({ ok: false, reason: "draft-changed" });
+  });
+
+  it("rejects untrusted model source bindings as extra stage arguments", async () => {
+    const h = harness();
+    const result = await h.stage({
+      ...pageOf("source"),
+      sourceBindings: [{ ref: "source", sourceDigest: "a".repeat(64) }],
+    });
+    expect(result).toMatchObject({ isError: true, data: { reason: "invalid-input" } });
+    expect(h.deps.store.size()).toBe(0);
+  });
+
+  it("projects every page before the checks, the store and the digest see it (F7)", async () => {
+    const h = harness();
+    const projectItems = vi.fn((items: readonly Record<string, unknown>[]) =>
+      items.map((entry) => ({
+        ...entry,
+        fields: { ...(entry.fields as object), description: `projected ${String(entry.ref)}` },
+      })),
+    );
+    const checkRequirements = vi.fn((_items: readonly unknown[]) => undefined);
+    const deps = { ...h.deps, projectItems, checkRequirements };
+    const first = await executeJiraDraftStageTool(pageOf("a"), CONTEXT, connection(), deps);
+    const second = await executeJiraDraftStageTool(
+      { draftId: text(first.data.draftId), ...pageOf("b") },
+      CONTEXT,
+      connection(),
+      deps,
+    );
+    expect(checkRequirements.mock.calls[0]?.[0]).toMatchObject([
+      { fields: { description: "projected a" } },
+    ]);
+    const resolved = resolveJiraDraftArguments(
+      { draftId: text(first.data.draftId), draftDigest: text(second.data.draftDigest) },
+      (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
+    );
+    expect(resolved?.ok === true ? JSON.stringify(resolved.arguments) : "").toContain(
+      "projected a",
+    );
+    expect(resolved?.ok === true ? JSON.stringify(resolved.arguments) : "").not.toContain(
+      "acceptance criteria\n* works",
+    );
+    expect(resolved?.ok === true ? JSON.stringify(resolved.arguments) : "").toContain(
+      "projected b",
+    );
+  });
+
+  it("refuses a page whose projection pushes a description past its limit, staging nothing (F7)", async () => {
+    const h = harness();
+    const nearLimit = "x".repeat(32_760);
+    const lengthen = (items: readonly Record<string, unknown>[]): Record<string, unknown>[] =>
+      items.map((entry) => ({
+        ...entry,
+        fields: { ...(entry.fields as object), description: `${nearLimit} (a long source label)` },
+      }));
+    const append = vi.spyOn(h.deps.store, "append");
+    const fits = await executeJiraDraftStageTool(
+      { items: [{ ...item("ok"), fields: { summary: "ok", description: nearLimit } }] },
+      CONTEXT,
+      connection(),
+      h.deps,
+    );
+    expect(fits.isError).toBeUndefined();
+    append.mockClear();
+    const refused = await executeJiraDraftStageTool(pageOf("long"), CONTEXT, connection(), {
+      ...h.deps,
+      projectItems: lengthen,
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.data).toMatchObject({
+      reason: "field-validation",
+      ref: "long",
+      fieldId: "description",
+    });
+    expect(append).not.toHaveBeenCalled();
+    expect(h.activity.at(-1)).toMatchObject({ phase: "refused", refusal: "invalid-fields" });
+  });
+
   it("assembles a 70-item draft in pages and resolves to exactly those items", async () => {
     const h = harness();
     const first = await h.stage({ items: page(0, JIRA_DRAFT_PAGE_ITEMS_MAX) });
@@ -154,6 +474,7 @@ describe("jira.draft-stage (#4178)", () => {
     const resolved = resolveJiraDraftArguments(
       { draftId, draftDigest: text(second.data.draftDigest) },
       (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
     );
     expect(resolved?.ok).toBe(true);
     const draft = resolved?.ok === true ? parseJiraDraft(resolved.arguments) : undefined;
@@ -170,11 +491,25 @@ describe("jira.draft-stage (#4178)", () => {
       items: [item("story", { parent: { fieldId: "parent", ref: "epic" } }) as CatalogJsonObject],
     });
     expect(first.data).toMatchObject({ unresolvedRefCount: 1, unresolvedRefs: ["epic"] });
+    expect(first.data).not.toHaveProperty("guidance");
     const second = await h.stage({
       draftId: text(first.data.draftId),
       items: [item("epic") as CatalogJsonObject],
     });
     expect(second.data).toMatchObject({ unresolvedRefCount: 0, unresolvedRefs: [] });
+  });
+
+  // Live rehearsal (#4287): with the creation already requested and Full access selected, the
+  // model read "reviewable draft" and asked the person to confirm twice before calling jira.draft.
+  it("tells the model that a complete draft goes straight to jira.draft without a second confirmation", async () => {
+    const h = harness();
+    const staged = await h.stage({ items: [item("epic") as CatalogJsonObject] });
+    expect(staged.data).toMatchObject({ outcome: "succeeded", unresolvedRefCount: 0 });
+    expect(staged.data.guidance).toBe(JIRA_DRAFT_READY_GUIDANCE);
+    expect(JIRA_DRAFT_READY_GUIDANCE).toContain(
+      "call jira.draft now with only draftId and draftDigest",
+    );
+    expect(JIRA_DRAFT_READY_GUIDANCE).toContain("do not ask the user to confirm again");
   });
 
   it("has no item-count limit: 1,200 items stage in pages and resolve to exactly those items", async () => {
@@ -194,6 +529,7 @@ describe("jira.draft-stage (#4178)", () => {
     const resolved = resolveJiraDraftArguments(
       { draftId: text(draftId), draftDigest: staged?.digest ?? "" },
       (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
     );
     const draft = resolved?.ok === true ? parseJiraDraft(resolved.arguments) : undefined;
     expect(draft?.items).toHaveLength(1200);
@@ -253,6 +589,9 @@ describe("jira.draft-stage (#4178)", () => {
         ref: "one",
         fieldId: "customfield_10103",
         validation: "required-field",
+        messages: [
+          "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+        ],
       },
     });
     expect(h.activity.at(-1)).toMatchObject({
@@ -263,6 +602,63 @@ describe("jira.draft-stage (#4178)", () => {
     });
     const staged = await h.stage(pageOf("one"));
     expect(staged.data).toMatchObject({ newDraft: true, itemCount: 1 });
+  });
+
+  // #4354: an Epic Link to an issue that is not an Epic is refused while the item is written, by the
+  // stage tool itself: before any review card, with nothing staged. The template dry run never
+  // decides it (it has no agile request); the field check does, and this pins that they agree.
+  describe("an item whose Epic Link points to a Task (#4354)", () => {
+    const EPIC_LINK_FIELD = {
+      ...field("customfield_10014", "any"),
+      schema: { type: "any", custom: "com.pyxis.greenhopper.jira:gh-epic-link" },
+    };
+    const route: ExtraRoute = (path) => {
+      if (path.endsWith("/rest/api/2/field"))
+        return response([
+          { id: "customfield_10014", name: "Epic Link", schema: EPIC_LINK_FIELD.schema },
+        ]);
+      if (path.endsWith("/rest/agile/1.0/epic/SYN-9")) return response({ key: "SYN-9" });
+      if (path.includes("/rest/agile/1.0/epic/"))
+        return response({ errorMessages: ["Epic does not exist"] }, 404);
+      return undefined;
+    };
+    const withEpic = (key: string): CatalogJsonObject =>
+      ({
+        items: [
+          item("story", {
+            fields: {
+              summary: "A story",
+              description: "h2. Acceptance criteria\n* ok",
+              customfield_10014: key,
+            },
+          }),
+        ],
+      }) as unknown as CatalogJsonObject;
+    const fields = [...CREATE_FIELDS, EPIC_LINK_FIELD];
+
+    it("is refused by the stage tool, naming the field, and nothing is staged", async () => {
+      const h = harness();
+      const result = await h.stage(withEpic("SYN-5"), "chat-1", fields, route);
+      expect(result).toMatchObject({
+        isError: true,
+        data: {
+          outcome: "rejected",
+          reason: "field-validation",
+          ref: "story",
+          fieldId: "customfield_10014",
+          validation: "invalid-epic-link",
+        },
+      });
+      expect(h.deps.store.size()).toBe(0);
+      expect(h.activity.at(-1)).toMatchObject({ phase: "refused", refusal: "invalid-fields" });
+    });
+
+    it("is staged when the Epic Link points to an Epic", async () => {
+      const h = harness();
+      const result = await h.stage(withEpic("SYN-9"), "chat-1", fields, route);
+      expect(result.data).toMatchObject({ newDraft: true, itemCount: 1 });
+      expect(h.deps.store.size()).toBe(1);
+    });
   });
 
   describe("a template that requires a link (parentLink)", () => {
@@ -312,6 +708,71 @@ describe("jira.draft-stage (#4178)", () => {
     });
   });
 
+  describe("a template that requires the parent's issue type (parentIssueTypes)", () => {
+    const underTask = (): JiraIssueTemplateSet => ({
+      templates: [template('parentField: "parent"', "parentIssueTypes: [Task]")],
+      unreadable: 0,
+    });
+
+    it("stages an item whose parent is an existing issue of an allowed type", async () => {
+      const h = harness(underTask());
+      const staged = await h.stage({
+        items: [
+          item("a", { parent: { fieldId: "parent", issueKey: "SYN-3" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(staged.data).toMatchObject({ outcome: "succeeded", itemCount: 1 });
+    });
+
+    it("refuses an item whose existing parent has another issue type, naming the allowed type", async () => {
+      const h = harness(underTask());
+      const refused = await h.stage({
+        items: [
+          item("a", { parent: { fieldId: "parent", issueKey: "SYN-4" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(refused).toMatchObject({
+        isError: true,
+        data: {
+          ref: "a",
+          violations: [{ ruleId: "parent-type-mismatch", subject: "parent: Task (found: Story)" }],
+        },
+      });
+      expect(h.deps.store.size()).toBe(0);
+    });
+
+    it("leaves the type of a parent that is another draft item to the create gate", async () => {
+      const h = harness(underTask());
+      const staged = await h.stage({
+        items: [
+          item("a", { parent: { fieldId: "parent", ref: "b" } }),
+          item("b", { parent: { fieldId: "parent", issueKey: "SYN-3" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(staged.data).toMatchObject({ outcome: "succeeded", itemCount: 2 });
+    });
+
+    it("still refuses every other rule of an item whose parent is another draft item", async () => {
+      const h = harness(underTask());
+      const refused = await h.stage({
+        items: [
+          item("a", {
+            parent: { fieldId: "parent", ref: "b" },
+            fields: { summary: "Item a", description: "No sections" },
+          }),
+          item("b", { parent: { fieldId: "parent", issueKey: "SYN-3" } }),
+        ] as CatalogJsonObject[],
+      });
+      expect(refused).toMatchObject({ isError: true, data: { ref: "a" } });
+      const data = refused.data as { readonly violations: readonly { readonly ruleId: string }[] };
+      expect(data.violations.map((violation) => violation.ruleId)).not.toContain(
+        "template-unreadable",
+      );
+      expect(data.violations.length).toBeGreaterThan(0);
+      expect(h.deps.store.size()).toBe(0);
+    });
+  });
+
   it.each([
     ["an empty page", { items: [] }],
     ["an unknown argument", { items: [item("a")], extra: true }],
@@ -348,12 +809,72 @@ describe("jira.draft-stage (#4178)", () => {
       draftId: "99999999-9999-4999-8999-999999999999",
       items: [item("b") as CatalogJsonObject],
     });
-    expect(unknown.data).toMatchObject({ reason: "draft-not-found" });
+    const NOT_FOUND =
+      "No draft with this draftId is held for this Chat, so nothing was staged. Call jira.draft-stage again without a draftId: that starts a new draft; then use the draftId it returns, and do not invent one.";
+    expect(unknown.data).toMatchObject({ reason: "draft-not-found", guidance: NOT_FOUND });
     const foreign = await h.stage({ draftId, items: [item("b") as CatalogJsonObject] }, "chat-2");
-    expect(foreign.data).toMatchObject({ reason: "draft-not-found" });
+    expect(foreign.data).toMatchObject({ reason: "draft-not-found", guidance: NOT_FOUND });
     const repeated = await h.stage({ draftId, items: [item("a") as CatalogJsonObject] });
-    expect(repeated.data).toMatchObject({ reason: "duplicate-ref" });
+    expect(repeated.data).toMatchObject({
+      reason: "duplicate-ref",
+      guidance:
+        "Two items of the draft use the same ref. Give every item its own ref and stage the page again; nothing was staged.",
+    });
     expect(h.deps.store.peek(draftId, "chat-1")?.items).toHaveLength(1);
+  });
+});
+
+// #4357 AC3: the three refusals that carried only a code now say what to do next, pinned exactly.
+describe("what a refused staging tells the model to do next (#4357 AC3)", () => {
+  it("names the way out of a page that did not pass Keiko's check", async () => {
+    const h = harness();
+    const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, connection(), {
+      ...h.deps,
+      prepareRequirements: () => ({
+        ok: true,
+        items: [item("different")],
+        sourceBindings: [{ ref: "source", sourceDigest: "a".repeat(64) }],
+      }),
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        reason: "invalid-input",
+        guidance:
+          "An item of this page did not pass Keiko's check of its fields, links or requirement references. Send the page again with every item in the jira.draft item form; nothing was staged.",
+      },
+    });
+  });
+  it("says a draft cannot be staged on a deployment that is not Data Center", async () => {
+    const h = harness();
+    const result = await executeJiraDraftStageTool(
+      pageOf("a"),
+      CONTEXT,
+      { ...connection(), deployment: "cloud" } as unknown as Parameters<
+        typeof executeJiraDraftStageTool
+      >[2],
+      h.deps,
+    );
+    expect(result.data).toMatchObject({
+      reason: "unsupported-deployment",
+      guidance:
+        "Drafts work with Jira Data Center only, and this connection is not one. Tell the user a draft cannot be staged here. Nothing was staged.",
+    });
+  });
+  it("tells a model to stage again when the connection changed since the draft was staged", async () => {
+    const h = harness();
+    const first = await h.stage({ items: [item("a") as CatalogJsonObject] });
+    const result = await executeJiraDraftStageTool(
+      { draftId: text(first.data.draftId), items: [item("b") as CatalogJsonObject] },
+      CONTEXT,
+      { ...connection(), baseUrl: "https://another-jira.example.invalid/context" },
+      h.deps,
+    );
+    expect(result.data).toMatchObject({
+      reason: "connection-changed",
+      guidance:
+        "The Jira connection changed since this draft was staged, so it cannot be extended. Call jira.draft-stage again without a draftId: that starts a new draft on the current connection. Nothing was staged.",
+    });
   });
 });
 
@@ -386,6 +907,7 @@ describe("refs repeated inside one staged page (review)", () => {
     const resolved = resolveJiraDraftArguments(
       { draftId: text(staged.data.draftId), draftDigest: text(staged.data.draftDigest) },
       (id) => h.deps.store.get(id, "chat-1"),
+      h.deps.store.connectionOf("chat-1"),
     );
     expect(resolved?.ok === true && parseJiraDraft(resolved.arguments)).toBeTruthy();
   });
@@ -393,7 +915,22 @@ describe("refs repeated inside one staged page (review)", () => {
 
 describe("resolving the draft a jira.draft call names (#4178)", () => {
   it("is not a reference when the call carries its own items", () => {
-    expect(resolveJiraDraftArguments({ items: [] }, () => undefined)).toBeUndefined();
+    expect(resolveJiraDraftArguments({ items: [] }, () => undefined, undefined)).toBeUndefined();
+  });
+
+  it("resolves a draft only under the connection it was stored with (#4353 AC4)", async () => {
+    const h = harness();
+    const first = await h.stage({ items: [item("a") as CatalogJsonObject] });
+    const args = { draftId: text(first.data.draftId), draftDigest: text(first.data.draftDigest) };
+    const lookup = (id: string): ReturnType<typeof h.deps.store.get> =>
+      h.deps.store.get(id, "chat-1");
+    const stored = h.deps.store.connectionOf("chat-1");
+    expect(resolveJiraDraftArguments(args, lookup, stored)).toMatchObject({ ok: true });
+    for (const current of ["another-jira", "", undefined])
+      expect(resolveJiraDraftArguments(args, lookup, current)).toEqual({
+        ok: false,
+        reason: "connection-changed",
+      });
   });
 
   it("refuses a draft that was extended after its digest was read", async () => {
@@ -403,8 +940,10 @@ describe("resolving the draft a jira.draft call names (#4178)", () => {
     const digest = text(first.data.draftDigest);
     await h.stage({ draftId, items: [item("b") as CatalogJsonObject] });
     expect(
-      resolveJiraDraftArguments({ draftId, draftDigest: digest }, (id) =>
-        h.deps.store.get(id, "chat-1"),
+      resolveJiraDraftArguments(
+        { draftId, draftDigest: digest },
+        (id) => h.deps.store.get(id, "chat-1"),
+        h.deps.store.connectionOf("chat-1"),
       ),
     ).toEqual({ ok: false, reason: "draft-changed" });
   });
@@ -417,9 +956,154 @@ describe("resolving the draft a jira.draft call names (#4178)", () => {
     ],
     ["a malformed digest", { draftId: "11111111-2222-4333-8444-555555555555", draftDigest: "A" }],
   ])("refuses %s as an unknown draft", (_name, args) => {
-    expect(resolveJiraDraftArguments(args, () => undefined)).toEqual({
+    expect(resolveJiraDraftArguments(args, () => undefined, undefined)).toEqual({
       ok: false,
       reason: "draft-not-found",
     });
+  });
+});
+
+describe("staged descriptions before requirement trace", () => {
+  it("refuses an escaped description with requirement references without changing the saved draft", async () => {
+    const h = harness({ templates: [template()], unreadable: 0 });
+    const accepted = await h.stage(pageOf("kept"));
+    const draftId = text(accepted.data.draftId);
+    const before = h.deps.store.peek(draftId, "chat-1");
+    const remote = connection({ templates: [template()], unreadable: 0 });
+    const refused = await executeJiraDraftStageTool(
+      {
+        draftId,
+        items: [
+          item("encoded", {
+            requirementIds: ["REQ-1"],
+            fields: {
+              summary: "Encoded description",
+              description: String.raw`h2. Acceptance criteria\n* exact\nh2. Source\nReference`,
+            },
+          }) as CatalogJsonObject,
+        ],
+      },
+      CONTEXT,
+      remote,
+      h.deps,
+    );
+    expect(refused).toEqual({
+      isError: true,
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        ref: "encoded",
+        fieldId: "description",
+        validation: "invalid-field",
+        messages: [
+          "The text contains escaped line breaks (\\n) and no real line break; send real line breaks instead.",
+        ],
+      },
+    });
+    expect(h.deps.store.peek(draftId, "chat-1")).toEqual(before);
+    expect(h.activity.at(-1)).toMatchObject({
+      phase: "refused",
+      refusal: "invalid-fields",
+      pageItemCount: 1,
+      violationCount: 1,
+    });
+    expect(vi.mocked(remote.http).mock.calls.every(([request]) => request.method === "GET")).toBe(
+      true,
+    );
+  });
+});
+
+describe("native staged description rendering contract", () => {
+  it("refuses Markdown-looking native headings before staging but accepts explicit Markdown", async () => {
+    const h = harness({ templates: [template()], unreadable: 0 });
+    const description = "## Acceptance criteria\n* works";
+    const refused = await h.stage({
+      items: [item("native", { fields: { summary: "Native", description } }) as CatalogJsonObject],
+    });
+    expect(refused).toMatchObject({
+      isError: true,
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        ref: "native",
+        violations: [{ ruleId: "section-missing", subject: "Acceptance criteria" }],
+      },
+    });
+    expect(refused.data.guidance).toEqual(expect.stringContaining("h2. Title"));
+    expect(h.deps.store.size()).toBe(0);
+    expect(h.activity.at(-1)).toMatchObject({
+      phase: "refused",
+      refusal: "template-violation",
+      violationCount: 1,
+    });
+    const explicit = { format: "markdown", text: description };
+    const accepted = await h.stage({
+      items: [
+        item("explicit", {
+          fields: { summary: "Explicit", description: explicit },
+        }) as CatalogJsonObject,
+      ],
+    });
+    expect(accepted.data).toMatchObject({ outcome: "succeeded", itemCount: 1 });
+    expect(
+      h.deps.store.peek(text(accepted.data.draftId), "chat-1")?.items[0]?.fields,
+    ).toMatchObject({ description: explicit });
+  });
+});
+
+describe("jira.draft-stage read reuse", () => {
+  const fifteen = (): CatalogJsonObject =>
+    pageOf(...Array.from({ length: 15 }, (_, index) => `r${String(index)}`));
+
+  it("reads Jira metadata a bounded number of times, not once per item", async () => {
+    const h = harness();
+    const target = connection();
+    const context = { ...CONTEXT };
+    const staged = await executeJiraDraftStageTool(fifteen(), context, target, h.deps);
+    expect(staged.data.outcome).toBe("succeeded");
+    const single = vi.mocked(target.http).mock.calls.length;
+
+    const unshared = connection();
+    await executeJiraDraftStageTool(pageOf("only"), { ...CONTEXT }, unshared, h.deps);
+    const onePerItem = vi.mocked(unshared.http).mock.calls.length;
+
+    // Fifteen items read no more than one item does (one metadata read per resource).
+    expect(single).toBeLessThanOrEqual(onePerItem);
+  });
+
+  it("serves a later page of the same invocation from the reads of the first", async () => {
+    const h = harness();
+    const target = connection();
+    const context = { ...CONTEXT };
+    const first = await executeJiraDraftStageTool(pageOf("a1", "a2"), context, target, h.deps);
+    const afterFirst = vi.mocked(target.http).mock.calls.length;
+    await executeJiraDraftStageTool(
+      { draftId: text(first.data.draftId), ...pageOf("b1", "b2") },
+      context,
+      target,
+      h.deps,
+    );
+    expect(vi.mocked(target.http).mock.calls).toHaveLength(afterFirst);
+  });
+
+  it("never serves a read to another invocation", async () => {
+    const h = harness();
+    const target = connection();
+    await executeJiraDraftStageTool(pageOf("a"), { ...CONTEXT }, target, h.deps);
+    const afterFirst = vi.mocked(target.http).mock.calls.length;
+    await executeJiraDraftStageTool(pageOf("b"), { ...CONTEXT }, target, h.deps);
+    expect(vi.mocked(target.http).mock.calls).toHaveLength(afterFirst * 2);
+  });
+
+  it("reports the reads it sent and reused on the staged and refused activity", async () => {
+    const h = harness();
+    const target = connection();
+    const context = { ...CONTEXT };
+    await executeJiraDraftStageTool(fifteen(), context, target, h.deps);
+    const staged = h.activity.find((entry) => entry.phase === "staged");
+    expect(staged?.readCount).toBe(vi.mocked(target.http).mock.calls.length);
+    expect(staged?.readReusedCount).toBeGreaterThan(0);
+    await executeJiraDraftStageTool({ items: "nope" }, context, target, h.deps);
+    expect(h.activity.at(-1)).toMatchObject({ phase: "refused", readCount: 0, readReusedCount: 0 });
   });
 });

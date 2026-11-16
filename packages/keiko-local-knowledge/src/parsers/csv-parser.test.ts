@@ -54,8 +54,8 @@ describe("csvParser", () => {
     );
     const parsed = rows(normalizedText(result), result.units);
     expect(parsed).toEqual([
-      { tableName: "csv", rowIndex: 0, span: "a=1 | b=2 | c=3\n" },
-      { tableName: "csv", rowIndex: 1, span: "a=4 | b=5 | c=6\n" },
+      { tableName: "csv", rowIndex: 1, span: "csv!2: a=1 | b=2 | c=3\n" },
+      { tableName: "csv", rowIndex: 2, span: "csv!3: a=4 | b=5 | c=6\n" },
     ]);
     expect(result.diagnostics).toEqual([]);
   });
@@ -69,8 +69,8 @@ describe("csvParser", () => {
     expect(parsed).toHaveLength(1);
     // The entire quoted block forms a single row, including the embedded `\n` inside the
     // third field.
-    expect(parsed[0]?.span).toBe('a=x,1 | b=y"2 | c=z\n3\n');
-    expect(parsed[0]?.rowIndex).toBe(0);
+    expect(parsed[0]?.span).toBe('csv!2: a=x,1 | b=y"2 | c=z\n3\n');
+    expect(parsed[0]?.rowIndex).toBe(1);
   });
 
   it("does not split on a comma inside a quoted field", () => {
@@ -80,7 +80,7 @@ describe("csvParser", () => {
       buildParserOptions({ now: () => 0 }),
     );
     const parsed = rows(normalizedText(result), result.units);
-    expect(parsed).toEqual([{ tableName: "csv", rowIndex: 0, span: "a=x,y,z | b=2\n" }]);
+    expect(parsed).toEqual([{ tableName: "csv", rowIndex: 1, span: "csv!2: a=x,y,z | b=2\n" }]);
   });
 
   it("handles CRLF row terminators", () => {
@@ -90,19 +90,19 @@ describe("csvParser", () => {
       buildParserOptions({ now: () => 0 }),
     );
     const parsed = rows(normalizedText(result), result.units);
-    expect(parsed.map((r) => r.span)).toEqual(["a=1 | b=2\n", "a=3 | b=4\n"]);
+    expect(parsed.map((r) => r.span)).toEqual(["csv!2: a=1 | b=2\n", "csv!3: a=3 | b=4\n"]);
   });
 
-  it("treats a single-line CSV as both header and data row", () => {
+  // #4235: a header with no data row below it is not a data row labelled with itself. The line
+  // stays observable as a plain line (no `Column N=` pairs), so no content vanishes.
+  it("emits a single-line CSV as one plain line, not as a data row", () => {
     const text = "only,one,line";
     const result = csvParser.parse(
       selectionFromText(text, { extension: "csv" }),
       buildParserOptions({ now: () => 0 }),
     );
     const parsed = rows(normalizedText(result), result.units);
-    expect(parsed).toEqual([
-      { tableName: "csv", rowIndex: 0, span: "Column 1=only | Column 2=one | Column 3=line\n" },
-    ]);
+    expect(parsed).toEqual([{ tableName: "csv", rowIndex: 0, span: "csv!1: only | one | line\n" }]);
   });
 
   it("emits TSV rows when extension is .tsv", () => {
@@ -111,7 +111,7 @@ describe("csvParser", () => {
       buildParserOptions({ now: () => 0 }),
     );
     const parsed = rows(normalizedText(result), result.units);
-    expect(parsed).toEqual([{ tableName: "tsv", rowIndex: 0, span: "a=1 | b=2 | c=3\n" }]);
+    expect(parsed).toEqual([{ tableName: "tsv", rowIndex: 1, span: "tsv!2: a=1 | b=2 | c=3\n" }]);
   });
 
   // #2906 KEIKO-0832 — selectDelimiter routes both extension "tab" and
@@ -199,7 +199,9 @@ describe("csvParser", () => {
       buildParserOptions({ now: () => 0 }),
     );
     const parsed = rows(normalizedText(result), result.units);
-    expect(parsed).toEqual([{ tableName: "csv", rowIndex: 0, span: "a=alpha,one | b=beta,two\n" }]);
+    expect(parsed).toEqual([
+      { tableName: "csv", rowIndex: 1, span: "csv!2: a=alpha,one | b=beta,two\n" },
+    ]);
   });
 
   it("binds CSV values to header names in normalized text", () => {
@@ -207,9 +209,9 @@ describe("csvParser", () => {
       selectionFromText("Name,Preis\nA,42\n", { extension: "csv" }),
       buildParserOptions({ now: () => 0 }),
     );
-    expect(normalizedText(result)).toBe("Name=A | Preis=42\n");
+    expect(normalizedText(result)).toBe("csv!2: Name=A | Preis=42\n");
     expect(rows(normalizedText(result), result.units)).toEqual([
-      { tableName: "csv", rowIndex: 0, span: "Name=A | Preis=42\n" },
+      { tableName: "csv", rowIndex: 1, span: "csv!2: Name=A | Preis=42\n" },
     ]);
   });
 
@@ -227,8 +229,8 @@ describe("csvParser", () => {
     );
     const parsed = rows(normalizedText(result), result.units);
     expect(parsed).toEqual([
-      { tableName: "csv", rowIndex: 0, span: "a=1 | b=note: 😀 field\n" },
-      { tableName: "csv", rowIndex: 1, span: "a=2 | b=plain 😀 field\n" },
+      { tableName: "csv", rowIndex: 1, span: "csv!2: a=1 | b=note: 😀 field\n" },
+      { tableName: "csv", rowIndex: 2, span: "csv!3: a=2 | b=plain 😀 field\n" },
     ]);
   });
 });

@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { vitestMaxWorkers } from "./scripts/lib/vitest-workers.mjs";
 
 import { PACKAGE_COVERAGE_GATE_SCRIPTS } from "./scripts/lib/package-coverage-gate-scripts.mjs";
 
@@ -20,12 +21,15 @@ export default defineConfig({
     // #3532: explicit Activity Log test-writer injection, identical to the root suite.
     setupFiles: [
       fileURLToPath(new URL("./tests/support/activity-log-test-writer.ts", import.meta.url)),
+      fileURLToPath(new URL("./tests/support/test-state-dirs.ts", import.meta.url)),
     ],
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
     // GEN-TEST-FLAKE-002: coverage instrumentation is substantially more CPU-intensive than the
-    // root suite. Keep the same bounded worker count so performance guardrails and subprocess-heavy
-    // release tests measure the product instead of scheduler contention on high-core hosts.
-    maxWorkers: 2,
+    // root suite. Keep the same bounded worker count (the shared helper, so it can never drift from
+    // vitest.config.ts: 2 under CI, 4 locally, KEIKO_VITEST_MAX_WORKERS to choose) so performance
+    // guardrails and subprocess-heavy release tests measure the product instead of scheduler
+    // contention on high-core hosts.
+    maxWorkers: vitestMaxWorkers(),
     // GEN-TEST-FLAKE-001: keep the CI-gated coverage run's per-test timeout aligned with the root
     // suite (vitest.config.ts) at 15s. v8 instrumentation + forked workers make this the run MOST
     // likely to exceed vitest's 5s default under scheduler load, so a drift here false-REDs the

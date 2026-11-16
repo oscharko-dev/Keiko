@@ -14,8 +14,11 @@ import {
 import {
   completedTurnEvidence,
   completedToolRoundTripEvidence,
+  customerShapeChooserClass,
   customerShapeFailureSummary,
+  customerShapeFolderClass,
   customerShapeRequestEvidence,
+  customerShapeWorkbenchFolderFacts,
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
 
@@ -390,6 +393,61 @@ describe("customer-shape LiteLLM twin", () => {
     expect(summary.requests).toHaveLength(12);
     expect(summary.requests.every((request) => request.stream === false)).toBe(true);
     expect(JSON.stringify(summary)).not.toContain("private-content");
+  });
+
+  it("classifies the Workbench folder without carrying a path into the report", () => {
+    const project = "/private/var/folders/x/keiko-customer-shape-yarn-Ab12Cd";
+    const repository = `${project}/synthetic-repository`;
+    expect(customerShapeFolderClass(repository, repository, project)).toBe("provisioned");
+    expect(customerShapeFolderClass(project, repository, project)).toBe("project-root");
+    expect(
+      customerShapeFolderClass(`${project}/synthetic-scp-repository`, repository, project),
+    ).toBe("other");
+    for (const absent of [undefined, null, "", "  ", 7]) {
+      expect(customerShapeFolderClass(absent, repository, project)).toBe("absent");
+    }
+    expect(customerShapeChooserClass(" synthetic-repository ", repository, project)).toBe(
+      "provisioned",
+    );
+    expect(customerShapeChooserClass("keiko-customer-shape-yarn-Ab12Cd", repository, project)).toBe(
+      "project-root",
+    );
+    expect(customerShapeChooserClass("synthetic-scp-repository", repository, project)).toBe(
+      "other",
+    );
+    expect(customerShapeChooserClass(null, repository, project)).toBe("absent");
+  });
+
+  it("keeps only counts and closed classes in the Workbench folder facts", () => {
+    const facts = customerShapeWorkbenchFolderFacts({
+      layoutStored: true,
+      layoutScopeCount: 2,
+      windowCount: 1,
+      windowFound: true,
+      repositoryPath: "/private/var/folders/x/keiko-customer-shape-yarn-Ab12Cd",
+      cfgFolder: "project-root",
+      chooserFolder: "/private/var/folders/x/keiko-customer-shape-yarn-Ab12Cd",
+    });
+    expect(facts).toEqual({
+      layoutStored: true,
+      layoutScopeCount: 2,
+      windowCount: 1,
+      windowFound: true,
+      cfgFolder: "project-root",
+      chooserFolder: "other",
+    });
+    expect(JSON.stringify(facts)).not.toContain("/private");
+    expect(customerShapeWorkbenchFolderFacts(null)).toEqual({
+      layoutStored: false,
+      layoutScopeCount: 0,
+      windowCount: 0,
+      windowFound: false,
+      cfgFolder: "other",
+      chooserFolder: "other",
+    });
+    expect(
+      customerShapeWorkbenchFolderFacts({ layoutScopeCount: -1, windowCount: 1.5 }),
+    ).toMatchObject({ layoutScopeCount: 0, windowCount: 0 });
   });
 
   it("records an accepted stream that entered the delayed-response branch", async () => {

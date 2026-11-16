@@ -30,7 +30,7 @@ export const GATEWAY_SETUP_AUDIT_SCHEMA_VERSION = "1" as const;
  * recorded as public rather than dropped, so no successful setup is ever missing from the trail.
  */
 export type GatewaySetupTargetClass =
-  "public" | "loopback" | "private" | "link-local" | "metadata" | "multicast";
+  "public" | "loopback" | "private" | "link-local" | "metadata" | "multicast" | "unspecified";
 
 export const GATEWAY_SETUP_TARGET_CLASSES: readonly GatewaySetupTargetClass[] = Object.freeze([
   "public",
@@ -39,6 +39,7 @@ export const GATEWAY_SETUP_TARGET_CLASSES: readonly GatewaySetupTargetClass[] = 
   "link-local",
   "metadata",
   "multicast",
+  "unspecified",
 ]);
 
 export function isGatewaySetupTargetClass(value: unknown): value is GatewaySetupTargetClass {

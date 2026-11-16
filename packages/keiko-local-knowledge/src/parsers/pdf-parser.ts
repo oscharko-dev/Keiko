@@ -3,8 +3,10 @@ import type {
   ParsedUnit,
   ParserDiagnostic,
   ParserResult,
+  SectionRecord,
 } from "@oscharko-dev/keiko-contracts";
 import { LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
 import {
   diagnostic,
@@ -23,21 +25,32 @@ import type {
   ParserSelectionInput,
 } from "./types.js";
 import { WindowTextBuilder } from "./large-document/window-builder.js";
+import {
+  composeInWindows,
+  pageLayoutOf,
+  sectionsFromHeadings,
+  type ComposedPages,
+  type PageLayout,
+} from "./pdf-layout.js";
 
 const PARSER_ID = "pdf";
-const PARSER_VERSION = "1";
+const PARSER_VERSION = "2";
 const DEPENDENCY_VERSIONS = Object.freeze([
   Object.freeze({ packageName: "pdfjs-dist", version: "6.0.227" }),
   Object.freeze({ packageName: "@napi-rs/canvas", version: "1.0.0" }),
 ]);
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46] as const;
 const PDF_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS);
+// A progressive extraction reads a document run by run; this route composes the same runs, so a
+// file reads as one text whichever route took it.
+const COMPOSE_RUN_PAGES = DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY.extractionWindowPages;
 
 export interface PdfTextItem {
   readonly str?: string;
   readonly transform?: readonly number[];
   readonly width?: number;
   readonly height?: number;
+  readonly fontName?: string;
   readonly hasEOL?: boolean;
 }
 
@@ -350,8 +363,8 @@ export interface PageTextReadState {
   readonly scannedObjects: number;
 }
 
-export interface PageTextReadResult {
-  readonly text: string;
+export interface PageLayoutReadResult {
+  readonly layout: PageLayout;
   readonly scannedObjects: number;
   readonly diagnostic?: ParserDiagnostic;
 }
@@ -388,8 +401,8 @@ function appendPdfTextItems(
       return { state: next, diagnostic: stopped };
     }
     next = { ...next, scannedObjects: next.scannedObjects + 1 };
-    const value = normalizePdfText(item.str ?? "").trim();
-    if (value.length > 0) {
+    const value = normalizePdfText(item.str ?? "");
+    if (value.trim().length > 0) {
       itemsOut.push({ ...item, str: value });
     }
   }
@@ -405,108 +418,10 @@ function normalizePdfText(value: string): string {
     .replaceAll("\ufb04", "ffl");
 }
 
-interface PositionedLine {
-  readonly text: string;
-  readonly x: number;
-  readonly y: number;
-}
-
-function itemX(item: PdfTextItem): number {
-  return item.transform?.[4] ?? 0;
-}
-
-function itemY(item: PdfTextItem): number {
-  return item.transform?.[5] ?? 0;
-}
-
-function hasPosition(item: PdfTextItem): boolean {
-  return item.transform !== undefined && item.transform.length >= 6;
-}
-
-function lineForItem(
-  lines: readonly {
-    readonly x: number;
-    readonly y: number;
-    readonly items: readonly PdfTextItem[];
-  }[],
-  item: PdfTextItem,
-): number {
-  const y = itemY(item);
-  const x = itemX(item);
-  const index = lines.findIndex((line) => Math.abs(line.y - y) <= 3 && Math.abs(line.x - x) <= 180);
-  return index;
-}
-
-function positionedLines(items: readonly PdfTextItem[]): readonly PositionedLine[] {
-  const mutable: { text: string; x: number; y: number; items: PdfTextItem[] }[] = [];
-  for (const item of items) {
-    const existing = lineForItem(mutable, item);
-    if (existing >= 0) {
-      mutable[existing]?.items.push(item);
-      continue;
-    }
-    mutable.push({ text: "", x: itemX(item), y: itemY(item), items: [item] });
-  }
-  return mutable.map((line) => {
-    const ordered = [...line.items].sort((a, b) => itemX(a) - itemX(b));
-    return {
-      text: ordered
-        .map((item) => item.str ?? "")
-        .join(" ")
-        .trim(),
-      x: Math.min(...ordered.map(itemX)),
-      y: line.y,
-    };
-  });
-}
-
-function largestColumnGap(lines: readonly PositionedLine[]): {
-  readonly index: number;
-  readonly gap: number;
-} {
-  const ordered = [...lines].sort((a, b) => a.x - b.x);
-  let best = { index: -1, gap: 0 };
-  for (let i = 0; i < ordered.length - 1; i += 1) {
-    const gap = (ordered[i + 1]?.x ?? 0) - (ordered[i]?.x ?? 0);
-    if (gap > best.gap) best = { index: i, gap };
-  }
-  return best;
-}
-
-function orderedPositionedText(items: readonly PdfTextItem[]): string {
-  const lines = positionedLines(items).filter((line) => line.text.length > 0);
-  if (lines.length === 0) return "";
-  const gap = largestColumnGap(lines);
-  if (gap.index >= 0 && gap.gap >= 80) {
-    const orderedByX = [...lines].sort((a, b) => a.x - b.x);
-    const splitX = ((orderedByX[gap.index]?.x ?? 0) + (orderedByX[gap.index + 1]?.x ?? 0)) / 2;
-    const left = lines.filter((line) => line.x <= splitX).sort((a, b) => b.y - a.y || a.x - b.x);
-    const right = lines.filter((line) => line.x > splitX).sort((a, b) => b.y - a.y || a.x - b.x);
-    return [...left, ...right]
-      .map((line) => line.text)
-      .join("\n")
-      .trim();
-  }
-  return [...lines]
-    .sort((a, b) => b.y - a.y || a.x - b.x)
-    .map((line) => line.text)
-    .join("\n")
-    .trim();
-}
-
-function itemsText(items: readonly PdfTextItem[]): string {
-  if (items.some(hasPosition)) return orderedPositionedText(items);
-  return items
-    .map((item) => item.str?.trim() ?? "")
-    .filter((value) => value.length > 0)
-    .join(" ")
-    .trim();
-}
-
-export async function readPageText(
+export async function readPageLayout(
   page: PdfPageLike,
   state: PageTextReadState,
-): Promise<PageTextReadResult> {
+): Promise<PageLayoutReadResult> {
   const reader = page.streamTextContent().getReader();
   const items: PdfTextItem[] = [];
   let next = state;
@@ -515,21 +430,21 @@ export async function readPageText(
       const stopped = pageTextStopDiagnostic(next);
       if (stopped !== undefined) {
         return {
-          text: itemsText(items),
+          layout: pageLayoutOf(items),
           scannedObjects: next.scannedObjects,
           diagnostic: stopped,
         };
       }
       const read = await reader.read();
       if (read.done) {
-        return { text: itemsText(items), scannedObjects: next.scannedObjects };
+        return { layout: pageLayoutOf(items), scannedObjects: next.scannedObjects };
       }
       const chunk = read.value;
       const appended = appendPdfTextItems(items, chunk.items, next);
       next = appended.state;
       if (appended.diagnostic !== undefined) {
         return {
-          text: itemsText(items),
+          layout: pageLayoutOf(items),
           scannedObjects: next.scannedObjects,
           diagnostic: appended.diagnostic,
         };
@@ -612,8 +527,16 @@ interface PageExtractionStepResult {
   readonly stopAfterPage: boolean;
 }
 
+interface BufferedPdfPage {
+  readonly pageNumber: number;
+  readonly pageLabel: string | undefined;
+  readonly layout: PageLayout;
+}
+
+const EMPTY_PAGE_LAYOUT: PageLayout = Object.freeze({ rows: [], offAxis: [], plain: "" });
+
 interface PdfPageStepArgs {
-  readonly builder: WindowTextBuilder;
+  readonly buffered: BufferedPdfPage[];
   readonly diagnostics: ParserDiagnostic[];
   readonly doc: PdfDocumentLike;
   readonly input: ParserSelectionInput;
@@ -625,16 +548,16 @@ interface PdfPageStepArgs {
 }
 
 function addEmptyPdfPage(
-  builder: WindowTextBuilder,
-  diagnostics: ParserDiagnostic[],
-  input: ParserSelectionInput,
-  pageNumber: number,
-  pageLabel: string | undefined,
+  args: PdfPageStepArgs,
   code: "PAGE_PARSE_FAILED" | "PAGE_TEXT_UNREADABLE",
   message: string,
 ): void {
-  diagnostics.push(pageFailureDiagnostic(input, pageNumber, code, message));
-  builder.addPage(pageNumber, "", pageLabel);
+  args.diagnostics.push(pageFailureDiagnostic(args.input, args.pageNumber, code, message));
+  args.buffered.push({
+    pageNumber: args.pageNumber,
+    pageLabel: args.pageLabel,
+    layout: EMPTY_PAGE_LAYOUT,
+  });
 }
 
 async function readPdfPageTextStep(
@@ -642,14 +565,18 @@ async function readPdfPageTextStep(
   args: PdfPageStepArgs,
 ): Promise<PageExtractionStepResult> {
   try {
-    const result = await readPageText(page, {
+    const result = await readPageLayout(page, {
       input: args.input,
       options: args.options,
       startedAt: args.startedAt,
-      emittedUnits: args.builder.pageCount,
+      emittedUnits: args.buffered.length,
       scannedObjects: args.scannedObjects,
     });
-    args.builder.addPage(args.pageNumber, result.text, args.pageLabel);
+    args.buffered.push({
+      pageNumber: args.pageNumber,
+      pageLabel: args.pageLabel,
+      layout: result.layout,
+    });
     if (result.diagnostic !== undefined) args.diagnostics.push(result.diagnostic);
     return {
       scannedObjects: result.scannedObjects,
@@ -657,11 +584,7 @@ async function readPdfPageTextStep(
     };
   } catch {
     addEmptyPdfPage(
-      args.builder,
-      args.diagnostics,
-      args.input,
-      args.pageNumber,
-      args.pageLabel,
+      args,
       "PAGE_TEXT_UNREADABLE",
       "pdf parser could not read page text; indexed page provenance without text",
     );
@@ -675,17 +598,40 @@ async function extractPdfPageStep(args: PdfPageStepArgs): Promise<PageExtraction
     page = await args.doc.getPage(args.pageNumber);
   } catch {
     addEmptyPdfPage(
-      args.builder,
-      args.diagnostics,
-      args.input,
-      args.pageNumber,
-      args.pageLabel,
+      args,
       "PAGE_PARSE_FAILED",
       "pdf parser could not load page; indexed page provenance without text",
     );
     return { scannedObjects: args.scannedObjects, stopAfterPage: false };
   }
   return readPdfPageTextStep(page, args);
+}
+
+function documentSections(
+  documentId: ParserSelectionInput["documentId"],
+  builder: WindowTextBuilder,
+  composed: ComposedPages,
+): readonly SectionRecord[] {
+  const headings = builder.snapshotPages().flatMap((page, index) =>
+    (composed.headings[index] ?? []).map((heading) => ({
+      start: page.characterStart + heading.offset,
+      title: heading.title,
+      level: heading.level,
+    })),
+  );
+  return sectionsFromHeadings(headings, builder.nextCursor).map((section) => ({
+    documentId,
+    ...section,
+  }));
+}
+
+export function pageFurnitureDiagnostic(
+  documentId: ParserSelectionInput["documentId"],
+  removedRows: number,
+): ParserDiagnostic | undefined {
+  if (removedRows === 0) return undefined;
+  const message = `pdf parser removed ${String(removedRows)} repeated page header or footer rows`;
+  return diagnostic("PDF_PAGE_FURNITURE_REMOVED", message, documentId, "info");
 }
 
 export async function extractPages(
@@ -696,16 +642,17 @@ export async function extractPages(
 ): Promise<{
   readonly diagnostics: readonly ParserDiagnostic[];
   readonly pages: readonly PageRecord[];
+  readonly sections: readonly SectionRecord[];
   readonly units: readonly ParsedUnit[];
   readonly normalizedText?: string;
 }> {
   const diagnostics: ParserDiagnostic[] = [];
-  const builder = new WindowTextBuilder(input.documentId, 0, false);
+  const buffered: BufferedPdfPage[] = [];
   const pageLabels = await pageLabelsFor(doc);
   let scannedObjects = 0;
 
   for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
-    const limit = shouldStop(startedAt, options, builder.pageCount);
+    const limit = shouldStop(startedAt, options, buffered.length);
     if (limit.stop) {
       if (limit.code !== undefined && limit.message !== undefined) {
         diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
@@ -715,7 +662,7 @@ export async function extractPages(
 
     const pageLabel = pageLabelFor(pageLabels, pageNumber);
     const step = await extractPdfPageStep({
-      builder,
+      buffered,
       diagnostics,
       doc,
       input,
@@ -729,9 +676,37 @@ export async function extractPages(
     if (step.stopAfterPage) break;
   }
 
+  return { ...composeBufferedPages(buffered, input.documentId, diagnostics), diagnostics };
+}
+
+function composeBufferedPages(
+  buffered: readonly BufferedPdfPage[],
+  documentId: ParserSelectionInput["documentId"],
+  diagnostics: ParserDiagnostic[],
+): {
+  readonly pages: readonly PageRecord[];
+  readonly sections: readonly SectionRecord[];
+  readonly units: readonly ParsedUnit[];
+  readonly normalizedText?: string;
+} {
+  const builder = new WindowTextBuilder(documentId, 0, false);
+  const composed = composeInWindows(
+    buffered.map((page) => page.layout),
+    COMPOSE_RUN_PAGES,
+  );
+  buffered.forEach((page, index) => {
+    builder.addPage(
+      page.pageNumber,
+      composed.texts[index] ?? "",
+      page.pageLabel,
+      composed.separators[index],
+    );
+  });
+  const furnitureDiagnostic = pageFurnitureDiagnostic(documentId, composed.removedRows);
+  if (furnitureDiagnostic !== undefined) diagnostics.push(furnitureDiagnostic);
   const normalizedText = builder.text();
   return {
-    diagnostics,
+    sections: documentSections(documentId, builder, composed),
     pages: builder.snapshotPages(),
     units: builder.snapshotUnits(),
     ...(normalizedText.length > 0 ? { normalizedText } : {}),
@@ -755,7 +730,7 @@ async function asyncParse(
   const startedAt = options.now();
   try {
     const doc = await loadPdfDocument(input.bytes);
-    const { diagnostics, pages, units, normalizedText } = await extractPages(
+    const { diagnostics, pages, sections, units, normalizedText } = await extractPages(
       doc,
       input,
       options,
@@ -773,7 +748,7 @@ async function asyncParse(
       documentId: input.documentId,
       parser: parserIdentity(capability),
       pages,
-      sections: [],
+      sections,
       units,
       diagnostics,
       extractedAt: options.now(),

@@ -29,6 +29,22 @@ The `/api/workspace/state` revision cache is memory-only, including when the lau
 `KEIKO_UI_DATA_DIR`. It never reads, writes, or quarantines a second layout file. Browser-local
 layout restoration remains authoritative after BFF restarts.
 
+Browser layout keys for windows, connections and camera are scoped to the current UI database.
+The BFF derives an opaque, domain-separated layout identifier from the existing persisted
+installation identity in that database; it is comparison metadata and grants no authority. The
+desktop resolves that identifier before mounting windows or writing browser layout state. A
+normal BFF restart preserves the identifier and therefore restores the same saved layout; a new
+or replacement database at the same loopback address cannot inherit another database's window
+references. Unscoped legacy browser snapshots remain untouched and are not replayed without
+provable ownership. Chats, messages and files remain in their existing owning stores.
+
+The memory-only revision cache is also scoped to its owning `UiStore`. Layout writes require both
+the storage identifier and the existing `If-Match` revision. A request belonging to another data
+store is refused before reading or mutating its snapshot. If the identifier cannot be resolved,
+desktop restoration offers a retry without opening stale windows or overwriting saved layouts.
+The existing Activity Log records restored, empty and unowned-layout outcomes using closed values
+only, without layout payloads, chat identifiers or paths.
+
 ### Object descriptor persistence expectation
 
 Every entry in the windows registry declares its `persistence` expectation from a closed set:

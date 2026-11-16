@@ -243,10 +243,12 @@ function scanRenderedFence(
 }
 
 function pushPipes(line: MarkdownLine, scan: InlineBreakScan): void {
-  let pipe = line.text.indexOf("|");
-  while (pipe !== -1) {
-    scan.inline.push(line.start + pipe);
-    pipe = line.text.indexOf("|", pipe + 1);
+  let escaped = false;
+  for (let index = 0; index < line.text.length; index++) {
+    const character = line.text[index];
+    // Only real table boundaries end inline code. Retain offsets in the untouched source.
+    if (character === "|" && !escaped) scan.inline.push(line.start + index);
+    escaped = character === "\\" && !escaped;
   }
 }
 

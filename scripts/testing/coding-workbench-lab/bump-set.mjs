@@ -1,0 +1,425 @@
+// Runs the version-bump regression set (bump-set-oracles.mjs) through the real Workbench UI and
+// judges every task on the host. Each task gets a fresh scratch copy of its fixture at its
+// baseline, so no task passes or fails on another task's leftovers. The verdict table and
+// `verdicts.json` in --work-dir are the result; the exit code is 0 only when every selected task
+// ran and every oracle, including the Coding History check, passed.
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+
+import {
+  flatten,
+  readActivityEvents,
+  resolveLogDirectory,
+  selectRunEvents,
+} from "./activity-log-events.mjs";
+import { BUMP_SET, historyCheck, judge, runEndCheck } from "./bump-set-oracles.mjs";
+import {
+  errorMessage,
+  labBaseUrl,
+  log,
+  openApiSession,
+  parseCli,
+  REPO_ROOT,
+  runMain,
+  UsageError,
+} from "./lab-common.mjs";
+import { isMainModule } from "../../lib/is-main-module.mjs";
+
+const USAGE = [
+  "usage: node bump-set.mjs --work-dir <empty dir outside the checkout> [--only T1,T4]",
+  "                         [--model <id>] [--timeout-min 30] [--base-url <origin>] [--log-dir <dir>]",
+];
+const OPTIONS = {
+  "work-dir": { type: "string" },
+  only: { type: "string" },
+  model: { type: "string" },
+  "timeout-min": { type: "string", default: "30" },
+  "base-url": { type: "string" },
+  "log-dir": { type: "string" },
+};
+const FIXTURES = join(REPO_ROOT, "tests", "fixtures", "coding-workbench-lab");
+const FIXTURE_DIRS = { ledger: "ledger-lab", polyglot: "polyglot-mono" };
+const PATCHES = {
+  initial: "initial-state.patch",
+  "head+opencode": "head-opencode.patch",
+};
+const GIT_ID = [
+  "-c",
+  "user.name=Keiko Lab",
+  "-c",
+  "user.email=lab@keiko.invalid",
+  "-c",
+  "commit.gpgsign=false",
+];
+
+/** A failed read throws, so an oracle never mistakes a broken repository for an unchanged one. */
+function git(cwd, args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+function mustRun(cwd, command, args) {
+  const result = spawnSync(command, args, { cwd, stdio: "ignore" });
+  if (result.status !== 0) throw new Error(`${command} ${args[0]} failed in ${cwd}`);
+}
+
+/** One installed copy per fixture; task copies are cut from it, node_modules included. */
+function template(workDir, fixture, cache) {
+  if (cache.has(fixture)) return cache.get(fixture);
+  const dir = join(workDir, "templates", fixture);
+  cpSync(join(FIXTURES, FIXTURE_DIRS[fixture]), dir, { recursive: true, verbatimSymlinks: true });
+  mustRun(dir, "npm", ["install", "--no-audit", "--no-fund", "--silent"]);
+  cache.set(fixture, dir);
+  return dir;
+}
+
+/** A fresh Git copy at the entry's baseline, plus a bare origin when the task pushes. */
+function prepareTask(workDir, entry, cache) {
+  const root = join(workDir, entry.id);
+  const repo = join(root, "repo");
+  cpSync(template(workDir, entry.fixture, cache), repo, {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
+  mustRun(repo, "git", ["init", "-q", "-b", "main"]);
+  const patch = PATCHES[entry.baseline];
+  if (patch !== undefined) mustRun(repo, "git", ["apply", join(FIXTURES, "patches", patch)]);
+  mustRun(repo, "git", ["add", "-A"]);
+  mustRun(repo, "git", [...GIT_ID, "commit", "-q", "-m", "Baseline"]);
+  const baseline = git(repo, ["rev-parse", "HEAD"]).trim();
+  let origin;
+  if (entry.origin === true) {
+    origin = join(root, "origin.git");
+    mustRun(root, "git", ["init", "-q", "--bare", "-b", "main", origin]);
+    mustRun(repo, "git", ["remote", "add", "origin", origin]);
+    mustRun(repo, "git", ["push", "-q", "origin", "main"]);
+  }
+  return { root, repo: realpathSync(repo), origin, baseline };
+}
+
+function driverArgs(entry, task, options) {
+  const args = [join(REPO_ROOT, "scripts", "testing", "coding-workbench-lab", "wb-ui.mjs")];
+  args.push("--task-id", entry.id, "--approve", entry.approve, "--repo", task.repo);
+  args.push("--text-out", join(task.root, "answer.txt"), "--timeout-min", options.timeoutMin);
+  if (options.baseUrl !== undefined) args.push("--base-url", options.baseUrl);
+  if (options.model !== undefined) args.push("--model", options.model);
+  if (entry.awaitWakeMinutes !== undefined)
+    args.push("--await-wake", String(entry.awaitWakeMinutes));
+  return args;
+}
+
+/**
+ * Drives the run through the real UI; the driver's run line names the run. The driver runs
+ * asynchronously: a run takes minutes, and a blocked event loop would keep a keep-alive
+ * connection the server closed meanwhile in the pool, so the next request failed.
+ */
+function driveTask(entry, task, options) {
+  const started = new Date().toISOString();
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(process.execPath, driverArgs(entry, task, options), {
+      cwd: REPO_ROOT,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+    child.on("error", rejectRun);
+    child.on("close", (code) => {
+      writeFileSync(join(task.root, "driver.log"), `${stdout}\n${stderr}`, { mode: 0o600 });
+      const runs = [...stdout.matchAll(/^----- run (run-\d+) -----$/gm)];
+      resolveRun({ started, exitCode: code, runId: runs[0]?.[1], finalState: finalState(stdout) });
+    });
+  });
+}
+
+function filesContaining(repo, value) {
+  const found = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      if (name === ".git" || name === "node_modules" || name === "target") continue;
+      const path = join(dir, name);
+      const stat = statSync(path);
+      if (stat.isDirectory()) walk(path);
+      else if (stat.size < 2_000_000 && readFileSync(path, "utf8").includes(value))
+        found.push(relative(repo, path));
+    }
+  };
+  walk(repo);
+  return found;
+}
+
+/** The driver's `final {...}` line names the state the run settled in. */
+function finalState(stdout) {
+  const line = /^\S+ final (\{.*\})$/m.exec(stdout)?.[1];
+  if (line === undefined) return undefined;
+  try {
+    return JSON.parse(line).state;
+  } catch {
+    return undefined;
+  }
+}
+
+const STALE_CONNECTION_CODES = new Set(["ECONNRESET", "UND_ERR_SOCKET", "EPIPE"]);
+
+/**
+ * Runs an idempotent read, once more on a fresh connection when the pooled one was reset. The
+ * fixture preparation blocks the event loop for seconds (Git, npm), and a keep-alive connection
+ * the server closed meanwhile is still in the pool when the next read is sent.
+ */
+async function idempotentRead(read) {
+  try {
+    return await read();
+  } catch (error) {
+    if (!STALE_CONNECTION_CODES.has(error?.cause?.code)) throw error;
+    return read();
+  }
+}
+
+/** A fresh paired session per read: a session held across a long run may have expired. */
+async function readHistory(baseUrl, repo) {
+  const session = await openApiSession(labBaseUrl(baseUrl));
+  const list = await session.request("GET", "/api/coding-workbench/history");
+  const task = (list.json.tasks ?? []).find((item) => item.projectPath === repo);
+  if (task === undefined) return { listed: false, messageCount: 0, status: list.status };
+  const detail = await session.request(
+    "GET",
+    `/api/coding-workbench/history/${encodeURIComponent(task.id)}`,
+  );
+  return { listed: true, messageCount: detail.json.messages?.length ?? 0, status: detail.status };
+}
+
+const MODEL_READY_WAIT_MS = 300_000;
+
+/**
+ * Waits until the Workbench offers the coding model, as its Start button does: after a server
+ * start Keiko verifies each model once, and until then the Workbench does not start a run.
+ */
+async function readCodingModel(baseUrl, model) {
+  const session = await openApiSession(labBaseUrl(baseUrl));
+  const path = `/api/coding-sidecar/gateway/profile?modelId=${encodeURIComponent(model)}`;
+  const profile = (await session.request("GET", path)).json ?? {};
+  return {
+    ready: profile.status === "available" && profile.verification === "verified",
+    state: `${String(profile.status)}, ${String(profile.verification ?? profile.unavailableReason)}`,
+  };
+}
+
+async function pollCodingModel(baseUrl, model, deadline) {
+  const { ready, state } = await idempotentRead(() => readCodingModel(baseUrl, model));
+  if (ready) return;
+  if (Date.now() >= deadline) throw new Error(`the coding model is not ready (${state})`);
+  await sleep(5000);
+  return pollCodingModel(baseUrl, model, deadline);
+}
+
+function awaitCodingModel(baseUrl, model) {
+  if (model === undefined) return Promise.resolve();
+  return pollCodingModel(baseUrl, model, Date.now() + MODEL_READY_WAIT_MS);
+}
+
+function oracleContext(task, run, events) {
+  // A missing answer file (the driver never wrote it) must fail the check, never read as empty.
+  const readAnswer = () => readFileSync(join(task.root, "answer.txt"), "utf8");
+  return {
+    baseline: task.baseline,
+    git: (args) => git(task.repo, args),
+    originGit: (args) => (task.origin === undefined ? "" : git(task.origin, args)),
+    exec: (command, args) =>
+      spawnSync(command, args, { cwd: task.repo, stdio: "ignore", timeout: 900_000 }).status,
+    filesContaining: (value) => filesContaining(task.repo, value),
+    answer: readAnswer,
+    events:
+      run.runId === undefined
+        ? []
+        : selectRunEvents(events, run.runId).map((event) => flatten(event)),
+    wakeEvents: events
+      .map((event) => flatten(event))
+      .filter((event) => (event.ts ?? "") >= run.started),
+  };
+}
+
+const WAKE_SETTLE_MS = 60_000;
+const WAKE_TERMINAL_OUTCOMES = new Set(["fired", "missed", "failed", "refused", "removed"]);
+
+function wakeSettled(events, started) {
+  return events
+    .map((event) => flatten(event))
+    .some(
+      (event) =>
+        event.op === "coding-runtime.schedule.wake" &&
+        (event.ts ?? "") >= started &&
+        WAKE_TERMINAL_OUTCOMES.has(event.outcome),
+    );
+}
+
+async function pollWake(logDir, started, deadline) {
+  const events = await readActivityEvents(logDir);
+  if (wakeSettled(events, started) || Date.now() >= deadline) return events;
+  await sleep(2000);
+  return pollWake(logDir, started, deadline);
+}
+
+/**
+ * The Activity Log after the run. Keiko records a wake's outcome only after the wake run ended,
+ * a moment after the driver saw it end (2026-11-08: `fired` two seconds later), so a task that
+ * awaits a wake reads until that outcome is written, for at most a minute.
+ */
+function readEventsAfterWake(entry, logDir, started) {
+  if (entry.awaitWakeMinutes === undefined) return readActivityEvents(logDir);
+  return pollWake(logDir, started, Date.now() + WAKE_SETTLE_MS);
+}
+
+async function runEntry(entry, options, cache) {
+  try {
+    return await judgeEntry(entry, options, cache);
+  } catch (error) {
+    const cause =
+      error instanceof Error && error.cause instanceof Error ? ` (${error.cause.message})` : "";
+    log("bump-set", `${entry.id}: ${errorMessage(error)}${cause}`);
+    const checks = [{ name: "harness", ok: false, reason: errorMessage(error).slice(0, 200) }];
+    return { id: entry.id, runId: undefined, driverExit: undefined, checks, ok: false };
+  }
+}
+
+async function judgeEntry(entry, options, cache) {
+  log("bump-set", `${entry.id}: preparing`);
+  const task = prepareTask(options.workDir, entry, cache);
+  await awaitCodingModel(options.baseUrl, options.model);
+  log("bump-set", `${entry.id}: running (approve ${entry.approve})`);
+  const run = await driveTask(entry, task, options);
+  // History first: the oracles below block on npm and Maven.
+  const history = await idempotentRead(() => readHistory(options.baseUrl, task.repo));
+  const events = await readEventsAfterWake(entry, options.logDir, run.started);
+  const checks =
+    run.runId === undefined
+      ? [{ name: "run", ok: false, reason: "no run started" }]
+      : judge(entry, oracleContext(task, run, events));
+  checks.unshift({ name: "run", ...runEndCheck(entry, run.finalState) });
+  checks.push({ name: "history", ...historyCheck(history) });
+  return {
+    id: entry.id,
+    runId: run.runId,
+    driverExit: run.exitCode,
+    history,
+    checks,
+    ok: checks.every((check) => check.ok),
+  };
+}
+
+function selectEntries(only) {
+  if (only === undefined) return BUMP_SET;
+  const ids = new Set(only.split(",").map((id) => id.trim()));
+  const entries = BUMP_SET.filter((entry) => ids.has(entry.id));
+  if (entries.length !== ids.size)
+    throw new UsageError(`--only names a task outside the set: ${only}`);
+  return entries;
+}
+
+/** Maven tasks need a JDK both in the dev server's runs and in the oracles; refuse before any run. */
+function requireJava(entries) {
+  if (!entries.some((entry) => entry.fixture === "polyglot")) return;
+  if (spawnSync("java", ["-version"], { stdio: "ignore" }).status !== 0) {
+    throw new UsageError(
+      "the polyglot tasks need a Java runtime: export JAVA_HOME and its bin on PATH for the dev server and this command",
+    );
+  }
+}
+
+async function preflight(session) {
+  const readiness = await session.request(
+    "GET",
+    "/api/coding-workbench/runtime/readiness?requestedMode=autonomous-delivery",
+  );
+  if (readiness.json.runtimeAvailable !== true) {
+    throw new Error(
+      `the coding runtime is not available (HTTP ${String(readiness.status)}); nothing ran`,
+    );
+  }
+}
+
+function printTable(results) {
+  for (const result of results) {
+    const failed = result.checks
+      .filter((check) => !check.ok)
+      .map((check) => `${check.name}: ${check.reason}`);
+    console.log(
+      `${result.ok ? "PASS" : "FAIL"} ${result.id.padEnd(4)} ${result.runId ?? "-"} driver=${String(result.driverExit)} ${failed.join("; ")}`,
+    );
+  }
+  const passed = results.filter((result) => result.ok).length;
+  console.log(`bump-set: ${String(passed)} of ${String(results.length)} passed`);
+}
+
+/**
+ * The work directory, created when absent. Every task needs a fresh fixture copy: a reused directory
+ * would merge old files into the copy and re-initialize the old `.git`, so a task could pass or fail
+ * on an earlier run's leftovers. Containment is checked on canonical paths, so a symbolic link into
+ * the checkout is refused and a sibling such as `<checkout>-lab` is not.
+ */
+export function freshWorkDir(path, repoRoot) {
+  const workDir = resolve(path);
+  const repo = realpathSync(repoRoot);
+  // Refuse before creating anything: the nearest existing ancestor, canonical, plus the rest.
+  requireOutside(canonicalPath(workDir), repo);
+  mkdirSync(workDir, { recursive: true });
+  const real = realpathSync(workDir);
+  requireOutside(real, repo);
+  if (readdirSync(real).length > 0)
+    throw new UsageError("--work-dir must be empty: every task needs a fresh copy");
+  return real;
+}
+
+function canonicalPath(path) {
+  if (existsSync(path)) return realpathSync(path);
+  const parent = dirname(path);
+  return parent === path ? path : join(canonicalPath(parent), basename(path));
+}
+
+function requireOutside(path, repo) {
+  const inside = relative(repo, path);
+  const outside = inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside);
+  if (inside === "" || !outside) throw new UsageError("--work-dir must be outside the checkout");
+}
+
+async function main() {
+  const cli = parseCli({ usage: USAGE, options: OPTIONS });
+  if (cli.help) return 0;
+  if (cli.values["work-dir"] === undefined) throw new UsageError("pass --work-dir <empty dir>");
+  const workDir = freshWorkDir(cli.values["work-dir"], REPO_ROOT);
+  const options = {
+    workDir,
+    timeoutMin: cli.values["timeout-min"],
+    model: cli.values.model,
+    baseUrl: cli.values["base-url"],
+    logDir: resolveLogDirectory(cli.values["log-dir"]),
+  };
+  const entries = selectEntries(cli.values.only);
+  requireJava(entries);
+  const session = await openApiSession(labBaseUrl(options.baseUrl));
+  await preflight(session);
+  const cache = new Map();
+  // One task at a time: the dev server holds one checkout, and the lab runs one model.
+  const results = await entries.reduce(
+    async (previous, entry) => [...(await previous), await runEntry(entry, options, cache)],
+    Promise.resolve([]),
+  );
+  writeFileSync(join(workDir, "verdicts.json"), `${JSON.stringify(results, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  printTable(results);
+  return results.every((result) => result.ok) ? 0 : 1;
+}
+
+if (isMainModule(import.meta.url)) runMain(main);

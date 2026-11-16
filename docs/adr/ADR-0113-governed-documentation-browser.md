@@ -175,8 +175,8 @@ Epic #1852 set for its consent boundary. No constraint above is weakened.
   injected `ManualCrawlFetcher` port — the same injection pattern the indexing layer already uses for the
   `WorkspaceFs` filesystem port and the embedding adapter. A local manual is read through `WorkspaceFs`
   (realpath-contained); an intranet manual is intended to be fetched by a `keiko-server`
-  implementation backed by `gatewayFetch`, but that fetcher does not exist yet — see the "Deferred"
-  note below. The crawler opens no socket itself.
+  implementation backed by `gatewayFetch`. The retained product boundary below limits the live
+  trigger to existing-manual refresh. The crawler opens no socket itself.
 - **One pure scope guard precedes every read/fetch, and fails closed.** `evaluateManualCrawlLink` is the
   single decision every candidate link is routed through before it is fetched or read. It layers an
   approved origin / path-prefix / local-root allowlist on top of the base scope and refuses every
@@ -221,12 +221,15 @@ The crawler consumes the pre-validated, redacted approval and never re-detects, 
 re-approves a target. The `keiko-server` egress route and any user-facing UI that drives the crawl remain
 the concern of later, separately governed work (chat-attach Epic #1854 and siblings).
 
-**Deferred: server-side trigger route and HTTP fetcher.** `createHtmlManualPod` and
-`refreshHtmlManualPod` (Epic #1856) are fully implemented, locally verified domain functions, but
-neither has a live entry point in the running product today: no `keiko-server` route calls either,
-no UI action triggers them, and the `gatewayFetch`-backed HTTP `ManualCrawlFetcher` for
-`html-manual-http` sources described above has not been built. Wiring a governed BFF trigger route
-and the HTTP fetcher is tracked in Issue #2063.
+**Current product boundary (owner decision, 2026-11-04).** The dedicated **Add HTML manual**
+creation feature is retired: the product exposes no HTML-manual creation form, create-request
+contract, create route or background create runner. The HTTP manual fetcher and explicit refresh
+route remain available for existing indexed manuals, together with bounded job status and the
+stored source scope. The lower-level `createHtmlManualPod` domain constructor remains a
+compatibility and fixture-building primitive; it is not a user-facing product entry point.
+Ordinary HTML files can still be parsed and indexed through normal file/folder Knowledge Pods.
+This retirement removes no stored manual data and does not weaken crawl, source-containment,
+credential or citation-navigation guards.
 
 ## Extension: citation-driven navigation for HTML manual chat answers (Epic #1854)
 

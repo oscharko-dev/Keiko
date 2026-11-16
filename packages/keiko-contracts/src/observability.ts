@@ -1459,6 +1459,7 @@ export function activityLogEvent<
 
 export * from "./support-report.js";
 export * from "./support-report-json.js";
+export * from "./support-report-correlation.js";
 export * from "./support-report-producer.js";
 
 export * from "./activity-log-label-policy.js";

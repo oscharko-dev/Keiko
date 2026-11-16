@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  permissiveJiraTemplates,
+  SYNTHETIC_ISSUE_TYPES,
+} from "../../../tests/support/jira-test-templates.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import {
   JIRA_DRAFT_IDENTITY_PREFIX,
@@ -11,6 +15,7 @@ import {
   resolveJiraDraftItem,
   type JiraDraft,
 } from "./jira-draft.js";
+import type { JiraTraceRequest } from "./jira-requirement-trace.js";
 import { executeJiraDraftItem, findJiraDraftItem } from "./jira-managed-mutations.js";
 import { field, LINKS_FIELD, response } from "../../../tests/support/jira-managed-remote.js";
 
@@ -277,25 +282,44 @@ interface StoredIssue {
   readonly id: string;
   fields: Record<string, unknown>;
 }
-function syntheticJira(options: { readonly labels: boolean; readonly existing?: StoredIssue[] }): {
+/**
+ * The answers that do not depend on the test: the identity a creation is judged by (a template
+ * governs a project and an issue type, #4354) and the create metadata.
+ */
+function fixedAnswer(
+  url: URL,
+  createFields: readonly Record<string, unknown>[],
+): ReturnType<typeof response> | undefined {
+  if (url.pathname.endsWith("/project/10000")) return response({ id: "10000", key: "SYN" });
+  const type = /\/issuetype\/(\d{1,10})$/u.exec(url.pathname);
+  if (type !== null) return response({ id: type[1], name: "Task" });
+  return url.pathname.includes("createmeta")
+    ? response({
+        values: createFields,
+        start: 0,
+        size: 100,
+        last: true,
+        total: createFields.length,
+      })
+    : undefined;
+}
+function syntheticJira(options: {
+  readonly labels: boolean;
+  readonly description?: boolean;
+  readonly existing?: StoredIssue[];
+}): {
   readonly http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
   readonly issues: StoredIssue[];
   readonly queries: string[];
 } {
   const issues: StoredIssue[] = [...(options.existing ?? [])];
   const queries: string[] = [];
-  const createFields = options.labels ? [...BASE_FIELDS, LABELS] : BASE_FIELDS;
+  const base =
+    options.description === true ? [...BASE_FIELDS, field("description", "string")] : BASE_FIELDS;
+  const createFields = options.labels ? [...base, LABELS] : base;
   const read = (url: URL): ReturnType<AtlassianHttpBodyPort> => {
-    if (url.pathname.includes("createmeta"))
-      return Promise.resolve(
-        response({
-          values: createFields,
-          start: 0,
-          size: 100,
-          last: true,
-          total: createFields.length,
-        }),
-      );
+    const fixed = fixedAnswer(url, createFields);
+    if (fixed !== undefined) return Promise.resolve(fixed);
     if (url.pathname.endsWith("/search")) {
       const jql = url.searchParams.get("jql") ?? "";
       queries.push(jql);
@@ -347,6 +371,7 @@ function runItem(
   parsed: JiraDraft,
   index: number,
   keys: ReadonlyMap<string, string> = new Map(),
+  trace?: JiraTraceRequest,
 ): ReturnType<typeof executeJiraDraftItem> {
   const entry = parsed.items[index];
   if (entry === undefined) throw new Error("item");
@@ -359,11 +384,46 @@ function runItem(
       signal: new AbortController().signal,
       beforeEffect: () => true,
     },
-    { deployment: "data-center", baseUrl: "https://jira.example.invalid", http: jira.http },
+    {
+      deployment: "data-center",
+      baseUrl: "https://jira.example.invalid",
+      http: jira.http,
+      issueTemplates: () => permissiveJiraTemplates(["SYN"], SYNTHETIC_ISSUE_TYPES),
+    },
+    trace,
   );
 }
 
 describe("executeJiraDraftItem", () => {
+  it("serializes explicit Markdown before trace while retaining raw draft identity and replay", async () => {
+    const jira = syntheticJira({ labels: true, description: true });
+    const description = {
+      format: "markdown",
+      text: "## Requirement\nExact body\n## Acceptance criteria\n* one\n* two",
+    };
+    const parsed = draft([item("a", { fields: { summary: "Item a", description } })]);
+    const raw = JSON.stringify(parsed);
+    const footer = "----\nKeiko traceability\nRequirement: REQ-1\nEnd of Keiko traceability";
+    const trace: JiraTraceRequest = {
+      labels: [],
+      footer,
+      footerStart: "----\nKeiko traceability",
+      footerEnd: "End of Keiko traceability",
+      replaceLabelPrefixes: [],
+    };
+    expect(await runItem(jira, parsed, 0, new Map(), trace)).toMatchObject({
+      ok: true,
+      descriptionConvertedHeadingCount: 2,
+    });
+    expect(jira.issues[0]?.fields.description).toBe(
+      `h2. Requirement\nExact body\nh2. Acceptance criteria\n* one\n* two\n\n${footer}`,
+    );
+    expect(JSON.stringify(parsed)).toBe(raw);
+    const replay = await runItem(jira, parsed, 0, new Map(), trace);
+    expect(replay.ok).toBe(true);
+    expect(replay).not.toHaveProperty("descriptionConvertedHeadingCount");
+    expect(jira.http.mock.calls.filter(([request]) => request.method === "POST")).toHaveLength(1);
+  });
   it("creates the item with its identity label and reconciles a second run without a write", async () => {
     const jira = syntheticJira({ labels: true });
     const parsed = draft([item("epic")]);
@@ -860,4 +920,14 @@ describe("findJiraDraftItem", () => {
     });
     expect(writes(jira)).toBe(1);
   });
+});
+
+it("retains full collision-safe Knowledge references and refuses over-bound or unsafe values", () => {
+  const reference = `${"a".repeat(32)}:${"R".repeat(80)}/AC20`;
+  const parsed = parseJiraDraft({ items: [item("source", { requirementIds: [reference] })] });
+  expect(parsed?.items[0]?.requirementIds).toEqual([reference]);
+  for (const invalid of ["r".repeat(121), `${reference}\n`, `${reference}?`])
+    expect(
+      parseJiraDraft({ items: [item("invalid", { requirementIds: [invalid] })] }),
+    ).toBeUndefined();
 });

@@ -14,13 +14,25 @@ import {
 } from "./jira-field-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraIssueLinksPresent, type JiraIssueLinkRequest } from "./jira-issue-links.js";
+import { dispatchFailure, type JiraObservationFailure } from "./jira-mutation-failure.js";
+import {
+  jiraCommentVisibility,
+  sameJiraCommentVisibility,
+  type JiraCommentVisibility,
+} from "./jira-comment-visibility.js";
+import {
+  jiraCommentSelfMatches,
+  normalizeJiraCommentBody,
+  type JiraCommentBinding,
+} from "./jira-comment-binding.js";
 
 type Failure = Extract<JiraMutationAttempt, { ok: false }>;
 export type JiraIssueReadback =
-  | Failure
+  | JiraObservationFailure
   | {
       readonly ok: true;
       readonly id: string;
+      readonly key?: string;
       readonly fields: Record<string, unknown>;
     };
 export type JiraValidatedMutationFields = Extract<JiraFieldValidationResult, { ok: true }> & {
@@ -47,7 +59,7 @@ export async function readJiraMutationIssue(
     fields: [...new Set(fields)].sort(compareStrings).join(","),
   });
   const response = await request(`issue/${encodeURIComponent(issueKey)}?${query.toString()}`);
-  if (!response.ok) return response;
+  if (!response.ok) return dispatchFailure(response);
   const body = response.body;
   if (response.status !== 200 || body === undefined) return MALFORMED;
   const values = asRecord(body.fields);
@@ -58,7 +70,7 @@ export async function readJiraMutationIssue(
   )
     return MALFORMED;
   if (body.key.toUpperCase() !== issueKey.toUpperCase() && body.id !== issueKey) return CONFLICT;
-  return { ok: true, id: body.id, fields: values };
+  return { ok: true, id: body.id, key: body.key, fields: values };
 }
 export function jiraMutationFieldSelection(
   values: JiraValidatedMutationFields,
@@ -233,7 +245,7 @@ export function jiraAlreadyHeldRefusal(issueKey: string): Failure {
     ok: false,
     reason: "conflict",
     receipt: { issueKey },
-    detail: { messages: [`${issueKey} already holds this. Nothing was written.`] },
+    detail: { unchanged: true, messages: [`${issueKey} already holds this. Nothing was written.`] },
   };
 }
 export async function confirmJiraMutationFields(
@@ -259,20 +271,39 @@ export async function confirmJiraMutationFields(
     return CONFLICT;
   return relevantChange(input, current.fields) ? { ok: true, receipt: input.receipt } : CONFLICT;
 }
+function commentContentMatches(
+  raw: Record<string, unknown>,
+  body: string,
+  visibility: JiraCommentVisibility | null | undefined,
+): boolean {
+  return (
+    typeof raw.body === "string" &&
+    normalizeJiraCommentBody(raw.body) === normalizeJiraCommentBody(body) &&
+    (visibility === undefined ||
+      sameJiraCommentVisibility(jiraCommentVisibility(raw.visibility), visibility))
+  );
+}
 export async function confirmJiraComment(
   request: JiraMutationRequest,
   issueKey: string,
   commentId: string,
   body: string,
+  visibility?: JiraCommentVisibility | null,
+  binding?: JiraCommentBinding,
 ): Promise<JiraMutationAttempt> {
+  // Callers supply either the fresh POST acknowledgement or an independently bound update target.
+  // A failed readback cannot erase that identity or promote the attempted change to success.
+  const receipt = { issueKey, commentId };
   const response = await request(
-    `issue/${encodeURIComponent(issueKey)}/comment/${encodeURIComponent(commentId)}`,
+    `issue/${encodeURIComponent(binding?.issueId ?? issueKey)}/comment/${encodeURIComponent(commentId)}`,
   );
-  if (!response.ok) return response;
-  if (response.status !== 200 || response.body === undefined) return MALFORMED;
-  return response.body.id === commentId && response.body.body === body
-    ? { ok: true, receipt: { issueKey, commentId } }
-    : CONFLICT;
+  if (!response.ok) return { ...response, receipt };
+  if (response.status !== 200 || response.body === undefined) return { ...MALFORMED, receipt };
+  return response.body.id === commentId &&
+    commentContentMatches(response.body, body, visibility) &&
+    (binding === undefined || jiraCommentSelfMatches(response.body.self, commentId, binding))
+    ? { ok: true, receipt }
+    : { ...CONFLICT, receipt };
 }
 function assignee(value: unknown): string | null | undefined {
   if (value === null) return null;

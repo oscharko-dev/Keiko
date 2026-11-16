@@ -94,9 +94,11 @@ package of the same name verifies or is refused. No environment token is asked: 
 part of what the operator installs, and `--omit=optional` remains their way to decline it. Without an explicit checkout-lane selection, an installed package that fails verification decides
 the outcome with its own D4 reason and never falls through to another lane. The lane reports the same honest
 posture as the dev lane (`functional-not-platform-qualified`) and the same forgone guarantees, and
-both dev-lane log operations carry `lane: "npm-runtime-package"`. Windows and Linux stay on their
-packaged lanes: Windows needs the native supervisor and Linux the sandbox isolation, neither of
-which this lane ships.
+both dev-lane log operations carry `lane: "npm-runtime-package"`. Linux stays on its packaged
+lane, because it needs the sandbox isolation this lane does not ship. Windows joins the lane
+(#4068, proposed 2026-11-09, pending repository-owner approval): its package also carries the native Job Object supervisor,
+admitted only at the digest compiled into the server, and its runs are confined by the D18 broker
+pinned to that digest (ADR-0043 D19).
 
 **Amended 2026-10-24 — the runtime package carries the pinned ripgrep (#3897, #4064).** OpenCode's
 `glob` and `grep` tools run ripgrep and would otherwise download it on first use, which a

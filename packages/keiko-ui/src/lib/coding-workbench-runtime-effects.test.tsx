@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -220,6 +221,7 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
         refreshSource,
         refreshRuntime,
         refreshRun: vi.fn(async () => undefined),
+        intent: { current: { pickedModelId: null } },
       }),
     );
     refreshSource.mockClear();
@@ -237,6 +239,7 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
   it("re-reads the source when the picker selects another model", () => {
     const refreshSource = vi.fn(async () => undefined);
     const initial = createInitialCodingWorkbenchRuntimeState();
+    const intent = { current: { pickedModelId: null } };
     const { rerender } = renderHook(
       ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
         useCodingWorkbenchRuntimeRefreshEffects({
@@ -244,6 +247,7 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
           refreshSource,
           refreshRuntime: vi.fn(async () => undefined),
           refreshRun: vi.fn(async () => undefined),
+          intent,
         });
       },
       { initialProps: { state: initial } },
@@ -255,6 +259,64 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
     expect(refreshSource).toHaveBeenCalledTimes(2);
     rerender({ state: { ...initial, selectedModelId: "sonnet-coding" } });
     expect(refreshSource).toHaveBeenCalledTimes(3);
+  });
+
+  // #4351: only the person's own pick is an explicit check. A model adopted from a run, a changed
+  // runtime preference and a double run of the effect read passively (`check=use`).
+  it("reads with check=use unless the selected model is the one the person just picked", () => {
+    const refreshSource = vi.fn(async () => undefined);
+    const intent = { current: { pickedModelId: null as string | null } };
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    const { rerender } = renderHook(
+      ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state,
+          refreshSource,
+          refreshRuntime: vi.fn(async () => undefined),
+          refreshRun: vi.fn(async () => undefined),
+          intent,
+        });
+      },
+      { initialProps: { state: initial } },
+    );
+    expect(refreshSource).toHaveBeenLastCalledWith(false, undefined, "use");
+    // A model adopted from a run changes the selection without a pick.
+    rerender({ state: { ...initial, selectedModelId: "adopted-model" } });
+    expect(refreshSource).toHaveBeenLastCalledWith(false, undefined, "use");
+    // A changed runtime preference is not a pick either.
+    rerender({
+      state: {
+        ...initial,
+        selectedModelId: "adopted-model",
+        runtimePreference: "codex-subscription",
+      },
+    });
+    expect(refreshSource).toHaveBeenLastCalledWith(false, undefined, "use");
+    // The person's pick is the one explicit check, and only once.
+    intent.current.pickedModelId = "picked-model";
+    rerender({ state: { ...initial, selectedModelId: "picked-model" } });
+    expect(refreshSource).toHaveBeenLastCalledWith(false, undefined, true);
+    expect(intent.current.pickedModelId).toBeNull();
+  });
+
+  it("asks for no explicit check when React runs the effect twice", () => {
+    const refreshSource = vi.fn(
+      async (_a?: boolean, _b?: string, _c?: boolean | "use"): Promise<void> => undefined,
+    );
+    renderHook(
+      () => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state: createInitialCodingWorkbenchRuntimeState(),
+          refreshSource,
+          refreshRuntime: vi.fn(async () => undefined),
+          refreshRun: vi.fn(async () => undefined),
+          intent: { current: { pickedModelId: null } },
+        });
+      },
+      { wrapper: StrictMode },
+    );
+    expect(refreshSource.mock.calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of refreshSource.mock.calls) expect(call[2]).toBe("use");
   });
 
   // Settings replaces the gateway configuration and records readiness verdicts without this
@@ -270,6 +332,7 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
         refreshRuntime,
         refreshSource,
         refreshRun,
+        intent: { current: { pickedModelId: null } },
       });
     });
     await waitFor(() => {
@@ -298,6 +361,7 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
     });
     const { unmount } = renderHook(() => {
       useCodingWorkbenchRuntimeRefreshEffects({
+        intent: { current: { pickedModelId: null } },
         state: createInitialCodingWorkbenchRuntimeState(),
         refreshRuntime: vi.fn(() => Promise.resolve()),
         refreshSource,
@@ -362,6 +426,7 @@ describe("post-run description refresh (#3390)", () => {
       const { rerender, unmount } = renderHook(
         ({ state }: { state: CodingWorkbenchRuntimeState }) => {
           useCodingWorkbenchRuntimeRefreshEffects({
+            intent: { current: { pickedModelId: null } },
             state,
             refreshRuntime: noop,
             refreshSource: noop,
@@ -393,6 +458,7 @@ describe("post-run description refresh (#3390)", () => {
       const noop = vi.fn(() => Promise.resolve());
       const { unmount } = renderHook(() => {
         useCodingWorkbenchRuntimeRefreshEffects({
+          intent: { current: { pickedModelId: null } },
           state: settled(),
           refreshRuntime: noop,
           refreshSource: noop,
@@ -415,6 +481,7 @@ it("forwards only the actual validated catalog parent into the profile refresh",
   const refreshRuntime = vi.fn().mockResolvedValue(undefined);
   const { unmount } = renderHook(() =>
     useCodingWorkbenchRuntimeRefreshEffects({
+      intent: { current: { pickedModelId: null } },
       state: createInitialCodingWorkbenchRuntimeState(),
       refreshSource,
       refreshRuntime,

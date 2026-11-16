@@ -275,6 +275,52 @@ describe("S16 test cases in the form the template defines", () => {
   });
 
   it.each([
+    ["label", { labels: [] }, "LH-002/AC2 Testfall", [], ["Schritte", "Erwartet"]],
+    [
+      "summary",
+      { summary: "Synthetischer Test ohne Kriterium" },
+      "Synthetischer Test ohne Kriterium",
+      ["keiko-requirement", "keiko-req-LH-002", "keiko-ac-LH-002-AC2"],
+      ["Schritte", "Erwartet"],
+    ],
+    [
+      "section",
+      {
+        description: "## Schritte\nPRIVATE-DESCRIPTION-BODY\n\n## Abweichende Überschrift\nWeiter.",
+      },
+      "LH-002/AC2 Testfall",
+      ["keiko-requirement", "keiko-req-LH-002", "keiko-ac-LH-002-AC2"],
+      ["Schritte", "Abweichende Überschrift"],
+    ],
+    [
+      "section",
+      { description: "## Schritte\nPRIVATE-DESCRIPTION-BODY\n\n## Erwartet\n" },
+      "LH-002/AC2 Testfall",
+      ["keiko-requirement", "keiko-req-LH-002", "keiko-ac-LH-002-AC2"],
+      ["Schritte", "Erwartet"],
+    ],
+  ])(
+    "retains each template %s failure and the observed issue snapshot in scorecard evidence",
+    async (cause, overrides, summary, labels, headings) => {
+      const { check } = await journey((jira) => {
+        testCase(jira, 1);
+        testCase(jira, 2, overrides);
+        return {};
+      });
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("REQ-2");
+      expect(check.detail).toContain(`causes=${cause}`);
+      expect(check.detail).toContain(`summary=${JSON.stringify(summary)}`);
+      expect(check.detail).toContain(`labels=${JSON.stringify(labels)}`);
+      expect(check.detail).toContain(`headings=${JSON.stringify(headings)}`);
+      expect(check.detail).not.toContain("PRIVATE-DESCRIPTION-BODY");
+      const stored = JSON.parse(JSON.stringify({ layer: "journey", ...check }));
+      expect(verdict("S16", stored).status).toBe("red");
+      expect(stored.detail).toBe(check.detail);
+    },
+  );
+
+  it.each([
     ["one criterion has no issue", (jira) => testCase(jira, 1)],
     [
       "a criterion has two issues",

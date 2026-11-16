@@ -54,7 +54,7 @@ function seeded(): JiraReportStore {
         donePercent: 0,
         estimate: { total: 0, done: 0, remaining: 0, unestimated: 1 },
       },
-      byType: [{ typeName: "Task", total: 1, done: 0 }],
+      byType: [{ typeName: "Task", total: 1, done: 0, estimated: 0, unestimated: 1 }],
       byStatus: [{ typeName: "Task", statusName: "Open", category: "new", total: 1 }],
       unassigned: 1,
       overdue: 0,
@@ -190,37 +190,82 @@ describe("Jira report export route", () => {
 });
 
 describe("Jira report activity", () => {
-  it("reconstructs a read from counts and rule ids alone", () => {
-    const logs = createBufferedServerLogSink();
-    recordJiraReportActivity(logs, "correlation-2", {
-      phase: "read",
-      status: "incomplete",
-      reason: "read-failed",
-      failure: "permission",
-      scopeKind: "project-jql",
-      continued: true,
-      issuesRead: 250,
-      issuesTotal: 253,
-      pageCount: 3,
-      issuesWithDeviations: 2,
-      deviationCount: 3,
-      ruleIds: ["required-field-empty", "template.bug.reproduction"],
-      requirementCount: 4,
-      durationMs: 12,
-    });
-    const line = onlyLine(logs);
-    expect(expectActivityLogProof("atlassian.jira-report.line", line)).toMatchObject({
-      phase: "read",
-      status: "incomplete",
-      reason: "read-failed",
-      failure: "permission",
-      level: "warn",
-      errorKind: "read-failed",
-      issuesRead: 250,
-      ruleIds: ["required-field-empty", "template.bug.reproduction"],
-    });
-    expect(analyzeLogText(line).timelines).toHaveLength(1);
-  });
+  it.each([
+    "explicit-field",
+    "board-configuration",
+    "project-screen",
+    "time-tracking",
+    "unavailable",
+  ] as const)(
+    "retains the closed estimate source %s through the registered writer and analyzer",
+    (estimateSource) => {
+      const logs = createBufferedServerLogSink();
+      recordJiraReportActivity(logs, "correlation-estimate", {
+        phase: "read",
+        status: "complete",
+        scopeKind: "project",
+        continued: false,
+        issuesRead: 4,
+        issuesTotal: 4,
+        pageCount: 1,
+        issuesWithDeviations: 0,
+        deviationCount: 0,
+        ruleIds: [],
+        requirementCount: 0,
+        durationMs: 1,
+        estimateSource,
+        ...(estimateSource === "unavailable"
+          ? { estimateUnavailableReason: "field-not-found" as const }
+          : {}),
+      });
+      const line = onlyLine(logs);
+      expect(expectActivityLogProof("atlassian.jira-report.line", line)).toMatchObject({
+        op: "atlassian.jira-report",
+        correlationId: "correlation-estimate",
+        estimateSource,
+        ...(estimateSource === "unavailable"
+          ? { estimateUnavailableReason: "field-not-found" }
+          : {}),
+      });
+      expect(analyzeLogText(line).timelines).toHaveLength(1);
+      expect(line).not.toMatch(/Story Points|customfield_|timeoriginalestimate|REP-/u);
+    },
+  );
+
+  it.each(["permission", "effect-denied", "cancelled"] as const)(
+    "reconstructs %s from counts and closed codes alone",
+    (failure) => {
+      const logs = createBufferedServerLogSink();
+      recordJiraReportActivity(logs, "correlation-2", {
+        phase: "read",
+        status: "incomplete",
+        reason: "read-failed",
+        failure,
+        scopeKind: "project-jql",
+        continued: true,
+        issuesRead: 250,
+        issuesTotal: 253,
+        pageCount: 3,
+        issuesWithDeviations: 2,
+        deviationCount: 3,
+        ruleIds: ["required-field-empty", "template.bug.reproduction"],
+        requirementCount: 4,
+        durationMs: 12,
+      });
+      const line = onlyLine(logs);
+      expect(expectActivityLogProof("atlassian.jira-report.line", line)).toMatchObject({
+        phase: "read",
+        status: "incomplete",
+        reason: "read-failed",
+        failure,
+        level: "warn",
+        errorKind: "read-failed",
+        issuesRead: 250,
+        ruleIds: ["required-field-empty", "template.bug.reproduction"],
+      });
+      expect(analyzeLogText(line).timelines).toHaveLength(1);
+    },
+  );
 
   it("records how the parent relation was found as counts and one closed word", () => {
     const logs = createBufferedServerLogSink();

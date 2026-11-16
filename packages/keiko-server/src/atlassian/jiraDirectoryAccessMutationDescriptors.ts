@@ -1,0 +1,166 @@
+import type { JiraDirectoryAccessMutation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { object, text } from "./jiraManagedSchemas.js";
+import {
+  jiraNativeDeclaration,
+  jiraNativeWriteResult,
+  jiraNativeProjectSchema as KEY,
+  type JiraNativeDefinition,
+} from "./jiraProjectStructureDescriptors.js";
+
+const NAME = { ...text(255), minLength: 1 };
+const ACCEPT = { type: "boolean", enum: [true] };
+const GROUPS = {
+  type: "array",
+  maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+  uniqueItems: true,
+  items: NAME,
+};
+const COLUMNS = {
+  type: "array",
+  minItems: 1,
+  maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+  items: NAME,
+};
+const ROLE = object({ key: KEY, groups: GROUPS, defaultGroups: GROUPS }, [
+  "key",
+  "groups",
+  "defaultGroups",
+]);
+const CHANGE = object({ expected: ROLE, value: ROLE }, ["expected", "value"]);
+const USER = object({ key: NAME, name: NAME }, ["key", "name"]);
+const ROLE_KEYS = {
+  type: "array",
+  minItems: 1,
+  maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+  uniqueItems: true,
+  items: KEY,
+};
+const USER_RECEIPT = { userKey: NAME, username: NAME };
+const COMMON =
+  "High-risk issue-tracker.admin operation. Jira separately checks native administrative permissions. Review the exact actor and selected identities before a single fixed native effect. No mode grants administration implicitly. Removing the connected actor's own application access, or removing an observed actor group from a role, is refused; use a different authorized administrator connection. A truncated actor group expansion is unavailable evidence. Every removed role group also requires complete native group-and-subgroup membership for this actor; user expansion alone never proves independence from nested groups. Unknown or lost acknowledgement preserves requested target facts only; never replay. Raw ETags, headers, URLs, credentials and group contents are not receipt/log fields. Existing transport/custody/deadline, approval and journal owners remain authoritative. No issue-field migration or new permission engine is implied.";
+function definition(
+  description: string,
+  input: CatalogJsonObject,
+  receipt: CatalogJsonObject,
+  confirmed = false,
+): JiraNativeDefinition {
+  const result = jiraNativeWriteResult({ actorUserKey: NAME, ...receipt });
+  return {
+    description: `${description} ${COMMON}`,
+    input,
+    result: confirmed
+      ? result
+      : {
+          ...result,
+          allOf: [
+            {
+              not: {
+                properties: { outcome: { type: "string", enum: ["succeeded"] } },
+                required: ["outcome"],
+              },
+            },
+          ],
+        },
+    risk: "write",
+    maxResultCount: 1,
+  };
+}
+const ROLE_RULE =
+  "Replace only selected groups and defaultGroups; complete native sets are required, null/missing is unknown, [] explicitly clears, defaults must be a subset of groups, and key/name/license/seat settings cannot change. Native set order is irrelevant. Independently bind requested groups by exact supported picker presence, re-read the full applicationrole collection and its strong ETag immediately before one native If-Match PUT. A 412 conflicts without automatic retry. Omitted bulk roles are preserved. Even matching readback remains unconfirmed for global application access/inherited-group/license consequences.";
+const APPLICATION_RULE =
+  "Bind user.key and user.name independently through native key and username lookups; never substitute one selector for the other. expectedApplicationRole is the full observed key/groups/defaultGroups config. No current membership or absence is inferred from omitted UserBean applicationRoles, group inheritance or license counts. The native experimental request is query-only username+applicationKey and carries no JSON body. Post-ACK identity/role observations cannot prove all effective access consequences; always unconfirmed. applicationAccessRequested is the requested target, never proof of effective access.";
+export const JIRA_DIRECTORY_ACCESS_WRITE_DEFINITIONS = {
+  "jira.set-application-role": definition(
+    `Set one role. ${ROLE_RULE}`,
+    object({ expectedActorKey: NAME, role: CHANGE, acceptGlobalPermissionChange: ACCEPT }, [
+      "expectedActorKey",
+      "role",
+      "acceptGlobalPermissionChange",
+    ]),
+    { applicationRoleKeys: ROLE_KEYS },
+  ),
+  "jira.set-application-roles": definition(
+    `Set a selected role batch with the native JSON array body. ${ROLE_RULE}`,
+    object(
+      {
+        expectedActorKey: NAME,
+        roles: {
+          type: "array",
+          minItems: 1,
+          maxItems: TOOL_CATALOG_LIMITS.maxArrayItems,
+          items: CHANGE,
+        },
+        acceptGlobalPermissionChange: ACCEPT,
+      },
+      ["expectedActorKey", "roles", "acceptGlobalPermissionChange"],
+    ),
+    { applicationRoleKeys: ROLE_KEYS },
+  ),
+  "jira.add-user-application": definition(
+    `Request application access for the exact reviewed user. ${APPLICATION_RULE}`,
+    object(
+      {
+        expectedActorKey: NAME,
+        user: USER,
+        expectedApplicationRole: ROLE,
+        acceptGlobalPermissionChange: ACCEPT,
+      },
+      ["expectedActorKey", "user", "expectedApplicationRole", "acceptGlobalPermissionChange"],
+    ),
+    {
+      ...USER_RECEIPT,
+      applicationRoleKeys: ROLE_KEYS,
+      applicationAccessRequested: { type: "boolean", enum: [true] },
+    },
+  ),
+  "jira.remove-user-application": definition(
+    `Request removal from the exact reviewed application. ${APPLICATION_RULE}`,
+    object(
+      {
+        expectedActorKey: NAME,
+        user: USER,
+        expectedApplicationRole: ROLE,
+        acceptGlobalPermissionChange: ACCEPT,
+      },
+      ["expectedActorKey", "user", "expectedApplicationRole", "acceptGlobalPermissionChange"],
+    ),
+    {
+      ...USER_RECEIPT,
+      applicationRoleKeys: ROLE_KEYS,
+      applicationAccessRequested: { type: "boolean", enum: [false] },
+    },
+  ),
+  "jira.set-user-columns": definition(
+    "Replace the bound named user's complete ordered column sequence with the primary-documented fixed form-urlencoded PUT. expectedColumns and columns are nonempty, preserve native order and repetitions, and are never treated as sets. Bind both user identities and re-read the full user layout. Confirmation establishes only the exact independently read sequence for that same user, not global permissions or layout inheritance. No arbitrary form fields or content type are accepted.",
+    object({ expectedActorKey: NAME, user: USER, expectedColumns: COLUMNS, columns: COLUMNS }, [
+      "expectedActorKey",
+      "user",
+      "expectedColumns",
+      "columns",
+    ]),
+    { ...USER_RECEIPT, columnIds: COLUMNS },
+    true,
+  ),
+  "jira.reset-user-columns": definition(
+    "Reset the exact bound named user's columns through one native DELETE, after reviewing the complete ordered current sequence. Native GET returns a layout array without explicit fallback provenance: matching system columns alone cannot prove a durable reset or future inheritance. Always unconfirmed after acknowledgement, even with a readable same-user layout. columnsResetRequested:true is the requested target only.",
+    object({ expectedActorKey: NAME, user: USER, expectedColumns: COLUMNS }, [
+      "expectedActorKey",
+      "user",
+      "expectedColumns",
+    ]),
+    { ...USER_RECEIPT, columnsResetRequested: ACCEPT },
+  ),
+} as const satisfies Readonly<Record<JiraDirectoryAccessMutation, JiraNativeDefinition>>;
+export function jiraDirectoryAccessMutationDeclarationForTool(
+  name: string,
+): ManagedMcpToolDeclaration | undefined {
+  const definitions: Readonly<Record<string, JiraNativeDefinition>> =
+    JIRA_DIRECTORY_ACCESS_WRITE_DEFINITIONS;
+  const selected = Object.hasOwn(definitions, name) ? definitions[name] : undefined;
+  return selected === undefined ? undefined : jiraNativeDeclaration(name, selected);
+}

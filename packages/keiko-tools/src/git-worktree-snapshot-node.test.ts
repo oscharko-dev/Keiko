@@ -395,6 +395,28 @@ describe("readGitWorktreeSnapshot", () => {
     expect((await readGitWorktreeSnapshot(deps())).stagedTreeDigest).not.toBe(stagedDigest);
   });
 
+  // #4068 (W7): without core.longpaths Git for Windows left a file below MAX_PATH out of the status
+  // read and still exited 0, so the snapshot counted no untracked file in a dirty worktree.
+  it.runIf(process.platform === "win32")(
+    "counts an untracked file below a path of MAX_PATH or more on Windows",
+    async () => {
+      writeFileSync(join(root, "a.txt"), "v1\n", "utf8");
+      git(["add", "a.txt"]);
+      git(["commit", "-m", "base"]);
+      const segments = Array.from(
+        { length: 14 },
+        (_, index) => `nested_directory_${String(index)}`,
+      );
+      const deep = join(root, ...segments);
+      mkdirSync(deep, { recursive: true });
+      writeFileSync(join(deep, "file.txt"), "deep\n", "utf8");
+      expect(join(deep, "file.txt").length).toBeGreaterThanOrEqual(260);
+
+      const snap = await readGitWorktreeSnapshot(deps());
+      expect(snap.untrackedFileCount).toBe(1);
+    },
+  );
+
   it("keeps the snapshot readable when the tracked index exceeds the default command output cap", async () => {
     writeLargeIndexFixture();
     expect(git(["ls-files", "--stage", "-z"]).length).toBeGreaterThan(

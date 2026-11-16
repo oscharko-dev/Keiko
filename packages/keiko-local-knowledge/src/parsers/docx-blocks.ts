@@ -1,0 +1,192 @@
+// Projection of the docx block model to the lines the parser indexes. A body paragraph becomes one
+// entry (a heading when its style or outline level says so, a list item with its real marker when
+// it is numbered), a table becomes its `Table row` lines, and a note appears where it is
+// referenced, so a footnote stays in the section whose text cites it.
+
+import { LIST_GROUP, type TextBlock } from "./block-text.js";
+import { bulletMarker, type ListMarker, type NumberingTracker } from "./docx-numbering.js";
+import {
+  resolveHeadingLevel,
+  resolveStyleNumbering,
+  styleLabel,
+  type StyleCatalog,
+} from "./docx-styles.js";
+import { normalizeLine, projectTable } from "./docx-tables.js";
+import type { NoteRef, RawBlock, RawParagraph, RawTable } from "./docx-xml.js";
+import { plainSpaces } from "./pptx-xml.js";
+
+export interface Paragraph extends TextBlock {
+  readonly headingLevel?: number;
+}
+
+export interface ProjectionContext {
+  readonly styles: StyleCatalog | undefined;
+  readonly numbering: NumberingTracker;
+  readonly footnotes: ReadonlyMap<string, readonly RawBlock[]>;
+  readonly endnotes: ReadonlyMap<string, readonly RawBlock[]>;
+  /** Notes already placed, keyed `footnote:<id>` / `endnote:<id>`. */
+  readonly placed: Set<string>;
+}
+
+const INDENT = "  ";
+const LIST_STYLE_PATTERN = /^list\s*(?:bullet|number)/iu;
+
+function lineOf(text: string): string {
+  return plainSpaces(text)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join("\n");
+}
+
+// ─── List markers ────────────────────────────────────────────────────────────
+
+/** A list that cannot be resolved is still a list item: a bullet, never an invented number. */
+function unresolvedListMarker(
+  paragraph: RawParagraph,
+  context: ProjectionContext,
+): ListMarker | undefined {
+  const named =
+    paragraph.styleId !== undefined &&
+    LIST_STYLE_PATTERN.test(styleLabel(context.styles, paragraph.styleId));
+  return paragraph.hasNumPr || named ? bulletMarker(paragraph.ilvl ?? 0) : undefined;
+}
+
+/** The list a paragraph belongs to: its own `w:numPr`, else the one its style applies. */
+function listMarkerOf(paragraph: RawParagraph, context: ProjectionContext): ListMarker | undefined {
+  if (paragraph.numId === "0") return undefined;
+  const fromStyle = resolveStyleNumbering(context.styles, paragraph.styleId);
+  const numId = paragraph.numId ?? fromStyle?.numId;
+  if (numId === undefined) return unresolvedListMarker(paragraph, context);
+  if (numId === "0") return undefined;
+  const ilvl = paragraph.ilvl ?? fromStyle?.ilvl;
+  return context.numbering.mark(numId, ilvl, paragraph.styleId);
+}
+
+function withMarker(text: string, marker: ListMarker | undefined): string {
+  if (marker === undefined || marker.kind === "none") return text;
+  const lead = marker.kind === "bullet" ? "-" : marker.text;
+  return `${INDENT.repeat(marker.level)}${lead} ${text}`;
+}
+
+// ─── Paragraphs ──────────────────────────────────────────────────────────────
+
+function paragraphEntry(paragraph: RawParagraph, context: ProjectionContext): Paragraph[] {
+  // Every list paragraph advances its counter, including a heading and an empty one, as in Word.
+  const marker = listMarkerOf(paragraph, context);
+  const text = lineOf(paragraph.text);
+  if (text.length === 0) return [];
+  const headingLevel = paragraph.inBox
+    ? undefined
+    : resolveHeadingLevel(context.styles, paragraph.styleId, paragraph.outlineLvl);
+  if (headingLevel !== undefined) return [{ text: normalizeLine(text), headingLevel }];
+  const marked = withMarker(text, marker);
+  return [marked === text ? { text } : { text: marked, group: LIST_GROUP }];
+}
+
+// ─── Tables ──────────────────────────────────────────────────────────────────
+
+/** A cell paragraph's text with the marker of its list; the counters advance as in the body. */
+function markedCellParagraph(paragraph: RawParagraph, context: ProjectionContext): RawParagraph {
+  const marker = listMarkerOf(paragraph, context);
+  const text = lineOf(paragraph.text);
+  return text.length === 0 ? paragraph : { ...paragraph, text: withMarker(text, marker) };
+}
+
+function markedBlock(block: RawBlock, context: ProjectionContext): RawBlock {
+  return block.kind === "p"
+    ? { kind: "p", paragraph: markedCellParagraph(block.paragraph, context) }
+    : { kind: "tbl", table: markedTable(block.table, context) };
+}
+
+/**
+ * The table with every list paragraph in its cells carrying the marker Word shows, visited in
+ * document order so the counters agree with the paragraphs around the table.
+ */
+function markedTable(table: RawTable, context: ProjectionContext): RawTable {
+  return {
+    rows: table.rows.map((row) => ({
+      ...row,
+      cells: row.cells.map((cell) => ({
+        ...cell,
+        blocks: cell.blocks.map((block) => markedBlock(block, context)),
+      })),
+    })),
+  };
+}
+
+function tableLines(table: RawTable, context: ProjectionContext): readonly string[] {
+  return projectTable(markedTable(table, context));
+}
+
+// ─── Notes ───────────────────────────────────────────────────────────────────
+
+function noteLabel(ref: NoteRef): string {
+  return `${ref.kind === "footnote" ? "Footnote" : "Endnote"} ${ref.id}`;
+}
+
+function blockTexts(blocks: readonly RawBlock[], context: ProjectionContext): readonly string[] {
+  return blocks.flatMap((block) =>
+    block.kind === "p" ? [normalizeLine(block.paragraph.text)] : tableLines(block.table, context),
+  );
+}
+
+function noteEntry(ref: NoteRef, context: ProjectionContext): Paragraph[] {
+  const key = `${ref.kind}:${ref.id}`;
+  const source = ref.kind === "footnote" ? context.footnotes : context.endnotes;
+  const blocks = source.get(key);
+  if (blocks === undefined || context.placed.has(key)) return [];
+  context.placed.add(key);
+  const text = blockTexts(blocks, context)
+    .filter((part) => part.length > 0)
+    .join(" ");
+  return text.length === 0 ? [] : [{ text: `${noteLabel(ref)}: ${text}` }];
+}
+
+function tableNoteRefs(table: RawTable): readonly NoteRef[] {
+  return table.rows.flatMap((row) =>
+    row.cells.flatMap((cell) =>
+      cell.blocks.flatMap((block) =>
+        block.kind === "p" ? block.paragraph.noteRefs : tableNoteRefs(block.table),
+      ),
+    ),
+  );
+}
+
+/** Notes that no body paragraph references, in part order, so none of them disappears silently. */
+export function unreferencedNotes(context: ProjectionContext): Paragraph[] {
+  const out: Paragraph[] = [];
+  for (const [kind, notes] of [
+    ["footnote", context.footnotes],
+    ["endnote", context.endnotes],
+  ] as const) {
+    for (const key of notes.keys()) {
+      const id = key.slice(kind.length + 1);
+      out.push(...noteEntry({ kind, id }, context));
+    }
+  }
+  return out;
+}
+
+// ─── Body ────────────────────────────────────────────────────────────────────
+
+/** Projects the top-level blocks of the document body in order. */
+export function projectBody(
+  blocks: readonly RawBlock[],
+  context: ProjectionContext,
+): readonly Paragraph[] {
+  const out: Paragraph[] = [];
+  let tables = 0;
+  for (const block of blocks) {
+    if (block.kind === "p") {
+      out.push(...paragraphEntry(block.paragraph, context));
+      for (const ref of block.paragraph.noteRefs) out.push(...noteEntry(ref, context));
+      continue;
+    }
+    tables += 1;
+    const group = `table:${String(tables)}`;
+    for (const line of tableLines(block.table, context)) out.push({ text: line, group });
+    for (const ref of tableNoteRefs(block.table)) out.push(...noteEntry(ref, context));
+  }
+  return out;
+}

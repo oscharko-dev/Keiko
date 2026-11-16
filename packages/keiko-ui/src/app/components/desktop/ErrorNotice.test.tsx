@@ -11,6 +11,8 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
+import { EN_MESSAGES } from "@/lib/i18n-messages.en";
+import { DE_MESSAGES } from "@/lib/i18n-messages.de";
 import {
   I18N_STORAGE_KEY,
   I18nProvider,
@@ -22,6 +24,7 @@ import * as reportApi from "@/lib/support-report-api";
 import { resetSupportReportOutcomesForTests } from "./SupportReportButton";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { formatUserError } from "./format-error";
+import { OPEN_MODEL_SETTINGS_EVENT } from "./widgets/panels/settingsPanelEvents";
 import styles from "./ErrorNotice.module.css";
 
 afterEach(() => {
@@ -404,3 +407,47 @@ it.each([
     );
   },
 );
+
+describe("explicit model readiness recovery", () => {
+  it.each(["en", "de"] as const)(
+    "opens verification only after the person clicks in %s",
+    async (locale) => {
+      await loadLocaleMessages(locale);
+      const open = vi.fn();
+      window.addEventListener(OPEN_MODEL_SETTINGS_EVENT, open);
+      try {
+        renderInLocale(
+          new ApiError("CONVERSATION_MODEL_NOT_READY", "Readiness refused", 400),
+          locale,
+        );
+        const action = screen.getByRole("button", {
+          name: locale === "de" ? "Modellprüfung öffnen" : "Open model verification",
+        });
+        expect(action).toBeVisible();
+        expect(open).not.toHaveBeenCalled();
+        fireEvent.click(action);
+        expect(open).toHaveBeenCalledTimes(1);
+        expect(await axe(action.parentElement ?? action)).toHaveNoViolations();
+      } finally {
+        window.removeEventListener(OPEN_MODEL_SETTINGS_EVENT, open);
+      }
+    },
+  );
+
+  it("does not infer a recovery action from prose in an unrelated error", () => {
+    renderInLocale(new ApiError("BAD_REQUEST", "Open Settings > Models", 400), "en");
+    expect(screen.queryByRole("button", { name: "Open model verification" })).toBeNull();
+  });
+});
+
+describe("unknown pending review notice", () => {
+  it.each([
+    ["en", EN_MESSAGES["chat.pendingObservation.unknown"]],
+    ["de", DE_MESSAGES["chat.pendingObservation.unknown"]],
+  ] as const)("announces the %s message as an accessible alert", async (locale, message) => {
+    const view = renderInLocale(message, locale);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(message);
+    expect(await axe(view.container)).toHaveNoViolations();
+  });
+});

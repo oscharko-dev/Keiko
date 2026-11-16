@@ -47,6 +47,7 @@ import {
   type SupportReportAvailabilityReason,
 } from "./support-report-policy.js";
 import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
+import { isInPlaceWorkspaceId } from "./task-workspace.js";
 import { isGitWireUnavailableReason, type GitWireUnavailableReason } from "./git-repository.js";
 import { SELECTED_SCOPE_KINDS } from "./connected-context.js";
 import type { ChatConnectedScope } from "./bff-wire.js";
@@ -380,9 +381,10 @@ export function isClientErrorEvidence(value: unknown): value is ClientErrorEvide
 
 export interface ClientMarkdownLayout {
   readonly messageId?: string | undefined;
-  readonly listStart: number;
-  readonly listIndex: number;
-  readonly depth: number;
+  readonly listStart?: number | undefined;
+  readonly listIndex?: number | undefined;
+  readonly depth?: number | undefined;
+  readonly escapedPipeCount?: number | undefined;
 }
 
 function isClientMessageId(value: unknown): value is string {
@@ -392,10 +394,21 @@ function isClientMessageId(value: unknown): value is string {
 export function isClientMarkdownLayout(value: unknown): value is ClientMarkdownLayout {
   if (!isRecord(value)) return false;
   if (!isOptional(value.messageId, isClientMessageId)) return false;
-  return [value.listStart, value.listIndex, value.depth].every(
-    (item) =>
-      typeof item === "number" && Number.isSafeInteger(item) && item >= 0 && item <= 999_999_999,
-  );
+  const coordinates = [value.listStart, value.listIndex, value.depth];
+  const hasCoordinates = coordinates.some((item) => item !== undefined);
+  if (
+    hasCoordinates &&
+    !coordinates.every((item) => isBoundedNonNegativeInteger(item, 999_999_999))
+  )
+    return false;
+  if (
+    !isOptional(
+      value.escapedPipeCount,
+      (count) => isBoundedNonNegativeInteger(count, 999_999_999) && count > 0,
+    )
+  )
+    return false;
+  return hasCoordinates || value.escapedPipeCount !== undefined;
 }
 
 export const CLIENT_COMPOSER_ACTIVITIES = [
@@ -410,6 +423,14 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "workspace-window-sizing-retired",
   "workspace-layout-locked",
   "workspace-layout-unlocked",
+  "workspace-window-content-zoomed",
+  "workspace-ownership-started",
+  "workspace-layout-restored",
+  "workspace-layout-empty",
+  "workspace-layout-unowned",
+  "workspace-sync-idle",
+  "workspace-sync-active",
+  "workspace-sync-pull-pending",
   "literal-input-preserved",
   "draft-resynchronized",
   "context-details-expanded",
@@ -426,12 +447,15 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "send-failure-skipped-draft",
   "send-failure-skipped-unproven",
   "send-cancel-requested",
+  "send-refused-while-running",
   "equivalent-edit-ignored",
   "stale-draft-echo-ignored",
   "non-text-paste-ignored",
   "text-copied",
   "coding-task-submission",
   "coding-task-reset",
+  "markdown-view-changed",
+  "markdown-rich-unavailable",
 ] as const;
 export type ClientComposerActivity = (typeof CLIENT_COMPOSER_ACTIVITIES)[number];
 export const CLIENT_COMPOSER_CODE_STAGES = [
@@ -597,15 +621,50 @@ export interface ClientEditorLineEnding {
 const EDITOR_LINE_ENDINGS: ReadonlySet<unknown> = new Set(CLIENT_EDITOR_LINE_ENDINGS);
 const EDITOR_LINE_ENDING_SOURCES: ReadonlySet<unknown> = new Set(CLIENT_EDITOR_LINE_ENDING_SOURCES);
 
-function hasValidEditorLineEndingContext(value: Record<string, unknown>): boolean {
-  const report = value.editorLineEnding;
+// A closed report of exactly two closed-vocabulary fields, under a correlation id.
+type ClosedField = readonly [name: string, allowed: ReadonlySet<unknown>];
+function hasValidClosedPairReport(
+  value: Record<string, unknown>,
+  key: string,
+  fields: readonly [ClosedField, ClosedField],
+): boolean {
+  const report = value[key];
   if (report === undefined) return true;
   if (!isRecord(report) || !isActivityLogCorrelationId(value.correlationId)) return false;
   return (
-    Object.keys(report).length === 2 &&
-    EDITOR_LINE_ENDINGS.has(report.lineEnding) &&
-    EDITOR_LINE_ENDING_SOURCES.has(report.source)
+    Object.keys(report).length === fields.length &&
+    fields.every(([name, allowed]) => allowed.has(report[name]))
   );
+}
+
+function hasValidEditorLineEndingContext(value: Record<string, unknown>): boolean {
+  return hasValidClosedPairReport(value, "editorLineEnding", [
+    ["lineEnding", EDITOR_LINE_ENDINGS],
+    ["source", EDITOR_LINE_ENDING_SOURCES],
+  ]);
+}
+
+// #4371: a Knowledge Pod catalog refresh that outlasted the picker's patience, or that a later
+// refresh superseded. Routine evidence, closed outcome and closed duration bucket only: the picker
+// keeps its last good snapshot meanwhile, so this is how a slow BFF answer stays reconstructable.
+export const CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES = ["ok", "failed", "superseded"] as const;
+export const CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS = ["1s-5s", "5s-10s", "10s-plus"] as const;
+export interface ClientKnowledgeCatalogRefresh {
+  readonly outcome: (typeof CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES)[number];
+  readonly duration: (typeof CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS)[number];
+}
+const KNOWLEDGE_CATALOG_REFRESH_OUTCOMES: ReadonlySet<unknown> = new Set(
+  CLIENT_KNOWLEDGE_CATALOG_REFRESH_OUTCOMES,
+);
+const KNOWLEDGE_CATALOG_REFRESH_DURATIONS: ReadonlySet<unknown> = new Set(
+  CLIENT_KNOWLEDGE_CATALOG_REFRESH_DURATIONS,
+);
+
+function hasValidKnowledgeCatalogRefreshContext(value: Record<string, unknown>): boolean {
+  return hasValidClosedPairReport(value, "knowledgeCatalogRefresh", [
+    ["outcome", KNOWLEDGE_CATALOG_REFRESH_OUTCOMES],
+    ["duration", KNOWLEDGE_CATALOG_REFRESH_DURATIONS],
+  ]);
 }
 
 function hasValidUpdateNoticeContext(value: Record<string, unknown>): boolean {
@@ -622,12 +681,21 @@ function hasValidUpdateNoticeContext(value: Record<string, unknown>): boolean {
   );
 }
 
-export interface ClientDiagnosticIngestRequest {
+// The catalog-refresh report rides beside the other closed reports (#4371).
+interface ClientKnowledgeCatalogRefreshReport {
+  readonly knowledgeCatalogRefresh?: ClientKnowledgeCatalogRefresh | undefined;
+}
+
+export interface ClientDiagnosticIngestRequest extends ClientKnowledgeCatalogRefreshReport {
   readonly message: string;
   readonly clientTs: string;
   readonly readyState?: ClientDiagnosticReadyState | undefined;
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
+  // The reporting page load's own random reference, minted once per document (#4068). Several tabs
+  // or windows of one origin share the session cookie, so without it their streams' reports cannot
+  // be told apart. It names no person, tab title or URL.
+  readonly documentRef?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   // The closed class of the failure the page observed, when it classified one (a refused
   // connection is `unavailable`, never `unknown`); otherwise the server derives it from `kind`.
@@ -659,6 +727,9 @@ export interface ClientDiagnosticIngestRequest {
   // under the correlation its synthesis request carries, never the spoken text.
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly citationActivation?: ClientDiagnosticCitationActivation | undefined;
+  // Whether the PDF viewer framed a cited passage on its page: a closed outcome and a box count,
+  // never the passage.
+  readonly citationHighlight?: ClientDiagnosticCitationHighlight | undefined;
   readonly scopeNotice?: ClientDiagnosticScopeNotice | undefined;
   readonly evidenceInspection?: ClientDiagnosticEvidenceInspection | undefined;
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
@@ -685,6 +756,8 @@ export interface ClientDiagnosticIngestRequest {
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
+  readonly jiraResultPresentation?: ClientJiraResultPresentation | undefined;
+  readonly jiraFieldPresentation?: ClientJiraFieldPresentation | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -765,9 +838,14 @@ const GIT_CHANGE_DESCRIPTION_OUTCOME_SET: ReadonlySet<string> = new Set(
   CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_OUTCOMES,
 );
 const BODY_FREE_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
-// Local checkout bindings carry a server-derived SHA-256 identity after their namespace.
-// Accept that exact grammar here without opening other diagnostic ids to arbitrary colon data.
-const WORKSPACE_DIAGNOSTIC_ID_PATTERN = /^(?:[A-Za-z0-9._-]{1,128}|local:[a-f0-9]{64})$/u;
+// In-place bindings (a local checkout or an ordinary folder) carry a server-derived SHA-256
+// identity after their namespace. Accept that exact grammar, owned by the task-workspace contract,
+// without opening other diagnostic ids to arbitrary colon data.
+function isWorkspaceDiagnosticId(value: unknown): value is string {
+  return (
+    typeof value === "string" && (BODY_FREE_ID_PATTERN.test(value) || isInPlaceWorkspaceId(value))
+  );
+}
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 function isSetMember(value: unknown, values: ReadonlySet<string>): value is string {
@@ -798,8 +876,7 @@ function isClientDiagnosticWorkspaceTrustBinding(
   return (
     typeof value.repositoryId === "string" &&
     BODY_FREE_ID_PATTERN.test(value.repositoryId) &&
-    typeof value.workspaceId === "string" &&
-    WORKSPACE_DIAGNOSTIC_ID_PATTERN.test(value.workspaceId)
+    isWorkspaceDiagnosticId(value.workspaceId)
   );
 }
 
@@ -871,9 +948,12 @@ function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
 const CLOSED_CLIENT_REPORT_KEYS = [
   "selectDismissal",
   "knowledgeCatalog",
+  "jiraResultPresentation",
+  "jiraFieldPresentation",
   "answerCopy",
   "answerSpeech",
   "citationActivation",
+  "citationHighlight",
   "scopeNotice",
   "evidenceInspection",
   "supportReportDelivery",
@@ -881,6 +961,7 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "filesScopeDecision",
   "updateNotice",
   "editorLineEnding",
+  "knowledgeCatalogRefresh",
   "codingRunRestore",
   "codingWorkbenchInteraction",
   "codingRequestTimeout",
@@ -890,6 +971,7 @@ const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
   "clientTs",
   "correlationId",
   "parentCorrelationId",
+  "documentRef",
   "loss",
 ]);
 function allowsClosedReportFailureField(value: Record<string, unknown>, key: string): boolean {
@@ -929,10 +1011,18 @@ function hasValidCodingReportContext(value: Record<string, unknown>): boolean {
 }
 
 // The closed, routine report shapes that may ride a message report (select dismissal, catalog).
+function hasValidCountedPresentationContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
+    isOptional(value.jiraResultPresentation, isClientJiraResultPresentation) &&
+    isOptional(value.jiraFieldPresentation, isClientJiraFieldPresentation)
+  );
+}
+
 function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   return (
     isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal) &&
-    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
+    hasValidCountedPresentationContext(value) &&
     isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
     isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech) &&
     hasExclusiveClosedReportContext(value) &&
@@ -968,14 +1058,22 @@ function hasValidOperationalContext(value: Record<string, unknown>): boolean {
     hasValidGitContext(value) &&
     hasValidHealthDiagnostic(value) &&
     hasValidUpdateNoticeContext(value) &&
-    hasValidEditorLineEndingContext(value)
+    hasValidEditorLineEndingContext(value) &&
+    hasValidKnowledgeCatalogRefreshContext(value)
+  );
+}
+
+function hasValidClientIdentityContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.errorKind, isActivityLogErrorKind) &&
+    isOptional(value.parentCorrelationId, isCorrelationIdShape) &&
+    isOptional(value.documentRef, isActivityLogCorrelationId)
   );
 }
 
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
-  const { errorKind, loss, parentCorrelationId } = value;
-  if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
-  if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
+  const { loss } = value;
+  if (!hasValidClientIdentityContext(value)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
   if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
   if (!hasValidRenderFailure(value)) return false;
@@ -1029,6 +1127,7 @@ export const CLIENT_STAGE_IDS = [
   "files widget chunk",
   "chat bind",
   "command palette",
+  "window palette",
   "chat history deletion",
   "files directory load",
   "files source preview",
@@ -1041,7 +1140,12 @@ export const CLIENT_STAGE_IDS = [
   "model selection availability",
   "markdown copy feedback",
   "transcript navigation",
+  "modal focus restoration",
   "browser approval",
+  "knowledge pod selection",
+  "jira human input",
+  "chat connector selection",
+  "chat connector refresh",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
@@ -1084,7 +1188,16 @@ export const CLIENT_STAGE_ORDINAL_MAX = 1_000_000;
 // anymore (a hung tab, not a slow one) — cap it instead of carrying an unbounded number on the wire.
 export const CLIENT_STAGE_DURATION_MS_MAX = 86_400_000;
 
+/** `purge` is the permanent delete from the Deleted tab; `move` is the reversible Delete (#4335). */
+export const CLIENT_CHAT_HISTORY_DELETION_ACTIONS = ["move", "purge"] as const;
+export type ClientChatHistoryDeletionAction = (typeof CLIENT_CHAT_HISTORY_DELETION_ACTIONS)[number];
+const CHAT_HISTORY_DELETION_ACTIONS: ReadonlySet<string> = new Set(
+  CLIENT_CHAT_HISTORY_DELETION_ACTIONS,
+);
+
 export interface ClientChatHistoryDeletionCounts {
+  /** Absent means `purge`, the shape every earlier client sent. */
+  readonly action?: ClientChatHistoryDeletionAction | undefined;
   readonly requestedCount: number;
   readonly deletedCount: number;
   readonly failedCount: number;
@@ -1176,6 +1289,10 @@ export const CLIENT_NAVIGATION_OUTCOMES = [
 export type ClientNavigationOutcome = (typeof CLIENT_NAVIGATION_OUTCOMES)[number];
 const NAVIGATION_OUTCOMES: ReadonlySet<string> = new Set(CLIENT_NAVIGATION_OUTCOMES);
 const NAVIGATION_OUTCOME_STAGES: ReadonlySet<string> = new Set([
+  "modal focus restoration",
+  "chat connector selection",
+  "chat connector refresh",
+  "knowledge pod selection",
   "editor project selection",
   "files directory load",
   "files source preview",
@@ -1196,16 +1313,24 @@ function hasValidNavigationOutcome(value: Record<string, unknown>): boolean {
 }
 
 const CHAT_HISTORY_DELETION_COUNT_KEYS: ReadonlySet<string> = new Set([
+  "action",
   "requestedCount",
   "deletedCount",
   "failedCount",
 ]);
 
+function hasValidDeletionShape(counts: Record<string, unknown>): boolean {
+  if (Object.keys(counts).some((key) => !CHAT_HISTORY_DELETION_COUNT_KEYS.has(key))) return false;
+  return (
+    counts.action === undefined ||
+    (typeof counts.action === "string" && CHAT_HISTORY_DELETION_ACTIONS.has(counts.action))
+  );
+}
+
 function hasValidStageDeletion(value: Record<string, unknown>): boolean {
   if (value.stage !== "chat history deletion") return value.deletion === undefined;
   const counts = value.deletion;
-  if (!isRecord(counts)) return false;
-  if (Object.keys(counts).some((key) => !CHAT_HISTORY_DELETION_COUNT_KEYS.has(key))) return false;
+  if (!isRecord(counts) || !hasValidDeletionShape(counts)) return false;
   if (!isBoundedPositiveInteger(counts.requestedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isBoundedNonNegativeInteger(counts.deletedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isBoundedNonNegativeInteger(counts.failedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
@@ -1667,6 +1792,8 @@ export interface ClientSessionRepairIngestRequest {
   readonly errorKind?: ActivityLogErrorKind | undefined;
   // The stream whose failure streak asked for the repair.
   readonly stream?: ClientSessionRepairStream | undefined;
+  // The reporting page load's own random reference (#4068), as on `ClientDiagnosticIngestRequest`.
+  readonly documentRef?: string | undefined;
 }
 
 const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
@@ -1676,6 +1803,7 @@ const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "repairCorrelationId",
   "errorKind",
   "stream",
+  "documentRef",
 ]);
 
 // Only a repair's own outcome can name a stream (a stream is never replayed), and a stream-only
@@ -1705,6 +1833,7 @@ export function isClientSessionRepairIngestRequest(
   if (!isOneOf(value.outcome, CLIENT_SESSION_REPAIR_OUTCOMES)) return false;
   if (!isOptional(value.errorKind, isActivityLogErrorKind)) return false;
   if (!hasConsistentRepairStream(value.outcome, value.stream)) return false;
+  if (!isOptional(value.documentRef, isActivityLogCorrelationId)) return false;
   return (
     isCorrelationIdShape(value.correlationId) && isCorrelationIdShape(value.repairCorrelationId)
   );
@@ -1957,6 +2086,83 @@ export function isClientDiagnosticKnowledgeCatalog(
   );
 }
 
+/** Closed presentation facts; the digest joins the existing parent transcript update event. */
+export const CLIENT_JIRA_RESULT_FAILURES = [
+  "none",
+  "auth",
+  "permission",
+  "not-found",
+  "rate-limited",
+  "conflict",
+  "transition",
+  "bounds",
+  "response",
+  "fields",
+  "unavailable",
+  "mixed",
+] as const;
+export type ClientJiraResultFailure = (typeof CLIENT_JIRA_RESULT_FAILURES)[number];
+export interface ClientJiraResultPresentation {
+  readonly messageDigest: string;
+  readonly exchangeCount: number;
+  readonly itemCount: number;
+  readonly shownCount: number;
+  readonly returnedCount: number;
+  readonly unreadableCount: number;
+  readonly problemCount: number;
+  readonly ruleCount: number;
+  readonly failure: ClientJiraResultFailure;
+  readonly restored: boolean;
+}
+const JIRA_RESULT_COUNT_KEYS = [
+  "exchangeCount",
+  "itemCount",
+  "shownCount",
+  "returnedCount",
+  "unreadableCount",
+  "problemCount",
+  "ruleCount",
+] as const;
+const JIRA_RESULT_KEYS = new Set<string>([
+  ...JIRA_RESULT_COUNT_KEYS,
+  "messageDigest",
+  "failure",
+  "restored",
+]);
+const JIRA_RESULT_FAILURE_SET: ReadonlySet<string> = new Set(CLIENT_JIRA_RESULT_FAILURES);
+export function isClientJiraResultPresentation(
+  value: unknown,
+): value is ClientJiraResultPresentation {
+  if (!isRecord(value) || Object.keys(value).length !== JIRA_RESULT_KEYS.size) return false;
+  return (
+    Object.keys(value).every((key) => JIRA_RESULT_KEYS.has(key)) &&
+    JIRA_RESULT_COUNT_KEYS.every((key) => isBoundedNonNegativeInteger(value[key], 1_000_000_000)) &&
+    isReportDigest(value.messageDigest) &&
+    typeof value.failure === "string" &&
+    JIRA_RESULT_FAILURE_SET.has(value.failure) &&
+    typeof value.restored === "boolean" &&
+    (value.shownCount as number) <= (value.itemCount as number)
+  );
+}
+
+/** Routine presentation counts only: labels, ids and field values never cross this boundary. */
+export interface ClientJiraFieldPresentation {
+  readonly fieldCount: number;
+  readonly localizedCount: number;
+}
+export function isClientJiraFieldPresentation(
+  value: unknown,
+): value is ClientJiraFieldPresentation {
+  if (!isRecord(value) || Object.keys(value).length !== 2) return false;
+  return (
+    Object.hasOwn(value, "fieldCount") &&
+    Object.hasOwn(value, "localizedCount") &&
+    isBoundedNonNegativeInteger(value.fieldCount, 1000) &&
+    isBoundedNonNegativeInteger(value.localizedCount, 1000) &&
+    value.localizedCount <= value.fieldCount
+  );
+}
+
 // ─── Chat answer copy (PR #3678 review) ─────────────────────────────────────────
 //
 // The copy button removes a grounded answer's in-range citation markers and keeps every other
@@ -2162,6 +2368,8 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   "pending-decision-focused",
   "repository-trust-bound",
   "changeset-review-prepared",
+  // The person gave up a start that had no run yet (#4271).
+  "start-cancelled",
   // A history task from another repository than the active one was returned and not activated: the
   // operator switched repositories, an ordinary transition and not a failure.
   "history-repository-switched",
@@ -2171,6 +2379,21 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // A history task of another workspace than the active one was returned and not activated: the
   // operator works in another workspace, an ordinary transition and not a failure (#4118).
   "history-workspace-switched",
+  // A window showing a task picked from Coding History, or a new task, did not follow a settled
+  // run of another task: the runtime status names the process's latest run, not the window's task
+  // (#4271). Once per pick; a run that becomes active afterwards owns the window again.
+  "history-run-held",
+  // A person left a run that needed recovery with New task (F30): the run stays recoverable from
+  // Coding History and no longer holds the window. Once per departure.
+  "recovery-left",
+  // A window without a stored repository decided its starting repository once the task-workspace
+  // state had answered (#4271): it took the shell's project (`repository-seeded`), or it met an
+  // active task binding and follows that (`repository-seed-skipped`). Once per window.
+  "repository-seeded",
+  "repository-seed-skipped",
+  // The Git window handed a repository the person just added or cloned back to the window that
+  // asked for the folder (its return window); no other window changes (#4371). Once per return.
+  "repository-returned",
   // The server refused to register the run's editor bridge: the root boundary refused the run's
   // root, or another tab holds the run's lease. Closed reason only (#4117).
   "bridge-registration-refused",
@@ -2181,6 +2404,16 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // missing pairing once instead of every surface reporting its own failure. Closed notice only
   // (#3880).
   "notice-held",
+  // The window first showed a live run's identity: whether the server reported its model and agent,
+  // and the reported tool profile. Reported flags and the closed profile only (#4068 W12).
+  "run-identity-observed",
+  // A delivery card showed a step's state: a review's load state, a verified commit's result, a
+  // draft delivery's phase, the CI readiness or the journey outcome. These were warn/unknown
+  // `client.diagnostic` sentences before (#4271). The step and its closed state only.
+  "delivery-step-shown",
+  // The mounted window settled where its repository came from: its own saved selection, the
+  // folder the shell held, or none. The closed source only, never the path (#4068).
+  "repository-resolved",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2188,6 +2421,7 @@ export type ClientCodingWorkbenchInteractionName =
 /** The disclosure the human opened or closed. */
 export const CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS = [
   "run",
+  "readiness",
   "model-reasoning",
   "tool",
   "activity-group",
@@ -2214,6 +2448,11 @@ export type ClientCodingWorkbenchProgressState =
 export const CLIENT_CODING_WORKBENCH_AGENT_KINDS = ["build", "plan", "custom"] as const;
 export type ClientCodingWorkbenchAgentKind = (typeof CLIENT_CODING_WORKBENCH_AGENT_KINDS)[number];
 
+/** The tool profile a window was told about; `unreported` when readiness named none. */
+export const CLIENT_CODING_WORKBENCH_TOOL_PROFILES = ["native", "mapped", "unreported"] as const;
+export type ClientCodingWorkbenchToolProfile =
+  (typeof CLIENT_CODING_WORKBENCH_TOOL_PROFILES)[number];
+
 /** Why the editor bridge registration was refused: the root boundary, or a lease held elsewhere. */
 export const CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS = ["root-boundary", "lease"] as const;
 export type ClientCodingWorkbenchBridgeRefusal =
@@ -2239,6 +2478,111 @@ export const CLIENT_CODING_WORKBENCH_HELD_NOTICES = [
 ] as const;
 export type ClientCodingWorkbenchHeldNotice = (typeof CLIENT_CODING_WORKBENCH_HELD_NOTICES)[number];
 
+/** The delivery card whose state a `delivery-step-shown` interaction reports (#4271). */
+export const CLIENT_CODING_WORKBENCH_DELIVERY_STEPS = [
+  "delivery-review",
+  "stage-review",
+  "unstage-review",
+  "commit-review",
+  "commit-result",
+  "draft-delivery",
+  "ci-readiness",
+  "journey",
+] as const;
+export type ClientCodingWorkbenchDeliveryStep =
+  (typeof CLIENT_CODING_WORKBENCH_DELIVERY_STEPS)[number];
+
+/** Every closed state a delivery step can show; each step admits only its own (below). */
+export const CLIENT_CODING_WORKBENCH_DELIVERY_STATES = [
+  "idle",
+  "loading",
+  "ready",
+  "unavailable",
+  "succeeded",
+  "blocked",
+  "failed",
+  "recovery-required",
+  "verification-failed",
+  "drift",
+  "push-proposed",
+  "pushing",
+  "pushed",
+  "pr-proposed",
+  "creating-pr",
+  "draft-created",
+  "technical-ready",
+  "pending",
+  "unknown",
+  "stale",
+  "unobserved",
+  "awaiting-ready-approval",
+  "keiko-technical-ready",
+  "ready-for-human-review",
+  "awaiting-human-requirements",
+  "merged-awaiting-issue-closure",
+  "completed",
+  "cancelled",
+] as const;
+export type ClientCodingWorkbenchDeliveryState =
+  (typeof CLIENT_CODING_WORKBENCH_DELIVERY_STATES)[number];
+
+const DELIVERY_REVIEW_STATES = ["idle", "loading", "ready", "unavailable"] as const;
+const DELIVERY_STEP_STATES = {
+  "delivery-review": DELIVERY_REVIEW_STATES,
+  "stage-review": DELIVERY_REVIEW_STATES,
+  "unstage-review": DELIVERY_REVIEW_STATES,
+  "commit-review": ["ready"],
+  "commit-result": [
+    "succeeded",
+    "blocked",
+    "failed",
+    "recovery-required",
+    "verification-failed",
+    "drift",
+  ],
+  "draft-delivery": [
+    "push-proposed",
+    "pushing",
+    "pushed",
+    "pr-proposed",
+    "creating-pr",
+    "draft-created",
+    "recovery-required",
+  ],
+  "ci-readiness": [
+    "technical-ready",
+    "pending",
+    "failed",
+    "blocked",
+    "unknown",
+    "stale",
+    "unobserved",
+  ],
+  journey: [
+    "awaiting-ready-approval",
+    "keiko-technical-ready",
+    "ready-for-human-review",
+    "awaiting-human-requirements",
+    "merged-awaiting-issue-closure",
+    "completed",
+    "blocked",
+    "cancelled",
+    "recovery-required",
+    "stale",
+  ],
+} as const satisfies Readonly<
+  Record<ClientCodingWorkbenchDeliveryStep, readonly ClientCodingWorkbenchDeliveryState[]>
+>;
+
+/**
+ * Where a mounted Workbench window took its repository from: the window's own saved selection, the
+ * folder the shell held when the window first knew it, or none (an active task binding met the
+ * window first).
+ */
+export const CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES = ["window", "shell", "none"] as const;
+export type ClientCodingWorkbenchRepositorySource =
+  (typeof CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES)[number];
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
 /** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
@@ -2263,9 +2607,15 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
       readonly workspaceId: string;
     }
   | { readonly interaction: "changeset-review-prepared"; readonly fileCount: number }
+  | { readonly interaction: "start-cancelled" }
   | { readonly interaction: "history-repository-switched" }
   | { readonly interaction: "event-stream-reconnecting" }
   | { readonly interaction: "history-workspace-switched" }
+  | { readonly interaction: "history-run-held" }
+  | { readonly interaction: "recovery-left" }
+  | { readonly interaction: "repository-seeded" }
+  | { readonly interaction: "repository-seed-skipped" }
+  | { readonly interaction: "repository-returned" }
   | {
       readonly interaction: "bridge-registration-refused";
       readonly refusal: ClientCodingWorkbenchBridgeRefusal;
@@ -2277,7 +2627,22 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
       readonly totalLineCount: number;
       readonly totalByteCount: number;
     }
-  | { readonly interaction: "notice-held"; readonly notice: ClientCodingWorkbenchHeldNotice };
+  | { readonly interaction: "notice-held"; readonly notice: ClientCodingWorkbenchHeldNotice }
+  | {
+      readonly interaction: "run-identity-observed";
+      readonly modelReported: boolean;
+      readonly agentReported: boolean;
+      readonly toolProfile: ClientCodingWorkbenchToolProfile;
+    }
+  | {
+      readonly interaction: "delivery-step-shown";
+      readonly deliveryStep: ClientCodingWorkbenchDeliveryStep;
+      readonly deliveryState: ClientCodingWorkbenchDeliveryState;
+    }
+  | {
+      readonly interaction: "repository-resolved";
+      readonly repositorySource: ClientCodingWorkbenchRepositorySource;
+    };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
@@ -2291,6 +2656,9 @@ const CODING_WORKBENCH_PROGRESS_STATE_SET: ReadonlySet<string> = new Set(
 const CODING_WORKBENCH_AGENT_KIND_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_AGENT_KINDS,
 );
+const CODING_WORKBENCH_TOOL_PROFILE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_TOOL_PROFILES,
+);
 const CODING_WORKBENCH_BRIDGE_REFUSAL_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
 );
@@ -2299,6 +2667,9 @@ const CODING_WORKBENCH_DIFF_SURFACE_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_HELD_NOTICE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+);
+const CODING_WORKBENCH_REPOSITORY_SOURCE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES,
 );
 
 function isCodingWorkbenchInteractionName(
@@ -2323,16 +2694,21 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   },
   "agent-selected": { agent: (value) => isSetMember(value, CODING_WORKBENCH_AGENT_KIND_SET) },
   "pending-decision-focused": {},
+  "start-cancelled": {},
   "history-repository-switched": {},
   "event-stream-reconnecting": {},
   "history-workspace-switched": {},
+  "history-run-held": {},
+  "recovery-left": {},
+  "repository-seeded": {},
+  "repository-seed-skipped": {},
+  "repository-returned": {},
   "bridge-registration-refused": {
     refusal: (value) => isSetMember(value, CODING_WORKBENCH_BRIDGE_REFUSAL_SET),
   },
   "repository-trust-bound": {
     repositoryId: (value) => typeof value === "string" && BODY_FREE_ID_PATTERN.test(value),
-    workspaceId: (value) =>
-      typeof value === "string" && WORKSPACE_DIAGNOSTIC_ID_PATTERN.test(value),
+    workspaceId: isWorkspaceDiagnosticId,
   },
   "changeset-review-prepared": {
     fileCount: (value) =>
@@ -2348,7 +2724,34 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
       isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX),
   },
   "notice-held": { notice: (value) => isSetMember(value, CODING_WORKBENCH_HELD_NOTICE_SET) },
+  "run-identity-observed": {
+    modelReported: (value) => typeof value === "boolean",
+    agentReported: (value) => typeof value === "boolean",
+    toolProfile: (value) => isSetMember(value, CODING_WORKBENCH_TOOL_PROFILE_SET),
+  },
+  "delivery-step-shown": {
+    deliveryStep: (value) =>
+      typeof value === "string" && Object.hasOwn(DELIVERY_STEP_STATES, value),
+    deliveryState: (value) => isSetMember(value, CODING_WORKBENCH_DELIVERY_STATE_SET),
+  },
+  "repository-resolved": {
+    repositorySource: (value) => isSetMember(value, CODING_WORKBENCH_REPOSITORY_SOURCE_SET),
+  },
 };
+
+const CODING_WORKBENCH_DELIVERY_STATE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_DELIVERY_STATES,
+);
+const CODING_WORKBENCH_DELIVERY_STEP_STATE_SETS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries(DELIVERY_STEP_STATES).map(([step, states]) => [step, new Set<string>(states)]),
+);
+
+// A delivery step admits only its own states: a journey state never rides a review.
+function coherentDeliveryStep(value: Readonly<Record<string, unknown>>): boolean {
+  if (value.interaction !== "delivery-step-shown") return true;
+  const states = CODING_WORKBENCH_DELIVERY_STEP_STATE_SETS.get(value.deliveryStep as string);
+  return states !== undefined && isSetMember(value.deliveryState, states);
+}
 
 /** True for one closed interaction with exactly its own valid fields. */
 function isClientDiagnosticCodingWorkbenchInteraction(
@@ -2359,7 +2762,8 @@ function isClientDiagnosticCodingWorkbenchInteraction(
   const keys = Object.keys(value).filter((key) => key !== "interaction");
   return (
     keys.length === Object.keys(fields).length &&
-    keys.every((key) => fields[key]?.(value[key]) === true)
+    keys.every((key) => fields[key]?.(value[key]) === true) &&
+    coherentDeliveryStep(value)
   );
 }
 
@@ -2464,13 +2868,67 @@ export interface ActivityLogReadinessSnapshot {
   readonly diagnosticCapacity?: number | undefined;
 }
 
-/** The `GET /api/health` body. `diagnostics` is additive; `status`/`version` keep their meaning. */
+export type MemoryReadinessSnapshot =
+  | { readonly readiness: "ready"; readonly reason: "none" }
+  | {
+      readonly readiness: "withheld";
+      readonly reason: "vault-unreadable" | "vault-migration-failed";
+    };
+
+export function isMemoryReadinessSnapshot(value: unknown): value is MemoryReadinessSnapshot {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, unknown>;
+  if (Object.keys(snapshot).length !== 2) return false;
+  if (snapshot.readiness === "ready") return snapshot.reason === "none";
+  return (
+    snapshot.readiness === "withheld" &&
+    (snapshot.reason === "vault-unreadable" || snapshot.reason === "vault-migration-failed")
+  );
+}
+
+/** A server instance identity: 128 random bits as 32 lowercase hex characters (#4370). */
+export const SERVER_INSTANCE_ID_PATTERN = /^[a-f0-9]{32}$/u;
+
+export function isServerInstanceId(value: unknown): value is string {
+  return typeof value === "string" && SERVER_INSTANCE_ID_PATTERN.test(value);
+}
+
+/**
+ * How the credential vaults this server opened from a key file are kept on Windows (#4358,
+ * ADR-0182 D5). Closed; absent on other platforms and before any vault key was read.
+ *   attested    key file and directory are private to the current account.
+ *   protected   the directory was not private and Keiko made it private; the key was not readable.
+ *   exposed     a key file was readable by another account before Keiko protected it: stored
+ *               secrets, such as a Jira token, should be replaced.
+ *   unattested  Windows could not be asked; nothing is known. Never the same as `attested`.
+ */
+export const CREDENTIAL_CUSTODY_STATES = [
+  "attested",
+  "protected",
+  "exposed",
+  "unattested",
+] as const;
+export type CredentialCustodyState = (typeof CREDENTIAL_CUSTODY_STATES)[number];
+
+export function isCredentialCustodyState(value: unknown): value is CredentialCustodyState {
+  return (CREDENTIAL_CUSTODY_STATES as readonly unknown[]).includes(value);
+}
+
+/** The `GET /api/health` body. Readiness projections are additive; `status` stays server liveness. */
 export interface HealthResponse {
   readonly status: "ok";
   readonly version: string;
   readonly diagnostics: ActivityLogReadinessSnapshot;
+  readonly memory?: MemoryReadinessSnapshot;
   /** The server-owned instance identity, when this process was started by a modern launcher. */
   readonly launchId?: string;
+  /**
+   * A random value regenerated at every server process start (#4370). It lets a page that saw it
+   * while connected recognize a restart; it is not a credential and grants nothing.
+   */
+  readonly instanceId?: string;
+  /** Credential custody on Windows; see {@link CredentialCustodyState}. */
+  readonly credentialCustody?: CredentialCustodyState;
 }
 
 const READINESS_STATE_SET: ReadonlySet<string> = new Set(ACTIVITY_LOG_READINESS_STATES);
@@ -2842,6 +3300,44 @@ function isClientDiagnosticCitationActivation(
   );
 }
 
+/** Whether the PDF viewer framed the cited passage on its page; never the passage itself. */
+export interface ClientDiagnosticCitationHighlight {
+  readonly outcome: "framed" | "not-found" | "no-passage" | "no-text";
+  readonly boxCount: number;
+}
+const CITATION_HIGHLIGHT_OUTCOMES: ReadonlySet<unknown> = new Set([
+  "framed",
+  "not-found",
+  "no-passage",
+  "no-text",
+]);
+const CITATION_HIGHLIGHT_KEYS = new Set(["outcome", "boxCount"]);
+export const CLIENT_CITATION_HIGHLIGHT_BOX_MAX = 64;
+
+function isClientDiagnosticCitationHighlight(
+  value: unknown,
+): value is ClientDiagnosticCitationHighlight {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (
+    keys.length !== CITATION_HIGHLIGHT_KEYS.size ||
+    keys.some((key) => !CITATION_HIGHLIGHT_KEYS.has(key))
+  )
+    return false;
+  if (!CITATION_HIGHLIGHT_OUTCOMES.has(value.outcome)) return false;
+  if (!isBoundedNonNegativeInteger(value.boxCount, CLIENT_CITATION_HIGHLIGHT_BOX_MAX)) return false;
+  // Only a framed passage has boxes, and it has at least one.
+  return value.outcome === "framed" ? value.boxCount > 0 : value.boxCount === 0;
+}
+
+function hasValidCitationHighlightContext(value: Record<string, unknown>): boolean {
+  if (value.citationHighlight === undefined) return true;
+  return (
+    isActivityLogCorrelationId(value.correlationId) &&
+    isClientDiagnosticCitationHighlight(value.citationHighlight)
+  );
+}
+
 function hasValidCitationActivationContext(value: Record<string, unknown>): boolean {
   if (value.citationActivation === undefined) return true;
   return (
@@ -2953,6 +3449,7 @@ function hasValidEvidenceInspectionContext(value: Record<string, unknown>): bool
 function hasValidRetrievalEvidenceContext(value: Record<string, unknown>): boolean {
   return (
     hasValidCitationActivationContext(value) &&
+    hasValidCitationHighlightContext(value) &&
     hasValidScopeNoticeContext(value) &&
     hasValidEvidenceInspectionContext(value)
   );

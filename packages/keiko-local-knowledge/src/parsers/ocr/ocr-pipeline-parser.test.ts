@@ -93,9 +93,9 @@ describe("createOcrPipelineParser — capability metadata", () => {
     expect(parser.capability.parserId).toBe("ocr-pipeline");
   });
 
-  it("reports parserVersion 1", () => {
+  it("reports parserVersion 2", () => {
     const parser = createOcrPipelineParser(nullOcrAdapter);
-    expect(parser.capability.parserVersion).toBe("1");
+    expect(parser.capability.parserVersion).toBe("2");
   });
 });
 

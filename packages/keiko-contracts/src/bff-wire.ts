@@ -1,15 +1,7 @@
+import type { JiraHumanInputView } from "./jira-human-input.js";
 import type { ModelCapability, NormalizedToolCall } from "./gateway.js";
 import type { ToolResultEnvelope } from "./governed-tool-catalog.js";
-import { exactKeys } from "./contract-validation-primitives.js";
-import { parseSafely } from "./managed-lsp-parse-safely.js";
-import {
-  CHAT_TOOL_READ_DISCLOSURE_VERSION,
-  MCP_CHAT_READ_DISCLOSURE_VERSION,
-  CHAT_TOOL_READ_GRANT_STATES,
-  type ChatToolReadGrantView,
-  type ChatToolWriteApprovalView,
-  validateChatToolWriteApprovalView,
-} from "./chat-tool-authority.js";
+import type { ChatToolReadGrantView, ChatToolWriteApprovalView } from "./chat-tool-authority.js";
 import type { JiraMutationOutcome } from "./jira-tool-execution.js";
 // Wire-safe entity types for the BFF (Back-For-Frontend) layer (ADR-0013 D4). These types
 // travel over the HTTP wire between the BFF and the React UI. The DI port interfaces
@@ -77,7 +69,11 @@ import {
   type ContextLaneId,
 } from "./context-engineering.js";
 
-export { MARKDOWN_SKILL_LIMITS } from "./markdown-skills.js";
+export {
+  isMarkdownSkillRefusalReason,
+  MARKDOWN_SKILL_LIMITS,
+  MARKDOWN_SKILL_REFUSAL_REASONS,
+} from "./markdown-skills.js";
 export type {
   MarkdownSkillReference,
   MarkdownSkillSelection,
@@ -85,6 +81,7 @@ export type {
   MarkdownSkillMetadata,
   MarkdownSkillDocument,
   MarkdownSkillUpload,
+  MarkdownSkillRefusalReason,
 } from "./markdown-skills.js";
 
 export interface Project {
@@ -354,6 +351,8 @@ export interface Chat {
   // single-source legacy field: this scope kind was never overloaded onto an earlier shape.
   readonly gitChangeScopes?: readonly ChatGitChangeScope[];
   readonly jiraPodBinding?: ChatJiraPodBinding | undefined;
+  /** Explicit administration selection for this Pod binding; absent means false. */
+  readonly jiraAdministrationEnabled?: boolean;
   /** Retained after disconnect so a later connection cannot reuse an earlier generation. */
   readonly jiraBindingGeneration?: number;
   /** Absent selections mean `CHAT_TOOL_DEFAULT_MODE` (Full access). */
@@ -525,15 +524,251 @@ export interface ChatAssistantResponseVersion {
 
 /** A call/result pair stays attached to its canonical human turn during history selection. */
 export interface ChatToolExchange {
-  readonly call: Pick<NormalizedToolCall, "id" | "name" | "arguments">;
+  readonly call: Pick<NormalizedToolCall, "id" | "name" | "arguments"> & {
+    /** Legacy transcript metadata may be read; current writers and public projections omit it. */
+    readonly origin?: "runtime" | undefined;
+  };
   readonly result?: ToolResultEnvelope | undefined;
+  /** Bound server-owned draft receipts retained beside a cancelled result, never inside it. */
+  readonly draftProgress?: Readonly<Record<string, unknown>> | undefined;
+  /** Public request metadata only; values stay in the private credential vault. */
+  readonly humanInput?: JiraHumanInputView | undefined;
+  /** Counted progress of a running Keiko-driven draft batch (#4173); counts only, never text. */
+  readonly batchProgress?: ChatToolBatchProgress | undefined;
   readonly approval?: ChatToolWriteApprovalView | undefined;
   /** Durable remote-effect knowledge is independent from transport cancellation or denial. */
   readonly mutationOutcome?: JiraMutationOutcome | undefined;
 }
+/** The phases of a Keiko-driven draft batch: grouping requirements, then drafting them in pages. */
+export const CHAT_TOOL_BATCH_PHASES = ["outlining", "drafting", "complete"] as const;
+export type ChatToolBatchPhase = (typeof CHAT_TOOL_BATCH_PHASES)[number];
+/** The largest count a batch reports; a requirements inventory holds at most 5000 units. */
+export const CHAT_TOOL_BATCH_COUNT_MAX = 5000;
+/**
+ * How far a draft batch has come: drafted issues of the planned issues and the requirements they
+ * cover. Only the tool that runs a batch carries it, and only while or after it ran.
+ */
+export interface ChatToolBatchProgress {
+  readonly phase: ChatToolBatchPhase;
+  readonly draftedCount: number;
+  readonly plannedCount: number;
+  readonly coveredRequirementCount: number;
+  readonly requirementCount: number;
+  readonly failedCount: number;
+}
+/** The model-facing name of the tool that runs a draft batch. */
+export const CHAT_TOOL_BATCH_TOOL_NAME = "jira_draft_batch";
+
+function isBatchCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= CHAT_TOOL_BATCH_COUNT_MAX
+  );
+}
+
+const BATCH_PROGRESS_KEYS = [
+  "phase",
+  "draftedCount",
+  "plannedCount",
+  "coveredRequirementCount",
+  "requirementCount",
+  "failedCount",
+] as const;
+
+function hasBatchProgressShape(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.length === BATCH_PROGRESS_KEYS.length &&
+    BATCH_PROGRESS_KEYS.every((key) => keys.includes(key))
+  );
+}
+
+/** A closed, self-consistent batch progress record. */
+export function isChatToolBatchProgress(value: unknown): value is ChatToolBatchProgress {
+  if (!hasBatchProgressShape(value)) return false;
+  if (!(CHAT_TOOL_BATCH_PHASES as readonly unknown[]).includes(value.phase)) return false;
+  const counts = BATCH_PROGRESS_KEYS.slice(1).map((key) => value[key]);
+  if (!counts.every(isBatchCount)) return false;
+  const progress = value as unknown as ChatToolBatchProgress;
+  return (
+    progress.draftedCount + progress.failedCount <= progress.plannedCount &&
+    progress.coveredRequirementCount <= progress.requirementCount
+  );
+}
+
+/**
+ * A fact Keiko states about the answer a turn published (#4355): the answer claimed an effect its
+ * own turn does not bear out and the correction could not remove the claim. The server states the
+ * closed marker; the Chat words it from its message catalog, so no language is guessed here.
+ */
+export const CHAT_CLAIM_NOTICES = ["no-jira-create", "tool-call-not-executed"] as const;
+export type ChatClaimNotice = (typeof CHAT_CLAIM_NOTICES)[number];
+export function isChatClaimNotice(value: unknown): value is ChatClaimNotice {
+  return (CHAT_CLAIM_NOTICES as readonly unknown[]).includes(value);
+}
+
+/**
+ * Why a Chat tool turn ended before the model gave its own answer (#4175, #4355). One closed
+ * vocabulary: the server's ending function writes it to the `chat.tool-turn.ended` log line and to
+ * the transcript from the same value, and the Chat words each member from its message catalog.
+ */
+export const CHAT_TOOL_TURN_END_REASONS = [
+  "budget-exhausted",
+  "deadline",
+  "authority-invalid",
+  "authentication-failed",
+  "tool-failure",
+  "output-exhausted",
+  "context-overflow",
+  "tool-not-offered",
+  "model-failure",
+] as const;
+export type ChatToolTurnEndReason = (typeof CHAT_TOOL_TURN_END_REASONS)[number];
+export function isChatToolTurnEndReason(value: unknown): value is ChatToolTurnEndReason {
+  return (CHAT_TOOL_TURN_END_REASONS as readonly unknown[]).includes(value);
+}
+
+/** The state a backlog-draft item carried when its turn ended. */
+export const CHAT_TURN_END_ITEM_STATES = [
+  "created",
+  "existing",
+  "failed",
+  "uncertain",
+  "skipped",
+  "excluded",
+  "pending",
+] as const;
+export type ChatTurnEndItemState = (typeof CHAT_TURN_END_ITEM_STATES)[number];
+
+/**
+ * One receipt of an ended turn: the tool, the issue key (or key range) Jira acknowledged, and for a
+ * backlog-draft item its position and state. Facts only, no text, so any language can word it.
+ */
+export interface ChatTurnEndReceipt {
+  readonly tool: string;
+  readonly key?: string | undefined;
+  /** 1-based position of a draft item that has no key. */
+  readonly item?: number | undefined;
+  readonly state?: ChatTurnEndItemState | undefined;
+}
+export const CHAT_TURN_END_RECEIPTS_MAX = 1000;
+const CHAT_TURN_END_TEXT_MAX = 600;
+const CHAT_TURN_END_KEYS = [
+  "reason",
+  "answer",
+  "completed",
+  "unconfirmed",
+  "unsettled",
+  "notDone",
+  "moreCount",
+  "readCount",
+  "refusedCount",
+] as const;
+const CHAT_TURN_END_RECEIPT_KEYS: ReadonlySet<string> = new Set(["tool", "key", "item", "state"]);
+
+/**
+ * How a turn ended early, as closed facts (#4355): the reason and the receipts its deterministic
+ * answer lists. The stored English answer stays the fallback for exports and older clients.
+ */
+export interface ChatToolTurnEnd {
+  readonly reason: ChatToolTurnEndReason;
+  /**
+   * Fingerprint of the stored English ending this record was built with. The Chat words the ending
+   * only for an answer whose stored text still matches it, so a record that outlived its answer
+   * (a failed clearing write) can never replace a real model answer.
+   */
+  readonly answer: string;
+  /** Writes Jira acknowledged. */
+  readonly completed: readonly ChatTurnEndReceipt[];
+  /** Writes sent whose outcome is not confirmed. */
+  readonly unconfirmed: readonly ChatTurnEndReceipt[];
+  /** Calls started but never settled. */
+  readonly unsettled: readonly ChatTurnEndReceipt[];
+  /** Draft items refused, blocked or not started. */
+  readonly notDone: readonly ChatTurnEndReceipt[];
+  /** Receipts beyond the per-list bound, over all four lists. */
+  readonly moreCount: number;
+  readonly readCount: number;
+  readonly refusedCount: number;
+}
+
+/**
+ * A short fingerprint of an answer's text: its length and a 32-bit FNV-1a over the code point at each UTF-16 index.
+ * It binds a stored ending record to the exact text it describes; it is not a security digest and
+ * never leaves the machine. One definition, used by the server that writes it and the Chat that
+ * compares it.
+ */
+export function chatTurnEndAnswerFingerprint(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = Math.imul(hash ^ (text.codePointAt(index) ?? 0), 0x01000193) >>> 0;
+  }
+  return `${String(text.length)}:${hash.toString(16).padStart(8, "0")}`;
+}
+const CHAT_TURN_END_ANSWER_PATTERN = /^\d{1,9}:[0-9a-f]{8}$/u;
+
+function isTurnEndText(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= CHAT_TURN_END_TEXT_MAX;
+}
+function isTurnEndCount(value: unknown, max: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
+}
+function isTurnEndReceiptDetail(entry: Record<string, unknown>): boolean {
+  return (
+    (entry.key === undefined || isTurnEndText(entry.key)) &&
+    (entry.item === undefined || (isTurnEndCount(entry.item, 1_000_000) && entry.item > 0)) &&
+    (entry.state === undefined ||
+      (CHAT_TURN_END_ITEM_STATES as readonly unknown[]).includes(entry.state))
+  );
+}
+function isTurnEndReceipt(value: unknown): value is ChatTurnEndReceipt {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    Object.keys(entry).every((key) => CHAT_TURN_END_RECEIPT_KEYS.has(key)) &&
+    isTurnEndText(entry.tool) &&
+    isTurnEndReceiptDetail(entry)
+  );
+}
+function isTurnEndReceiptList(value: unknown): value is readonly ChatTurnEndReceipt[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= CHAT_TURN_END_RECEIPTS_MAX &&
+    value.every(isTurnEndReceipt)
+  );
+}
+const CHAT_TURN_END_LISTS = ["completed", "unconfirmed", "unsettled", "notDone"] as const;
+const CHAT_TURN_END_COUNTS = ["moreCount", "readCount", "refusedCount"] as const;
+function hasTurnEndShape(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.length === CHAT_TURN_END_KEYS.length &&
+    CHAT_TURN_END_KEYS.every((key) => keys.includes(key))
+  );
+}
+/** A closed, bounded ending record; anything else is not one (exact keys, closed reason). */
+export function isChatToolTurnEnd(value: unknown): value is ChatToolTurnEnd {
+  return (
+    hasTurnEndShape(value) &&
+    isChatToolTurnEndReason(value.reason) &&
+    typeof value.answer === "string" &&
+    CHAT_TURN_END_ANSWER_PATTERN.test(value.answer) &&
+    CHAT_TURN_END_LISTS.every((key) => isTurnEndReceiptList(value[key])) &&
+    CHAT_TURN_END_COUNTS.every((key) => isTurnEndCount(value[key], 1_000_000_000))
+  );
+}
+
 export interface ChatToolTranscript {
   readonly schemaVersion: 1;
   readonly exchanges: readonly ChatToolExchange[];
+  /** Absent unless the published answer carries a claim the turn does not bear out. */
+  readonly claimNotice?: ChatClaimNotice | undefined;
+  /** Absent unless the turn ended early; the stored answer is then its English rendering. */
+  readonly turnEnd?: ChatToolTurnEnd | undefined;
   /** Latest update retained for older clients and the existing consent event. */
   readonly readGrant?: ChatToolReadGrantView | undefined;
   /** At most one current disclosure per source kind; older transcripts contain only readGrant. */
@@ -541,6 +776,8 @@ export interface ChatToolTranscript {
 }
 
 export interface ChatMessage {
+  /** Private stored prompt metadata. Browser response projections omit it; content is the draft. */
+  readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
   readonly toolTranscript?: ChatToolTranscript | undefined;
   readonly id: string;
   readonly chatId: string;
@@ -594,6 +831,8 @@ export interface UpdateProjectPatch {
 export interface UpdateChatPatch {
   /** Selection intent only; the server resolves and validates the current Pod generation. */
   readonly jiraPodId?: string | null;
+  /** Explicit opt-in; requires the current ready Pod and scope identity. */
+  readonly jiraAdministrationEnabled?: boolean;
   readonly toolMode?: CodingWorkbenchMode;
   /** Selection intent: server names, or null to offer every enabled server again. */
   readonly mcpServers?: readonly string[] | null;
@@ -626,6 +865,7 @@ export interface UpdateChatPatch {
 }
 
 export interface NewChatMessage {
+  readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
   readonly chatId: string;
   readonly role: ChatRole;
   readonly content: string;
@@ -656,6 +896,10 @@ export interface ProjectWithAvailability extends Project {
   // A project row is not sufficient authority for workspace capabilities. Governed consumers
   // admit only explicit `true`; `false` or an absent field fails closed and requires reconnection.
   readonly workspaceAvailable?: boolean;
+  // `false` when the Files and Git routes refuse this folder (a tool's own state area): the project
+  // stays listed and can be chosen, but the shell never offers it as the starting project (#4371).
+  // Absent reads as readable.
+  readonly readable?: boolean;
 }
 
 // ─── Chat status (BFF wire — mirror of UiStore Chat["status"]) ───────────────────
@@ -736,7 +980,7 @@ export interface ChatContextSegmentWire {
  * server can resolve it.
  */
 export interface ChatContextConnectorWire {
-  readonly kind: "mcp" | "jira";
+  readonly kind: "mcp" | "jira" | "knowledge";
   readonly name?: string | undefined;
   readonly toolCount?: number | undefined;
   readonly tokens?: number | undefined;
@@ -906,6 +1150,9 @@ export interface MemoryAutonomyPolicyWire {
   readonly effectiveMode: CodingWorkbenchMode;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly revision: number;
+  // True when an operator-configured ceiling holds new routine facts for review instead of using
+  // them right away (#4206). Absent from older servers, which never held them.
+  readonly routineFactsHeldForReview?: boolean | undefined;
 }
 
 export interface UpdateMemoryAutonomyPolicyWire {
@@ -1007,14 +1254,34 @@ export interface ConversationMemoryContextEntryWire {
   readonly capturedAt: number;
 }
 
+/** One fact of the standing profile (#4228): supplied with every answer, not marked per answer. */
+export interface ConversationStandingProfileEntryWire {
+  readonly memoryId: string;
+  readonly text: string;
+}
+
+export interface ConversationStandingProfileWire {
+  readonly entries: readonly ConversationStandingProfileEntryWire[];
+  readonly tokens: number;
+  /** Eligible facts the profile's entry or token cap left out. */
+  readonly droppedCount?: number;
+}
+
 export interface ConversationMemoryContextWire {
   readonly enabled: boolean;
   readonly text: string;
+  /** Memories retrieved for this question; the answer marker shows exactly these. */
   readonly memories: readonly ConversationMemoryContextEntryWire[];
   readonly budget: {
     readonly tokens: number;
     readonly used: number;
   };
+  /** The person's standing profile, supplied with the system prompt of every answer. */
+  readonly profile?: ConversationStandingProfileWire;
+  /** How many candidate memories the relevance floor held back for this question. */
+  readonly belowFloorCount?: number;
+  /** Standing profile facts this question is about: sent once, with the retrieved memories. */
+  readonly profileRetrievedCount?: number;
 }
 
 export type ConversationMemoryActionWire =
@@ -1027,6 +1294,9 @@ export type ConversationMemoryActionWire =
       // Server-owned persistence result. UI consumers must never infer reviewability from mode or
       // requiresApproval: an accepted candidate has already passed the unattended promotion gate.
       readonly status: Extract<MemoryStatus, "proposed" | "accepted">;
+      // True for a person's own clear statement, which the chat answers. Anything learned stays
+      // invisible, even when its status is the same.
+      readonly explicitStatement?: true;
     }
   | {
       readonly kind: "update";
@@ -1037,8 +1307,15 @@ export type ConversationMemoryActionWire =
       readonly kind: "forget";
       readonly memoryId: string;
       readonly requiresConfirmation: boolean;
+      // True when the server has already forgotten the memory, so nothing is left to confirm.
+      readonly forgotten?: boolean;
     }
-  | { readonly kind: "rejected"; readonly reason: string };
+  | {
+      readonly kind: "rejected";
+      readonly reason: string;
+      // True when a person's own clear statement was refused, so the chat answers it.
+      readonly explicitStatement?: true;
+    };
 
 export type ConversationMemoryCaptureOutcomeWire =
   | {
@@ -1167,164 +1444,6 @@ export const DESKTOP_CHAT_SEND_ABORT_CONTRACT: DesktopChatSendAbortContract = {
   streaming: "client-disconnect-aborts-model-call",
   streamingTerminalEvent: "cancelled",
 } as const;
-
-function isWireRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isDesktopChatTokenData(data: unknown): boolean {
-  return isWireRecord(data) && typeof data.text === "string";
-}
-
-function isDesktopChatErrorData(data: unknown): boolean {
-  return isWireRecord(data) && typeof data.code === "string" && typeof data.message === "string";
-}
-
-function isDesktopChatDoneData(data: unknown): boolean {
-  return isWireRecord(data) && isWireRecord(data.chat) && Array.isArray(data.messages);
-}
-
-export function isChatToolWriteApprovalView(value: unknown): value is ChatToolWriteApprovalView {
-  return validateChatToolWriteApprovalView(value).ok;
-}
-
-function isChatToolCallView(value: unknown): value is ChatToolExchange["call"] {
-  const parsed = parseSafely(() => {
-    if (
-      !isWireRecord(value) ||
-      exactKeys(value, ["id", "name", "arguments"], "call").length > 0 ||
-      typeof value.id !== "string" ||
-      !/^[\w-]{1,128}$/u.test(value.id) ||
-      typeof value.name !== "string" ||
-      !/^[\w.-]{1,128}$/u.test(value.name) ||
-      !isWireRecord(value.arguments)
-    )
-      return { ok: true, value: false };
-    const serialized = JSON.stringify(value.arguments);
-    return {
-      ok: true,
-      value:
-        typeof serialized === "string" && new TextEncoder().encode(serialized).length <= 262144,
-    };
-  });
-  return parsed.ok && parsed.value;
-}
-
-function isDesktopChatWriteApprovalData(data: unknown): boolean {
-  return (
-    isWireRecord(data) &&
-    exactKeys(data, ["messageId", "call", "approval"], "data").length === 0 &&
-    typeof data.messageId === "string" &&
-    /^[\w-]{1,128}$/u.test(data.messageId) &&
-    isChatToolCallView(data.call) &&
-    isChatToolWriteApprovalView(data.approval) &&
-    data.call.name === data.approval.operation.replaceAll(".", "_")
-  );
-}
-
-function isDesktopChatStreamedExchange(exchange: unknown): boolean {
-  return (
-    isWireRecord(exchange) &&
-    exactKeys(exchange, ["call", "result", "mutationOutcome"], "exchange").length === 0 &&
-    isChatToolCallView(exchange.call) &&
-    (exchange.result === undefined || isWireRecord(exchange.result)) &&
-    (exchange.mutationOutcome === undefined || typeof exchange.mutationOutcome === "string")
-  );
-}
-
-function isDesktopChatToolExchangeData(data: unknown): boolean {
-  return (
-    isWireRecord(data) &&
-    exactKeys(data, ["messageId", "exchange"], "data").length === 0 &&
-    typeof data.messageId === "string" &&
-    /^[\w-]{1,128}$/u.test(data.messageId) &&
-    isDesktopChatStreamedExchange(data.exchange)
-  );
-}
-
-const CHAT_READ_VIEW_KEYS = [
-  "kind",
-  "grantId",
-  "chatId",
-  "state",
-  "disclosureVersion",
-  "requestedAt",
-  "expiresAt",
-];
-function validReadGrantSubject(value: Record<string, unknown>): boolean {
-  if (value.kind === "mcp-chat-read")
-    return (
-      value.disclosureVersion === MCP_CHAT_READ_DISCLOSURE_VERSION &&
-      typeof value.configurationDigest === "string" &&
-      /^[a-f0-9]{64}$/u.test(value.configurationDigest)
-    );
-  return (
-    value.kind === "jira-chat-read" &&
-    value.disclosureVersion === CHAT_TOOL_READ_DISCLOSURE_VERSION &&
-    typeof value.podId === "string" &&
-    /^[\w-]{1,128}$/u.test(value.podId) &&
-    [value.bindingGeneration, value.authenticationGeneration].every(
-      (n) => Number.isSafeInteger(n) && Number(n) > 0,
-    )
-  );
-}
-export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGrantView {
-  if (!isWireRecord(value)) return false;
-  const keys = [
-    ...CHAT_READ_VIEW_KEYS,
-    ...(value.kind === "mcp-chat-read"
-      ? ["configurationDigest"]
-      : ["podId", "bindingGeneration", "authenticationGeneration"]),
-  ];
-  return (
-    exactKeys(value, keys, "readGrant").length === 0 &&
-    keys.every((key) => Object.hasOwn(value, key)) &&
-    validReadGrantSubject(value) &&
-    [value.grantId, value.chatId].every(
-      (id) => typeof id === "string" && /^[\w-]{1,128}$/u.test(id),
-    ) &&
-    [value.requestedAt, value.expiresAt].every((n) => Number.isSafeInteger(n) && Number(n) >= 0) &&
-    Number(value.expiresAt) > Number(value.requestedAt) &&
-    typeof value.state === "string" &&
-    (CHAT_TOOL_READ_GRANT_STATES as readonly string[]).includes(value.state)
-  );
-}
-
-function isDesktopChatReadConsentData(data: unknown): boolean {
-  return (
-    isWireRecord(data) &&
-    exactKeys(data, ["messageId", "grant"], "data").length === 0 &&
-    typeof data.messageId === "string" &&
-    /^[\w-]{1,128}$/u.test(data.messageId) &&
-    isChatToolReadGrantView(data.grant)
-  );
-}
-
-const DESKTOP_CHAT_TOOL_EVENT_DATA: ReadonlyMap<unknown, (data: unknown) => boolean> = new Map([
-  ["tool-write-approval", isDesktopChatWriteApprovalData],
-  ["tool-read-consent", isDesktopChatReadConsentData],
-  ["tool-exchange", isDesktopChatToolExchangeData],
-]);
-
-export function isDesktopChatStreamEvent(value: unknown): value is DesktopChatStreamEvent {
-  if (!isWireRecord(value)) return false;
-  const { event, data } = value;
-  const isToolData = DESKTOP_CHAT_TOOL_EVENT_DATA.get(event);
-  if (isToolData !== undefined)
-    return exactKeys(value, ["event", "data"], "event").length === 0 && isToolData(data);
-  switch (event) {
-    case "token":
-      return isDesktopChatTokenData(data);
-    case "error":
-      return isDesktopChatErrorData(data);
-    case "cancelled":
-      return isWireRecord(data);
-    case "done":
-      return isDesktopChatDoneData(data);
-    default:
-      return false;
-  }
-}
 
 export function isDesktopChatStreamTerminalEvent(
   value: DesktopChatStreamEvent,
@@ -1487,6 +1606,17 @@ export interface ChatDraftUpdate {
   readonly text: string;
   readonly expectedRevision: number;
 }
+
+/**
+ * The Coding Workbench window id that keys its private composer draft (ADR-0114 D1). The desktop
+ * shell's `coding` window type is a singleton, so its window id is the type itself; the key is a
+ * closed token, never a path or free text.
+ */
+export const CODING_WORKBENCH_DRAFT_WINDOW_ID = "coding";
+
+export function isCodingWorkbenchDraftWindowId(value: string): boolean {
+  return value === CODING_WORKBENCH_DRAFT_WINDOW_ID;
+}
 export const MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS = 256;
 export const GROUNDING_SCOPE_IDENTITY_PATTERN = /^gsi-v1:[0-9a-f]{64}$/u;
 
@@ -1565,6 +1695,12 @@ export interface SafeRerankerConfig {
   readonly modelId: string;
   readonly credentialHeaderName: string;
   readonly timeoutMs: number;
+}
+
+/** Credential-free model metadata and the startup observation already in progress. */
+export interface GatewayModelsResponseWire {
+  readonly models: ModelCapability[];
+  readonly startupReadinessPending?: true;
 }
 
 export interface SafeGatewayConfig {
@@ -2034,7 +2170,8 @@ export type CitationRepairDisposition =
   | "rejected-uncited"
   | "failed"
   | "skipped-budget"
-  | "skipped-capability";
+  | "skipped-capability"
+  | "skipped-tool-action";
 
 export interface GroundedAnswerEvidenceDeclaration {
   readonly answerKind?: GroundedAnswerKind | undefined;
@@ -2224,6 +2361,7 @@ export type BffErrorCode =
   // English strings (no echoing of model ids, file names, or byte counts) so they pass
   // through the BFF redactor without leaking any caller-supplied value.
   | "CONVERSATION_UNAVAILABLE_MODEL"
+  | "CONVERSATION_MODEL_NOT_READY"
   | "CONVERSATION_UNSUPPORTED_MODALITY"
   | "CONVERSATION_UNSUPPORTED_FILE_TYPE"
   | "CONVERSATION_OVERSIZED_CONTEXT"
@@ -2237,6 +2375,108 @@ export type BffErrorCode =
 export interface BffError {
   readonly error: { readonly code: string; readonly message: string };
 }
+
+/**
+ * Every error code a person can reach on the Chat path (send, stream, approve, regenerate, cancel,
+ * bind or unbind a Pod, change the scope; #4355). It is a closed list on purpose: the Chat's code
+ * table maps each member to the text a person reads or to an explicit "never shown" reason, and the
+ * type of that table fails the build when a member has neither. The gateway members are pinned to
+ * the gateway's own `ERROR_CODES` by a server test, so a new gateway code cannot reach a person
+ * without text. The server codes are traced from the handlers on the path.
+ */
+export const CHAT_PATH_ERROR_CODES = [
+  // The model gateway (`ERROR_CODES` in keiko-security).
+  "GATEWAY_AUTHENTICATION",
+  "GATEWAY_TRANSPORT",
+  "GATEWAY_MODEL_REFUSAL",
+  "GATEWAY_MALFORMED_TOOL_CALL",
+  "GATEWAY_CONTEXT_OVERFLOW",
+  "GATEWAY_ATTEMPT_ADMISSION_DENIED",
+  "GATEWAY_RATE_LIMIT",
+  "GATEWAY_TIMEOUT",
+  "GATEWAY_CANCELLED",
+  "GATEWAY_CIRCUIT_OPEN",
+  "GATEWAY_PROVIDER_ERROR",
+  "GATEWAY_CONFIG_INVALID",
+  "GATEWAY_UNKNOWN_MODEL",
+  "GATEWAY_PROXY_UNREACHABLE",
+  "GATEWAY_PROXY_AUTH_REQUIRED",
+  "GATEWAY_PROXY_EGRESS_FAILED",
+  "GATEWAY_PROXY_BLOCKED_BY_POLICY",
+  "GATEWAY_TLS_CA_FAILURE",
+  "GATEWAY_OUTPUT_EXHAUSTED",
+  // The chat handlers and the stream.
+  "PAYLOAD_TOO_LARGE",
+  "BAD_REQUEST",
+  "INVALID_REQUEST",
+  "NOT_FOUND",
+  "NOT_APPLIABLE",
+  "FORBIDDEN",
+  "CONFLICT",
+  "INTERNAL",
+  "UNAVAILABLE",
+  "CANCELLED",
+  "REQUEST_CANCELLED",
+  "CLARIFICATION_NEEDED",
+  "NO_MODEL",
+  "INVALID_PATH",
+  "PATH_NOT_FOUND",
+  "PATH_NOT_DIRECTORY",
+  "PROJECT_IDENTITY_CHANGED",
+  "CHAT_CLOSED",
+  "CHAT_TURN_IN_PROGRESS",
+  "CHAT_TURN_IDEMPOTENCY_CONFLICT",
+  "SKILL_SELECTION_CHANGED",
+  "GATEWAY_CONFIG_CHANGED",
+  "GROUNDING_SCOPE_CHANGED",
+  "STREAMING_UNSUPPORTED",
+  "TOO_MANY_STREAMS",
+  "DESKTOP_CHAT_STREAM_STALLED",
+  "CHAT_TOOL_TIMEOUT",
+  "CHAT_TOOL_UNAVAILABLE",
+  "CONVERSATION_UNSUPPORTED_MODALITY",
+  "CONVERSATION_UNSUPPORTED_FILE_TYPE",
+  "CONVERSATION_OVERSIZED_CONTEXT",
+  "CONVERSATION_UNAVAILABLE_MODEL",
+  "CONVERSATION_MODEL_NOT_READY",
+  // Pods and the Jira connection.
+  "JIRA_AUTHENTICATION_FAILED",
+  "JIRA_POD_UNAVAILABLE",
+  "JIRA_POD_VERIFICATION_REQUIRED",
+  "JIRA_POD_CONNECTION_CHANGED",
+  "KNOWLEDGE_POD_UNAVAILABLE",
+  "KNOWLEDGE_STORE_UNAVAILABLE",
+  // Approving, rejecting and answering a Jira action.
+  "CHAT_WRITE_APPROVAL_UNAVAILABLE",
+  "VALIDATION_FAILED",
+  "JIRA_DRAFT_UNAVAILABLE",
+  "JIRA_HUMAN_INPUT_UNAVAILABLE",
+  "APPROVAL_NOT_FOUND",
+  "CREDENTIAL_NOT_FOUND",
+  "ATLASSIAN_CONNECTORS_UNAVAILABLE",
+  // Every route.
+  "FORBIDDEN_HOST",
+  "FORBIDDEN_CSRF",
+  "UNSUPPORTED_MEDIA_TYPE",
+  "STARTUP_RECOVERY_PENDING",
+  "METHOD_NOT_ALLOWED",
+  // The stream's fallback when a failure body carries no code of its own.
+  "GATEWAY_ERROR",
+  // The Chat's skill selection.
+  "SKILL_SURFACE_UNSUPPORTED",
+  // The Git-change description and apply routes of a Chat's Git-change scope.
+  "GIT_CHANGE_APPLY_READER_UNAUTHORIZED",
+  "GIT_CHANGE_APPLY_REMOTE_UNRESOLVED",
+  "GIT_CHANGE_APPLY_REPOSITORY_UNAVAILABLE",
+  "GIT_CHANGE_APPLY_UNAVAILABLE",
+  "GIT_CHANGE_APPLY_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_APPROVE_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED",
+  "GIT_CHANGE_DESCRIPTION_UNAVAILABLE",
+  "GIT_CHANGE_REVIEW_UNKNOWN_PROPOSAL",
+  "GIT_CHANGE_SCOPE_NOT_FOUND",
+] as const;
+export type ChatPathErrorCode = (typeof CHAT_PATH_ERROR_CODES)[number];
 
 /**
  * The one definition of the `UNKNOWN_REPOSITORY` code for its producers (the issue preview and the
@@ -2727,6 +2967,21 @@ export type GatewayReadinessProbeName =
 
 export type GatewayReadinessProbeStatus = "passed" | "failed" | "unsupported" | "skipped";
 
+/**
+ * How a tool-calling check ended (#4351). The check first offers the tool the way production does, with
+ * no forced `tool_choice`; only a model that called none gets a second attempt with the forced named call.
+ * `forced-refused` and `inconclusive` are never a verdict that the model cannot call tools.
+ */
+export const GATEWAY_TOOL_CALLING_OUTCOMES = [
+  "called-unforced",
+  "called-only-forced",
+  "forced-refused",
+  "no-call",
+  "tools-refused",
+  "inconclusive",
+] as const;
+export type GatewayToolCallingOutcome = (typeof GATEWAY_TOOL_CALLING_OUTCOMES)[number];
+
 export type GatewayReadinessOverallStatus = "ready" | "partial" | "failed";
 
 export interface GatewayReadinessProbeResult {
@@ -2737,6 +2992,8 @@ export interface GatewayReadinessProbeResult {
   readonly latencyMs: number;
   readonly evidence: string;
   readonly warning?: string | undefined;
+  /** Only on the tool-calling probe: which closed outcome the two-step check reached. */
+  readonly toolCallingOutcome?: GatewayToolCallingOutcome | undefined;
   // Present only when transport-level evidence conclusively proves a capability value. A semantic
   // sentinel mismatch remains unsupported in the report but must not rewrite durable capability
   // configuration as false.

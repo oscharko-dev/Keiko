@@ -9,13 +9,12 @@
 // currentRedactionSecrets(deps) scrub can remove it. A one-line revert of that scrub leaks the
 // base URL to the wire and fails these tests.
 
-import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IncomingMessage } from "node:http";
+import { mockRequest } from "./_support.js";
 
 import {
   AuthenticationError,
@@ -96,10 +95,6 @@ function chatConfig(): GatewayConfig {
   };
 }
 
-function fakeReq(body: string): IncomingMessage {
-  return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
-}
-
 function fakeRes(): RouteContext["res"] {
   const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
   res.writableEnded = false;
@@ -109,7 +104,7 @@ function fakeRes(): RouteContext["res"] {
 function ctx(body: string): RouteContext {
   return {
     correlationId: undefined,
-    req: fakeReq(body),
+    req: mockRequest({ body }),
     res: fakeRes(),
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),

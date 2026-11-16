@@ -169,7 +169,6 @@ function registerAuthority(options: AuthorityOptions = {}): Record<string, unkno
     budget: {
       maxRuntimeMs: 120_000,
       maxToolCalls: options.maxToolCalls ?? 12,
-      maxPromptTokens: 24_000,
       maxPatchBytes: 32_768,
     },
     expiresAt: new Date(Date.now() + 60_000).toISOString(),

@@ -152,11 +152,7 @@ export function couplingKinds(text, workflow) {
   return kinds.length > 0 ? kinds : ["references it"];
 }
 
-/**
- * Report every consumer of one workflow.
- * @returns {number} consumer count
- */
-export function reportWorkflow(workflow, files) {
+function workflowReport(workflow) {
   // A bare filename also appears in prose, fixtures and unrelated strings. Require a reference
   // that actually addresses the workflow: a path, or the `<name>:<line>` anchor form.
   const escaped = asPattern(workflow);
@@ -164,7 +160,14 @@ export function reportWorkflow(workflow, files) {
     `workflows${PATH_SEPARATOR}${escaped}|${QUOTE}${escaped}${QUOTE}|${escaped}:${DIGITS}`,
     "u",
   );
-  const consumers = [];
+  return { workflow, addresses, consumers: [] };
+}
+
+function collectWorkflowConsumers(workflows, files) {
+  const reports = workflows.map(workflowReport);
+  if (reports.length === 0) return reports;
+  // Keep only matching consumer metadata. Every source is read once per invocation, even for
+  // --all, and released after checking the selected workflows rather than cached repository-wide.
   for (const file of files) {
     let text;
     try {
@@ -174,14 +177,20 @@ export function reportWorkflow(workflow, files) {
       reportScanFailure(file, error);
       continue;
     }
-    if (!addresses.test(text)) continue;
-    const rel = relative(REPO_ROOT, file);
-    consumers.push({
-      rel,
-      base: rel.split("/").at(-1) ?? rel,
-      kinds: couplingKinds(text, workflow),
-    });
+    for (const { workflow, addresses, consumers } of reports) {
+      if (!addresses.test(text)) continue;
+      const rel = relative(REPO_ROOT, file);
+      consumers.push({
+        rel,
+        base: rel.split("/").at(-1) ?? rel,
+        kinds: couplingKinds(text, workflow),
+      });
+    }
   }
+  return reports;
+}
+
+function printWorkflowReport({ workflow, consumers }) {
   const ordered = consumers.toSorted((a, b) => compareStrings(a.rel, b.rel));
 
   console.log(`\n${workflow} — ${String(ordered.length)} consumer(s)\n`);
@@ -191,6 +200,14 @@ export function reportWorkflow(workflow, files) {
   }
   console.log("\n  These run inside `npm test`: a changed count fails there, not only in CI.");
   return ordered.length;
+}
+
+/**
+ * Report every consumer of one workflow.
+ * @returns {number} consumer count
+ */
+export function reportWorkflow(workflow, files) {
+  return printWorkflowReport(collectWorkflowConsumers([workflow], files)[0]);
 }
 
 /** The workflow files that exist, which is the only set this tool ever reports on. */
@@ -238,7 +255,8 @@ export function main() {
   const workflows = selectWorkflows(all, requested);
 
   const files = sourceFiles();
-  for (const workflow of workflows.toSorted(compareStrings)) reportWorkflow(workflow, files);
+  const reports = collectWorkflowConsumers(workflows.toSorted(compareStrings), files);
+  for (const report of reports) printWorkflowReport(report);
 
   console.log("\nGates to run after changing any workflow:\n");
   for (const { command, why, repair } of WORKFLOW_GATES) {

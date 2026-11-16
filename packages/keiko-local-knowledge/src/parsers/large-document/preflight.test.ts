@@ -85,4 +85,18 @@ describe("legacy-format guidance", () => {
     expect(legacyFormatDiagnostic("pdf", "doc-1" as DocumentId)).toBeUndefined();
     expect(legacyFormatGuidance("pdf")).toBeUndefined();
   });
+
+  it.each(["constructor", "__proto__", "hasownproperty", "tostring", "CONSTRUCTOR"])(
+    "does not treat the object-prototype name %s as a legacy office extension",
+    (extension) => {
+      expect(isLegacyBinaryOfficeFormat(extension)).toBe(false);
+      expect(legacyFormatGuidance(extension)).toBeUndefined();
+      expect(legacyFormatDiagnostic(extension, "doc-1" as DocumentId)).toBeUndefined();
+      const result = classifyLargeDocument(
+        { extension, mediaType: "application/octet-stream", sizeBytes: 100 },
+        POLICY,
+      );
+      expect(result.strategy).toBe("standard-buffer");
+    },
+  );
 });

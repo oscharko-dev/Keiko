@@ -23,7 +23,8 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 /** Journeys that write no shared Jira issue: they never take the lock. */
-const LANE_LOCAL_JOURNEYS = new Set(["S02", "S03", "S04", "S10", "S11", "S12"]);
+// C07 is the Composer lane's S10 and S11: it reads the report projects and writes nothing shared.
+const LANE_LOCAL_JOURNEYS = new Set(["S02", "S03", "S04", "S10", "S11", "S12", "C07"]);
 /** Journeys that write a shared issue outside REQ: serialized, but REQ is left as it is. */
 const OUTSIDE_WORK_PROJECT = new Set(["S13"]);
 
@@ -156,6 +157,27 @@ function tryAcquire(directory, id) {
 
 function release(directory, generation) {
   writeFileSync(join(generationPath(directory, generation), RELEASED), "", { mode: 0o600 });
+}
+
+/** Exclusive local output ownership for other labs, using the same atomic generations. */
+export async function withExclusiveProcessLock(directory, id, run) {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const generation = tryAcquire(directory, id);
+  if (generation === false) throw new Error("another lab process owns the output directory");
+  const assertOwned = () => {
+    if (
+      generations(directory).at(-1) !== generation ||
+      released(generationPath(directory, generation))
+    )
+      throw new Error("the lab process no longer owns the output directory");
+  };
+  try {
+    assertOwned();
+    return await run(assertOwned);
+  } finally {
+    assertOwned();
+    release(directory, generation);
+  }
 }
 
 /**

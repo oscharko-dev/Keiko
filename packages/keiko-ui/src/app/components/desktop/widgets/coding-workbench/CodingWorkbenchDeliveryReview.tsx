@@ -4,7 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import type { CodingWorkbenchRuntimePendingPermission } from "@oscharko-dev/keiko-contracts";
 import type { CodingRuntimeDeliveryReview } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type { UseCodingWorkbenchApprovalReviewResult } from "@/lib/useCodingWorkbenchApprovalReview";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { DeliveryBindingFacts } from "./CodingWorkbenchDraftDelivery";
@@ -51,7 +51,11 @@ export function CodingWorkbenchDeliveryReview({
 }): ReactNode {
   const review = state.review?.draftDelivery;
   useEffect(() => {
-    reportClientDiagnostic(`[keiko] draft delivery review displayed: ${state.status}`);
+    reportCodingWorkbenchInteraction({
+      interaction: "delivery-step-shown",
+      deliveryStep: "delivery-review",
+      deliveryState: state.status,
+    });
   }, [state.status, state.review?.requestId]);
   return (
     <>

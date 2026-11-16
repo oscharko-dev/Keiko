@@ -2,7 +2,12 @@ import {
   isSafeAtlassianIdentifier,
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldMetadata,
+  type JiraMutationFailureDetail,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import type {
   AtlassianWriteHttpOutcome,
@@ -15,16 +20,25 @@ import {
 } from "./jira-field-metadata.js";
 import { jiraMetadataPageLast, parseJiraFieldMap } from "./jira-managed-metadata.js";
 
+/** Fixed native owners may serialize a complete JSON value; the HTTP owner still enforces method,
+ * UTF-8 bytes, custody, authority and multipart exclusion on the same serialized body channel.
+ */
+export type JiraMutationBody = Readonly<Record<string, unknown>> | CatalogJsonValue;
 export type JiraMutationRequest = (
   path: string,
   method?: AtlassianWriteHttpRequest["method"],
-  body?: Readonly<Record<string, unknown>>,
+  body?: JiraMutationBody,
   expect?: AtlassianWriteHttpRequest["expect"],
   upload?: AtlassianWriteHttpRequest["upload"],
 ) => Promise<AtlassianWriteHttpOutcome>;
 export type JiraMutationMetadata =
   | { readonly ok: true; readonly fields: readonly JiraFieldMetadata[] }
-  | { readonly ok: false; readonly reason: AtlassianConnectorWriteFailureReason };
+  | {
+      readonly ok: false;
+      readonly reason: AtlassianConnectorWriteFailureReason;
+      /** The sentence of a refusal Keiko itself decided, e.g. a transition that is not offered (#4357). */
+      readonly detail?: JiraMutationFailureDetail;
+    };
 const MALFORMED = { ok: false, reason: "malformed-payload" } as const;
 function parsedMetadata(parsed: JiraMetadataResult): JiraMutationMetadata {
   return parsed.ok
@@ -95,8 +109,27 @@ export type JiraTransitionMutationMetadata =
       readonly targetStatusId: string;
       readonly transitionName?: string;
       readonly targetStatusName?: string;
+      /** Every transition this issue offers now, for a rule that names one by its name or id. */
+      readonly availableTransitions: readonly AvailableTransition[];
     };
-function selectedTransitionMetadata(value: unknown): JiraTransitionMutationMetadata {
+export interface AvailableTransition {
+  readonly id: string;
+  readonly name?: string;
+}
+/** The id and, where Jira names it, the name of each transition the issue offers. */
+function availableTransitionsOf(transitions: readonly unknown[]): readonly AvailableTransition[] {
+  return transitions.flatMap((item): readonly AvailableTransition[] => {
+    const record = asRecord(item);
+    const id = record?.id;
+    const name = record?.name;
+    if (typeof id !== "string") return [];
+    return [typeof name === "string" ? { id, name } : { id }];
+  });
+}
+function selectedTransitionMetadata(
+  value: unknown,
+  available: readonly AvailableTransition[],
+): JiraTransitionMutationMetadata {
   const transition = asRecord(value);
   const target = asRecord(transition?.to);
   const targetStatusId = target?.id;
@@ -108,6 +141,7 @@ function selectedTransitionMetadata(value: unknown): JiraTransitionMutationMetad
   return {
     ...parsed,
     targetStatusId,
+    availableTransitions: available,
     ...(typeof transitionName === "string" ? { transitionName } : {}),
     ...(typeof targetStatusName === "string" ? { targetStatusName } : {}),
   };
@@ -125,6 +159,93 @@ export async function jiraTransitionMutationMetadata(
   if (response.status !== 200 || transitions === undefined || transitions.length > 1000)
     return MALFORMED;
   const matches = transitions.map(asRecord).filter((item) => item?.id === transitionId);
-  if (matches.length === 0) return { ok: false, reason: "invalid-transition" };
-  return matches.length === 1 ? selectedTransitionMetadata(matches[0]) : MALFORMED;
+  if (matches.length === 0)
+    return {
+      ok: false,
+      reason: "invalid-transition",
+      detail: {
+        fieldId: "transitionId",
+        messages: [
+          "The transition id is not available for this issue in its current status: read jira.transitions for the ids it offers now. Nothing was changed.",
+        ],
+      },
+    };
+  return matches.length === 1
+    ? selectedTransitionMetadata(matches[0], availableTransitionsOf(transitions))
+    : MALFORMED;
+}
+/** The bound on a known-target receipt that is journaled before any native request is sent. */
+export const JIRA_MUTATION_RECEIPT_MAX_BYTES = 16384;
+export function jiraMutationReceiptFits(receipt: unknown): boolean {
+  return (
+    new TextEncoder().encode(JSON.stringify(receipt)).byteLength <= JIRA_MUTATION_RECEIPT_MAX_BYTES
+  );
+}
+/**
+ * The one admission order every fixed-effect mutation shares: admit against the live native state,
+ * stop there for a dry check, admit again immediately before the effect, then dispatch exactly once.
+ */
+export async function runAdmittedMutation<Attempt>(
+  admit: () => Promise<Attempt | undefined>,
+  check: boolean,
+  checked: Attempt,
+  dispatch: () => Promise<Attempt>,
+): Promise<Attempt> {
+  const refused = await admit();
+  if (refused !== undefined) return refused;
+  if (check) return checked;
+  const current = await admit();
+  return current ?? dispatch();
+}
+/** The fixed refusals, receipt and dry-check result one fixed-effect mutation family declares once. */
+export interface FixedMutationSpec<Input, Receipt, Attempt> {
+  readonly refuse: (message: string) => Attempt;
+  readonly invalid: string;
+  readonly oversize: string;
+  readonly receiptOf: (input: Input) => Receipt;
+  readonly checked: Attempt;
+}
+/** A fixed-effect mutation from parsed input to its single dispatch, with the shared receipt bound. */
+export async function runFixedMutation<Input, Receipt, Attempt>(
+  spec: FixedMutationSpec<Input, Receipt, Attempt>,
+  input: Input | undefined,
+  check: boolean,
+  run: {
+    readonly admit: (input: Input, receipt: Receipt) => Promise<Attempt | undefined>;
+    readonly dispatch: (input: Input, receipt: Receipt) => Promise<Attempt>;
+  },
+): Promise<Attempt> {
+  if (input === undefined) return spec.refuse(spec.invalid);
+  const receipt = spec.receiptOf(input);
+  if (!jiraMutationReceiptFits(receipt)) return spec.refuse(spec.oversize);
+  return runAdmittedMutation(
+    () => run.admit(input, receipt),
+    check,
+    spec.checked,
+    () => run.dispatch(input, receipt),
+  );
+}
+/** The exported executor of one fixed-effect mutation family: parse, bound, admit twice, dispatch once. */
+export function fixedMutationExecutor<Operation, Input, Receipt, Attempt>(
+  spec: FixedMutationSpec<Input, Receipt, Attempt>,
+  parse: (operation: Operation, args: CatalogJsonObject) => Input | undefined,
+  run: {
+    readonly admit: (request: JiraMutationRequest, input: Input) => Promise<Attempt | undefined>;
+    readonly dispatch: (
+      request: JiraMutationRequest,
+      input: Input,
+      receipt: Receipt,
+    ) => Promise<Attempt>;
+  },
+): (
+  operation: Operation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  check?: boolean,
+) => Promise<Attempt> {
+  return (operation, args, request, check = false) =>
+    runFixedMutation(spec, parse(operation, args), check, {
+      admit: (input) => run.admit(request, input),
+      dispatch: (input, receipt) => run.dispatch(request, input, receipt),
+    });
 }

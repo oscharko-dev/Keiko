@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Page } from "@playwright/test";
 import type { CommandTaskTrustState } from "@oscharko-dev/keiko-contracts/runtime/command-runner";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -29,25 +30,28 @@ function createProject(): string {
 }
 
 async function seedCommandsWindow(page: Page, projectPath: string): Promise<void> {
-  await page.addInitScript((root) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-1387-commands",
-          type: "commands",
-          x: 64,
-          y: 56,
-          w: 620,
-          h: 480,
-          z: 10,
-          cfg: { projectPath: root },
-          max: false,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, projectPath);
+  await page.addInitScript(
+    ({ argument: root, storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-1387-commands",
+            type: "commands",
+            x: 64,
+            y: 56,
+            w: 620,
+            h: 480,
+            z: 10,
+            cfg: { projectPath: root },
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, projectPath),
+  );
 }
 
 // The catalog is the surface that carries the server's trust decision (`trustState`), and the Run

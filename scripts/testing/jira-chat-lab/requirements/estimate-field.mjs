@@ -10,7 +10,9 @@
 // Every function takes a `jira` port, so the logic is unit-tested without HTTP:
 //   jira.call(name, method, path, body?, expected?) -> JSON value, throws on an unexpected status
 //   jira.request(method, path, body?)               -> { status, value }, never throws
-// Lab-side code may know Jira Software's field schemas; product code may not.
+// The product identifies a screen story-points field by the same non-localized schema key
+// (`JIRA_STORY_POINTS_SCHEMA_KEY` in jira-report-estimate.ts), never by its display name.
+import { sequentially } from "./journey-support.mjs";
 
 const JSW_STORY_POINTS = "com.pyxis.greenhopper.jira:jsw-story-points";
 const PAGE = 100;
@@ -68,7 +70,7 @@ async function boardEstimationField(jira, projectKey) {
  * The instance's story-points field: the Jira Software story-points custom type first, otherwise
  * the field the project's board estimates with. `undefined` when the instance has none.
  */
-export async function discoverEstimateField(jira, projectKey) {
+async function estimateDiscovery(jira, projectKey) {
   const numeric = (await jira.call("fields", "GET", "/rest/api/2/field")).filter(isNumber);
   const board = await boardEstimationField(jira, projectKey);
   const typed = numeric.filter((field) => field.schema.custom === JSW_STORY_POINTS);
@@ -76,9 +78,37 @@ export async function discoverEstimateField(jira, projectKey) {
   const chosen = typed.length > 1 ? typed.filter((field) => field.id === board) : typed;
   if (typed.length > 1 && chosen.length !== 1)
     throw new TypeError("More than one story-points field; cannot choose");
-  if (chosen.length === 1) return { ...chosen[0], source: "custom-type" };
+  if (chosen.length === 1) return { field: { ...chosen[0], source: "custom-type" }, board };
   const viaBoard = numeric.find((field) => field.id === board);
-  return viaBoard === undefined ? undefined : { ...viaBoard, source: "board-estimation" };
+  return {
+    field: viaBoard === undefined ? undefined : { ...viaBoard, source: "board-estimation" },
+    board,
+  };
+}
+
+/** Candidate discovery for the existing screen-placement seeder; it does not prove availability. */
+export async function discoverEstimateField(jira, projectKey) {
+  return (await estimateDiscovery(jira, projectKey)).field;
+}
+
+/** Read-only observation: a global field alone never proves this project's estimate is available. */
+export async function discoverReadableEstimate(jira, projectKey) {
+  const { field, board } = await estimateDiscovery(jira, projectKey);
+  if (field !== undefined && board === field.id)
+    return { ...pointsTarget(field), source: field.source };
+  const base = `/rest/api/2/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`;
+  const types = asList(await jira.call("estimate-types", "GET", base));
+  const pages = await sequentially(types, (type) => {
+    if (typeof type.id !== "string" || !/^[0-9]+$/u.test(type.id))
+      throw new TypeError("Project issue-type identity unavailable");
+    return jira.call("estimate-create-fields", "GET", `${base}/${type.id}?maxResults=200`);
+  });
+  const offered = new Set(pages.flatMap((page) => asList(page).map((item) => item.fieldId)));
+  if (field !== undefined && offered.has(field.id))
+    return { ...pointsTarget(field), source: field.source };
+  if (offered.has(TIME_TRACKING.writeFieldId) || offered.has(TIME_TRACKING.fieldId))
+    return { ...TIME_TRACKING, source: "time-tracking" };
+  return undefined;
 }
 
 /** Whether the create screen of each issue type and the edit screen of a Task offer the field. */

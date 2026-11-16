@@ -1,10 +1,9 @@
 "use client";
 
-// Shared live-progress rendering + polling for HTML Manual Knowledge Pod jobs (Issue #2063). The
-// create and refresh controls both project the same body-free `HtmlManualPodJob` and stream the same
-// crawl/index progress; only the per-operation state labels differ. Extracted so both controls share
-// one proven self-scheduling poll loop (a new poll never fires until the previous one resolves, so
-// requests never stack and the completion callback runs exactly once when the job settles).
+// Live-progress rendering + polling for existing HTML Manual Knowledge Pod refresh jobs (Issue
+// #2063). Projects the body-free `HtmlManualPodJob` through one self-scheduling poll loop: a new
+// poll never fires until the previous one resolves, so requests never stack and the completion
+// callback runs exactly once when the job settles.
 
 import { useEffect, type ReactNode } from "react";
 import type { HtmlManualPodJob } from "@oscharko-dev/keiko-contracts";
@@ -17,7 +16,7 @@ type ManualPodMessageKey = Parameters<I18nTranslate>[0];
 // shared module does not depend on the API module's identifier. Internal to this module.
 type ManualPodJobGetter = (jobId: string) => Promise<HtmlManualPodJob>;
 
-// The per-operation state labels (create vs refresh); crawl/index progress lines are shared.
+// The refresh state labels; crawl/index progress lines are shared.
 // `partial` is a real terminal state, not a flavour of success: a usable pod exists but pages of the
 // approved manual were skipped or failed, and neither the success nor the failure label tells the
 // truth about it (0.3.0 audit).

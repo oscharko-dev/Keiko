@@ -4,7 +4,8 @@ import {
   CodingRuntimeJiraPodRefusedError,
   CodingRuntimeLaunchRejectedError,
 } from "./launchFailure.js";
-import type { CodingJiraPods } from "./codingJiraPodMcp.js";
+import type { CodingJiraPods, CodingJiraRunAuthority } from "./codingJiraPodMcp.js";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
 import { openCodePromptInputs } from "./opencodePromptInputs.js";
 import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
@@ -24,7 +25,7 @@ import { createProductionTaskBranchPort } from "./productionTaskBranchPort.js";
 import type { GitDeliveryDescriptionAuthorityMintRequest } from "../gitDelivery/runBoundAuthority.js";
 import { createProductionCiObservationService } from "./productionCiObservationRuntime.js";
 import { createProductionCiRepairBudget } from "./productionCiRepairRuntime.js";
-import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
+import { admitModelCallWithCiRepair } from "./ciRepairModelCallAdmission.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
 import {
@@ -144,6 +145,7 @@ import {
   CodingRuntimeAuthorityService,
   type CodingRuntimeMintResult,
   type CodingRuntimeTrustedContext,
+  type CodingRuntimeResolution,
 } from "./runtimeAuthorityService.js";
 import {
   createCodingToolApprovalBridge,
@@ -159,7 +161,9 @@ import { isIdentityProofFailure } from "../task-workspace/errors.js";
 import {
   createCodingRuntimeContextUsageRegistry,
   type CodingRuntimeContextUsageRegistry,
+  type CodingRuntimeConversation,
 } from "./codingRuntimeContextUsage.js";
+import { observeGatewayPromptTokens } from "./codingRuntimeContextUsageObservation.js";
 import {
   createCodingRuntimeRunEffortRegistry,
   type CodingRuntimeRunEffortRegistry,
@@ -192,6 +196,7 @@ export interface ProductionRuntimeBackendInput {
   >;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly workspaceIsCurrent: () => boolean;
+  readonly jiraAuthority?: CodingJiraRunAuthority | undefined;
   readonly canSpawnRuntime?: CodingRuntimeManagerDeps["canSpawnRuntime"];
   readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
   readonly contextUsage?: CodingRuntimeContextUsageRegistry | undefined;
@@ -565,13 +570,9 @@ function runBoundFacts(
   authority: CodingRuntimeAuthorityService,
   input: ProductionCodingRuntimeResolverInput,
   { runEffort }: Pick<RunComposition, "runEffort">,
-): Pick<
-  QualifiedProductionCodingRuntime,
-  "runEffort" | "promptAllowanceExhausted" | "envelopeDurationExhausted"
-> {
+): Pick<QualifiedProductionCodingRuntime, "runEffort" | "envelopeDurationExhausted"> {
   return {
     runEffort: { read: runEffort.read },
-    promptAllowanceExhausted: (runId) => authority.promptAllowanceExhausted(runId),
     envelopeDurationExhausted: (runId) =>
       authority.envelopeDurationExhausted(runId, runtimeNow(input).getTime()),
   };
@@ -602,27 +603,24 @@ function composedMintLaunch(
   );
 }
 
-// #3384 wave-3 W3-3 "needs": `settlePromptTokens` (agentAuthorityRegistry.ts) had zero production
-// callers -- this is the wiring. `CodingRuntimeHost["runtimeCapabilityAuthenticator"]` (the
-// interface the return type below is checked against) does not itself declare `settlePromptTokens`
-// yet, so the return type is widened with an explicit intersection instead of touching that shared
-// interface: the object literal below satisfies both the narrower contract every existing consumer
-// still reads and the wider one `coding-sidecar-gateway.ts`'s settlement call site expects.
-// #3873: the sidecar gateway is the one caller of this reservation pair, and it reserves a call's
-// prompt estimate immediately before dispatching it and settles it once the provider answered or
-// failed, so an admitted reservation and its settlement are the run's model call as `runEffort`
-// counts and times it. The admitted reservation answers the call's identity (`modelCallId`) and the
-// gateway hands it back with the settlement, so a call is timed from its own reservation and never
-// from another call's of the same size (#3873 review).
-type PromptReservation = ReturnType<CodingRuntimeAuthorityService["reservePromptTokens"]> & {
+// #3384 wave-3 W3-3 "needs": `settlePromptTokens` records a call's real reported usage; it is
+// wired here because `CodingRuntimeHost["runtimeCapabilityAuthenticator"]` (the interface the
+// return type below is checked against) does not itself declare it yet, so the return type is
+// widened with an explicit intersection instead of touching that shared interface.
+// #3873: the sidecar gateway is the one caller of this admission pair, and it admits a call
+// immediately before dispatching it and settles it once the provider answered or failed, so an
+// admitted call and its settlement are the run's model call as `runEffort` counts and times it.
+// Keiko does not limit tokens (#4346): the estimate only feeds that roll-up and is charged against
+// no allowance. The admitted call answers its identity (`modelCallId`) and the gateway hands it
+// back with the settlement, so a call is timed from its own admission and never from another
+// call's of the same size (#3873 review).
+type ModelCallAdmission = ReturnType<CodingRuntimeAuthorityService["admitModelCall"]> & {
   readonly modelCallId?: number;
 };
 
-function runtimeCapabilityAuthenticatorFor(
-  authority: CodingRuntimeAuthorityService,
-  runs: Map<string, ResolverRunRecord>,
-  { runEffort }: Pick<RunComposition, "runEffort">,
-): NonNullable<QualifiedProductionCodingRuntime["runtimeCapabilityAuthenticator"]> & {
+type ResolverCapabilityAuthenticator = NonNullable<
+  QualifiedProductionCodingRuntime["runtimeCapabilityAuthenticator"]
+> & {
   readonly settlePromptTokens: (
     capability: string,
     reservedPromptTokens: number,
@@ -630,6 +628,12 @@ function runtimeCapabilityAuthenticatorFor(
     modelCallId?: number,
   ) => unknown;
   readonly recordCompletionTokens: (runId: string, completionTokens: number) => void;
+  readonly observeProviderPromptTokens: (
+    capability: string,
+    providerPromptTokens: number,
+    conversation: CodingRuntimeConversation,
+    modelCallId?: number,
+  ) => unknown;
   // #3384 wave-3 W3-1 redirect: the real per-run fact `coding-sidecar-gateway.ts`'s outgoing
   // tool-catalog advertisement needs, keyed by runId the same way `ciRepairBudget` already is
   // above. `undefined` (run not tracked here) preserves the advertisement's prior,
@@ -637,33 +641,51 @@ function runtimeCapabilityAuthenticatorFor(
   readonly unavailableOptionalTools: (
     runId: string,
   ) => ReadonlySet<OpenCodeOptionalToolName> | undefined;
-} {
+};
+
+function runtimeCapabilityAuthenticatorFor(
+  authority: CodingRuntimeAuthorityService,
+  runs: Map<string, ResolverRunRecord>,
+  { runEffort, contextUsage }: Pick<RunComposition, "runEffort" | "contextUsage">,
+): ResolverCapabilityAuthenticator {
   return {
     authenticate: (capability, audience) => authority.authenticateCapability(capability, audience),
-    reservePromptTokens: (capability, promptTokens): PromptReservation => {
-      const reserved = reservePromptWithCiRepair(
+    admitModelCall: (capability, estimatedPromptTokens): ModelCallAdmission => {
+      const admitted = admitModelCallWithCiRepair(
         authority,
         (runId) => runs.get(runId)?.ciRepairBudget,
         capability,
-        promptTokens,
       );
-      if (!reserved.ok) return reserved;
-      const modelCallId = runEffort.modelCallReserved(reserved.runId, promptTokens);
-      return modelCallId === undefined ? reserved : { ...reserved, modelCallId };
+      if (!admitted.ok) return admitted;
+      const modelCallId = runEffort.modelCallReserved(admitted.runId, estimatedPromptTokens);
+      return modelCallId === undefined ? admitted : { ...admitted, modelCallId };
     },
     settlePromptTokens: (
       capability,
-      reservedPromptTokens,
+      _reservedPromptTokens,
       actualPromptTokens,
       modelCallId,
-    ): ReturnType<CodingRuntimeAuthorityService["settlePromptTokens"]> => {
-      const settled = authority.settlePromptTokens(
-        capability,
-        reservedPromptTokens,
-        actualPromptTokens,
+    ): { readonly ok: boolean } => {
+      const authenticated = authority.authenticateCapability(capability, "model-gateway");
+      if (!authenticated.ok) return { ok: false };
+      runEffort.modelCallSettled(authenticated.binding.runId, modelCallId, actualPromptTokens);
+      return { ok: true };
+    },
+    observeProviderPromptTokens: (
+      capability,
+      providerPromptTokens,
+      conversation,
+      modelCallId,
+    ): void => {
+      const authenticated = authority.authenticateCapability(capability, "model-gateway");
+      if (!authenticated.ok) return;
+      observeGatewayPromptTokens(
+        contextUsage,
+        authenticated.binding.runId,
+        conversation,
+        providerPromptTokens,
+        modelCallId,
       );
-      if (settled.ok) runEffort.modelCallSettled(settled.runId, modelCallId, actualPromptTokens);
-      return settled;
     },
     recordCompletionTokens: (runId, completionTokens): void => {
       runEffort.modelOutputSettled(runId, completionTokens);
@@ -714,10 +736,30 @@ function launchPreparation(
   if (prepareModel === undefined) return preparation?.prepare;
   return async (request): Promise<void> => {
     if (request.runtimePreference !== "codex-subscription") {
-      await prepareModel(request.modelId, request.correlationId);
+      await untilAbandoned(prepareModel(request.modelId, request.correlationId), request.abandoned);
     }
+    if (request.abandoned?.aborted === true) return;
     await preparation?.prepare(request);
   };
+}
+
+// The model check belongs to the readiness queue and other requests may share it, so giving up the
+// wait leaves the check running. Only the start stops waiting, which frees the lane for the next.
+function untilAbandoned(work: Promise<void>, abandoned: AbortSignal | undefined): Promise<void> {
+  if (abandoned === undefined) return work;
+  return Promise.race([
+    work,
+    new Promise<void>((resolve) => {
+      if (abandoned.aborted) resolve();
+      abandoned.addEventListener(
+        "abort",
+        () => {
+          resolve();
+        },
+        { once: true },
+      );
+    }),
+  ]);
 }
 
 function launchContext(
@@ -842,6 +884,7 @@ function withBoundJiraPod(
   input.jiraPods?.recordBind(
     request.runId,
     resolution.ok ? { outcome: "bound" } : { outcome: "refused", reason: resolution.reason },
+    context.connectorScopes,
   );
   if (!resolution.ok) throw new CodingRuntimeJiraPodRefusedError(resolution.reason);
   return { ...request, jiraPod: resolution.binding };
@@ -892,6 +935,7 @@ function confirmationFacts(
       ? {}
       : { issueBindingDigest: context.issueBinding.bindingDigest }),
     ...(request.jiraPod === undefined ? {} : { jiraPod: request.jiraPod }),
+    connectorScopes: context.connectorScopes,
   };
 }
 
@@ -1228,6 +1272,10 @@ function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
 
 function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRunRecord {
   const { input, request, context, minted, authority, research, onRuntimeEvent } = args;
+  const deadlineMs = authority.runtimeDeadline(request.runId);
+  if (deadlineMs === undefined || !Number.isSafeInteger(deadlineMs)) {
+    throw new TypeError("Missing accepted runtime deadline");
+  }
   const controller = new AbortController();
   const surface = createRunToolSurface({ ...args, signal: controller.signal });
   const backend = createBackendRun({
@@ -1243,6 +1291,8 @@ function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRun
     contextUsage: args.contextUsage,
   });
   const detachLease = attachedRuntimeMutationLease(input, surface, backend, request.runId);
+  const finishJira = runPrivateFinalizer(input, request.runId);
+  armRunExpiry(controller, deadlineMs, runtimeNow(input).getTime(), finishJira);
   return {
     manager: backend.manager,
     ciRepairBudget: surface.ciRepairBudget,
@@ -1259,8 +1309,60 @@ function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRun
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
     ...(backend.permissionPort ? { permissionPort: backend.permissionPort } : {}),
     toolBridge: backend.toolBridge,
-    dispose: createRunDisposer(detachLease, surface.leases, surface.invocationRegistry, backend),
+    dispose: createRunDisposer(
+      detachLease,
+      surface.leases,
+      surface.invocationRegistry,
+      backend,
+      controller,
+      finishJira,
+    ),
     unavailableOptionalTools: surface.unavailableOptionalTools,
+  };
+}
+
+/** The accepted run already owns this controller and deadline. Idle time must end its
+ * private resources too; no tool call, authority re-query or Jira-specific TTL is required. */
+function armRunExpiry(
+  controller: AbortController,
+  deadlineMs: number,
+  nowMs: number,
+  finishJira: () => Promise<void>,
+): void {
+  if (controller.signal.aborted) {
+    void finishJira();
+    return;
+  }
+  const delayMs = Number.isFinite(nowMs) ? Math.max(0, deadlineMs - nowMs) : 0;
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, delayMs);
+  timeout.unref();
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      clearTimeout(timeout);
+      void finishJira();
+    },
+    { once: true },
+  );
+}
+
+function runPrivateFinalizer(
+  input: ProductionCodingRuntimeResolverInput,
+  runId: string,
+): () => Promise<void> {
+  let settled: Promise<void> | undefined;
+  return (): Promise<void> => {
+    // Publish completion before closeRun can re-enter the existing disposer.
+    settled ??= Promise.resolve().then(async () => {
+      try {
+        await input.jiraPods?.closeRun(runId);
+      } catch (error) {
+        recordBackendDisposalFailure(input.diagnostics, runId, error);
+      }
+    });
+    return settled;
   };
 }
 
@@ -1376,12 +1478,19 @@ function createRunDisposer(
   leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
   invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
   backend: QualifiedProductionRuntimeRun,
+  controller: AbortController,
+  finishJira: () => Promise<void>,
 ): () => Promise<void> {
   return async (): Promise<void> => {
-    detachLease?.();
-    leases.dispose();
-    invocationRegistry.dispose();
-    await backend.dispose?.();
+    controller.abort();
+    try {
+      detachLease?.();
+      leases.dispose();
+      invocationRegistry.dispose();
+      await backend.dispose?.();
+    } finally {
+      await finishJira();
+    }
   };
 }
 
@@ -1468,11 +1577,31 @@ function createBackendRun({
       resolveWorkspaceRootAccess,
     }),
     workspaceIsCurrent: runtimeWorkspaceIsCurrent(input, context),
+    jiraAuthority: backendJiraAuthority({ input, request, context, minted, authority, controller }),
     resolveWorkspaceRootAccess,
     contextUsage,
   });
   validateLaunchedBackend(backend, context, request.runId, input.diagnostics);
   return backend;
+}
+
+function backendJiraAuthority({
+  input,
+  request,
+  context,
+  minted,
+  authority,
+  controller,
+}: Pick<
+  CreateBackendRunInput,
+  "input" | "request" | "context" | "minted" | "authority" | "controller"
+>): CodingJiraRunAuthority {
+  return {
+    runId: request.runId,
+    signal: controller.signal,
+    currentScopes: (phase) => runtimeJiraScopes(input, context, minted, authority, phase),
+    currentInputAuthority: () => runtimeJiraInputAuthority(input, context, minted, authority),
+  };
 }
 
 function runtimeWorkspaceIsCurrent(
@@ -1661,7 +1790,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     authorityExpiresAt: context.expiresAt,
     effectiveMode: minted.effectiveMode,
     effectiveModeNow: () => authority.effectiveMode(),
-    reservePromptTokens: managedPromptReservation(options),
+    admitModelCall: managedModelCallAdmission(options),
     deploymentCeiling: context.deploymentCeiling,
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,
@@ -1858,15 +1987,12 @@ export function operatorDecisionRequester(
   };
 }
 
-function managedPromptReservation(
-  options: ManagedToolFacadeInput,
-): (promptTokens: number) => boolean {
-  return (promptTokens): boolean =>
-    reservePromptWithCiRepair(
+function managedModelCallAdmission(options: ManagedToolFacadeInput): () => boolean {
+  return (): boolean =>
+    admitModelCallWithCiRepair(
       options.authority,
       () => options.ciRepairBudget,
       options.minted.modelGatewayCapability,
-      promptTokens,
     ).ok;
 }
 
@@ -1955,6 +2081,58 @@ function pendingSpawnGuard({
       throw error;
     }
   };
+}
+
+/** Reuses the live capability/envelope boundary; a stale captured scope list is never authority. */
+function runtimeJiraScopes(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+  phase: "discovery" | "effect",
+): ReturnType<CodingJiraRunAuthority["currentScopes"]> {
+  return runtimeJiraEnvelope(input, context, minted, authority, phase)?.authority.connectorScopes;
+}
+function runtimeJiraEnvelope(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+  phase: "discovery" | "effect",
+): Extract<CodingRuntimeResolution, { ok: true }>["envelope"] | undefined {
+  const request = {
+    capability: minted.toolFacadeCapability,
+    adapterKind: adapterKind(context),
+    liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
+    workspaceRoot: context.workspaceRoot,
+    deploymentCeiling: context.deploymentCeiling,
+    nowIso: runtimeNow(input).toISOString(),
+  };
+  const resolved =
+    phase === "discovery" && authority.state().state === "starting"
+      ? authority.revalidateCapabilityForPendingSpawn(request)
+      : authority.revalidateCapabilityForMutation(request);
+  return resolved.ok ? resolved.envelope : undefined;
+}
+
+function runtimeJiraInputAuthority(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+): ReturnType<NonNullable<CodingJiraRunAuthority["currentInputAuthority"]>> {
+  const envelope = runtimeJiraEnvelope(input, context, minted, authority, "effect");
+  if (
+    envelope?.authority.runId !== minted.authorityRef.runId ||
+    editorAgentAuthorityEnvelopeDigest(envelope.authority) !== minted.authorityRef.envelopeDigest
+  )
+    return undefined;
+  return Object.freeze({
+    taskId: context.taskId,
+    principalDigest: sha256Hex(context.operatorId),
+    authority: Object.freeze({ ...minted.authorityRef }),
+    expiresAt: Date.parse(envelope.authority.expiresAt),
+  });
 }
 
 function runtimeMutationLive(

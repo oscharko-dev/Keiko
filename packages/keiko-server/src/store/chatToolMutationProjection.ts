@@ -1,16 +1,26 @@
 import type { DatabaseSync } from "node:sqlite";
+import { jiraMutationToolId } from "../atlassian/jiraMutationToolId.js";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  JIRA_MUTATION_OPERATIONS,
+  type JiraMutationOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ChatToolReadGrant, ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
 import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import {
+  jiraOperationActionDigest,
+  type JiraOperationBinding,
+} from "../atlassian/jiraOperationRegistry.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ChatMessage } from "./types.js";
 import type { ChatToolMutationRecord } from "./chatToolMutationTypes.js";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { observedChatToolMutationOutcome, mutationIntentError } from "./chatToolMutationState.js";
-import { readChatToolMutationTurn } from "./chatToolMutations.js";
+import { readChatToolMutationTurn, readCodingJiraMutationMessage } from "./chatToolMutations.js";
 import { readChatReadGrant } from "./chatToolReadGrants.js";
 import {
   projectChatReadGrant,
@@ -38,24 +48,38 @@ const PROJECTED = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
+function sameMutationMessage(message: ChatMessage, record: ChatToolMutationRecord): boolean {
+  return (
+    record.userMessageId === message.id &&
+    record.chatId === message.chatId &&
+    record.turnRef === message.canonicalTurnRef
+  );
+}
 function matchesCall(
   message: ChatMessage,
   call: ChatToolExchange,
   record: ChatToolMutationRecord,
+  operationBinding: JiraOperationBinding | undefined,
+  sourceDigest: string | undefined,
 ): boolean {
   const expected = sha256Hex(canonicalise({ messageId: message.id, callId: call.call.id }));
-  const action = sha256Hex(
-    canonicalise({
-      operation: record.operation,
-      argumentsDigest: sha256Hex(canonicalise(call.call.arguments)),
-    }),
-  );
+  const argumentsDigest = sha256Hex(canonicalise(call.call.arguments));
+  const action =
+    record.sourceKind === "configured-mcp"
+      ? sha256Hex(canonicalise({ operation: record.operation, argumentsDigest }))
+      : jiraOperationActionDigest(
+          record.operation,
+          argumentsDigest,
+          operationBinding,
+          sourceDigest,
+          call.humanInput?.revision,
+        );
   return (
+    (record.sourceKind !== "configured-mcp" ||
+      (operationBinding === undefined && sourceDigest === undefined)) &&
     record.invocationId === expected &&
-    record.userMessageId === message.id &&
-    record.chatId === message.chatId &&
-    record.turnRef === message.canonicalTurnRef &&
-    call.call.name === record.operation.replaceAll(".", "_") &&
+    sameMutationMessage(message, record) &&
+    call.call.name === record.operation.replace(/[.-]/gu, "_") &&
     record.actionDigest === action
   );
 }
@@ -75,15 +99,86 @@ function validObservation(
   message: ChatMessage,
   call: ChatToolExchange,
   record: ChatToolMutationRecord,
+  operationBinding: JiraOperationBinding | undefined,
+  sourceDigest: string | undefined,
+  nativeArgumentsDigest: string | undefined,
 ): boolean {
-  if (!matchesCall(message, call, record) || !observationAvailable(message, call, record))
+  if (record.consumer?.kind === "coding")
+    return validCodingObservation(message, call, record, operationBinding, nativeArgumentsDigest);
+  if (
+    !matchesCall(message, call, record, operationBinding, sourceDigest) ||
+    !observationAvailable(message, call, record)
+  )
     return false;
   const canonicalId =
     record.sourceKind === "configured-mcp"
       ? `keiko.mcp.t${sha256Hex(canonicalise({ server: record.serverName, tool: record.toolName }))}`
-      : `keiko.${record.operation}`;
+      : jiraMutationToolId(record.operation);
   if (call.result !== undefined && call.result.toolRef?.canonicalId !== canonicalId) return false;
   return mutationIntentError({ ...record, userMessageId: message.id }) === undefined;
+}
+
+/** Native identity is the existing journal's captured run/message/call, not Chat approval identity. */
+function validCodingObservation(
+  message: ChatMessage,
+  exchange: ChatToolExchange,
+  record: ChatToolMutationRecord,
+  binding: JiraOperationBinding | undefined,
+  nativeArgumentsDigest: string | undefined,
+): boolean {
+  if (
+    record.sourceKind !== "configured-mcp" ||
+    record.serverName !== "jira" ||
+    record.consumer?.kind !== "coding" ||
+    binding === undefined
+  )
+    return false;
+  const operation = JIRA_MUTATION_OPERATIONS.find((name) => name === record.toolName);
+  return (
+    operation !== undefined &&
+    codingCallMatches(message, exchange, record, nativeArgumentsDigest) &&
+    codingResultMatches(exchange, operation, binding) &&
+    mutationIntentError({ ...record, userMessageId: message.id }) === undefined
+  );
+}
+function codingCallMatches(
+  message: ChatMessage,
+  exchange: ChatToolExchange,
+  record: ChatToolMutationRecord,
+  nativeArgumentsDigest: string | undefined,
+): boolean {
+  return (
+    record.chatId === message.chatId &&
+    record.userMessageId === message.id &&
+    record.invocationId === exchange.call.id &&
+    nativeArgumentsDigest !== undefined &&
+    nativeArgumentsDigest === record.consumer?.argumentsDigest
+  );
+}
+function deniedEmptyResult(result: {
+  readonly status: unknown;
+  readonly reason?: unknown;
+  readonly data: unknown;
+}): boolean {
+  return result.status === "denied" && result.reason === "effect-denied" && result.data === null;
+}
+function codingResultMatches(
+  exchange: ChatToolExchange,
+  operation: JiraMutationOperation,
+  binding: JiraOperationBinding,
+): boolean {
+  const result = exchange.result;
+  if (result === undefined) return false;
+  return (
+    exchange.call.name === operation.replace(/[.-]/gu, "_") &&
+    result.toolRef?.canonicalId === jiraMutationToolId(operation) &&
+    (isResultObject(result.data)
+      ? canonicalise(result.data.operationBinding) === canonicalise(binding)
+      : deniedEmptyResult(result))
+  );
+}
+function isResultObject(value: unknown): value is CatalogJsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /** The journal commits before any dispatch, so a reviewed call it never saw cannot have been sent. */
@@ -112,18 +207,52 @@ function observedOutcome(
   return neverDispatched(message, exchange, records) ? "not-dispatched" : undefined;
 }
 
+function mutationRecords(
+  db: DatabaseSync,
+  message: ChatMessage,
+  transcript: ChatToolTranscript,
+  operationBindings: ReadonlyMap<string, JiraOperationBinding>,
+): readonly ChatToolMutationRecord[] {
+  const chatRecords =
+    message.canonicalTurnRef === undefined
+      ? []
+      : readChatToolMutationTurn(db, message.chatId, message.canonicalTurnRef);
+  // This prefix only preselects a lookup; validCodingObservation proves its full stored identity.
+  const codingIds = transcript.exchanges
+    .filter(
+      (exchange) => exchange.call.id.startsWith("mcp-") && operationBindings.has(exchange.call.id),
+    )
+    .map((exchange) => exchange.call.id);
+  const codingRecords = readCodingJiraMutationMessage(db, message.chatId, message.id, codingIds);
+  return [...chatRecords, ...codingRecords];
+}
+
 /** Historical effects remain visible after authority expires or the connection closes.
  * The journal is authoritative; projection neither grants authority nor executes an action. */
-export function projectChatToolMutationHistory(db: DatabaseSync, input: ChatMessage): ChatMessage {
+export function projectChatToolMutationHistory(
+  db: DatabaseSync,
+  input: ChatMessage,
+  operationBindings: ReadonlyMap<string, JiraOperationBinding>,
+  sourceDigests: ReadonlyMap<string, string> = new Map(),
+  nativeArgumentsDigests: ReadonlyMap<string, string> = new Map(),
+): ChatMessage {
   const message = projectChatReadConsentHistory(db, input);
   const transcript = message.toolTranscript;
-  if (message.role !== "user" || message.canonicalTurnRef === undefined || transcript === undefined)
-    return message;
-  const records = readChatToolMutationTurn(db, message.chatId, message.canonicalTurnRef);
+  if (message.role !== "user" || transcript === undefined) return message;
+  const records = mutationRecords(db, message, transcript, operationBindings);
   let observationCount = 0;
   let correlationId: string | undefined;
   const exchanges = transcript.exchanges.map((exchange) => {
-    const record = records.find((candidate) => validObservation(message, exchange, candidate));
+    const record = records.find((candidate) =>
+      validObservation(
+        message,
+        exchange,
+        candidate,
+        operationBindings.get(exchange.call.id),
+        sourceDigests.get(exchange.call.id),
+        nativeArgumentsDigests.get(exchange.call.id),
+      ),
+    );
     const mutationOutcome = observedOutcome(message, exchange, record, records);
     if (mutationOutcome === undefined || mutationOutcome === exchange.mutationOutcome)
       return exchange;

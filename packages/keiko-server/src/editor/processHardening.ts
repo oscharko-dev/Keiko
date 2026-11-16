@@ -54,6 +54,33 @@ export function executableExtensions(
   return (pathExtensions ?? ".EXE;.CMD;.BAT;.COM").split(";").filter((value) => value.length > 0);
 }
 
+// The suffixes to probe for one name (#4068). On Windows a name that already ends in a PATHEXT
+// extension (`node.exe`) is tried as it is first, as the shell does; an extensionless name is never
+// tried bare, because Windows cannot run it.
+function candidateExtensions(
+  name: string,
+  pathExtensions: string | undefined,
+  platform: NodeJS.Platform,
+): readonly string[] {
+  const extensions = executableExtensions(pathExtensions, platform);
+  if (platform !== "win32") return extensions;
+  const lower = name.toLowerCase();
+  return extensions.some((extension) => lower.endsWith(extension.toLowerCase()))
+    ? ["", ...extensions]
+    : extensions;
+}
+
+// Windows environment names are case-insensitive, and a copied environment keeps the spelling the
+// parent used (`Path` for a process started from Explorer). Elsewhere only `PATH` names it.
+function searchPathValue(
+  processEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): string | undefined {
+  if (platform !== "win32" || processEnv.PATH !== undefined) return processEnv.PATH;
+  const key = Object.keys(processEnv).find((name) => name.toUpperCase() === "PATH");
+  return key === undefined ? undefined : processEnv[key];
+}
+
 function probeCandidate(
   directory: string,
   name: string,
@@ -97,8 +124,8 @@ export function resolveExecutableCandidateOutsideWorkspace(
   assertBareExecutableName(name);
   const lexicalRoot = workspace.root;
   const realRoot = workspaceRoot(lexicalRoot);
-  for (const directory of splitProcessPath(processEnv.PATH)) {
-    for (const extension of executableExtensions(processEnv.PATHEXT, platform)) {
+  for (const directory of splitProcessPath(searchPathValue(processEnv, platform))) {
+    for (const extension of candidateExtensions(name, processEnv.PATHEXT, platform)) {
       const candidate = probeCandidate(directory, name, extension);
       if (candidate === undefined) continue;
       if (isWorkspaceCandidate(candidate, lexicalRoot, realRoot)) {

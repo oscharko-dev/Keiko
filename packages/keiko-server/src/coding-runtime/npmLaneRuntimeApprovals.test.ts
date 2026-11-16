@@ -6,13 +6,17 @@ import { describe, expect, it } from "vitest";
 
 import { hashHelperSourceTree } from "./devLanePortableCodingRuntime.js";
 import {
-  NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
+  NPM_LANE_RETIRED_EXECUTABLE_TREES,
   NPM_LANE_RUNTIME_APPROVALS,
 } from "./npmLaneRuntimeApprovals.js";
 import {
-  SECURE_WORKSPACE_TEXT_READ_LEGACY_MAX_BYTES,
-  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
-} from "./secureWorkspaceTextReadProtocol.js";
+  OPENCODE_PINNED_VERSION,
+  OPENCODE_RUNTIME_VERSION_PINS,
+} from "./opencodeRuntimeVersions.js";
+
+/** The helper source of the retired 1.1.3 packages, which no table may approve again. */
+const RETIRED_HELPER_SOURCE_TREE_SHA256 =
+  "97a7a11c6dc2e1512b976c846141e0459d26094097a77b822dc7b895ad3bb4aa";
 
 // The npm lane's trust anchor is compiled into the server because an npm installation carries
 // neither the approvals catalog nor the helper source. That copy must never drift from the
@@ -74,19 +78,34 @@ describe("npm-lane runtime approvals", () => {
     }
   });
 
+  // #4068: Windows runs launch through the Job Object supervisor the package carries, and the
+  // installed broker is pinned to its digest, so that digest must describe the source this
+  // repository carries, and only Windows may name a supervisor at all.
+  it("pins the Windows supervisor built from the supervisor source this repository carries", () => {
+    const current = hashHelperSourceTree(join(repoRoot, "native", "runtime-supervisor", "windows"));
+    expect(NPM_LANE_RUNTIME_APPROVALS["windows-x64"].runtimeSupervisor?.sourceTreeSha256).toBe(
+      current,
+    );
+    expect(NPM_LANE_RUNTIME_APPROVALS["macos-arm64"].runtimeSupervisor).toBeUndefined();
+    expect(NPM_LANE_RUNTIME_APPROVALS["macos-x64"].runtimeSupervisor).toBeUndefined();
+  });
+
+  // #4359: Keiko admits exactly one OpenCode. The retired 1.1.4 packages (2.1.4) approve nothing;
+  // their executable trees are only recognised so the person is told to update.
   it.each(Object.entries(NPM_LANE_RUNTIME_APPROVALS))(
-    "%s keeps the previously approved helper's narrower capability and source identity",
-    (target, approval) => {
-      const previous =
-        NPM_LANE_PREVIOUS_RUNTIME_APPROVALS[target as keyof typeof NPM_LANE_RUNTIME_APPROVALS];
-      expect(approval.helperMaxBytes).toBe(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES);
-      expect(previous.helperMaxBytes).toBe(SECURE_WORKSPACE_TEXT_READ_LEGACY_MAX_BYTES);
-      expect(previous.helperSourceCommit).toBe("98b77857ecb39e936269f875f8ade3688870629f");
-      expect(previous.helperSourceTreeSha256).toBe(
-        "97a7a11c6dc2e1512b976c846141e0459d26094097a77b822dc7b895ad3bb4aa",
-      );
-      expect(previous.helperSha256).not.toBe(approval.helperSha256);
-      expect(previous.helperSourceTreeSha256).not.toBe(approval.helperSourceTreeSha256);
+    "%s approves the current runtime only and refuses the retired helper source",
+    (_target, approval) => {
+      expect(approval.upstreamVersion).toBe(OPENCODE_PINNED_VERSION);
+      expect(OPENCODE_RUNTIME_VERSION_PINS).toHaveLength(1);
+      expect(NPM_LANE_RETIRED_EXECUTABLE_TREES.has(approval.executableTreeSha256)).toBe(false);
+      expect(approval.helperSourceTreeSha256).not.toBe(RETIRED_HELPER_SOURCE_TREE_SHA256);
     },
   );
+
+  it("names the two retired 1.1.4 executable trees and nothing else", () => {
+    expect([...NPM_LANE_RETIRED_EXECUTABLE_TREES].sort()).toEqual([
+      "2ebf820d99c5df9d9097268f763ae406aceff555322dbd1fcb66f1ff2b85cff8",
+      "c29fb7e5a9593e8072f0694ca1156e761386901fb4f53ac527ca863d2d40eba0",
+    ]);
+  });
 });

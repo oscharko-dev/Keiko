@@ -21,6 +21,7 @@ export const OPENCODE_NATIVE_POLICY_WAIT_MS =
  */
 export const OPENCODE_CODE_MODE_GOVERNED_TOOLS = Object.freeze([
   "opencode_session_move",
+  "opencode_session_rename",
   "opencode_worktree_create",
 ] as const);
 
@@ -32,10 +33,51 @@ export const OPENCODE_CODE_MODE_GOVERNED_TOOLS = Object.freeze([
 export const OPENCODE_CODE_MODE_SESSION_MOVE = "opencode_session_move";
 
 /**
+ * The Code Mode program itself (`execute`, #4359): it asserts no permission, so the hook asks for
+ * one under its own name. On a runtime whose pin says every nested effect is decided on its own,
+ * the program sends no text to review and passes as a plain computation (`opencodeNativePolicy.ts`).
+ */
+export const OPENCODE_CODE_MODE_PROGRAM = "execute";
+
+/**
+ * The governed management tool that retitles a session, the current one when `sessionID` is
+ * omitted (#4359). It changes nothing but the title of the run's own OpenCode session, so the
+ * policy decides it like a move: allowed for the run's own session in every mode, refused for any
+ * other. The producer asserts no permission for it, so the hook asks for one.
+ */
+export const OPENCODE_CODE_MODE_SESSION_RENAME = "opencode_session_rename";
+
+/**
  * The governed management tool that would add an unmanaged worktree (#3903 AC4): the hook sends
  * the name it carries, and Keiko's managed task-workspace owner provisions an approved one.
  */
 export const OPENCODE_CODE_MODE_WORKTREE_CREATE = "opencode_worktree_create";
+
+/**
+ * The permission the native policy decides for every change of a native schedule (#4271): the
+ * producer's schedule tools assert no permission of their own, so the hook asks for one, with the
+ * operation as the first resource.
+ */
+export const OPENCODE_CODE_MODE_SCHEDULE = "opencode_schedule";
+export const OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS: readonly string[] = Object.freeze([
+  "create",
+  "pause",
+  "resume",
+  "delete",
+]);
+
+/**
+ * The tool names a schedule change arrives under: the Code Mode management name and the bare one,
+ * each mapped to its operation. `schedule_list` only reads and is not governed.
+ */
+export const OPENCODE_SCHEDULE_TOOLS: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries(
+    OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS.flatMap((operation) => [
+      [`opencode_schedule_${operation}`, operation],
+      [`schedule_${operation}`, operation],
+    ]),
+  ),
+);
 
 /**
  * Secrets and Keiko bindings never reach a shell the native agent starts. The server-owned binding
@@ -67,10 +109,20 @@ const OVERSIZED_MESSAGE =
  * would still execute the complete original action (#3897 review). The shell hook strips Keiko's
  * bindings and the server password from every shell the agent starts, so no tool output can
  * carry them.
+ *
+ * `programReviewed` (#4359) is chosen once per profile from the CURRENT pin (adapter), while the
+ * policy decides from the run's own verified version. With one approved version they always agree.
+ * If two versions were ever approved together, a plugin built for a pin that vouches for nested
+ * effects would send no program text to a run whose version does not, and the policy would then
+ * refuse that program as having nothing to review (a deny, never a free pass). A second approved
+ * version needs this generator keyed by version first.
  */
-export function createGeneratedOpenCodeNativePolicyPlugin(): string {
+export function createGeneratedOpenCodeNativePolicyPlugin(
+  options: { readonly programReviewed?: boolean } = {},
+): string {
+  const programReviewed = options.programReviewed ?? true;
   return [
-    ...pluginConstantsSource(),
+    ...pluginConstantsSource(programReviewed),
     ...mcpMutationSource(),
     ...policyEvaluationSource(),
     ...pluginBodySource(),
@@ -88,7 +140,7 @@ function mcpMutationSource(): readonly string[] {
   ];
 }
 
-function pluginConstantsSource(): readonly string[] {
+function pluginConstantsSource(programReviewed: boolean): readonly string[] {
   return [
     `const ACTION = ${JSON.stringify(OPENCODE_NATIVE_POLICY_ACTION)};`,
     `const MAX_RESOURCES = ${String(OPENCODE_NATIVE_POLICY_MAX_RESOURCES)};`,
@@ -100,6 +152,7 @@ function pluginConstantsSource(): readonly string[] {
     `const OVERSIZED_MESSAGE = ${JSON.stringify(OVERSIZED_MESSAGE)};`,
     `const ENV_DENYLIST = new Set(${JSON.stringify(OPENCODE_NATIVE_SHELL_ENV_DENYLIST)});`,
     `const CODE_MODE_GOVERNED = new Set(${JSON.stringify(OPENCODE_CODE_MODE_GOVERNED_TOOLS)});`,
+    `const PROGRAM_REVIEWED = ${JSON.stringify(programReviewed)};`,
     "const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     "const runId = process.env.KEIKO_CODING_RUN_ID;",
@@ -140,16 +193,36 @@ function pluginConstantsSource(): readonly string[] {
 
 function managementSource(): readonly string[] {
   return [
+    ...scheduleSource(),
     "// A session move is reviewed by the directory it names and the session it moves (absent: the",
-    "// calling one); a new worktree by the name it is given.",
+    "// calling one), a rename by the title it sets, a new worktree by the name it is given.",
     "function managementResources(tool, input) {",
     '  if (!input || typeof input !== "object") return [];',
-    `  const value = tool === ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} ? input.directory : tool === ${JSON.stringify(OPENCODE_CODE_MODE_WORKTREE_CREATE)} ? input.name : undefined;`,
+    `  const value = tool === ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} ? input.directory : tool === ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_RENAME)} ? input.title : tool === ${JSON.stringify(OPENCODE_CODE_MODE_WORKTREE_CREATE)} ? input.name : undefined;`,
     '  return typeof value === "string" ? [value] : [];',
     "}",
     "function managementTarget(tool, input) {",
-    `  if (tool !== ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} || !input || typeof input !== "object") return null;`,
+    `  if ((tool !== ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} && tool !== ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_RENAME)}) || !input || typeof input !== "object") return null;`,
     "  return input.sessionID === undefined ? null : input.sessionID;",
+    "}",
+  ];
+}
+
+function scheduleSource(): readonly string[] {
+  return [
+    `const SCHEDULE_PERMISSION = ${JSON.stringify(OPENCODE_CODE_MODE_SCHEDULE)};`,
+    `const SCHEDULE_TOOLS = ${JSON.stringify(OPENCODE_SCHEDULE_TOOLS)};`,
+    "// A schedule change is reviewed by its operation, then what it would do: a new schedule by its",
+    "// time and the prompt it would send, split like a program; any other change by the schedule id.",
+    "// A schedule gated by an if or until check names the check alone, which the policy refuses.",
+    "function scheduleResources(operation, input) {",
+    '  const value = input && typeof input === "object" ? input : {};',
+    '  if (operation !== "create") return [operation, String(value.id ?? "")];',
+    '  if (value.if !== undefined || value.until !== undefined) return [operation, value.if !== undefined ? "condition:if" : "condition:until"];',
+    '  const timing = ["when:" + JSON.stringify(value.when ?? null)];',
+    '  if (value.ends !== undefined) timing.push("ends:" + JSON.stringify(value.ends));',
+    '  if (typeof value.name === "string") timing.push("name:" + value.name);',
+    '  return [operation, ...timing, ...programResources({ code: typeof value.prompt === "string" ? value.prompt : "" })];',
     "}",
   ];
 }
@@ -218,8 +291,14 @@ function pluginBodySource(): readonly string[] {
     "    // (`execute`) nor for the nested management tools that change state, so the same policy",
     "    // decides them here; a refusal blocks the call with the policy's message.",
     '    await ctx.tool.hook("execute.before", async (event) => {',
+    "      const scheduleOperation = Object.hasOwn(SCHEDULE_TOOLS, event.tool) ? SCHEDULE_TOOLS[event.tool] : undefined;",
+    "      if (scheduleOperation !== undefined) {",
+    '        const decision = await evaluate({ sessionID: event.sessionID, agent: event.agent, action: SCHEDULE_PERMISSION, resources: scheduleResources(scheduleOperation, event.input), targetSessionID: null, effect: "ask", source: { type: "tool", messageID: event.messageID, id: event.id } });',
+    '        if (decision.effect !== "allow") throw new Error(decision.message ?? DENY_MESSAGE);',
+    "        return;",
+    "      }",
     '      if (event.tool !== "execute" && !CODE_MODE_GOVERNED.has(event.tool)) return;',
-    '      const resources = event.tool === "execute" ? programResources(event.input) : managementResources(event.tool, event.input);',
+    '      const resources = event.tool === "execute" ? (PROGRAM_REVIEWED ? programResources(event.input) : []) : managementResources(event.tool, event.input);',
     '      const decision = await evaluate({ sessionID: event.sessionID, agent: event.agent, action: event.tool, resources, targetSessionID: managementTarget(event.tool, event.input), effect: "ask", source: { type: "tool", messageID: event.messageID, id: event.id } });',
     '      if (decision.effect !== "allow") throw new Error(decision.message ?? DENY_MESSAGE);',
     "    });",

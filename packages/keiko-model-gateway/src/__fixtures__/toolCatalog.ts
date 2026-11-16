@@ -1,7 +1,9 @@
 import {
   createInitialToolCatalog,
   createKeikoToolCatalog,
+  createToolDescriptor,
   compileToolProjection,
+  legacyNativeRegistrationSet,
   opencodeRegistrationSet,
   type ToolCatalog,
 } from "@oscharko-dev/keiko-tool-catalog";
@@ -74,4 +76,38 @@ export function openCodeReviewGatewayCatalogAdvertisement(
   const catalog = createKeikoToolCatalog([set]);
   const projection = compileToolProjection(catalog, set.profile);
   return boundAdvertisement(catalog, projection, now);
+}
+
+/**
+ * The legacy native catalog with some tools offered under other aliases (the production
+ * registration set re-aliased, never a restated catalog): a way to offer a dotted alias beside an
+ * underscore one, the mixed-family case a connected tool server and a native tool can produce.
+ */
+export function realiasedGatewayCatalogAdvertisement(
+  now: number,
+  aliasOf: Readonly<Record<string, string>>,
+): GatewayToolCatalogAdvertisement {
+  const set = legacyNativeRegistrationSet();
+  const catalog = createKeikoToolCatalog([
+    {
+      ...set,
+      entries: set.entries.map((entry) => {
+        const alias = aliasOf[entry.alias] ?? entry.alias;
+        if (alias === entry.alias) return entry;
+        // The action mapping names the alias, so a re-aliased tool is a re-issued descriptor.
+        const { descriptorDigest: _digest, ...declaration } = entry.descriptor;
+        return {
+          alias,
+          descriptor: createToolDescriptor({
+            ...declaration,
+            actionMapping: declaration.actionMapping.map((mapping) => ({
+              ...mapping,
+              action: alias,
+            })),
+          }),
+        };
+      }),
+    },
+  ]);
+  return boundAdvertisement(catalog, compileToolProjection(catalog, set.profile), now);
 }

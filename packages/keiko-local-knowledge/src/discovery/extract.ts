@@ -82,6 +82,8 @@ import { redactDiagnosticMessage } from "../privacy/diagnostic-redactor.js";
 import type { KnowledgeStore } from "../store.js";
 import { getCapsule } from "../capsule-lifecycle.js";
 import { upsertExtractionCheckpoint } from "../indexing/checkpoint-persist.js";
+import type { IndexingLogContext } from "../indexing/types.js";
+import type { KnowledgeLogSink } from "../knowledge-log.js";
 import { basenameOf, extensionOf, mediaTypeFor } from "./media-type.js";
 import { compileGlobList, matchesAny, type CompiledGlob } from "./glob.js";
 import {
@@ -126,6 +128,9 @@ export interface ExtractDocumentDeps {
   // The chunking strategy key the orchestrator will use; pinned into the checkpoint fingerprint so
   // resume refuses a checkpoint produced under a different chunking strategy.
   readonly chunkingStrategyVersion?: string;
+  // Where the progressive route reports what it recovers from without failing the document.
+  readonly logSink?: KnowledgeLogSink;
+  readonly logContext?: IndexingLogContext;
 }
 
 // ─── Path helpers (re-derived to keep extract.ts self-contained for the realpath gate) ──
@@ -809,6 +814,64 @@ async function readBytes(
   }
 }
 
+// ─── Parser changes ─────────────────────────────────────────────────────────────
+//
+// The stored text is what a parser made of the file, so a changed parser makes it stale although
+// the bytes did not change. Without this a repaired parser never reaches an existing Pod (#4235).
+
+function currentParserVersion(deps: ExtractDocumentDeps, parserId: string): string | undefined {
+  const adapter = deps.parserRegistry
+    .list()
+    .find(({ capability }) => capability.parserId === parserId);
+  if (adapter !== undefined) return adapter.capability.parserVersion;
+  const extractors = deps.progressiveExtractors ?? defaultProgressiveExtractors();
+  return extractors.find((extractor) => extractor.strategyId === parserId)?.parserVersion;
+}
+
+/** The version that replaces the stored one; undefined while the stored text is current. */
+function supersededParserVersion(
+  deps: ExtractDocumentDeps,
+  existing: { readonly parser_id: string; readonly parser_version: string },
+): string | undefined {
+  const current = currentParserVersion(deps, existing.parser_id);
+  return current === undefined || current === existing.parser_version ? undefined : current;
+}
+
+/** The change a run is about to apply to this document, read before it replaces the row. */
+function pendingParserChange(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  documentId: DocumentId,
+): ParserDiagnostic | undefined {
+  const existing = readExistingDocumentRow(deps.store._internal.db, params.capsuleId, documentId);
+  if (existing === undefined) return undefined;
+  const replacement = supersededParserVersion(deps, existing);
+  if (replacement === undefined) return undefined;
+  return {
+    severity: "info",
+    code: "PARSER_VERSION_CHANGED",
+    message: `${existing.parser_id} parser version ${existing.parser_version} replaced by ${replacement}`,
+    documentId,
+  };
+}
+
+function withParserChangeEvidence(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  documentId: DocumentId,
+  change: ParserDiagnostic | undefined,
+  result: ExtractionResult,
+): ExtractionResult {
+  if (change === undefined || result.outcome.kind !== "persisted") return result;
+  insertDiagnosticRow(deps.store._internal.db, {
+    id: `${String(documentId)}#parser-version`,
+    capsuleId: params.capsuleId,
+    diagnostic: change,
+    createdAt: deps.store._internal.now(),
+  });
+  return { ...result, diagnostics: [...result.diagnostics, change] };
+}
+
 // ─── Incremental fast-path ───────────────────────────────────────────────────
 function readUnchangedFastPath(
   deps: ExtractDocumentDeps,
@@ -819,6 +882,7 @@ function readUnchangedFastPath(
   const existing = readExistingDocumentRow(deps.store._internal.db, params.capsuleId, documentId);
   if (existing === undefined) return undefined;
   if (existing.content_hash !== contentHash) return undefined;
+  if (supersededParserVersion(deps, existing) !== undefined) return undefined;
   // Skip only terminal-good states. A `pending` row is an interrupted progressive extraction
   // (Issue #1286) and `failed` should be retried; both must re-extract rather than be skipped.
   if (
@@ -1047,6 +1111,7 @@ function selectionInput(
     bytes,
     extension,
     mediaType: mediaTypeFor(extension),
+    fileName: basenameOf(relativePath),
   };
 }
 
@@ -1520,6 +1585,7 @@ async function runPinnedProgressiveExtraction(
   }
   const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
   if (fast !== undefined) return fast;
+  const parserChange = pendingParserChange(deps, params, documentId);
   // The persisted hash and every persisted unit must describe ONE generation, so confirm the pin
   // still holds before the extraction writes its first row.
   if (!pinned.isPinnedGenerationCurrent()) {
@@ -1529,7 +1595,7 @@ async function runPinnedProgressiveExtraction(
       relativePath: params.file.relativePath,
     });
   }
-  return await extractDocumentProgressive(
+  const result = await extractDocumentProgressive(
     deps,
     params,
     context,
@@ -1537,6 +1603,7 @@ async function runPinnedProgressiveExtraction(
     contentHash,
     extractor,
   );
+  return withParserChangeEvidence(deps, params, documentId, parserChange, result);
 }
 
 async function progressiveExtractionResult(
@@ -1597,7 +1664,8 @@ async function standardExtractionResult(
   const contentHash = hashBytes(bytes);
   const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
   if (fast !== undefined) return fast;
-  const result = await parseAndPersistDocument(
+  const parserChange = pendingParserChange(deps, params, documentId);
+  const parsed = await parseAndPersistDocument(
     deps,
     params,
     documentId,
@@ -1605,6 +1673,7 @@ async function standardExtractionResult(
     contentHash,
     options,
   );
+  const result = withParserChangeEvidence(deps, params, documentId, parserChange, parsed);
   return isLegacyBinaryOfficeFormat(extension)
     ? appendLegacyDiagnostic(deps, params, documentId, extension, result)
     : result;

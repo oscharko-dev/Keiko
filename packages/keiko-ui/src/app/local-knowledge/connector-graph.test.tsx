@@ -2,7 +2,15 @@
 // Uses vitest + React Testing Library (jsdom) matching the existing test pattern.
 // jest-axe WCAG check at the end per GroundedAnswer.a11y.test.tsx pattern.
 
-import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { readFileSync } from "node:fs";
@@ -10,10 +18,6 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  sealedLocalPodModelUsePolicy,
-  standardPodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { ConnectorGraph } from "./connector-graph";
 import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
@@ -24,6 +28,7 @@ import type {
   CapsulesResponse,
   CapsuleSetsResponse,
   CapsuleActionResponse,
+  CapsuleDetailResponse,
   CapsuleSetActionResponse,
   CapsuleListEntry,
   CapsuleSetListEntry,
@@ -34,6 +39,11 @@ import type {
   CapsuleLifecycleState,
 } from "@oscharko-dev/keiko-contracts";
 import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticWriter,
+} from "@/lib/client-diagnostics";
 
 const pushMock = vi.fn();
 
@@ -68,6 +78,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetClientDiagnosticWriter();
   window.localStorage.removeItem(I18N_STORAGE_KEY);
   stubPlatform(originalPlatform);
 });
@@ -107,6 +118,30 @@ function makeCapsuleSet(overrides: Partial<CapsuleSetListEntry> = {}): CapsuleSe
 
 function okAction(capsuleId: KnowledgeCapsuleId): Promise<CapsuleActionResponse> {
   return Promise.resolve({ ok: true, capsuleId });
+}
+
+function createdPod(id: KnowledgeCapsuleId, displayName: string): CapsuleDetailResponse {
+  return {
+    capsule: {
+      id,
+      displayName,
+      tags: [],
+      sourceIds: [],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      embeddingModelIdentity: {
+        provider: "openai-compatible:test",
+        modelId: "test-embedding",
+        vectorDimensions: 8,
+        vectorMetric: "cosine",
+      },
+      lifecycleState: "draft",
+      storageReference: `capsules/${id}`,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  };
 }
 
 function okSetAction(capsuleSetId: CapsuleSetId): Promise<CapsuleSetActionResponse> {
@@ -152,6 +187,7 @@ describe("ConnectorGraph — empty state", () => {
 
     // Header button still present
     expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add html manual/i })).toBeNull();
   });
 
   it("does not render the former pipeline visualization", async () => {
@@ -202,12 +238,8 @@ describe("ConnectorGraph — empty state", () => {
       expect(within(dialog).getByText(/Benenne diesen Knowledge Pod/i)).toBeInTheDocument();
     });
     expect(within(dialog).getByLabelText(/Anzeigename des Knowledge Pod/i)).toBeInTheDocument();
-    expect(within(dialog).getByText("Zugriff")).toBeInTheDocument();
-    expect(within(dialog).getByRole("radio", { name: /^Lokal$/i })).toBeInTheDocument();
-    expect(within(dialog).getByRole("radio", { name: /Teilbar/i })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(within(dialog).queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByRole("button", { name: "HTML-Handbuch hinzufügen" })).toBeNull();
     expect(
       within(dialog).getByRole("button", { name: "Knowledge Pod erstellen" }),
     ).toBeInTheDocument();
@@ -225,6 +257,12 @@ describe("ConnectorGraph — with capsules", () => {
     const jira = screen.getByTestId("acx-panel");
     expect(list.compareDocumentPosition(jira) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(jira.className).toMatch(/cmpEmbedded/);
+    expect(screen.getAllByRole("heading", { name: "Knowledge Pods" })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1, name: "Knowledge Pods" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Knowledge Pods" })).toContainElement(list);
+    const createKnowledge = screen.getByRole("button", { name: "Create Knowledge Pod" });
+    const createJira = screen.getByRole("button", { name: "Create Jira Pod" });
+    expect(createKnowledge.className).toBe(createJira.className);
   });
 
   it("renders one row per capsule with the correct display name", async () => {
@@ -240,83 +278,35 @@ describe("ConnectorGraph — with capsules", () => {
     expect(screen.getByText("Beta Notes")).toBeInTheDocument();
   });
 
-  it("renders redacted embedding reindex guidance when Knowledge Pod metadata is present", async () => {
+  it.each([
+    ["reindex-recommended", "warning"],
+    ["embedding-mismatch", "danger"],
+    ["policy-denied", "danger"],
+  ] as const)("keeps the pod name clear when guidance is %s", async (code, tone) => {
     const capsule = makeCapsule({
-      displayName: "Legacy Vectors",
+      displayName: "My Documents",
+      sourceCount: 0,
+      lifecycleState: "draft",
       knowledgePod: {
         readiness: "degraded",
-        embeddingCompatibilityStatus: "unknown",
-        embeddingCompatibilityReason: "legacy-unverified-profile",
         reindexRecommended: true,
         queryEmbeddingAllowed: false,
-        guidance: { code: "reindex-recommended", scope: "pod", tone: "warning" },
+        guidance: { code, scope: "pod", tone },
       },
     });
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
-    const badge = await screen.findByText("Reindex recommended");
-    const description =
-      "Knowledge Pod guidance: Reindex recommended. Compatibility is unverified; lexical fallback remains available.";
-    const row = screen.getByRole("article", { name: "Knowledge Pod: Legacy Vectors" });
-    const dragHandle = screen.getByRole("button", {
-      name: "Drag Knowledge Pod Legacy Vectors to the workspace",
+    const row = await screen.findByRole("article", { name: "Knowledge Pod: My Documents" });
+    const identity = within(row).getByRole("button", {
+      name: "Drag Knowledge Pod My Documents to the workspace",
     });
-
-    expect(badge).not.toHaveAttribute("title");
-    expect(screen.getByText(description)).toBeInTheDocument();
-    expect(row).toHaveAccessibleDescription(description);
-    expect(dragHandle).toHaveAccessibleDescription(description);
-  });
-
-  it("renders the danger-tone embedding mismatch guidance for an incompatible Knowledge Pod", async () => {
-    const capsule = makeCapsule({
-      displayName: "Mismatched Vectors",
-      knowledgePod: {
-        readiness: "degraded",
-        embeddingCompatibilityStatus: "incompatible",
-        embeddingCompatibilityReason: "fingerprint-mismatch",
-        reindexRecommended: true,
-        queryEmbeddingAllowed: false,
-        guidance: { code: "embedding-mismatch", scope: "pod", tone: "danger" },
-      },
-    });
-    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
-
-    const badge = await screen.findByText("Embedding mismatch");
-    const description =
-      "Knowledge Pod guidance: Embedding mismatch. Semantic retrieval is disabled for this pod until it is reindexed locally.";
-    const row = screen.getByRole("article", { name: "Knowledge Pod: Mismatched Vectors" });
-    const dragHandle = screen.getByRole("button", {
-      name: "Drag Knowledge Pod Mismatched Vectors to the workspace",
-    });
-
-    expect(badge).not.toHaveAttribute("title");
-    expect(screen.getByText(description)).toBeInTheDocument();
-    expect(row).toHaveAccessibleDescription(description);
-    expect(dragHandle).toHaveAccessibleDescription(description);
-  });
-
-  it("renders the policy-denied guidance for a sealed Knowledge Pod", async () => {
-    const capsule = makeCapsule({
-      displayName: "Sealed Pod",
-      knowledgePod: {
-        readiness: "degraded",
-        sealed: true,
-        reindexRecommended: false,
-        queryEmbeddingAllowed: false,
-        guidance: { code: "policy-denied", scope: "pod", tone: "danger" },
-      },
-    });
-    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
-
-    const badge = await screen.findByText("Policy denied");
-    const description =
-      "Knowledge Pod guidance: Policy denied. This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.";
-    const row = screen.getByRole("article", { name: "Knowledge Pod: Sealed Pod" });
-
-    expect(badge).not.toHaveAttribute("title");
-    expect(screen.getByText(description)).toBeInTheDocument();
-    expect(row).toHaveAccessibleDescription(description);
+    expect(identity).toHaveTextContent(/^My Documents$/);
+    expect(row.querySelector(".lk-badge")).toBeNull();
+    expect(within(row).queryByText(/Knowledge Pod guidance/)).toBeNull();
+    expect(within(row).queryByRole("menu")).toBeNull();
+    expect(
+      within(row).getByRole("button", { name: "Actions for Knowledge Pod My Documents" }),
+    ).toHaveAttribute("aria-haspopup", "menu");
   });
 
   it("does NOT render the empty-state panel when capsules are present", async () => {
@@ -689,13 +679,20 @@ describe("ConnectorGraph — localized row actions", () => {
         name: "Knowledge Pod Fachkonzept zum Arbeitsbereich hinzufügen",
       }),
     ).toBeInTheDocument();
+    await userEvent.setup().click(
+      within(actions).getByRole("button", {
+        name: "Aktionen für Knowledge Pod Fachkonzept",
+      }),
+    );
     expect(
-      within(actions).getByRole("button", { name: "Details zu Knowledge Pod Fachkonzept öffnen" }),
+      within(actions).getByRole("menuitem", {
+        name: "Details zu Knowledge Pod Fachkonzept öffnen",
+      }),
     ).toHaveTextContent("Details");
     expect(
-      within(actions).getByRole("button", { name: "Knowledge Pod Fachkonzept trennen" }),
+      within(actions).getByRole("menuitem", { name: "Knowledge Pod Fachkonzept trennen" }),
     ).toHaveTextContent("Trennen");
-    expect(screen.getByText("Indexiert")).toBeInTheDocument();
+    expect(screen.queryByText("Indexiert")).toBeNull();
   });
 });
 
@@ -708,7 +705,7 @@ describe("ConnectorGraph — German Knowledge Pod surfaces", () => {
     render(<I18nProvider>{ui}</I18nProvider>);
   }
 
-  it("localizes the indexing actions, their busy labels and the missing-source hint", async () => {
+  it("localizes indexing actions and hides indexing without a source", async () => {
     const user = userEvent.setup();
     const drafts = makeCapsule({
       id: makeCapsuleId("de-draft"),
@@ -748,14 +745,12 @@ describe("ConnectorGraph — German Knowledge Pod surfaces", () => {
       />,
     );
 
-    const missingSource = await screen.findByRole("button", {
-      name: "Indexierung für Knowledge Pod Leerer Pod starten",
-    });
-    expect(missingSource).toHaveAttribute(
-      "title",
-      "Verbinde eine Quelle, bevor du diesen Knowledge Pod indexierst.",
-    );
-    expect(missingSource).toHaveAccessibleDescription("Verbinde eine Quelle vor dem Indexieren.");
+    await screen.findByRole("article", { name: "Knowledge Pod: Leerer Pod" });
+    expect(
+      screen.queryByRole("button", {
+        name: "Indexierung für Knowledge Pod Leerer Pod starten",
+      }),
+    ).toBeNull();
 
     const start = screen.getByRole("button", {
       name: "Indexierung für Knowledge Pod Entwurfspod starten",
@@ -858,26 +853,34 @@ describe("ConnectorGraph — German Knowledge Pod surfaces", () => {
     }
   });
 
-  it("localizes the guidance badge and description of a Knowledge Pod", async () => {
-    const capsule = makeCapsule({
-      displayName: "Legacy Vectors",
-      knowledgePod: {
-        readiness: "degraded",
-        embeddingCompatibilityStatus: "unknown",
-        reindexRecommended: true,
-        queryEmbeddingAllowed: false,
-        guidance: { code: "reindex-recommended", scope: "pod", tone: "warning" },
-      },
-    });
-    renderGerman(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+  it("localizes the compact pod menu and keeps its keyboard path", async () => {
+    const user = userEvent.setup();
+    const onOpenCapsule = vi.fn();
+    renderGerman(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule()])}
+        onOpenCapsule={onOpenCapsule}
+      />,
+    );
 
-    expect(await screen.findByText("Neuindexierung empfohlen")).toBeInTheDocument();
-    const description =
-      "Hinweis zum Knowledge Pod: Neuindexierung empfohlen. Die Kompatibilität ist ungeprüft; der lexikalische Fallback bleibt verfügbar.";
-    expect(screen.getByText(description)).toBeInTheDocument();
+    const trigger = await screen.findByRole("button", {
+      name: "Aktionen für Knowledge Pod My Capsule",
+    });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const details = screen.getByRole("menuitem", {
+      name: "Details zu Knowledge Pod My Capsule öffnen",
+    });
+    expect(details).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
     expect(
-      screen.getByRole("article", { name: "Knowledge Pod: Legacy Vectors" }),
-    ).toHaveAccessibleDescription(description);
+      screen.getByRole("menuitem", { name: "Knowledge Pod My Capsule trennen" }),
+    ).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(trigger).toHaveFocus();
+    expect(screen.queryByRole("menu")).toBeNull();
+    await user.keyboard("{Enter}{Enter}");
+    expect(onOpenCapsule).toHaveBeenCalledWith(makeCapsuleId("1"));
   });
 });
 
@@ -961,13 +964,138 @@ describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
 });
 
 describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
-  it("submits a trimmed display name with the searchable standard model-use policy by default", async () => {
+  it("does not certify a selection before an external detail view actually opens", async () => {
+    const diagnostic = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(diagnostic);
+    const onOpenCapsule = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule({ displayName: "Selection" })])}
+        onOpenCapsule={onOpenCapsule}
+      />,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Actions for Knowledge Pod Selection" }),
+    );
+    await user.click(
+      screen.getByRole("menuitem", { name: "Open details for Knowledge Pod Selection" }),
+    );
+    expect(onOpenCapsule).toHaveBeenCalledOnce();
+    expect(
+      diagnostic.mock.calls.some(([message]) => message === "Knowledge Pod selection settled."),
+    ).toBe(false);
+  });
+
+  it("records a failed open after successful creation without misclassifying it as a create failure", async () => {
+    const diagnostic = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(diagnostic);
+    const createdId = makeCapsuleId("open-failure");
+    const createCapsuleImpl = vi.fn().mockResolvedValue(createdPod(createdId, "Created Pod"));
+    const onOpenCapsule = vi.fn(() => {
+      throw new Error("PRIVATE opening failure");
+    });
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={emptyFetch}
+        createCapsuleImpl={createCapsuleImpl}
+        onOpenCapsule={onOpenCapsule}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Create Knowledge Pod" }));
+    const dialog = screen.getByRole("dialog", { name: "Create Knowledge Pod" });
+    await user.type(within(dialog).getByLabelText("Knowledge Pod display name"), "Created Pod");
+    await user.click(within(dialog).getByRole("button", { name: "Create Knowledge Pod" }));
+    await waitFor(() =>
+      expect(diagnostic).toHaveBeenCalledWith(
+        "Knowledge Pod opening failed.",
+        expect.objectContaining({
+          correlationId: expect.any(String),
+          errorEvidence: expect.any(Object),
+        }),
+      ),
+    );
+    expect(
+      diagnostic.mock.calls.some(([message]) => message === "Knowledge Pod creation failed."),
+    ).toBe(false);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("PRIVATE opening failure");
+    expect(screen.queryByRole("dialog", { name: "Create Knowledge Pod" })).toBeNull();
+  });
+
+  it("setup regression: opens the newly created pod instead of leaving setup on an existing pod", async () => {
+    const createdId = makeCapsuleId("new-migration");
+    const onOpenCapsule = vi.fn();
+    const createCapsuleImpl = vi.fn().mockResolvedValue(createdPod(createdId, "Migration"));
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule({ displayName: "Existing documents" })])}
+        createCapsuleImpl={createCapsuleImpl}
+        onOpenCapsule={onOpenCapsule}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Create Knowledge Pod" }));
+    const dialog = screen.getByRole("dialog", { name: "Create Knowledge Pod" });
+    await user.type(within(dialog).getByLabelText("Knowledge Pod display name"), "Migration");
+    await user.click(within(dialog).getByRole("button", { name: "Create Knowledge Pod" }));
+    await waitFor(() => expect(onOpenCapsule).toHaveBeenCalledExactlyOnceWith(createdId));
+  });
+
+  it("setup regression: offers document setup for an empty pod and opens that exact pod", async () => {
+    const emptyId = makeCapsuleId("empty-migration");
+    const onOpenCapsule = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([
+          makeCapsule({ displayName: "Existing documents" }),
+          makeCapsule({
+            id: emptyId,
+            displayName: "Migration",
+            lifecycleState: "draft",
+            sourceCount: 0,
+          }),
+        ])}
+        onOpenCapsule={onOpenCapsule}
+      />,
+    );
+    const row = await screen.findByRole("article", { name: "Knowledge Pod: Migration" });
+    await user.click(
+      within(row).getByRole("button", { name: "Add documents to Knowledge Pod Migration" }),
+    );
+    expect(onOpenCapsule).toHaveBeenCalledExactlyOnceWith(emptyId);
+    expect(
+      within(row).queryByRole("button", { name: "Add Knowledge Pod Migration to workspace" }),
+    ).toBeNull();
+  });
+
+  it("setup regression: does not present an indexed pod as needing initial indexing", async () => {
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule({ displayName: "Ready documents" })])}
+      />,
+    );
+    const row = await screen.findByRole("article", { name: "Knowledge Pod: Ready documents" });
+    expect(within(row).queryByRole("button", { name: /start indexing/i })).toBeNull();
+    expect(
+      within(row).getByRole("button", { name: "Add Knowledge Pod Ready documents to workspace" }),
+    ).toBeEnabled();
+  });
+
+  it("submits only the trimmed display name", async () => {
     const createCapsuleImpl = vi
       .fn()
-      .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
+      .mockResolvedValue(createdPod(makeCapsuleId("create"), "Treasury Docs"));
     const user = userEvent.setup();
 
-    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />);
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={emptyFetch}
+        createCapsuleImpl={createCapsuleImpl}
+        onOpenCapsule={vi.fn()}
+      />,
+    );
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
@@ -984,122 +1112,58 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     await waitFor(() => {
       expect(createCapsuleImpl).toHaveBeenCalledWith({
         displayName: "Treasury Docs",
-        modelUsePolicy: standardPodModelUsePolicy(),
       });
     });
   });
 
-  it("shows local access as the active create option and shareable access as disabled", async () => {
-    const createCapsuleImpl = vi
-      .fn()
-      .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
+  it.each([
+    ["en", "Create Knowledge Pod", "Knowledge Pod display name", "Cancel"],
+    ["de", "Knowledge Pod erstellen", "Anzeigename des Knowledge Pod", "Abbrechen"],
+  ] as const)("asks only for a name in %s", async (locale, createLabel, nameLabel, cancelLabel) => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
     const user = userEvent.setup();
-
-    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod$/i }));
-    const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
-    const local = within(dialog).getByRole("radio", { name: /^local$/i });
-    const shareable = within(dialog).getByRole("radio", { name: /shareable/i });
-
-    expect(local).toBeChecked();
-    expect(shareable).toHaveAttribute("aria-disabled", "true");
-
-    await user.type(within(dialog).getByLabelText(/pod display name/i), "Local Docs");
-    await user.click(
-      within(dialog).getByRole("button", {
-        name: /^create Knowledge Pod$/i,
-      }),
+    render(
+      <I18nProvider>
+        <ConnectorGraph fetchCapsulesImpl={emptyFetch} />
+      </I18nProvider>,
     );
-
-    await waitFor(() => {
-      expect(createCapsuleImpl).toHaveBeenCalledWith({
-        displayName: "Local Docs",
-        modelUsePolicy: standardPodModelUsePolicy(),
-      });
-    });
+    await user.click(await screen.findByRole("button", { name: createLabel }));
+    const dialog = screen.getByRole("dialog", { name: createLabel });
+    expect(within(dialog).getAllByRole("textbox")).toHaveLength(1);
+    // #4335: focus must already be there when the dialog mounts, not a frame later -- text typed
+    // right away would otherwise be lost.
+    expect(within(dialog).getByLabelText(nameLabel, { exact: true })).toHaveFocus();
+    expect(within(dialog).queryByRole("radiogroup")).toBeNull();
+    expect(within(dialog).queryByRole("radio")).toBeNull();
+    expect(within(dialog).getAllByRole("button")).toHaveLength(2);
+    expect(within(dialog).getByRole("button", { name: cancelLabel })).toBeEnabled();
   });
 
-  it("explains access choices in the create dialog", async () => {
+  it("rejects a blank name before sending a create request", async () => {
+    const createCapsuleImpl = vi.fn();
     const user = userEvent.setup();
-
-    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod$/i }));
-    const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
-    const local = within(dialog).getByRole("radio", { name: /^local$/i });
-    const shareable = within(dialog).getByRole("radio", { name: /shareable/i });
-    const helpButton = within(dialog).getByLabelText("Explain Knowledge Pod access");
-
-    expect(local.closest("label")).toHaveClass("c-radio");
-    expect(shareable).toHaveClass("c-radio");
-
-    await user.click(helpButton);
-
-    expect(screen.getByRole("tooltip")).toHaveTextContent(/local keeps it private/i);
-    expect(helpButton).toHaveAccessibleDescription(/shareable will allow trusted sharing later/i);
-  });
-
-  it("states what each model-use policy allows and submits a sealed-local pod only on request", async () => {
-    const createCapsuleImpl = vi
-      .fn()
-      .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
-    const user = userEvent.setup();
-
     render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod$/i }));
+    await user.click(await screen.findByRole("button", { name: /^create Knowledge Pod$/i }));
     const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
-    const standard = within(dialog).getByRole("radio", { name: /use configured models/i });
-    const sealed = within(dialog).getByRole("radio", { name: /sealed local/i });
-
-    expect(standard).toBeChecked();
-    expect(sealed).not.toBeChecked();
-    expect(standard).toHaveAccessibleDescription(
-      /searchable and citable as soon as it is indexed/i,
-    );
-    expect(sealed).toHaveAccessibleDescription(/never sent to an external model/i);
-
-    await user.click(sealed);
-    await user.type(within(dialog).getByLabelText(/pod display name/i), "Sealed Docs");
+    await user.type(within(dialog).getByLabelText(/pod display name/i), "   ");
     await user.click(within(dialog).getByRole("button", { name: /^create Knowledge Pod$/i }));
-
-    await waitFor(() => {
-      expect(createCapsuleImpl).toHaveBeenCalledWith({
-        displayName: "Sealed Docs",
-        modelUsePolicy: sealedLocalPodModelUsePolicy(),
-      });
-    });
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Pod display name is required.");
+    expect(createCapsuleImpl).not.toHaveBeenCalled();
   });
 
-  it("explains the disabled future sharing option on hover", async () => {
+  it("keeps the name and dialog available after a failed create request", async () => {
+    const createCapsuleImpl = vi.fn().mockRejectedValueOnce(new Error("Create unavailable"));
     const user = userEvent.setup();
-
-    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod$/i }));
+    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />);
+    await user.click(await screen.findByRole("button", { name: /^create Knowledge Pod$/i }));
     const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
-    const shareable = within(dialog).getByRole("radio", { name: /shareable/i });
-
-    await user.hover(shareable);
-
-    expect(screen.getByRole("tooltip")).toHaveTextContent(/share Knowledge Pods with trusted/i);
+    await user.type(within(dialog).getByLabelText(/pod display name/i), "Retry Docs");
+    await user.click(within(dialog).getByRole("button", { name: /^create Knowledge Pod$/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: /create Knowledge Pod/i })).toBeVisible(),
+    );
+    expect(within(dialog).getByLabelText(/pod display name/i)).toHaveValue("Retry Docs");
+    expect(within(dialog).getByRole("alert")).toBeVisible();
   });
 
   it("calls startIndexing with the right capsule ID when Index is clicked", async () => {
@@ -1129,7 +1193,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
   });
 
-  it("disables indexing for capsules without attached sources", async () => {
+  it("offers details instead of indexing for capsules without attached sources", async () => {
     const id = makeCapsuleId("empty");
     const capsule = makeCapsule({
       id,
@@ -1150,18 +1214,17 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
       expect(screen.getByText("Empty Cap")).toBeInTheDocument();
     });
 
-    const indexBtn = screen.getByRole("button", {
-      name: /start indexing Knowledge Pod empty cap/i,
-    });
-    expect(indexBtn).not.toBeDisabled();
-    expect(indexBtn).toHaveAttribute("aria-disabled", "true");
-    expect(indexBtn).toHaveAccessibleDescription("Attach a source before indexing.");
-    expect(indexBtn).toHaveAttribute(
-      "title",
-      "Attach a source before indexing this Knowledge Pod.",
-    );
-
-    await userEvent.setup().click(indexBtn);
+    expect(
+      screen.queryByRole("button", {
+        name: /start indexing Knowledge Pod empty cap/i,
+      }),
+    ).toBeNull();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Actions for Knowledge Pod Empty Cap" }));
+    expect(
+      screen.getByRole("menuitem", { name: "Open details for Knowledge Pod Empty Cap" }),
+    ).toBeVisible();
     expect(startIndexingImpl).not.toHaveBeenCalled();
   });
 
@@ -1234,6 +1297,62 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
   });
 
+  it("removes Cancel when indexing finishes without remounting the Knowledge Pod row", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let finishReload: ((response: CapsulesResponse) => void) | undefined;
+    const response = new Promise<CapsulesResponse>((resolve) => {
+      finishReload = resolve;
+    });
+    const fetchCapsulesImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        capsules: [makeCapsule({ displayName: "Running Pod", lifecycleState: "indexing" })],
+      })
+      .mockReturnValue(response);
+    const view = render(<ConnectorGraph fetchCapsulesImpl={fetchCapsulesImpl} />);
+    try {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const row = screen.getByRole("article", { name: "Knowledge Pod: Running Pod" });
+      expect(
+        within(row).getByRole("button", {
+          name: "Cancel indexing for Knowledge Pod Running Pod",
+        }),
+      ).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      // A real HTTP response yields between loading and settlement; the existing row must
+      // stay mounted through that pending interval as well as after the new data arrives.
+      expect(screen.getByRole("article", { name: "Knowledge Pod: Running Pod" })).toBe(row);
+      if (finishReload === undefined) throw new TypeError("Missing held Pod reload resolver");
+      const finish = finishReload;
+      await act(async () => {
+        finish({
+          capsules: [makeCapsule({ displayName: "Running Pod", lifecycleState: "ready" })],
+        });
+        await response;
+      });
+      expect(
+        within(row).queryByRole("button", {
+          name: "Cancel indexing for Knowledge Pod Running Pod",
+        }),
+      ).toBeNull();
+      expect(screen.getByRole("article", { name: "Knowledge Pod: Running Pod" })).toBe(row);
+      expect(fetchCapsulesImpl).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(fetchCapsulesImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      view.unmount();
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("asks for confirmation before calling disconnectCapsule (destructive, no undo)", async () => {
     const id = makeCapsuleId("55");
     const capsule = makeCapsule({ id, displayName: "Ready Cap", lifecycleState: "ready" });
@@ -1251,10 +1370,8 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
       expect(screen.getByText("Ready Cap")).toBeInTheDocument();
     });
 
-    const disconnectBtn = screen.getByRole("button", {
-      name: /disconnect Knowledge Pod ready cap/i,
-    });
-    await user.click(disconnectBtn);
+    await user.click(screen.getByRole("button", { name: "Actions for Knowledge Pod Ready Cap" }));
+    await user.click(screen.getByRole("menuitem", { name: /disconnect Knowledge Pod ready cap/i }));
 
     // Row click opens the confirm dialog — nothing is deleted yet (uiux-fix F033, C064).
     expect(disconnectCapsuleImpl).not.toHaveBeenCalled();
@@ -1286,7 +1403,8 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
       expect(screen.getByText("Keep Cap")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /disconnect Knowledge Pod keep cap/i }));
+    await user.click(screen.getByRole("button", { name: "Actions for Knowledge Pod Keep Cap" }));
+    await user.click(screen.getByRole("menuitem", { name: /disconnect Knowledge Pod keep cap/i }));
     const dialog = screen.getByRole("dialog", { name: /disconnect Knowledge Pod/i });
     await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
 
@@ -1308,8 +1426,9 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
       expect(screen.getByText("Health Cap")).toBeInTheDocument();
     });
 
+    await user.click(screen.getByRole("button", { name: "Actions for Knowledge Pod Health Cap" }));
     await user.click(
-      screen.getByRole("button", { name: /open details for Knowledge Pod health cap/i }),
+      screen.getByRole("menuitem", { name: /open details for Knowledge Pod health cap/i }),
     );
 
     expect(onOpenCapsule).toHaveBeenCalledWith(id);
@@ -1317,7 +1436,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
   });
 });
 
-describe("ConnectorGraph — status badges", () => {
+describe("ConnectorGraph — compact pod identities", () => {
   const stateCases: Array<{ state: CapsuleLifecycleState; expectedLabel: string }> = [
     { state: "draft", expectedLabel: "Draft" },
     { state: "indexing", expectedLabel: "Indexing" },
@@ -1328,7 +1447,7 @@ describe("ConnectorGraph — status badges", () => {
   ];
 
   for (const { state, expectedLabel } of stateCases) {
-    it(`renders "${expectedLabel}" badge for lifecycle state "${state}"`, async () => {
+    it(`keeps lifecycle state "${state}" in details instead of the list`, async () => {
       const capsule = makeCapsule({ lifecycleState: state, displayName: `Cap-${state}` });
       render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
@@ -1336,12 +1455,13 @@ describe("ConnectorGraph — status badges", () => {
         expect(screen.getByText(`Cap-${state}`)).toBeInTheDocument();
       });
 
-      // Static badge text — no per-row live region: every aria-live badge made
-      // screen readers re-announce the whole list on reload (uiux-fix F032, C226).
       const row = screen.getByRole("article", { name: `Knowledge Pod: Cap-${state}` });
-      const badge = within(row).getByText(expectedLabel);
-      expect(badge).toHaveClass("lk-badge");
-      expect(badge).not.toHaveAttribute("aria-live");
+      expect(within(row).queryByText(expectedLabel)).toBeNull();
+      expect(
+        within(row).getByRole("button", {
+          name: `Drag Knowledge Pod Cap-${state} to the workspace`,
+        }),
+      ).toHaveTextContent(`Cap-${state}`);
     });
   }
 });
@@ -1361,6 +1481,38 @@ describe("ConnectorGraph — error states", () => {
     expect(
       screen.getByRole("button", { name: /retry loading Knowledge Pods/i }),
     ).toBeInTheDocument();
+    expect(screen.queryByTestId("empty-state")).toBeNull();
+    expect(screen.queryByRole("button", { name: /create your first Knowledge Pod/i })).toBeNull();
+  });
+
+  it("shows the empty state only after a failed load is retried successfully", async () => {
+    const user = userEvent.setup();
+    const fetchCapsulesImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network error"))
+      .mockResolvedValue({ capsules: [] });
+    render(<ConnectorGraph fetchCapsulesImpl={fetchCapsulesImpl} />);
+    const retry = await screen.findByRole("button", { name: /retry loading Knowledge Pods/i });
+    expect(screen.queryByTestId("empty-state")).toBeNull();
+    await user.click(retry);
+    expect(await screen.findByTestId("empty-state")).toBeInTheDocument();
+    expect(screen.queryByText("network error")).toBeNull();
+  });
+
+  it("retains cached Pod rows when a reload fails", async () => {
+    const user = userEvent.setup();
+    const capsule = makeCapsule({ displayName: "Cached Pod", lifecycleState: "draft" });
+    const fetchCapsulesImpl = vi
+      .fn()
+      .mockResolvedValueOnce({ capsules: [capsule] })
+      .mockRejectedValue(new Error("network error"));
+    render(<ConnectorGraph fetchCapsulesImpl={fetchCapsulesImpl} startIndexingImpl={okAction} />);
+    await user.click(
+      await screen.findByRole("button", { name: /start indexing Knowledge Pod Cached Pod/i }),
+    );
+    expect(await screen.findByText("network error")).toBeInTheDocument();
+    expect(screen.getByText("Cached Pod")).toBeInTheDocument();
+    expect(screen.queryByTestId("empty-state")).toBeNull();
   });
 
   it("renders an alert when an action rejects", async () => {
@@ -1558,9 +1710,9 @@ describe("ConnectorGraph — DisconnectConfirmDialog focus management (test-plan
     await waitFor(() => {
       expect(screen.getByText("Ready Cap")).toBeInTheDocument();
     });
-    const trigger = screen.getByRole("button", { name: /disconnect Knowledge Pod ready cap/i });
-    trigger.focus();
+    const trigger = screen.getByRole("button", { name: "Actions for Knowledge Pod Ready Cap" });
     await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: /disconnect Knowledge Pod ready cap/i }));
     await screen.findByRole("dialog", { name: /disconnect Knowledge Pod/i });
     return { user, trigger };
   }

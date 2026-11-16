@@ -5,6 +5,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryDetail } from "./MemoryDetail";
+import { PROFILE_EXCLUDED_MEMORY_TAG } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type { MemoryDetailResponse } from "@/lib/memory-api";
 import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import type {
@@ -276,6 +277,16 @@ describe("MemoryDetail — success state with full record", () => {
     expect(screen.getByRole("region", { name: "Herkunft" })).toBeInTheDocument();
     expect(screen.getByText("Inhalt")).toBeInTheDocument();
     expect(screen.getByText("Keine Schlagwörter")).toBeInTheDocument();
+  });
+
+  it("shows the person's own tags and never Keiko's profile exclusion (#4228)", async () => {
+    const record = makeRecord({ tags: ["format", PROFILE_EXCLUDED_MEMORY_TAG] });
+    render(<MemoryDetail id="mem-001" fetchMemoryImpl={resolvesWith(record)} onBack={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("format")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(PROFILE_EXCLUDED_MEMORY_TAG)).toBeNull();
   });
 
   it("renders confidence as a rounded percentage", async () => {

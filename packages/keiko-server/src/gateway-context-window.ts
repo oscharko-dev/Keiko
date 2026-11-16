@@ -89,7 +89,7 @@ const CONTEXT_WINDOW_PROBE = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["reported", "not-reported", "failed", "skipped-spend-budget"],
+      values: ["reported", "not-reported", "failed", "skipped-spend-budget", "skipped-unused"],
     },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     contextWindow: { type: "integer", dataClass: "count", required: false },
@@ -163,7 +163,9 @@ function logAdoption(
 
 function logProbe(
   modelId: string,
-  outcome: GatewayContextWindowDiscovery | { readonly status: "failed" | "skipped-spend-budget" },
+  outcome:
+    | GatewayContextWindowDiscovery
+    | { readonly status: "failed" | "skipped-spend-budget" | "skipped-unused" },
   probe: ProbeCorrelation,
 ): void {
   getServerLogger().info(
@@ -290,6 +292,8 @@ interface ProbeState {
    */
   readonly inFlight: Map<string, Promise<void>>;
   readonly failed: Map<string, FailedProbes>;
+  /** Identities whose probe a meter read withheld because nobody used the model (logged once each). */
+  readonly withheld: Set<string>;
   readonly controller: AbortController;
   queue: Promise<void>;
   disposed: boolean;
@@ -306,6 +310,7 @@ function probeState(deps: UiHandlerDeps): ProbeState | undefined {
       probed: new Set(),
       inFlight: new Map(),
       failed: new Map(),
+      withheld: new Set(),
       controller: new AbortController(),
       queue: Promise.resolve(),
       disposed: false,
@@ -313,6 +318,34 @@ function probeState(deps: UiHandlerDeps): ProbeState | undefined {
     probeStates.set(holder, state);
   }
   return state;
+}
+
+/**
+ * A meter read withheld the probe because nobody used the model (#4351): the window stays assumed,
+ * and this line is how a customer log shows why. Once per deployment and configuration generation,
+ * never per read.
+ */
+export function noteWithheldContextWindowProbe(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+): void {
+  const config = currentGatewayConfig(deps);
+  const state = probeState(deps);
+  if (config === undefined || state === undefined || state.disposed) return;
+  // Only a window that is really still assumed stays "assumed" for want of the probe; a window the
+  // provider already reported is merely not re-checked, which changes nothing a person sees.
+  const capability = findConfiguredCapability(config, modelId);
+  const key =
+    capability?.kind === "chat" && capability.contextWindowAssumed === true
+      ? probeKey(deps, config, modelId)
+      : undefined;
+  if (key === undefined || state.withheld.has(key)) return;
+  state.withheld.add(key);
+  const probe = { correlationId: newCorrelationId(), parentCorrelationId: correlationId };
+  recordSafely(CONTEXT_WINDOW_PROBE.op, probe.correlationId, () => {
+    logProbe(modelId, { status: "skipped-unused" }, probe);
+  });
 }
 
 /** Resolves once every queued context-window probe of this holder has finished. Test seam. */
@@ -512,12 +545,19 @@ function windowAssumed(config: GatewayConfig, modelId: string): boolean {
   );
 }
 
-export interface ContextWindowRetryInput {
+export interface ContextWindowRetryInput<Result = unknown> {
   readonly modelId: string;
   readonly surface: "chat-buffered" | "chat-stream" | "grounded";
   readonly correlationId: string | undefined;
   /** False once the failed attempt already showed content, which a retry would repeat. */
   readonly retryable?: (() => boolean) | undefined;
+  /** Only the failed second attempt may settle work retained across this adopted-window retry. */
+  readonly settleRetryFailure?:
+    | ((
+        failure: unknown,
+        originalFailure: unknown,
+      ) => Result | undefined | Promise<Result | undefined>)
+    | undefined;
 }
 
 function plannedContextWindow(deps: UiHandlerDeps, modelId: string): number | undefined {
@@ -543,7 +583,8 @@ function adoptedWindowAfter(
  * Runs one model attempt and, when the provider's overflow answer taught Keiko the deployment's
  * real window (adopted synchronously by the Gateway's report hook), re-plans and sends it exactly
  * once more. The attempt callback must assemble its prompt from the CURRENT context profile, so the
- * second run fits the adopted window. Any other failure — and a second overflow — propagates.
+ * second run fits the adopted window. A retained tool turn may settle a failed retry through its
+ * existing terminal boundary; otherwise that failure, including a second overflow, propagates.
  */
 /** What an attempt knows about the retry around it. */
 export interface ContextWindowAttempt {
@@ -559,7 +600,7 @@ export interface ContextWindowAttempt {
 
 export async function withAdoptedContextWindowRetry<T>(
   deps: UiHandlerDeps,
-  input: ContextWindowRetryInput,
+  input: ContextWindowRetryInput<T>,
   attempt: (context: ContextWindowAttempt) => Promise<T>,
 ): Promise<T> {
   const planned = plannedContextWindow(deps, input.modelId);
@@ -573,7 +614,13 @@ export async function withAdoptedContextWindowRetry<T>(
     recordSafely(CONTEXT_WINDOW_RETRY.op, correlationIdOrUnknown(input.correlationId), () => {
       logRetry(input, planned, adopted);
     });
-    return await attempt({ retrying: true, retryFollows: () => false });
+    try {
+      return await attempt({ retrying: true, retryFollows: () => false });
+    } catch (error_) {
+      const settled = await input.settleRetryFailure?.(error_, error);
+      if (settled !== undefined) return settled;
+      throw error_;
+    }
   }
 }
 

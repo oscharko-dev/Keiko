@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
 import { clearWorkProject } from "../testing/jira-chat-lab/requirements/work-project-reset.mjs";
 
 const directories = [];
@@ -11,7 +12,7 @@ function session() {
   directories.push(directory);
   mkdirSync(join(directory, "secrets"), { mode: 0o700 });
   writeFileSync(join(directory, "secrets", "admin-password"), "synthetic", { mode: 0o600 });
-  return { directory, origin: "http://127.0.0.1:18080" };
+  return { ...DEFAULT_LAB_CONNECTION, directory };
 }
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -25,7 +26,9 @@ function jira(keys, { subtasks = {}, deleteStatus = 204 } = {}) {
   vi.stubGlobal(
     "fetch",
     vi.fn((url, init) => {
-      const { pathname, searchParams } = new globalThis.URL(url);
+      const selected = new globalThis.URL(url);
+      expect(selected.origin).toBe(`http://127.0.0.1:${DEFAULT_LAB_CONNECTION.httpPort}`);
+      const { pathname, searchParams } = selected;
       calls.push(`${init.method} ${pathname}`);
       if (init.method === "GET") {
         const page = [...issues].slice(0, Number(searchParams.get("maxResults")));

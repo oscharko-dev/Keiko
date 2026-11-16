@@ -1,4 +1,11 @@
+import {
+  handleGetJiraHumanInput,
+  handleSubmitJiraHumanInput,
+  handleCancelJiraHumanInput,
+} from "./atlassian/jiraHumanInputRoutes.js";
 import { CODING_HISTORY_ROUTES } from "./coding-runtime/codingHistoryRoutes.js";
+import { SERVER_INSTANCE_ID } from "./server-instance.js";
+import { handleCancelDesktopChat } from "./chat-approval-continuation.js";
 import {
   REVIEW_PULL_REQUEST_ROUTE,
   REVIEW_PULL_REQUESTS_ROUTE,
@@ -36,6 +43,7 @@ import {
 import {
   handleListJiraTemplates,
   handleProposeJiraTemplates,
+  handleBindJiraTemplate,
   handleValidateJiraTemplate,
 } from "./markdown-skill-jira-template-routes.js";
 // BFF route dispatch (ADR-0011 D5). The route contract is wired here. The route TABLE
@@ -47,6 +55,7 @@ import {
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HealthResponse } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { currentWindowsVaultCustody } from "@oscharko-dev/keiko-security";
 import {
   KEIKO_UI_LAUNCH_ID_ENV,
   isKeikoUiLaunchId,
@@ -61,7 +70,7 @@ import { STREAMING } from "./route-outcome.js";
 export { STREAMING } from "./route-outcome.js";
 import {
   handleConfig,
-  handleModels,
+  handleModelsAfterStartupCatalog,
   handleVoiceCapability,
   handleWorkflows,
   handleWorkspace,
@@ -107,7 +116,12 @@ import {
   handleSendDesktopChat,
 } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
-import { handleReadChatDraft, handleSaveChatDraft } from "./chat-draft-routes.js";
+import {
+  handleReadChatDraft,
+  handleReadCodingWorkbenchDraft,
+  handleSaveChatDraft,
+  handleSaveCodingWorkbenchDraft,
+} from "./chat-draft-routes.js";
 import {
   handleGetMcpSettings,
   handlePutMcpSettings,
@@ -165,7 +179,7 @@ import {
 } from "./memory-autonomy-policy-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleBuildVoiceRecap } from "./voice-recap.js";
-import { handleGatewayReadiness } from "./gateway-readiness.js";
+import { handleGatewayReadiness, handleGatewaySelectionCheck } from "./gateway-readiness.js";
 import { handleApplyGatewayVerifiedCapabilities, handleGatewaySetup } from "./gateway-setup.js";
 import {
   handleCodingSidecarGatewayChatCompletions,
@@ -183,6 +197,7 @@ import {
 } from "./coding-codex-subscription.js";
 import { CODING_CONTEXT_ROUTE_GROUP } from "./coding-context/codingContextRoutes.js";
 import { CODING_RUNTIME_ROUTE_GROUP } from "./coding-runtime/codingRuntimeRoutes.js";
+import { handleLauncherBrowserOpen } from "./coding-app-session/launcherBrowserRoutes.js";
 import { CODING_APP_SESSION_ROUTE_GROUP } from "./coding-app-session/codingAppSessionRoutes.js";
 import { BROWSER_APPROVAL_ROUTES } from "./coding-app-session/browserApprovalRoutes.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
@@ -370,7 +385,6 @@ import {
   handleUpdateLocalKnowledgeCapsule,
 } from "./local-knowledge-handlers.js";
 import {
-  handleCreateHtmlManualPod,
   handleGetHtmlManualPodJob,
   handleRefreshHtmlManualPod,
 } from "./manual/manual-pod-routes.js";
@@ -514,11 +528,17 @@ export interface RouteDefinition {
 // reason codes and a count — so a health probe never discloses a path or an error message.
 function health(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const launchId = deps.env[KEIKO_UI_LAUNCH_ID_ENV];
+  // #4358: how the credential vaults opened so far are kept on Windows. A closed value; absent on
+  // other platforms and before a vault key was read from its key file.
+  const credentialCustody = currentWindowsVaultCustody();
   const body: HealthResponse = {
     status: "ok",
     version: SDK_VERSION,
     diagnostics: currentActivityLogReadiness(),
+    ...(deps.memoryReadiness === undefined ? {} : { memory: deps.memoryReadiness }),
     ...(isKeikoUiLaunchId(launchId) ? { launchId } : {}),
+    instanceId: SERVER_INSTANCE_ID,
+    ...(credentialCustody === undefined ? {} : { credentialCustody }),
   };
   return { status: 200, body };
 }
@@ -599,7 +619,7 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
   ...EDITOR_LOCAL_HISTORY_ROUTE_GROUP,
   ...DAP_DEBUG_ROUTE_GROUP,
   { method: "GET", pattern: "/api/config", handler: handleConfig },
-  { method: "GET", pattern: "/api/models", handler: handleModels },
+  { method: "GET", pattern: "/api/models", handler: handleModelsAfterStartupCatalog },
   { method: "GET", pattern: "/api/voice/capability", handler: handleVoiceCapability },
   // Issue #494 (Epic #491) — optional, capability-gated STT composer dictation (ADR-0100 D1/D2/D4).
   // POST a short audio clip (base64 inside the JSON + CSRF envelope) and receive its transcript;
@@ -738,6 +758,16 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/chats", handler: handleListChats },
   { method: "GET", pattern: "/api/chats/:id/draft", handler: handleReadChatDraft },
   { method: "PUT", pattern: "/api/chats/:id/draft", handler: handleSaveChatDraft },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/drafts/:id",
+    handler: handleReadCodingWorkbenchDraft,
+  },
+  {
+    method: "PUT",
+    pattern: "/api/coding-workbench/drafts/:id",
+    handler: handleSaveCodingWorkbenchDraft,
+  },
   { method: "POST", pattern: "/api/chats", handler: handleCreateChat },
   { method: "PATCH", pattern: "/api/chats", handler: handleUpdateChat },
   { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },
@@ -758,6 +788,11 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/skills/jira-templates/propose",
     handler: handleProposeJiraTemplates,
+  },
+  {
+    method: "POST",
+    pattern: "/api/skills/jira-templates/bind",
+    handler: handleBindJiraTemplate,
   },
   { method: "GET", pattern: "/api/skills/:id", handler: handleReadMarkdownSkill },
   { method: "PUT", pattern: "/api/skills/:id", handler: handleReplaceMarkdownSkill },
@@ -793,6 +828,7 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/regenerate", handler: handleRegenerateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/stream", handler: handleSendDesktopChatStream },
+  { method: "POST", pattern: "/api/desktop/chat/cancel", handler: handleCancelDesktopChat },
   // ADR-0018 — bounded permitted-command execution. PTY routes (shells/sessions/WS upgrade) and
   // the WebSocket upgrade handler in server.ts are removed; commands run via synchronous POST.
   { method: "GET", pattern: "/api/terminal/policy", handler: handleTerminalPolicy },
@@ -1359,12 +1395,7 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/local-knowledge/capsules/:capsuleId/reindex",
     handler: handleReindexLocalKnowledgeCapsule,
   },
-  // Issue #2063 — live HTML Manual Knowledge Pod create/refresh trigger + job status poll.
-  {
-    method: "POST",
-    pattern: "/api/local-knowledge/manual-pods/create",
-    handler: handleCreateHtmlManualPod,
-  },
+  // Retained HTML manual refresh and job status for existing pods.
   {
     method: "POST",
     pattern: "/api/local-knowledge/manual-pods/refresh",
@@ -1530,6 +1561,21 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/docs-browser/navigate", handler: handleDocsBrowserNavigate },
   { method: "POST", pattern: "/api/docs-browser/propose", handler: handleDocsBrowserPropose },
   { method: "POST", pattern: "/api/docs-browser/approve", handler: handleDocsBrowserApprove },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/human-inputs/:requestId",
+    handler: handleGetJiraHumanInput,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/human-inputs/:requestId",
+    handler: handleSubmitJiraHumanInput,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/atlassian-connectors/human-inputs/:requestId",
+    handler: handleCancelJiraHumanInput,
+  },
   // Issue #2241 (Epic #2238, ADR-0128) — Atlassian connector credential custody. Write-only
   // after creation: create answers authRef + metadata (never the secret), list is metadata-only,
   // delete removes ciphertext + metadata and invalidates the authRef, and verify runs one bounded
@@ -1788,6 +1834,11 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
   // fetch/snapshot + stream surface. It does not widen the permanently content-free runtime SSE
   // union above; content-bearing reads fail closed to a content-free projection without a session.
   ...CODING_APP_SESSION_ROUTE_GROUP,
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/app-session/open-browser",
+    handler: handleLauncherBrowserOpen,
+  },
   ...BROWSER_APPROVAL_ROUTES,
   // #1989 coding-context intake: governed GitHub/Jira reads behind default-false connector
   // authorization, the server deployment ceiling, and connector-scope grants. Context stays
@@ -1808,6 +1859,12 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
   ...REVIEW_POLICY_ROUTE_GROUP,
   ...JIRA_REPORT_ROUTE_GROUP,
   ...JIRA_DRAFT_ROUTE_GROUP,
+  // #4351: a person's explicit pick of a chat model starts the one check of that model.
+  {
+    method: "POST",
+    pattern: "/api/gateway/readiness/selection",
+    handler: handleGatewaySelectionCheck,
+  },
 ];
 
 // Issue #4137: every `/api/git-review/*` route, wherever it is registered, sits behind the

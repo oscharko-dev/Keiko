@@ -174,6 +174,7 @@ describe("checkpointCompatibility", () => {
       [
         "chunking-strategy",
         "embedding-identity",
+        "learned-state",
         "parser-version",
         "resource-policy",
         "source-hash",

@@ -443,6 +443,9 @@ function warnSemanticRetrievalDisabled(
     operation: "memory.retrieval.semantic-disabled",
     source: "memory-retrieval-signals",
     errorClass: "SemanticRetrievalDisabled",
+    ...(reason === "vector-index-failed" || reason === "identity-mismatch"
+      ? {}
+      : { diagnosticOutcome: "routine" as const }),
     message: "Semantic memory retrieval was disabled for this turn.",
     code: vectorIndexReason === undefined ? reason : `${reason}:${vectorIndexReason}`,
     semanticCandidateCount: candidates,

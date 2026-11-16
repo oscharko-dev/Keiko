@@ -19,6 +19,8 @@ import {
 } from "../publish-coding-runtime-npm-packages.mjs";
 
 const VERSION = "1.1.4";
+const OPENCODE = "2.2.5";
+const RECEIPT = `${JSON.stringify({ opencode: { version: OPENCODE } })}\n`;
 const OIDC = {
   ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.invalid",
   ACTIONS_ID_TOKEN_REQUEST_TOKEN: "t",
@@ -46,9 +48,10 @@ function pinned(assetDir, target, bytes) {
   const name = `@oscharko-dev/keiko-coding-runtime-darwin-${target.slice("macos-".length)}`;
   const tarball = `${name.slice(1).replace("/", "-")}-${VERSION}.tgz`;
   writeFileSync(join(assetDir, tarball), bytes);
-  writeFileSync(join(assetDir, receiptAssetName(tarball)), "{}\n");
+  writeFileSync(join(assetDir, receiptAssetName(tarball)), RECEIPT);
   return {
     name,
+    opencodeVersion: OPENCODE,
     tarball,
     sizeBytes: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
@@ -88,6 +91,8 @@ describe("coding-runtime package publisher", () => {
       { ...entry, integrity: "sha256-abc" },
       { ...entry, tarball: "other.tgz" },
       { ...entry, sizeBytes: 0 },
+      { ...entry, opencodeVersion: undefined },
+      { ...entry, opencodeVersion: "latest" },
     ]) {
       const releases = { [VERSION]: { "macos-arm64": broken } };
       expect(() => reviewedRelease({ schemaVersion: 1, releases }, VERSION)).toThrow("malformed");
@@ -116,7 +121,7 @@ describe("coding-runtime package publisher", () => {
     const entry = pinned(assetDir, "macos-x64", Buffer.from("x64"));
     const run = vi.fn();
     const verifyCandidate = vi.fn((input) => {
-      expect(readFileSync(join(input.artifactDir, "receipt.json"), "utf8")).toBe("{}\n");
+      expect(readFileSync(join(input.artifactDir, "receipt.json"), "utf8")).toBe(RECEIPT);
       expect(readFileSync(join(input.artifactDir, entry.tarball), "utf8")).toBe("x64");
       return Promise.resolve();
     });
@@ -136,6 +141,19 @@ describe("coding-runtime package publisher", () => {
     expect(verifyCandidate).toHaveBeenCalledWith(
       expect.objectContaining({ target: "macos-x64", version: VERSION }),
     );
+  });
+
+  it("refuses a verified tarball whose receipt carries another OpenCode than its pin", async () => {
+    const assetDir = scratch();
+    const entry = pinned(assetDir, "macos-arm64", Buffer.from("arm64"));
+    const stale = { target: "macos-arm64", ...entry, opencodeVersion: "2.1.4" };
+
+    await expect(
+      verifyDownloadedRuntime(stale, VERSION, assetDir, {
+        run: vi.fn(),
+        verifyCandidate: vi.fn(() => Promise.resolve()),
+      }),
+    ).rejects.toThrow("does not carry the pinned OpenCode version");
   });
 
   it("answers what npm holds, nothing for an unpublished version, and fails on anything else", () => {

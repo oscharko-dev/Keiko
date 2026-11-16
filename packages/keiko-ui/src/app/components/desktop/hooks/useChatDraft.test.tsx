@@ -2,12 +2,23 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatDraft, ChatDraftUpdate } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError } from "@/lib/api";
-import { readChatDraft, writeChatDraft } from "@/lib/chat-draft-api";
+import {
+  readChatDraft,
+  readCodingWorkbenchDraft,
+  writeChatDraft,
+  writeCodingWorkbenchDraft,
+} from "@/lib/chat-draft-api";
 import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { ChatDraftController } from "./chat-draft-controller";
-import { useChatDraft, useChatDraftUnloadGuard } from "./useChatDraft";
+import { useChatDraft, useChatDraftUnloadGuard, usePrivateDraft } from "./useChatDraft";
 
-vi.mock("@/lib/chat-draft-api", () => ({ readChatDraft: vi.fn(), writeChatDraft: vi.fn() }));
+vi.mock("@/lib/chat-draft-api", () => ({
+  readChatDraft: vi.fn(),
+  writeChatDraft: vi.fn(),
+  readCodingWorkbenchDraft: vi.fn(),
+  writeCodingWorkbenchDraft: vi.fn(),
+}));
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
 
 function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
@@ -37,7 +48,7 @@ function controller(): ChatDraftController {
 
 describe("private chat drafts", () => {
   it("hydrates a saved draft and never persists the body in browser storage", async () => {
-    const local = vi.spyOn(Storage.prototype, "setItem");
+    const local = vi.spyOn(Object.getPrototypeOf(window.localStorage) as Storage, "setItem");
     vi.mocked(readChatDraft).mockResolvedValue({ text: "私の Entwurf", revision: 7 });
     const { result } = renderHook(() => useChatDraft("a"));
     await waitFor(() => expect(result.current.text).toBe("私の Entwurf"));
@@ -58,6 +69,38 @@ describe("private chat drafts", () => {
     act(() => result.current.setText("B pending"));
     rerender({ id: "a" });
     expect(result.current.text).toBe("A pending");
+  });
+
+  it("distinguishes an unsuccessful initial read from an unsaved user edit", async () => {
+    vi.mocked(readChatDraft).mockRejectedValueOnce(new TypeError("offline"));
+    const { result } = renderHook(() => useChatDraft("a"));
+    await waitFor(() => expect(result.current.persistence.phase).toBe("load-failed"));
+    expect(result.current.text).toBe("");
+    expect(result.current.persistence.hasUnsavedChanges).toBe(false);
+    expect(result.current.controller.hasUnsaved()).toBe(false);
+    expect(writeChatDraft).not.toHaveBeenCalled();
+  });
+
+  it("keeps a save failure stable while typing and resumes only after recovery", async () => {
+    vi.useFakeTimers();
+    const draft = controller();
+    await draft.refresh("a");
+    draft.setText("a", "local");
+    vi.mocked(writeChatDraft).mockRejectedValueOnce(new TypeError("offline"));
+    await draft.save("a");
+    draft.setText("a", "newer local");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(draft.entry("a")).toMatchObject({ text: "newer local", phase: "failed" });
+    expect(writeChatDraft).toHaveBeenCalledOnce();
+    await expect(draft.prepareClose()).resolves.toBe(false);
+    await draft.refresh("a");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(writeChatDraft).toHaveBeenLastCalledWith("a", {
+      text: "newer local",
+      expectedRevision: 0,
+    });
+    expect(draft.entry("a").phase).toBe("saved");
+    expect(draft.hasUnsaved()).toBe(false);
   });
 
   it("debounces typing and writes the authoritative expected revision", async () => {
@@ -94,6 +137,20 @@ describe("private chat drafts", () => {
     await draft.save("a");
     expect(writeChatDraft).toHaveBeenLastCalledWith("a", { text: "newer", expectedRevision: 1 });
     expect(draft.hasUnsaved()).toBe(false);
+  });
+
+  it("preserves an explicit clear while the initial saved draft is still loading", async () => {
+    const draft = controller();
+    const pending = deferred<ChatDraft>();
+    vi.mocked(readChatDraft).mockReturnValueOnce(pending.promise);
+    const loading = draft.refresh("a");
+    draft.setText("a", "local");
+    draft.setText("a", "");
+    pending.resolve({ text: "remote", revision: 3 });
+    await loading;
+    expect(draft.entry("a")).toMatchObject({ text: "", phase: "conflict" });
+    await draft.save("a");
+    expect(writeChatDraft).not.toHaveBeenCalled();
   });
 
   it("keeps typing during initial load without overwriting an existing saved draft", async () => {
@@ -206,6 +263,25 @@ describe("private chat drafts", () => {
     expect(result.current.text).toBe("retained");
     await act(() => result.current.controller.save("a"));
     expect(result.current.persistence.phase).toBe("saved");
+  });
+
+  // #4068: an unpaired browser reads every draft as 404 by design, and the server records that
+  // refusal. Reporting each one as a client failure buried the real ones; an offline read still is.
+  it("does not report a read refused as an access decision as a client failure", async () => {
+    vi.mocked(reportClientDiagnostic).mockClear();
+    vi.mocked(readChatDraft).mockRejectedValueOnce(new ApiError("NOT_FOUND", "Unavailable", 404));
+    const denied = renderHook(() => useChatDraft("a"));
+    await waitFor(() => expect(denied.result.current.persistence.phase).toBe("unavailable"));
+    expect(reportClientDiagnostic).not.toHaveBeenCalled();
+    denied.unmount();
+
+    vi.mocked(readChatDraft).mockRejectedValueOnce(new TypeError("offline"));
+    const offline = renderHook(() => useChatDraft("b"));
+    await waitFor(() => expect(offline.result.current.persistence.phase).toBe("load-failed"));
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "Private chat draft read failed.",
+      expect.objectContaining({ errorKind: expect.any(String) as unknown as string }),
+    );
   });
 
   it("queues session refresh behind a pending read", async () => {
@@ -339,4 +415,43 @@ describe("private chat drafts", () => {
       });
     },
   );
+});
+
+describe("private Coding Workbench drafts", () => {
+  it("restores the window's unsent text after a reload and saves edits to that window", async () => {
+    vi.mocked(readCodingWorkbenchDraft)
+      .mockReset()
+      .mockResolvedValue({ text: "Synthetic task intent", revision: 3 });
+    vi.mocked(writeCodingWorkbenchDraft)
+      .mockReset()
+      .mockImplementation(async (_id: string, update: ChatDraftUpdate): Promise<ChatDraft> => ({
+        text: update.text,
+        revision: update.expectedRevision + 1,
+      }));
+    const { result } = renderHook(() =>
+      usePrivateDraft("coding-workbench-mabc12", "coding-workbench"),
+    );
+    await waitFor(() => expect(result.current.text).toBe("Synthetic task intent"));
+    expect(readCodingWorkbenchDraft).toHaveBeenCalledWith("coding-workbench-mabc12");
+    act(() => result.current.setText("Edited intent"));
+    await waitFor(() =>
+      expect(writeCodingWorkbenchDraft).toHaveBeenCalledWith("coding-workbench-mabc12", {
+        text: "Edited intent",
+        expectedRevision: 3,
+      }),
+    );
+    expect(readChatDraft).not.toHaveBeenCalled();
+    expect(writeChatDraft).not.toHaveBeenCalled();
+  });
+
+  it("stays local without a window identity", async () => {
+    vi.mocked(readCodingWorkbenchDraft).mockReset();
+    vi.mocked(writeCodingWorkbenchDraft).mockReset();
+    const { result } = renderHook(() => usePrivateDraft(undefined, "coding-workbench"));
+    act(() => result.current.setText("Local only"));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(result.current.text).toBe("Local only");
+    expect(readCodingWorkbenchDraft).not.toHaveBeenCalled();
+    expect(writeCodingWorkbenchDraft).not.toHaveBeenCalled();
+  });
 });

@@ -10,10 +10,6 @@ import { evidenceArtifactPath, evidenceScreenshotPath } from "./evidence.js";
 import { runAxe, seriousOrCritical, formatViolations } from "./axe.js";
 import { CI_WINDOW_ID } from "./coding-issue-ci-journey.js";
 import { readActivityLogText } from "../../../scripts/lib/activity-log-files.mjs";
-// #3625 review: the client diagnostic's raw text is redacted to a digest before it reaches the
-// activity log (ADR-0173 D4, client-diagnostics-routes.ts's `logClientDiagnostic`) -- the same
-// producer function coding-issue-intake.spec.ts's own pin already imports, never restated here.
-import { clientDiagnosticNoteDigest } from "../../../packages/keiko-server/src/client-diagnostics-routes.js";
 
 function sourceHashes(): Readonly<Record<string, string>> {
   const paths = [
@@ -80,11 +76,10 @@ export async function captureCiModes(page: Page): Promise<void> {
   await applyCodingWorkbenchEvidenceMode(page, selector, { name: "01-dark", theme: "dark" });
 }
 /**
- * The exact "technical-ready" render this receipt looks for: `CodingWorkbenchCiReadiness.tsx`
- * reports `` `[keiko] CI readiness displayed: ${state} head ${head.slice(0, 12)}` `` on every
- * render, where `state` is the readiness snapshot's own `state` and `head` is the draft delivery's
- * bound `headSha` -- both already observed by the journey's own `observe(page, "technical-ready")`
- * call, so this restates nothing the test does not already know first-hand.
+ * The "technical-ready" render this receipt looks for: `CodingWorkbenchCiReadiness.tsx` reports the
+ * closed `delivery-step-shown` interaction with the readiness snapshot's own `state` (#4271). The
+ * `headSha` is the draft delivery's bound head the journey's own `observe(page, "technical-ready")`
+ * call already read, so this restates nothing the test does not already know first-hand.
  */
 export interface CiReadinessDisplay {
   readonly state: "technical-ready";
@@ -103,13 +98,14 @@ export function writeCiJourneyReceipt(
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   const observations = lines.filter((line) => line.op === "git.ci-observation");
-  // #3625 review: `clientNote` is redacted to `clientNoteDigest` before it ever reaches the log
-  // (ADR-0173 D4) -- the digest of the exact message the component reports is the only trace left.
-  const displayedDigest = clientDiagnosticNoteDigest(
-    `[keiko] CI readiness displayed: ${display.state} head ${display.headSha.slice(0, 12)}`,
-  );
+  // The component reports the closed `delivery-step-shown` interaction (#4271): the step and the
+  // readiness state, never the head; the head is proven by the journey's own snapshot reads.
   const displayed = lines.filter(
-    (line) => line.op === "client.diagnostic" && line.clientNoteDigest === displayedDigest,
+    (line) =>
+      line.op === "client.coding-workbench.interaction" &&
+      line.interaction === "delivery-step-shown" &&
+      line.deliveryStep === "ci-readiness" &&
+      line.deliveryState === display.state,
   );
   expect(observations.length).toBeGreaterThan(0);
   expect(displayed.length).toBeGreaterThan(0);

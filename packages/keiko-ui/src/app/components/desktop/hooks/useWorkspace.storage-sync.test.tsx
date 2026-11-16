@@ -127,7 +127,7 @@ describe("useWorkspace cross-tab storage sync (STEP 07 cluster B)", () => {
     const incomingSerialized = JSON.stringify(incoming);
     window.localStorage.setItem(WS_LS, incomingSerialized);
 
-    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const setItemSpy = vi.spyOn(Object.getPrototypeOf(window.localStorage) as Storage, "setItem");
     act(() => {
       dispatchStorage(WS_LS, incomingSerialized);
     });

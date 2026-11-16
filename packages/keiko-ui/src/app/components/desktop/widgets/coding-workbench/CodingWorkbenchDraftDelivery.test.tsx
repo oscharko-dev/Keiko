@@ -3,6 +3,8 @@ import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodingWorkbenchDraftDelivery } from "./CodingWorkbenchDraftDelivery";
 import { draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import type { ClientDiagnosticCodingWorkbenchInteraction } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   descriptionStatusSnapshot,
   genericDescriptionArtifact,
@@ -27,12 +29,27 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
   return { promise, resolve };
 }
 
+// #4271: what the card showed is a closed delivery-step interaction, not a warn sentence.
+const shown: ClientDiagnosticCodingWorkbenchInteraction[] = [];
+const step = (deliveryState: string): Record<string, string> => ({
+  interaction: "delivery-step-shown",
+  deliveryStep: "draft-delivery",
+  deliveryState,
+});
+
 describe("durable repository delivery in the Code task", () => {
   beforeEach(() => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    shown.length = 0;
+    setClientDiagnosticWriter((message, meta) => {
+      const interaction = meta?.codingWorkbenchInteraction;
+      if (interaction?.interaction === "delivery-step-shown") shown.push(interaction);
+      else console.warn(message);
+    });
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    resetClientDiagnosticWriter();
   });
 
   // #3390: a lapsed retention used to leave the operator with a false sentence ("the change moved")
@@ -108,9 +125,7 @@ describe("durable repository delivery in the Code task", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     expect(screen.getAllByText("3".repeat(40))).toHaveLength(2);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    expect(console.warn).toHaveBeenCalledWith(
-      "[keiko] draft delivery displayed: draft-created reason completed head 333333333333",
-    );
+    expect(shown).toEqual([step("draft-created")]);
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
@@ -207,12 +222,12 @@ describe("durable repository delivery in the Code task", () => {
       <CodingWorkbenchDraftDelivery snapshot={draftDeliverySnapshot()} />,
     );
     rerender(<CodingWorkbenchDraftDelivery snapshot={draftDeliverySnapshot()} />);
-    expect(console.warn).toHaveBeenCalledOnce();
+    expect(shown).toHaveLength(1);
     rerender(
       <CodingWorkbenchDraftDelivery snapshot={{ ...draftDeliverySnapshot(), runId: "run-2" }} />,
     );
     expect(screen.queryByRole("region", { name: "Repository delivery" })).not.toBeInTheDocument();
-    expect(console.warn).toHaveBeenCalledOnce();
+    expect(shown).toHaveLength(1);
   });
 
   it.each([

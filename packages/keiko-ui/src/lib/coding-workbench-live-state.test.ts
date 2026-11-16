@@ -9,6 +9,7 @@ import type {
 import {
   codingWorkbenchRuntimeReducer,
   codingWorkbenchSourceFromManaged,
+  codingWorkbenchVisibleIdentity,
   createInitialCodingWorkbenchRuntimeState,
   NO_CODING_WORKBENCH_PROMPT_INPUTS,
   offeredCodingWorkbenchAgents,
@@ -577,6 +578,85 @@ describe("primary agent selection (#3897)", () => {
       preference: "managed-gateway",
     });
     expect(offeredCodingWorkbenchAgents(managed)).toEqual(["build", "plan"]);
+  });
+});
+
+describe("the live run's identity after a reload (#4068 W12)", () => {
+  const live = (
+    overrides: Partial<CodingWorkbenchRuntimeSnapshot>,
+  ): CodingWorkbenchRuntimeSnapshot =>
+    snapshot({ state: "running", pendingPermission: undefined, ...overrides });
+  const withReadiness = (state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState =>
+    codingWorkbenchRuntimeReducer(state, {
+      kind: "runtime-set",
+      readiness: readiness(["build", "plan"]),
+    });
+  const withRun = (
+    state: CodingWorkbenchRuntimeState,
+    run: CodingWorkbenchRuntimeSnapshot,
+  ): CodingWorkbenchRuntimeState =>
+    codingWorkbenchRuntimeReducer(state, { kind: "run-set", snapshot: run });
+
+  it("restores the run's agent whichever of readiness and the snapshot arrives first", () => {
+    const run = live({ agent: "plan" });
+    expect(withRun(withReadiness(readyState()), run).agent).toBe("plan");
+    expect(withReadiness(withRun(readyState(), run)).agent).toBe("plan");
+  });
+
+  it("does not overwrite the operator's next choice with later snapshots of the same run", () => {
+    const restored = withRun(withReadiness(readyState()), live({ agent: "plan", revision: 5 }));
+    const chosen = codingWorkbenchRuntimeReducer(restored, {
+      kind: "select-agent",
+      agent: "build",
+    });
+    expect(withRun(chosen, live({ agent: "plan", revision: 6 })).agent).toBe("build");
+  });
+
+  it("does not restore an agent the deployment does not offer or a settled run's agent", () => {
+    expect(withRun(readyState(), live({ agent: "plan" })).agent).toBe("build");
+    expect(
+      withRun(withReadiness(readyState()), live({ state: "failed", agent: "plan" })).agent,
+    ).toBe("build");
+  });
+
+  it("states the live run's identity, never the picker's, and says when none is reported", () => {
+    const picked = codingWorkbenchRuntimeReducer(withReadiness(readyState()), {
+      kind: "select-model",
+      modelId: "picker-model",
+    });
+    expect(
+      codingWorkbenchVisibleIdentity(
+        withRun(picked, live({ modelId: "run-model", agent: "plan" })),
+      ),
+    ).toEqual({ source: "run", modelId: "run-model", agent: "plan" });
+    expect(codingWorkbenchVisibleIdentity(withRun(picked, live({})))).toEqual({
+      source: "run",
+      modelId: null,
+      agent: null,
+    });
+    expect(codingWorkbenchVisibleIdentity(picked)).toEqual({
+      source: "selection",
+      modelId: "picker-model",
+      agent: "build",
+    });
+    expect(
+      codingWorkbenchVisibleIdentity(
+        withRun(picked, live({ state: "failed", modelId: "run-model" })),
+      ),
+    ).toMatchObject({ source: "selection", modelId: "picker-model" });
+  });
+
+  it("keeps the reported tool profile across a mode change and starts without one", () => {
+    expect(createInitialCodingWorkbenchRuntimeState().toolProfile).toBeNull();
+    const reported = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "runtime-set",
+      readiness: { ...readiness(), toolProfile: "mapped" },
+    });
+    expect(reported.toolProfile).toBe("mapped");
+    expect(
+      codingWorkbenchRuntimeReducer(reported, { kind: "select-mode", mode: "governed-assist" })
+        .toolProfile,
+    ).toBe("mapped");
   });
 });
 

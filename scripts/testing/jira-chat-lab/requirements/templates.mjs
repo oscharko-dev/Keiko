@@ -12,8 +12,30 @@ import { toolExchangeOf, completedToolExchange } from "./tool-exchanges.mjs";
 const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const sameSet = (left, right) => left.size === right.size && [...left].every((id) => right.has(id));
 
+/** Runtime runs require an explicit key; the reusable Markdown builders retain their inputs. */
+export function runtimeTemplateProjectKey(projectKey) {
+  if (typeof projectKey !== "string" || !/^[A-Z][A-Z0-9_]{1,31}$/u.test(projectKey)) {
+    throw new TypeError("Invalid runtime template project key");
+  }
+  return projectKey;
+}
+
 /** The summary every epic of the lab starts with: `[LH-001] <title>`. */
 export const EPIC_SUMMARY_PATTERN = String.raw`^\[LH-\d{3}\] \S`;
+
+/**
+ * The Epic summary rule of the golden Lastenheft run: the bracketed requirement ID, then the title.
+ * The Lastenheft numbers its requirements in several schemes (REQ-FA-017, NFA-SEC-003, MIG_DAT-002,
+ * ABN-45.1), so the rule names the ID shape, not one scheme. It is flat because the product refuses
+ * a quantified group that holds a quantifier (ADR-0128 D4).
+ */
+const REQUIREMENT_EPIC_SUMMARY_PATTERN = String.raw`^\[[A-Z][A-Z0-9_.-]*[0-9]\] \S`;
+
+/** The one formal rule the bulk run breaks on purpose: the installed Epic template's summary pattern. */
+export const EPIC_SUMMARY_VIOLATION = Object.freeze({
+  ruleId: "summary-pattern",
+  prompt: "Deliberately omit the required bracketed requirement ID from the summary.",
+});
 
 /**
  * The Markdown template a lead would write for `issueType` from the lab's structure rule: the
@@ -26,7 +48,9 @@ export function templateMarkdown({
   rule,
   summaryPattern,
   parentField,
+  parentIssueTypes,
   requiredFields = [],
+  activateOn = ["create"],
 }) {
   const quoted = (value) => JSON.stringify(value);
   const front = [
@@ -35,12 +59,15 @@ export function templateMarkdown({
     "version: 1",
     `project: ${project}`,
     `issueType: ${quoted(issueType)}`,
-    "activateOn: [create]",
+    `activateOn: [${activateOn.join(", ")}]`,
     ...(summaryPattern === undefined ? [] : [`summaryPattern: ${quoted(summaryPattern)}`]),
     ...(rule.labels?.length > 0
       ? [`requiredLabels: [${rule.labels.map((label) => quoted(label)).join(", ")}]`]
       : []),
     ...(parentField === undefined ? [] : [`parentField: ${quoted(parentField)}`]),
+    ...(parentIssueTypes === undefined
+      ? []
+      : [`parentIssueTypes: [${parentIssueTypes.map(quoted).join(", ")}]`]),
     ...(requiredFields.length > 0
       ? [`requiredFields: [${requiredFields.map((field) => quoted(field)).join(", ")}]`]
       : []),
@@ -51,13 +78,69 @@ export function templateMarkdown({
 }
 
 /** The template of the lab's work project for epics. */
-export const epicTemplateMarkdown = (project) =>
+export const epicTemplateMarkdown = (project, summaryPattern = EPIC_SUMMARY_PATTERN) =>
   templateMarkdown({
     project,
     issueType: "Epic",
     rule: STRUCTURE_RULES.Epic,
-    summaryPattern: EPIC_SUMMARY_PATTERN,
+    summaryPattern,
   });
+
+/** The structure a project lead defines for Stories: a user goal, the criteria and the done list. */
+export const STORY_STRUCTURE_RULE = Object.freeze({
+  sections: ["Nutzerziel", "Akzeptanzkriterien", "Definition of Done"],
+  parent: true,
+});
+
+/** The Story template of the work project: its sections, and the epic link the lead requires. */
+export const storyTemplateMarkdown = (project, epicLinkFieldId) =>
+  templateMarkdown({
+    project,
+    issueType: "Story",
+    rule: STORY_STRUCTURE_RULE,
+    parentField: epicLinkFieldId,
+  });
+
+/** The Sub-task template of the work project; `parentIssueTypes` names the types it may hang under. */
+export const subtaskTemplateMarkdown = (project, parentIssueTypes = ["Task"]) =>
+  templateMarkdown({
+    project,
+    issueType: "Sub-task",
+    rule: STRUCTURE_RULES.Task,
+    parentField: "parent",
+    parentIssueTypes,
+  });
+
+/** The issue types whose templates the limit run installs for its work project. */
+const LIMIT_TEMPLATE_TYPES = Object.freeze(["Epic", "Task", "Bug", "Sub-task"]);
+
+function limitTemplateMarkdown(project, issueType, epicLinkFieldId) {
+  if (issueType === "Epic") return epicTemplateMarkdown(project, REQUIREMENT_EPIC_SUMMARY_PATTERN);
+  if (issueType === "Sub-task") return subtaskTemplateMarkdown(project, ["Task"]);
+  return templateMarkdown({
+    project,
+    issueType,
+    rule: STRUCTURE_RULES[issueType],
+    parentField: epicLinkFieldId,
+    requiredFields: issueType === "Bug" ? ["priority"] : [],
+  });
+}
+
+/**
+ * The four templates the limit run installs for its work project, as the lead defines them. The
+ * Epic rule is the golden Lastenheft one, so every correctly traced golden Epic can meet it.
+ */
+export function limitTemplateDefinitions(project, epicLinkFieldId) {
+  return LIMIT_TEMPLATE_TYPES.map((issueType) => {
+    const subtask = issueType === "Sub-task";
+    const parentIssueTypes = subtask ? ["Task"] : undefined;
+    return {
+      issueType,
+      markdown: limitTemplateMarkdown(project, issueType, epicLinkFieldId),
+      formal: { project, issueType, ...(subtask ? { parentIssueTypes } : {}) },
+    };
+  });
+}
 
 /**
  * The templates a lead defines for the report project before judging its compliance (S11): the
@@ -114,7 +197,7 @@ async function defineTemplate(http, markdown, name) {
 }
 
 /** Deletes a template skill at the revision the import returned. */
-async function removeTemplate(http, skill) {
+export async function removeTemplate(http, skill) {
   await http(
     "template-delete",
     `/api/skills/${encodeURIComponent(skill.id)}`,
@@ -241,15 +324,23 @@ const violationsIn = (value) =>
     (item) => isRecord(item) && typeof item.ruleId === "string",
   );
 
-/** The refusal an exchange carries: a `jira.create` rejection or the failed items of a draft. */
+/** The refusal a single result carries on itself: its field-validation violations, and a receipt if any. */
+function resultRefusal(exchange, index, mayHaveReceipt) {
+  const data = exchange.result.data;
+  const violations = data?.reason === "field-validation" ? violationsIn(data.violations) : [];
+  return violations.length === 0
+    ? []
+    : [{ index, violations, receipt: mayHaveReceipt && typeof data.issueKey === "string" }];
+}
+
+/**
+ * The refusal an exchange carries: a `jira.create` rejection, a `jira.draft-stage` rejection (the
+ * staging step of a draft checks the template before anything is written; the violations sit on the
+ * result itself, and nothing can carry a receipt) or the failed items of a draft commit.
+ */
 function refusalOf(exchange, index) {
-  if (toolExchangeOf(exchange, "jira.create")) {
-    const data = exchange.result.data;
-    const violations = data?.reason === "field-validation" ? violationsIn(data.violations) : [];
-    return violations.length === 0
-      ? []
-      : [{ index, violations, receipt: typeof data.issueKey === "string" }];
-  }
+  if (toolExchangeOf(exchange, "jira.draft-stage")) return resultRefusal(exchange, index, false);
+  if (toolExchangeOf(exchange, "jira.create")) return resultRefusal(exchange, index, true);
   if (!toolExchangeOf(exchange, "jira.draft")) return [];
   const items = Array.isArray(exchange.result.data?.items) ? exchange.result.data.items : [];
   return items
@@ -263,14 +354,53 @@ function refusalOf(exchange, index) {
 }
 
 /** Every template refusal of the turn with its position, the violations and a receipt, if any. */
-function templateRefusals(exchanges) {
+export function templateRefusals(exchanges) {
   return (Array.isArray(exchanges) ? exchanges : []).flatMap((exchange, index) =>
     refusalOf(exchange, index),
   );
 }
 
+/**
+ * Every `jira.edit` the gate refused with template violations (the same structured rejection a
+ * create carries). An edit that failed for another reason carries no violation and is not listed.
+ */
+export function editRefusals(exchanges) {
+  return (Array.isArray(exchanges) ? exchanges : []).flatMap((exchange, index) => {
+    if (!toolExchangeOf(exchange, "jira.edit")) return [];
+    const data = exchange.result.data;
+    const violations = data?.outcome === "rejected" ? violationsIn(data.violations) : [];
+    return violations.length === 0 ? [] : [{ index, violations }];
+  });
+}
+
+/**
+ * Every `jira.transition` the gate refused with template violations (the rule lines of a transition rule),
+ * the same structured rejection an edit carries. A transition that failed for another reason lists none.
+ */
+export function transitionRefusals(exchanges) {
+  return (Array.isArray(exchanges) ? exchanges : []).flatMap((exchange, index) => {
+    if (!toolExchangeOf(exchange, "jira.transition")) return [];
+    const data = exchange.result.data;
+    const violations = data?.outcome === "rejected" ? violationsIn(data.violations) : [];
+    return violations.length === 0 ? [] : [{ index, violations }];
+  });
+}
+
+/**
+ * Every succeeded `jira.edit` with the template notices it carried: the rules an issue already
+ * broke in fields the edit did not touch (the product's closed account, never its wording).
+ */
+export function succeededEdits(exchanges) {
+  return (Array.isArray(exchanges) ? exchanges : [])
+    .filter(
+      (exchange) =>
+        toolExchangeOf(exchange, "jira.edit") && exchange.result.data?.outcome === "succeeded",
+    )
+    .map((exchange) => ({ notices: violationsIn(exchange.result.data?.templateNotices) }));
+}
+
 /** Whether an exchange wrote an issue: a succeeded create or a draft item in state created. */
-function wroteIssue(exchange) {
+export function wroteIssue(exchange) {
   if (completedToolExchange(exchange, "jira.create"))
     return exchange.result.data?.outcome === "succeeded";
   const items = toolExchangeOf(exchange, "jira.draft") ? exchange.result.data?.items : [];
@@ -279,18 +409,30 @@ function wroteIssue(exchange) {
   );
 }
 
+/** The template a refusal names, lower case, without the " #n" the product appends when several templates govern one type. */
+const templateName = (name) =>
+  String(name ?? "")
+    .replace(/ #\d+$/u, "")
+    .toLowerCase();
+
 /**
  * Grades the repair of a template refusal. Detected: a refusal of the turn names a content rule
  * of `template` (the `PROJECT/Issue type` the violation reports). Repaired before write: no
  * refusal carries a receipt, an issue was written after the first refusal, and every issue the
  * turn produced satisfies the template as Jira holds it, so the violating content never persisted.
  */
-export function gradeTemplateRepair({ exchanges, issues, template }) {
+export function gradeTemplateRepair({
+  exchanges,
+  issues,
+  template,
+  // The lab's own conformity rule for the template's issue type; Epic unless a lane names another.
+  conforms = epicTemplateConforms,
+}) {
   const refusals = templateRefusals(exchanges);
   const violations = refusals.flatMap((refusal) => refusal.violations);
   const content = violations.filter(
     (item) =>
-      CONTENT_RULES.has(item.ruleId) && item.template?.toLowerCase() === template.toLowerCase(),
+      CONTENT_RULES.has(item.ruleId) && templateName(item.template) === template.toLowerCase(),
   );
   const first = refusals[0]?.index;
   const writtenAfter =
@@ -298,7 +440,7 @@ export function gradeTemplateRepair({ exchanges, issues, template }) {
     (Array.isArray(exchanges) ? exchanges : [])
       .slice(first + 1)
       .some((exchange) => wroteIssue(exchange));
-  const nonconforming = issues.filter((issue) => !epicTemplateConforms(issue));
+  const nonconforming = issues.filter((issue) => !conforms(issue));
   return {
     detected: content.length > 0,
     ruleIds: [...new Set(content.map((item) => item.ruleId))],

@@ -7,6 +7,8 @@ import {
   useWorkspaceConnectorWindows,
 } from "./connector-windows-context";
 import { JiraChatTools } from "./JiraChatTools";
+import { ClaimNoticeLine, useClaimNoticeText } from "./ClaimNoticeLine";
+import { useTurnEndText } from "./turnEndText";
 import { ChatJiraNames } from "./jiraNames";
 import { ChatDraftStatus } from "./ChatDraftStatus";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
@@ -34,6 +36,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useId,
   useMemo,
   useRef,
@@ -49,7 +52,12 @@ import {
   type SyntheticEvent,
 } from "react";
 import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
-import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  MAX_DESKTOP_CHAT_INPUT_CHARS,
+  type ChatClaimNotice,
+  type ChatToolTranscript,
+  type ChatToolTurnEnd,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   citationMarkerIndices,
   findCitationMarkerGroups,
@@ -117,6 +125,7 @@ import {
 import { isRunSummaryMessage, RunSummaryCard } from "./WorkflowHandoff";
 import { FileIcon } from "./widgets/shared/projectTree";
 import {
+  isInFlight,
   type AttachmentRejectionReason,
   type ChatSessionApi,
   type PendingAttachment,
@@ -175,7 +184,7 @@ import type {
   OpenEditorFileResult,
   WorkspaceLinkedGitChangeComparison,
 } from "./hooks/useWorkspace.types";
-import { fetchFilesSearch } from "@/lib/api";
+import { ApiError, fetchFilesSearch } from "@/lib/api";
 import { GitChangeScopePill } from "./GitChangeScopePill";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { ConnectorScopePill } from "./ConnectorScopePill";
@@ -191,6 +200,7 @@ import {
   useOptionalWidgetTranslate as useTranslate,
   type OptionalWidgetTranslate as I18nTranslate,
 } from "@/lib/optional-widget-i18n";
+import { sourceKindLabel } from "@/lib/memory-source-label";
 import { formatUserError } from "./format-error";
 import type {
   CapsuleListEntry,
@@ -229,6 +239,7 @@ const CloseIcon = Icons.close;
 const MicIcon = Icons.mic;
 const CubeIcon = Icons.cube;
 const ArrowUpIcon = Icons.arrowUp;
+const StopIcon = Icons.stop;
 const SparkIcon = Icons.spark;
 const BrainIcon = Icons.brain;
 
@@ -557,6 +568,56 @@ const AssessedAnswerBody = dynamic(
   () => import("./OwnAssessment").then((mod) => mod.AssessedAnswerBody),
   { ssr: false, loading: () => null },
 );
+
+/**
+ * The stored transcript of the turn an assistant answer closes (#4355): the closest earlier user
+ * message's. Only the turn's first answer closes it; a regenerated one never does.
+ */
+function transcriptOfAnswer(
+  messages: readonly ChatMessage[],
+  answer: ChatMessage | undefined,
+): ChatToolTranscript | undefined {
+  if (answer === undefined || (answer.responseVersion ?? 1) !== 1) return undefined;
+  const at = messages.findIndex((message) => message.id === answer.id);
+  for (let index = at - 1; index >= 0; index -= 1) {
+    const earlier = messages[index];
+    if (earlier?.role === "user") return earlier.toolTranscript;
+  }
+  return undefined;
+}
+
+/** The stored claim marker of the turn an assistant answer closes (#4355). */
+export function claimNoticeOfAnswer(
+  messages: readonly ChatMessage[],
+  answer: ChatMessage | undefined,
+): ChatClaimNotice | undefined {
+  return transcriptOfAnswer(messages, answer)?.claimNotice;
+}
+
+/** The stored ending of the turn an assistant answer closes, when it ended early (#4355). */
+export function turnEndOfAnswer(
+  messages: readonly ChatMessage[],
+  answer: ChatMessage | undefined,
+): ChatToolTurnEnd | undefined {
+  return transcriptOfAnswer(messages, answer)?.turnEnd;
+}
+
+/** The stored facts of the turn only its closing answer carries: the claim marker and the ending. */
+function turnClosingProps(
+  userMessage: ChatMessage | null | undefined,
+  closing: boolean,
+): { readonly claimNotice?: ChatClaimNotice; readonly turnEnd?: ChatToolTurnEnd } {
+  const transcript = closing ? userMessage?.toolTranscript : undefined;
+  return {
+    ...(transcript?.claimNotice === undefined ? {} : { claimNotice: transcript.claimNotice }),
+    ...(transcript?.turnEnd === undefined ? {} : { turnEnd: transcript.turnEnd }),
+  };
+}
+
+/** What is read aloud: the answer, then Keiko's note when the turn carries one, as a copy does. */
+export function speechTextWithNote(answerText: string, noteText: string | undefined): string {
+  return noteText === undefined ? answerText : `${answerText}\n\n${noteText}`;
+}
 
 /**
  * The body-free evidence of `speakableAnswerText` by the same rule: whether the answer is grounded
@@ -963,9 +1024,12 @@ function ChatBubbleFooterActions({
   collapsed,
   onToggleCollapsed,
   contentId,
+  claimNoticeText,
 }: {
   readonly isUser: boolean;
   readonly message: ChatMessage;
+  /** Keiko's note about the answer; a copy carries it, so the claim never travels without it. */
+  readonly claimNoticeText: string | undefined;
   readonly showRegenerate: boolean;
   readonly regenerating: boolean;
   readonly onRegenerate: ((assistantMessageId: string) => Promise<void>) | undefined;
@@ -988,7 +1052,11 @@ function ChatBubbleFooterActions({
         />
       ) : null}
       <MessageCopyButton
-        content={answerReadingText(message)}
+        content={
+          claimNoticeText === undefined
+            ? answerReadingText(message)
+            : `${answerReadingText(message)}\n\n${claimNoticeText}`
+        }
         citationCeiling={groundedCitationCeiling(message.groundedAnswer)}
         grounded={message.groundedAnswer !== undefined}
       />
@@ -1057,9 +1125,16 @@ function ChatBubbleImpl({
   previewWindows,
   windowId,
   streaming = false,
+  waitingForDecision = false,
   layout = "stack",
+  claimNotice,
+  turnEnd,
 }: {
   readonly message: ChatMessage;
+  /** The stored turn's marker; only the first answer of the turn carries it, never a regeneration. */
+  readonly claimNotice?: ChatClaimNotice | undefined;
+  /** The stored ending of a turn that ended early; the answer is then worded from it (#4355). */
+  readonly turnEnd?: ChatToolTurnEnd | undefined;
   readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
   readonly onRegenerate?: (assistantMessageId: string) => Promise<void>;
   readonly onCancelRegenerate?: () => void;
@@ -1072,6 +1147,7 @@ function ChatBubbleImpl({
   // Issue #1296 — true only for the live assistant turn while tokens are arriving,
   // so the DS 0.4.0 streaming caret blinks at the growing edge of the text.
   readonly streaming?: boolean;
+  readonly waitingForDecision?: boolean;
   readonly layout?: "stack" | "turn";
 }): ReactNode {
   const t = useTranslate();
@@ -1092,10 +1168,20 @@ function ChatBubbleImpl({
     responseSelection.currentVersion === message.responseVersion
       ? responseSelection.selectedVersion
       : undefined;
-  const displayedMessage = messageForSelectedResponseVersion(message, selectedResponseVersion);
+  const selectedMessage = messageForSelectedResponseVersion(message, selectedResponseVersion);
+  const endText = useTurnEndText(
+    message.role !== "user" && (selectedMessage.responseVersion ?? 1) === 1 ? turnEnd : undefined,
+    selectedMessage.content,
+  );
+  // The stored English answer stays the fallback; the ending is worded from its closed facts.
+  const displayedMessage =
+    endText === undefined ? selectedMessage : { ...selectedMessage, content: endText };
   const evidence = useConnectedEvidenceReferences(displayedMessage.groundedAnswer, repositoryRoots);
   const isRunSummary = isRunSummaryMessage(message);
   const isUser = message.role === "user";
+  const claimNoticeText = useClaimNoticeText(
+    !isUser && (displayedMessage.responseVersion ?? 1) === 1 ? claimNotice : undefined,
+  );
   const citationPreview = usePdfCitationPreviewController({
     answer: displayedMessage.groundedAnswer,
     chatId: activeChat?.id,
@@ -1159,10 +1245,14 @@ function ChatBubbleImpl({
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
         />
+        <ClaimNoticeLine text={claimNoticeText} />
         <JiraChatTools
           transcript={message.toolTranscript}
+          messageId={message.id}
           turnState={message.turnState}
           chatId={message.chatId}
+          showPending={isUser && message.turnState === "pending"}
+          waitingForDecision={waitingForDecision}
         />
         <ResponseVersionSelector
           message={message}
@@ -1186,6 +1276,7 @@ function ChatBubbleImpl({
           <ChatBubbleFooterActions
             isUser={isUser}
             message={displayedMessage}
+            claimNoticeText={claimNoticeText}
             showRegenerate={
               showRegenerate &&
               message.groundedAnswer === undefined &&
@@ -1354,6 +1445,7 @@ function ConversationThreadImpl({
               {userMessage !== null ? (
                 <ChatBubble
                   message={userMessage}
+                  waitingForDecision={isLastTurn && sendStatus === "awaiting-decision"}
                   onOpenRunResult={onOpenRunResult}
                   repositoryRoots={repositoryRoots}
                   openRepositoryReference={openRepositoryReference}
@@ -1374,6 +1466,7 @@ function ConversationThreadImpl({
                   previewWindows={previewWindows}
                   windowId={windowId}
                   layout="turn"
+                  {...turnClosingProps(userMessage, index === turn.responses.length - 1)}
                   onRegenerate={onRegenerate}
                   onCancelRegenerate={onCancelRegenerate}
                   showRegenerate={showRegenerateControls && latestAssistantId === response.id}
@@ -1435,7 +1528,7 @@ function ConversationThreadImpl({
           <div className="chat-turn-cell chat-turn-prompt" />
           <div className="chat-turn-cell chat-turn-answer">
             <div className="chatw-typing-row">
-              <TypingBubble />
+              {sendStatus === "awaiting-decision" ? null : <TypingBubble />}
               {hasGroundingScope(activeChat) ? (
                 <button
                   type="button"
@@ -2120,6 +2213,10 @@ interface ComposerBarProps {
   readonly voiceDialogActive: boolean;
   readonly onToggleVoiceDialog: () => void;
   readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
+  // #4371 — the composer's own handling of the running answer: a send refused while it runs, and
+  // where focus goes when the stop control that held it disappears.
+  readonly onSendRefusedWhileRunning?: () => void;
+  readonly onStopFocusReleased?: () => void;
 }
 
 interface VoiceDialogComposerControlsProps {
@@ -2186,40 +2283,23 @@ function VoiceDialogMicMuteButton({
   );
 }
 
-// Extracted from ComposerContextControls (SonarCloud S3358) — the compact model-select tip label.
-function composerModelCompactTip(
-  loading: boolean,
-  noEligibleModels: boolean,
+/** An unfinished catalog read is unknown, not proof that no model is configured. */
+function composerModelStatus(
+  session: Pick<ChatSessionApi, "loading" | "noEligibleModels" | "modelCatalogStatus">,
   t: I18nTranslate,
-): string {
-  if (loading) return t("chat.model.loading");
-  if (noEligibleModels) return t("chat.model.noEligible");
-  return t("chat.model.change");
-}
-
-// Extracted from ComposerContextControls (SonarCloud S3358) — the model-select placeholder text.
-function composerModelPlaceholder(
-  loading: boolean,
-  noEligibleModels: boolean,
-  t: I18nTranslate,
-): string {
-  if (loading) return t("chat.model.loading");
-  if (noEligibleModels) return t("chat.model.noEligible");
-  return t("chat.model.menuTitle");
+): string | undefined {
+  if (session.loading || session.modelCatalogStatus === "loading") return t("chat.model.loading");
+  if (session.modelCatalogStatus === "failed") return t("chat.model.unavailable");
+  return session.noEligibleModels ? t("chat.model.noEligible") : undefined;
 }
 
 // Extracted from ComposerContextControls (SonarCloud S3358) — the model-select option list: a
 // single disabled placeholder option while loading or with no eligible models, else the real list.
 function composerModelOptions(
-  loading: boolean,
-  noEligibleModels: boolean,
+  status: string | undefined,
   models: readonly ModelCapability[],
-  t: I18nTranslate,
 ): readonly { readonly value: string; readonly label: string; readonly disabled?: boolean }[] {
-  if (loading) return [{ value: "", label: t("chat.model.loading"), disabled: true }];
-  if (noEligibleModels) {
-    return [{ value: "", label: t("chat.model.noEligible"), disabled: true }];
-  }
+  if (status !== undefined) return [{ value: "", label: status, disabled: true }];
   return modelList(models).map((model) => ({ value: model.id, label: model.id }));
 }
 
@@ -2228,6 +2308,18 @@ function composerModelSearch(
   t: I18nTranslate,
 ): string | undefined {
   return models.length >= 10 ? t("chat.model.search") : undefined;
+}
+
+function refreshComposerModels(status: ChatSessionApi["modelCatalogStatus"]): void {
+  if (status !== "loading") requestGatewayModelCatalogRefresh({ check: true });
+}
+
+function composerModelCatalogReady(status: ChatSessionApi["modelCatalogStatus"]): boolean {
+  return status === undefined || status === "ready";
+}
+
+function composerModelValue(status: string | undefined, selected: string | undefined): string {
+  return status === undefined ? (selected ?? "") : "";
 }
 
 function ChatSkillControl({ session }: { readonly session: ChatSessionApi }): ReactNode {
@@ -2249,9 +2341,10 @@ function ComposerContextControls({
 }: ComposerContextControlsProps): ReactNode {
   const t = useTranslate();
   const { models, selectedModel, setSelectedModel, noEligibleModels, loading } = session;
+  const status = composerModelStatus(session, t);
   const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
-  const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
-  const compactModelTip = composerModelCompactTip(loading, noEligibleModels, t);
+  const selectValue = composerModelValue(status, selectedModel);
+  const compactModelTip = status ?? t("chat.model.change");
 
   return (
     <div className="cmp-bar-model">
@@ -2266,7 +2359,7 @@ function ComposerContextControls({
           ariaLabel={t("chat.model.menuTitle")}
           ariaDescribedBy={selectDescribedBy}
           disabled={loading}
-          placeholder={composerModelPlaceholder(loading, noEligibleModels, t)}
+          placeholder={status ?? t("chat.model.menuTitle")}
           leadingVisual={
             <CubeIcon size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
           }
@@ -2280,23 +2373,43 @@ function ComposerContextControls({
           menuMinWidth={controlsNarrow ? 118 : 280}
           mono
           onOpen={() => {
-            requestGatewayModelCatalogRefresh({ check: true });
+            refreshComposerModels(session.modelCatalogStatus);
           }}
           sections={[
             {
-              options: composerModelOptions(loading, noEligibleModels, models, t),
+              options: composerModelOptions(status, models),
             },
           ]}
           onValueChange={(next) => {
-            if (noEligibleModels || loading) return;
+            if (status !== undefined) return;
             setSelectedModel(next);
           }}
         />
       </div>
+      <ModelCheckNotice model={selectedModelCapability} />
       <ChatContextMeterContainer session={session} />
       <ChatSkillControl session={session} />
       <ComposerConnectorsControl session={session} />
     </div>
+  );
+}
+
+// #4351: a model nobody had checked is checked once when a person picks it. The person sees that it
+// is being checked, then nothing when it is ready, or a readable reason when it is not.
+function ModelCheckNotice({ model }: { readonly model: ModelCapability | undefined }): ReactNode {
+  const t = useTranslate();
+  if (model === undefined) return null;
+  if (model.conversationCheckPending === true)
+    return (
+      <output className={styles.cmpModelCheck}>
+        {t("chat.model.checking", { model: model.id })}
+      </output>
+    );
+  if (model.conversationReady !== false) return null;
+  return (
+    <output className={`${styles.cmpModelCheck} ${styles.cmpModelCheckFailed}`}>
+      {t("chat.model.notReady", { model: model.id })}
+    </output>
   );
 }
 
@@ -2408,9 +2521,103 @@ function cancelComposerSend(event: SyntheticEvent, cancelSend: () => void): void
   });
 }
 
-// Extracted from ComposerBar (SonarCloud S3776) — the primary action button, which flips between
-// "cancel in-flight send" and "submit" (Issue #152). Same markup/behavior, now isolated so the
-// sending/type/data-tip branching lives in one small component instead of inline in ComposerBar.
+// #4371 — a send attempted while an answer runs (Enter in the composer, or a click on the inert Send)
+// is refused with a visible, politely announced reason, and leaves the draft alone. The refusal lasts
+// until the answer ends; the evidence is closed and body-free.
+function useRunningSendRefusal(sending: boolean): {
+  readonly refusals: number;
+  readonly refuse: () => void;
+} {
+  const [refusals, setRefusals] = useState(0);
+  const recordedRef = useRef(false);
+  useEffect(() => {
+    if (sending) return;
+    setRefusals(0);
+    recordedRef.current = false;
+  }, [sending]);
+  const refuse = useCallback((): void => {
+    setRefusals((count) => count + 1);
+    // One record per running turn: a held Enter repeats the key, not the evidence.
+    if (recordedRef.current) return;
+    recordedRef.current = true;
+    reportClientDiagnostic("Keiko composer refused a send while a response runs.", {
+      composerActivity: "send-refused-while-running",
+    });
+  }, []);
+  return { refusals: sending ? refusals : 0, refuse };
+}
+
+// The stop control while an answer runs. It is its own element, never the Send button re-labelled:
+// a Send that turned into Cancel in place let a double click, or a key press on the still focused
+// button, cancel the answer the first activation had just started. It looks like what it does — a
+// stop square in neutral chrome — and sits beside the inert Send, not in its place.
+//
+// Focus follows the person: when Send held it as the answer started, Stop takes it, so a keyboard
+// user can stop without hunting; when Stop held it as the answer ended (or was stopped), it moves to
+// the composer input instead of being lost with the unmounted button.
+function ComposerStopButton({
+  cancelSend,
+  takeFocus,
+  onFocusReleased,
+}: {
+  readonly cancelSend: () => void;
+  readonly takeFocus: boolean;
+  readonly onFocusReleased: (() => void) | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  // Only the mount takes focus and only the unmount releases it: the callback and the first
+  // decision live in refs, so a re-render while the answer runs never moves focus.
+  const takeFocusRef = useRef(takeFocus);
+  const releaseRef = useRef(onFocusReleased);
+  useLayoutEffect(() => {
+    releaseRef.current = onFocusReleased;
+  });
+  useLayoutEffect(() => {
+    const node = buttonRef.current;
+    if (takeFocusRef.current) node?.focus();
+    return (): void => {
+      if (node !== null && document.activeElement === node) releaseRef.current?.();
+    };
+  }, []);
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      className={styles.cmpStop}
+      aria-label={t("chat.send.cancel")}
+      data-tip={t("chat.send.cancel")}
+      onClick={(event) => cancelComposerSend(event, cancelSend)}
+    >
+      <StopIcon size={14} />
+    </button>
+  );
+}
+
+// Whether the element it is spread on holds focus right now, readable without a re-render.
+function useFocusFlag(): {
+  readonly focused: { current: boolean };
+  readonly handlers: { readonly onFocus: () => void; readonly onBlur: () => void };
+} {
+  const focused = useRef(false);
+  const handlers = useMemo(
+    () => ({
+      onFocus: (): void => {
+        focused.current = true;
+      },
+      onBlur: (): void => {
+        focused.current = false;
+      },
+    }),
+    [],
+  );
+  return { focused, handlers };
+}
+
+// Extracted from ComposerBar (SonarCloud S3776) — the primary action button. While a response runs
+// it stays in place, as the same element, as an inert control (aria-disabled, never a submit) that
+// says why it cannot send and records the refusal; the cancel control is the separate
+// ComposerStopButton (#4371).
 function ComposerSendButton({
   sending,
   cancelSend,
@@ -2418,6 +2625,8 @@ function ComposerSendButton({
   noEligibleModels,
   loading,
   sendDescribedBy,
+  onRefusedWhileRunning,
+  onFocusReleased,
 }: {
   readonly sending: boolean;
   readonly cancelSend: () => void;
@@ -2425,38 +2634,36 @@ function ComposerSendButton({
   readonly noEligibleModels: boolean;
   readonly loading: boolean;
   readonly sendDescribedBy: string | undefined;
+  readonly onRefusedWhileRunning: (() => void) | undefined;
+  readonly onFocusReleased: (() => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
-  // Issue #152 — while a send is in flight the primary action button
-  // flips to "Cancel response" (AC#1 + AC#3). Type="button" so it never
-  // submits the surrounding form; onClick calls cancelSend which is a
-  // safe no-op when the status is already terminal.
-  if (sending) {
-    return (
-      <button
-        type="button"
-        className="cmp-send cmp-send-cancel cmp-tip-end"
-        data-on
-        aria-label={t("chat.send.cancel")}
-        data-tip={t("chat.send.cancel")}
-        onClick={(event) => cancelComposerSend(event, cancelSend)}
-      >
-        <CloseIcon size={16} />
-      </button>
-    );
-  }
+  const focusTracking = useFocusFlag();
+  const inert = sendBlocked || sending;
+  const runningLabel = t("chat.send.running");
   return (
-    <button
-      type={sendBlocked ? "button" : "submit"}
-      className="cmp-send cmp-tip-end"
-      data-on={!sendBlocked}
-      data-tip={sendButtonTip(noEligibleModels, loading, t)}
-      aria-disabled={sendBlocked}
-      aria-describedby={sendDescribedBy}
-      aria-label={t("chat.send.label")}
-    >
-      <ArrowUpIcon size={16} />
-    </button>
+    <>
+      {sending ? (
+        <ComposerStopButton
+          cancelSend={cancelSend}
+          takeFocus={focusTracking.focused.current}
+          onFocusReleased={onFocusReleased}
+        />
+      ) : null}
+      <button
+        type={inert ? "button" : "submit"}
+        className="cmp-send cmp-tip-end"
+        data-on={!inert}
+        data-tip={sending ? runningLabel : sendButtonTip(noEligibleModels, loading, t)}
+        aria-disabled={inert}
+        aria-describedby={sending ? undefined : sendDescribedBy}
+        aria-label={sending ? runningLabel : t("chat.send.label")}
+        {...focusTracking.handlers}
+        onClick={sending ? onRefusedWhileRunning : undefined}
+      >
+        <ArrowUpIcon size={16} />
+      </button>
+    </>
   );
 }
 
@@ -2482,6 +2689,8 @@ function ComposerBar({
   voiceDialogActive,
   onToggleVoiceDialog,
   voiceDialogButtonRef,
+  onSendRefusedWhileRunning,
+  onStopFocusReleased,
 }: ComposerBarProps): ReactNode {
   const t = useTranslate();
   const { draft, noEligibleModels, loading, sending, cancelSend } = session;
@@ -2560,6 +2769,8 @@ function ComposerBar({
           noEligibleModels={noEligibleModels}
           loading={loading}
           sendDescribedBy={sendDescribedBy}
+          onRefusedWhileRunning={onSendRefusedWhileRunning}
+          onFocusReleased={onStopFocusReleased}
         />
       </div>
       {sendDescribedBy === SKILL_SEND_HINT_ID ? (
@@ -2669,9 +2880,21 @@ function sendLifecycleStatusLabel(status: SendStatus, t: I18nTranslate): string 
 // role="status" + aria-live="polite" so screen-reader users hear transitions
 // without interruption. Hidden when there is nothing to say (idle/completed/
 // failed — the error string carries its own role="alert").
-function SendLifecycleStatus({ status }: { readonly status: SendStatus }): ReactNode {
+function SendLifecycleStatus({
+  status,
+  sendRefusals = 0,
+}: {
+  readonly status: SendStatus;
+  /**
+   * Sends attempted while the answer runs: say why they were not sent, at that moment (#4371). The
+   * reason sits in a child keyed by the attempt, so every attempt inserts a new node into the polite
+   * region and a repeated refusal is announced again.
+   */
+  readonly sendRefusals?: number;
+}): ReactNode {
   const t = useTranslate();
   const label = sendLifecycleStatusLabel(status, t);
+  const refused = sendRefusals > 0 && isInFlight(status);
   // uiux-fix F041 (C170, WCAG 4.1.3) — the live region stays permanently mounted
   // and only its CONTENT changes: a role="status" region inserted into the DOM
   // together with its first message is unreliably announced (VoiceOver/Safari,
@@ -2684,6 +2907,11 @@ function SendLifecycleStatus({ status }: { readonly status: SendStatus }): React
         <>
           <span className="cmp-loading-dot" aria-hidden="true" />
           {label}
+          {refused ? (
+            <span key={sendRefusals} data-send-refusal>
+              {` ${t("chat.send.runningHint")}`}
+            </span>
+          ) : null}
         </>
       )}
     </div>
@@ -2904,17 +3132,21 @@ function composerDictationVisibility(
 function ComposerStatusRow({
   voiceDialogActive,
   sendStatus,
+  sendRefusals,
   voiceDictationVisible,
   dictation,
 }: {
   readonly voiceDialogActive: boolean;
   readonly sendStatus: SendStatus;
+  readonly sendRefusals: number;
   readonly voiceDictationVisible: boolean;
   readonly dictation: DictationController;
 }): ReactNode {
   return (
     <>
-      {voiceDialogActive ? null : <SendLifecycleStatus status={sendStatus} />}
+      {voiceDialogActive ? null : (
+        <SendLifecycleStatus status={sendStatus} sendRefusals={sendRefusals} />
+      )}
       {!voiceDialogActive && voiceDictationVisible ? (
         <VoiceDictationComposerStatus error={dictation.error} emptyResult={dictation.emptyResult} />
       ) : null}
@@ -3227,6 +3459,7 @@ function ComposerCoreImpl({
   // auto-grow, attachment intake, mention autocomplete, voice-capability gating) up to
   // 60×/s while a reply streams.
   const session = useChatSessionComposer();
+  const { refusals: sendRefusals, refuse: refuseSend } = useRunningSendRefusal(session.sending);
   const {
     draft,
     sending,
@@ -3375,12 +3608,24 @@ function ComposerCoreImpl({
             message.chatId === pendingVoiceAnswer.chatId &&
             message.role === "assistant",
         );
+  const voiceClaimNoticeText = useClaimNoticeText(claimNoticeOfAnswer(messages, voiceAnswer));
+  const voiceTurnEndText = useTurnEndText(
+    turnEndOfAnswer(messages, voiceAnswer),
+    voiceAnswer?.content ?? "",
+  );
   const playback = useAssistantSpeech({
     profile: voiceCapability?.profile ?? "none",
     // Only the canonical assistant answer produced after a spoken user turn is eligible. Typed chat and
-    // pre-existing history remain silent, while synthesized speech is byte-for-byte the visible answer.
+    // pre-existing history remain silent, while synthesized speech is the visible answer followed by
+    // Keiko's visible note, when the turn carries one.
     enabled: voiceDialogActive && voiceAnswer !== undefined,
-    text: voiceAnswer === undefined ? undefined : speakableAnswerText(voiceAnswer),
+    text:
+      voiceAnswer === undefined
+        ? undefined
+        : speechTextWithNote(
+            voiceTurnEndText ?? speakableAnswerText(voiceAnswer),
+            voiceClaimNoticeText,
+          ),
     preparation: voiceAnswer === undefined ? undefined : speechPreparationEvidence(voiceAnswer),
     messageId: voiceAnswer?.id,
     persona: voiceDialog.persona,
@@ -3713,6 +3958,14 @@ function ComposerCoreImpl({
     },
     [activeChat, draft, replaceChat, repositoryMention, setDraft, t, taRef],
   );
+  const pickRepositoryResult = useCallback(
+    (result: FilesSearchResult): void => {
+      insertRepositoryFileReference(result).catch((error: unknown) => {
+        setRepositoryPickError(formatRepositoryFocusError(error, t));
+      });
+    },
+    [insertRepositoryFileReference, t],
+  );
 
   const removeRepositoryReference = useCallback(
     (id: string): void => {
@@ -3754,18 +4007,19 @@ function ComposerCoreImpl({
           highlightedIndex: repositoryHighlightedIndex,
           setHighlightedIndex: setRepositoryHighlightedIndex,
           closeMention: () => setRepositoryMention(null),
-          pickResult: (picked) => {
-            void insertRepositoryFileReference(picked);
-          },
+          pickResult: pickRepositoryResult,
         });
         if (handled) return;
       }
-      if (composerEnterSubmits(event)) {
-        void sendMessage({ text: value, clearDraftOnAdmission: true });
-      }
+      if (!composerEnterSubmits(event)) return;
+      // A send while an answer runs is refused with a reason, and the draft stays (#4371).
+      if (sending) refuseSend();
+      else void sendMessage({ text: value, clearDraftOnAdmission: true });
     },
     [
-      insertRepositoryFileReference,
+      refuseSend,
+      sending,
+      pickRepositoryResult,
       repositoryHighlightedIndex,
       repositoryPickerOpen,
       repositorySearch.results,
@@ -3857,9 +4111,7 @@ function ComposerCoreImpl({
                   pickingPath={repositoryPickingPath}
                   highlightedIndex={repositoryHighlightedIndex}
                   pickError={repositoryPickError}
-                  onPick={(result) => {
-                    void insertRepositoryFileReference(result);
-                  }}
+                  onPick={pickRepositoryResult}
                   onClose={() => setRepositoryMention(null)}
                 />
               ) : null}
@@ -3880,6 +4132,7 @@ function ComposerCoreImpl({
               <ComposerStatusRow
                 voiceDialogActive={voiceDialogActive}
                 sendStatus={sendStatus}
+                sendRefusals={sendRefusals}
                 voiceDictationVisible={voiceDictationVisible}
                 dictation={dictation}
               />
@@ -3904,6 +4157,8 @@ function ComposerCoreImpl({
               voiceDialogActive={false}
               onToggleVoiceDialog={toggleVoiceDialog}
               voiceDialogButtonRef={normalVoiceDialogButtonRef}
+              onSendRefusedWhileRunning={refuseSend}
+              onStopFocusReleased={() => inputRef.current?.focus()}
             />
           }
         />
@@ -4052,6 +4307,10 @@ function hasGroundingScope(chat: Chat | undefined): boolean {
     hasConnectorGroundingScope(chat) ||
     hasGitChangeGroundingScope(chat)
   );
+}
+
+function isKnowledgePodUnavailable(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "KNOWLEDGE_POD_UNAVAILABLE";
 }
 
 function formatScopeUpdateError(error: unknown, t: I18nTranslate): string {
@@ -4373,7 +4632,8 @@ function GroundingCatalogStatus({
 }: {
   readonly loading: boolean;
   readonly empty: boolean;
-  readonly emptyLabel: string;
+  /** Absent while something else is active (a Jira Pod): no empty sentence then. */
+  readonly emptyLabel: string | undefined;
   readonly error: string | null;
   /** Present only when the catalog itself failed to load: a failed load is retryable, not empty. */
   readonly onRetry: (() => void) | undefined;
@@ -4386,7 +4646,9 @@ function GroundingCatalogStatus({
           {t("chat.grounding.catalogLoading")}
         </span>
       ) : null}
-      {empty ? <span className="scope-connect-hint">{emptyLabel}</span> : null}
+      {empty && emptyLabel !== undefined ? (
+        <span className="scope-connect-hint">{emptyLabel}</span>
+      ) : null}
       {error !== null ? (
         <span role="alert" className="scope-connect-error">
           {error}
@@ -4407,15 +4669,17 @@ interface KnowledgeScopeChoices {
   readonly catalogEmpty: boolean;
 }
 
-// While a deliberate refresh resolves, no cached pod reads as selectable: only the bound scope
-// stays visible (by name and real state) as a disabled row.
+// While a refresh has nothing to show (the first load, or after a failed one) no pod reads as
+// selectable: only the bound scope stays visible (by name and real state) as a disabled row. A
+// refresh that still holds a good snapshot keeps the known pods listed and selectable.
 function knowledgeScopeChoices(
   chat: Chat,
   catalog: KnowledgeCatalog,
   t: I18nTranslate,
   lk: LocalKnowledgeTranslate,
 ): KnowledgeScopeChoices {
-  const { capsules, capsuleSets, loading, loadError } = catalog;
+  const { capsules, capsuleSets, loadError } = catalog;
+  const loading = catalog.loading && !catalog.refreshing;
   const readyCapsules = loading ? [] : capsules.filter(isReadyCapsule);
   const selectableSets = loading ? [] : capsuleSets.filter(isSelectableGroundingCapsuleSet);
   const capsuleSetChoices = capsuleSetOptions(chat, selectableSets, t, lk);
@@ -4431,15 +4695,18 @@ function knowledgeScopeChoices(
   };
 }
 
+// With a Jira Pod on, the picker keeps the product's ordinary terms: its "none" entry names what is
+// active instead of claiming there are no sources, and no empty-catalog sentence contradicts the
+// Pod that is on (#4371).
 function groundingTerminology(
   chat: Chat,
   t: I18nTranslate,
-): { label: string; none: string; empty: string } {
+): { label: string; none: string; empty: string | undefined } {
   if (chat.jiraPodBinding !== undefined)
     return {
-      label: t("chat.grounding.dataLabel"),
-      none: t("chat.grounding.noDataSources"),
-      empty: t("chat.grounding.dataCatalogEmpty"),
+      label: t("chat.grounding.label"),
+      none: t("chat.grounding.jiraOnly"),
+      empty: undefined,
     };
   return {
     label: t("chat.grounding.label"),
@@ -4461,7 +4728,9 @@ function LocalKnowledgeScopeControl({
 }): ReactNode {
   const t = useTranslate();
   const lk = useLocalKnowledgeTranslate();
-  const { loading, refresh, refreshOnPickerOpen } = catalog;
+  const { refresh, refreshOnPickerOpen } = catalog;
+  // A refresh that still serves the last good snapshot neither hides nor disables the picker.
+  const loading = catalog.loading && !catalog.refreshing;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -4472,6 +4741,9 @@ function LocalKnowledgeScopeControl({
       await applyLocalKnowledgeScopeChange(value, chat, t, onChatChanged);
     } catch (error_) {
       setError(formatScopeUpdateError(error_, t));
+      // The list offered a pod the server no longer has: the scope stays as it was, and the list is
+      // read again so the pod disappears from it (#4371).
+      if (isKnowledgePodUnavailable(error_)) refresh();
     } finally {
       setBusy(false);
     }
@@ -4586,7 +4858,7 @@ function ChatScopeHeaderImpl({
         chat={chat}
         onDisconnect={onChatChanged}
         labels={connectorScopeLabels(catalog, t)}
-        labelsSettled={!catalog.loading && catalog.loadError === null}
+        labelsSettled={(!catalog.loading || catalog.refreshing) && catalog.loadError === null}
       />
       {/* Issue #3400 — the git-change comparison connected via the Git window's "Connect to
           Chat" action renders here, alongside the grounding scope control, so its current /
@@ -4929,11 +5201,68 @@ function MemoryActionRejectedCard({
   const t = useTranslate();
   return (
     <article className="chat-memory-action">
-      <div className="chat-memory-action-head">
-        <strong>{t("chat.memory.proposalDeclined")}</strong>
-      </div>
-      <p>{action.reason !== "" ? action.reason : t("chat.memory.noReason")}</p>
+      <p>{t(memoryRefusalSentenceKey(action.reason))}</p>
     </article>
+  );
+}
+
+type MemoryRefusalSentenceKey = Parameters<I18nTranslate>[0];
+
+const MEMORY_REFUSAL_SENTENCE_KEYS: Readonly<Record<string, MemoryRefusalSentenceKey>> = {
+  "ambiguous-forget": "chat.memory.refusal.whichMemory",
+  "ambiguous-update": "chat.memory.refusal.whichMemory",
+  "forget-not-applied": "chat.memory.refusal.forgetFailed",
+  "suppressed-by-forget": "chat.memory.refusal.forgotten",
+  "suppressed-by-rejection": "chat.memory.refusal.forgotten",
+  "credential-shape": "chat.memory.refusal.secret",
+  "private-credential-path": "chat.memory.refusal.secret",
+  "provider-base-url": "chat.memory.refusal.secret",
+  "customer-identifier": "chat.memory.refusal.sensitive",
+  "denied-category": "chat.memory.refusal.sensitive",
+  "restricted-sensitivity": "chat.memory.refusal.sensitive",
+  "sensitive-memory-requires-approval": "chat.memory.refusal.sensitive",
+};
+
+// The closed reason stays in the Activity Log; the person reads one plain sentence.
+function memoryRefusalSentenceKey(reason: string): MemoryRefusalSentenceKey {
+  return MEMORY_REFUSAL_SENTENCE_KEYS[reason] ?? "chat.memory.refusal.notSaved";
+}
+
+function memoryStatementSentenceKey(
+  action: ConversationMemoryActionWire,
+): MemoryRefusalSentenceKey | undefined {
+  if (action.kind === "forget" && action.forgotten === true) {
+    return "chat.memory.forgottenStatement";
+  }
+  if (action.kind === "rejected" && action.explicitStatement === true) {
+    return memoryRefusalSentenceKey(action.reason);
+  }
+  if (action.kind === "candidate" && action.status === "accepted" && action.explicitStatement) {
+    return "chat.memory.rememberedStatement";
+  }
+  return undefined;
+}
+
+// What a clear "Merke dir" or "Vergiss das" did. The person said it in the chat, so the answer is
+// in the chat, not behind the memory disclosure.
+function MemoryStatementResults({
+  actions,
+}: {
+  readonly actions: readonly ConversationMemoryActionWire[];
+}): ReactNode {
+  const t = useTranslate();
+  const keys = [...new Set(actions.map((action) => memoryStatementSentenceKey(action)))].filter(
+    (key) => key !== undefined,
+  );
+  if (keys.length === 0) return null;
+  return (
+    <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>
+      {keys.map((key) => (
+        <p key={key} className="chat-memory-summary">
+          <output>{t(key)}</output>
+        </p>
+      ))}
+    </section>
   );
 }
 
@@ -4959,7 +5288,7 @@ function MemoryActionCard({
       if (busy) return;
       setBusy(true);
       setError(undefined);
-      void actionCallback()
+      actionCallback()
         .then(() => {
           onActionSettled(successMessage);
         })
@@ -4985,6 +5314,13 @@ function MemoryActionCard({
   }
   if (action.kind === "update") {
     return <MemoryActionUpdateCard action={action} />;
+  }
+  if (action.kind === "forget" && action.forgotten === true) {
+    return (
+      <article className="chat-memory-action">
+        <p>{t("chat.memory.forgottenStatement")}</p>
+      </article>
+    );
   }
   if (action.kind === "forget") {
     return (
@@ -5218,7 +5554,7 @@ function MemoryPanelImpl({
   readonly disclosure: MemoryDisclosureState;
 }): ReactNode {
   const t = useTranslate();
-  if (!disclosure.open) return null;
+  if (!disclosure.open) return <MemoryStatementResults actions={latestMemory?.actions ?? []} />;
 
   return (
     <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>
@@ -5241,7 +5577,7 @@ function MemoryPanelImpl({
             >
               <div>
                 <dt>{t("chat.memory.source")}</dt>
-                <dd>{memory.sourceKind}</dd>
+                <dd>{sourceKindLabel(memory.sourceKind, t)}</dd>
               </div>
               <div>
                 <dt>{t("chat.memory.sensitivity")}</dt>
@@ -5821,6 +6157,7 @@ export function ChatWindow({
   };
   const displayedError = presentChatSessionError(error, optionalT);
   const ready =
+    composerModelCatalogReady(session.modelCatalogStatus) &&
     !chatSkillBlocksSend(session.markdownSkill) &&
     session.groundingScopeTransition === undefined &&
     isComposerReadyToSend(draft, sending, loading, noEligibleModels) &&
@@ -6020,7 +6357,7 @@ export function ChatWindow({
           draft={draft}
           focusComposer={() => composerInputRef.current?.focus()}
         />
-        <ChatDraftStatus draft={draft} persistence={session.draftPersistence} />
+        <ChatDraftStatus persistence={session.draftPersistence} />
         <ChatSourceTransitionStatus transition={session.groundingScopeTransition} />
         <ChatWindowComposerFooter
           visible={visible}

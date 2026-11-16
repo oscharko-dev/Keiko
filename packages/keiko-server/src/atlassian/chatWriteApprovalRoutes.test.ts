@@ -18,6 +18,8 @@ import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import { requestJiraChatReadGrant } from "./jiraChatAuthority.js";
 import { requestJiraChatWriteApproval } from "./jiraChatWriteApproval.js";
 import { handleDecideChatWriteApproval } from "./chatWriteApprovalRoutes.js";
+import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
+import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
 
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" };
@@ -196,7 +198,7 @@ afterEach(async () => {
 });
 
 function path(entry = pending): string {
-  return `/api/atlassian-connectors/action-approvals/${entry.approval.approvalId}/chat-write-approval`;
+  return `/api/atlassian-connectors/chat-write-approval/${entry.approval.approvalId}`;
 }
 function decide(
   body: unknown,
@@ -257,6 +259,30 @@ describe("authenticated Chat exact-action write approval routes", () => {
     expect(registry.getChatWriteApproval(pending.approval.approvalId)?.approval.state).toBe(
       "pending",
     );
+  });
+
+  it("never consults the app-session cookie on the generic action-approval routes", async () => {
+    const channel = deps.codingAppSessionChannel;
+    if (channel === undefined) throw new Error("Missing app-session channel");
+    const verify = vi.spyOn(channel, "verifySession");
+    const cookie = { Cookie: `${APP_SESSION_COOKIE_NAME}=forged-fixture-proof` };
+    // Positive control: the production authority resolver does reach the spied channel.
+    resolveAppSessionReadAuthority(deps, { headers: cookie } as unknown as IncomingMessage);
+    expect(verify).toHaveBeenCalledOnce();
+    verify.mockClear();
+    const generic = `${baseUrl}/api/atlassian-connectors/action-approvals`;
+    const id = pending.approval.approvalId;
+    const post = { method: "POST", headers: { ...HEADERS, ...cookie }, body: "{}" };
+    const responses = await Promise.all([
+      fetch(generic, { headers: cookie }),
+      fetch(`${generic}/${id}`, { headers: cookie }),
+      fetch(`${generic}/${id}/approve`, post),
+      fetch(`${generic}/${id}/reject`, post),
+    ]);
+    expect(verify).not.toHaveBeenCalled();
+    // A Chat review is not a generic connector approval: no generic route reads or decides it.
+    expect(responses.slice(1).map((response) => response.status)).not.toContain(200);
+    expect(registry.getChatWriteApproval(id)?.approval.state).toBe("pending");
   });
 
   it.each(["another-owner", ""])(

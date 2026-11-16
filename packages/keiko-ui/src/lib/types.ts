@@ -484,3 +484,5 @@ export type { ExpectedCheck, WorkflowKind } from "@oscharko-dev/keiko-contracts/
 // ─── SSE stream aggregation (UI-internal — see ./sse-types for rationale) ──────────
 export type { HarnessEvent, HarnessEventType, TerminalEventType, SseStatus } from "./sse-types";
 export { ALL_SSE_EVENT_TYPES, TERMINAL_EVENT_TYPES } from "./sse-types";
+
+export type { GatewayModelsResponseWire } from "@oscharko-dev/keiko-contracts/bff-wire";

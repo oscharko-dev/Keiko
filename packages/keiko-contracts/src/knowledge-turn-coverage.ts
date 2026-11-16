@@ -1,0 +1,648 @@
+import type { ChatToolExchange } from "./bff-wire.js";
+import { canonicalise } from "./canonical-json.js";
+import { JIRA_DRAFT_DIGEST_PATTERN, JIRA_DRAFT_ID_PATTERN } from "./jira-tool-execution.js";
+
+export const KNOWLEDGE_REVIEW_FAILURE_STAGES = [
+  "model-output-invalid",
+  "model-port-unavailable",
+  "budget-port-unavailable",
+] as const;
+export type KnowledgeReviewFailureStage = (typeof KNOWLEDGE_REVIEW_FAILURE_STAGES)[number];
+export const KNOWLEDGE_REVIEW_VALIDATION_REASONS = [
+  "finish-reason",
+  "tool-calls",
+  "output-bound",
+  "json-syntax",
+  "review-shape",
+  "complete-type",
+  "findings-type",
+  "findings-bound",
+  "finding-shape",
+  "finding-kind",
+  "anchor-shape",
+  "anchor-range",
+  "proposal-bound",
+  "question-bound",
+  "conflict-anchors",
+  "clarification-question",
+] as const;
+export type KnowledgeReviewValidationReason = (typeof KNOWLEDGE_REVIEW_VALIDATION_REASONS)[number];
+/**
+ * The single declaration of every managed Knowledge tool identity. The server's tool descriptors,
+ * its coverage receipts and the UI presentation all derive from these; none restates them.
+ */
+export const KNOWLEDGE_REQUIREMENTS_TOOL_ID = "keiko.knowledge.requirements";
+export const KNOWLEDGE_REQUIREMENTS_CONTRACT_VERSION = 1;
+export const KNOWLEDGE_DOCUMENTS_TOOL_ID = "keiko.knowledge.documents";
+export const KNOWLEDGE_DOCUMENTS_CONTRACT_VERSION = 1;
+export const KNOWLEDGE_REVIEW_TOOL_ID = "keiko.knowledge.review";
+export const KNOWLEDGE_REVIEW_CONTRACT_VERSION = 2;
+export const KNOWLEDGE_TOOL_IDENTITIES = [
+  {
+    name: "knowledge_requirements",
+    canonicalId: KNOWLEDGE_REQUIREMENTS_TOOL_ID,
+    contractVersion: KNOWLEDGE_REQUIREMENTS_CONTRACT_VERSION,
+  },
+  {
+    name: "knowledge_documents",
+    canonicalId: KNOWLEDGE_DOCUMENTS_TOOL_ID,
+    contractVersion: KNOWLEDGE_DOCUMENTS_CONTRACT_VERSION,
+  },
+  {
+    name: "knowledge_review",
+    canonicalId: KNOWLEDGE_REVIEW_TOOL_ID,
+    contractVersion: KNOWLEDGE_REVIEW_CONTRACT_VERSION,
+  },
+] as const;
+const TOOLS: ReadonlySet<string> = new Set(KNOWLEDGE_TOOL_IDENTITIES.map((t) => t.canonicalId));
+export interface KnowledgeToolRefLike {
+  readonly canonicalId: string;
+  readonly contractVersion: number;
+}
+/** True only for the exact canonical id and contract version the named Knowledge tool carries. */
+export function isCanonicalKnowledgeToolRef(
+  callName: string,
+  ref: KnowledgeToolRefLike | null | undefined,
+): boolean {
+  if (ref === undefined || ref === null) return false;
+  return KNOWLEDGE_TOOL_IDENTITIES.some(
+    (t) =>
+      t.name === callName &&
+      t.canonicalId === ref.canonicalId &&
+      t.contractVersion === ref.contractVersion,
+  );
+}
+/** True only for the current canonical Knowledge review tool reference. */
+export function isCanonicalKnowledgeReviewRef(
+  ref: KnowledgeToolRefLike | null | undefined,
+): boolean {
+  return (
+    ref?.canonicalId === KNOWLEDGE_REVIEW_TOOL_ID &&
+    ref.contractVersion === KNOWLEDGE_REVIEW_CONTRACT_VERSION
+  );
+}
+function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+function count(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+interface Stream {
+  readonly callId: string;
+  readonly cursor: string | undefined;
+  readonly continuous: boolean;
+  /** Position of the exchange that last advanced this chain. */
+  readonly seq: number;
+}
+interface ReviewCoverage {
+  readonly revision: string;
+  readonly textRevision: string;
+  readonly fingerprint: string;
+  readonly documentChars: number;
+  readonly windows: Map<number, number>;
+}
+
+interface Tally {
+  observed: boolean;
+  documents: number;
+  requirements: number;
+  unavailable: number;
+  scopeRefusals: number;
+  failedOperations: number;
+  omittedRequirements: number;
+  readonly reviewTargets: Set<string>;
+  readonly truncatedRequirements: Set<string>;
+  readonly unavailableSources: Set<string>;
+  readonly read: Set<string>;
+  readonly missingCriteria: Set<string>;
+  readonly reviewed: Map<string, ReviewCoverage>;
+  readonly streams: Map<string, Stream>;
+  /** The latest draft batch's coverage of the whole collection; undefined when it covered less. */
+  batchCovered: number | undefined;
+  /** Exchange position of the batch behind `batchCovered`. */
+  batchSeq: number;
+  /** Exchanges observed so far; orders chains against the batch. */
+  seq: number;
+}
+export interface KnowledgeTurnCoverage {
+  readonly documentCount: number;
+  readonly requirementCount: number;
+  readonly readRequirementCount: number;
+  readonly sourceCriteriaMissingCount: number;
+  readonly reviewedDocumentCount: number;
+  readonly unavailableDocumentCount: number;
+  readonly pendingPageCount: number;
+  readonly requestedReviewDocumentCount: number;
+  readonly refusedScopeCount: number;
+  readonly failedOperationCount: number;
+  readonly omittedRequirementCount: number;
+  readonly truncatedRequirementCount: number;
+  /**
+   * Requirements a completed, unfiltered new draft batch of the turn read and drafted, all of the
+   * collection. Keiko covered them itself, so an earlier partial page chain is not pending.
+   */
+  readonly draftBatchCoveredRequirementCount?: number;
+}
+
+/** A cursor is only a position; cumulative coverage requires an observed, continuous page chain. */
+function observeStream(
+  tally: Tally,
+  exchange: ChatToolExchange,
+  data: Readonly<Record<string, unknown>>,
+): void {
+  const cursor = exchange.call.arguments.cursor === "" ? undefined : exchange.call.arguments.cursor;
+  const selection = effectiveSelection(exchange.call.arguments, data);
+  const key = `${exchange.result?.toolRef?.canonicalId ?? ""}|${canonicalise(selection)}`;
+  const previous = tally.streams.get(key);
+  tally.streams.set(key, {
+    callId: exchange.call.id,
+    cursor: typeof data.nextCursor === "string" ? data.nextCursor : undefined,
+    continuous:
+      cursor === undefined || (previous?.continuous === true && previous.cursor === cursor),
+    seq: tally.seq,
+  });
+}
+
+function effectiveSelection(
+  args: Readonly<Record<string, unknown>>,
+  data: Readonly<Record<string, unknown>>,
+): object {
+  return Object.fromEntries(
+    Object.entries({ ...args, view: data.view }).filter(
+      ([key, value]) =>
+        key !== "cursor" &&
+        key !== "limit" &&
+        value !== "" &&
+        (!Array.isArray(value) || value.length > 0),
+    ),
+  );
+}
+
+interface ReviewRange {
+  readonly start: number;
+  readonly end: number;
+  readonly documentChars: number;
+}
+
+function reviewRange(coverage: Readonly<Record<string, unknown>>): ReviewRange | undefined {
+  const { characterStart: start, characterEnd: end, documentChars } = coverage;
+  if (typeof start !== "number" || typeof end !== "number" || typeof documentChars !== "number")
+    return undefined;
+  if (
+    ![start, end, documentChars].every(Number.isSafeInteger) ||
+    start < 0 ||
+    end <= start ||
+    end > documentChars
+  )
+    return undefined;
+  return { start, end, documentChars };
+}
+
+function sameReview(
+  previous: ReviewCoverage | undefined,
+  coverage: Readonly<Record<string, unknown>>,
+  documentChars: number,
+): previous is ReviewCoverage {
+  return (
+    previous !== undefined &&
+    previous.fingerprint === coverage.reviewFingerprint &&
+    previous.revision === coverage.revisionDigest &&
+    previous.textRevision === coverage.textRevision &&
+    previous.documentChars === documentChars
+  );
+}
+
+function observeReview(
+  tally: Tally,
+  coverage: Readonly<Record<string, unknown>> | undefined,
+): void {
+  if (
+    typeof coverage?.documentScope !== "string" ||
+    typeof coverage.revisionDigest !== "string" ||
+    typeof coverage.textRevision !== "string" ||
+    typeof coverage.reviewFingerprint !== "string"
+  )
+    return;
+  const range = reviewRange(coverage);
+  if (range === undefined) return;
+  const previous = tally.reviewed.get(coverage.documentScope);
+  const windows = sameReview(previous, coverage, range.documentChars)
+    ? previous.windows
+    : new Map<number, number>();
+  if (coverage.windowReviewComplete === true) windows.set(range.start, range.end);
+  else windows.delete(range.start);
+  tally.reviewed.set(coverage.documentScope, {
+    revision: coverage.revisionDigest,
+    textRevision: coverage.textRevision,
+    fingerprint: coverage.reviewFingerprint,
+    documentChars: range.documentChars,
+    windows,
+  });
+}
+
+/** Only settled windows in this turn contribute; the model cost cache supplies no coverage. */
+function reviewComplete(review: ReviewCoverage): boolean {
+  let end = 0;
+  for (const [start, next] of [...review.windows].sort((left, right) => left[0] - right[0])) {
+    if (start > end) return false;
+    end = Math.max(end, next);
+  }
+  return end === review.documentChars;
+}
+
+function changedReviewSource(
+  item: Readonly<Record<string, unknown>>,
+  review: { readonly revision: string; readonly textRevision: string },
+): boolean {
+  return (
+    (typeof item.revisionDigest === "string" && item.revisionDigest !== review.revision) ||
+    (typeof item.textRevision === "string" && item.textRevision !== review.textRevision)
+  );
+}
+
+function invalidateChangedReviews(tally: Tally, data: Readonly<Record<string, unknown>>): void {
+  if (!Array.isArray(data.items) || data.view === "units") return;
+  for (const value of data.items) {
+    const item = record(value);
+    if (typeof item?.documentScope !== "string") continue;
+    const review = tally.reviewed.get(item.documentScope);
+    if (review === undefined) continue;
+    if (changedReviewSource(item, review)) tally.reviewed.delete(item.documentScope);
+  }
+}
+
+function missingSourceCriteria(item: Readonly<Record<string, unknown>>): boolean {
+  return (
+    Array.isArray(item.acceptanceCriteria) &&
+    item.acceptanceCriteria.length === 0 &&
+    item.criteriaTruncated !== true
+  );
+}
+function observeItems(tally: Tally, data: Readonly<Record<string, unknown>>): void {
+  if (data.view !== "units" || !Array.isArray(data.items)) return;
+  for (const value of data.items) {
+    const item = record(value);
+    if (typeof item?.reference !== "string") continue;
+    tally.read.add(item.reference);
+    if (item.criteriaTruncated === true || item.statementTruncated === true)
+      tally.truncatedRequirements.add(item.reference);
+    if (missingSourceCriteria(item)) tally.missingCriteria.add(item.reference);
+  }
+}
+function observeReviewTarget(tally: Tally, exchange: ChatToolExchange): void {
+  if (
+    exchange.result?.toolRef?.canonicalId === KNOWLEDGE_REVIEW_TOOL_ID &&
+    typeof exchange.call.arguments.documentScope === "string"
+  )
+    tally.reviewTargets.add(exchange.call.arguments.documentScope);
+}
+const REQUIREMENTS_TOOL = KNOWLEDGE_REQUIREMENTS_TOOL_ID;
+const DRAFT_BATCH_TOOL = "keiko.jira.draft.batch";
+
+/** A completed, unfiltered new batch that drafted every requirement of the collection. */
+function wholeBatchCoverage(exchange: ChatToolExchange): number | undefined {
+  const result = exchange.result;
+  const data = result?.status === "completed" ? record(result.data) : undefined;
+  if (data?.outcome !== "succeeded" || data.paused === true || data.wholeCollection !== true)
+    return undefined;
+  return everyRequirementCovered(data.requirementCount, data.coveredRequirementCount);
+}
+function everyRequirementCovered(selected: unknown, covered: unknown): number | undefined {
+  if (typeof selected !== "number" || typeof covered !== "number" || selected <= 0)
+    return undefined;
+  return covered >= selected ? covered : undefined;
+}
+
+/** A draft batch settles the turn's batch coverage; every other exchange is a Knowledge receipt. */
+function observeExchange(tally: Tally, exchange: ChatToolExchange): void {
+  tally.seq++;
+  if (exchange.result?.toolRef?.canonicalId === DRAFT_BATCH_TOOL) {
+    tally.batchCovered = wholeBatchCoverage(exchange);
+    tally.batchSeq = tally.seq;
+  } else observe(tally, exchange);
+}
+
+/**
+ * A whole-collection batch drafted the requirements an earlier requirement page chain was
+ * reading. Document, search and review continuations, and any read after the batch, stay pending.
+ */
+function settledByBatch(tally: Tally, key: string, stream: Stream): boolean {
+  return (
+    tally.batchCovered !== undefined &&
+    stream.seq < tally.batchSeq &&
+    key.startsWith(`${REQUIREMENTS_TOOL}|`)
+  );
+}
+function pendingPageCount(tally: Tally, incidentalCalls: ReadonlySet<string>): number {
+  return [...tally.streams].filter(
+    ([key, stream]) =>
+      (stream.cursor !== undefined || !stream.continuous) &&
+      !settledByBatch(tally, key, stream) &&
+      !incidentalCalls.has(stream.callId),
+  ).length;
+}
+
+const DRAFT_ID = new RegExp(JIRA_DRAFT_ID_PATTERN, "u");
+const DRAFT_DIGEST = new RegExp(JIRA_DRAFT_DIGEST_PATTERN, "u");
+function namedDraft(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    typeof value.draftId === "string" &&
+    DRAFT_ID.test(value.draftId) &&
+    typeof value.draftDigest === "string" &&
+    DRAFT_DIGEST.test(value.draftDigest)
+  );
+}
+function positiveCount(value: unknown): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+function completedStage(data: Readonly<Record<string, unknown>>): boolean {
+  return (
+    namedDraft(data) &&
+    positiveCount(data.itemCount) &&
+    positiveCount(data.pageCount) &&
+    data.unresolvedRefCount === 0 &&
+    Array.isArray(data.unresolvedRefs) &&
+    data.unresolvedRefs.length === 0
+  );
+}
+function completedDraft(
+  exchange: ChatToolExchange,
+  data: Readonly<Record<string, unknown>>,
+): boolean {
+  const settled = [data.createdCount, data.existingCount, data.excludedCount];
+  return (
+    namedDraft(exchange.call.arguments) &&
+    settled.every(
+      (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0,
+    ) &&
+    settled.some((value) => positiveCount(value)) &&
+    [data.failedCount, data.uncertainCount, data.skippedCount, data.pendingCount].every(
+      (value) => value === 0,
+    )
+  );
+}
+/** A named replay can finish every item without dispatching another Jira write. */
+function completedDraftReplay(
+  exchange: ChatToolExchange,
+  data: Readonly<Record<string, unknown>>,
+): boolean {
+  return (
+    exchange.result?.toolRef?.canonicalId === "keiko.jira.draft" &&
+    exchange.mutationOutcome === "not-dispatched" &&
+    data.outcome === "not-dispatched" &&
+    data.createdCount === 0 &&
+    completedDraft(exchange, data)
+  );
+}
+function successfulCreationData(
+  exchange: ChatToolExchange,
+): Readonly<Record<string, unknown>> | undefined {
+  const result = exchange.result;
+  if (result?.status !== "completed") return undefined;
+  const data = record(result.data);
+  if (data !== undefined && completedDraftReplay(exchange, data)) return data;
+  if (exchange.mutationOutcome !== undefined && exchange.mutationOutcome !== "succeeded")
+    return undefined;
+  return data?.outcome === "succeeded" ? data : undefined;
+}
+function completedIssue(data: Readonly<Record<string, unknown>>): boolean {
+  return (
+    typeof data.issueId === "string" &&
+    data.issueId.length > 0 &&
+    typeof data.issueKey === "string" &&
+    data.issueKey.length > 0
+  );
+}
+function completedCreation(exchange: ChatToolExchange): boolean | undefined {
+  const data = successfulCreationData(exchange);
+  switch (exchange.result?.toolRef?.canonicalId) {
+    case "keiko.jira.create":
+      return data !== undefined && completedIssue(data);
+    case "keiko.jira.draft.stage":
+      return data !== undefined && completedStage(data);
+    case "keiko.jira.draft":
+      return data !== undefined && completedDraft(exchange, data);
+    default:
+      return undefined;
+  }
+}
+function outsideCreationTask(exchange: ChatToolExchange): boolean {
+  const complete = completedCreation(exchange);
+  return (
+    exchange.result?.toolRef?.canonicalId === DRAFT_BATCH_TOOL ||
+    complete === false ||
+    (exchange.mutationOutcome !== undefined && complete !== true)
+  );
+}
+function attestedInventory(exchange: ChatToolExchange, calls: ReadonlySet<string>): boolean {
+  return (
+    calls.has(exchange.call.id) &&
+    exchange.result?.toolRef?.canonicalId === "keiko.knowledge.documents" &&
+    exchange.call.arguments.view === "inventory" &&
+    record(exchange.result.data)?.view === "inventory"
+  );
+}
+
+/** Runtime inventory is supporting metadata, not a model-requested collection task. */
+function incidentalInventoryCalls(
+  exchanges: readonly ChatToolExchange[],
+  callIds: readonly string[] | undefined,
+): ReadonlySet<string> {
+  const calls = new Set(callIds);
+  if (calls.size === 0 || !exchanges.some((exchange) => completedCreation(exchange) === true))
+    return new Set<string>();
+  if (exchanges.some((exchange) => outsideCreationTask(exchange))) return new Set<string>();
+  const requestedCoverage = exchanges.some(
+    (exchange) =>
+      TOOLS.has(exchange.result?.toolRef?.canonicalId ?? "") && !attestedInventory(exchange, calls),
+  );
+  return requestedCoverage ? new Set<string>() : calls;
+}
+
+function observe(tally: Tally, exchange: ChatToolExchange): void {
+  const result = exchange.result;
+  if (result === undefined || !TOOLS.has(result.toolRef?.canonicalId ?? "")) return;
+  tally.observed = true;
+  observeReviewTarget(tally, exchange);
+  const data = record(result.data);
+  if (result.status !== "completed" || data?.outcome !== "succeeded") {
+    tally.failedOperations++;
+    return;
+  }
+  observeUnavailableSources(tally, data);
+  observeCounts(tally, record(data.totals));
+  invalidateChangedReviews(tally, data);
+  if (result.toolRef?.canonicalId === KNOWLEDGE_REVIEW_TOOL_ID)
+    observeReview(tally, record(data.coverage));
+  observeItems(tally, data);
+  observeStream(tally, exchange, data);
+}
+function observeUnavailableSources(tally: Tally, data: Readonly<Record<string, unknown>>): void {
+  const unavailableScopes = record(data.coverage)?.unavailableDocumentScopes;
+  if (Array.isArray(unavailableScopes)) {
+    for (const scope of unavailableScopes)
+      if (typeof scope === "string") tally.unavailableSources.add(scope);
+  }
+  if (!Array.isArray(data.items)) return;
+  for (const value of data.items) {
+    const item = record(value);
+    if (item?.sourceUnavailable === true && typeof item.documentScope === "string")
+      tally.unavailableSources.add(item.documentScope);
+  }
+}
+function unavailableDocuments(totals: Readonly<Record<string, unknown>> | undefined): number {
+  return count(totals?.documentsNotExtracted) + count(totals?.documentsOmitted);
+}
+function observeCounts(tally: Tally, totals: Readonly<Record<string, unknown>> | undefined): void {
+  tally.documents = Math.max(
+    tally.documents,
+    count(totals?.documentCount),
+    count(totals?.documentsScanned) + unavailableDocuments(totals),
+  );
+  tally.requirements = Math.max(tally.requirements, count(totals?.detectedCount));
+  tally.omittedRequirements = Math.max(tally.omittedRequirements, count(totals?.unitsOmitted));
+  tally.scopeRefusals = Math.max(
+    tally.scopeRefusals,
+    Array.isArray(totals?.refusals) ? totals.refusals.length : 0,
+  );
+  tally.unavailable = Math.max(tally.unavailable, unavailableDocuments(totals));
+}
+
+/** Trusted tool identity and structured receipts only; neither answer wording nor document text. */
+export function knowledgeTurnCoverage(
+  exchanges: readonly ChatToolExchange[],
+  context?: { readonly incidentalReadCallIds: readonly string[] },
+): KnowledgeTurnCoverage | undefined {
+  const tally: Tally = {
+    observed: false,
+    documents: 0,
+    requirements: 0,
+    unavailable: 0,
+    scopeRefusals: 0,
+    failedOperations: 0,
+    omittedRequirements: 0,
+    reviewTargets: new Set(),
+    truncatedRequirements: new Set(),
+    unavailableSources: new Set(),
+    read: new Set(),
+    missingCriteria: new Set(),
+    reviewed: new Map(),
+    streams: new Map(),
+    batchCovered: undefined,
+    batchSeq: 0,
+    seq: 0,
+  };
+  for (const exchange of exchanges) observeExchange(tally, exchange);
+  if (!tally.observed) return undefined;
+  const covered = tally.batchCovered;
+  const incidentalCalls = incidentalInventoryCalls(exchanges, context?.incidentalReadCallIds);
+  return {
+    documentCount: tally.documents,
+    requirementCount: tally.requirements,
+    readRequirementCount: tally.read.size,
+    sourceCriteriaMissingCount: tally.missingCriteria.size,
+    reviewedDocumentCount: [...tally.reviewed.values()].filter(reviewComplete).length,
+    unavailableDocumentCount: Math.max(tally.unavailable, tally.unavailableSources.size),
+    requestedReviewDocumentCount: tally.reviewTargets.size,
+    refusedScopeCount: tally.scopeRefusals,
+    failedOperationCount: tally.failedOperations,
+    omittedRequirementCount: tally.omittedRequirements,
+    truncatedRequirementCount: tally.truncatedRequirements.size,
+    pendingPageCount: pendingPageCount(tally, incidentalCalls),
+    ...(covered === undefined ? {} : { draftBatchCoveredRequirementCount: covered }),
+  };
+}
+
+export type KnowledgeCoverageIssue =
+  | {
+      readonly kind:
+        | "pending-reads"
+        | "unavailable-documents"
+        | "refused-scopes"
+        | "failed-operations"
+        | "omitted-requirements"
+        | "truncated-requirements"
+        | "missing-criteria";
+      readonly count: number;
+    }
+  | { readonly kind: "requested-reviews"; readonly completed: number; readonly requested: number };
+
+/** Presentation kinds retain the same observed limits; metadata alone requests no semantic review. */
+export function knowledgeCoverageIssues(
+  coverage: KnowledgeTurnCoverage | undefined,
+): readonly KnowledgeCoverageIssue[] {
+  if (coverage === undefined) return [];
+  const fields = [
+    ["pendingPageCount", "pending-reads"],
+    ["unavailableDocumentCount", "unavailable-documents"],
+    ["refusedScopeCount", "refused-scopes"],
+    ["failedOperationCount", "failed-operations"],
+    ["omittedRequirementCount", "omitted-requirements"],
+    ["truncatedRequirementCount", "truncated-requirements"],
+    ["sourceCriteriaMissingCount", "missing-criteria"],
+  ] as const;
+  const issues: KnowledgeCoverageIssue[] = [];
+  for (const [field, kind] of fields)
+    if (coverage[field] > 0) issues.push({ kind, count: coverage[field] });
+  if (coverage.reviewedDocumentCount < coverage.requestedReviewDocumentCount)
+    issues.push({
+      kind: "requested-reviews",
+      completed: coverage.reviewedDocumentCount,
+      requested: coverage.requestedReviewDocumentCount,
+    });
+  return issues;
+}
+
+function isCanonicalReviewFailure(result: ChatToolExchange["result"]): boolean {
+  return (
+    result !== undefined &&
+    isCanonicalKnowledgeReviewRef(result.toolRef) &&
+    result.status === "failed" &&
+    result.reason === "provider-reported-error"
+  );
+}
+
+/** Only the canonical v2 provider error can attest that its source was read before refusal. */
+function reviewFailureReceipt(
+  exchange: ChatToolExchange,
+  data: Readonly<Record<string, unknown>>,
+): object {
+  if (
+    !isCanonicalReviewFailure(exchange.result) ||
+    data.outcome !== "failed" ||
+    data.sourceAvailable !== true ||
+    data.reason !== data.failureStage
+  )
+    return {};
+  const stage = KNOWLEDGE_REVIEW_FAILURE_STAGES.find(
+    (candidate) => candidate === data.failureStage,
+  );
+  const reason = KNOWLEDGE_REVIEW_VALIDATION_REASONS.find(
+    (candidate) => candidate === data.validationReason,
+  );
+  if (stage === undefined || (data.validationReason !== undefined && reason === undefined))
+    return {};
+  return {
+    failureStage: stage,
+    sourceAvailable: true,
+    ...(reason === undefined ? {} : { validationReason: reason }),
+  };
+}
+
+/** Compaction retains the next page and explicit coverage instead of losing the continuation. */
+export function knowledgeCoverageReceipt(exchange: ChatToolExchange): object | undefined {
+  if (exchange.result === undefined || !TOOLS.has(exchange.result.toolRef?.canonicalId ?? ""))
+    return undefined;
+  const data = record(exchange.result.data);
+  return data === undefined
+    ? undefined
+    : {
+        view: data.view,
+        totals: data.totals,
+        coverage: data.coverage,
+        nextCursor: data.nextCursor,
+        ...reviewFailureReceipt(exchange, data),
+      };
+}

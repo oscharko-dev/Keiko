@@ -139,6 +139,26 @@ static int verify_conditions(const FWPM_FILTER0 *filter, PSID sid, UINT16 family
 static DWORD verify_filter_ids(const struct keiko_gateway_filters *filters, PSID sid,
                                 UINT16 family, UINT16 port) {
   size_t index;
+  FWPM_SUBLAYER0 *sublayer = NULL;
+  HANDLE engine = filters->guard_engine != NULL ? filters->guard_engine : filters->engine;
+  DWORD checked = FwpmSubLayerGetByKey0(engine, &filters->sublayer, &sublayer);
+  if (checked != ERROR_SUCCESS) return checked;
+  int valid_sublayer = 1;
+  if (sublayer == NULL) valid_sublayer = readback_mismatch("missing-sublayer");
+  else if (!same_guid(&sublayer->subLayerKey, &filters->sublayer))
+    valid_sublayer = readback_mismatch("sublayer-key");
+  /* BFE assigns the closest available sublayer weight (Installing a Provider, Microsoft).
+   * The requested weight is a placement hint, not an identity or policy field. Exact filter
+   * weights within this private sublayer still enforce permit-before-deny, and the permit
+   * remains soft so another provider's deny is never overridden. */
+  else if (sublayer->providerKey != NULL) valid_sublayer = readback_mismatch("sublayer-provider");
+  else if (sublayer->flags !=
+             (UINT32)(filters->guard_engine != NULL ? FWPM_SUBLAYER_FLAG_PERSISTENT : 0))
+    valid_sublayer = readback_mismatch("sublayer-flags");
+  if (!valid_sublayer)
+    checked = ERROR_INVALID_DATA;
+  if (sublayer != NULL) FwpmFreeMemory0((void **)&sublayer);
+  if (checked != ERROR_SUCCESS) return checked;
   for (index = 0; index < (filters->engine == NULL ? 2u : 3u); index++) {
     FWPM_FILTER0 *filter = NULL;
     int guard = filters->guard_engine != NULL && index < 2;
@@ -153,6 +173,8 @@ static DWORD verify_filter_ids(const struct keiko_gateway_filters *filters, PSID
     if (filter == NULL) valid = readback_mismatch("missing-filter");
     else if (!same_guid(&filter->subLayerKey, &filters->sublayer)) valid = readback_mismatch("sublayer");
     else if (!same_guid(&filter->layerKey, layer)) valid = readback_mismatch("layer");
+    else if (filter->providerKey != NULL || filter->rawContext != 0)
+      valid = readback_mismatch("provider-context");
     /* BFE may mark a returned filter as indexed. That is a lookup optimization, not a policy
      * change. Reject every other flag, including disabled filters and hard-permit semantics. */
     else if ((filter->flags & ~(UINT32)FWPM_FILTER_FLAG_INDEXED) !=
@@ -257,6 +279,21 @@ DWORD keiko_gateway_filters_open(PSID package_sid, UINT16 family, UINT16 port,
   return result;
 }
 
+DWORD keiko_gateway_filters_close_after_revoke(struct keiko_gateway_filters *filters,
+                                               DWORD revoke_result) {
+  DWORD result = ERROR_SUCCESS;
+  if (filters == NULL) return ERROR_INVALID_PARAMETER;
+  /* The durable deny guard is the only breadcrumb the next broker start uses to find and revoke
+   * this tree's loopback exemption. Deleting it after a failed revoke would orphan the exemption. */
+  if (revoke_result != ERROR_SUCCESS) return revoke_result;
+  for (unsigned attempt = 0; attempt < 100; attempt++) {
+    result = keiko_gateway_filters_close(filters);
+    if (result != ERROR_BUSY) break;
+    Sleep(20);
+  }
+  return result;
+}
+
 static DWORD duplicate_owned_job(HANDLE job, HANDLE *owned) {
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
   if (job == NULL || job == INVALID_HANDLE_VALUE) return ERROR_INVALID_PARAMETER;
@@ -274,6 +311,27 @@ static DWORD duplicate_owned_job(HANDLE job, HANDLE *owned) {
 static DWORD new_key(GUID *key) {
   DWORD result = UuidCreate(key);
   return result == RPC_S_UUID_LOCAL_ONLY ? ERROR_SUCCESS : result;
+}
+
+int keiko_gateway_guard_keys_valid(const struct keiko_gateway_guard_keys *keys) {
+  const GUID zero = {0};
+  return keys != NULL && !same_guid(&keys->sublayer, &zero) &&
+         !same_guid(&keys->deny[0], &zero) && !same_guid(&keys->deny[1], &zero) &&
+         !same_guid(&keys->sublayer, &keys->deny[0]) &&
+         !same_guid(&keys->sublayer, &keys->deny[1]) &&
+         !same_guid(&keys->deny[0], &keys->deny[1]);
+}
+
+DWORD keiko_gateway_guard_prepare(struct keiko_gateway_guard_keys *keys) {
+  struct keiko_gateway_guard_keys prepared = {0};
+  DWORD result;
+  if (keys == NULL) return ERROR_INVALID_PARAMETER;
+  result = new_key(&prepared.sublayer);
+  if (result == ERROR_SUCCESS) result = new_key(&prepared.deny[0]);
+  if (result == ERROR_SUCCESS) result = new_key(&prepared.deny[1]);
+  if (result == ERROR_SUCCESS && !keiko_gateway_guard_keys_valid(&prepared)) result = ERROR_INVALID_DATA;
+  if (result == ERROR_SUCCESS) *keys = prepared;
+  return result;
 }
 
 static DWORD install_guard(struct keiko_gateway_filters *filters, PSID sid) {
@@ -296,19 +354,26 @@ static DWORD install_guard(struct keiko_gateway_filters *filters, PSID sid) {
 
 DWORD keiko_gateway_filters_open_guarded(PSID package_sid, UINT16 family, UINT16 port,
                                         HANDLE job, struct keiko_gateway_filters *filters) {
+  struct keiko_gateway_guard_keys keys = {0};
+  DWORD result = keiko_gateway_guard_prepare(&keys);
+  if (result != ERROR_SUCCESS) return result;
+  return keiko_gateway_filters_open_prepared(package_sid, family, port, job, &keys, filters);
+}
+
+DWORD keiko_gateway_filters_open_prepared(PSID package_sid, UINT16 family, UINT16 port,
+                                         HANDLE job, const struct keiko_gateway_guard_keys *keys,
+                                         struct keiko_gateway_filters *filters) {
   FWPM_SESSION0 session = {0};
   DWORD result;
   if (filters == NULL || filters->engine != NULL || filters->guard_engine != NULL ||
-      filters->job != NULL || !package_sid_valid(package_sid) ||
+      filters->job != NULL || !package_sid_valid(package_sid) || !keiko_gateway_guard_keys_valid(keys) ||
       (family != AF_INET && family != AF_INET6) || port == 0) return ERROR_INVALID_PARAMETER;
   memset(filters, 0, sizeof(*filters));
   result = duplicate_owned_job(job, &filters->job);
   if (result != ERROR_SUCCESS) return result;
-  result = new_key(&filters->sublayer);
-  if (result == ERROR_SUCCESS) result = new_key(&filters->guard_keys[0]);
-  if (result == ERROR_SUCCESS) result = new_key(&filters->guard_keys[1]);
-  if (result == ERROR_SUCCESS)
-    result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, NULL, &filters->guard_engine);
+  filters->sublayer = keys->sublayer;
+  memcpy(filters->guard_keys, keys->deny, sizeof(filters->guard_keys));
+  result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, NULL, &filters->guard_engine);
   if (result == ERROR_SUCCESS) result = install_guard(filters, package_sid);
   if (result == ERROR_SUCCESS) filters->guard_installed = 1;
   if (result == ERROR_SUCCESS) {
@@ -350,5 +415,62 @@ DWORD keiko_gateway_filters_recover_guard(PSID package_sid, HANDLE job, const GU
     CloseHandle(filters->job);
     memset(filters, 0, sizeof(*filters));
   }
+  return result;
+}
+
+static int is_guard_filter(const FWPM_FILTER0 *filter) {
+  const FWPM_FILTER_CONDITION0 *condition = filter->filterCondition;
+  return (filter->flags & FWPM_FILTER_FLAG_PERSISTENT) != 0 &&
+         filter->action.type == FWP_ACTION_BLOCK && filter->displayData.name != NULL &&
+         wcscmp(filter->displayData.name, L"Keiko runtime tree deny outbound") == 0 &&
+         filter->numFilterConditions == 1 && condition != NULL &&
+         condition->matchType == FWP_MATCH_EQUAL &&
+         IsEqualGUID(&condition->fieldKey, &FWPM_CONDITION_ALE_PACKAGE_ID) &&
+         condition->conditionValue.type == FWP_SID &&
+         package_sid_valid(condition->conditionValue.sid);
+}
+
+static DWORD keep_guard_sid(PSID sid, PSID *packages, DWORD *count, DWORD capacity) {
+  DWORD index, size = GetLengthSid(sid);
+  for (index = 0; index < *count; index++) {
+    if (EqualSid(packages[index], sid)) return ERROR_SUCCESS;
+  }
+  if (*count >= capacity) return ERROR_INSUFFICIENT_BUFFER;
+  packages[*count] = HeapAlloc(GetProcessHeap(), 0, size);
+  if (packages[*count] == NULL) return ERROR_OUTOFMEMORY;
+  if (!CopySid(size, packages[*count], sid)) {
+    HeapFree(GetProcessHeap(), 0, packages[*count]);
+    return GetLastError();
+  }
+  *count += 1;
+  return ERROR_SUCCESS;
+}
+
+/* Each guard installs one IPv4 and one IPv6 deny with the same package SID; collecting the IPv4
+ * layer names every tree once. Reading persistent filters needs no recovery record. */
+DWORD keiko_gateway_filters_guarded_packages(PSID *packages, DWORD capacity, DWORD *count) {
+  FWPM_FILTER_ENUM_TEMPLATE0 query = {0};
+  HANDLE engine = NULL, enumeration = NULL;
+  DWORD result;
+  if (packages == NULL || count == NULL) return ERROR_INVALID_PARAMETER;
+  *count = 0;
+  query.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V4;
+  query.actionMask = 0xFFFFFFFF;
+  result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, NULL, &engine);
+  if (result == ERROR_SUCCESS) result = FwpmFilterCreateEnumHandle0(engine, &query, &enumeration);
+  while (result == ERROR_SUCCESS) {
+    FWPM_FILTER0 **entries = NULL;
+    UINT32 found = 0, index;
+    result = FwpmFilterEnum0(engine, enumeration, 64, &entries, &found);
+    for (index = 0; result == ERROR_SUCCESS && index < found; index++) {
+      if (is_guard_filter(entries[index]))
+        result = keep_guard_sid(entries[index]->filterCondition[0].conditionValue.sid, packages,
+                                count, capacity);
+    }
+    if (entries != NULL) FwpmFreeMemory0((void **)&entries);
+    if (found < 64) break;
+  }
+  if (enumeration != NULL) (void)FwpmFilterDestroyEnumHandle0(engine, enumeration);
+  if (engine != NULL) (void)FwpmEngineClose0(engine);
   return result;
 }

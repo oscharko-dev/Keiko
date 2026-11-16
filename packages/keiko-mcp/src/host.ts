@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { recordManagedMcp } from "./activity.js";
+import { mcpRequestTimeouts } from "./request-timeouts.js";
 import { ManagedMcpError, definitionIdentity, toolDefinition, toolsOf } from "./definitions.js";
 
 import { deepFreeze, isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
@@ -34,6 +35,35 @@ const RESERVED_ARGUMENTS = new Set([
   "context",
   "_meta",
 ]);
+
+type SchemaValidator = ReturnType<typeof fromJsonSchema<CatalogJsonObject>>;
+/** Compiled schemas are pure and immutable, so equal schema content shares one compilation. */
+const VALIDATORS_MAX = 1024;
+const validatorsByIdentity = new WeakMap<object, SchemaValidator>();
+const validatorsByContent = new Map<string, SchemaValidator>();
+
+/**
+ * Compiling a JSON Schema is the dominant cost of building a host's SDK server, which the
+ * stateless handler does for every request (initialize, list, each call), and every turn admits
+ * its own host over the same descriptors. Reuse the validator by object identity, then by
+ * canonical content; the content cache is bounded and evicts the oldest entry.
+ */
+function validatorFor(schema: CatalogJsonObject): SchemaValidator {
+  const known = validatorsByIdentity.get(schema);
+  if (known !== undefined) return known;
+  const key = canonicalise(schema);
+  let validator = validatorsByContent.get(key);
+  if (validator === undefined) {
+    validator = fromJsonSchema<CatalogJsonObject>(schema);
+    if (validatorsByContent.size >= VALIDATORS_MAX) {
+      const oldest = validatorsByContent.keys().next();
+      if (oldest.done !== true) validatorsByContent.delete(oldest.value);
+    }
+    validatorsByContent.set(key, validator);
+  }
+  validatorsByIdentity.set(schema, validator);
+  return validator;
+}
 
 function failure(error: unknown, signal?: AbortSignal): ManagedMcpError {
   if (signal?.aborted) return new ManagedMcpError("aborted");
@@ -61,11 +91,23 @@ async function capturedResult<Context extends ManagedMcpInvocationContext>(
     throw new ManagedMcpError("protocol-error");
   // Capture before the asynchronous validator so a provider cannot mutate an admitted result.
   const captured: unknown = JSON.parse(encoded);
-  const validated = await fromJsonSchema<CatalogJsonObject>(tool.descriptor.resultSchema)[
-    "~standard"
-  ].validate(captured);
+  const validated = await validatorFor(tool.descriptor.resultSchema)["~standard"].validate(
+    captured,
+  );
   if (validated.issues !== undefined) throw new ManagedMcpError("protocol-error");
   return validated.value;
+}
+
+function sameProtocolMetadata(
+  left: ManagedMcpToolDeclaration,
+  right: ManagedMcpToolDeclaration,
+): boolean {
+  return (
+    left.title === right.title &&
+    left.annotations?.openWorldHint === right.annotations?.openWorldHint &&
+    left.annotations?.idempotentHint === right.annotations?.idempotentHint &&
+    Object.keys(left.annotations ?? {}).length === Object.keys(right.annotations ?? {}).length
+  );
 }
 
 class ManagedHost<Context extends ManagedMcpInvocationContext> implements ManagedMcpHost<Context> {
@@ -94,20 +136,25 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     private readonly log: ManagedMcpLogPort,
   ) {
     const tools = toolsOf(providers);
+    const frozen = tools.map((tool) => isDeepFrozen(tool.descriptor));
     this.#tools = deepFreeze(
-      tools.map(({ name, risk, descriptor, execute }) => ({
+      tools.map(({ name, risk, descriptor, execute, title, annotations }, index) => ({
         name,
         risk,
-        descriptor: structuredClone(descriptor),
+        // A deeply frozen descriptor cannot change, so it is admitted as itself: a clone would
+        // drop the identity the tool catalog uses to skip verifying it again on every turn.
+        descriptor: frozen[index] === true ? descriptor : structuredClone(descriptor),
         execute,
+        ...(title === undefined ? {} : { title }),
+        ...(annotations === undefined ? {} : { annotations: structuredClone(annotations) }),
       })),
     );
     this.#catalog = deepFreeze(
-      this.#tools.map(({ name, risk, descriptor }) => ({ name, risk, descriptor })),
+      this.#tools.map(({ execute: _execute, ...declaration }) => declaration),
     );
     this.#expected = definitionIdentity(tools.map(toolDefinition));
     this.#declarations = this.declarationIdentity(tools);
-    this.#frozenDescriptors = tools.every((tool) => isDeepFrozen(tool.descriptor))
+    this.#frozenDescriptors = frozen.every(Boolean)
       ? tools.map((tool) => tool.descriptor)
       : undefined;
     this.#registrySha256 = sha256Hex(this.#declarations);
@@ -127,7 +174,13 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
 
   private declarationIdentity(tools: readonly ManagedMcpTool<Context>[]): string {
     return canonicalise(
-      tools.map((tool) => ({ name: tool.name, risk: tool.risk, descriptor: tool.descriptor })),
+      tools.map((tool) => ({
+        name: tool.name,
+        risk: tool.risk,
+        descriptor: tool.descriptor,
+        title: tool.title,
+        annotations: tool.annotations,
+      })),
     );
   }
 
@@ -141,6 +194,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
           tool.descriptor === frozen[index] &&
           tool.name === admitted?.name &&
           tool.risk === admitted.risk &&
+          sameProtocolMetadata(tool, admitted) &&
           tool.execute === admitted.execute
         );
       })
@@ -182,9 +236,10 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
       server.registerTool(
         tool.name,
         {
+          ...(definition.title === undefined ? {} : { title: definition.title }),
           description: tool.descriptor.description,
-          inputSchema: fromJsonSchema<CatalogJsonObject>(tool.descriptor.inputSchema),
-          outputSchema: fromJsonSchema<CatalogJsonObject>(tool.descriptor.resultSchema),
+          inputSchema: validatorFor(tool.descriptor.inputSchema),
+          outputSchema: validatorFor(tool.descriptor.resultSchema),
           annotations: { ...definition.annotations },
         },
         async (args, sdkContext) => {
@@ -360,10 +415,10 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     if (tool === undefined) throw new ManagedMcpError("invalid-arguments");
     const invocation = new AbortController();
     const bound = withSignal(context, this.#lifetime.signal, invocation.signal);
-    const timeout = Math.min(30_000, tool.descriptor.bounds.maxDurationMs);
+    const timeouts = mcpRequestTimeouts(tool.descriptor.bounds.maxDurationMs);
     const timer = setTimeout(() => {
       invocation.abort();
-    }, timeout);
+    }, timeouts.maxTotalTimeout);
     timer.unref();
     try {
       const result = await this.#contexts.run(bound, async () => {
@@ -372,7 +427,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
         return this.#client.callTool(
           { name, arguments: argumentsValue },
           // Pin the admitted definition so SDK HEADER_MISMATCH recovery cannot replay effects.
-          { toolDefinition: deepFreeze(toolDefinition(tool)), signal: bound.signal, timeout },
+          { toolDefinition: deepFreeze(toolDefinition(tool)), signal: bound.signal, ...timeouts },
         );
       });
       if (result.isError)

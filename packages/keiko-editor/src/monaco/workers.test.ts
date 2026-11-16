@@ -58,7 +58,8 @@ describe("MONACO_WORKER_MODULES", () => {
   it("resolves every worker module from the installed monaco-editor package (verified in build)", () => {
     for (const specifier of Object.values(MONACO_WORKER_MODULES)) {
       const resolved = require.resolve(specifier);
-      expect(resolved).toContain("node_modules/monaco-editor/esm/vs/");
+      // `require.resolve` answers a native path; compare with `/` on every host (#4068).
+      expect(resolved.replaceAll("\\", "/")).toContain("node_modules/monaco-editor/esm/vs/");
     }
   });
 });

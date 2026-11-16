@@ -911,6 +911,10 @@ function setupWorkspace(
   git(repository, ["config", "user.email", "functional@keiko.example"]);
   git(repository, ["config", "user.name", "Keiko Functional"]);
   git(repository, ["config", "commit.gpgsign", "false"]);
+  // The scripted model binds its edit to the digest of OLD's exact bytes. A host-wide
+  // `core.autocrlf=true` (the Git for Windows default) would check the managed worktree out with
+  // CRLF, and the runtime would rightly refuse the edit as stale. Worktrees share this config.
+  git(repository, ["config", "core.autocrlf", "false"]);
   mkdirSync(join(repository, "src"));
   writeFileSync(join(repository, "src", "example.ts"), OLD);
   writeFileSync(

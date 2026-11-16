@@ -21,10 +21,17 @@ const BASE_FIELDS = [
   "duedate",
 ];
 
+/** The estimate fields one search reads: the configured one and the alternate beside it. */
+function estimateIds(plan: JiraReportFieldPlan): readonly string[] {
+  return [plan.estimateFieldId, plan.alternateEstimateFieldId].filter(
+    (id): id is string => id !== undefined,
+  );
+}
+
 /** Every field the report reads, except the parent candidates already shown not to hold a key. */
 function fieldIdsOf(plan: JiraReportFieldPlan): readonly string[] {
   const ids = new Set<string>(BASE_FIELDS);
-  ids.add(plan.estimateFieldId);
+  for (const id of estimateIds(plan)) ids.add(id);
   for (const id of plan.parentFieldIds) if (!plan.parentFieldsRejected.has(id)) ids.add(id);
   for (const fields of plan.requiredByType.values()) for (const id of fields) ids.add(id);
   for (const id of plan.checker?.fieldIds ?? []) ids.add(id);
@@ -71,7 +78,12 @@ function mergePages(
   if (issues === undefined) return first;
   for (const body of rest) {
     const other = asArray(body.issues);
-    if (other?.length !== issues.length || body.total !== first.total) return undefined;
+    if (
+      other?.length !== issues.length ||
+      body.total !== first.total ||
+      body.startAt !== first.startAt
+    )
+      return undefined;
     const merged: unknown[] = issues.map((issue, index) => mergeIssue(issue, other[index]));
     if (merged.includes(undefined)) return undefined;
     issues = merged;

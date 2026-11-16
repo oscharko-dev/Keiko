@@ -82,7 +82,11 @@ A `ProgressiveExtractor` yields the document as an ordered sequence of bounded
 next window is requested, so the extraction working set never grows past one
 window plus the policy-bounded accumulators.
 
-- `progressive-pdf` reuses the existing pdfjs loader and per-page text reader.
+- `progressive-pdf` reuses the existing pdfjs loader, per-page text reader and
+  page layout composition, so it produces the same text as the synchronous route.
+  A paragraph running over a page break continues across a window and across a
+  resumed job; the page spans stay exact, because only the separator between two
+  pages changes. A chunk still lies inside one page.
   pdfjs-dist requires the raw byte buffer in memory to open a document — that is
   an upstream limitation, documented in §8 — but **useful work begins after the
   first window** and neither the extracted text, the chunk set, nor the
@@ -97,16 +101,33 @@ window plus the policy-bounded accumulators.
 
 `extraction_checkpoints` persists one row per `(capsule_id, document_id)` with
 the parser phase, page/section/object cursors, extracted-text-bytes window,
-chunk cursor, embedded-chunk cursor, retry count, terminal diagnostics, and a
-compatibility fingerprint (source content hash, parser version, policy
-fingerprint, chunking strategy version, embedding identity).
+chunk cursor, embedded-chunk cursor, retry count, terminal diagnostics, the page
+furniture the windows have learned, and a compatibility fingerprint (source
+content hash, parser version, policy fingerprint, chunking strategy version,
+embedding identity).
+
+A PDF run learns which repeated lines are page furniture across its windows. A
+resumed run restores that set instead of reading it back from the last window, so
+a header that skips a few pages is removed exactly as a continuous run removes it.
+The checkpoint stores at most 256 truncated SHA-256 digests of those lines, never
+the lines themselves. Hashes of short repeated lines are not encryption: they sit
+beside the other hashes of the row and could be matched against a guessed line.
+Schema 34 adds the column, and a store at 34 is refused by an older binary.
 
 Resume reads the checkpoint and continues from the recorded phase only when the
 fingerprint still matches. `checkpointCompatibility()` refuses a stale checkpoint
 with a precise reason (`source-hash`, `parser-version`, `resource-policy`,
-`chunking-strategy`, or `embedding-identity`) and the job restarts cleanly with a
+`chunking-strategy`, `embedding-identity`, or `learned-state` when the stored
+furniture digests cannot be read) and the job restarts cleanly with a
 `CHECKPOINT_INCOMPATIBLE` diagnostic. Cancellation writes the checkpoint before
-unwinding so the cancelled state is durable and resumable.
+unwinding so the cancelled state is durable and resumable. A resumed run replaces
+what the stopped run reported at its end, so "cancelled" does not outlive the run
+that finished the document.
+
+A page that cannot be read leaves `indexing.document.page-read-failed` on the
+Activity Log (`stage` `window` or `resume`, the page number and the closed failure
+kind). At the `resume` stage the document also carries an info diagnostic, because
+a paragraph over the resume point may stay split.
 
 ## 6. Capability-aware fallbacks
 

@@ -556,6 +556,39 @@ describe("local-knowledge preview session handlers", () => {
     expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-authorized"]);
   });
 
+  it("carries the cited passage, as the person reads it, on an authorized open", async () => {
+    const fixture = await seedPreviewFixture();
+    const selection = {
+      chatId: fixture.chatId,
+      assistantMessageId: fixture.assistantMessageId,
+      marker: "[1]",
+      stableId: fixture.previewCitation.stableId,
+    };
+
+    const plain = await handleOpenPdfCitationPreviewSession(
+      ctx("/api/local-knowledge/citation-preview/open", selection),
+      deps(),
+    );
+    const passage = (plain.body as { display: { passage?: unknown } }).display.passage;
+    expect(typeof passage).toBe("string");
+    expect(String(passage).trim().length).toBeGreaterThan(0);
+
+    // The passage goes through the person-facing redactor before it leaves the server.
+    const redacted = await handleOpenPdfCitationPreviewSession(
+      ctx("/api/local-knowledge/citation-preview/open", selection),
+      { ...deps(), redactor: (value: unknown) => (typeof value === "string" ? "[shown]" : value) },
+    );
+    expect((redacted.body as { display: { passage?: unknown } }).display.passage).toBe("[shown]");
+
+    // A redactor that yields no text leaves the open without a passage rather than failing it.
+    const withheld = await handleOpenPdfCitationPreviewSession(
+      ctx("/api/local-knowledge/citation-preview/open", selection),
+      { ...deps(), redactor: () => undefined },
+    );
+    expect(withheld.body).toMatchObject({ outcome: "authorized" });
+    expect((withheld.body as { display: object }).display).not.toHaveProperty("passage");
+  });
+
   it("serves the cited historical blob after the current document hash drifts", async () => {
     const fixture = await seedPreviewFixture();
     writePreviewFixtureBlob(fixture);
@@ -592,6 +625,60 @@ describe("local-knowledge preview session handlers", () => {
     );
     expect(streamed).toBe(STREAMING);
     expect(response.statusCode()).toBe(200);
+    expect(Buffer.from(await response.body()).equals(PDF_BYTES)).toBe(true);
+  });
+
+  it("binds the highlighted passage to the served version: no foreign-version text for an archived blob", async () => {
+    const fixture = await seedPreviewFixture();
+    writePreviewFixtureBlob(fixture);
+    const changedBytes = Buffer.from("%PDF-1.4\nchanged after answer\n%%EOF\n", "utf8");
+    updatePreviewFixtureDocument(fixture, {
+      blobRef: null,
+      contentHash: sha256Hex(changedBytes),
+      sizeBytes: changedBytes.byteLength,
+    });
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    try {
+      const rewritten = knowledgeStore._internal.db
+        .prepare("SELECT normalized_text AS text FROM document_texts WHERE capsule_id = :capsuleId")
+        .get({ capsuleId: String(fixture.previewCitation.lineage.capsuleId) }) as {
+        readonly text: string;
+      };
+      knowledgeStore._internal.db
+        .prepare("UPDATE document_texts SET normalized_text = :text WHERE capsule_id = :capsuleId")
+        .run({
+          text: "NEWER-REVISION ".repeat(Math.ceil(rewritten.text.length / 15) + 1),
+          capsuleId: String(fixture.previewCitation.lineage.capsuleId),
+        });
+    } finally {
+      knowledgeStore.close();
+    }
+    unlinkSync(fixture.pdfPath);
+    const sessionManager = createPdfCitationPreviewSessionManager();
+
+    const opened = await handleOpenPdfCitationPreviewSession(
+      ctx("/api/local-knowledge/citation-preview/open", {
+        chatId: fixture.chatId,
+        assistantMessageId: fixture.assistantMessageId,
+        marker: "[1]",
+        stableId: fixture.previewCitation.stableId,
+      }),
+      deps(sessionManager),
+    );
+
+    expect(opened.body).toMatchObject({ outcome: "authorized" });
+    const display = (opened.body as { readonly display: object }).display;
+    expect(display).not.toHaveProperty("passage");
+    expect(JSON.stringify(opened.body)).not.toContain("NEWER-REVISION");
+    const handle = (opened.body as { readonly session: { readonly handle: string } }).session
+      .handle;
+    const response = captureResponse();
+    await handleGetPdfCitationPreviewDocument(
+      documentContext(handle, emptyRequest(), response.res),
+      deps(sessionManager),
+    );
     expect(Buffer.from(await response.body()).equals(PDF_BYTES)).toBe(true);
   });
 

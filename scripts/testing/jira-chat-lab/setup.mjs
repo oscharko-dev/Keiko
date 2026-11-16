@@ -34,12 +34,12 @@ async function waitForFirstRun(session) {
   throw new TypeError("Laboratory first-run readiness timed out");
 }
 
-async function submitSetup(page, session, action, fields, expectedRedirect) {
+async function submitSetup(page, session, action, fields, expectedRedirect, timeoutMs = 30_000) {
   const csrf = await page.locator("input[name=atl_token]").first().inputValue();
   const response = await page.request.post(`${session.origin}/secure/${action}.jspa`, {
     form: { ...fields, atl_token: csrf },
     maxRedirects: 0,
-    timeout: 30_000,
+    timeout: timeoutMs,
   });
   const location = new URL(response.headers().location ?? "", page.url());
   const expected =
@@ -66,6 +66,8 @@ export async function licenseSetup(page, session, license) {
     "SetupLicense",
     { setupLicenseKey: license, next: "" },
     "SetupAdminAccount!default",
+    // The first license activates plugins and runs their upgrades within normal setup readiness.
+    180_000,
   );
 }
 

@@ -160,11 +160,15 @@ export async function pollUntilDead(
   confirmAfterTimeout = false,
 ): Promise<boolean> {
   const start = performance.now();
-  while (performance.now() - start <= budgetMs) {
+  // One poll per call instead of an await inside a loop: the same order of checks, the same budget.
+  const poll = async (): Promise<boolean> => {
+    if (performance.now() - start > budgetMs)
+      return confirmAfterTimeout ? !isProcessAlive(pid) : false;
     if (!isProcessAlive(pid)) return true;
     await sleep(intervalMs);
-  }
-  return confirmAfterTimeout ? !isProcessAlive(pid) : false;
+    return poll();
+  };
+  return poll();
 }
 
 export async function terminateUiProcess(
@@ -367,6 +371,7 @@ function verifyLiveLaunchId(input: TerminateUiProcessInput, launchId: string): b
   }
   return liveProcessHasLaunchId(input.pid, launchId, {
     platform: input.platform,
+    securityLogSink: input.securityLogSink,
     ...(input.readProcessEnviron === undefined ? {} : { readEnviron: input.readProcessEnviron }),
     ...(input.readProcessCommandLine === undefined
       ? {}

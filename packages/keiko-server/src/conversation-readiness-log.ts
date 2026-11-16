@@ -4,17 +4,18 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { getServerLogger } from "./observability/index.js";
+import type { ToolCallingReadinessReason } from "./conversation-readiness-error.js";
 
 export type ConversationAdmissionDisposition =
   | "allowed-untracked"
   | "allowed-fresh"
-  | "allowed-continuation"
+  | "allowed-cached"
   | "model-changed"
   | "generation-changed"
   | "observation-unavailable"
   | "probe-failed"
   | "timestamp-invalid"
-  | "expired";
+  | "provider-rejected";
 
 const CONVERSATION_ADMISSION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -31,17 +32,23 @@ const CONVERSATION_ADMISSION = defineActivityLogOperation({
       values: [
         "allowed-untracked",
         "allowed-fresh",
-        "allowed-continuation",
+        "allowed-cached",
         "model-changed",
         "generation-changed",
         "observation-unavailable",
         "probe-failed",
         "timestamp-invalid",
-        "expired",
+        "provider-rejected",
       ],
     },
     admittedGeneration: { type: "integer", dataClass: "count", required: false },
     currentGeneration: { type: "integer", dataClass: "count", required: false },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["unsupported", "unverified", "stale", "configuration-changed"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -58,6 +65,7 @@ export function logConversationAdmission(
   correlationId: string | undefined,
   admittedGeneration: number | undefined,
   currentGeneration: number | undefined,
+  reason?: ToolCallingReadinessReason,
 ): void {
   getServerLogger().info(
     activityLogEvent(
@@ -67,6 +75,7 @@ export function logConversationAdmission(
         disposition,
         ...(admittedGeneration === undefined ? {} : { admittedGeneration }),
         ...(currentGeneration === undefined ? {} : { currentGeneration }),
+        ...(reason === undefined ? {} : { reason }),
         completeness: "complete",
         loss: "none",
       },

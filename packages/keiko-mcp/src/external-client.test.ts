@@ -10,6 +10,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 import { connectExternalMcp } from "./external-client.js";
+import { supportsOwnedMcpStdio } from "./owned-stdio.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 const clients: ExternalMcpConnection[] = [];
@@ -316,24 +317,29 @@ const legacyProgram = `
 `;
 
 describe("external MCP compatibility", () => {
-  it("negotiates with a real legacy stdio process and isolates its environment", async () => {
-    const connection = await connectExternalMcp({
-      signal: new AbortController().signal,
-      correlationId: "external-stdio-test",
-      log: { write: () => undefined },
-      transport: {
-        kind: "local",
-        command: [process.execPath, "--input-type=module", "--eval", legacyProgram],
-        cwd: process.cwd(),
-        environment: { SERVICE_SECRET: "synthetic-token" },
-      },
-    });
-    clients.push(connection);
-    expect(connection.tools.map((tool) => tool.name)).toEqual(["probe"]);
-    expect(await connection.call("probe", {}, context())).toMatchObject({
-      content: [{ text: "isolated" }],
-    });
-  });
+  // Windows requires the native lifetime owner (#4068), which this hermetic suite does not supply;
+  // the Windows reference runner exercises it through the MCP harness instead.
+  it.skipIf(!supportsOwnedMcpStdio())(
+    "negotiates with a real legacy stdio process and isolates its environment",
+    async () => {
+      const connection = await connectExternalMcp({
+        signal: new AbortController().signal,
+        correlationId: "external-stdio-test",
+        log: { write: () => undefined },
+        transport: {
+          kind: "local",
+          command: [process.execPath, "--input-type=module", "--eval", legacyProgram],
+          cwd: process.cwd(),
+          environment: { SERVICE_SECRET: "synthetic-token" },
+        },
+      });
+      clients.push(connection);
+      expect(connection.tools.map((tool) => tool.name)).toEqual(["probe"]);
+      expect(await connection.call("probe", {}, context())).toMatchObject({
+        content: [{ text: "isolated" }],
+      });
+    },
+  );
   it("bounds legacy discovery pagination without invoking tools", async () => {
     let pages = 0;
     const connected = connectExternalMcp({

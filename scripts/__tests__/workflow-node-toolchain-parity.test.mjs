@@ -3,10 +3,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 
-import {
-  EXPECTED_NODE_BASELINE,
-  EXPECTED_NODE_COMPATIBILITY_BASELINE,
-} from "../check-runtime-toolchain.mjs";
+import { EXPECTED_NODE_BASELINE } from "../check-runtime-toolchain.mjs";
 
 // Anchor test for `docs/runtime-toolchain.md`'s claim that every GitHub Actions Node setup is
 // followed by the governed toolchain check. That claim was hand-maintained across 26 setup steps in
@@ -26,11 +23,6 @@ const WORKFLOW_DIR = join(repoRoot, ".github", "workflows");
 const ACTION_DIR = join(repoRoot, ".github", "actions");
 const GATE_SCRIPT = "check-runtime-toolchain.mjs";
 const SETUP_NODE = "actions/setup-node@";
-const NODE_26_JOB = ".github/workflows/ci.yml:node-26-compatibility";
-const APPROVED_NODE_BASELINES = new Set([
-  EXPECTED_NODE_BASELINE,
-  EXPECTED_NODE_COMPATIBILITY_BASELINE,
-]);
 
 function collectYaml(directory, accumulator = []) {
   let entries;
@@ -214,6 +206,9 @@ describe("workflow Node toolchain parity", () => {
     // The four-target portable secure-read matrix adds one pinned setup-node definition.
     // The isolated Firefox smoke matrix adds one more governed setup definition. The owner-dispatched
     // coding-runtime package publisher (#3898 AC8, coding-runtime-publish.yml) adds one more.
+    // The owner-dispatched published-install matrix on Windows x64 and Intel macOS (#4068 W3)
+    // adds one more.
+    // The sole Node 26 baseline retires one duplicate compatibility-job setup.
     expect(withSetupNode).toHaveLength(37);
   });
 
@@ -222,22 +217,11 @@ describe("workflow Node toolchain parity", () => {
       for (const index of classify(group.steps).setupNode) {
         const step = group.steps[index];
         expect(
-          APPROVED_NODE_BASELINES.has(String(step.with?.["node-version"])),
+          String(step.with?.["node-version"]) === EXPECTED_NODE_BASELINE,
           `${group.label} step ${index}`,
         ).toBe(true);
       }
     }
-  });
-
-  it("confines the Node 26 compatibility baseline to its dedicated CI job", () => {
-    const node26Groups = withSetupNode.filter((group) =>
-      classify(group.steps).setupNode.some(
-        (index) =>
-          String(group.steps[index]?.with?.["node-version"]) ===
-          EXPECTED_NODE_COMPATIBILITY_BASELINE,
-      ),
-    );
-    expect(node26Groups.map((group) => group.label)).toEqual([NODE_26_JOB]);
   });
 
   it("verifies the governed toolchain after every Node setup and before npm ci", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CODING_SAFE_ACTIVITY_GIT_OUTCOMES,
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
@@ -117,6 +118,28 @@ describe("coding safe-activity contract", () => {
       { ...presentation, exitCode: Number.MAX_SAFE_INTEGER + 1 },
     ]) {
       expect(validateCodingSafeActivityFeed(withPresentation(invalid)).ok).toBe(false);
+    }
+  });
+
+  // Lab T37 (#4271): a refused Git step must not read as a succeeded call, so the card gets how it
+  // really ended as a closed word; nothing outside the vocabulary may reach it.
+  it("admits only the closed Git outcome vocabulary on a tool presentation", () => {
+    expect([...CODING_SAFE_ACTIVITY_GIT_OUTCOMES]).toEqual([
+      "completed",
+      "waiting-for-approval",
+      "verification-failed",
+      "verification-missing",
+      "not-staged",
+      "unsaved-changes",
+      "blocked",
+      "changed",
+      "not-done",
+    ]);
+    for (const gitOutcome of CODING_SAFE_ACTIVITY_GIT_OUTCOMES) {
+      expect(isCodingSafeActivityToolPresentation({ gitOutcome })).toBe(true);
+    }
+    for (const gitOutcome of ["committed", "failed", "", null, 1, ["blocked"], "Blocked"]) {
+      expect(isCodingSafeActivityToolPresentation({ gitOutcome })).toBe(false);
     }
   });
 

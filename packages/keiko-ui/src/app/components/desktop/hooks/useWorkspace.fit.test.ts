@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyContentWheelZoom,
+  applyWheelZoomToWindows,
   fitWorkspaceViewToWindows,
   fitWindowToViewport,
   fitWindowsToViewport,
+  nextContentZoomFromWheel,
   normalizeWheelDelta,
 } from "./useWorkspace";
 import {
@@ -150,6 +153,89 @@ describe("workspace view fitting", () => {
     expect(
       fitWorkspaceViewToWindows([appWindow({ minimized: true })], { width: 1000, height: 800 }),
     ).toEqual({ zoom: 1, x: 0, y: 0 });
+  });
+});
+
+describe("content wheel zoom", () => {
+  it("maps Command/Ctrl wheel deltas to the same clamped content zoom scale", () => {
+    expect(nextContentZoomFromWheel(1, -100)).toBe(1.2);
+    expect(nextContentZoomFromWheel(1, 100)).toBe(0.9);
+    expect(nextContentZoomFromWheel(1.9, -1000)).toBe(2);
+    expect(nextContentZoomFromWheel(0.6, 1000)).toBe(0.5);
+  });
+
+  it("never turns a NaN wheel delta into an invalid content zoom", () => {
+    expect(nextContentZoomFromWheel(1, Number.NaN)).toBe(1);
+  });
+
+  it("updates only window content zoom and preserves frame geometry", () => {
+    const win = appWindow({ x: 123, y: 234, w: 456, h: 345, max: false, zoom: 1 });
+
+    const next = applyContentWheelZoom(win, -100);
+
+    expect(next).toMatchObject({
+      id: win.id,
+      type: win.type,
+      x: win.x,
+      y: win.y,
+      w: win.w,
+      h: win.h,
+      max: win.max,
+      zoom: 1.2,
+    });
+  });
+
+  // Issue #2402 — WindowFrame is memoized per window; a sibling that gets a fresh object identity
+  // on every wheel tick of a neighboring window's content zoom would re-render for no reason.
+  it("replaces only the targeted window's object and preserves every sibling's identity", () => {
+    const target = appWindow({ id: "target", zoom: 1 });
+    const siblingA = appWindow({ id: "sibling-a", zoom: 1 });
+    const siblingB = appWindow({ id: "sibling-b", zoom: 1 });
+    const wins = [siblingA, target, siblingB];
+
+    const next = applyWheelZoomToWindows(wins, "target", [-100]);
+
+    expect(next).not.toBe(wins);
+    expect(next?.find((w) => w.id === "sibling-a")).toBe(siblingA);
+    expect(next?.find((w) => w.id === "sibling-b")).toBe(siblingB);
+    const nextTarget = next?.find((w) => w.id === "target");
+    expect(nextTarget).not.toBe(target);
+    expect(nextTarget?.zoom).toBe(1.2);
+  });
+
+  it("returns the SAME array when the replayed deltas snap back to the same zoom", () => {
+    const wins = [appWindow({ id: "target", zoom: 1 }), appWindow({ id: "sibling", zoom: 1 })];
+
+    expect(applyWheelZoomToWindows(wins, "target", [0])).toBe(wins);
+  });
+
+  it("returns the SAME array when a multi-delta batch ends back at its starting zoom", () => {
+    // From 1.9, exp(0.45) overshoots the 2.0 cap and pins there, then exp(-0.06) eases to ~1.8835,
+    // which the 0.1 snap rounds back to 1.9. The expected value is stated rather than recomputed
+    // with the production helper, which would make the assertion its own oracle.
+    const wins = [appWindow({ id: "target", zoom: 1.9 }), appWindow({ id: "sibling", zoom: 1 })];
+
+    const next = applyWheelZoomToWindows(wins, "target", [-300, 40]);
+
+    expect(next).toBe(wins);
+    expect(next?.find((win) => win.id === "target")?.zoom).toBe(1.9);
+  });
+
+  it("accumulates fine pinch deltas before rounding and matches a coarse gesture", () => {
+    const wins = [appWindow({ id: "target", zoom: 1 })];
+    const fine = applyWheelZoomToWindows(wins, "target", Array<number>(120).fill(-2));
+    const coarse = applyWheelZoomToWindows(wins, "target", [-240]);
+    expect(fine?.[0]?.zoom).toBe(1.4);
+    expect(fine?.[0]?.zoom).toBe(coarse?.[0]?.zoom);
+  });
+
+  it("returns the input unchanged for a missing window, an empty list and no list", () => {
+    const wins = [appWindow({ id: "only" })];
+    const empty: ReturnType<typeof appWindow>[] = [];
+
+    expect(applyWheelZoomToWindows(wins, "missing", [-100])).toBe(wins);
+    expect(applyWheelZoomToWindows(empty, "any", [-100])).toBe(empty);
+    expect(applyWheelZoomToWindows(null, "any", [-100])).toBeNull();
   });
 });
 

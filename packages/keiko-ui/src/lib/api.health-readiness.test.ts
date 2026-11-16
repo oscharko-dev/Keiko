@@ -4,6 +4,82 @@ import { CORRELATION_HEADER, responseCorrelationIdOf } from "./bff-correlation";
 
 afterEach(() => vi.unstubAllGlobals());
 describe("health diagnostics validation", () => {
+  it.each([
+    { readiness: "ready", reason: "none" },
+    { readiness: "withheld", reason: "vault-unreadable" },
+    { readiness: "withheld", reason: "vault-migration-failed" },
+  ])(
+    "retains only closed Memory readiness and keeps the observed response correlation %#",
+    async (memory) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              status: "ok",
+              version: "1.2.3",
+              memory,
+            }),
+            { headers: { [CORRELATION_HEADER]: "memory-readiness-response" } },
+          ),
+        ),
+      );
+      const health = await fetchHealth();
+      expect(health.memory).toEqual(memory);
+      expect(responseCorrelationIdOf(health)).toBe("memory-readiness-response");
+    },
+  );
+  it.each([
+    { readiness: "withheld", reason: "raw database details" },
+    { readiness: "ready", reason: "vault-migration-failed" },
+    { readiness: "withheld", reason: "vault-migration-failed", sql: "SELECT private" },
+  ])(
+    "withholds an invalid optional Memory projection without reflecting its content %#",
+    async (memory) => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ status: "ok", version: "1.2.3", memory })),
+          ),
+      );
+      expect(await fetchHealth()).toEqual({ status: "ok", version: "1.2.3" });
+    },
+  );
+  // #4358: credential custody is kept only as one of its closed states.
+  it.each(["attested", "protected", "exposed", "unattested"] as const)(
+    "retains the closed credential custody state %s",
+    async (credentialCustody) => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ status: "ok", version: "1.2.3", credentialCustody })),
+          ),
+      );
+      expect(await fetchHealth()).toEqual({ status: "ok", version: "1.2.3", credentialCustody });
+    },
+  );
+  it.each(["ATTESTED", "ok", "C:\\Users\\someone\\.keiko", true, 1, { state: "attested" }, null])(
+    "drops a credential custody value outside the closed states and marks it, without its content %#",
+    async (credentialCustody) => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ status: "ok", version: "1.2.3", credentialCustody })),
+          ),
+      );
+      expect(await fetchHealth()).toEqual({
+        status: "ok",
+        version: "1.2.3",
+        credentialCustodyInvalid: true,
+      });
+    },
+  );
   it("sends the caller's health observation correlation on the actual request", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

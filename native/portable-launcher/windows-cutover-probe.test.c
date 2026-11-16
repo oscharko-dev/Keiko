@@ -56,6 +56,8 @@ typedef struct {
   int success;
   int allowing_handle;
   int denying_handle;
+  int image_locked;
+  int image_recovered;
   int invalid_candidate;
   int pre_termination;
   int post_termination;
@@ -410,6 +412,93 @@ static int case_invalid_candidate(const keiko_paths *paths, keiko_results *resul
   return results->invalid_candidate;
 }
 
+/* Compare the complete copied executable, with a finite fixture budget, without printing bytes. */
+static int same_image_bytes(const wchar_t *left_path, const wchar_t *right_path) {
+  HANDLE left = open_regular(left_path, GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+  HANDLE right = open_regular(right_path, GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+  keiko_file_fact left_fact = {0};
+  keiko_file_fact right_fact = {0};
+  unsigned char left_bytes[4096];
+  unsigned char right_bytes[4096];
+  LONGLONG remaining = 0;
+  int ok = left != INVALID_HANDLE_VALUE && right != INVALID_HANDLE_VALUE &&
+           query_fact(left, &left_fact) && query_fact(right, &right_fact) &&
+           left_fact.size.QuadPart > 0 && left_fact.size.QuadPart <= 16 * 1024 * 1024 &&
+           left_fact.size.QuadPart == right_fact.size.QuadPart;
+  if (ok) remaining = left_fact.size.QuadPart;
+  while (ok && remaining > 0) {
+    DWORD count = remaining < (LONGLONG)sizeof(left_bytes) ? (DWORD)remaining : (DWORD)sizeof(left_bytes);
+    DWORD left_read = 0;
+    DWORD right_read = 0;
+    ok = ReadFile(left, left_bytes, count, &left_read, NULL) && left_read == count &&
+         ReadFile(right, right_bytes, count, &right_read, NULL) && right_read == count &&
+         memcmp(left_bytes, right_bytes, count) == 0;
+    remaining -= count;
+  }
+  close_if_valid(right);
+  close_if_valid(left);
+  return ok;
+}
+
+/* A real SEC_IMAGE view, not a mocked sharing violation, pins the pending executable. */
+static int case_image_lock(const keiko_paths *paths, keiko_results *results) {
+  wchar_t *self = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, KEIKO_PATH_CAP * sizeof(wchar_t));
+  HANDLE file = INVALID_HANDLE_VALUE;
+  HANDLE mapping = NULL;
+  HANDLE writer = INVALID_HANDLE_VALUE;
+  void *view = NULL;
+  keiko_file_fact candidate = {0};
+  keiko_file_fact old_active = {0};
+  keiko_file_fact observed = {0};
+  DWORD length = self == NULL ? 0 : GetModuleFileNameW(NULL, self, KEIKO_PATH_CAP);
+  int ok = length > 0 && length < KEIKO_PATH_CAP &&
+           reset_pair(paths, KEIKO_OLD_BYTES, sizeof(KEIKO_OLD_BYTES) - 1,
+                      KEIKO_NEW_BYTES, sizeof(KEIKO_NEW_BYTES) - 1, results) &&
+           remove_owned_path(paths->pending) && CopyFileW(self, paths->pending, TRUE) &&
+           same_image_bytes(self, paths->pending) &&
+           snapshot_path(paths->active, KEIKO_OLD_BYTES, sizeof(KEIKO_OLD_BYTES) - 1,
+                         &old_active, results);
+  if (ok) {
+    file = open_regular(paths->pending, GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    ok = file != INVALID_HANDLE_VALUE && query_fact(file, &candidate);
+  }
+  if (ok) {
+    mapping = CreateFileMappingW(file, NULL, PAGE_READONLY | SEC_IMAGE, 0, 0, NULL);
+    if (mapping != NULL) view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    ok = view != NULL;
+  }
+  if (ok) {
+    writer = open_regular(paths->pending, GENERIC_WRITE,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    ok = writer == INVALID_HANDLE_VALUE && !rename_pending(paths) &&
+         same_image_bytes(self, paths->pending) && query_fact(file, &observed) &&
+         equal_id(&candidate.id, &observed.id) &&
+         snapshot_path(paths->active, KEIKO_OLD_BYTES, sizeof(KEIKO_OLD_BYTES) - 1,
+                       &observed, results) && equal_id(&old_active.id, &observed.id);
+  }
+  results->image_locked = ok;
+  close_if_valid(writer);
+  if (view != NULL && !UnmapViewOfFile(view)) ok = 0;
+  close_if_valid(mapping);
+  close_if_valid(file);
+  file = INVALID_HANDLE_VALUE;
+  if (ok) {
+    ok = rename_pending(paths) && same_image_bytes(self, paths->active) &&
+         GetFileAttributesW(paths->pending) == INVALID_FILE_ATTRIBUTES;
+    file = open_regular(paths->active, GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    ok = ok && file != INVALID_HANDLE_VALUE && query_fact(file, &observed) &&
+         equal_id(&candidate.id, &observed.id) && !equal_id(&old_active.id, &observed.id);
+  }
+  results->image_recovered = ok;
+  close_if_valid(file);
+  if (self != NULL) (void)HeapFree(GetProcessHeap(), 0, self);
+  return results->image_locked && results->image_recovered;
+}
+
 static int wait_for_ready(const keiko_paths *paths) {
   DWORD elapsed = 0;
   while (elapsed < KEIKO_WAIT_MS) {
@@ -646,10 +735,11 @@ static void print_result(const keiko_results *results) {
   const char *status = results->success ? "PASS" : "FAIL";
   printf(
     "windows-cutover-probe: %s success=%d allowing=%d denying=%d invalid=%d pre=%d post=%d "
-    "contention=%d flush-before=%ld/%ld flush-after=%ld/%ld\n",
+    "contention=%d image-locked=%d image-recovered=%d flush-before=%ld/%ld flush-after=%ld/%ld\n",
     status, results->success, results->allowing_handle, results->denying_handle,
     results->invalid_candidate, results->pre_termination, results->post_termination,
-    results->contention, results->flush_before_successes, results->flush_before_attempts,
+    results->contention, results->image_locked, results->image_recovered,
+    results->flush_before_successes, results->flush_before_attempts,
     results->flush_after_successes, results->flush_after_attempts
   );
 }
@@ -669,6 +759,7 @@ int wmain(int argc, wchar_t **argv) {
     results.success = case_success(paths, &results);
     results.success = results.success && case_held_handles(paths, &results);
     results.success = results.success && case_invalid_candidate(paths, &results);
+    results.success = results.success && case_image_lock(paths, &results);
     results.success = results.success && case_termination(paths, &results);
     results.success = results.success && case_contention(paths, &results);
     results.success = results.success &&

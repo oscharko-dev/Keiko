@@ -105,11 +105,20 @@ function admittedDirectoryFs(
   return bound;
 }
 
+// A glob matches the root-relative path. With a selected directory it also matches the path
+// relative to that directory, as a model naming `directory: "src"` writes `query: "*.js"`; only
+// root-relative matching found nothing there and the coding agent reported existing files as
+// missing (#4068). Discovery walks only the selected directory, so no path outside it can match.
+function globMatcher(request: WorkspacePathDiscoveryRequest): (path: string) => boolean {
+  const glob = compileGlob(request.query);
+  if (request.directory === "") return (path) => glob.test(path);
+  const prefix = `${request.directory}/`;
+  return (path) =>
+    glob.test(path) || (path.startsWith(prefix) && glob.test(path.slice(prefix.length)));
+}
+
 function pathMatcher(request: WorkspacePathDiscoveryRequest): (path: string) => boolean {
-  if (request.mode === "glob") {
-    const glob = compileGlob(request.query);
-    return (path) => glob.test(path);
-  }
+  if (request.mode === "glob") return globMatcher(request);
   if (request.query === "*") return () => true;
   const terms = request.query
     .toLowerCase()

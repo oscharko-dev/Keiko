@@ -17,6 +17,10 @@ const FIXTURE_EXECUTABLE = "#!/bin/sh\nexit 0\n";
 const FIXTURE_LICENSE = "fixture license evidence\n";
 const FIXTURE_SBOM = '{"bomFormat":"CycloneDX"}\n';
 const FIXTURE_HELPER = "#!/bin/sh\nexit 0\n";
+// The fixture runtime supervisor answers its broker status read with no known broker state on every
+// host: Windows cannot spawn this text as an image (no exit status), and a POSIX host runs it through
+// `/bin/sh` and gets 97, which no broker state uses. With `exit 0` a Linux host read it as "ready".
+const FIXTURE_SUPERVISOR = "#!/bin/sh\nexit 97\n";
 const FIXTURE_HELPER_SOURCE = "/* fixture secure_workspace_read source */\n";
 const FIXTURE_COMMIT = "a".repeat(40);
 
@@ -107,7 +111,7 @@ function stageHelperFixture(
   chmodSync(helper, 0o755);
   const supervisor = join(stagedTargetRoot, `${DEV_LANE_RUNTIME_SUPERVISOR_RELATIVE_PATH}.exe`);
   if (target === "windows-x64") {
-    writeFile(supervisor, FIXTURE_HELPER);
+    writeFile(supervisor, FIXTURE_SUPERVISOR);
     chmodSync(supervisor, 0o755);
   }
   return helper;
@@ -165,8 +169,8 @@ function fixtureHelperManifest(target: DevLaneOpenCodeTarget): Record<string, un
   return {
     ...manifest,
     runtimeSupervisor: {
-      sha256: sha256Text(FIXTURE_HELPER),
-      sizeBytes: FIXTURE_HELPER.length,
+      sha256: sha256Text(FIXTURE_SUPERVISOR),
+      sizeBytes: FIXTURE_SUPERVISOR.length,
       sourceCommit: FIXTURE_COMMIT,
       sourceTreeSha256: sha256Text(
         `keiko_runtime_supervisor.c\0${sha256Text(FIXTURE_HELPER_SOURCE)}\0`,

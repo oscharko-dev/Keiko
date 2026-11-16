@@ -10,6 +10,7 @@ import {
   statSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -108,6 +109,7 @@ afterEach(() => {
   db.close();
   rmSync(`${root}-hook-marker`, { force: true });
   rmSync(root, { recursive: true, force: true });
+  rmSync(`${root}-old-git`, { recursive: true, force: true });
 });
 
 describe("local checkout selection", () => {
@@ -334,6 +336,41 @@ describe("local checkout selection", () => {
     expect(service.getActive()?.instance.taskBranch).toBe("feature");
   });
 
+  it("refuses to reselect a persisted Local ID once the checkout's Git directory was replaced (#4271)", () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = fixture(activityLog);
+    const selected = service.selectLocal({ root, branch: "feature", requestedBy: "test" });
+    service.clearActive();
+    // A re-clone under the same registered path: the old Git directory moves aside (its inode stays
+    // allocated) and a new repository with the same branch names takes its place.
+    renameSync(join(root, ".git"), `${root}-old-git`);
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "test@example.invalid");
+    git("config", "user.name", "Keiko Test");
+    git("config", "commit.gpgsign", "false");
+    git("add", "README.md");
+    git("commit", "-qm", "replacement");
+    git("branch", "feature");
+    expect(service.selectable?.(selected.instance.workspaceId)).toBe(true);
+
+    expect(() =>
+      service.setActive({
+        workspaceId: selected.instance.workspaceId,
+        requestedBy: "history",
+        acquireLock: false,
+        correlationId: "corr-stale-local",
+      }),
+    ).toThrow(expect.objectContaining({ code: "WORKSPACE_NOT_FOUND" }));
+    expect(git("branch", "--show-current")).toBe("main");
+    expect(service.getActive()).toBeUndefined();
+    expect(activityLog.events.at(-1)).toMatchObject({
+      op: "task-workspace.lifecycle",
+      correlationId: "corr-stale-local",
+      errorKind: "unavailable",
+      extra: { operation: "activate" },
+    });
+  });
+
   it("verifies a registered linked checkout against its owning repository", () => {
     const linkedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-linked-checkout-")));
     try {
@@ -368,6 +405,63 @@ describe("local checkout selection", () => {
       git("worktree", "remove", "--force", linkedRoot);
       rmSync(linkedRoot, { recursive: true, force: true });
     }
+  });
+
+  // #4068 W7: the active pointer names the path the human selected. Once Git moves the linked
+  // checkout, that path must refuse instead of following Git's metadata to the new location; the
+  // new location binds only when the human registers and selects it, under a new identity.
+  describe("a moved linked checkout", () => {
+    let scratch: string;
+    let linkedRoot: string;
+
+    beforeEach(() => {
+      scratch = realpathSync(mkdtempSync(join(tmpdir(), "keiko-linked-move-")));
+      linkedRoot = join(scratch, "linked wt ä");
+      git("worktree", "add", "-q", "-b", "linked", linkedRoot);
+    });
+
+    afterEach(() => {
+      git("worktree", "prune");
+      rmSync(scratch, { recursive: true, force: true });
+    });
+
+    function selectAt(path: string): ReturnType<ReturnType<typeof fixture>["selectLocal"]> {
+      return fixture(undefined, path).selectLocal({
+        root: path,
+        branch: "linked",
+        requestedBy: "test",
+      });
+    }
+
+    it("refuses the selected path after `git worktree move` and binds the new path anew", () => {
+      const service = fixture(undefined, linkedRoot);
+      const selected = service.selectLocal({
+        root: linkedRoot,
+        branch: "linked",
+        requestedBy: "t",
+      });
+      const moved = join(scratch, "moved wt ö");
+
+      git("worktree", "move", linkedRoot, moved);
+
+      expect(service.getActive()).toBeUndefined();
+      const rebound = selectAt(moved);
+      expect(rebound.binding.activeRoot).toBe(moved);
+      expect(rebound.instance.workspaceId).not.toBe(selected.instance.workspaceId);
+    });
+
+    it("refuses the selected path after a folder rename, before and after `git worktree repair`", () => {
+      const service = fixture(undefined, linkedRoot);
+      service.selectLocal({ root: linkedRoot, branch: "linked", requestedBy: "t" });
+      const renamed = join(scratch, "renamed wt ü");
+
+      renameSync(linkedRoot, renamed);
+      expect(service.getActive()).toBeUndefined();
+
+      git("worktree", "repair", renamed);
+      expect(service.getActive()).toBeUndefined();
+      expect(selectAt(renamed).binding.activeRoot).toBe(renamed);
+    });
   });
 
   it("rejects unknown branches without changing HEAD or the active pointer", () => {

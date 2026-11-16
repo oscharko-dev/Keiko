@@ -16,3 +16,19 @@
   flex: 0 0 auto;
   flex-wrap: nowrap;
 }
+
+/* The header sits at the top edge, so the shared tooltip, which opens above its control, rendered
+   outside the viewport and was never seen. Header tooltips open below. The rightmost one aligns to
+   its control's right edge: centred, its hidden box overflowed the window, and focusing a dialog
+   then scrolled the whole workspace sideways (#4271). */
+.cmpWindowTools .cmpHeaderTip[data-tip]::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
+.cmpWindowTools .cmpHeaderTip[data-tip]:last-child::after {
+  left: auto;
+  right: 0;
+  transform: none;
+  text-align: right;
+}

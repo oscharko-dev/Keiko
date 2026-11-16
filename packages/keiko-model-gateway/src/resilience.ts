@@ -95,8 +95,35 @@ export function codingWorkbenchProviderTimeoutMs(timeoutMs: number): number {
 // the route deadline armed behind a streamed call (`gateway-route-deadline.ts` in keiko-server): a
 // route that backed a streamed call with the BUFFERED budget cut a healthy stream at ten minutes
 // while the gateway itself was still reading it (PR #3602 review).
-export function streamRequestBudgetMs(provider: { readonly timeoutMs: number }): number {
-  return Math.max(provider.timeoutMs, GATEWAY_SILENCE_FLOOR_MS, GATEWAY_STREAM_BUDGET_FLOOR_MS);
+export function streamRequestBudgetMs(
+  provider: { readonly timeoutMs: number },
+  maxOutputTokens?: number,
+): number {
+  const base = Math.max(
+    provider.timeoutMs,
+    GATEWAY_SILENCE_FLOOR_MS,
+    GATEWAY_STREAM_BUDGET_FLOOR_MS,
+  );
+  return Math.min(Math.max(base, streamOutputAllowanceMs(maxOutputTokens)), MAX_TIMER_DELAY_MS);
+}
+
+// The slowest generation rate (tokens per second) a LIVE stream is still granted its whole output
+// allowance at. A healthy but slow local model (8 tok/s, 32k tokens = 68 minutes) was cut at the
+// fixed 30-minute floor and generated again from scratch behind the abandoned read. The silence
+// bound (`GATEWAY_SILENCE_FLOOR_MS`) still ends a stream that stops producing, so a larger budget
+// only ever applies to a stream that keeps delivering data events.
+export const GATEWAY_MIN_STREAM_TOKENS_PER_SECOND = 4;
+
+// How long a stream that is allowed `maxOutputTokens` may run at the slowest granted rate, after
+// the wait for its first byte. Zero when the call states no allowance.
+export function streamOutputAllowanceMs(maxOutputTokens: number | undefined): number {
+  if (maxOutputTokens === undefined || !Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
+    return 0;
+  }
+  return (
+    GATEWAY_SILENCE_FLOOR_MS +
+    Math.ceil((maxOutputTokens / GATEWAY_MIN_STREAM_TOKENS_PER_SECOND) * 1000)
+  );
 }
 
 /**
@@ -217,7 +244,13 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["retryable-error", "output-exhausted-repair", "empty-answer-repair"],
+      values: [
+        "retryable-error",
+        "output-exhausted-repair",
+        "empty-answer-repair",
+        "reasoning-restore-repair",
+        "reasoning-withhold-repair",
+      ],
     },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },
@@ -406,7 +439,15 @@ export interface RetryConfig {
  * its output budget (#3873, F17) and one that ended after reasoning without a tool call or any text
  * (#3873, F23). The reason names the correction the caller sends and is what the scheduled line says.
  */
-export type RetryRepairReason = "output-exhausted-repair" | "empty-answer-repair";
+export type RetryRepairReason =
+  | "output-exhausted-repair"
+  | "empty-answer-repair"
+  // #4351: a provider rejected the next tool round for want of the previous assistant reasoning; the
+  // one retry restores the current turn's reasoning and sends no correction.
+  | "reasoning-restore-repair"
+  // #4351: a deployment learned to want its reasoning back rejected a continuation that carried it;
+  // the one retry sends the same request without it, and its success unlearns the deployment.
+  | "reasoning-withhold-repair";
 
 /**
  * An attempt that already ran outside the loop and failed (#3873, F17, option iii): the loop
@@ -429,6 +470,12 @@ export interface RetryResume {
 // The reason a further attempt was scheduled, on the scheduled line.
 type RetryScheduledReason = "retryable-error" | RetryRepairReason;
 
+/** The repairs that send a correction to the model (the reasoning repairs of #4351 send none). */
+export type SteeredAnswerRepairReason = Exclude<
+  RetryRepairReason,
+  "reasoning-restore-repair" | "reasoning-withhold-repair"
+>;
+
 // The gateway's own repair of an answer the model could not use: one that exhausted its output
 // budget (#3873, F17), and one that ended after reasoning without a tool call or any text (F23) —
 // an empty answer that carried no reasoning is the model's final word and gets none (#3610).
@@ -436,7 +483,7 @@ type RetryScheduledReason = "retryable-error" | RetryRepairReason;
 // attempt, once, and only on a call whose retry configuration carries it (`RetryConfig.repair`).
 // The single classification every path consults: the buffered attempt, the streamed startup, and
 // the stream resumed after forwarded reasoning.
-export function steeredAnswerRepair(error: Error): RetryRepairReason | undefined {
+export function steeredAnswerRepair(error: Error): SteeredAnswerRepairReason | undefined {
   if (error instanceof ProviderOutputExhaustedError) return "output-exhausted-repair";
   return error instanceof ProviderEmptyAnswerError && error.afterReasoning
     ? "empty-answer-repair"
@@ -1250,8 +1297,9 @@ export function bufferedCallBudgetMs(provider: ProviderRetryPolicy, windowMs: nu
 export function streamedCallBudgetMs(
   provider: { readonly timeoutMs: number },
   windowMs: number,
+  maxOutputTokens?: number,
 ): number {
-  const budgetMs = streamRequestBudgetMs(provider);
+  const budgetMs = streamRequestBudgetMs(provider, maxOutputTokens);
   return outageCallBudgetMs(budgetMs, windowMs, budgetMs);
 }
 

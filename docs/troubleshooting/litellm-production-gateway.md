@@ -12,6 +12,42 @@ against a LiteLLM-only configuration. Buffered dictation and read-aloud remain a
 
 ---
 
+## DeepSeek thinking with tool continuations (#4059)
+
+A tool-enabled thinking route may require the exact prior assistant `reasoning_content`, including
+ordinary assistant answers before a later user turn. Configure the existing provider entry with
+`"reasoningContinuation": "required-with-tools"` only when the deployed endpoint implements that
+contract. Model display aliases do not select it. Setup preserves the explicit policy across
+rediscovery; changing it invalidates the old tool-calling proof. Keep LiteLLM's
+`merge_reasoning_content_in_choices` disabled and do not strip `reasoning_content` or replace it with
+a blank placeholder. See the [DeepSeek thinking contract](https://api-docs.deepseek.com/guides/thinking_mode/).
+
+Rerun readiness after selecting this policy. Its bounded probe now requires two tool/result rounds,
+a final assistant answer and another tool-enabled user turn. A single accepted tool call is no proof
+of continuation support. Every attempt uses existing spend, timeout, cancellation and input budgets;
+missing, conflicting, secret-bearing, oversized or rejected continuation remains unverified.
+
+`codingReasoningDisplay: "off"` hides the live timeline while the native session retains its required
+private transport state. Complete native assistant records survive an eligible session resume;
+aborted, unfinished and foreign-model rounds are excluded with their orphaned tool results.
+A live run refuses changed model routes, and retained sessions with a changed route start fresh
+(`coding-runtime.session-continuity`, `reason: model-route-changed`). A streamed physical attempt
+that has published required reasoning ends as failed if it cannot complete; it never combines that
+state with a repair's reasoning. Retry before publishing any state retains the normal policy.
+
+Read `coding-sidecar.gateway.request-validated` counts `reasoningContinuationMessages` and
+`reasoningContinuationBytes`, then the existing outcome/readiness operations. Invalid incoming state
+uses `reasoning-continuation-invalid`; unusable response state is a rejected turn. No reasoning text,
+provider endpoint or credential belongs in an Activity Log/support report.
+
+Qualification on 2026-11-05 uses strict synthetic buffered/SSE endpoints and the pinned native
+OpenCode 2.1.4 binary under macOS Seatbelt, including multi-tool, cancellation, length, compaction
+and a new-process retained-session resume. It does not certify a live native DeepSeek deployment,
+a customer LiteLLM route, a particular LiteLLM version, or the legacy 2.0.10 binary. Those remain
+explicitly unverified until the approved deployment completes the same bounded round trip.
+
+---
+
 ## Context limits and token admission
 
 Configure each LiteLLM route's actual deployed input/output limits in `model_info`. Discovery uses
@@ -430,6 +466,39 @@ Update to a release after 1.3.2 and open the Workbench; the check runs without a
 that answered but refused forced tool calls does not support tools through this gateway: choose a
 model that does, or fix the gateway's tool parser and run the model's check in Settings → Models
 once.
+
+### A shared gateway loads a model nobody selected
+
+| Field             | Value                                                                                  |
+| ----------------- | -------------------------------------------------------------------------------------- |
+| Stable identifier | `gateway.readiness.scope` and `gateway.readiness.automatic.started` with `checkReason` |
+
+**Symptom**
+
+Before the fix of #4351, every Keiko start sent a real chat request to every chat model the gateway
+listed, so the gateway loaded each of them: a large model nobody selected was loaded, evicted the
+model another installation was using, and used free memory or metered spend.
+
+**Root Cause**
+
+Keiko adopted every listed alias into its catalog and then checked each of them at startup, in
+Gateway Setup and in the background Workbench verification. Listing costs nothing; a check loads the
+model.
+
+**Diagnostic Steps**
+
+At the start, `gateway.readiness.scope` records how many chat models were listed
+(`listedModelCount`) and how many the decision checks (`checkedModelCount`, normally 1) with the
+closed `reason`: `startup` for the elected default, `fallback` for the next model of the election
+order after the default was refused definitively, `selection` for a person's first explicit pick. A
+`gateway.readiness.automatic.started` line carries the same `checkReason`. No line for another model
+means no request was sent to it.
+
+**Resolution**
+
+None needed on a release with #4351. A model nobody has used is listed and unverified; picking it in
+the Chat or Coding Workbench picker checks it once, and the picker says so. Settings → Models keeps
+the explicit check of every model.
 
 ---
 
@@ -994,6 +1063,11 @@ the configuration sets `codingReasoningDisplay: "off"`. The answer arrives in on
 configuration sets `codingStreaming: "off"`, when the model's capability does not stream, when the
 coding runtime sent its request without `stream: true`, or when a proxy between Keiko and the model
 ignores `stream` and answers with one JSON body.
+
+Keiko's own mechanical page calls (the Jira draft batch) ask for no reasoning with the wire value
+`reasoning_effort: "none"` (the internal `reasoningPreference: "off"`; never a user-selectable
+effort). A route that rejects the parameter is answered once without it, the deployment remembers
+that, and `chat.request.compatibility-retry` records `omittedField: "reasoning_effort"`.
 
 A turn the gateway streams can still reach the timeline in one piece when the runtime's delta
 events do not reach it. OpenCode persists a streamed reasoning or answer part only empty, when its

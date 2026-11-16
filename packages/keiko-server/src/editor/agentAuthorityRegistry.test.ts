@@ -80,7 +80,6 @@ function envelope(
     budget: {
       maxRuntimeMs: 60_000,
       maxToolCalls: 20,
-      maxPromptTokens: 10_000,
       maxPatchBytes: 65_536,
     },
     expiresAt: FUTURE,
@@ -232,7 +231,6 @@ describe("EditorAgentAuthorityRegistry", () => {
       budget: {
         maxRuntimeMs: 60_000,
         maxToolCalls: 2,
-        maxPromptTokens: 1,
         maxPatchBytes: 5,
       },
     });
@@ -280,7 +278,6 @@ describe("EditorAgentAuthorityRegistry", () => {
       budget: {
         maxRuntimeMs: 60_000,
         maxToolCalls: 1,
-        maxPromptTokens: 1,
         maxPatchBytes: 5,
       },
     });
@@ -348,7 +345,6 @@ describe("EditorAgentAuthorityRegistry", () => {
       budget: {
         maxRuntimeMs: 1_000,
         maxToolCalls: 1,
-        maxPromptTokens: 1,
         maxPatchBytes: 5,
       },
     });
@@ -395,7 +391,6 @@ describe("EditorAgentAuthorityRegistry", () => {
       budget: {
         maxRuntimeMs: 1_000,
         maxToolCalls: 2,
-        maxPromptTokens: 1,
         maxPatchBytes: 5,
       },
     });
@@ -455,7 +450,7 @@ describe("EditorAgentAuthorityRegistry.reserveForConnector", () => {
 
   it("charges exactly one toolCall per reservation and fails closed at the budget", () => {
     const { registry, reference } = registered({
-      budget: { maxRuntimeMs: 60_000, maxToolCalls: 2, maxPromptTokens: 1, maxPatchBytes: 1 },
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 2, maxPatchBytes: 1 },
     });
     expect(registry.reserveForConnector(reference, ROOT, "autonomous-delivery", NOW).ok).toBe(true);
     expect(registry.reserveForConnector(reference, ROOT, "autonomous-delivery", NOW).ok).toBe(true);
@@ -615,11 +610,11 @@ function registeredRuntime(over: Partial<CodingWorkbenchAuthorityEnvelope> = {})
 }
 
 describe("EditorAgentAuthorityRegistry.runtimeDelegationFits (#3417)", () => {
-  const read = { toolCalls: 1, patchBytes: 0, promptTokens: 0 } as const;
+  const read = { toolCalls: 1, patchBytes: 0 } as const;
 
   it("answers whether one more delegation fits the retained budget, reserving nothing", () => {
     const { registry, reference } = registeredRuntime({
-      budget: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPromptTokens: 100, maxPatchBytes: 1 },
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPatchBytes: 1 },
     });
     expect(registry.runtimeDelegationFits(reference, ROOT, "autonomous-delivery", read, NOW)).toBe(
       true,
@@ -638,7 +633,7 @@ describe("EditorAgentAuthorityRegistry.runtimeDelegationFits (#3417)", () => {
 
   it("answers no for malformed usage and for a revoked record", () => {
     const { registry, reference } = registeredRuntime();
-    const malformed = { toolCalls: -1, patchBytes: 0, promptTokens: 0 };
+    const malformed = { toolCalls: -1, patchBytes: 0 };
     expect(
       registry.runtimeDelegationFits(reference, ROOT, "autonomous-delivery", malformed, NOW),
     ).toBe(false);
@@ -649,142 +644,37 @@ describe("EditorAgentAuthorityRegistry.runtimeDelegationFits (#3417)", () => {
   });
 });
 
-// ─── live-journey-readiness-2: prompt-token reservation reconciliation ──────────
-
-describe("EditorAgentAuthorityRegistry.settleRuntimePromptTokens", () => {
-  it("replaces the booked estimate with the provider's real usage instead of stacking both", () => {
+// Keiko does not limit tokens (#4346): a retained runtime admits a model call whenever its
+// authority is live, books nothing, and refuses only a revoked, expired or time-spent record.
+describe("EditorAgentAuthorityRegistry.admitRuntimeModelCall", () => {
+  it("admits every model call of a live runtime and books no usage", () => {
     const { registry, reference } = registeredRuntime({
-      budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 1_000, maxPatchBytes: 1 },
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPatchBytes: 1 },
     });
-
-    // A tool-calling client resends its whole growing history: the estimate for this call is 900
-    // (close to the 1,000 ceiling), but the provider reports only 40 real prompt tokens spent.
-    expect(registry.reserveRuntimePromptTokens(reference, 900, NOW)).toEqual({ ok: true });
-    expect(registry.settleRuntimePromptTokens(reference, 900, 40, NOW)).toEqual({ ok: true });
-
-    // Reconciled to 40, so a next call's full-history estimate (well below 1,000) is admitted —
-    // proving the ledger no longer carries the discarded 900-token estimate.
-    expect(registry.reserveRuntimePromptTokens(reference, 960, NOW)).toEqual({ ok: true });
-  });
-
-  it("without settlement, the stale estimate alone exhausts the budget the real usage never would", () => {
-    const { registry, reference } = registeredRuntime({
-      budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 1_000, maxPatchBytes: 1 },
-    });
-
-    expect(registry.reserveRuntimePromptTokens(reference, 900, NOW)).toEqual({ ok: true });
-    // No settlement call — the next call's real cumulative need (40 + 960 = 1,000) still fits the
-    // budget, but the un-reconciled 900-token estimate already consumed it.
-    expect(registry.reserveRuntimePromptTokens(reference, 960, NOW)).toEqual({
-      ok: false,
-      reason: "authority-budget-exceeded",
-    });
-  });
-
-  it("rejects an over-refund instead of erasing already-booked usage and manufacturing budget", () => {
-    const { registry, reference } = registeredRuntime({
-      budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 100, maxPatchBytes: 1 },
-    });
-
-    expect(registry.reserveRuntimePromptTokens(reference, 10, NOW)).toEqual({ ok: true });
-    // Only 10 tokens were ever booked on this record. Claiming a 500-token refund must be
-    // rejected outright — clamping the result to zero would silently hand back budget (90
-    // tokens' worth) that was never actually reserved, letting a single bogus settlement erase
-    // real, unrelated usage on the same run.
-    expect(registry.settleRuntimePromptTokens(reference, 500, 0, NOW)).toEqual({
-      ok: false,
-      reason: "authority-resolution-failed",
-    });
-    // Proof the rejection left the ledger untouched: exactly 90 of the 100-token budget remains
-    // (10 still booked) — not the full 100 an accepted over-refund would have wrongly restored.
-    expect(registry.reserveRuntimePromptTokens(reference, 90, NOW)).toEqual({ ok: true });
-    expect(registry.reserveRuntimePromptTokens(reference, 1, NOW)).toEqual({
-      ok: false,
-      reason: "authority-budget-exceeded",
-    });
-  });
-
-  it("rejects a replayed settlement once the first application already reduced the booked total", () => {
-    const { registry, reference } = registeredRuntime({
-      budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 1_000, maxPatchBytes: 1 },
-    });
-
-    expect(registry.reserveRuntimePromptTokens(reference, 900, NOW)).toEqual({ ok: true });
-    expect(registry.settleRuntimePromptTokens(reference, 900, 40, NOW)).toEqual({ ok: true });
-    // A second, replayed settlement of the SAME reservation must not succeed a second time: only
-    // 40 tokens remain booked, so claiming to refund the original 900-token reservation again is
-    // rejected rather than double-subtracting it from the ledger.
-    expect(registry.settleRuntimePromptTokens(reference, 900, 0, NOW)).toEqual({
-      ok: false,
-      reason: "authority-resolution-failed",
-    });
-  });
-
-  it("rejects a non-finite or negative usage count instead of silently coercing it", () => {
-    const { registry, reference } = registeredRuntime();
-    expect(registry.settleRuntimePromptTokens(reference, -1, 0, NOW)).toEqual({
-      ok: false,
-      reason: "authority-resolution-failed",
-    });
-    expect(registry.settleRuntimePromptTokens(reference, 0, Number.NaN, NOW)).toEqual({
-      ok: false,
-      reason: "authority-resolution-failed",
-    });
-  });
-
-  it("fails closed for an expired runtime authority instead of settling a dead run", () => {
-    const { registry, reference } = registeredRuntime();
-    expect(
-      registry.settleRuntimePromptTokens(reference, 10, 5, "2027-01-01T00:00:00.000Z"),
-    ).toEqual({ ok: false, reason: "authority-expired" });
-  });
-});
-
-// F9 (#3873): `reserveRuntimePromptTokens` answers `authority-budget-exceeded` both when the
-// cumulative prompt allowance cannot hold a call and when the runtime's time budget is spent. Only
-// the first is an exhausted prompt allowance; the Workbench must not name it for the second.
-describe("EditorAgentAuthorityRegistry.runtimePromptAllowanceExhausted (F9)", () => {
-  const budget = {
-    maxRuntimeMs: 60_000,
-    maxToolCalls: 20,
-    maxPromptTokens: 1_000,
-    maxPatchBytes: 1,
-  };
-
-  it("names the allowance only when the booked usage leaves no room for the refused call", () => {
-    const { registry, reference } = registeredRuntime({ budget });
-    expect(registry.reserveRuntimePromptTokens(reference, 900, NOW)).toEqual({ ok: true });
-    expect(registry.runtimePromptAllowanceExhausted(reference, 100, NOW)).toBe(false);
-    expect(registry.reserveRuntimePromptTokens(reference, 101, NOW)).toEqual({
-      ok: false,
-      reason: "authority-budget-exceeded",
-    });
-    expect(registry.runtimePromptAllowanceExhausted(reference, 101, NOW)).toBe(true);
-    // Asking books nothing: the 100 tokens the allowance still holds are still there.
-    expect(registry.reserveRuntimePromptTokens(reference, 100, NOW)).toEqual({ ok: true });
-  });
-
-  it("does not name the allowance when the runtime's time budget refused the call", () => {
-    const { registry, reference } = registeredRuntime({ budget });
-    const afterRuntimeBudget = "2026-07-09T12:01:00.001Z";
-    expect(registry.reserveRuntimePromptTokens(reference, 2_000, afterRuntimeBudget)).toEqual({
-      ok: false,
-      reason: "authority-budget-exceeded",
-    });
-    expect(registry.runtimePromptAllowanceExhausted(reference, 2_000, afterRuntimeBudget)).toBe(
-      false,
+    for (let call = 0; call < 50; call += 1) {
+      expect(registry.admitRuntimeModelCall(reference, NOW)).toEqual({ ok: true });
+    }
+    // Admission booked nothing: the one tool call the budget holds is still there.
+    expect(registry.reserveForConnector(reference, ROOT, "autonomous-delivery", NOW)).toMatchObject(
+      { ok: true },
     );
   });
 
-  it("answers no for a malformed count, a revoked record and an unknown run", () => {
-    const { registry, reference } = registeredRuntime({ budget });
-    expect(registry.runtimePromptAllowanceExhausted(reference, -1, NOW)).toBe(false);
-    expect(registry.runtimePromptAllowanceExhausted(reference, Number.NaN, NOW)).toBe(false);
-    expect(
-      registry.runtimePromptAllowanceExhausted({ ...reference, runId: "run-unknown" }, 5_000, NOW),
-    ).toBe(false);
+  it("fails closed for a revoked, expired or time-spent runtime", () => {
+    const { registry, reference } = registeredRuntime();
+    expect(registry.admitRuntimeModelCall(reference, "2026-07-09T12:01:00.001Z")).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+    expect(registry.admitRuntimeModelCall(reference, "2027-01-01T00:00:00.000Z")).toEqual({
+      ok: false,
+      reason: "authority-expired",
+    });
     registry.revoke(reference);
-    expect(registry.runtimePromptAllowanceExhausted(reference, 5_000, NOW)).toBe(false);
+    expect(registry.admitRuntimeModelCall(reference, NOW).ok).toBe(false);
+    expect(registry.admitRuntimeModelCall({ ...reference, runId: "run-unknown" }, NOW).ok).toBe(
+      false,
+    );
   });
 });
 
@@ -886,19 +776,18 @@ describe("ordinary Chat authority in the existing registry (#4084)", () => {
     const registry = new EditorAgentAuthorityRegistry();
     const value = chatEnvelope();
     const reference = registerChat(registry, value);
-    const reserve = (toolCalls: number, promptTokens = 0): boolean =>
+    const reserve = (toolCalls: number): boolean =>
       registry.reserveForChat(
         reference,
         value.subject,
         "autonomous-delivery",
-        { toolCalls, promptTokens, patchBytes: 0 },
+        { toolCalls, patchBytes: 0 },
         NOW,
       ).ok;
-    expect(reserve(19, 9_999)).toBe(true);
+    expect(reserve(19)).toBe(true);
     expect(registerChat(registry, value)).toEqual(reference);
     expect(reserve(2)).toBe(false);
-    expect(reserve(1, 1)).toBe(true);
-    expect(reserve(0, 1)).toBe(false);
+    expect(reserve(1)).toBe(true);
     expect(reserve(1)).toBe(false);
   });
 
@@ -907,9 +796,9 @@ describe("ordinary Chat authority in the existing registry (#4084)", () => {
     const value = chatEnvelope();
     const reference = registerChat(registry, value);
     for (const usage of [
-      { toolCalls: -1, promptTokens: 0, patchBytes: 0 },
-      { toolCalls: 1, promptTokens: 0, patchBytes: 1 },
-      { toolCalls: 0, promptTokens: Number.NaN, patchBytes: 0 },
+      { toolCalls: -1, patchBytes: 0 },
+      { toolCalls: 1, patchBytes: 1 },
+      { toolCalls: Number.NaN, patchBytes: 0 },
     ])
       expect(
         registry.reserveForChat(reference, value.subject, "autonomous-delivery", usage, NOW).ok,
@@ -919,7 +808,7 @@ describe("ordinary Chat authority in the existing registry (#4084)", () => {
         reference,
         value.subject,
         "autonomous-delivery",
-        { toolCalls: 20, promptTokens: 10_000, patchBytes: 0 },
+        { toolCalls: 20, patchBytes: 0 },
         NOW,
       ).ok,
     ).toBe(true);
@@ -1009,7 +898,7 @@ it("reconstructs Chat authority decisions through the real writer and reader wit
       reference,
       value.subject,
       "autonomous-delivery",
-      { toolCalls: 20, promptTokens: 1, patchBytes: 0 },
+      { toolCalls: 20, patchBytes: 0 },
       NOW,
       correlation,
     );
@@ -1017,7 +906,7 @@ it("reconstructs Chat authority decisions through the real writer and reader wit
       reference,
       value.subject,
       "autonomous-delivery",
-      { toolCalls: 1, promptTokens: 0, patchBytes: 0 },
+      { toolCalls: 1, patchBytes: 0 },
       NOW,
       correlation,
     );

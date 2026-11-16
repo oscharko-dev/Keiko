@@ -58,6 +58,7 @@ import {
 } from "./testGenerationRunner.js";
 import { defaultAssuredPreFilter, type AssuredPreFilterPort } from "./assuredPreFilterRunner.js";
 import { editorAiStatusActive, resolveEditorAiAssistStatusForRoot } from "./aiAssistActivation.js";
+import { strictRedactor } from "../content-redactor.js";
 
 // The overlay buffer(s) may be up to the document-size cap; allow 64 KiB of JSON on top, doubled to
 // accommodate a small changed-file set.
@@ -257,7 +258,7 @@ async function assembleDiscoveryContext(
     correlationId: ctx.correlationId,
   });
   const wire = toCodingContextWirePack(pack);
-  recordCodingContextEvidence(ctx.deps.evidenceStore, ctx.deps.redactor, wire, ctx.nowMs);
+  recordCodingContextEvidence(ctx.deps.evidenceStore, strictRedactor(ctx.deps), wire, ctx.nowMs);
   return { pack, wire };
 }
 
@@ -420,7 +421,7 @@ export async function handleEditorTestGeneration(
     if (!(await testGenerationActivationStillActive(deps, canonicalRoot))) {
       return { status: 200, body: deps.redactor(disabledResponse()) };
     }
-    recordTestGenerationEvidence(deps.evidenceStore, deps.redactor, outcome, nowMs);
+    recordTestGenerationEvidence(deps.evidenceStore, strictRedactor(deps), outcome, nowMs);
     return { status: 200, body: deps.redactor(outcome) };
   });
 }

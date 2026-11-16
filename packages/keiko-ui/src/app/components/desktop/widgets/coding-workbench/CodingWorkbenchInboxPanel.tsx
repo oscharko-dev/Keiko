@@ -10,6 +10,8 @@ export interface CodingWorkbenchInboxPanelProps {
   readonly runId: string | undefined;
   /** The run's turn is running: the only time the runtime holds messages it has not taken yet. */
   readonly running: boolean;
+  /** The run's profile takes a message while a turn runs (`promptInputs.delivery`). */
+  readonly offered: boolean;
   readonly revision: number | undefined;
   /** Changes when the turn takes a waiting message (`deliveredMessageSignal`). */
   readonly deliveredSignal: number | null;
@@ -26,12 +28,19 @@ export interface CodingWorkbenchInboxPanelProps {
 export function CodingWorkbenchInboxPanel({
   runId,
   running,
+  offered,
   revision,
   deliveredSignal,
   busy,
   onAction,
 }: CodingWorkbenchInboxPanelProps): ReactNode {
-  const inbox = useCodingWorkbenchInbox({ runId, live: running, revision, deliveredSignal });
+  const inbox = useCodingWorkbenchInbox({
+    runId,
+    live: running,
+    offered,
+    revision,
+    deliveredSignal,
+  });
   return (
     <CodingWorkbenchInbox
       status={inbox.status}

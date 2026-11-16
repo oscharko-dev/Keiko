@@ -3,7 +3,12 @@ import { readContinuityCheckpoint, writeContinuityCheckpoint } from "./chatConti
 import { createChatToolMutationStore } from "./chatToolMutations.js";
 import { withImmediateTransaction } from "./transaction.js";
 import { replayChatCreationIntent, withChatCreationIntent } from "./chatCreationIntents.js";
-import { readChatDraft, updateChatDraft } from "./chatDrafts.js";
+import {
+  readChatDraft,
+  readCodingWorkbenchDraft,
+  updateChatDraft,
+  updateCodingWorkbenchDraft,
+} from "./chatDrafts.js";
 import { createMarkdownSkillStore } from "./markdownSkills.js";
 import { createBrowserApprovalStore } from "./browserApprovals.js";
 import { bindMarkdownSkillTurn } from "./markdownSkillSelections.js";
@@ -48,6 +53,7 @@ import {
   isSqliteCorruptionError,
 } from "@oscharko-dev/keiko-security/sqlite-corruption";
 import { createChatReadGrantStore } from "./chatToolReadGrants.js";
+import { createChatMemoryLearningStore } from "./chatMemoryLearning.js";
 import type {
   Chat,
   ChatMessage,
@@ -736,6 +742,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
   const stagedTurnAssistants: StagedTurnAssistants = new Map();
   const store: UiStore = {
     chatToolReadGrants: createChatReadGrantStore(db),
+    memoryLearning: createChatMemoryLearningStore(db),
     chatToolMutations: createChatToolMutationStore(db, options.now),
     markdownSkills: createMarkdownSkillStore(db, options.now),
     browserApprovals: createBrowserApprovalStore(db),
@@ -759,6 +766,9 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     },
     readChatDraft: (id) => readChatDraft(db, id),
     updateChatDraft: (id, update) => updateChatDraft(db, id, update),
+    readCodingWorkbenchDraft: (windowId) => readCodingWorkbenchDraft(db, windowId),
+    updateCodingWorkbenchDraft: (windowId, update) =>
+      updateCodingWorkbenchDraft(db, windowId, update),
     createChat: (
       projectPath: string,
       title: string,
@@ -805,7 +815,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     countMessages: (chatId: string): number => sqlCountMessages(db, chatId),
     findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
     updateChatToolTranscript: (id, update, correlationId): void => {
-      updateChatToolTranscript(db, id, update, options.redactString, correlationId);
+      updateChatToolTranscript(db, id, update, options.redactContentString, correlationId);
     },
     createMessage: (msg: NewChatMessage): ChatMessage => {
       const message = createMessageRecord(db, options, msg);

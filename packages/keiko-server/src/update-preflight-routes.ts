@@ -85,7 +85,14 @@ function installModeForPreflight(
 ): UpdateInstallMode {
   if (options.installMode !== undefined) return options.installMode();
   const env = processEnvFrom(deps);
-  return detectUpdateInstallMode(productionUpdateFacts(env), env);
+  // An availability read: a pass an earlier passive read saw may be reused.
+  return detectUpdateInstallMode(
+    productionUpdateFacts(env),
+    env,
+    undefined,
+    undefined,
+    "passive-read",
+  );
 }
 
 function isPortableInstallMode(mode: UpdateInstallMode): boolean {
@@ -154,15 +161,21 @@ async function portablePreflightReport(
   );
 }
 
+// The blocker code is what the update window reads without a session: a volume refusal must not
+// read as "set this install up first".
+function portableBlockerCode(reason: UpdateInstallMode["reason"]): UpdatePreflightBlockerCode {
+  if (reason === "portable-it-managed") return "portable-install-managed-externally";
+  if (reason === "portable-volume-not-local") return "portable-install-volume-not-local";
+  if (reason === "portable-volume-unverified") return "portable-install-volume-unverified";
+  return "portable-install-mode-ineligible";
+}
+
 function portableBlockedReport(
   base: ReturnType<typeof reportBase>,
   mode: UpdateInstallMode,
 ): UpdatePreflightReport {
   const target = mode.portable?.target ?? "windows-x64";
-  const code: UpdatePreflightBlockerCode =
-    mode.reason === "portable-it-managed"
-      ? "portable-install-managed-externally"
-      : "portable-install-mode-ineligible";
+  const code = portableBlockerCode(mode.reason);
   return portableInstallModeBlockedReport(
     base,
     portableInstallability(target, "install-mode-ineligible"),

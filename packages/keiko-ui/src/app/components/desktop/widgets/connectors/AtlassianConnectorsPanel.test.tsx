@@ -2,7 +2,7 @@
 // token flow), verifies, manages (scope + sync), and deletes with confirmation. Whole-panel axe
 // runs in light AND dark.
 
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
@@ -53,6 +53,41 @@ function makeClient(overrides: Partial<AtlassianConnectorsClient> = {}): Atlassi
 }
 
 describe("AtlassianConnectorsPanel", () => {
+  it.each([false, true])(
+    "suppresses empty claims after a failed fetch (Jira Live: %s)",
+    async (jiraLive) => {
+      const client = makeClient({
+        listConnectors: vi
+          .fn()
+          .mockRejectedValueOnce(new Error("network error"))
+          .mockResolvedValue([]),
+      });
+      render(<AtlassianConnectorsPanel client={client} jiraLive={jiraLive} />);
+      const section = screen.getByRole("region", {
+        name: jiraLive ? "Jira Live Pods" : "Connectors",
+      });
+      expect(await screen.findByRole("alert")).toBeInTheDocument();
+      expect(section.querySelector(".acx-empty")).toBeNull();
+      act(() => window.dispatchEvent(new Event(ATLASSIAN_CONNECTORS_CHANGED_EVENT)));
+      await waitFor(() => expect(section.querySelector(".acx-empty")).toBeInTheDocument());
+      expect(screen.queryByRole("alert")).toBeNull();
+    },
+  );
+
+  it("keeps cached connectors visible when a reload fails", async () => {
+    const client = makeClient({
+      listConnectors: vi
+        .fn()
+        .mockResolvedValueOnce([DOCS])
+        .mockRejectedValue(new Error("network error")),
+    });
+    render(<AtlassianConnectorsPanel client={client} />);
+    expect(await screen.findByText("Docs")).toBeInTheDocument();
+    act(() => window.dispatchEvent(new Event(ATLASSIAN_CONNECTORS_CHANGED_EVENT)));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("Docs")).toBeInTheDocument();
+  });
+
   it("lists configured connectors with provider, label, and base URL", async () => {
     render(<AtlassianConnectorsPanel client={makeClient()} pollIntervalMs={100000} />);
     const card = await screen.findByTestId("acx-connector");
@@ -174,7 +209,47 @@ it("shows only owned Live Pods in the Hub without sync or legacy approvals", asy
   const { container } = render(<AtlassianConnectorsPanel client={client} jiraLive />);
   const card = await screen.findByTestId("acx-connector");
   expect(card).toHaveTextContent("Live Jira");
-  expect(card).toHaveTextContent("Ready");
+  expect(card).not.toHaveTextContent("Ready");
+  expect(card).not.toHaveTextContent(live.baseUrl);
+  const addToWorkspace = screen.getByRole("button", { name: "Add to workspace" });
+  expect(addToWorkspace).toBeVisible();
+  expect(addToWorkspace).toHaveClass("lk-btn-ghost");
+  expect(addToWorkspace).not.toHaveClass("lk-btn-primary");
+  const jiraLogo = within(card).getByRole("img", { name: "Jira" });
+  expect(jiraLogo).toHaveAttribute("src", "/assets/brands/jira.svg?v=ad20a139");
+  expect(jiraLogo).toHaveAttribute("width", "15");
+  expect(jiraLogo).toHaveAttribute("height", "15");
+  expect(jiraLogo.parentElement).toHaveClass("lk-capsule-icon");
+  expect(within(card).getByText("Live Jira")).toHaveClass("lk-capsule-name");
+  expect(jiraLogo.closest("button")).toHaveAttribute("draggable", "true");
+  expect(jiraLogo.closest("button")).toHaveAccessibleName(
+    "Drag Jira Pod Live Jira to the workspace",
+  );
+  const workspace = document.createElement("main");
+  workspace.className = "workspace";
+  document.body.appendChild(workspace);
+  const elementFromPoint = document.elementFromPoint;
+  document.elementFromPoint = vi.fn(() => workspace);
+  const onDrop = vi.fn();
+  window.addEventListener("keiko:local-knowledge-connector-drop", onDrop);
+  try {
+    const handle = within(card).getByRole("button", {
+      name: "Drag Jira Pod Live Jira to the workspace",
+    });
+    fireEvent.pointerDown(handle, { button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 80, clientY: 90 });
+    fireEvent.pointerUp(window, { clientX: 120, clientY: 140 });
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    expect(onDrop.mock.calls[0]?.[0].detail).toEqual({
+      payload: { kind: "jira-live", id: "pod-one", label: "Live Jira" },
+      clientX: 120,
+      clientY: 140,
+    });
+  } finally {
+    window.removeEventListener("keiko:local-knowledge-connector-drop", onDrop);
+    document.elementFromPoint = elementFromPoint;
+    workspace.remove();
+  }
   expect(screen.queryByText("Docs")).toBeNull();
   expect(screen.queryByRole("button", { name: /manage/i })).toBeNull();
   expect(client.listApprovals).not.toHaveBeenCalled();
@@ -195,7 +270,16 @@ it("renders the live Jira Pods as one Knowledge Pods page section", async () => 
   );
   await screen.findByText("No Jira Pods yet.");
   // A page section heading like the pod list's, without a nested "Connectors" heading.
-  expect(screen.getByRole("heading", { level: 2, name: "Jira Live Pods" })).toBeVisible();
+  const heading = screen.getByRole("heading", { level: 2, name: "Jira Live Pods" });
+  const create = screen.getByRole("button", { name: "Create Jira Pod" });
+  expect(heading).toBeVisible();
+  expect(heading).toHaveClass("lk-title");
+  expect(create).toHaveClass("lk-btn-primary", "lk-btn-lg");
+  expect(create.parentElement).toBe(heading.parentElement);
+  expect(
+    create.compareDocumentPosition(screen.getByText("No Jira Pods yet.")) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).not.toBe(0);
   expect(screen.queryByRole("heading", { name: "Connectors" })).toBeNull();
   expect(screen.getByRole("region", { name: "Jira Live Pods" })).toBeVisible();
   expect(screen.getByTestId("acx-panel")).toHaveProperty(

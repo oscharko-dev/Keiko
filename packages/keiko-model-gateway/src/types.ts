@@ -108,8 +108,14 @@ export interface ModelProviderConfig {
   readonly apiVersion?: string | undefined;
   readonly realtimeAuthMode?: RealtimeAuthMode | undefined;
   readonly outputTokenParameter?: OutputTokenParameter | undefined;
+  /** Explicit deployment protocol contract; never inferred from a model display alias. */
+  readonly reasoningContinuation?: "required-with-tools" | undefined;
   /** Use the configured LiteLLM proxy's authenticated token-counting endpoint. */
   readonly tokenCounter?: "litellm" | undefined;
+  /** Opt-in protocol requirement, independent of the model alias and reasoning display. */
+  readonly reasoningHistory?: "required-with-tools" | "current-turn" | undefined;
+  /** Qualified provider wire spelling; default is the DeepSeek-compatible reasoning_content. */
+  readonly reasoningHistoryField?: "reasoning_content" | "reasoning" | undefined;
   /**
    * SHA-256 digest of the deployment the gateway reported behind this alias when it was last
    * discovered (the underlying model identity of every replica, never the raw values). Present
@@ -122,6 +128,10 @@ export interface ModelProviderConfig {
   // Bounds ONE attempt. The whole buffered call is bounded by the budget `providerRequestBudgetMs`
   // (resilience.ts) derives from this and `maxRetries`.
   readonly timeoutMs: number;
+  // Present (true) only when the stored configuration named `timeoutMs` itself, whatever its value:
+  // an operator's explicit choice, which an explicit check never lifts (#4351). Absent means the
+  // conversational default applied. Not part of any capability fingerprint.
+  readonly timeoutConfigured?: true | undefined;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
   readonly egress?: OutboundHttpEgressConfig | undefined;
@@ -159,7 +169,7 @@ export interface OutboundHttpEgressConfig {
   // Narrow, non-config-file, non-env-mapped opt-in set ONLY by the model-gateway setup route
   // after its own dedicated KEIKO_ALLOW_LINK_LOCAL_GATEWAY-gated check has already approved the
   // exact submitted baseUrl (AUDIT-SEC-002 follow-up). Unlike `allowPrivateNetwork`, this may
-  // re-permit the "metadata"/"link-local" target classes -- never "multicast", and never via a
+  // re-permit the "metadata"/"link-local" target classes -- never "multicast"/"unspecified", and never via a
   // generic env var, so it cannot silently widen the crawler/manual-fetcher SSRF surface.
   readonly allowLinkLocalAndMetadata?: boolean | undefined;
   // Set ONLY by the #2387 research-egress config. "loopback" is permitted by default because

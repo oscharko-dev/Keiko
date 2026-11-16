@@ -98,7 +98,9 @@ describe("node git publish adapter — the push can authenticate", (): void => {
   it("pins every interactive credential path closed so a missing credential fails, never hangs", async () => {
     const env = await publishLaneEnv();
     expect(env.GIT_TERMINAL_PROMPT).toBe("0");
-    expect(env.GIT_ASKPASS).toBe("/dev/null");
+    // The askpass helper is the platform null device: a non-executable path, so any prompt fails.
+    // Pinned as the literal device name per platform, not re-derived from the producer's helper.
+    expect(env.GIT_ASKPASS).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
     expect(env.SSH_ASKPASS_REQUIRE).toBe("never");
     expect(env.GCM_INTERACTIVE).toBe("never");
     expect(env.GIT_SSH_COMMAND).toContain("-oBatchMode=yes");

@@ -105,6 +105,15 @@ export function maskHoldoutResult(result, name) {
   };
 }
 
+// Checkpoints use their own derived key and retain no readable per-unit evidence at rest.
+export function holdoutProgressCodec(maskingKey) {
+  const key = createHmac("sha256", maskingKey).update("memory-lab-progress-v1").digest();
+  return {
+    encode: (value) => encrypt(JSON.stringify(value), key),
+    decode: (envelope) => JSON.parse(decrypt(envelope, key)),
+  };
+}
+
 function createKeyFile(path) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeFileSync(path, `${randomBytes(KEY_BYTES).toString("base64")}\n`, {

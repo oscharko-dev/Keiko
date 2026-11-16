@@ -373,34 +373,63 @@ describe("USearch ANN index", () => {
     ).toMatchObject({ ok: true, mode: "exact" });
   });
 
-  it("does not re-hash the native runtime binary on a warm ANN cache hit (KEIKO-0409)", async () => {
-    // Regression pin for KEIKO-0409: resolvedIndex still calls targetRuntime() first so a
-    // swapped-out or missing native addon can never be masked by a stale in-memory cache
-    // hit, but targetRuntime() now memoizes its result per (path, mtimeMs, size) — so a
-    // warm search does NOT re-read + SHA-256 the multi-MB native addon on the Node.js event
-    // loop. Fresh binaries or on-disk changes still trigger a full verification.
-    const corpus = clusteredCorpus(64, IDENTITY);
-    const queryVector = corpus.entries[0]?.vector;
-    if (queryVector === undefined) throw new Error("test corpus must contain a query vector");
-    const binary = runtimePath();
-    const request = {
-      partition: partition(corpus.entries, "warm-cache-runtime-hash"),
-      queryVector,
-      candidateLimit: 5,
-      exactScanThreshold: 0,
-      binaryPath: binary,
-    };
-    __resetTargetRuntimeCacheForTests();
-    readFileSyncTelemetry.paths.length = 0;
-    const first = await searchUsearchAnnIndex(request);
-    expect(first.ok).toBe(true);
-    const readsAfterCold = readFileSyncTelemetry.paths.filter((path) => path === binary).length;
-    expect(readsAfterCold).toBeGreaterThan(0);
-    const second = await searchUsearchAnnIndex(request);
-    expect(second.ok).toBe(true);
-    const readsAfterWarm = readFileSyncTelemetry.paths.filter((path) => path === binary).length;
-    expect(readsAfterWarm).toBe(readsAfterCold);
-  });
+  // Windows has no unforgeable change signal, so targetRuntime() deliberately re-verifies there on
+  // every call (cacheEntryStillMatches); the memoization this pin proves exists on POSIX only.
+  it.skipIf(process.platform === "win32")(
+    "does not re-hash the native runtime binary on a warm ANN cache hit (KEIKO-0409)",
+    async () => {
+      // Regression pin for KEIKO-0409: resolvedIndex still calls targetRuntime() first so a
+      // swapped-out or missing native addon can never be masked by a stale in-memory cache
+      // hit, but targetRuntime() now memoizes its result per (path, mtimeMs, size) — so a
+      // warm search does NOT re-read + SHA-256 the multi-MB native addon on the Node.js event
+      // loop. Fresh binaries or on-disk changes still trigger a full verification.
+      const corpus = clusteredCorpus(64, IDENTITY);
+      const queryVector = corpus.entries[0]?.vector;
+      if (queryVector === undefined) throw new Error("test corpus must contain a query vector");
+      const binary = runtimePath();
+      const request = {
+        partition: partition(corpus.entries, "warm-cache-runtime-hash"),
+        queryVector,
+        candidateLimit: 5,
+        exactScanThreshold: 0,
+        binaryPath: binary,
+      };
+      __resetTargetRuntimeCacheForTests();
+      readFileSyncTelemetry.paths.length = 0;
+      const first = await searchUsearchAnnIndex(request);
+      expect(first.ok).toBe(true);
+      const readsAfterCold = readFileSyncTelemetry.paths.filter((path) => path === binary).length;
+      expect(readsAfterCold).toBeGreaterThan(0);
+      const second = await searchUsearchAnnIndex(request);
+      expect(second.ok).toBe(true);
+      const readsAfterWarm = readFileSyncTelemetry.paths.filter((path) => path === binary).length;
+      expect(readsAfterWarm).toBe(readsAfterCold);
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "re-verifies the native runtime binary on every warm ANN search on Windows",
+    async () => {
+      const corpus = clusteredCorpus(64, IDENTITY);
+      const queryVector = corpus.entries[0]?.vector;
+      if (queryVector === undefined) throw new Error("test corpus must contain a query vector");
+      const binary = runtimePath();
+      const request = {
+        partition: partition(corpus.entries, "warm-cache-runtime-rehash-win32"),
+        queryVector,
+        candidateLimit: 5,
+        exactScanThreshold: 0,
+        binaryPath: binary,
+      };
+      __resetTargetRuntimeCacheForTests();
+      readFileSyncTelemetry.paths.length = 0;
+      expect((await searchUsearchAnnIndex(request)).ok).toBe(true);
+      const readsAfterCold = readFileSyncTelemetry.paths.filter((path) => path === binary).length;
+      expect((await searchUsearchAnnIndex(request)).ok).toBe(true);
+      const readsAfterWarm = readFileSyncTelemetry.paths.filter((path) => path === binary).length;
+      expect(readsAfterWarm).toBeGreaterThan(readsAfterCold);
+    },
+  );
 
   // The "logs search.native-runtime-resolved on the cold path only, content-free" case moved to
   // ./usearch-runtime-resolved-logging.test.ts: it needs a mocked runtime-manifest approval to

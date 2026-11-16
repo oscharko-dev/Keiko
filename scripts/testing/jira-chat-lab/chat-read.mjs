@@ -31,20 +31,49 @@ import {
   SESSION_PAIRING_LAUNCHER_SECRET_ENV,
 } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
-import { actorDetails, loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
+import {
+  actorDetails,
+  labSessionConnection,
+  loadSession,
+  readPrivateFile,
+  requireLicense,
+} from "./lab-client.mjs";
+import { sessionVerificationPort } from "./product-port.mjs";
 import { establishedReadGrant } from "./read-grant.mjs";
+import { prepareLabRun } from "./run-preflight.mjs";
+import { seedProductBaseline } from "./requirements/baseline-templates.mjs";
 import { drainLiveChatTurns } from "./chat-lifecycle.mjs";
+import { createOwnedLiveChatProcess, runOwnedLiveChatLifecycle } from "./owned-live-chat.mjs";
+
+let ownedEvidenceFailure;
 
 process.on("warning", (warning) => {
   if (warning.code !== "KEIKO_LOG_SINK_FAILED") return;
+  process.exitCode = 1;
+  ownedEvidenceFailure?.();
   console.log(
     JSON.stringify({ operation: "jira-chat-live-read", passed: false, stage: "activity-log" }),
   );
-  process.exitCode = 1;
 });
 
 /** Where the lab's live Keiko writes its Activity Log; a lane's state directory holds none. */
 export const chatReadLogDirectory = (session) => join(session.directory, "chat-read-logs");
+
+/**
+ * The lab holds no product state outside its private session (#4369). Besides the explicit
+ * `KEIKO_MEMORY_DIR` and database paths of the deps, the process-wide diagnostics writers resolve
+ * `KEIKO_STATE_DIR`, else `<cwd>/.keiko`: without it a lab run would write into the working
+ * directory of whoever started it. The variable is set for this process and every child it forks,
+ * and restored when the run ends.
+ */
+export function isolateRuntimeState(session, env = process.env) {
+  const previous = env.KEIKO_STATE_DIR;
+  env.KEIKO_STATE_DIR = chatReadLogDirectory(session);
+  return () => {
+    if (previous === undefined) delete env.KEIKO_STATE_DIR;
+    else env.KEIKO_STATE_DIR = previous;
+  };
+}
 
 async function unusedPort() {
   const probe = createServer();
@@ -68,34 +97,36 @@ export async function request(origin, cookie, name, path, body, method = "POST",
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   if (!response.ok) {
-    const failure = await response.json().catch(() => ({}));
-    console.log(
-      JSON.stringify({
-        operation: "jira-chat-live-http",
-        stage: name,
-        status: response.status,
-        code: failure.error?.code,
-        message:
-          typeof failure.error?.message === "string"
-            ? failure.error.message.slice(0, 240)
-            : undefined,
-      }),
-    );
-    throw new TypeError("Live Chat HTTP stage failed");
+    throw failedStage(name, response.status);
   }
   return response;
 }
-function failedStage(name, status, failure) {
+/**
+ * A JSON request whose status the caller decides on: a refusal the lab expects (a route an older build does
+ * not have, a binding the product refuses) is a value, not a stage failure. Anything else a caller treats
+ * as it treats `request`.
+ */
+export async function requestStatus(origin, cookie, path, body, method = "POST") {
+  const response = await globalThis.fetch(origin + path, {
+    method,
+    headers: {
+      Origin: origin,
+      "X-Keiko-CSRF": "1",
+      "Content-Type": "application/json",
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const value = await response.json().catch(() => ({}));
+  return { status: response.status, value };
+}
+function failedStage(_name, status, _failure) {
   console.log(
     JSON.stringify({
       operation: "jira-chat-live-http",
-      stage: name,
-      status,
-      code: failure.error?.code,
-      message:
-        typeof failure.error?.message === "string"
-          ? failure.error.message.slice(0, 240)
-          : undefined,
+      stage: "request-failed",
+      status: Number.isSafeInteger(status) && status >= 100 && status <= 599 ? status : 0,
+      failureClass: "http-status",
     }),
   );
   return new TypeError("Live Chat HTTP stage failed");
@@ -179,12 +210,15 @@ function selectedGatewayProvider(modelId) {
   if (selected === undefined) throw new TypeError("Selected laboratory model is not configured");
   if (!new Set(["127.0.0.1", "localhost", "[::1]"]).has(new URL(selected.baseUrl).hostname))
     throw new TypeError("Jira qualification requires a local model Gateway");
-  const {
-    apiKey,
-    apiKeySecretRef: _reference,
-    apiKeySourceModelId: _source,
-    ...provider
-  } = selected;
+  const apiKey = selected.apiKey;
+  const provider = { ...selected };
+  // A provider the product discovered would make it list EVERY model of the gateway, elect one of
+  // them as the default and check it at startup: with a shared local gateway that loads a second,
+  // large chat model beside the selected one. The laboratory names its models explicitly.
+  delete provider.catalogOrigin;
+  delete provider.apiKey;
+  delete provider.apiKeySecretRef;
+  delete provider.apiKeySourceModelId;
   if (typeof apiKey !== "string" || apiKey.length === 0)
     throw new TypeError("Configured laboratory model credential is unavailable");
   const token = modelId.replace(/[^A-Za-z0-9]/gu, "_").toUpperCase();
@@ -261,9 +295,6 @@ export async function configureModel(deps, modelId, session, configPath, options
   const raw = {
     providers: [provider, ...additionalProviders],
     capabilities: [capability, ...embeddingCapabilities],
-    atlassian: {
-      privateTargets: [{ baseUrl: "https://127.0.0.1:18443", addressClass: "loopback" }],
-    },
     egress: { caBundlePath: join(session.directory, "secrets", "tls", "ca.pem") },
   };
   const parsed = parseGatewayConfig(raw, env);
@@ -290,9 +321,10 @@ export async function configureModel(deps, modelId, session, configPath, options
   );
   console.log(JSON.stringify({ operation: "jira-chat-live-model", verified: true }));
 }
-async function createVerifiedPod(origin, cookie, session, actor) {
+async function createVerifiedPod(origin, cookie, session, actor, administration = false) {
   actorDetails(actor);
-  if (actor === "admin") throw new TypeError("The laboratory administrator has no synthetic PAT");
+  if (actor === "admin" && !administration)
+    throw new TypeError("The laboratory administrator requires explicit qualification scope");
   const credential = await jsonRequest(
     origin,
     cookie,
@@ -303,7 +335,7 @@ async function createVerifiedPod(origin, cookie, session, actor) {
       deployment: "data-center",
       authScheme: "bearer-pat",
       displayName: "Synthetic live Chat qualification",
-      baseUrl: "https://127.0.0.1:18443",
+      baseUrl: labSessionConnection(session).httpsOrigin,
       apiToken: readPrivateFile(join(session.directory, "secrets", `${actor}-token`)),
       livePodCreationRequestId: randomUUID(),
     },
@@ -319,6 +351,11 @@ async function createVerifiedPod(origin, cookie, session, actor) {
   assert.equal(verification.status, "ok");
   return credential;
 }
+/** The id of a freshly created, verified Pod for the actor: what a template bind goes through (no Chat, no model). */
+export async function createLabPodId(origin, cookie, session, actor = "api") {
+  return (await createVerifiedPod(origin, cookie, session, actor)).livePod.podId;
+}
+
 /**
  * A new Chat's tool mode is Full access (owner decision 2026-11-02). A scenario that proves a write
  * approval passes its own mode, so the Chat asks exactly as the scenario expects.
@@ -331,26 +368,81 @@ export async function prepareChat(
   modelId,
   actor = "api",
   toolMode = undefined,
+  administration = false,
 ) {
-  const credential = await createVerifiedPod(origin, cookie, session, actor);
+  const credential = await createVerifiedPod(origin, cookie, session, actor, administration);
   const created = await jsonRequest(origin, cookie, "chat-create", "/api/chats", {
     projectPath,
     title: "Synthetic Jira live Chat",
     selectedModel: modelId,
   });
-  const bound = await jsonRequest(
+  return bindVerifiedChat(origin, cookie, created.chat, credential, toolMode, administration);
+}
+
+/** Private qualification state uses the real store without inventing a gateway/model provider. */
+export async function prepareModelFreeChat(context, actor = "api", administration = false) {
+  assert.equal(context.deps.gatewayConfig.current(), undefined);
+  const credential = await createVerifiedPod(
+    context.origin,
+    context.cookie,
+    context.session,
+    actor,
+    administration,
+  );
+  const created = context.deps.store.createChat(
+    context.projectPath,
+    "Synthetic model-free API qualification",
+    "model-free-qualification",
+  );
+  const observed = await jsonRequest(
+    context.origin,
+    context.cookie,
+    "qualification-chat-observe",
+    `/api/chats?id=${encodeURIComponent(created.id)}&projectPath=${encodeURIComponent(context.projectPath)}`,
+    undefined,
+    "GET",
+  );
+  const chat = observed.chats.find((entry) => entry.id === created.id);
+  assert.ok(chat);
+  return bindVerifiedChat(
+    context.origin,
+    context.cookie,
+    chat,
+    credential,
+    "autonomous-delivery",
+    administration,
+  );
+}
+
+async function bindVerifiedChat(origin, cookie, chat, credential, toolMode, administration) {
+  let bound = await jsonRequest(
     origin,
     cookie,
     "chat-bind",
-    `/api/chats?id=${encodeURIComponent(created.chat.id)}`,
+    `/api/chats?id=${encodeURIComponent(chat.id)}`,
     {
       jiraPodId: credential.livePod.podId,
       ...(toolMode === undefined ? {} : { toolMode }),
-      expectedGroundingScopeIdentity: created.chat.groundingScopeIdentity,
+      expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
     },
     "PATCH",
   );
   assert.equal(bound.chat.jiraPodBinding.podId, credential.livePod.podId);
+  if (administration) {
+    bound = await jsonRequest(
+      origin,
+      cookie,
+      "chat-administration-enable",
+      `/api/chats?id=${encodeURIComponent(chat.id)}`,
+      {
+        jiraAdministrationEnabled: true,
+        expectedGroundingScopeIdentity: bound.chat.groundingScopeIdentity,
+      },
+      "PATCH",
+    );
+    assert.equal(bound.chat.jiraAdministrationEnabled, true);
+    assert.equal(bound.chat.jiraPodBinding.podId, credential.livePod.podId);
+  }
   if (toolMode !== undefined) assert.equal(bound.chat.toolMode, toolMode);
   console.log(JSON.stringify({ operation: "jira-chat-live-binding", verified: true }));
   return bound.chat;
@@ -455,6 +547,9 @@ function createLiveDeps(root, session, secret, retainState, restoring = false, m
     uiDbPath: join(root, "ui.db"),
     env: {
       ...modelEnv,
+      KEIKO_OS_KEYCHAIN: "off",
+      KEIKO_STATE_DIR: chatReadLogDirectory(session),
+      KEIKO_MEMORY_DIR: join(root, "memory"),
       [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: secret,
       KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: credentialKey,
     },
@@ -496,7 +591,7 @@ async function runSelectedJourney(origin, cookie, session, projectPath, modelId,
       ),
   });
 }
-async function pairedCookie(origin, secret) {
+async function pairedCookie(origin, secret, signal) {
   const attestation = mintLauncherPairingAttestation({
     secret,
     requestId: randomUUID(),
@@ -508,6 +603,8 @@ async function pairedCookie(origin, secret) {
     "pair",
     "/api/coding-workbench/app-session/pair",
     attestation,
+    "POST",
+    signal,
   );
   const cookie = paired.headers
     .getSetCookie()
@@ -520,12 +617,11 @@ async function pairedCookie(origin, secret) {
 function liveStateDirectory(session, retainState, restoreState) {
   if (restoreState !== undefined && !retainState)
     throw new TypeError("A reopened laboratory state must be retained");
-  const root =
-    restoreState === undefined
-      ? mkdtempSync(
-          join(retainState ? session.directory : realpathSync(tmpdir()), "keiko-jira-live-chat-"),
-        )
-      : realpathSync(restoreState);
+  let root;
+  if (restoreState === undefined) {
+    const parent = retainState ? session.directory : realpathSync(tmpdir());
+    root = mkdtempSync(join(parent, "keiko-jira-live-chat-"));
+  } else root = realpathSync(restoreState);
   if (
     restoreState !== undefined &&
     !root.startsWith(`${realpathSync(session.directory)}/keiko-jira-live-chat-`)
@@ -534,17 +630,223 @@ function liveStateDirectory(session, retainState, restoreState) {
   return root;
 }
 
-function decorateCredentialTransport(deps, decorate) {
-  if (decorate === undefined) return;
+function decorateCredentialTransport(deps, decorate, session) {
   const credentials = deps.atlassianConnectorCredentials;
   assert.ok(credentials);
-  credentials.httpBodyPortFactory = decorate(credentials.httpBodyPortFactory.bind(credentials));
+  const factory = credentials.httpBodyPortFactory.bind(credentials);
+  const observed = (metadata, correlationId, lifecycle) =>
+    sessionVerificationPort(session, factory(metadata, correlationId, lifecycle));
+  credentials.httpBodyPortFactory = decorate === undefined ? observed : decorate(observed);
+  const privateFactory = credentials.jiraPrivatePortFactory?.bind(credentials);
+  if (privateFactory === undefined) return;
+  credentials.jiraPrivatePortFactory = (metadata, context, options, lifecycle) =>
+    privateFactory(
+      metadata,
+      context,
+      {
+        ...options,
+        decorateHttpBodyPort: (port, observation) => {
+          const native = sessionVerificationPort(session, port);
+          return decorate === undefined
+            ? native
+            : decorate(() => native)(metadata, context.correlationId, {
+                ...lifecycle,
+                canonicalPrivateFinalizer: observation.kind === "session-finalizer",
+              });
+        },
+      },
+      lifecycle,
+    );
 }
 
 function createLiveUiServer({ port, deps, root, browser, configureServer }) {
   const server = createUiServer({ port, handlerDeps: deps, ...uiSurface(root, browser) });
   configureServer?.({ server, store: deps.store });
   return server;
+}
+
+async function closeLiveProduct(server, deps, projectPath) {
+  try {
+    server?.closeAllConnections();
+    if (server) await new Promise((resolve) => server.close(resolve));
+  } finally {
+    try {
+      await drainLiveChatTurns(deps, projectPath);
+    } finally {
+      await deps.dispose?.();
+    }
+  }
+}
+
+/** The one server/dependency/model lifecycle, shared by in-process and owned-child qualification. */
+async function startLiveProduct({
+  root,
+  session,
+  secret,
+  retainState,
+  restoring,
+  model,
+  browser,
+  decorateAtlassianHttp,
+  configureServer,
+  port,
+}) {
+  const projectPath = join(root, "workspace");
+  mkdirSync(projectPath, { recursive: true });
+  const deps = createLiveDeps(root, session, secret, retainState, restoring, model.env);
+  let server;
+  try {
+    decorateCredentialTransport(deps, decorateAtlassianHttp, session);
+    await model.configure(deps);
+    if (!deps.store.listProjects().some((project) => project.path === projectPath))
+      deps.store.createProject(projectPath);
+    const selectedPort = port ?? (await unusedPort());
+    server = createLiveUiServer({ port: selectedPort, deps, root, browser, configureServer });
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(selectedPort, "127.0.0.1", resolve);
+    });
+    return {
+      port: selectedPort,
+      projectPath,
+      deps,
+      close: () => closeLiveProduct(server, deps, projectPath),
+    };
+  } catch (error) {
+    await closeLiveProduct(server, deps, projectPath);
+    throw error;
+  }
+}
+
+function validateOwnedLiveOptions(options) {
+  const allowed = new Set([
+    "sessionDir",
+    "root",
+    "secret",
+    "modelId",
+    "modelRetries",
+    "embeddingModelId",
+    "browser",
+    "restoring",
+    "port",
+  ]);
+  if (
+    Object.keys(options).some((key) => !allowed.has(key)) ||
+    process.env.KEIKO_OS_KEYCHAIN !== "off"
+  )
+    throw new TypeError("owned-lab-invalid-initialization");
+}
+
+function bindOwnedEvidenceFailure(observer) {
+  ownedEvidenceFailure = observer;
+  if (process.exitCode === 1) {
+    ownedEvidenceFailure?.();
+    throw new TypeError("owned-lab-evidence-unavailable");
+  }
+}
+
+/** Internal IPC entry: ordinary composition, same persisted state and credential-key owner. */
+export async function startOwnedLiveChatServer(options, { onEvidenceFailure } = {}) {
+  validateOwnedLiveOptions(options);
+  if (
+    typeof options.root !== "string" ||
+    typeof options.sessionDir !== "string" ||
+    !Number.isSafeInteger(options.port) ||
+    options.port < 1 ||
+    options.port > 65535
+  )
+    throw new TypeError("owned-lab-invalid-initialization");
+  const session = loadSession(options.sessionDir);
+  const root = liveStateDirectory(session, true, options.root);
+  bindOwnedEvidenceFailure(onEvidenceFailure);
+  if (
+    typeof options.secret !== "string" ||
+    !/^[0-9a-f]{96}$/u.test(options.secret) ||
+    !options.modelId
+  )
+    throw new TypeError("owned-lab-invalid-initialization");
+  const model = prepareLiveModel(root, session, options.modelId, {
+    modelRetries: options.modelRetries,
+    embeddingModelId: options.embeddingModelId,
+  });
+  return startLiveProduct({ ...options, root, session, model, retainState: true });
+}
+
+function ownedLiveContext(options, root, secret, controller) {
+  let cookie;
+  const pair = async (signal) => {
+    cookie = await pairedCookie(
+      controller.origin,
+      secret,
+      globalThis.AbortSignal.any([
+        globalThis.AbortSignal.timeout(30000),
+        ...(signal ? [signal] : []),
+      ]),
+    );
+  };
+  const live = {
+    session: options.session,
+    modelId: options.modelId,
+    root,
+    secret,
+    projectPath: join(root, "workspace"),
+    get origin() {
+      return controller.origin;
+    },
+    get cookie() {
+      return cookie;
+    },
+    restartServer: async (restartOptions = {}) => {
+      const began = globalThis.performance.now();
+      await controller.restart(restartOptions);
+      await pair(restartOptions.signal);
+      return { restarted: true, downtimeMs: Math.ceil(globalThis.performance.now() - began) };
+    },
+  };
+  return { live, pair };
+}
+
+async function withOwnedLiveChat(options) {
+  if (!options.retainState || options.decorateAtlassianHttp || options.configureServer)
+    throw new TypeError(
+      "Owned laboratory children require retained state and serializable lifecycle options",
+    );
+  await requireLicense(options.session);
+  const root = liveStateDirectory(options.session, true, options.restoreState);
+  options.stateReady?.(root);
+  const secret = randomBytes(48).toString("hex");
+  const controller = createOwnedLiveChatProcess({
+    port: await unusedPort(),
+    initialization: {
+      sessionDir: options.session.directory,
+      root,
+      secret,
+      modelId: options.modelId,
+      modelRetries: options.modelRetries,
+      embeddingModelId: options.embeddingModelId,
+      browser: options.browser,
+      restoring: options.restoreState !== undefined,
+    },
+  });
+  const context = ownedLiveContext(options, root, secret, controller);
+  return runOwnedLiveChatLifecycle({
+    run: async () => {
+      await controller.start();
+      await context.pair();
+      await seedProductBaseline({
+        origin: context.live.origin,
+        cookie: context.live.cookie,
+        root,
+        session: options.session,
+        baselineTemplates: options.baselineTemplates,
+        jsonRequest,
+      });
+      await options.run(context.live);
+      assert.notEqual(process.exitCode, 1);
+    },
+    close: () => controller.close(),
+    audit: () => requireLicense(options.session),
+  });
 }
 
 /** Reuse the paired production server, vault, real model probe and ordinary Chat routes. */
@@ -561,36 +863,106 @@ export async function withLiveChat({
   configureServer,
   modelRetries,
   embeddingModelId,
+  ownedChild = false,
+  baselineTemplates = true,
 }) {
   if (!modelId) throw new TypeError("A locally installed model is required");
+  return withLabProduct({
+    session,
+    modelId,
+    run,
+    retainState,
+    stateReady,
+    browser,
+    restoreState,
+    decorateAtlassianHttp,
+    configureServer,
+    ownedChild,
+    modelRetries,
+    embeddingModelId,
+    baselineTemplates,
+    prepareModel: (root) =>
+      prepareLiveModel(root, session, modelId, { modelRetries, embeddingModelId }),
+  });
+}
+
+/** Same paired server/vault/transport as the Chat lab, with no provider or model probe. */
+export async function withModelFreeJira({
+  session,
+  run,
+  stateReady,
+  decorateAtlassianHttp,
+  baselineTemplates = true,
+}) {
+  return withLabProduct({
+    session,
+    run,
+    stateReady,
+    decorateAtlassianHttp,
+    baselineTemplates,
+    modelId: undefined,
+    retainState: true,
+    browser: false,
+    prepareModel: () => ({
+      env: { KEIKO_CA_BUNDLE_PATH: join(session.directory, "secrets", "tls", "ca.pem") },
+      configure: () => undefined,
+    }),
+  });
+}
+
+async function withLabProduct(options) {
+  const restoreState = isolateRuntimeState(options.session);
+  let release;
+  try {
+    release = await prepareLabRun(options.session);
+    return await (options.ownedChild ? withOwnedLiveChat(options) : runLabProduct(options));
+  } finally {
+    release?.();
+    restoreState();
+  }
+}
+
+async function runLabProduct({
+  session,
+  modelId,
+  run,
+  retainState,
+  stateReady,
+  browser,
+  restoreState,
+  decorateAtlassianHttp,
+  configureServer,
+  prepareModel,
+  baselineTemplates,
+}) {
   await requireLicense(session);
   const root = liveStateDirectory(session, retainState, restoreState);
   const projectPath = join(root, "workspace");
   mkdirSync(projectPath, { recursive: true });
   const secret = randomBytes(48).toString("hex");
   stateReady?.(root);
-  const model = prepareLiveModel(root, session, modelId, { modelRetries, embeddingModelId });
-  const restoring = restoreState !== undefined;
-  const deps = createLiveDeps(root, session, secret, retainState, restoring, model.env);
-  decorateCredentialTransport(deps, decorateAtlassianHttp);
-  let server;
+  const model = prepareModel(root);
+  let product;
   try {
-    await model.configure(deps);
-    if (!deps.store.listProjects().some((project) => project.path === projectPath))
-      deps.store.createProject(projectPath);
-    const port = await unusedPort();
-    const origin = `http://127.0.0.1:${port}`;
-    server = createLiveUiServer({ port, deps, root, browser, configureServer });
-    await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+    product = await startLiveProduct({
+      root,
+      session,
+      secret,
+      retainState,
+      restoring: restoreState !== undefined,
+      model,
+      browser,
+      decorateAtlassianHttp,
+      configureServer,
+    });
+    const origin = `http://127.0.0.1:${product.port}`;
     const cookie = await pairedCookie(origin, secret);
-    await run({ origin, cookie, session, projectPath, modelId, secret, root });
+    await seedProductBaseline({ origin, cookie, root, session, baselineTemplates, jsonRequest });
+    await run({ origin, cookie, session, projectPath, modelId, secret, root, deps: product.deps });
     await requireLicense(session);
     assert.notEqual(process.exitCode, 1);
   } finally {
-    server?.closeAllConnections();
-    if (server) await new Promise((resolve) => server.close(resolve));
-    await drainLiveChatTurns(deps, projectPath);
-    await deps.dispose?.();
+    await product?.close();
     if (!retainState) rmSync(root, { recursive: true, force: true });
   }
 }

@@ -1,3 +1,4 @@
+import type { PrivateDraftSurface } from "@/lib/chat-draft-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { dirty, newEntry, type DraftEntry } from "./chat-draft-state";
 import type { ChatDraftActions } from "./chat-draft-runtime";
@@ -10,6 +11,7 @@ export class ChatDraftController {
   constructor(
     private readonly changed: () => void,
     private readonly replaced: () => void = () => {},
+    private readonly surface: PrivateDraftSurface = "chat",
   ) {}
   entry(chatId: string): DraftEntry {
     let entry = this.entries.get(chatId);
@@ -26,9 +28,11 @@ export class ChatDraftController {
     entry.text = text;
     entry.edited = true;
     entry.editVersion += 1;
-    entry.phase = entry.conflict ? "conflict" : "unsaved";
+    const failed =
+      entry.phase === "failed" || entry.phase === "unavailable" || entry.phase === "load-failed";
+    if (!failed) entry.phase = entry.conflict ? "conflict" : "unsaved";
     this.changed();
-    this.schedule(chatId, entry);
+    if (entry.phase === "unsaved") this.schedule(chatId, entry);
   }
 
   private schedule(chatId: string, entry: DraftEntry): void {
@@ -49,6 +53,7 @@ export class ChatDraftController {
           replaced: this.replaced,
           schedule: (chatId, entry): void => this.schedule(chatId, entry),
           hasUnsaved: (): boolean => this.hasUnsaved(),
+          surface: this.surface,
         }),
     );
     return this.actions;
@@ -62,7 +67,9 @@ export class ChatDraftController {
       return await operation(await this.loadActions());
     } catch {
       this.actions = undefined;
-      for (const entry of this.entries.values()) entry.phase = "failed";
+      for (const entry of this.entries.values()) {
+        entry.phase = dirty(entry) ? "failed" : "load-failed";
+      }
       this.changed();
       reportClientDiagnostic("Private chat draft runtime could not be loaded.", {
         errorKind: "unavailable",

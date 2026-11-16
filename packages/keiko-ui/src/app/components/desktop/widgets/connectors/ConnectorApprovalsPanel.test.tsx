@@ -13,13 +13,13 @@ const APPROVAL: AtlassianConnectorPendingApproval = {
   schemaVersion: "1",
   approvalId: "ap1",
   connectorId: "c1",
-  provider: "jira",
-  actionType: "create-issue",
+  provider: "confluence",
+  actionType: "create-page",
   actionClass: "connector-write",
-  requiredScope: "issue-tracker.write",
+  requiredScope: "knowledge-base.write",
   risk: "high",
   reviewReason: "deterministic-risk-approval-required",
-  targetRef: "PROJ-1",
+  targetRef: "4711",
   correlationId: "corr1",
   requestedAt: 0,
   expiresAt: 1000,
@@ -30,7 +30,7 @@ function makeClient(overrides: Partial<ApprovalsClient> = {}): ApprovalsClient {
     listApprovals: vi.fn(async () => [APPROVAL]),
     approveAction: vi.fn(async () => ({
       disposition: "review-required" as const,
-      result: { status: "succeeded" as const, targetRef: "PROJ-1" },
+      result: { status: "succeeded" as const, targetRef: "4711" },
     })),
     rejectAction: vi.fn(async () => ({
       approvalId: "ap1",
@@ -45,8 +45,8 @@ describe("ConnectorApprovalsPanel — rendering", () => {
   it("renders a pending action with its disposition context", async () => {
     render(<ConnectorApprovalsPanel client={makeClient()} />);
     const row = await screen.findByTestId("acx-approval");
-    expect(row).toHaveTextContent("Create Jira issue");
-    expect(row).toHaveTextContent("PROJ-1");
+    expect(row).toHaveTextContent("Create Confluence page");
+    expect(row).toHaveTextContent("4711");
     expect(row).toHaveTextContent("High");
     expect(row).toHaveTextContent("Review required");
     expect(row).toHaveTextContent(/high-risk action always requires approval/i);
@@ -81,7 +81,7 @@ describe("ConnectorApprovalsPanel — content preview (KEIKO-0186)", () => {
     expect(approveIndex).toBeGreaterThan(previewIndex);
   });
 
-  it("renders nothing extra when the server supplied no preview (transition-issue, or nothing to preview)", async () => {
+  it("renders nothing extra when the server supplied no preview (a write without a text field, or nothing to preview)", async () => {
     render(<ConnectorApprovalsPanel client={makeClient()} />);
     await screen.findByTestId("acx-approval");
     expect(screen.queryByTestId("acx-content-preview")).not.toBeInTheDocument();
@@ -232,7 +232,7 @@ describe("ConnectorApprovalsPanel — approve outcomes", () => {
     await user.click(await screen.findByRole("button", { name: "Approve" }));
     const result = await screen.findByTestId("acx-approval-result");
     expect(result).toHaveAttribute("data-tone", "ok");
-    expect(result).toHaveTextContent(/Result: PROJ-1/);
+    expect(result).toHaveTextContent(/Result: 4711/);
     expect(vi.mocked(client.approveAction)).toHaveBeenCalledWith("ap1");
   });
 

@@ -280,6 +280,34 @@ describe("native runtime process backend", () => {
     child.emit("exit", 0);
   });
 
+  // The verified helper bytes are reused while the file is unchanged, never after it was replaced:
+  // even a same-length replacement moves the file's change time and is verified again.
+  it("reuses verified helper bytes for a second launch and rejects a same-length replacement", () => {
+    const paths = fixture();
+    const executed: string[] = [];
+    const spawn = vi.fn<NativeRuntimeHelperSpawn>((helperPath) => {
+      executed.push(readFileSync(helperPath, "utf8"));
+      return new FakeHelper();
+    });
+    const backend = createNativeRuntimeProcessBackend({
+      helperPath: paths.helper,
+      expectedHelperSha256: createHash("sha256").update("helper").digest("hex"),
+      runtimeRoots: [join(paths.runtime, "..")],
+      workspaceRoot: paths.workspace,
+      spawnHelper: spawn,
+    });
+
+    backend.spawnOwnedTree(request(paths.runtime, paths.workspace));
+    backend.spawnOwnedTree(request(paths.runtime, paths.workspace));
+    expect(executed).toEqual(["helper", "helper"]);
+
+    writeFileSync(paths.helper, "HELPER");
+    expect(() => backend.spawnOwnedTree(request(paths.runtime, paths.workspace))).toThrow(
+      "native-runtime-helper-digest-mismatch",
+    );
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
   it("maps both signals to closed helper protocol commands without OS process signaling", () => {
     const { backend, child, paths } = backendFixture();
     const tree = backend.spawnOwnedTree(request(paths.runtime, paths.workspace), SANDBOX);

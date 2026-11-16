@@ -5,6 +5,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { backlogModelMessage, createBacklogJiraRoutes } from "./jira-chat-4081-backlog.mjs";
 
 export const FIXTURE_PAT = "synthetic-jira-browser-fixture-pat";
 export const COMMENT_BODY = "Synthetic browser approval fixture";
@@ -72,11 +73,12 @@ function certificate(directory) {
   return { key: readFileSync(key), cert: readFileSync(cert), caPath: cert };
 }
 
-function jiraHandler(observation, baseUrl) {
+function jiraHandler(observation, baseUrl, backlogRoute) {
   return async (request, response) => {
     observation.counts.jiraRequests++;
     observation.persist();
-    const path = new URL(request.url, baseUrl).pathname;
+    const url = new URL(request.url, baseUrl);
+    const path = url.pathname;
     if (request.headers.authorization !== `Bearer ${FIXTURE_PAT}`) {
       observation.counts.denied++;
       observation.persist();
@@ -103,6 +105,7 @@ function jiraHandler(observation, baseUrl) {
       observation.persist();
       return json(response, 200, [{ id: "10000", key: "KEIKO", name: "Synthetic project" }]);
     }
+    if (await backlogRoute(request, response, path, url)) return;
     return commentRoute(request, response, path, observation);
   };
 }
@@ -145,6 +148,12 @@ function modelMessage(body, observation) {
     return toolMessage("report_readiness", { status: "ok" }, "readiness");
   }
   const messages = lastTurn(Array.isArray(body.messages) ? body.messages : []);
+  const backlog = backlogModelMessage(body, messages);
+  if (backlog !== undefined) return backlog;
+  return ordinaryModelMessage(messages, tools, observation);
+}
+
+function ordinaryModelMessage(messages, tools, observation) {
   const prompt = JSON.stringify(messages);
   if (!prompt.includes("JIRA_E2E_")) return { role: "assistant", content: "Ready." };
   if (messages.some((message) => message.role === "tool")) {
@@ -223,7 +232,8 @@ export async function startJiraChatTransports(directory, jiraPort, modelPort) {
   const tls = certificate(directory);
   const observation = metricsOwner(directory);
   const baseUrl = `https://127.0.0.1:${jiraPort}/jira`;
-  const jira = createHttpsServer(tls, guarded(jiraHandler(observation, baseUrl)));
+  const backlogRoute = createBacklogJiraRoutes(directory, observation, bodyOf, json);
+  const jira = createHttpsServer(tls, guarded(jiraHandler(observation, baseUrl, backlogRoute)));
   const model = createHttpServer(
     guarded(async (request, response) => {
       observation.counts.models++;

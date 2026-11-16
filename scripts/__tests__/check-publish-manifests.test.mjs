@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { validatePublishManifests } from "../check-publish-manifests.mjs";
-import { requiredPlatformRuntimePackageNames } from "../release-workspace-policy.mjs";
+import {
+  pendingPlatformRuntimePackageNames,
+  requiredPlatformRuntimePackageNames,
+} from "../release-workspace-policy.mjs";
 import { NPM_LANE_RUNTIME_APPROVALS } from "../../packages/keiko-server/src/coding-runtime/npmLaneRuntimeApprovals.ts";
 
 const VERSION = "0.2.11";
@@ -194,11 +197,21 @@ describe("platform coding-runtime packages", () => {
   // declared takes the coding runtime away from every npm installation on that platform, silently:
   // npm just has nothing optional left to install.
   it("requires exactly the packages the server holds approvals for", () => {
-    expect([...requiredPlatformRuntimePackageNames].sort()).toStrictEqual(
+    expect(
+      [...requiredPlatformRuntimePackageNames, ...pendingPlatformRuntimePackageNames].sort(),
+    ).toStrictEqual(
       Object.values(NPM_LANE_RUNTIME_APPROVALS)
         .map((approval) => approval.packageName)
         .sort(),
     );
+  });
+
+  // #4068: only the never-published Windows package may wait for its first publication; any other
+  // approved package left undeclared would silently take the runtime away from its platform.
+  it("lets only the unpublished Windows package wait for its first publication", () => {
+    expect(pendingPlatformRuntimePackageNames).toStrictEqual([
+      "@oscharko-dev/keiko-coding-runtime-win32-x64",
+    ]);
   });
 
   it("refuses a manifest that declares none of them", () => {

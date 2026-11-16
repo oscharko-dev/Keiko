@@ -59,10 +59,31 @@ describe("keeping an MCP server's OAuth credential between runs (#3903 AC3)", ()
       { ...BINDING, server: "tracker" },
     ])
       expect(credentials.load(changed)).toBeUndefined();
-    const files = readdirSync(join(stateDir, "credentials"));
-    const sealed = files.map((file) => readFileSync(join(stateDir, "credentials", file), "utf8"));
+    // Recursive: the vault keeps its write-guard directory beside the sealed files.
+    const files = readdirSync(join(stateDir, "credentials"), {
+      recursive: true,
+      withFileTypes: true,
+    }).filter((entry) => entry.isFile());
+    const sealed = files.map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"));
     expect(sealed.join("")).not.toContain("token-canary");
     expect(sealed.join("")).not.toContain("issues.example.test");
+  });
+
+  it("keeps the credential with the later expiry when an older one is saved over it", () => {
+    const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-mcp-vault-")));
+    roots.push(stateDir);
+    const credentials = store(stateDir);
+    const fresher = { ...CREDENTIAL, value: { ...CREDENTIAL.value, expires: 9_000 } };
+    const older = { ...CREDENTIAL, value: { ...CREDENTIAL.value, expires: 5_000 } };
+    credentials.save(BINDING, fresher);
+    credentials.save(BINDING, older);
+    expect(credentials.load(BINDING)).toEqual(fresher);
+    const newest = { ...CREDENTIAL, value: { ...CREDENTIAL.value, expires: 12_000 } };
+    credentials.save(BINDING, newest);
+    expect(credentials.load(BINDING)).toEqual(newest);
+    // A credential without a stamp proves nothing about age, so it is stored as before.
+    credentials.save(BINDING, CREDENTIAL);
+    expect(credentials.load(BINDING)).toEqual(CREDENTIAL);
   });
 
   it("names a binding by a digest, never by its URL or issuer", () => {

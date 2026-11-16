@@ -266,3 +266,15 @@ describe("streamed tool-call fragments without a numeric index", () => {
     expect(line?.extra).toMatchObject({ toolCallFragmentsDropped: 1 });
   });
 });
+
+describe("a stream of very many unindexed tool-call fragments", () => {
+  it("is judged a malformed tool call in linear time, never a transport cut", async () => {
+    let body = "";
+    for (let i = 0; i < 126_000; i += 1) {
+      body += `data: {"choices":[{"delta":{"tool_calls":[{"id":"i${String(i)}"}]}}]}\n\n`;
+    }
+    const adapter = adapterFor(() => new Response(body + "data: [DONE]\n\n"));
+    const failure = await failureOf(() => drain(adapter.callStream(REQUEST, PROVIDER)));
+    expect(failure).toBeInstanceOf(MalformedToolCallError);
+  }, 20_000);
+});

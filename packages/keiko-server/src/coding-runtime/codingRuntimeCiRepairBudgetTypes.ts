@@ -1,16 +1,13 @@
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { CodingWorkbenchBudget } from "@oscharko-dev/keiko-contracts";
 
-export type CiRepairLimits = Pick<
-  CodingWorkbenchBudget,
-  "maxRuntimeMs" | "maxToolCalls" | "maxPromptTokens"
->;
+// Keiko does not limit tokens (#4346): a repair counts time and tool calls only.
+export type CiRepairLimits = Pick<CodingWorkbenchBudget, "maxRuntimeMs" | "maxToolCalls">;
 export type CiRepairAttemptKind = "workspace-edit" | "verification" | "commit";
 export type CiRepairAttemptStatus = "active" | "succeeded" | "failed" | "interrupted";
 export interface CiRepairCharge {
   readonly chargeId: string;
   readonly toolCalls: number;
-  readonly promptTokens: number;
 }
 export interface CiRepairAttempt {
   readonly attemptId: string;
@@ -23,7 +20,6 @@ export interface CiRepairAttempt {
   readonly startedAtMs: number;
   readonly finishedAtMs: number | null;
   readonly toolCalls: number;
-  readonly promptTokens: number;
   readonly charges: readonly CiRepairCharge[];
 }
 /** Internal content-free accounting. Neither authority nor approval can be serialized here. */
@@ -39,7 +35,6 @@ export interface CiRepairBudgetRecord {
   readonly deadlineMs: number;
   readonly limits: CiRepairLimits;
   readonly toolCalls: number;
-  readonly promptTokens: number;
   readonly failedAttempts: number;
   readonly attempts: readonly CiRepairAttempt[];
 }
@@ -59,7 +54,6 @@ export type CiRepairBudgetBlockReason =
   | "clock-drift"
   | "deadline-exhausted"
   | "tool-budget-exhausted"
-  | "prompt-budget-exhausted"
   | "attempt-budget-exhausted"
   | "storage-capacity"
   | "attempt-active"
@@ -122,10 +116,8 @@ export function ciRepairCount(value: unknown): value is number {
 }
 export function validCiRepairLimits(value: CiRepairLimits): boolean {
   return (
-    Object.keys(value).length === 3 &&
-    [value.maxRuntimeMs, value.maxToolCalls, value.maxPromptTokens].every(
-      (limit) => ciRepairCount(limit) && limit > 0,
-    )
+    Object.keys(value).length === 2 &&
+    [value.maxRuntimeMs, value.maxToolCalls].every((limit) => ciRepairCount(limit) && limit > 0)
   );
 }
 
@@ -136,7 +128,6 @@ export function ciRepairBudgetErrorKind(reason: CiRepairBudgetBlockReason): Acti
   if (reason === "invalid-binding" || reason === "invalid-input") return "validation-failed";
   if (
     reason === "tool-budget-exhausted" ||
-    reason === "prompt-budget-exhausted" ||
     reason === "attempt-budget-exhausted" ||
     reason === "storage-capacity"
   ) {

@@ -183,7 +183,17 @@ function commandForPlatform(cmd, args, options = {}) {
     return { command: cmd, shell: false };
   }
   assertWindowsShellArguments(cmd, args);
-  const executable = resolveHostExecutable(cmd, { env: options.env ?? process.env });
+  let executable;
+  try {
+    executable = resolveHostExecutable(cmd, { env: options.env ?? process.env });
+  } catch (error) {
+    // Report resolution failure through the same body-free result path as a failed spawn.
+    // In particular, never fall back to the unverified command on PATH.
+    const spawnError = Object.assign(new Error(`trusted ${cmd} executable unavailable`), {
+      code: error?.code ?? "UNTRUSTED_OR_MISSING",
+    });
+    return { error: spawnError, status: null, signal: null, stdout: "", stderr: "" };
+  }
   // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with trusted absolute executable.
   return { command: shellCommandForTrustedExecutable(executable), shell: true };
 }
@@ -191,7 +201,9 @@ function commandForPlatform(cmd, args, options = {}) {
 function runResult(cmd, args, options = {}) {
   // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with the executable resolved to a
   // trusted absolute path before the shell is enabled. POSIX and node/bin paths stay shell:false.
-  const { command, shell } = commandForPlatform(cmd, args, options);
+  const invocation = commandForPlatform(cmd, args, options);
+  if (invocation.error) return invocation;
+  const { command, shell } = invocation;
   return spawnSync(command, args, { encoding: "utf8", ...options, shell });
 }
 
@@ -217,6 +229,7 @@ function safeErrorCode(error) {
 
 function corepackSpawnFailureSetupSummary(error, timeoutMs) {
   const code = safeErrorCode(error);
+  if (code === "UNTRUSTED_OR_MISSING") return "trusted corepack executable was not found";
   if (code === "ETIMEDOUT") {
     return `corepack did not finish before the ${String(timeoutMs)}ms setup timeout`;
   }
@@ -237,6 +250,10 @@ export function terminateProcessTree(child) {
     });
     return;
   }
+  terminatePosixProcessGroup(child);
+}
+
+export function terminatePosixProcessGroup(child) {
   try {
     process.kill(-child.pid, "SIGKILL");
   } catch (error) {
@@ -299,7 +316,9 @@ export function runAsync(cmd, args, options = {}) {
     throw new TypeError("runAsync requires a positive finite timeout in milliseconds");
   }
   const outputState = { capturedBytes: 0, limitBytes: asyncOutputLimitBytes(outputLimitBytes) };
-  const { command, shell } = commandForPlatform(cmd, args, spawnOptions);
+  const invocation = commandForPlatform(cmd, args, spawnOptions);
+  if (invocation.error) return Promise.resolve(invocation);
+  const { command, shell } = invocation;
   return new Promise((resolvePromise) => {
     let settled = false;
     const stdout = [];
@@ -592,30 +611,28 @@ function removeStaleCorepackCacheLock(lockDir, timeoutMs) {
   }
 }
 
-async function acquireCorepackCacheLock(locator, timeoutMs) {
+async function acquireCorepackCacheLock(locator, timeoutMs, deadline = Date.now() + timeoutMs) {
   const lockDir = corepackCacheLockDir(locator);
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    const ownerToken = `${process.pid}-${randomBytes(9).toString("hex")}`;
-    try {
-      mkdirSync(lockDir, { mode: 0o700 });
-      writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs);
-      const renewal = startCorepackCacheLockRenewal(lockDir, ownerToken, timeoutMs);
-      return () => {
-        renewal.stop();
-        releaseCorepackCacheLock(lockDir, ownerToken);
-        renewal.assertHealthy();
-      };
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-    }
-    removeStaleCorepackCacheLock(lockDir, timeoutMs);
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      throw smokeGateFailure(`timed out waiting for Corepack cache lock for ${locator}`);
-    }
-    await sleep(Math.min(COREPACK_CACHE_LOCK_POLL_MS, remainingMs));
+  const ownerToken = `${process.pid}-${randomBytes(9).toString("hex")}`;
+  try {
+    mkdirSync(lockDir, { mode: 0o700 });
+    writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs);
+    const renewal = startCorepackCacheLockRenewal(lockDir, ownerToken, timeoutMs);
+    return () => {
+      renewal.stop();
+      releaseCorepackCacheLock(lockDir, ownerToken);
+      renewal.assertHealthy();
+    };
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
   }
+  removeStaleCorepackCacheLock(lockDir, timeoutMs);
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    throw smokeGateFailure(`timed out waiting for Corepack cache lock for ${locator}`);
+  }
+  await sleep(Math.min(COREPACK_CACHE_LOCK_POLL_MS, remainingMs));
+  return acquireCorepackCacheLock(locator, timeoutMs, deadline);
 }
 
 export async function withCorepackYarnCacheLock(
@@ -734,15 +751,16 @@ function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
 
 export function packRoot() {
   // BEHAVIOURAL BRANCH (env-gated, opt-in): default behaviour is unchanged — the gating Linux
-  // `build-scan-sbom-smoke` job leaves the flag unset and packs with the full `prepack` chain
-  // (clean + build + every release gate). ONLY the cross-platform runtime smoke (#284 AC4) opts in
-  // by setting KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1, which packs the
+  // `build-scan-sbom-smoke` job's first smoke leaves the flag unset and packs with the full
+  // `prepack` chain (clean + build + every release gate). Its following optional-dependency
+  // smoke and the cross-platform runtime smoke (#284 AC4) opt in with
+  // KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1, which packs the
   // ALREADY-BUILT dist (assembled by the job's explicit build / prepare:bin / build:ui steps)
   // WITHOUT re-running that chain: the prepack gates (arch-check, package-surface, supply-chain)
   // are the Linux publish gate — they run on the gating `build-scan-sbom-smoke` job and several
   // shell out to `npx`/`npm` in ways that are not Windows-portable, which is a separate concern from
   // verifying that the PACKED ARTIFACT runs cross-platform. On Linux the gate keeps the full
-  // prepack pack (flag unset), so its coverage is unchanged.
+  // first prepack pack (flag unset), so its coverage is unchanged.
   if (process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS !== "1") {
     const gateResult = run("npm", ["run", "prepack"], { cwd: repoRoot });
     if (gateResult.status !== 0) {
@@ -809,6 +827,58 @@ function installInto(tmp, tarballPath, options) {
         `(signal=${String(installResult.signal)}): ${installResult.stderr}`,
     );
   }
+}
+
+/** Qualify npm's genuinely global shallow layout in a disposable prefix (#3582). */
+export function assertGlobalPackageInstall(prefix, artifact, options) {
+  const modules =
+    process.platform === "win32"
+      ? join(prefix, "node_modules")
+      : join(prefix, "lib", "node_modules");
+  // Strict script-policy preflight loads the global root before npm's reify creates it.
+  mkdirSync(dirname(modules), { recursive: true });
+  const result = run(
+    "npm",
+    [
+      "install",
+      "--global",
+      "--prefix",
+      prefix,
+      artifact.tarballPath,
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      ...(options.includeOptional ? [] : ["--omit=optional"]),
+    ],
+    { cwd: prefix, timeout: npmInstallTimeoutMs() },
+  );
+  if (result.status !== 0) fail(`isolated global install failed: ${result.stderr}`);
+  const packageRoot = join(modules, "@oscharko-dev", "keiko");
+  const verification = run(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+    import {createRequire} from 'node:module';
+    import {pathToFileURL} from 'node:url';
+    import {join} from 'node:path';
+    const root = process.argv[1];
+    const local = createRequire(join(root, 'package.json'));
+    for (const name of ['ws','typescript','yauzl','yaml','ajv','pdfjs-dist']) local.resolve(name);
+    await import(pathToFileURL(join(root, 'dist/index.js')).href);
+    await import('@oscharko-dev/keiko-server');
+  `,
+      packageRoot,
+    ],
+    { cwd: packageRoot },
+  );
+  if (verification.status !== 0) fail(`global runtime graph is incomplete: ${verification.stderr}`);
+  const cli = run(process.execPath, [join(packageRoot, "dist", "cli", "index.js"), "--version"], {
+    cwd: prefix,
+  });
+  if (cli.status !== 0 || !cli.stdout.includes(rootVersion))
+    fail("global CLI version is unavailable");
 }
 
 function registryPackument(registryUrl, artifact, tarballBytes) {
@@ -2598,31 +2668,38 @@ async function reserveUiPort() {
   });
 }
 
-async function waitForHealth(baseUrl, child, stdoutChunks, stderrChunks) {
-  const deadline = Date.now() + UI_HEALTH_TIMEOUT_MS;
-  let lastError = "health endpoint did not respond";
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      fail(
-        `keiko ui exited ${String(child.exitCode)} before /api/health was reachable.\n` +
-          `stdout:\n${stdoutChunks.join("")}\n` +
-          `stderr:\n${stderrChunks.join("")}`,
-      );
-    }
-    try {
-      const res = await globalThis.fetch(`${baseUrl}/api/health`);
-      if (res.ok) return;
-      lastError = `/api/health returned ${String(res.status)}`;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-    await sleep(UI_HEALTH_POLL_INTERVAL_MS);
+async function waitForHealth(
+  baseUrl,
+  child,
+  stdoutChunks,
+  stderrChunks,
+  deadline = Date.now() + UI_HEALTH_TIMEOUT_MS,
+  lastError = "health endpoint did not respond",
+) {
+  if (Date.now() >= deadline) {
+    fail(
+      `keiko ui did not become healthy within ${String(UI_HEALTH_TIMEOUT_MS)}ms: ${lastError}\n` +
+        `stdout:\n${stdoutChunks.join("")}\n` +
+        `stderr:\n${stderrChunks.join("")}`,
+    );
   }
-  fail(
-    `keiko ui did not become healthy within ${String(UI_HEALTH_TIMEOUT_MS)}ms: ${lastError}\n` +
-      `stdout:\n${stdoutChunks.join("")}\n` +
-      `stderr:\n${stderrChunks.join("")}`,
-  );
+  if (child.exitCode !== null) {
+    fail(
+      `keiko ui exited ${String(child.exitCode)} before /api/health was reachable.\n` +
+        `stdout:\n${stdoutChunks.join("")}\n` +
+        `stderr:\n${stderrChunks.join("")}`,
+    );
+  }
+  let nextError;
+  try {
+    const res = await globalThis.fetch(`${baseUrl}/api/health`);
+    if (res.ok) return;
+    nextError = `/api/health returned ${String(res.status)}`;
+  } catch (error) {
+    nextError = error instanceof Error ? error.message : String(error);
+  }
+  await sleep(UI_HEALTH_POLL_INTERVAL_MS);
+  return waitForHealth(baseUrl, child, stdoutChunks, stderrChunks, deadline, nextError);
 }
 
 async function stopChild(child) {
@@ -2785,7 +2862,7 @@ async function assertUiLaunchProject(baseUrl, tmp) {
   }
 }
 
-async function assertPackagedUi(tmp) {
+export async function assertPackagedUi(tmp) {
   const packageRoot = join(tmp, "node_modules", "@oscharko-dev", "keiko");
   const staticRoot = join(packageRoot, "dist", "ui", "static");
   const hashesFile = join(packageRoot, "dist", "ui", "csp-hashes.json");
@@ -2805,6 +2882,7 @@ async function assertPackagedUi(tmp) {
   const stderrChunks = [];
   const child = spawn(process.execPath, [bin, "ui", "--port", String(port)], {
     cwd: tmp,
+    env: { ...process.env, KEIKO_OS_KEYCHAIN: "off" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout?.on("data", (chunk) => stdoutChunks.push(String(chunk)));
@@ -2827,7 +2905,7 @@ async function assertPackagedUi(tmp) {
   }
 }
 
-function lifecycleCommandRunner(tmp, bin, port, stateDir) {
+function lifecycleCommandRunner(tmp, bin, port, stateDir, packageStart) {
   const commonArgs = [
     "--host",
     "127.0.0.1",
@@ -2842,10 +2920,9 @@ function lifecycleCommandRunner(tmp, bin, port, stateDir) {
   ];
   return (command, extra = []) =>
     run(
-      "node",
+      packageStart && command === "start" ? "npm" : "node",
       [
-        bin,
-        command,
+        ...(packageStart && command === "start" ? ["start", "--"] : [bin, command]),
         ...commonArgs,
         ...(command === "start" || command === "restart" ? ["--no-open"] : []),
         ...extra,
@@ -2959,7 +3036,7 @@ function assertLifecycleStatusStopped(runLifecycle) {
   }
 }
 
-async function assertPackagedLifecycleCommands(tmp) {
+export async function assertPackagedLifecycleCommands(tmp, { packageStart = false } = {}) {
   const packageRoot = join(tmp, "node_modules", "@oscharko-dev", "keiko");
   const bin = join(packageRoot, "dist", "cli", "index.js");
   const port = await reserveUiPort();
@@ -2970,7 +3047,7 @@ async function assertPackagedLifecycleCommands(tmp) {
   // planting attack (KEIKO-0330). A home-contained temp dir satisfies both: outside the workspace,
   // inside home, cleaned up when the smoke completes.
   const stateDir = mkdtempSync(join(homedir(), ".keiko-smoke-state-"));
-  const lifecycleRun = lifecycleCommandRunner(tmp, bin, port, stateDir);
+  const lifecycleRun = lifecycleCommandRunner(tmp, bin, port, stateDir, packageStart);
 
   let started = false;
   try {
@@ -3059,14 +3136,12 @@ export function seedThenPack(vendorTmp, deps) {
 }
 
 /**
- * The one-line verdict the smoke prints once both consumer install paths — the npm tarball install
- * and the Yarn registry install — have passed. It names exactly the paths this smoke proves; the
- * global-prefix path is not among them since #3565 (see #3582).
+ * The one-line verdict after project npm, isolated global npm and Yarn registry installs pass.
  */
 export function smokeSuccessSummary(options, vendoredPackageCount) {
   const optionals = options.includeOptional ? "optional deps included" : "optional deps omitted";
   return (
-    `installable-smoke ok: npm tarball + Yarn registry installs passed (${optionals}), ` +
+    `installable-smoke ok: npm tarball + isolated global npm + Yarn registry installs passed (${optionals}), ` +
     `${String(vendoredPackageCount)} vendored packages present, ` +
     "root runtime/types + CLI + UI/lifecycle reachable."
   );
@@ -3080,6 +3155,7 @@ async function main() {
   // the first; the finally tolerates either being unassigned.
   let tmp;
   let yarnTmp;
+  let globalTmp;
   let artifact;
   try {
     tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
@@ -3087,6 +3163,8 @@ async function main() {
     const seeded = seedThenPack(vendorTmp);
     const { vendored } = seeded;
     artifact = seeded.artifact;
+    globalTmp = mkdtempSync(join(tmpdir(), "keiko-global-install-smoke-"));
+    assertGlobalPackageInstall(globalTmp, artifact, options);
     installInto(tmp, artifact.tarballPath, options);
     assertCliExecutable(tmp);
     assertVendoredPayload(tmp);
@@ -3111,6 +3189,7 @@ async function main() {
   } finally {
     if (tmp !== undefined) rmSync(tmp, { recursive: true, force: true });
     if (yarnTmp !== undefined) rmSync(yarnTmp, { recursive: true, force: true });
+    if (globalTmp !== undefined) rmSync(globalTmp, { recursive: true, force: true });
     // vendorTmp is deliberately NOT removed: it is the lockfile-keyed cache the next invocation
     // reuses, and it lives under the OS temp directory.
     artifact?.cleanup();

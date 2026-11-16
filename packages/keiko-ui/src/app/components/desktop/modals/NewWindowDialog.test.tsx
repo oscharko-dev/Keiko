@@ -1106,6 +1106,19 @@ describe("NewWindowDialog dialog controls and Files defaults", () => {
     expect(screen.queryByDisplayValue("/offline")).not.toBeInTheDocument();
   });
 
+  it("does not prefill a Files project the read surface refuses (#4371)", async () => {
+    vi.mocked(fetchProjects).mockResolvedValue({
+      projects: [{ ...project("/refused", "Refused"), readable: false }, project()],
+    });
+
+    render(
+      <NewWindowDialog type="files" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+
+    expect(await screen.findByDisplayValue("/repo")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("/refused")).not.toBeInTheDocument();
+  });
+
   it("does not overwrite a manually entered Files root when project loading resolves later", async () => {
     let resolveProjects: ((value: Awaited<ReturnType<typeof fetchProjects>>) => void) | undefined;
     vi.mocked(fetchProjects).mockReturnValue(
@@ -1240,6 +1253,19 @@ describe("NewWindowDialog chat title (0.3.0 audit: locale-independent untitled m
     const cfg = confirmedCfg(onConfirm);
     expect(cfg["title"]).toBe("Freigabeprüfung");
     expect(subText("chat", cfg)).toBe("Freigabeprüfung");
+  });
+
+  it("selects the prefilled default so typing replaces it instead of appending (#4335)", async () => {
+    const onConfirm = vi.fn();
+    render(
+      <NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />,
+    );
+    const input = screen.getByDisplayValue(EN_MESSAGES["window.default.chatTitle"]);
+    await waitFor(() => expect(input).toHaveFocus());
+    expect(input).toHaveProperty("selectionStart", 0);
+    expect(input).toHaveProperty("selectionEnd", input.getAttribute("value")?.length);
+    await userEvent.setup().keyboard("Online-Banking-App");
+    expect(input).toHaveValue("Online-Banking-App");
   });
 
   it("treats an accepted English default exactly the same way", () => {

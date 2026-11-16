@@ -220,8 +220,13 @@ wrapper. POSIX still sends `SIGTERM` in addition to the sentinel.
 executes on that loop. One Windows run can pay the 5 000 ms bound twice (SIGTERM and SIGKILL), so
 `WindowsTerminationCapacity` deliberately admits at most THREE live Windows commands process-wide.
 Each admitted command reserves two units from the same 30-second/60-second rolling budget used by
-direct LSP tree kills. A fourth concurrent command, or any command for which two units are not
-available, is denied with `CommandDeniedError` before ephemeral HOME creation or spawn. Held units
+direct LSP tree kills. A fourth concurrent command, already validated, waits for a released slot
+first come first served — unspawned, with no ephemeral HOME, bounded by its abort signal and
+`windowsSlotWaitMs` (30 s by default) — and `reserve` never overtakes a waiter (#4068). A command
+whose wait expires, or for which two budget units are not available when a slot frees, is denied
+with `CommandDeniedError` before ephemeral HOME creation or spawn; the stall budget itself never
+waits. A free slot still admits synchronously, and an injected capacity without `acquire` keeps the
+immediate denial. Held units
 remain charged across a window rollover; completed calls refund only their unused wait, and release
 returns only units the command never consumed. Releasing a concurrency slot therefore cannot reset
 the stall budget, and `runCommand` plus LSP termination together cannot stack past the process-wide
@@ -314,9 +319,17 @@ contains no validation logic — because validation belongs to the caller, not t
 ### D4 — Patch validation rules, dry-run-never-writes, and fail-closed atomic apply
 
 **Supported subset.** `parseUnifiedDiff` handles standard unified
-diffs: `--- a/<path>` / `+++ b/<path>` headers, `@@ -l,s +l,s @@` hunks, ` `/`+`/`-` body lines,
-file creation (`--- /dev/null`), and deletion (`+++ /dev/null`). This is not git-apply: no rename
-detection, no fuzzy matching, no binary patches. The parser is linear — a single pass over split
+diffs: `--- a/<path>` / `+++ b/<path>` headers, including Git's C-quoted form for a path with special
+characters, `@@ -l,s +l,s @@` hunks, ` `/`+`/`-` body lines,
+file creation (`--- /dev/null`), and deletion (`+++ /dev/null`). A shape that would silently lose a
+change is refused with `PatchParseError` instead of parsing to a smaller patch: hunks under a
+`--- ` line that has no `+++ ` line, a change line between the `+++ ` header and the file's first
+hunk header, and a hunk header number outside the safe integer range (#4271, found by seeded
+property tests). A lone `--- ` line without hunks stays ignored, and so does prose after a
+finished hunk once a line that is not a change line (a blank line or a fence) ended it; a change
+line directly after a hunk whose counts are spent is refused as before. Redaction of model text
+that holds a refused diff projects it as text, not as a diff (ADR-0022).
+This is not git-apply: no rename detection, no fuzzy matching, no binary patches. The parser is linear — a single pass over split
 lines with bounded per-line regexes — so it cannot backtrack catastrophically (CodeQL ReDoS guard).
 
 The pure parser lives in `keiko-contracts/runtime/unified-diff`; the existing tools module re-exports
@@ -384,6 +397,11 @@ Tool `output` strings are redacted at two points:
    declared credential values and built-in secret patterns remain scrubbed, and child environment
    isolation is unchanged. Machine metadata containing a redaction marker is rejected before
    parsing or hashing; corrupted identities must never become verification facts or permit a push.
+   The verification runtime-target probe (`resolveVerificationRuntimeTarget`) uses the same scrub for
+   one reason: it runs only a fixed, repository-independent Node metadata script whose output is
+   bounded to 1 KiB and parsed against a closed key set, and a host that exports `NODE_VERSION` (the
+   official Node container image does) would otherwise have its Node version redacted and the target
+   refused; a credential-named value in that output still scrubs and still fails the probe closed.
    Content-bearing blob, patch and CI failure-log readers retain the default all-environment-value
    scrub; the pull-request body reader applies that same scrub to the body text it returns (text the
    scrub would alter is an altered read, never a fact) while the identity envelope around it is a
@@ -482,10 +500,12 @@ Tool consumers (`WorkspaceToolHost` callers) depend only on the `ToolPort` inter
   `git status` exposes any partial write, and the repository's VCS history is the recovery path.
 - **Windows termination safety deliberately caps concurrency.** At most three Windows
   `runCommand` children may be live process-wide because each reserves both bounded tree-kill
-  escalations from the shared rolling stall budget. A fourth concurrent command is denied before
-  spawn with `CommandDeniedError`; it is not started with weaker descendant containment. This is
-  an intentional availability trade-off, and callers must surface the ordinary correlated denied
-  outcome rather than retrying in an unbounded loop.
+  escalations from the shared rolling stall budget. A fourth concurrent command waits, bounded and
+  unspawned, for a released slot and is denied before spawn with `CommandDeniedError` only when
+  that wait expires; it is never started with weaker descendant containment. The bounded wait
+  replaced the immediate denial because ordinary fan-out (a four-read Git snapshot, concurrent
+  server requests) otherwise failed every time on Windows (#4068). Callers must still surface the
+  ordinary correlated denied outcome rather than retrying in an unbounded loop.
 - **Windows grandchild orphaning is bounded, not architecturally eliminated.** `child.kill()`
   terminates the immediate child only; `killGroup` additionally runs
   `taskkill.exe /PID <pid> /T /F` to bound the whole descendant tree (e.g. a test runner that

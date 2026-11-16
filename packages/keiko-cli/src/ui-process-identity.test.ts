@@ -1,3 +1,4 @@
+import { nullSecurityLogSink } from "@oscharko-dev/keiko-security";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -79,7 +80,7 @@ describe("default live identity readers", () => {
   it("return undefined for a pid that has no /proc identity files", () => {
     const missing = 2_147_483_647;
     expect(defaultReadProcessEnviron(missing, "linux")).toBeUndefined();
-    expect(defaultReadProcessCommandLine(missing, "linux")).toBeUndefined();
+    expect(defaultReadProcessCommandLine(missing, "linux", nullSecurityLogSink())).toBeUndefined();
   });
 
   it("spawns ps and PowerShell by absolute path, never a PATH basename", () => {
@@ -89,7 +90,20 @@ describe("default live identity readers", () => {
     );
     expect(source).not.toMatch(/spawnSync\(\s*"(?:ps|powershell\.exe)"/u);
     expect(source).toContain('"/bin/ps"');
-    expect(source).toContain("resolveWindowsPowerShellExecutable");
+    // The Windows read moved to its owner in keiko-security (#4358). The pin moves with it: this
+    // module names no PowerShell at all, and the owner still resolves the inbox PowerShell by
+    // identity and never spawns it by a PATH basename.
+    expect(source).toContain("readWindowsProcessCommandLine");
+    expect(source).not.toContain("powershell");
+    const owner = readFileSync(
+      fileURLToPath(
+        new URL("../../keiko-security/src/windows-process-identity.ts", import.meta.url),
+      ),
+      "utf8",
+    );
+    expect(owner).toContain("resolveWindowsPowerShellExecutable");
+    expect(owner).not.toMatch(/spawnSync\(\s*"(?:ps|powershell\.exe)"/u);
+    expect(owner).not.toMatch(/["'`]powershell(?:\.exe)?["'`]/iu);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -105,7 +119,7 @@ describe("default live identity readers", () => {
       );
       process.env.PATH = `${dir}${delimiter}${previousPath ?? ""}`;
       try {
-        defaultReadProcessCommandLine(process.pid, "darwin");
+        defaultReadProcessCommandLine(process.pid, "darwin", nullSecurityLogSink());
         expect(existsSync(marker)).toBe(false);
       } finally {
         if (previousPath === undefined) {

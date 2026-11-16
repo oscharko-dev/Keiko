@@ -7,8 +7,8 @@
 // the run active, the requesting session holds the existing scoped operation lease until the run
 // leaves an active state. Like every operation lease it protects only inactivity: revocation,
 // restart, capacity eviction and the absolute lifetime still end the session at once. A rotation
-// re-issues the session as a new record with no operations, so the next admitted mutation holds
-// the rotated credential again. The run-state observation below only releases; it never renews or
+// preserves active operation counts, and each release resolves the live entry by session id.
+// The next admitted mutation replaces its tracked credential without duplicating the lease. The run-state observation below only releases; it never renews or
 // extends anything, and a failure while observing releases rather than holds.
 
 import { createHash } from "node:crypto";
@@ -165,7 +165,7 @@ class CodingRunSessionLeases {
     const held = run.sessions.get(input.sessionId);
     if (held?.credential === credential) return;
     if (held === undefined && !hasPlace(input.runId, run, input.deps)) return;
-    // The predecessor of a rotated session no longer protects it: end that lease, hold this one.
+    // Transfer the preserved lease to the credential presented by this admitted mutation.
     if (held !== undefined) releaseLease(input.runId, run, held);
     const abort = new AbortController();
     const release = beginAppSessionOperation(input.deps, input.req, abort.signal, {

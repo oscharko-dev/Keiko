@@ -96,8 +96,9 @@ describe("ConnectorPickerWidget", () => {
 
     expect(screen.getByTestId("knowledge-connector-node")).toBeInTheDocument();
     expect(screen.getByText("First KC")).toBeInTheDocument();
-    expect(screen.getByText("Indexed")).toBeInTheDocument();
-    expect(screen.getByText("Local Knowledge Pod")).toBeInTheDocument();
+    expect(screen.queryByText("Indexed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Local Knowledge Pod")).not.toBeInTheDocument();
+    expect(screen.getByTestId("knowledge-connector-node").className).toMatch(/lazyWidgetScope/);
     expect(screen.queryByText("cap-abc")).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
@@ -360,8 +361,8 @@ describe("ConnectorPickerWidget", () => {
       </I18nProvider>,
     );
     expect(await screen.findByText("Veraltet")).toBeInTheDocument();
-    expect(screen.getByText("Lokaler Knowledge Pod")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Verwalten" })).toBeInTheDocument();
+    expect(screen.queryByText("Lokaler Knowledge Pod")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Verwalten: First KC" })).toBeInTheDocument();
   });
 
   it("localizes the empty, loading and failure states when German is selected", async () => {
@@ -434,7 +435,7 @@ describe("ConnectorPickerWidget — a11y (GEN-UI-A11Y-018 / test-plan #28)", () 
     // The title carries its class but must NOT be a heading — a compact leaf card
     // has no sectioning context, so an <h2> would be an orphan heading.
     const title = screen.getByText("First KC");
-    expect(title.tagName).toBe("P");
+    expect(title.tagName).toBe("SPAN");
     expect(title).toHaveClass("connector-node-title");
     expect(screen.queryByRole("heading", { name: "First KC" })).toBeNull();
   });
@@ -669,7 +670,7 @@ describe("ConnectorPickerWidget — connector node follows the shared catalog", 
       expect(mockFetchCapsules).toHaveBeenCalledTimes(1);
     });
     expect(screen.getByText("Old name")).toBeInTheDocument();
-    expect(screen.getByText("Indexed")).toBeInTheDocument();
+    expect(screen.queryByText("Indexed")).not.toBeInTheDocument();
     expect(screen.queryByText("Unavailable")).toBeNull();
   });
 

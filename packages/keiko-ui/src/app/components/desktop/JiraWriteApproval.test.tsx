@@ -57,7 +57,8 @@ describe("Jira Chat write approvals", () => {
     const details = screen.getByRole("group", { name: "Proposed action details" });
     expect(details).toHaveTextContent("Issue");
     expect(details).toHaveTextContent("LAB-1");
-    expect(details).toHaveTextContent("summary");
+    expect(details).toHaveTextContent("Summary");
+    expect(screen.queryByText("summary", { exact: true })).toBeNull();
     expect(details).toHaveTextContent("Reviewed change");
     expect(observe).toHaveBeenCalledExactlyOnceWith(view.approvalId);
     expect(decide).not.toHaveBeenCalled();
@@ -457,8 +458,14 @@ describe("Jira backlog draft approval (#4178)", () => {
     await ready();
     expect(screen.getByRole("group", { name: "Issues to create (4 of 4 selected)" })).toBeVisible();
     expect(screen.getByRole("checkbox", { name: /Story B/u })).toBeChecked();
-    expect(screen.getByText("Blocks → story")).toBeVisible();
-    expect(screen.getByText("description")).toBeVisible();
+    // An untraced item names its missing source trace beside its link (#4321).
+    expect(
+      screen.getByText(
+        "No requirement references: approval creates this issue without a source trace. · Blocks → story",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("description")).toBeNull();
+    expect(screen.getByText("Description")).toBeVisible();
     expect(screen.getByText("Synthetic")).toBeVisible();
     await userEvent.click(screen.getByRole("checkbox", { name: /Story B/u }));
     expect(screen.getByRole("group", { name: "Issues to create (2 of 4 selected)" })).toBeVisible();
@@ -519,7 +526,7 @@ describe("Jira backlog draft approval (#4178)", () => {
 
     it.each([
       ["target project", { projectId: "10001" }, "Project 10001"],
-      ["issue type", { issueTypeId: "10003" }, "Issue type 10003"],
+      ["issue type", { issueTypeId: "10003" }, "Issue type ID 10003"],
       [
         "relation field",
         { parent: { fieldId: "customfield_10100", issueKey: "SYN-7" } },
@@ -545,7 +552,7 @@ describe("Jira backlog draft approval (#4178)", () => {
     ])("renders drafts that differ only in the %s differently", (_name, change, shown) => {
       const original = review(base);
       const changed = review({ ...base, ...change });
-      expect(original).toContain("Project 10000 · Issue type 10002");
+      expect(original).toContain("Project 10000 · Issue type ID 10002");
       expect(original).toContain("Parent (parent): SYN-7");
       expect(original).toContain("Same description");
       expect(changed).not.toBe(original);

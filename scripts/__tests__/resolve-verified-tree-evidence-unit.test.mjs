@@ -146,11 +146,12 @@ describe("candidateProvedEveryReusedJob", () => {
     "Semantic duplication",
     "Core quality",
     "Coverage suite (keiko-ui)",
-    "Coverage suite (scripts)",
     "Coverage and SonarCloud",
     "Build, scan, SBOM, smoke",
-    "Node 26 compatibility (shard 1/2)",
-    "Node 26 compatibility (shard 2/2)",
+    "Coverage shard (packages 1/4)",
+    "Coverage shard (packages 2/4)",
+    "Coverage shard (packages 3/4)",
+    "Coverage shard (packages 4/4)",
     "Portable secure-read smoke (linux-x64)",
     "Portable secure-read smoke (windows-x64)",
     "Portable secure-read smoke (macos-arm64)",
@@ -159,7 +160,9 @@ describe("candidateProvedEveryReusedJob", () => {
     "Firefox smoke (shard 2/2)",
     "ui",
     "Cross-platform smoke (ubuntu-latest)",
-    "Coverage shard (packages 1/3)",
+    "Coverage shard (scripts 1/3)",
+    "Coverage shard (scripts 2/3)",
+    "Coverage shard (scripts 3/3)",
   ].map((name) => ({ name, conclusion: "success" }));
 
   it("accepts a candidate that executed every reused job", async () => {
@@ -181,8 +184,16 @@ describe("candidateProvedEveryReusedJob", () => {
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
   });
 
-  it.each([1, 2])("requires successful exact evidence for Node 26 shard %s", async (shard) => {
-    const name = `Node 26 compatibility (shard ${shard}/2)`;
+  it.each([
+    ["packages", 1, 4],
+    ["packages", 2, 4],
+    ["packages", 3, 4],
+    ["packages", 4, 4],
+    ["scripts", 1, 3],
+    ["scripts", 2, 3],
+    ["scripts", 3, 3],
+  ])("requires successful exact evidence for %s test shard %s/%s", async (suite, shard, count) => {
+    const name = `Coverage shard (${suite} ${shard}/${count})`;
     const missing = everyJob.filter((job) => job.name !== name);
     for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
       const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
@@ -191,8 +202,8 @@ describe("candidateProvedEveryReusedJob", () => {
     }
   });
 
-  it("refuses legacy single-job Node 26 evidence", async () => {
-    const jobs = everyJob.filter((job) => !job.name.startsWith("Node 26 compatibility"));
+  it("refuses a partial package-test matrix even if the retired compatibility job passed", async () => {
+    const jobs = everyJob.filter((job) => !job.name.startsWith("Coverage shard (packages"));
     jobs.push({ name: "Node 26 compatibility", conclusion: "success" });
     stubFetch({ "/jobs": { body: { jobs } } });
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);

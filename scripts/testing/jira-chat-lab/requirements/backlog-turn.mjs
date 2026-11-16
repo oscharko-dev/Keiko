@@ -34,7 +34,7 @@ const requirementsOf = (priority) =>
  * Grades the unchanged-catalog-refresh part. `induced` is what the lab recorded about its mid-turn
  * action: `ok`, and `turnOpen` (the turn had not settled when the refresh finished).
  */
-export function gradeCatalogRefresh({ induced, refused, failure }) {
+export function gradeCatalogRefresh({ induced, refused, failure, termination }) {
   const covers = ["survives-unchanged-catalog-refresh"];
   if (induced === undefined) {
     return {
@@ -53,6 +53,13 @@ export function gradeCatalogRefresh({ induced, refused, failure }) {
       detail: "the turn had settled before the refresh finished",
     };
   }
+  if (termination === "lab-limit" && !refused) {
+    return {
+      status: "unverified",
+      covers,
+      detail: "the refresh finished, but the lab stopped supervision before product completion",
+    };
+  }
   if (refused || failure !== undefined) {
     return { status: "red", covers, detail: "the admitted turn did not survive the refresh" };
   }
@@ -64,8 +71,17 @@ export function gradeCatalogRefresh({ induced, refused, failure }) {
  * as created in the turn. `ended` says the Activity Log recorded an early ending for this turn;
  * `created` are the epics Jira holds that the turn produced.
  */
-export function gradeInterruption({ induced, ended, created, answer }) {
+export function gradeInterruption({ induced, ended, created, answer, termination }) {
   const covers = ["interrupted-turn-reports-created-keys"];
+  // The lab cancelled the turn at its own limit: the product never got to write its answer, so a
+  // missing key list is no evidence about the product.
+  if (termination === "lab-limit") {
+    return {
+      status: "unverified",
+      covers,
+      detail: "the lab stopped supervision before the product's early-ending answer",
+    };
+  }
   if (induced === undefined || !induced.ok || !induced.startedOpen) {
     return {
       status: "unverified",
@@ -109,6 +125,19 @@ const modeChangeDuring = (ctx, chat) => ({
     ),
 });
 
+function turnLimitDetail(turn) {
+  const lab = turn.limits?.labTurnMs;
+  const product = turn.limits?.productTurnMs;
+  const label = (value) => (value === undefined || value === null ? "unobserved" : `${value} ms`);
+  return `lab turn limit ${label(lab)}; product turn limit ${label(product)}`;
+}
+
+function backlogStatus(ok, refused, turn) {
+  if (refused) return "red";
+  if (turn.termination === "lab-limit") return "unverified";
+  return ok ? "green" : "red";
+}
+
 async function backlogPart(ctx, chat) {
   const before = await snapshotBefore(ctx, EPIC_QUERY);
   const requested = requirementsOf("Muss");
@@ -128,12 +157,22 @@ async function backlogPart(ctx, chat) {
   const grade = gradeBacklog({ requested, created: epics.credited, answer: turn.answer });
   const ok =
     !turn.failure && grade.mappingOk && grade.namesOk && !refused && epics.duplicates.length === 0;
-  const detail = `${grade.mapped}/${requested.length} requirements mapped to one epic each, ${countsOf(epics, "epics")}, ${grade.stray} unmapped, ${grade.unnamed} reported keys missing from the answer${refused ? ", generation-changed refusal logged" : ""}`;
-  const refresh = gradeCatalogRefresh({ induced: turn.induced, refused, failure: turn.failure });
+  const detail = `${grade.mapped}/${requested.length} requirements mapped to one epic each, ${countsOf(epics, "epics")}, ${grade.stray} unmapped, ${grade.unnamed} reported keys missing from the answer${refused ? ", generation-changed refusal logged" : ""}; ${turnLimitDetail(turn)}`;
+  const refresh = gradeCatalogRefresh({
+    induced: turn.induced,
+    refused,
+    failure: turn.failure,
+    termination: turn.termination,
+  });
   return {
     turn,
     parts: [
-      { label: "backlog", status: ok ? "green" : "red", covers: BACKLOG_COVERS, detail },
+      {
+        label: "backlog",
+        status: backlogStatus(ok, refused, turn),
+        covers: BACKLOG_COVERS,
+        detail,
+      },
       { label: "refresh", ...refresh },
     ],
   };
@@ -161,6 +200,7 @@ async function interruptionPart(ctx) {
     ended: ctx.turnEnds() > endsBefore,
     created: epics.credited,
     answer: turn.answer,
+    termination: turn.termination,
   });
   return { turn, parts: [{ label: "interruption", ...grade }] };
 }
@@ -168,7 +208,9 @@ async function interruptionPart(ctx) {
 export async function backlogJourney(ctx, chat) {
   const backlog = await backlogPart(ctx, chat);
   const interruption =
-    backlog.turn.failure === undefined ? await interruptionPart(ctx) : { parts: [] };
+    backlog.turn.failure === undefined && backlog.turn.termination !== "lab-limit"
+      ? await interruptionPart(ctx)
+      : { parts: [] };
   const turns = [backlog.turn, ...(interruption.turn === undefined ? [] : [interruption.turn])];
   return aggregateParts([...backlog.parts, ...interruption.parts], turns);
 }

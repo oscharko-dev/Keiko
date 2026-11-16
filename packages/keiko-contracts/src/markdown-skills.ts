@@ -43,3 +43,31 @@ export interface MarkdownSkillUpload {
   readonly fileName: string;
   readonly contentBase64: string;
 }
+
+/**
+ * Why the server refused to store a Markdown skill, as a closed vocabulary the browser turns into
+ * one plain sentence each. A Jira template parse failure keeps its own closed code behind the
+ * `template-` prefix. The refusal never carries the person's text, a key name or a path.
+ */
+export const MARKDOWN_SKILL_REFUSAL_REASONS = [
+  "template-marker-misplaced",
+  "template-not-a-template",
+  "template-front-matter-unterminated",
+  "template-malformed-line",
+  "template-unknown-key",
+  "template-duplicate-key",
+  "template-missing-key",
+  "template-invalid-value",
+  "template-limit-exceeded",
+  "template-unsafe-pattern",
+  "template-no-rules",
+  "text-empty",
+  "text-control-characters",
+] as const;
+export type MarkdownSkillRefusalReason = (typeof MARKDOWN_SKILL_REFUSAL_REASONS)[number];
+
+const REFUSAL_REASONS: ReadonlySet<string> = new Set(MARKDOWN_SKILL_REFUSAL_REASONS);
+
+export function isMarkdownSkillRefusalReason(value: unknown): value is MarkdownSkillRefusalReason {
+  return typeof value === "string" && REFUSAL_REASONS.has(value);
+}

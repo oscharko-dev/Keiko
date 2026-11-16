@@ -1003,7 +1003,9 @@ function insertGroundedTestMemory(vault: MemoryVaultStore, id: string, body: str
     id: id as MemoryId,
     schemaVersion: "1",
     scope: { kind: "user", userId: "local-operator" as MemoryUserId },
-    type: "preference",
+    // A fact, not a preference: preferences reach every answer through the standing profile
+    // (#4228), and this fixture proves retrieval by the question.
+    type: "semantic-fact",
     body,
     provenance: {
       sourceKind: "explicit-user-instruction",
@@ -1189,14 +1191,17 @@ describe("mappedWorkspaceError", () => {
 });
 
 describe("grounded prompt elapsed budget", () => {
+  // #3687 pinned that a missing search time limit never renders as "/null ms" and that the single-
+  // and multi-source folder prompts state the budget the same way. The measured wall-clock time is
+  // not prompt content: it made the fitted prompt depend on machine load, so one slow search could
+  // drop an excerpt from a tight model window that a fast one kept.
   it.each([
-    { elapsedMsMax: null, elapsedMs: 37, expected: "elapsed 37 ms (no search time limit)" },
-    { elapsedMsMax: 1000, elapsedMs: 37, expected: "elapsed 37/1000 ms" },
-    { elapsedMsMax: 0, elapsedMs: 0, expected: "elapsed 0/0 ms" },
-  ])(
-    "renders $expected consistently in each folder prompt",
-    ({ elapsedMsMax, elapsedMs, expected }) => {
-      const base = emptyPack();
+    { elapsedMsMax: null, expected: "search time limit none" },
+    { elapsedMsMax: 1000, expected: "search time limit 1000 ms" },
+    { elapsedMsMax: 0, expected: "search time limit 0 ms" },
+  ])("renders $expected consistently in each folder prompt", ({ elapsedMsMax, expected }) => {
+    const base = emptyPack();
+    const prompts = [0, 37, 12_345].map((elapsedMs) => {
       const pack = {
         ...base,
         budget: { ...base.budget, modelInputTokensMax: 16_000, elapsedMsMax },
@@ -1213,10 +1218,12 @@ describe("grounded prompt elapsed budget", () => {
       );
       for (const messages of [single, multi]) {
         expect(JSON.stringify(messages)).toContain(`- budget/usage: ${summary}`);
-        expect(JSON.stringify(messages)).not.toContain("/null ms");
+        expect(JSON.stringify(messages)).not.toContain("null");
       }
-    },
-  );
+      return JSON.stringify([single, multi]);
+    });
+    expect(new Set(prompts).size).toBe(1);
+  });
 });
 
 describe("buildGroundedGatewayMessages", () => {
@@ -1787,7 +1794,7 @@ describe("handleGroundedAsk", () => {
     },
   );
 
-  it("requires live skill authority before grounded turn persistence regardless of client preconditions", async () => {
+  it("refuses missing skill authority before model readiness regardless of client preconditions", async () => {
     const { chatId, projectPath } = await setupChatWithScope();
     seedScopedRepo(projectPath);
     const skill = store.markdownSkills.import({
@@ -1803,6 +1810,9 @@ describe("handleGroundedAsk", () => {
     if (!pair.paired) throw new Error("Expected pairing");
     channel.signOut(pair.cookieToken);
     const seen: GatewayRequest[] = [];
+    const config = customModelConfig();
+    const holder = unreadyRuntimeGatewayConfig(config);
+    const probe = vi.spyOn(readiness, "awaitInitializedConversationReadiness");
     for (const revision of [undefined, 1, null]) {
       for (const cookie of [undefined, `${APP_SESSION_COOKIE_NAME}=${pair.cookieToken}`]) {
         const result = await handleGroundedAsk(
@@ -1815,14 +1825,70 @@ describe("handleGroundedAsk", () => {
             fakeRes(),
             cookie,
           ),
-          deps(fakeModel("Must not dispatch", seen), {}, { codingAppSessionChannel: channel }),
+          deps(
+            fakeModel("Must not dispatch", seen),
+            {},
+            { config, gatewayConfig: holder, codingAppSessionChannel: channel },
+          ),
         );
         expect(result).toMatchObject({ status: 404 });
         expect(store.listMessages(chatId)).toHaveLength(0);
       }
     }
+    expect(probe).not.toHaveBeenCalled();
+    probe.mockRestore();
     expect(seen).toHaveLength(0);
   });
+
+  it.each(["authority", "selection"] as const)(
+    "rechecks skill %s after asynchronous model readiness before persisting the turn",
+    async (change) => {
+      const { chatId, projectPath } = await setupChatWithScope();
+      seedScopedRepo(projectPath);
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Private method\nCheck boundaries.").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const seen: GatewayRequest[] = [];
+      const config = customModelConfig();
+      const paired = pairedReportOwner(tmp);
+      const probe = vi
+        .spyOn(readiness, "awaitInitializedConversationReadiness")
+        .mockImplementationOnce(async (): Promise<void> => {
+          await Promise.resolve();
+          if (change === "authority")
+            paired.owner.codingAppSessionChannel?.signOut(
+              decodeURIComponent(paired.cookie.slice(paired.cookie.indexOf("=") + 1)),
+            );
+          else store.markdownSkills.delete(skill.id, skill.revision);
+        });
+      try {
+        const result = await handleGroundedAsk(
+          ctx(
+            JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION }),
+            fakeRes(),
+            paired.cookie,
+          ),
+          deps(
+            fakeModel("Must not dispatch", seen),
+            {},
+            {
+              config,
+              gatewayConfig: runtimeGatewayConfig(config, true),
+              codingAppSessionChannel: paired.owner.codingAppSessionChannel,
+            },
+          ),
+        );
+        expect(probe).toHaveBeenCalledOnce();
+        expect(result).toMatchObject({ status: change === "authority" ? 404 : 409 });
+        expect(store.listMessages(chatId)).toHaveLength(0);
+        expect(seen).toHaveLength(0);
+      } finally {
+        probe.mockRestore();
+      }
+    },
+  );
 
   it.each(["single", "multiple"] as const)(
     "applies the pinned skill once at the actual %s-folder synthesis boundary",
@@ -2428,7 +2494,7 @@ describe("handleGroundedAsk", () => {
         status: 400,
         body: {
           error: {
-            code: "BAD_REQUEST",
+            code: "CONVERSATION_MODEL_NOT_READY",
             message:
               "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
@@ -2504,7 +2570,7 @@ describe("handleGroundedAsk", () => {
         status: 400,
         body: {
           error: {
-            code: "BAD_REQUEST",
+            code: "CONVERSATION_MODEL_NOT_READY",
             message:
               "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
@@ -4746,11 +4812,13 @@ describe("handleGroundedAsk", () => {
           "derived from that memory as uncited and unverified.",
       });
       expect(JSON.stringify(answer.uncertainty)).not.toContain("Use pnpm for package installs.");
-      expect(
-        memoryVault
-          .getAccessStats(["mem-package-manager" as MemoryId])
-          .get("mem-package-manager" as MemoryId)?.accessCount,
-      ).toBe(1);
+      // The answer's use of the recalled memory is remembered for "Vergiss das" and never
+      // reinforces it (ADR-0146): only the memory recalled from the question carries the use.
+      const stats = memoryVault.getAccessStats(["mem-package-manager" as MemoryId]);
+      expect(stats.get("mem-package-manager" as MemoryId)?.accessCount).toBe(0);
+      const touches = memoryVault.getConversationTouches(chatId);
+      expect(touches.get("mem-package-manager" as MemoryId)?.usedAt).toBeGreaterThan(0);
+      expect(touches.get("mem-production-database" as MemoryId)).toBeUndefined();
     } finally {
       memoryVault.close();
     }
@@ -5972,7 +6040,7 @@ describe("actual fitted repository evidence authority", () => {
       spy.mockRestore();
     }
   });
-  it("keeps a newly declared follow-up source in the actual second prompt under cumulative tokens", async () => {
+  it("keeps a newly declared follow-up source when each prompt fits but their sum exceeds the input window", async () => {
     const { chatId } = await setupChatWithScope();
     mkdirSync(join(tmp, "src"), { recursive: true });
     mkdirSync(join(tmp, "lib"), { recursive: true });
@@ -6032,7 +6100,8 @@ describe("actual fitted repository evidence authority", () => {
     );
     expect(
       requests.reduce((sum, request) => sum + countGatewayPromptTokens(request), 0),
-    ).toBeLessThanOrEqual(5000);
+    ).toBeGreaterThan(5000);
+    expect(requests.every((request) => countGatewayPromptTokens(request) <= 5000)).toBe(true);
     expect(result.body).toMatchObject({
       content: "Configuration is 42 [lib/ConfigurationOrchid.ts:1].",
     });

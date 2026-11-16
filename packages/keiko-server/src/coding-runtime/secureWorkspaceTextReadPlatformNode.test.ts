@@ -1,9 +1,14 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+  WINDOWS_HOST,
+} from "../../../../tests/support/symlink-fixture.js";
 import {
   createNodePortableSecureWorkspaceReadInspection,
   isContainedPortableRelativePath,
@@ -43,12 +48,38 @@ describe("node portable secure workspace-read inspection", (): void => {
       { symbolicLink: false, reparsePoint: false, safeType: true },
       { symbolicLink: false, reparsePoint: false, safeType: true },
     ]);
+  });
+
+  // A Windows symbolic link is a reparse point; the inspection reports it as both.
+  it("reports a linked helper as a link and not a safe type", async (context): Promise<void> => {
+    const { executable, resourceRoot } = fixture();
+    const inspection = createNodePortableSecureWorkspaceReadInspection();
 
     const linkedExecutable = join(resourceRoot, "linked-helper");
-    symlinkSync(executable, linkedExecutable);
+    plantSymlinkOrSkip(context, executable, linkedExecutable);
     await expect(inspection.inspectPath(resourceRoot, linkedExecutable)).resolves.toEqual([
       { symbolicLink: false, reparsePoint: false, safeType: true },
-      { symbolicLink: true, reparsePoint: false, safeType: false },
+      { symbolicLink: true, reparsePoint: WINDOWS_HOST, safeType: false },
+    ]);
+  });
+
+  // The directory form: a junction on Windows (no privilege needed), a directory symlink elsewhere.
+  it("reports a redirected ancestor directory as a link and not a safe type", async (): Promise<void> => {
+    const { resourceRoot } = fixture();
+    const inspection = createNodePortableSecureWorkspaceReadInspection();
+
+    const linkedRuntime = join(resourceRoot, "linked-runtime");
+    plantDirectoryRedirect(join(resourceRoot, "runtime"), linkedRuntime);
+    await expect(
+      inspection.inspectPath(
+        resourceRoot,
+        join(linkedRuntime, "native", "keiko-secure-workspace-read"),
+      ),
+    ).resolves.toEqual([
+      { symbolicLink: false, reparsePoint: false, safeType: true },
+      { symbolicLink: true, reparsePoint: WINDOWS_HOST, safeType: false },
+      { symbolicLink: false, reparsePoint: false, safeType: true },
+      { symbolicLink: false, reparsePoint: false, safeType: true },
     ]);
   });
 

@@ -7,7 +7,7 @@ import type {
   ReadinessSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -44,7 +44,10 @@ function CiReadinessCard({
   const stale = isStale(snapshot, now);
   const state = displayState(observation, stale);
   useEffect(() => {
-    reportClientDiagnostic(`[keiko] CI readiness displayed: ${state} head ${head.slice(0, 12)}`);
+    reportCodingWorkbenchInteraction(
+      { interaction: "delivery-step-shown", deliveryStep: "ci-readiness", deliveryState: state },
+      snapshot.runId,
+    );
   }, [head, state, snapshot.runId]);
   return (
     <section className={common.card} aria-label={t("codingWorkbench.ci.title")}>

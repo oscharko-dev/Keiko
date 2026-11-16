@@ -1503,10 +1503,6 @@ export function Workspace({
     handTool,
     marquee,
   });
-  const openWindowPalette = (): void => {
-    reportClientDiagnostic("Workspace window palette opened.");
-    openPalette();
-  };
 
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
@@ -1548,7 +1544,7 @@ export function Workspace({
       </p>
       <WorkspaceClipboardStatusView status={clipboardStatus} />
       <WorkspaceConnectHint connecting={connecting} t={t} />
-      <WorkspaceEmptyState empty={empty} onNewWindow={openWindowPalette} />
+      <WorkspaceEmptyState empty={empty} onNewWindow={openPalette} />
 
       <WorkspaceScene
         layoutLocked={layoutLocked}
@@ -1613,7 +1609,7 @@ export function Workspace({
         type="button"
         className={`ws-fab ui-tip cmp-tip-end ${controlStyles.cmpWorkspaceControl}`}
         onPointerDown={(event) => event.stopPropagation()}
-        onClick={openWindowPalette}
+        onClick={openPalette}
         aria-label={t("workspace.newWindow")}
         data-tip={t("workspace.newWindow")}
       >

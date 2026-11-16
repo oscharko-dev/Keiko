@@ -3,7 +3,7 @@
 // These handlers wire the /api/memory/* routes to the three memory packages:
 //   - @oscharko-dev/keiko-memory-vault   → persistence (list / get / update / delete)
 //   - @oscharko-dev/keiko-memory-governance → pure operation builders (pin, archive, forget, correct)
-//   - @oscharko-dev/keiko-memory-retrieval → not called here (retrieval is for model context)
+//   - @oscharko-dev/keiko-memory-retrieval → only the standing-profile succession rule (#4228)
 //
 // ADR-0019 direction rule 6a: keiko-server may import memory-vault, memory-governance, and
 // memory-retrieval. Rule 8: the browser tier (keiko-ui) imports only keiko-contracts types
@@ -39,6 +39,7 @@ import {
   supersededValidity,
   type ForgetSelector,
 } from "@oscharko-dev/keiko-memory-governance";
+import { standingProfileSuccession } from "@oscharko-dev/keiko-memory-retrieval";
 import type {
   AcceptMemoryProposalOptions,
   MemoryConversationId,
@@ -61,12 +62,15 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   checkStatusTransition,
+  MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
   MEMORY_FORGET_REASON_USER_REQUEST,
   MEMORY_SCOPE_KINDS,
   MEMORY_STATUSES,
   MEMORY_TYPES,
   MEMORY_SENSITIVITIES,
+  PROFILE_EXCLUDED_MEMORY_TAG,
   isMemoryRecord,
+  personMemoryTags,
   validateMemoryScope,
   validateMemoryAcceptance,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
@@ -84,7 +88,9 @@ import {
   replayMemoryCaptureAuditLedger,
   type MemoryCaptureDecision,
 } from "./memory-capture-projection.js";
-import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
+import { embedMemoryText, refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
+import { memoryCapturePolicyForDeps } from "./memory-capture-policy.js";
+import { memoryTextSecretEgressRejectionReason } from "@oscharko-dev/keiko-memory-capture";
 import { readJsonRequestBodyOutcome, type JsonRequestBodyOutcome } from "./bounded-request-body.js";
 import { processServerLogSink, processServerLogSinkFor } from "./process-log-sink.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
@@ -365,7 +371,7 @@ function memoryMatchesQuery(record: MemoryRecord, query: string | undefined): bo
   if (query === undefined) return true;
   const haystack = [
     record.body,
-    ...record.tags,
+    ...personMemoryTags(record.tags),
     record.type,
     record.status,
     record.scope.kind,
@@ -898,18 +904,30 @@ function parseEditInput(raw: Record<string, unknown>): EditInput | RouteResult {
   };
 }
 
+// A memory the person rewrote is their own statement: it no longer carries the words Keiko learned
+// it from, so a later learned fact cannot replace it (ADR-0146 D4c).
+function humanEditedProvenance(provenance: MemoryRecord["provenance"]): MemoryRecord["provenance"] {
+  const { evidenceSpan, ...rest } = provenance;
+  return evidenceSpan === undefined ? provenance : rest;
+}
+
 function buildEditPatch(input: EditInput, existing: MemoryRecord): Record<string, unknown> {
   const { newBody, tags, sensitivity } = input;
   const patch: Record<string, unknown> = {};
-  if (typeof newBody === "string" && newBody.trim().length > 0) {
-    patch.body = newBody.trim();
-  }
+  const bodyEdited = typeof newBody === "string" && newBody.trim().length > 0;
+  if (bodyEdited) patch.body = newBody.trim();
   if (Array.isArray(tags)) {
-    patch.tags = tags.filter((t): t is string => typeof t === "string");
+    // The person edits their own tags; Keiko's profile exclusion stays as it was (#4228).
+    const own = personMemoryTags(tags.filter((t): t is string => typeof t === "string"));
+    patch.tags = existing.tags.includes(PROFILE_EXCLUDED_MEMORY_TAG)
+      ? [...own, PROFILE_EXCLUDED_MEMORY_TAG]
+      : own;
   }
-  if (isMemorySensitivity(sensitivity)) {
-    patch.provenance = { ...existing.provenance, sensitivity };
-  }
+  const provenance = isMemorySensitivity(sensitivity)
+    ? { ...existing.provenance, sensitivity }
+    : existing.provenance;
+  const settled = bodyEdited ? humanEditedProvenance(provenance) : provenance;
+  if (settled !== existing.provenance) patch.provenance = settled;
   return patch;
 }
 
@@ -922,6 +940,26 @@ function memoryIdFromParams(ctx: RouteContext): MemoryId | RouteResult {
     result = id as MemoryId;
   }
   return result;
+}
+
+interface MemoryBodyRequest {
+  readonly vault: MemoryVaultStore;
+  readonly id: MemoryId;
+  readonly body: Record<string, unknown>;
+}
+
+// The shared start of a mutation on one memory: the vault, the id from the route, the JSON body.
+async function readMemoryBodyRequest(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<MemoryBodyRequest | RouteResult> {
+  const vault = resolveVault(deps);
+  if (isRouteResult(vault)) return vault;
+  const id = memoryIdFromParams(ctx);
+  if (isRouteResult(id)) return id;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  return { vault, id, body: outcome.value };
 }
 
 async function readEditRouteInput(ctx: RouteContext): Promise<EditInput | RouteResult> {
@@ -1000,7 +1038,12 @@ export function handlePinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
       reviewerId: reviewerIdForMemoryMutation(deps),
       nowMs: Date.now(),
     });
-    const updated = vault.updateMemory(id as MemoryId, { pinned: true }, Date.now());
+    // Pinning also lifts an earlier removal from the standing profile (#4228).
+    const updated = vault.updateMemory(
+      id as MemoryId,
+      { pinned: true, tags: personMemoryTags(record.tags) },
+      Date.now(),
+    );
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof GovernanceError) {
@@ -1043,7 +1086,12 @@ export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): Route
       reviewerId: reviewerIdForMemoryMutation(deps),
       nowMs: Date.now(),
     });
-    const updated = vault.updateMemory(id as MemoryId, { pinned: false }, Date.now());
+    // Unpinning takes the fact out of the standing profile until it is pinned again (#4228).
+    const updated = vault.updateMemory(
+      id as MemoryId,
+      { pinned: false, tags: [...personMemoryTags(record.tags), PROFILE_EXCLUDED_MEMORY_TAG] },
+      Date.now(),
+    );
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof GovernanceError) {
@@ -1077,20 +1125,13 @@ export async function handleArchiveMemory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const vault = resolveVault(deps);
-  if (isRouteResult(vault)) return vault;
-
-  const { id } = ctx.params;
-  if (id === undefined || id.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
-  }
-
-  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
-  if (outcome.kind === "rejected") return outcome.response;
-  const reason = archiveReason(outcome.value);
+  const request = await readMemoryBodyRequest(ctx, deps);
+  if (isRouteResult(request)) return request;
+  const { vault, id, body } = request;
+  const reason = archiveReason(body);
 
   try {
-    const record = vault.getMemory(id as MemoryId);
+    const record = vault.getMemory(id);
     if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
@@ -1102,11 +1143,7 @@ export async function handleArchiveMemory(
     // KEIKO-0348: persist the (sanitised) archive reason on the record — before this
     // wiring the field was validated and then discarded, leaving staleReason undefined
     // and the archive event without operator context.
-    const updated = vault.updateMemory(
-      id as MemoryId,
-      { status: "archived", staleReason: reason },
-      Date.now(),
-    );
+    const updated = vault.updateMemory(id, { status: "archived", staleReason: reason }, Date.now());
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof GovernanceError) {
@@ -1320,6 +1357,7 @@ function executeForgetSelection(
   vault: MemoryVaultStore,
   selector: ForgetSelector,
   reason: MemoryForgetReason,
+  forgetterSurface = "memory-center",
 ): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
   const nowMs = Date.now();
   const authorizedScopes = authorizedMemoryScopes(deps, vault);
@@ -1351,7 +1389,7 @@ function executeForgetSelection(
         tombstone: true,
         reviewerId: operation.reviewerId,
         reason: operation.reason,
-        forgetterSurface: "memory-center",
+        forgetterSurface,
         nowMs: operation.forgottenAt,
       },
     })),
@@ -1413,37 +1451,121 @@ function preflightPrivacyCriticalAudit(
   }
 }
 
-export async function handleForgetMemory(
-  ctx: RouteContext,
+export type ExplicitMemoryForgetResult = "forgotten" | "refused" | "failed";
+
+// A person's clear "Vergiss das" in a chat, through the one forget implementation: the same audit
+// preflight, authorization, tombstone and deletion as the Memory window. It never throws, because
+// the chat answer is already there; the caller shows the result in a plain sentence.
+export function forgetMemoryFromStatement(
   deps: UiHandlerDeps,
-): Promise<RouteResult> {
-  const vault = resolveVault(deps);
-  if (isRouteResult(vault)) return vault;
-
-  const { id } = ctx.params;
-  if (id === undefined || id.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
-  }
-
-  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
-  if (outcome.kind === "rejected") return outcome.response;
-  const body = outcome.value;
-
-  const input = parseDestructiveInput(body);
-  if (isRouteResult(input)) return input;
-  // Minted once so the preflight check and a later mutation failure report under the SAME id
-  // (ADR-0173 D5 / g12), mirroring handleRunMaintenance's correlationId reuse.
-  const correlationId = handlerCorrelationId(ctx);
-  const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
-  if (auditReady !== undefined) return auditReady;
-
+  vault: MemoryVaultStore,
+  memoryId: MemoryId,
+  correlationId: string,
+): ExplicitMemoryForgetResult {
+  if (preflightPrivacyCriticalAudit(deps, correlationId) !== undefined) return "failed";
   try {
     const result = executeForgetSelection(
       deps,
       vault,
-      { kind: "by-id", memoryId: id as MemoryId },
-      input.reason,
+      { kind: "by-id", memoryId },
+      MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
+      "chat-statement",
     );
+    return isRouteResult(result) ? "refused" : "forgotten";
+  } catch (error) {
+    reportMemoryHandlerFailure(
+      deps,
+      correlationId,
+      "memory.forget.statement",
+      "memory-handlers.forgetMemoryFromStatement",
+      error,
+    );
+    return "failed";
+  }
+}
+
+// "Vergiss das" about a statement nothing was stored from: leaves a tombstone in every scope a later
+// learning pass could choose, so that pass stores nothing. A statement carrying a credential keeps
+// its hash only and never reaches the embedding endpoint.
+export async function forgetStatementNotLearned(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  body: string,
+  scopes: readonly MemoryScope[],
+  correlationId: string,
+): Promise<ExplicitMemoryForgetResult> {
+  if (preflightPrivacyCriticalAudit(deps, correlationId) !== undefined) return "failed";
+  try {
+    // Unlike a stored memory, the statement's scopes need not hold anything yet, so an installation
+    // without scope authorization allows the conversation's own scopes.
+    const { memoryAuthorization } = deps;
+    const allowed =
+      memoryAuthorization === undefined
+        ? scopes
+        : scopes.filter((scope) => scopeAuthorized(scope, memoryAuthorization.authorizedScopes()));
+    if (allowed.length === 0) return "refused";
+    const carriesSecret =
+      memoryTextSecretEgressRejectionReason(body, memoryCapturePolicyForDeps(deps)) !== null;
+    const embedding = carriesSecret ? null : await embedMemoryText(deps, body, "document");
+    const nowMs = Date.now();
+    vault.recordForgottenStatements(
+      allowed.map((scope) => ({
+        scope,
+        body,
+        forgetterSurface: "chat-statement",
+        reviewerId: reviewerIdForMemoryMutation(deps),
+        reason: MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
+        nowMs,
+        ...(embedding === null ? {} : { bodyEmbedding: embedding.vector }),
+      })),
+    );
+    return "forgotten";
+  } catch (error) {
+    reportMemoryHandlerFailure(
+      deps,
+      correlationId,
+      "memory.forget.statement",
+      "memory-handlers.forgetStatementNotLearned",
+      error,
+    );
+    return "failed";
+  }
+}
+
+interface ForgetByIdRequest {
+  readonly vault: MemoryVaultStore;
+  readonly id: MemoryId;
+  readonly reason: MemoryForgetReason;
+  readonly correlationId: string;
+}
+
+// The shared start of forgetting one memory. The correlation id is minted once, so the preflight
+// check and a later mutation failure report under the SAME id (ADR-0173 D5 / g12), mirroring
+// handleRunMaintenance's correlationId reuse.
+async function readForgetByIdRequest(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<ForgetByIdRequest | RouteResult> {
+  const request = await readMemoryBodyRequest(ctx, deps);
+  if (isRouteResult(request)) return request;
+  const input = parseDestructiveInput(request.body);
+  if (isRouteResult(input)) return input;
+  const correlationId = handlerCorrelationId(ctx);
+  const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
+  if (auditReady !== undefined) return auditReady;
+  return { vault: request.vault, id: request.id, reason: input.reason, correlationId };
+}
+
+export async function handleForgetMemory(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const request = await readForgetByIdRequest(ctx, deps);
+  if (isRouteResult(request)) return request;
+  const { vault, id, reason, correlationId } = request;
+
+  try {
+    const result = executeForgetSelection(deps, vault, { kind: "by-id", memoryId: id }, reason);
     if (isRouteResult(result)) return result;
     return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
@@ -1496,31 +1618,12 @@ export async function handleDeleteMemory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const vault = resolveVault(deps);
-  if (isRouteResult(vault)) return vault;
-
-  const { id } = ctx.params;
-  if (id === undefined || id.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
-  }
-
-  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
-  if (outcome.kind === "rejected") return outcome.response;
-  const body = outcome.value;
-
-  const input = parseDestructiveInput(body);
-  if (isRouteResult(input)) return input;
-  const correlationId = handlerCorrelationId(ctx);
-  const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
-  if (auditReady !== undefined) return auditReady;
+  const request = await readForgetByIdRequest(ctx, deps);
+  if (isRouteResult(request)) return request;
+  const { vault, id, reason, correlationId } = request;
 
   try {
-    const result = executeForgetSelection(
-      deps,
-      vault,
-      { kind: "by-id", memoryId: id as MemoryId },
-      input.reason,
-    );
+    const result = executeForgetSelection(deps, vault, { kind: "by-id", memoryId: id }, reason);
     if (isRouteResult(result)) return result;
     return {
       status: 200,
@@ -1923,23 +2026,15 @@ export async function handleCorrectMemory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const vault = resolveVault(deps);
-  if (isRouteResult(vault)) return vault;
-
-  const { id } = ctx.params;
-  if (id === undefined || id.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
-  }
-
-  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
-  if (outcome.kind === "rejected") return outcome.response;
-  const body = outcome.value;
+  const request = await readMemoryBodyRequest(ctx, deps);
+  if (isRouteResult(request)) return request;
+  const { vault, id, body } = request;
 
   const input = parseCorrectInput(body);
   if (isRouteResult(input)) return input;
 
   try {
-    const existing = vault.getMemory(id as MemoryId);
+    const existing = vault.getMemory(id);
     if (existing === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
@@ -2113,19 +2208,35 @@ function resolveCorrectionOrigins(
   return isRouteResult(resolved) ? resolved : [resolved];
 }
 
+// An accepted correction takes its origins' place in the standing profile, or their removal from it.
+function correctionProfileSuccession(
+  proposal: MemoryRecord,
+  origins: readonly CorrectionSupersessionOrigin[],
+): Pick<MemoryBatchUpdate["patch"], "tags" | "retentionHint"> {
+  let successor: Pick<MemoryRecord, "tags" | "retentionHint"> = proposal;
+  for (const { original } of origins) {
+    successor = { ...successor, ...standingProfileSuccession(original, successor) };
+  }
+  const { tags, retentionHint } = successor;
+  return {
+    ...(tags === proposal.tags ? {} : { tags }),
+    ...(retentionHint === undefined || retentionHint === proposal.retentionHint
+      ? {}
+      : { retentionHint }),
+  };
+}
+
 function buildAcceptProposalPatch(
+  proposal: MemoryRecord,
   origins: readonly CorrectionSupersessionOrigin[],
   bodyOverride?: string,
-): {
-  readonly status: "accepted";
-  readonly type?: MemoryType;
-  readonly body?: string;
-} {
+): MemoryBatchUpdate["patch"] {
   const correctionType = acceptedCorrectionType(origins);
   return {
     status: "accepted",
     ...(correctionType === undefined ? {} : { type: correctionType }),
     ...(bodyOverride === undefined ? {} : { body: bodyOverride }),
+    ...correctionProfileSuccession(proposal, origins),
   };
 }
 
@@ -2226,7 +2337,7 @@ function commitCorrectionAcceptance(
   bodyOverride: string | undefined,
 ): CommittedCorrectionAcceptance | RouteResult {
   const nowMs = Date.now();
-  const acceptPatch = buildAcceptProposalPatch(origins, bodyOverride);
+  const acceptPatch = buildAcceptProposalPatch(proposal, origins, bodyOverride);
   const updates = buildCorrectionAcceptanceUpdates(proposal, acceptPatch, origins, nowMs);
   try {
     const mutation = vault.applyGraphMutation({
@@ -2340,21 +2451,14 @@ export async function handleAcceptMemoryProposal(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const vault = resolveVault(deps);
-  if (isRouteResult(vault)) return vault;
-
-  const { id } = ctx.params;
-  if (id === undefined || id.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
-  }
-  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
-  if (outcome.kind === "rejected") return outcome.response;
-  const body = outcome.value;
-  const input = parseAcceptBody(body, id as MemoryId, deps);
+  const request = await readMemoryBodyRequest(ctx, deps);
+  if (isRouteResult(request)) return request;
+  const { vault, id, body } = request;
+  const input = parseAcceptBody(body, id, deps);
   if (isRouteResult(input)) return input;
 
   try {
-    return acceptMemoryProposal(vault, deps, id as MemoryId, input);
+    return acceptMemoryProposal(vault, deps, id, input);
   } catch (err) {
     return memoryMutationErrorBody(
       deps,
@@ -2446,32 +2550,20 @@ export async function handleRejectMemoryProposal(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const vault = resolveVault(deps);
-  if (isRouteResult(vault)) return vault;
-
-  const { id } = ctx.params;
-  if (id === undefined || id.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
-  }
-
-  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
-  if (outcome.kind === "rejected") return outcome.response;
-  const body = outcome.value;
+  const request = await readMemoryBodyRequest(ctx, deps);
+  if (isRouteResult(request)) return request;
+  const { vault, id, body } = request;
 
   const { reason } = parseRejectInput(body);
 
   try {
-    const existing = ensureRejectableMemory(vault.getMemory(id as MemoryId));
+    const existing = ensureRejectableMemory(vault.getMemory(id));
     if (isRouteResult(existing)) return existing;
     const nowMs = Date.now();
-    const updated = vault.updateMemory(
-      id as MemoryId,
-      { status: "rejected", staleReason: reason },
-      nowMs,
-    );
+    const updated = vault.updateMemory(id, { status: "rejected", staleReason: reason }, nowMs);
     // Outcome-driven forgetting (#204, O-V1): a user rejection is a negative retention outcome
     // (utility 0), so the rejected memory fades faster under maintenance instead of lingering.
-    vault.recordOutcome([id as MemoryId], 0, nowMs);
+    vault.recordOutcome([id], 0, nowMs);
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof MemoryStorageError) {

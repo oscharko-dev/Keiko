@@ -185,14 +185,6 @@ export interface ModelCapability {
    */
   readonly conversationReady?: boolean | undefined;
   /**
-   * Transient server observation, never persisted: the current configuration generation holds a
-   * SUCCESSFUL basic-chat observation of this model that is older than the readiness freshness
-   * bound, so `conversationReady` is absent. It tells "was ready, needs a fresh check" apart from
-   * "never probed in this process"; both are unknown for admission, and an observed `false` is never
-   * stale. Absent in every other state (#3905).
-   */
-  readonly conversationReadinessStale?: true | undefined;
-  /**
    * Transient server observation, never persisted: this chat model's forced tool-call proof lapsed
    * or was withdrawn (for example because the gateway re-pointed the alias) and the server's own
    * automatic verification of it is still open: queued, running, or retrying after an inconclusive
@@ -201,6 +193,20 @@ export interface ModelCapability {
    * proof, a verification that gave up, and a model the server never renews (#3905).
    */
   readonly toolCallingRenewalPending?: true | undefined;
+  /**
+   * Transient server observation, never persisted: a basic-chat check of this model is running now,
+   * for example the one a person's first explicit pick of it started (#4351). It lets the picker say
+   * that the model is being checked. Absent when no check of it runs.
+   */
+  readonly conversationCheckPending?: true | undefined;
+  /**
+   * Transient server observation, never persisted and never configuration: this deployment rejected a
+   * tool-turn continuation for want of the previous assistant reasoning and accepted it restored, so
+   * Keiko returns that reasoning on tool turns from then on (#4351). It lives and dies with the
+   * configuration generation; Settings shows it so an operator can see what Keiko learned. Absent
+   * when nothing was detected.
+   */
+  readonly reasoningOnToolTurns?: "detected" | undefined;
   /** Observed repository-citation behavior; absent means unknown and grants no execution authority. */
   readonly citationBehaviour?: "cites" | "cites-after-repair" | "never" | undefined;
   /**
@@ -733,6 +739,8 @@ export type ChatMessageContentPart =
   ChatMessageTextContentPart | ChatMessageImageUrlContentPart | ChatMessageFileContentPart;
 
 export interface ChatMessage {
+  /** Provider continuation state; separate from answer/presentation, admitted by the server. */
+  readonly reasoningContent?: string | undefined;
   readonly role: "system" | "user" | "assistant" | "tool";
   readonly content: string;
   readonly contentParts?: readonly ChatMessageContentPart[] | undefined;
@@ -824,6 +832,8 @@ export function assertValidGatewaySamplingParameters(parameters: GatewaySampling
 }
 
 export interface GatewayRequest {
+  /** Trusted caller-owned conversation/run identity for transient provider continuation; never wire data. */
+  readonly reasoningScope?: string | undefined;
   /** Server-produced projection/offer. Tool-bearing requests require this exact bound arm. */
   readonly toolCatalog?: GatewayToolAdvertisement | undefined;
   readonly modelId: string;
@@ -844,6 +854,14 @@ export interface GatewayRequest {
   readonly seed?: number | undefined;
   /** Optional provider-neutral reasoning level, admitted only from the selected model capability. */
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  /**
+   * Internal, server-chosen preference to spend no reasoning on a mechanical call. `"off"` asks an
+   * OpenAI-compatible adapter for the wire-only `reasoning_effort: "none"` unless an explicit
+   * `reasoningEffort` or a provider requirement already decides. It is deliberately not a
+   * `ModelReasoningEffort` value and never user-selectable (#3640); a provider that rejects the
+   * parameter is retried once without it.
+   */
+  readonly reasoningPreference?: "off" | undefined;
 }
 
 // ─── Tool-call normalisation ──────────────────────────────────────────────────
@@ -923,7 +941,7 @@ export interface NormalizedResponse {
    * Set by the gateway, never by a provider (#3873 review): the provider-reported usage of earlier
    * attempts of this call that the gateway discarded — the first answer of a steered repair, a tool
    * call the catalog rejected, a stream that failed after its usage arrived — so a caller that
-   * meters every token the provider processed (the coding run's prompt allowance) can count them.
+   * meters every token the provider processed (the run's recorded usage) can count them.
    * `usage` keeps describing the answer itself. Counts only; absent when no discarded attempt
    * reported usage.
    */

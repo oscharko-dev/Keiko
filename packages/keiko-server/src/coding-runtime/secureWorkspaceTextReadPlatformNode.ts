@@ -39,6 +39,7 @@ export function createNodePortableSecureWorkspaceReadInspection(
 ): PortableSecureWorkspaceReadPlatformInspection {
   return Object.freeze({
     inspectPath: inspectPathEntries,
+    statIdentity,
     openReadSameIdentity,
     verifySignature: (executable: string, target: PortableNativeTarget): Promise<boolean> =>
       verifySignature(executable, target, options),
@@ -81,6 +82,12 @@ export function isContainedPortableRelativePath(value: string): boolean {
     !isAbsolute(value) &&
     !win32.isAbsolute(value)
   );
+}
+
+// lstat, never stat: a helper replaced by a symbolic link reports a non-regular file and never
+// matches a verdict, and no content is read.
+async function statIdentity(executable: string): Promise<PortableSecureWorkspaceReadMetadata> {
+  return metadata(await lstat(executable, { bigint: true }));
 }
 
 async function openReadSameIdentity(

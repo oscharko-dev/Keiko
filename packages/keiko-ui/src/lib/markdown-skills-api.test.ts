@@ -36,6 +36,7 @@ describe("private skill client boundary", () => {
     expect(bffFetchJson).toHaveBeenLastCalledWith(
       "/api/skills",
       expect.objectContaining({ method: "POST", body: JSON.stringify(upload) }),
+      { enrichError: expect.any(Function) },
     );
     await skills.saveMarkdownSkill(upload, reference);
     expect(bffFetchJson).toHaveBeenLastCalledWith(
@@ -44,6 +45,7 @@ describe("private skill client boundary", () => {
         method: "PUT",
         body: JSON.stringify({ ...upload, expectedRevision: 3 }),
       }),
+      { enrichError: expect.any(Function) },
     );
     await skills.deleteMarkdownSkill(reference);
     expect(bffFetchJson).toHaveBeenLastCalledWith(
@@ -84,6 +86,16 @@ describe("private skill client boundary", () => {
     expect(bffFetchJson).toHaveBeenLastCalledWith("/api/chats/chat%2Fid/skill", {
       signal: controller.signal,
     });
+  });
+
+  it("carries the logical validation correlation id through the immutable skill read", async () => {
+    vi.mocked(bffFetchJson).mockResolvedValue({ skill: reference });
+    expect(await skills.readMarkdownSkill(reference, "template-validation-run")).toEqual(reference);
+    expect(bffFetchJson).toHaveBeenLastCalledWith(
+      "/api/skills/local%2Fid?revision=3",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      { correlationId: "template-validation-run" },
+    );
   });
 
   it("transports exact UTF-8 bytes without trimming or normalizing the local document", async () => {

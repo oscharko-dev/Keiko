@@ -44,8 +44,15 @@ function catalogOf(items: readonly unknown[]): readonly JiraReportFieldCatalogEn
   if (items.length > CATALOG_MAX) return undefined;
   return items.flatMap((item): readonly JiraReportFieldCatalogEntry[] => {
     const record = asRecord(item);
-    return typeof record?.id === "string" && typeof record.name === "string"
-      ? [{ id: record.id, name: record.name }]
+    const key = asRecord(record?.schema)?.custom;
+    return typeof record?.id === "string" && FIELD_ID.test(record.id)
+      ? [
+          {
+            id: record.id,
+            name: typeof record.name === "string" ? record.name : record.id,
+            ...(typeof key === "string" ? { schemaKey: key } : {}),
+          },
+        ]
       : [];
   });
 }
@@ -77,6 +84,32 @@ export interface JiraReportRequiredFields {
   readonly state: "applied" | "partial" | "unavailable";
   readonly reason?: JiraReportFailure;
   readonly byType: ReadonlyMap<string, readonly string[]>;
+  /** Numeric estimate candidates actually present on this project's create screens. */
+  readonly estimateFields?: readonly JiraReportFieldCatalogEntry[];
+  readonly timeTracking?: boolean;
+  /**
+   * The estimate field ids each issue type's create screen carries (`timeoriginalestimate` stands
+   * for Time Tracking), for the types whose screen was read. A type absent here was not read.
+   */
+  readonly estimateByType?: ReadonlyMap<string, readonly string[]>;
+}
+
+/** Jira's own id of the native original time estimate, which the Time Tracking screen field offers. */
+export const JIRA_REPORT_TIME_ESTIMATE_FIELD_ID = "timeoriginalestimate";
+
+function screenEstimateField(value: unknown): readonly JiraReportFieldCatalogEntry[] {
+  const field = asRecord(value);
+  if (typeof field?.fieldId !== "string" || !FIELD_ID.test(field.fieldId)) return [];
+  const schema = asRecord(field.schema);
+  if (typeof field.name !== "string" || schema?.type !== "number") return [];
+  const key = schema.custom;
+  return [
+    {
+      id: field.fieldId,
+      name: field.name.trim(),
+      ...(typeof key === "string" ? { schemaKey: key } : {}),
+    },
+  ];
 }
 
 function requiredIds(values: readonly unknown[]): readonly string[] {
@@ -104,6 +137,10 @@ function statedTotal(body: Record<string, unknown>): number | undefined | "inval
 function coherent(body: Record<string, unknown>, startAt: number): boolean {
   return (body.startAt ?? startAt) === startAt && statedTotal(body) !== "invalid";
 }
+function nextPage(body: Record<string, unknown>, read: number, total: number | undefined): PageEnd {
+  if (total === undefined && body.isLast !== false) return "malformed";
+  return read > 0 ? "more" : "malformed";
+}
 /**
  * Whether a createmeta page ends its collection. Jira's own completion statement (`isLast`) or a
  * total this page reaches settles it, and the two must agree: a page that starts elsewhere than
@@ -116,17 +153,18 @@ function pageEnd(body: Record<string, unknown>, startAt: number, read: number): 
   const reached = total !== undefined && startAt + read >= total;
   if (body.isLast === true) return total === undefined || reached ? "last" : "malformed";
   if (reached) return "last";
-  return total === undefined || read === 0 ? "malformed" : "more";
+  return nextPage(body, read, total);
 }
 /** Every page of one createmeta collection; the failure reason when a page cannot be read. */
-async function collectPages(
-  http: JiraReportHttp,
+export async function collectJiraReportMetadataPages(
+  http: Pick<JiraReportHttp, "getRecord">,
   path: string,
   startAt: number,
   into: unknown[],
+  maxItems = Number.MAX_SAFE_INTEGER,
 ): Promise<JiraReportFailure | undefined> {
   const outcome = await http.getRecord(
-    `${path}?startAt=${String(startAt)}&maxResults=${String(METADATA_PAGE_SIZE)}`,
+    `${path}${path.includes("?") ? "&" : "?"}startAt=${String(startAt)}&maxResults=${String(METADATA_PAGE_SIZE)}`,
   );
   if (!outcome.ok) return outcome.reason;
   const values = asArray(outcome.body.values);
@@ -134,23 +172,37 @@ async function collectPages(
   const end = pageEnd(outcome.body, startAt, values.length);
   if (end === "malformed") return "malformed-payload";
   into.push(...values);
-  return end === "last" ? undefined : collectPages(http, path, startAt + values.length, into);
+  if (into.length > maxItems) return "bounds-exceeded";
+  return end === "last"
+    ? undefined
+    : collectJiraReportMetadataPages(http, path, startAt + values.length, into, maxItems);
 }
 type TypeRequirements =
-  { readonly fields: readonly string[] } | { readonly reason: JiraReportFailure };
+  | {
+      readonly fields: readonly string[];
+      readonly estimateFields: readonly JiraReportFieldCatalogEntry[];
+      readonly timeTracking: boolean;
+    }
+  | { readonly reason: JiraReportFailure };
 async function typeRequirements(
   http: JiraReportHttp,
   projectKey: string,
   typeId: string,
 ): Promise<TypeRequirements> {
   const values: unknown[] = [];
-  const reason = await collectPages(
+  const reason = await collectJiraReportMetadataPages(
     http,
     `issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${typeId}`,
     0,
     values,
   );
-  return reason === undefined ? { fields: requiredIds(values) } : { reason };
+  return reason === undefined
+    ? {
+        fields: requiredIds(values),
+        estimateFields: values.flatMap(screenEstimateField),
+        timeTracking: values.some((value) => asRecord(value)?.fieldId === "timetracking"),
+      }
+    : { reason };
 }
 
 function requiredState(read: number, expected: number): JiraReportRequiredFields["state"] {
@@ -165,7 +217,7 @@ export async function loadRequiredFields(
 ): Promise<JiraReportRequiredFields> {
   const types: unknown[] = [];
   const typesReason = isSafeAtlassianIdentifier(projectKey)
-    ? await collectPages(
+    ? await collectJiraReportMetadataPages(
         http,
         `issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`,
         0,
@@ -187,5 +239,23 @@ export async function loadRequiredFields(
     else if ("reason" in item) reason = item.reason;
   });
   const state = requiredState(byType.size, ids.length);
-  return { state, ...(reason === undefined ? {} : { reason }), byType };
+  const estimateFields = loaded.flatMap((item) => ("fields" in item ? item.estimateFields : []));
+  const timeTracking = loaded.some((item) => "fields" in item && item.timeTracking);
+  const estimateByType = new Map<string, readonly string[]>();
+  loaded.forEach((item, index) => {
+    const id = ids[index];
+    if (!("fields" in item) || id === undefined) return;
+    estimateByType.set(id, [
+      ...item.estimateFields.map((field) => field.id),
+      ...(item.timeTracking ? [JIRA_REPORT_TIME_ESTIMATE_FIELD_ID] : []),
+    ]);
+  });
+  return {
+    state,
+    ...(reason === undefined ? {} : { reason }),
+    byType,
+    estimateFields,
+    timeTracking,
+    estimateByType,
+  };
 }

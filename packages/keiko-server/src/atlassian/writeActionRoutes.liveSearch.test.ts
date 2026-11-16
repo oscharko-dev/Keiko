@@ -144,6 +144,7 @@ function guardWith(
     },
     beginVerification: (): undefined => undefined,
     finishVerification: (): boolean => false,
+    releaseVerification: (): boolean => false,
     observeAuthenticationFailure: (): boolean => false,
     create: (): never => {
       throw new Error("create not exercised");
@@ -220,7 +221,6 @@ function envelope(
     budget: {
       maxRuntimeMs: 3_600_000,
       maxToolCalls: 50,
-      maxPromptTokens: 10_000,
       maxPatchBytes: 65_536,
     },
     expiresAt: "2099-01-01T00:00:00.000Z",
@@ -706,7 +706,7 @@ describe("live-search route — bounds and degradation (AC6)", () => {
   it("keeps existing write actions working through the extended union (no regression)", async () => {
     const counter: FetchCounter = { count: 0, requests: [] };
     const guard = guardWith(counter, (request) =>
-      request.method === "POST" && request.url.includes("/comment")
+      request.method === "POST" && request.url.endsWith("/footer-comments")
         ? {
             kind: "response",
             status: 201,
@@ -718,15 +718,15 @@ describe("live-search route — bounds and degradation (AC6)", () => {
     );
     const authority = registerEnvelope("autonomous-delivery", [
       "issue-tracker.read",
-      "issue-tracker.write",
+      "knowledge-base.write",
     ]);
     const result = (await handleExecuteAtlassianConnectorAction(
       ctx(
         {
-          action: { type: "add-issue-comment", issueKey: "PROJ-7", commentText: "Verified" },
+          action: { type: "add-page-comment", pageId: "123", commentText: "Verified" },
           authority,
         },
-        { authRef: JIRA_AUTH_REF },
+        { authRef: CONFLUENCE_AUTH_REF },
       ),
       deps(guard, "autonomous-delivery"),
     )) as RouteReply;

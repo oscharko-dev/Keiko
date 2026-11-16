@@ -31,6 +31,7 @@ import {
   readLocalVaultReferences,
   resolveLocalVaultKey,
 } from "./secret-vault.js";
+import { plantDirectoryRedirect } from "../../../tests/support/symlink-fixture.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -716,6 +717,36 @@ describe("createLocalSecretVault — delete", () => {
     expect(persisted).toMatchObject({ count: 2 });
   });
 
+  it("deleteMany reports the foreign entries a pruning caller left, even when it deleted none", () => {
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(dir, "vault-delete-many-foreign.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+    vault.set("cred:a", "secret-A");
+    vault.set("cred:other", "other-secret");
+    events.length = 0;
+    vault.deleteMany(["cred:a"], { foreignRetainedCount: 1 });
+    vault.deleteMany([], { foreignRetainedCount: 1 });
+    // Nothing to delete and nothing to report is silent, as before.
+    vault.deleteMany([]);
+    vault.deleteMany([], { foreignRetainedCount: 0 });
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.extra)).toEqual([
+      expect.objectContaining({ count: 1, foreignRetainedCount: 1 }),
+      expect.objectContaining({ count: 0, foreignRetainedCount: 1 }),
+    ]);
+    expect(vault.list()).toEqual(["cred:other"]);
+    expect(
+      expectActivityLogProof(
+        "security.vault.entries-deleted.count",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({ count: 1, foreignRetainedCount: 1 });
+    expect(JSON.stringify(events)).not.toMatch(/cred:|secret-A|other-secret/u);
+  });
+
   it("emits structured body-free evidence when deleteMany cannot read the store", () => {
     const storePath = join(dir, "vault-delete-fail.enc.json");
     mkdirSync(storePath);
@@ -1072,6 +1103,26 @@ function itemNotFound(): Error & { status: number } {
 }
 
 describe("createKeychainCommandRunner", () => {
+  it("runs `security` without a controlling terminal, so a piped key is what it reads", () => {
+    // `getpass` prefers the controlling terminal over stdin; a foreground terminal launch would
+    // otherwise wait there and seal credentials with the fallback keyfile. The stand-in refuses
+    // unless it leads a session of its own (Linux: session id; elsewhere: process group).
+    const fakeDir = mkdtempSync(join(tmpdir(), "keiko-secret-vault-keychain-"));
+    try {
+      const leader = join(fakeDir, "security");
+      writeFileSync(
+        leader,
+        `#!/bin/sh\nif [ -r /proc/$$/stat ]; then set -- $(cat /proc/$$/stat); leader=$6; else leader=$(ps -o pgid= -p $$ | tr -d " "); fi\n[ "$leader" = "$$" ] || exit 9\ncat\n`,
+      );
+      chmodSync(leader, 0o700);
+      const run = createKeychainCommandRunner(leader, 30_000);
+
+      expect(run(["add-generic-password", "-w"], "key\nkey\n")).toBe("key\nkey\n");
+    } finally {
+      rmSync(fakeDir, { recursive: true, force: true });
+    }
+  });
+
   it("gives up on a keychain that never answers instead of waiting for it", () => {
     // Stands in for `security` blocked on a macOS unlock dialog. Against an unbounded spawn this
     // waits the full 30s and the test fails on the suite timeout.
@@ -1143,19 +1194,82 @@ describe("createKeychainVaultKeyAccess", () => {
   it("generates and stores a new key when the keychain has none (read miss → add)", () => {
     setPlatform("darwin");
     const commands: string[][] = [];
-    const runner = (args: readonly string[]): string => {
+    const inputs: (string | undefined)[] = [];
+    const runner = (args: readonly string[], input?: string): string => {
       commands.push([...args]);
+      inputs.push(input);
       if (args[0] === "find-generic-password") throw itemNotFound();
       return "";
     };
     const key = createKeychainVaultKeyAccess("svc", runner)();
     expect(key?.length).toBe(32);
     expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
-    // The key persisted to the keychain (the `-w` value of add-generic-password) must be exactly the
-    // key returned to the caller, so a later read resolves the same vault key.
-    const addArgs = commands[1] ?? [];
-    const storedKey = addArgs[addArgs.indexOf("-w") + 1] ?? "";
-    expect(Buffer.from(storedKey, "base64")).toEqual(key);
+    // The key persisted to the keychain must be exactly the key returned to the caller, so a later
+    // read resolves the same vault key. It travels over stdin, twice, as bare `-w` asks for it;
+    // the argument vector, which every process of the same user can read, never carries it.
+    const encoded = key?.toString("base64") ?? "";
+    expect(commands[1]?.at(-1)).toBe("-w");
+    expect(commands[1]).not.toContain(encoded);
+    expect(inputs[1]).toBe(`${encoded}\n${encoded}\n`);
+  });
+
+  it("reads a stored key once per runner and serves later accesses from memory", () => {
+    setPlatform("darwin");
+    const stored = Buffer.alloc(32, 7).toString("base64");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      return `${stored}\n`;
+    };
+    const first = createKeychainVaultKeyAccess("svc", runner)();
+    const second = createKeychainVaultKeyAccess("svc", runner)();
+    expect(second).toEqual(first);
+    expect(commands).toHaveLength(1);
+    createKeychainVaultKeyAccess("other-svc", runner)();
+    expect(commands).toHaveLength(2);
+  });
+
+  it("does not remember a key it generated, so the next access reads the stored winner", () => {
+    setPlatform("darwin");
+    const winner = Buffer.alloc(32, 9).toString("base64");
+    let stored: string | undefined;
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      if (args[0] === "add-generic-password") {
+        // Another process stored its key first; `-U` leaves the last writer's value, here the winner.
+        stored = winner;
+        return "";
+      }
+      if (stored === undefined) throw itemNotFound();
+      return `${stored}\n`;
+    };
+    createKeychainVaultKeyAccess("svc", runner)();
+    const next = createKeychainVaultKeyAccess("svc", runner)();
+    expect(next?.toString("base64")).toBe(winner);
+    expect(commands.map((c) => c[0])).toEqual([
+      "find-generic-password",
+      "add-generic-password",
+      "find-generic-password",
+    ]);
+  });
+
+  it("never serves a replaced undecodable value from memory", () => {
+    setPlatform("darwin");
+    const undecodable = Buffer.alloc(16, 2).toString("base64");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      return args[0] === "find-generic-password" ? `${undecodable}\n` : "";
+    };
+    createKeychainVaultKeyAccess("svc", runner)();
+    createKeychainVaultKeyAccess("svc", runner)();
+    expect(commands.map((c) => c[0])).toEqual([
+      "find-generic-password",
+      "add-generic-password",
+      "find-generic-password",
+      "add-generic-password",
+    ]);
   });
 
   it("returns undefined when generating the key fails (add error)", () => {
@@ -1407,8 +1521,7 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     },
   );
 
-  it("writes one 0600 file per entry into a 0700 directory and never plaintext", () => {
-    const storeDir = join(dir, "sharded");
+  function writeTwoShards(storeDir: string): readonly string[] {
     const vault = shardedVaultAt(storeDir);
     vault.set("cred:a", "plaintext-marker-A");
     vault.set("cred:b", "plaintext-marker-B");
@@ -1419,10 +1532,27 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
       const filePath = join(storeDir, name);
       expect(readFileSync(filePath, "utf8")).not.toContain("plaintext-marker");
       expect(readFileSync(filePath, "utf8").startsWith("kv1.")).toBe(true);
-      expect(statSync(filePath).mode & 0o777).toBe(0o600);
     }
-    expect(statSync(storeDir).mode & 0o777).toBe(0o700);
+    return files.map((name) => join(storeDir, name));
+  }
+
+  it("writes one sealed file per entry and never plaintext", () => {
+    writeTwoShards(join(dir, "sharded"));
   });
+
+  // The modes are POSIX permission bits the vault itself set. Windows synthesizes st_mode from the
+  // read-only attribute (0o666 / 0o444), so these exact bits are only observable on a POSIX host;
+  // the content assertions above run everywhere.
+  it.skipIf(process.platform === "win32")(
+    "writes one 0600 file per entry into a 0700 directory and never plaintext",
+    () => {
+      const storeDir = join(dir, "sharded");
+      for (const filePath of writeTwoShards(storeDir)) {
+        expect(statSync(filePath).mode & 0o777).toBe(0o600);
+      }
+      expect(statSync(storeDir).mode & 0o777).toBe(0o700);
+    },
+  );
 
   it("ignores foreign and malformed filenames instead of reporting them as references", () => {
     const storeDir = join(dir, "sharded");
@@ -1554,8 +1684,9 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
   });
 
   // EACCES specifically, as distinct proof from the EISDIR case above — skipped only when the
-  // worker itself runs as root (uid 0), where a permission bit never actually refuses a read.
-  it.skipIf(process.getuid?.() === 0)(
+  // worker itself runs as root (uid 0), where a permission bit never actually refuses a read, and on
+  // Windows, where chmod only toggles the read-only attribute and can never refuse the owner a read.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "emits security.vault.shard-unreadable for an EACCES shard, and never breaks the read when the sink throws",
     () => {
       const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
@@ -1621,11 +1752,13 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     expect(vault.list()).toEqual(["cred:a"]);
   });
 
+  // The redirect is a directory symlink on POSIX and a junction on Windows, which needs no symlink
+  // privilege; the vault refuses both as a symlinked path.
   it("refuses to enumerate through a symlinked store directory", () => {
     const storeDir = join(dir, "sharded-list");
     mkdirSync(join(dir, "foreign"), { recursive: true });
     shardedVaultAt(join(dir, "foreign")).set("cred:foreign", "not mine");
-    symlinkSync(join(dir, "foreign"), storeDir);
+    plantDirectoryRedirect(join(dir, "foreign"), storeDir);
 
     // The single-file list() reads through readStore, which refuses a symlinked path; the sharded
     // one must not become the one operation a hostile redirect can enumerate.
@@ -1650,7 +1783,7 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
   it("refuses to write through a symlinked path segment", () => {
     const storeDir = join(dir, "sharded");
     mkdirSync(join(dir, "elsewhere"), { recursive: true });
-    symlinkSync(join(dir, "elsewhere"), storeDir);
+    plantDirectoryRedirect(join(dir, "elsewhere"), storeDir);
 
     expect(() => {
       shardedVaultAt(storeDir).set("cred:a", "secret-A");

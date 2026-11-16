@@ -153,6 +153,42 @@ describe("editor process executable resolution", () => {
     ).toBe(realpathSync(expected));
   });
 
+  // #4068: a name that already carries a PATHEXT extension was probed as `adapter.EXE.EXE` and never
+  // found, and a copied Windows environment spells the search path `Path`.
+  it("finds a Windows name that already carries its extension", () => {
+    const bin = temporary("keiko-shared-win-named-");
+    const root = temporary("keiko-shared-ws-");
+    const expected = executable(bin, "adapter.EXE");
+    expect(
+      resolveExecutableOutsideWorkspace("adapter.EXE", workspace(root), { PATH: bin }, "win32"),
+    ).toBe(realpathSync(expected));
+    const script = executable(bin, "tool.cmd");
+    expect(
+      resolveExecutableOutsideWorkspace("tool.cmd", workspace(root), { PATH: bin }, "win32"),
+    ).toBe(realpathSync(script));
+  });
+
+  it("never probes an extensionless Windows name as it is", () => {
+    const bin = temporary("keiko-shared-win-bare-");
+    const root = temporary("keiko-shared-ws-");
+    executable(bin, "adapter");
+    expect(() =>
+      resolveExecutableOutsideWorkspace("adapter", workspace(root), { PATH: bin }, "win32"),
+    ).toThrow(EditorProcessHardeningError);
+  });
+
+  it("reads the Windows search path whatever its letter case", () => {
+    const bin = temporary("keiko-shared-win-case-");
+    const root = temporary("keiko-shared-ws-");
+    const expected = executable(bin, "adapter.EXE");
+    expect(
+      resolveExecutableOutsideWorkspace("adapter", workspace(root), { Path: bin }, "win32"),
+    ).toBe(realpathSync(expected));
+    expect(() =>
+      resolveExecutableOutsideWorkspace("adapter", workspace(root), { Path: bin }, "linux"),
+    ).toThrow(EditorProcessHardeningError);
+  });
+
   it("skips an existing non-executable candidate", () => {
     const first = temporary("keiko-shared-nonexec-");
     const second = temporary("keiko-shared-exec-");

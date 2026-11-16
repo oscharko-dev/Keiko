@@ -63,6 +63,19 @@ export function nullSecurityLogSink(): SecurityLogSink {
   return NULL_SINK;
 }
 
+// The sink of a layer that has not been given one yet: each event it is handed is counted as an
+// unwired port, exactly what an absent sink did silently. It exists so that a remaining gap is a
+// named line a search finds (and the next conversion removes), never an implicit `undefined`.
+const UNWIRED_SINK: SecurityLogSink = {
+  write(_event: SecurityLogEvent): void {
+    recordActivityLogLoss("port-unwired");
+  },
+};
+
+export function unwiredSecurityLogSink(): SecurityLogSink {
+  return UNWIRED_SINK;
+}
+
 // Monotonic elapsed milliseconds, rounded to 3 decimals so a line stays stable in width.
 // `performance.now()` rather than `Date.now()` so a clock step cannot produce a negative duration
 // while a bounded keychain spawn is in flight.

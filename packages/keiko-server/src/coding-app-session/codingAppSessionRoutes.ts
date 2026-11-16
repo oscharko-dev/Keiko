@@ -19,10 +19,11 @@ import {
 import type { UiHandlerDeps } from "../deps.js";
 import {
   emitServerDiagnostic,
+  serverDiagnosticFromError,
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { UNKNOWN_CORRELATION_ID, resolveCorrelationId } from "../correlation.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import { STREAMING } from "../route-outcome.js";
@@ -34,15 +35,24 @@ import {
   writeContentFreeSessionStream,
   type SessionStreamFlowCounts,
 } from "./sessionStreamWriter.js";
-import { resolveCodingAppSessionDenialWindows } from "./denialWindows.js";
+import {
+  DENIAL_ALERT_THRESHOLD,
+  LOCAL_SESSION_DENIAL_REASONS,
+  resolveCodingAppSessionDenialWindows,
+  type LocalSessionDenialReason,
+  type LocalSessionDenialSummary,
+} from "./denialWindows.js";
 import {
   APP_SESSION_ACTIVE_COOKIE_COUNT,
   APP_SESSION_COOKIE_MAX_AGE_SECONDS,
   clearSessionCookies,
   readSessionCookie,
+  readSessionCookieObservation,
   requestIsSecure,
   serializeSessionCookies,
 } from "./sessionCookie.js";
+
+import { SESSION_EXPIRY_REFUSAL_REASONS } from "./sessionRegistry.js";
 
 const MAX_PAIRING_BODY_BYTES = 8 * 1_024;
 export { CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS };
@@ -100,6 +110,12 @@ const CODING_APP_SESSION_PAIRED_OPERATION = defineActivityLogOperation({
       values: ["none", "inactive", "active"],
       required: false,
     },
+    reconnect: {
+      type: "string",
+      dataClass: "closed-enum",
+      values: ["no-credential", "live-credential", "ended-credential", "after-restart"],
+      required: false,
+    },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -128,6 +144,178 @@ const CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
+// Shared field shapes of the two local-session refusal registrations: one count per closed refusal
+// reason (so every refused repair is counted whichever caller sent it), the window state flag, and
+// the two closed reason sets.
+const DENIAL_REASON_COUNT = { type: "integer", dataClass: "count", required: true } as const;
+const WINDOW_CLOSED_FLAG = { type: "boolean", dataClass: "closed-enum", required: true } as const;
+const WINDOW_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: ["authority-unavailable"],
+} as const;
+const REFUSAL_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: LOCAL_SESSION_DENIAL_REASONS,
+} as const;
+
+const LOCAL_SESSION_DENIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.local-session.denied",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.codingAppSessionRoutes.localSessionDenied",
+  fields: {
+    count: DENIAL_REASON_COUNT,
+    reason: WINDOW_REASON_FIELD,
+    // `false`: the alert raised when the window crossed its threshold. `true`: the window's final
+    // summary, written for every window that refused anything. Read the closed one for the totals.
+    windowClosed: WINDOW_CLOSED_FLAG,
+    approvalCount: DENIAL_REASON_COUNT,
+    inactivityCount: DENIAL_REASON_COUNT,
+    invalidClockCount: DENIAL_REASON_COUNT,
+    lifetimeCount: DENIAL_REASON_COUNT,
+    proofMalformedCount: DENIAL_REASON_COUNT,
+    proofMissingCount: DENIAL_REASON_COUNT,
+    secretMismatchCount: DENIAL_REASON_COUNT,
+    sessionUnregisteredCount: DENIAL_REASON_COUNT,
+    lifetimeInsufficientCount: DENIAL_REASON_COUNT,
+    proofUnavailableCount: DENIAL_REASON_COUNT,
+    channelUnavailableCount: DENIAL_REASON_COUNT,
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-app-session-pairing"],
+  proofIds: ["coding-app-session.local-session.denied.request"],
+  releaseImpact: "patch",
+});
+
+const LOCAL_SESSION_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.local-session.refused",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.codingAppSessionRoutes.localSessionRefused",
+  fields: {
+    reason: REFUSAL_REASON_FIELD,
+    count: DENIAL_REASON_COUNT,
+    presentedProofCount: DENIAL_REASON_COUNT,
+    distinctProofCount: DENIAL_REASON_COUNT,
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-app-session-pairing"],
+  proofIds: ["coding-app-session.local-session.refused.reason"],
+  releaseImpact: "patch",
+});
+
+// Only a caller holding a registered session can reach these refusals, each at most once per
+// session (expiry) or within its final second (`lifetime-insufficient`). Every other refused repair
+// is caller-controlled and stays in the per-minute denial aggregate, never one line per request.
+const RECORDED_REPAIR_REFUSALS: ReadonlySet<string> = new Set([
+  ...SESSION_EXPIRY_REFUSAL_REASONS,
+  "lifetime-insufficient",
+]);
+
+function localSessionRefused(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  reason: LocalSessionDenialReason,
+): RouteResult {
+  if (!RECORDED_REPAIR_REFUSALS.has(reason)) return localSessionDenied(ctx, deps, reason);
+  const { presentedProofCount, distinctProofCount } = readSessionCookieObservation(ctx.req);
+  appSessionActivity(deps).write(
+    activityLogEvent(
+      LOCAL_SESSION_REFUSED_OPERATION,
+      { level: "info", correlationId: ctx.correlationId ?? resolveCorrelationId(ctx.req) },
+      { reason, count: 1, presentedProofCount, distinctProofCount },
+    ),
+  );
+  return localSessionDenied(ctx, deps, reason);
+}
+
+function writeLocalSessionDenial(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  summary: LocalSessionDenialSummary,
+): void {
+  const { histogram } = summary;
+  // An alert above the threshold stays a warning; a quiet window's summary is information.
+  const level = summary.windowClosed && summary.count < DENIAL_ALERT_THRESHOLD ? "info" : "warn";
+  appSessionActivity(deps).write(
+    activityLogEvent(
+      LOCAL_SESSION_DENIED_OPERATION,
+      { level, correlationId },
+      {
+        reason: "authority-unavailable",
+        count: summary.count,
+        windowClosed: summary.windowClosed,
+        approvalCount: histogram.approval,
+        inactivityCount: histogram.inactivity,
+        invalidClockCount: histogram["invalid-clock"],
+        lifetimeCount: histogram.lifetime,
+        proofMalformedCount: histogram["proof-malformed"],
+        proofMissingCount: histogram["proof-missing"],
+        secretMismatchCount: histogram["secret-mismatch"],
+        sessionUnregisteredCount: histogram["session-unregistered"],
+        lifetimeInsufficientCount: histogram["lifetime-insufficient"],
+        proofUnavailableCount: histogram["proof-unavailable"],
+        channelUnavailableCount: histogram["channel-unavailable"],
+      },
+    ),
+  );
+}
+
+// The summary is written from a window timer, from the next denial after the window and from graph
+// disposal. None of those may let a failing sink escape as an uncaught exception, so a write that
+// throws takes the existing structured diagnostic path under the denial's correlation (#4370).
+function writeLocalSessionDenialGuarded(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  summary: LocalSessionDenialSummary,
+): void {
+  try {
+    writeLocalSessionDenial(deps, correlationId, summary);
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "coding-app-session.local-session.denied",
+        source: "coding-app-session-routes",
+        error,
+        redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      }),
+    );
+  }
+}
+
+function localSessionDenied(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  reason: LocalSessionDenialReason,
+): RouteResult {
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  resolveCodingAppSessionDenialWindows(deps).recordLocalSessionDenial(
+    Date.now(),
+    reason,
+    (summary) => {
+      writeLocalSessionDenialGuarded(deps, correlationId, summary);
+    },
+  );
+  // An unpaired browser, a stale cookie and an absent channel are ordinary states of a page load:
+  // the refusal is recorded above and the caller receives the content-free acknowledgement with no
+  // cookie, as before #4321 (a 401 here fails every unpaired page load in the browser console).
+  return ackResult();
+}
+
 const CODING_APP_SESSION_ROTATED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -135,7 +323,10 @@ const CODING_APP_SESSION_ROTATED_OPERATION = defineActivityLogOperation({
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionRotate",
-  fields: { cookieMaxAgeSeconds: { type: "integer", dataClass: "duration", required: true } },
+  fields: {
+    cookieMaxAgeSeconds: { type: "integer", dataClass: "duration", required: true },
+    activeOperationCount: { type: "integer", dataClass: "count", required: true },
+  },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -294,7 +485,7 @@ export async function handleCodingAppSessionPair(
   const channel = deps.codingAppSessionChannel;
   if (channel === undefined) return ackResult();
   const attestation = await readPairingBody(ctx.req);
-  const result = channel.pair(attestation);
+  const result = channel.pair(attestation, readSessionCookie(ctx.req));
   if (!result.paired) {
     // KEIKO-0838: aggregate denials into one rate-limited, count-only diagnostic per window.
     resolveCodingAppSessionDenialWindows(deps).recordPairingDenial(Date.now(), (count) => {
@@ -306,7 +497,7 @@ export async function handleCodingAppSessionPair(
     activityLogEvent(
       CODING_APP_SESSION_PAIRED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      result.capacityDecision ?? {},
+      { ...result.capacityDecision, reconnect: result.reconnect },
     ),
   );
   return ackResult(issuedCookie(ctx.req, result.cookieToken));
@@ -322,9 +513,20 @@ export function handleCodingAppSessionLocalSession(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
-  const cookieToken = readSessionCookie(ctx.req);
-  const result = deps.codingAppSessionChannel?.ensureLocalSession(cookieToken);
-  if (result?.status !== "active" || cookieToken === undefined) return ackResult();
+  const { cookieToken, ...observation } = readSessionCookieObservation(ctx.req);
+  const result = deps.codingAppSessionChannel?.ensureLocalSession(cookieToken, {
+    ...observation,
+    correlationId: ctx.correlationId ?? resolveCorrelationId(ctx.req),
+    purpose: "repair",
+  });
+  if (result?.status !== "active" || cookieToken === undefined)
+    return localSessionRefused(
+      ctx,
+      deps,
+      result?.status === "unavailable"
+        ? (result.reason ?? "proof-unavailable")
+        : "channel-unavailable",
+    );
   const maxAgeSeconds = Math.min(APP_SESSION_COOKIE_MAX_AGE_SECONDS, result.maxAgeSeconds);
   const headers = issuedCookie(ctx.req, cookieToken, maxAgeSeconds);
   appSessionActivity(deps).write(
@@ -344,7 +546,7 @@ function currentSnapshot(
   const channel = deps.codingAppSessionChannel;
   return channel === undefined
     ? contentFreeCodingAppSessionChannelSnapshot()
-    : channel.snapshot(readSessionCookie(req));
+    : channel.snapshot(readSessionCookie(req), { correlationId: resolveCorrelationId(req) });
 }
 
 /** GET /channel — authenticated snapshot read; content-free for an unpaired caller (fail closed). */
@@ -469,6 +671,10 @@ export function openCodingAppSessionStream(
   });
   const subscription = channel.subscribe(cookieToken, writer.publish, {
     deferAdmissionReleaseOnBackpressure: true,
+    observation: {
+      correlationId: correlationId ?? resolveCorrelationId(req),
+      purpose: "inspection",
+    },
   });
   reportStall = subscription.reportBackpressure;
   if (writer.isClosing() || !writer.writeInitial(subscription.snapshot) || !subscription.live) {
@@ -491,8 +697,12 @@ export function openCodingAppSessionStream(
 export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const channel = deps.codingAppSessionChannel;
   if (channel === undefined) return ackResult();
-  const result = channel.rotate(readSessionCookie(ctx.req));
+  const result = channel.rotate(
+    readSessionCookie(ctx.req),
+    ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+  );
   if (!result.rotated) {
+    if (result.status === "deferred") return { status: 200, body: { status: "deferred" } };
     // KEIKO-0838: same aggregate-diagnostic pattern as pair(), independent window/counter.
     resolveCodingAppSessionDenialWindows(deps).recordRotateDenial(Date.now(), (count) => {
       emitPairingDenialAggregate(deps, "coding-app-session.rotate", count);
@@ -504,7 +714,7 @@ export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerD
     activityLogEvent(
       CODING_APP_SESSION_ROTATED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      { cookieMaxAgeSeconds: maxAgeSeconds },
+      { cookieMaxAgeSeconds: maxAgeSeconds, activeOperationCount: result.activeOperationCount },
     ),
   );
   return ackResult(issuedCookie(ctx.req, result.cookieToken, maxAgeSeconds));
@@ -515,7 +725,11 @@ export function handleCodingAppSessionSignOut(ctx: RouteContext, deps: UiHandler
   // Only a sign-out that revoked a session is logged, as only a rotation that rotated one is: an
   // absent or unknown cookie, or a repeated sign-out from a stale tab, revoked nothing, and the
   // response is the same either way (PR #3452 review).
-  if (deps.codingAppSessionChannel?.signOut(readSessionCookie(ctx.req)) === true) {
+  if (
+    deps.codingAppSessionChannel?.signOut(readSessionCookie(ctx.req), {
+      correlationId: ctx.correlationId ?? resolveCorrelationId(ctx.req),
+    }) === true
+  ) {
     appSessionActivity(deps).write(
       activityLogEvent(
         CODING_APP_SESSION_SIGNED_OUT_OPERATION,

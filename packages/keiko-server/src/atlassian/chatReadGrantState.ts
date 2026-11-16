@@ -84,7 +84,7 @@ export function snapshotReadGrant(
 }
 
 export function sameReadGrantSubject(
-  grant: Pick<ChatToolReadGrant, "subject">,
+  grant: { readonly subject: ChatToolAuthoritySubject },
   subject: ChatToolAuthoritySubject,
 ): boolean {
   return (

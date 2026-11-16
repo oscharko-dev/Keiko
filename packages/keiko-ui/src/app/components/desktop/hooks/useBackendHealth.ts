@@ -34,6 +34,7 @@ interface HealthPoll {
   failureReport: HealthReport | undefined;
   invalidReport: HealthReport | undefined;
   degradedReport: HealthReport | undefined;
+  custodyInvalidReported: boolean;
 }
 
 type PublishHealth = (update: (previous: BackendHealth) => BackendHealth) => void;
@@ -59,6 +60,21 @@ function recordInvalidHealth(health: HealthSnapshot, correlationId: string): Hea
   return { correlationId, failure: { errorKind: "validation-failed", context: [] } };
 }
 
+// A credential custody value outside the closed states is never shown (#4358); it is reported
+// once per page, body-free: the value itself never leaves the health reader.
+function reportInvalidCredentialCustodyOnce(
+  poll: HealthPoll,
+  health: HealthSnapshot,
+  correlationId: string,
+): void {
+  if (health.credentialCustodyInvalid !== true || poll.custodyInvalidReported) return;
+  poll.custodyInvalidReported = true;
+  reportClientDiagnostic("[keiko] health credential custody failed validation", {
+    correlationId: responseCorrelationIdOf(health) ?? correlationId,
+    errorKind: "validation-failed",
+  });
+}
+
 function observedHealthReport(
   poll: HealthPoll,
   health: HealthSnapshot,
@@ -66,6 +82,7 @@ function observedHealthReport(
 ): HealthReport | undefined {
   poll.failedPolls = 0;
   poll.failureReport = undefined;
+  reportInvalidCredentialCustodyOnce(poll, health, correlationId);
   if (health.diagnosticsInvalid) {
     poll.invalidReport ??= recordInvalidHealth(
       health,
@@ -131,6 +148,7 @@ export function useBackendHealth(): BackendHealth {
       failureReport: undefined,
       invalidReport: undefined,
       degradedReport: undefined,
+      custodyInvalidReported: false,
     };
     void readBackendHealth(poll, setBackendHealth);
     const timer = window.setInterval(() => {

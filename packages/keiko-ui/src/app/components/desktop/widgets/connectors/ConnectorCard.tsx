@@ -19,6 +19,7 @@ import { VerifyConnectionStatus } from "./VerifyConnectionStatus";
 import { useConnectorCard, type CardController } from "./useConnectorCard";
 import { ConnectorUpdateForm } from "./ConnectorUpdateForm";
 import { LivePodActions, LivePodHeader, livePodState } from "./LivePodCard";
+import styles from "./connectors.module.css";
 
 export interface ConnectorCardProps {
   readonly connector: AtlassianConnectorMetadata;
@@ -26,6 +27,7 @@ export interface ConnectorCardProps {
   readonly onDeleted: (authRef: string) => void;
   readonly onUpdated: (metadata: AtlassianConnectorMetadata) => void;
   readonly pollIntervalMs?: number;
+  readonly embedded?: boolean;
 }
 
 function CardHeader({
@@ -212,6 +214,7 @@ function cardVerification(
     status: ctrl.unconfirmed ? undefined : currentVerifyStatus(connector, ctrl.verifyStatus),
     verifying:
       ctrl.operation === "verify" ||
+      ctrl.operation === "rotate" ||
       (connector.deployment === "data-center" &&
         connector.livePod?.verificationInProgress === true),
   };
@@ -226,12 +229,30 @@ function CardError({ error }: { readonly error: string | undefined }): ReactNode
   );
 }
 
+/** An existing Pod obtains the retained compatibility facts only by an explicit verification. */
+function CompatibilityNotice({
+  connector,
+}: {
+  readonly connector: AtlassianConnectorMetadata;
+}): ReactNode {
+  const translate = useTranslate();
+  if (connector.deployment !== "data-center" || connector.livePod?.compatibilityFacts !== "missing")
+    return null;
+  return (
+    <p className="acx-hint" data-testid="acx-compatibility-missing">
+      {translate("atlassianConnectors.live.compatibilityMissing")}
+    </p>
+  );
+}
+
 function LiveConnectorCard({
   connector,
   ctrl,
+  embedded,
 }: {
   readonly connector: AtlassianConnectorMetadata;
   readonly ctrl: CardController;
+  readonly embedded: boolean;
 }): ReactNode {
   const verification = cardVerification(connector, ctrl);
   const state = livePodState(
@@ -241,15 +262,23 @@ function LiveConnectorCard({
   );
   const managing = ctrl.confirming || ctrl.editing !== undefined;
   return (
-    <li className="acx-card" data-testid="acx-connector" data-auth-ref={connector.authRef}>
+    <li
+      className={`acx-card ${styles.cmpPodCard}`}
+      data-testid="acx-connector"
+      data-auth-ref={connector.authRef}
+    >
       <LivePodHeader
         connector={connector}
         state={state}
+        embedded={embedded}
         actions={
-          managing ? null : <LivePodActions connector={connector} ctrl={ctrl} state={state} />
+          managing ? null : (
+            <LivePodActions connector={connector} ctrl={ctrl} state={state} embedded={embedded} />
+          )
         }
       />
       <CardError error={ctrl.error} />
+      <CompatibilityNotice connector={connector} />
       {managing ? <CardManagement connector={connector} ctrl={ctrl} actions={null} /> : null}
     </li>
   );
@@ -261,9 +290,11 @@ export function ConnectorCard({
   onDeleted,
   onUpdated,
   pollIntervalMs,
+  embedded = false,
 }: ConnectorCardProps): ReactNode {
   const ctrl = useConnectorCard(client, connector, onDeleted, onUpdated);
-  if (isLivePod(connector)) return <LiveConnectorCard connector={connector} ctrl={ctrl} />;
+  if (isLivePod(connector))
+    return <LiveConnectorCard connector={connector} ctrl={ctrl} embedded={embedded} />;
   const canSync = connector.deployment !== "data-center";
   const { status, verifying } = cardVerification(connector, ctrl);
   const syncPollProps = pollIntervalMs === undefined ? {} : { pollIntervalMs };

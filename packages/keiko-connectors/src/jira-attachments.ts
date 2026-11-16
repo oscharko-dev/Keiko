@@ -13,6 +13,7 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
+import { jiraNativeText } from "./jira-native-values.js";
 import type { AtlassianHttpUpload } from "./atlassian-http-port.js";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
@@ -38,6 +39,8 @@ export type JiraAttachmentSourceResult =
       readonly detail?: JiraMutationFailureDetail;
     };
 export interface JiraAttachmentSourceRequest {
+  /** Private composing-owner purpose; never a model-selectable generic archive capability. */
+  readonly purpose?: "jira-email-template-pack" | "jira-avatar-image";
   readonly kind: (typeof JIRA_ATTACHMENT_SOURCE_KINDS)[number];
   /** Relative to a root the owner already governs; the owner re-validates containment. */
   readonly path: string;
@@ -139,19 +142,46 @@ export function jiraAttachmentUpload(
   return { contentType: `multipart/form-data; boundary=${boundary}`, bytes };
 }
 
+/** Native settings remain observable when attachments are disabled; missing limits are not zero. */
+export function jiraAttachmentSettings(value: unknown): CatalogJsonObject | undefined {
+  const raw = asRecord(value);
+  if (raw === undefined || typeof raw.enabled !== "boolean") return undefined;
+  const limit = raw.uploadLimit ?? undefined;
+  if (limit === undefined) return { enabled: raw.enabled };
+  if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 0) return undefined;
+  return {
+    enabled: raw.enabled,
+    uploadLimit: limit,
+    maxBytes: Math.min(limit, JIRA_ATTACHMENT_MAX_BYTES),
+  };
+}
+
+/** Shared stored-file facts; this does not fetch content or establish byte equality. */
+export function jiraAttachmentRecord(
+  value: unknown,
+): { readonly filename: string; readonly size: number } | undefined {
+  const raw = asRecord(value);
+  return raw !== undefined &&
+    jiraNativeText(raw.filename, 1024) &&
+    typeof raw.size === "number" &&
+    Number.isSafeInteger(raw.size) &&
+    raw.size >= 0
+    ? { filename: raw.filename, size: raw.size }
+    : undefined;
+}
+
 /** The instance's own attachment switch and limit; Keiko's ceiling can only lower it. */
 export async function jiraAttachmentLimit(
   request: JiraMutationRequest,
 ): Promise<{ readonly ok: true; readonly maxBytes: number } | Failure> {
   const response = await request("attachment/meta");
   if (!response.ok) return { ok: false, reason: response.reason };
-  const body = response.body;
-  const limit = body?.uploadLimit;
-  if (response.status !== 200 || body === undefined || typeof body.enabled !== "boolean")
-    return MALFORMED;
-  if (!body.enabled) return { ok: false, reason: "unavailable" };
-  if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 0) return MALFORMED;
-  return { ok: true, maxBytes: Math.min(limit, JIRA_ATTACHMENT_MAX_BYTES) };
+  const settings = response.status === 200 ? jiraAttachmentSettings(response.body) : undefined;
+  if (settings === undefined) return MALFORMED;
+  if (!settings.enabled) return { ok: false, reason: "unavailable" };
+  return typeof settings.maxBytes === "number"
+    ? { ok: true, maxBytes: settings.maxBytes }
+    : MALFORMED;
 }
 
 /** Jira answers an upload with the stored attachments; ours is the one new entry of this size. */
@@ -196,10 +226,8 @@ async function readbackAttachment(
     .map((value) => asRecord(value))
     .find((value) => value?.id === expected.id);
   const names = [expected.name, jiraAttachmentAsciiName(expected.name)];
-  const matches =
-    stored?.size === expected.size &&
-    typeof stored.filename === "string" &&
-    names.includes(stored.filename);
+  const record = jiraAttachmentRecord(stored);
+  const matches = record?.size === expected.size && names.includes(record.filename);
   return matches ? { ok: true, receipt: { issueKey, attachmentId: expected.id } } : CONFLICT;
 }
 

@@ -21,7 +21,6 @@ import {
   startAtlassianConnectorSync,
 } from "./atlassian-connectors-api.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
-import type { AtlassianNetworkConfig } from "@oscharko-dev/keiko-contracts";
 import { responseCorrelationIdOf } from "./bff-correlation.js";
 import { I18nProvider, loadLocaleMessages } from "./i18n.js";
 import { loadOptionalWidgetMessages } from "./optional-widget-i18n.js";
@@ -31,6 +30,24 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 
+// A 401 that Jira itself authored (its request id and the anonymous-user marker): the only kind
+// that is a definitive token rejection (#4353).
+const JIRA_401_HEADERS = { "X-AREQUESTID": "synthetic-request", "X-AUSERNAME": "anonymous" };
+const { fixtureDnsLookup } = vi.hoisted(() => ({
+  fixtureDnsLookup: vi.fn(async (hostname: string) => {
+    if (hostname !== "jira.example" && hostname !== "cloud.example")
+      throw Object.assign(new Error("Unexpected synthetic DNS target"), { code: "ENOTFOUND" });
+    return [{ address: "203.0.113.10", family: 4 }];
+  }),
+}));
+
+// The saved Data Center hostname now passes real address-class admission before the fake HTTP
+// response is used. Stub only these synthetic DNS answers; custody and admission remain real.
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:dns/promises")>();
+  return { ...actual, default: { ...actual, lookup: fixtureDnsLookup }, lookup: fixtureDnsLookup };
+});
+
 const syntheticToken = (): string => ["fixture", "jira", "token", "4082"].join("-");
 let configDir: string;
 let configPath: string;
@@ -38,7 +55,6 @@ let close: (() => Promise<void>) | undefined;
 let events: ServerLogEvent[];
 let responses: (Response | Error)[];
 let outbound: { url: string; authorization: string | null }[];
-let networkConfig: AtlassianNetworkConfig | undefined;
 let listenerPort = 0;
 
 function fixtureFetch(input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
@@ -67,7 +83,6 @@ function dependencies(): UiHandlerDeps {
       configPath,
       env: { KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64") },
       egress: () => undefined,
-      networkConfig: () => networkConfig,
       fetchImpl: fixtureFetch,
       activityLog: {
         write: (event): void => {
@@ -79,7 +94,7 @@ function dependencies(): UiHandlerDeps {
 }
 
 beforeEach(async () => {
-  networkConfig = undefined;
+  fixtureDnsLookup.mockClear();
   events = [];
   responses = [];
   outbound = [];
@@ -118,9 +133,8 @@ beforeEach(async () => {
   );
 });
 
-it("refuses the actual BFF listener even if a loopback target is operator-admitted", async () => {
+it("refuses the actual BFF listener after the owner saves an explicit loopback URL", async () => {
   const baseUrl = `https://127.0.0.1:${String(listenerPort)}/jira`;
-  networkConfig = { privateTargets: [{ baseUrl, addressClass: "loopback" }] };
   const created = await createAtlassianConnector({
     provider: "jira",
     deployment: "data-center",
@@ -228,6 +242,10 @@ describe("Atlassian browser client through the real credential route (#4082)", (
       Response.json({ name: "fixture-user", key: "fixture-key", active: true }),
     );
     expect(await verifyAtlassianConnector(metadata.authRef)).toMatchObject({ status: "ok" });
+    expect(fixtureDnsLookup).toHaveBeenCalledWith("jira.example", {
+      all: true,
+      verbatim: true,
+    });
     expect(outbound.map((request) => request.url)).toEqual([
       "https://jira.example/context/rest/api/2/serverInfo",
       "https://jira.example/context/rest/api/2/myself",
@@ -272,9 +290,11 @@ describe("Atlassian browser client through the real credential route (#4082)", (
   });
 });
 
-function verifiedDataCenterResponses(): Response[] {
+function verifiedDataCenterResponses(
+  versionNumbers: readonly [number, number, number] = [10, 3, 26],
+): Response[] {
   return [
-    Response.json({ version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Server" }),
+    Response.json({ version: versionNumbers.join("."), versionNumbers, deploymentType: "Server" }),
     Response.json({ name: "fixture-user", key: "fixture-key", active: true }),
   ];
 }
@@ -291,7 +311,9 @@ const hubVerificationCases = [
     status: "auth-failed",
     en: "Authentication failed",
     de: "Authentifizierung fehlgeschlagen",
-    replies: (): Response[] => [new Response(privateProviderDetail, { status: 401 })],
+    replies: (): Response[] => [
+      new Response(privateProviderDetail, { status: 401, headers: JIRA_401_HEADERS }),
+    ],
   },
   {
     status: "forbidden",
@@ -377,6 +399,32 @@ async function mountedDataCenterHub(locale: "en" | "de"): Promise<{
 }
 
 describe.each(["en", "de"] as const)("Data Center verification in the real %s Hub", (locale) => {
+  it.each([
+    [10, 3, 0],
+    [10, 4, 4],
+    [11, 2, 1],
+    [11, 3, 13],
+  ] as const)("shows a verified connection for Jira %i.%i.%i", async (major, minor, patch) => {
+    const { metadata, card } = await mountedDataCenterHub(locale);
+    responses.push(...verifiedDataCenterResponses([major, minor, patch]));
+    await userEvent.click(
+      within(card).getByRole("button", {
+        name: locale === "en" ? "Verify connection" : "Verbindung prüfen",
+      }),
+    );
+    const notice = within(card).getByTestId("acx-verify-status");
+    await waitFor(() => expect(notice).toHaveAttribute("data-status", "ok"));
+    expect(notice).toHaveTextContent(
+      locale === "en" ? "Connection verified" : "Verbindung geprüft",
+    );
+    const stored = (await listAtlassianConnectors()).find(
+      (item) => item.authRef === metadata.authRef,
+    );
+    assert(stored?.deployment === "data-center");
+    expect(stored.livePod?.verificationStatus).toBe("ok");
+    expect(outbound).toHaveLength(2);
+  });
+
   it.each(hubVerificationCases)(
     "carries $status through the client, route, custody and card",
     async (scenario) => {
@@ -394,6 +442,7 @@ describe.each(["en", "de"] as const)("Data Center verification in the real %s Hu
       expect(within(card).getByRole("status")).toBe(notice);
       if (scenario.status === "auth-failed") expect(notice).not.toHaveTextContent(/e-?mail/iu);
       if (scenario.status === "forbidden") expect(notice).toHaveTextContent(/licen[cs]e|lizenz/iu);
+      if (scenario.status === "unsupported-version") expect(notice).toHaveTextContent("10.3");
       expect(card).not.toHaveTextContent(privateProviderDetail);
       expect(card).not.toHaveTextContent(syntheticToken());
       const stored = (await listAtlassianConnectors()).find(
@@ -427,7 +476,7 @@ it("removes the Hub's verified state after a revoked PAT fails real re-verificat
     (item) => item.authRef === metadata.authRef,
   );
   assert(verified?.deployment === "data-center");
-  responses.push(new Response(privateProviderDetail, { status: 401 }));
+  responses.push(new Response(privateProviderDetail, { status: 401, headers: JIRA_401_HEADERS }));
   // A verified Pod keeps its secondary actions, re-verification included, in the "…" menu.
   await userEvent.click(within(card).getByRole("button", { name: /^More actions:/u }));
   await userEvent.click(within(card).getByRole("menuitem", { name: "Verify connection" }));

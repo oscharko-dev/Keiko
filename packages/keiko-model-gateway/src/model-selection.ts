@@ -1,3 +1,4 @@
+import { reasoningContinuationRouteDigest } from "./provider-identity.js";
 import {
   COST_RANK,
   assumedChatCapability,
@@ -290,6 +291,8 @@ function codingSidecarProjection(
   capability: ModelCapability,
   verification: GatewayVerificationState,
   supportsStreaming: boolean,
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
 ): CodingWorkbenchSidecarGatewayProjection {
   const contextProfile = deriveContextProfileFromCapability(provenWindowCapability(capability));
   return {
@@ -300,6 +303,12 @@ function codingSidecarProjection(
     supportsStreaming,
     supportsToolCalling: true,
     runMetadata: {
+      ...(provider.reasoningContinuation === undefined
+        ? {}
+        : { reasoningContinuation: provider.reasoningContinuation }),
+      ...(reasoningContinuationRouteDigest(config, capability.id) === undefined
+        ? {}
+        : { continuationRouteDigest: reasoningContinuationRouteDigest(config, capability.id) }),
       maxPromptTokens: contextProfile.maxInputTokens,
       ...(contextProfile.inputTokenLimit === undefined
         ? {}
@@ -434,6 +443,8 @@ export function resolveCodingSafeSidecarGatewayProfile(
     selected,
     options.gatewayVerification ?? UNVERIFIED_GATEWAY,
     codingSidecarStreams(config, selected),
+    config,
+    provider,
   );
 }
 

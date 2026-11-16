@@ -26,7 +26,7 @@ export function chatAuthorityFixture(
     },
     actionClasses: ["connector-access", "network-egress"],
     connectorScopes: ["issue-tracker.read", "issue-tracker.write"],
-    budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 10_000, maxPatchBytes: 0 },
+    budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPatchBytes: 0 },
     ...overrides,
   };
 }

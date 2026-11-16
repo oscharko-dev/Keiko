@@ -9,6 +9,8 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
+import { isWindowsLocalDriveFilePath } from "../windowsHostPath.js";
+
 const HEAD_BYTES = 4_096;
 const PACKED_REFS_BYTES = 1_048_576;
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
@@ -83,6 +85,26 @@ function localBranch(reference: string): string | undefined {
   return reference.startsWith("refs/heads/") ? reference.slice("refs/heads/".length) : undefined;
 }
 
+// #4068 W7: the path a `gitdir:` or `commondir` pointer names, or undefined when it is not a
+// local drive path on Windows. A UNC share or a device would be touched by the next lstat, which
+// reaches the SMB host or the device before anything is refused.
+function pointedPath(base: string, pointer: string): string | undefined {
+  const pointed = resolve(base, pointer);
+  return process.platform === "win32" && !isWindowsLocalDriveFilePath(pointed)
+    ? undefined
+    : pointed;
+}
+
+function pointedDirectory(
+  base: string,
+  pointer: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): string {
+  const pointed = pointedPath(base, pointer);
+  if (pointed === undefined) throw new Error("git-pointer-invalid");
+  return canonicalDirectory(pointed, fileSystem);
+}
+
 function resolveCommonRoot(
   repositoryRoot: string,
   fileSystem: ProductionWorkspaceHeadFileSystem,
@@ -94,10 +116,10 @@ function resolveCommonRoot(
   if (dotGitStat.isDirectory()) return canonicalDirectory(dotGit, fileSystem);
   const pointer = parseGitPointer(boundedText(dotGit, HEAD_BYTES, fileSystem));
   if (pointer === undefined) throw new Error("repository-git-dir-invalid");
-  const gitDir = canonicalDirectory(resolve(repository, pointer), fileSystem);
+  const gitDir = pointedDirectory(repository, pointer, fileSystem);
   const commonPointer = boundedText(join(gitDir, "commondir"), HEAD_BYTES, fileSystem)?.trim();
   if (commonPointer === undefined) return gitDir;
-  const commonDir = canonicalDirectory(resolve(gitDir, commonPointer), fileSystem);
+  const commonDir = pointedDirectory(gitDir, commonPointer, fileSystem);
   if (
     !containsCanonicalPath(join(commonDir, "worktrees"), gitDir) ||
     !commonDir.endsWith(`${sep}.git`)
@@ -118,7 +140,8 @@ function resolveGitDir(
   if (dotGitStat.isDirectory()) return canonicalDirectory(dotGit, fileSystem);
   const pointer = parseGitPointer(boundedText(dotGit, HEAD_BYTES, fileSystem));
   if (pointer === undefined) return undefined;
-  const pointed = resolve(workspaceRoot, pointer);
+  const pointed = pointedPath(workspaceRoot, pointer);
+  if (pointed === undefined) return undefined;
   const gitDir = canonicalDirectory(pointed, fileSystem);
   return containsCanonicalPath(commonRoot, gitDir) ? gitDir : undefined;
 }
@@ -144,8 +167,7 @@ function resolveCommonDir(
 ): string {
   const pointer = boundedText(join(gitDir, "commondir"), HEAD_BYTES, fileSystem)?.trim();
   if (pointer === undefined || pointer.length === 0) return commonRoot;
-  const pointed = resolve(gitDir, pointer);
-  const candidate = canonicalDirectory(pointed, fileSystem);
+  const candidate = pointedDirectory(gitDir, pointer, fileSystem);
   if (!containsCanonicalPath(commonRoot, candidate)) {
     throw new Error("git-common-dir-invalid");
   }

@@ -7,12 +7,11 @@
 // structurally: no '/' or '\\' appears anywhere in the serialized contextSummary.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IncomingMessage } from "node:http";
+import { mockRequest } from "./_support.js";
 import type { ConnectedContextPack, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
@@ -176,16 +175,12 @@ const CHAT_MODEL = "example-chat-model";
 let store: UiStore;
 let tmp: string;
 
-function fakeReq(body: string): IncomingMessage {
-  return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
-}
-
 function routeCtx(body: string): RouteContext {
   const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
   res.writableEnded = false;
   return {
     correlationId: undefined,
-    req: fakeReq(body),
+    req: mockRequest({ body }),
     res,
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),

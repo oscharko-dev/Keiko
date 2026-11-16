@@ -1,5 +1,6 @@
 "use client";
 
+import { startingProjectRoot } from "./windows/startingProjectRoot";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   adoptableGitChat,
@@ -19,6 +20,7 @@ import { GlobalSupportReportAction } from "./SupportReportButton";
 import { DiagnosticReadinessNotice } from "./DiagnosticReadinessNotice";
 import { useBackendHealth } from "./hooks/useBackendHealth";
 import { AppShellBoundary } from "./AppShellBoundary";
+import { AppBootPlaceholder } from "./AppBootPlaceholder";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
 import { AnnouncerProvider } from "./context/AnnouncerContext";
@@ -106,7 +108,10 @@ import { EditorPaletteHostRegistryProvider } from "./EditorPaletteHostRegistryCo
 import { EditorShellActionsProvider } from "./EditorShellActionsContext";
 import { WorkspaceReplaceBufferProvider } from "./WorkspaceReplaceBufferContext";
 import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
-import { OPEN_EDITOR_SETTINGS_EVENT } from "./widgets/panels/settingsPanelEvents";
+import {
+  OPEN_EDITOR_SETTINGS_EVENT,
+  OPEN_MODEL_SETTINGS_EVENT,
+} from "./widgets/panels/settingsPanelEvents";
 import { WINDOW_LAUNCHER_TYPES, COMMAND_TOOL_TYPES, type Command } from "./workspaceCommands";
 import "./widgets";
 import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
@@ -1761,6 +1766,11 @@ export function buildAppShellCommands(
   ];
 }
 
+export function openModelSettingsPanel(api: WorkspaceApi): void {
+  // add is the existing singleton-aware open/focus operation and records window lifecycle evidence.
+  api.add("settings", { initialTab: "models" });
+}
+
 function openEditorSettingsPanel(toggleTool: (type: WindowType) => void): void {
   toggleTool("settings");
   if (typeof window !== "undefined") {
@@ -1793,10 +1803,12 @@ function AppShellInner(): ReactNode {
   // Issue #446 (ADR-0090) — the active task-workspace binding state machine. It is provided to the
   // whole shell so the Header switcher and every window's render context read one source of truth.
   const activeWorkspace = useActiveWorkspaceState();
-  const shortcutRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
+  // A project the read surface refuses is never the root a shell shortcut starts in (#4371).
+  const startingRoot = startingProjectRoot(session.activeProject ?? null) ?? undefined;
+  const shortcutRoot = activeWorkspace.activeRoot ?? startingRoot;
   // Git is repository control, not task-worktree content. Opening it from shell chrome must therefore
   // use the selected repository root and must not borrow `activeWorkspace.activeRoot`.
-  const repositoryShortcutRoot = session.activeProject?.path ?? undefined;
+  const repositoryShortcutRoot = startingRoot;
   const [shellShortcutState, setShellShortcutState] = useState<ShellShortcutState>(
     EMPTY_SHELL_SHORTCUT_STATE,
   );
@@ -3093,6 +3105,12 @@ function AppShellInner(): ReactNode {
     [activeWorkspace.activeRoot, repositoryShortcutRoot, searchOwner, undoStack, ws.api, ws.wins],
   );
 
+  useEffect(() => {
+    const openModelSettings = (): void => openModelSettingsPanel(ws.api);
+    window.addEventListener(OPEN_MODEL_SETTINGS_EVENT, openModelSettings);
+    return (): void => window.removeEventListener(OPEN_MODEL_SETTINGS_EVENT, openModelSettings);
+  }, [ws.api]);
+
   const openEditorSettings = useCallback((): void => openEditorSettingsPanel(onTool), [onTool]);
   // Lets the editor's own capturing keydown listener (EditorWidget.tsx) invoke the shell action
   // directly, so command and settings shortcuts work while the cursor is inside Monaco. The shell keeps
@@ -3354,14 +3372,7 @@ export function AppShell(): ReactNode {
   // is untouched: the placeholder is static markup, so the build-time prerender and the client's
   // first render stay byte-identical.
   if (!mounted) {
-    return (
-      <div className="app" aria-hidden="true">
-        <div className="app-boot">
-          {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG; next/image would inject a wrapper that breaks the centered placeholder */}
-          <img className="app-boot-logo" src="/keiko-logo.svg" alt="" />
-        </div>
-      </div>
-    );
+    return <AppBootPlaceholder />;
   }
   return (
     <AppShellFrame>

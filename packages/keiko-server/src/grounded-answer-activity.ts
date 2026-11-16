@@ -62,6 +62,7 @@ const ANSWER_DETAILS_OPERATION = defineActivityLogOperation({
         "failed",
         "skipped-budget",
         "skipped-capability",
+        "skipped-tool-action",
       ],
     },
     filesInPrompt: { type: "integer", dataClass: "count", required: true },

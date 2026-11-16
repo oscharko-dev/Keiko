@@ -82,6 +82,14 @@ export const SCENARIOS = Object.freeze([
       "per-epic-progress",
       "estimate-totals",
       "large-project-report",
+      "unavailable-metrics-labelled",
+      // The product's estimate rule (#4356): the source of the figure, an unused configured field
+      // and a second field that holds values are stated, graded against the native data.
+      "estimate-source-labelled",
+      "configured-unused-stated",
+      "other-estimate-field-named",
+      // #4355: the answer shows the figures, no raw result keys, and no unsupported-claim flag.
+      "answer-clean",
     ],
   },
   {
@@ -90,6 +98,13 @@ export const SCENARIOS = Object.freeze([
     issue: 4181,
     title: "Compliance of every issue",
     obligations: ["deviating-issues", "deviation-detail"],
+  },
+  {
+    id: "S11b",
+    requirement: "AC3",
+    issue: 4181,
+    title: "Complete large-project compliance",
+    obligations: ["large-deviating-issues", "large-deviation-detail", "independent-paged-jql"],
   },
   {
     id: "S12",

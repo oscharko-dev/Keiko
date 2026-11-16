@@ -9,21 +9,45 @@ export type {
   CaptureContext,
   CaptureMemoryResolver,
   CaptureOutcome,
+  CaptureStatementKind,
   CapturePolicyOptions,
-  MemoryScopeKindHint,
+  LearnedFactRelation,
   SalienceDiagnostic,
   SalienceDeps,
+  SalienceDropReason,
   SalienceInput,
+  SalienceOutcome,
   SalienceModelMessage,
   SalienceModelMessageRole,
-  WorkflowOutcomeInput,
 } from "./types.js";
-export { extractCandidatesFromUserText, extractCandidatesFromWorkflowOutcome } from "./capture.js";
+export { extractCandidatesFromUserText } from "./capture.js";
+export {
+  explicitStatementKind,
+  forgetsOnlyIfStored,
+  isExplicitMemoryStatement,
+  isForgettableStatement,
+  isMemoryForgetReference,
+} from "./intent-explicit.js";
 export { extractSalientMemories } from "./salience.js";
+export { sameFactWord } from "./fact-text.js";
+export { FACT_DROP_REASONS } from "./fact-admission.js";
+export {
+  FACT_CHANGE_BASES,
+  FACT_RELATION_LABELS,
+  factReplacedByStatement,
+  statesChangedFact,
+  statesSameFact,
+  type FactChangeBasis,
+  type FactRelationLabel,
+  type KnownFact,
+} from "./fact-relation.js";
 export { memoryTextEgressRejectionReason } from "./capture-safety.js";
-export { memoryTextSecretEgressRejectionReason } from "./capture-safety.js";
+export {
+  memoryTextCaptureRejectionReason,
+  memoryTextSecretEgressRejectionReason,
+} from "./capture-safety.js";
 // Individual extractors are NOT re-exported: callers must go through the top-level capture
 // surface so the pre-flight (empty / length / restricted-default) and priority order are
-// enforced uniformly. The internal modules (intent-explicit, intent-workflow, policy,
+// enforced uniformly. The internal modules (intent-explicit, policy,
 // secret-patterns, scope-inference, _envelopes, _constants) stay package-private per
 // ADR-0019 trust rule 7.

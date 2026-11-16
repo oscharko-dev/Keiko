@@ -3331,6 +3331,11 @@ describe("ChatWindowSessionHost target missing", () => {
     chatSessionState.chats = [chatB];
     const cfg = { chatId: chatA.id, projectPath: projectA.path, title: chatA.title };
     const ctx = context();
+    let completeProjectOpen = (): void => undefined;
+    const projectOpen = new Promise<void>((resolve) => {
+      completeProjectOpen = resolve;
+    });
+    chatSessionState.openProject.mockImplementation(() => projectOpen);
     const view = render(
       <I18nProvider>
         <ChatWindowSessionHost cfg={cfg} ctx={ctx} />
@@ -3360,6 +3365,10 @@ describe("ChatWindowSessionHost target missing", () => {
       </I18nProvider>,
     );
 
+    await act(async () => {
+      completeProjectOpen();
+      await projectOpen;
+    });
     expect(await screen.findByTestId("chat-window")).toBeInTheDocument();
     expect(ctx.updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ chatId: chatB.id }));
   });

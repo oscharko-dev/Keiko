@@ -50,6 +50,8 @@ export class CodingRuntimeOrchestratorState {
         runId: string,
       ) => CodingWorkbenchRuntimePendingPermission | undefined;
       readonly effectiveMode: (runId: string) => CodingWorkbenchMode | undefined;
+      readonly runIdentity?:
+        ((runId: string) => Pick<PublicSnapshot, "modelId" | "agent"> | undefined) | undefined;
       readonly contextUsage?:
         ((runId: string) => CodingWorkbenchContextUsage | undefined) | undefined;
     },
@@ -68,6 +70,7 @@ export class CodingRuntimeOrchestratorState {
       ...(effectiveMode === undefined ? {} : { effectiveMode }),
       runtimeSource: snapshot.runtimeSource,
       modelSource: snapshot.modelSource,
+      ...this.deps.runIdentity?.(snapshot.runId),
       ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
       ...contextUsageProjection(this.deps.contextUsage?.(snapshot.runId)),
       ...this.stateBoundDetail(snapshot),

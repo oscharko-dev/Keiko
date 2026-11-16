@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-security",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Keiko security primitives (redaction, safe error shaping, secret collection, content hashing, trust-boundary helpers). Not published independently.",
@@ -83,6 +83,10 @@
       "types": "./dist/fs-hardening.d.ts",
       "import": "./dist/fs-hardening.js"
     },
+    "./zip-entry-kind": {
+      "types": "./dist/zip-entry-kind.d.ts",
+      "import": "./dist/zip-entry-kind.js"
+    },
     "./fs-atomic-rename": {
       "types": "./dist/fs-atomic-rename.d.ts",
       "import": "./dist/fs-atomic-rename.js"
@@ -114,6 +118,10 @@
     "./windows-local-volume": {
       "types": "./dist/windows-local-volume.d.ts",
       "import": "./dist/windows-local-volume.js"
+    },
+    "./windows-owner-private": {
+      "types": "./dist/windows-owner-private.d.ts",
+      "import": "./dist/windows-owner-private.js"
     }
   },
   "scripts": {
@@ -126,10 +134,10 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=24.18.0 <25 || >=26.3.0 <27"
+    "node": ">=26.13.1 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "1.4.0",
+    "@oscharko-dev/keiko-contracts": "1.5.0",
     "typescript": "~6.0.3",
     "java-parser": "3.0.1",
     "yaml": "2.9.1"

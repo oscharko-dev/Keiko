@@ -22,8 +22,8 @@ function writeExclusive(path, serialized) {
 }
 
 /** Keep the previous complete intent until its replacement is synced and atomically renamed. */
-export function privateJson(path, value, exclusive = false) {
-  const serialized = JSON.stringify(value);
+export function privateText(path, serialized, exclusive = false) {
+  if (typeof serialized !== "string") throw new TypeError("Private text must be a string");
   const directory = dirname(path);
   if (exclusive) {
     writeExclusive(path, serialized);
@@ -38,4 +38,8 @@ export function privateJson(path, value, exclusive = false) {
   } finally {
     rmSync(temporary, { force: true });
   }
+}
+
+export function privateJson(path, value, exclusive = false) {
+  privateText(path, JSON.stringify(value), exclusive);
 }

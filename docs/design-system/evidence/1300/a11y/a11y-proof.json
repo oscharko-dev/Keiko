@@ -45,7 +45,7 @@
     },
     {
       "path": "docs/design-system/evidence/1300/browser/capture.mjs",
-      "sha256": "0cf20a8782eeb190ac35ca193d162b127c92b377abcdc3af67db74bea7b55f45"
+      "sha256": "6c94aaa1051ad5dccbd5a4c25f22e4ab78c5b270273dff2900cc38e5271f61f1"
     },
     {
       "path": "docs/design-system/evidence/1300/component-fixture-data.json",
@@ -65,11 +65,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "b056fbca3054e53f328c14e3ea4643b1acf8f3968dadc0aaafb31826d62a072a"
+      "sha256": "6332e0ae144f9707debbb43eebd62cf64c26ff662732aa5f0d22bf5b526c1423"
     },
     {
       "path": "package.json",
-      "sha256": "6ebc1e3a379b4e06f0a1c4ebec971915a04f02797f07fe49bc7659a0d2e95ef1"
+      "sha256": "b6048a47d496b4abd458d6ad6e65aea24bf4189d7253cb6aae84126ee5f7f2dd"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -77,11 +77,11 @@
     },
     {
       "path": "packages/keiko-ui/next.config.mjs",
-      "sha256": "5d2f34ac59dbccc52eb1b485b399caac66dd11b70906d3bea9337e097283191e"
+      "sha256": "54efa67c8dc62dfb4ec406d229d8b50c4528218c10aac1df06291f928c88f679"
     },
     {
       "path": "packages/keiko-ui/package.json",
-      "sha256": "404dd2aba3ec24b4e16dac535d9f84ad71e30fd47760c5d8138a99fae9559900"
+      "sha256": "f39f87ed99f4582b3d2485a20af6eaed8fbc61d35bb66c835ee545748108f015"
     },
     {
       "path": "packages/keiko-ui/read-stylesheet.mjs",
@@ -89,7 +89,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css",
-      "sha256": "cff8d9ba0a72bc481669096937ab47a6f2c28bd46a3dffe73bfd4515bdf2ea39"
+      "sha256": "73583079453265733c218a7e089da7288cb7337bc7b107d93b2f329e74900304"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
@@ -122,8 +122,8 @@
   ],
   "postCssSha256": "a75653326a80e3d3ca9212fe75c233744952b1129d216cbb11741b094da870c2",
   "run": {
-    "generatedAt": "2026-11-03T20:54:13.970Z",
-    "repoHeadSha": "298e939febfcc0f2959bfeffb9f377acaf9f5999"
+    "generatedAt": "2026-11-15T18:06:35.710Z",
+    "repoHeadSha": "860edf47877a205feab6aa18e0db4154d60b885a"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",

@@ -114,7 +114,6 @@ function envelope(
     budget: {
       maxRuntimeMs: 3_600_000,
       maxToolCalls: 20,
-      maxPromptTokens: 10_000,
       maxPatchBytes: 65_536,
     },
     expiresAt: "2099-01-01T00:00:00.000Z",
@@ -309,7 +308,6 @@ describe("handleEditorAgentVerificationRun preconditions", () => {
       budget: {
         maxRuntimeMs: 3_600_000,
         maxToolCalls: 1,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 65_536,
       },
     });
@@ -543,7 +541,6 @@ describe("handleEditorAgentVerificationRun audit (AC5)", () => {
       budget: {
         maxRuntimeMs: 3_600_000,
         maxToolCalls: 1,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 65_536,
       },
     });
@@ -833,7 +830,6 @@ describe("handleEditorAgentVerificationRun root-binding guards (#2624)", () => {
       budget: {
         maxRuntimeMs: 3_600_000,
         maxToolCalls: 1,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 65_536,
       },
     });
@@ -883,7 +879,6 @@ describe("handleEditorAgentVerificationRun root-binding guards (#2624)", () => {
       budget: {
         maxRuntimeMs: 3_600_000,
         maxToolCalls: 1,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 65_536,
       },
     });
@@ -919,7 +914,6 @@ describe("handleEditorAgentVerificationRun root-binding guards (#2624)", () => {
       budget: {
         maxRuntimeMs: 3_600_000,
         maxToolCalls: 1,
-        maxPromptTokens: 10_000,
         maxPatchBytes: 65_536,
       },
     });

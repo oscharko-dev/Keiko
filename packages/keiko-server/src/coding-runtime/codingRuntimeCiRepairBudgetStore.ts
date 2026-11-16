@@ -66,8 +66,7 @@ function blocked(
 function sameLimits(a: CiRepairBudgetRecord, b: CiRepairBudgetRecord): boolean {
   return (
     a.limits.maxRuntimeMs === b.limits.maxRuntimeMs &&
-    a.limits.maxToolCalls === b.limits.maxToolCalls &&
-    a.limits.maxPromptTokens === b.limits.maxPromptTokens
+    a.limits.maxToolCalls === b.limits.maxToolCalls
   );
 }
 function expected(current: CiRepairBudgetRecord | undefined, revision: number | null): boolean {
@@ -110,13 +109,12 @@ function validBegin(value: CiRepairBegin): boolean {
 }
 function validCharge(value: CiRepairChargeInput): boolean {
   return (
-    keys(value, ["attemptId", "chargeId", "toolCalls", "promptTokens", "expectedRevision"]) &&
+    keys(value, ["attemptId", "chargeId", "toolCalls", "expectedRevision"]) &&
     ciRepairId(value.attemptId) &&
     ciRepairId(value.chargeId) &&
     ciRepairCount(value.expectedRevision) &&
     ciRepairCount(value.toolCalls) &&
-    ciRepairCount(value.promptTokens) &&
-    value.toolCalls + value.promptTokens > 0
+    value.toolCalls > 0
   );
 }
 function validSettle(value: CiRepairSettle): boolean {
@@ -149,7 +147,7 @@ function priorChargeResult(
     .find((attempt) => attempt.attemptId === input.attemptId)
     ?.charges.find((charge) => charge.chargeId === input.chargeId);
   if (prior === undefined) return undefined;
-  return prior.toolCalls === input.toolCalls && prior.promptTokens === input.promptTokens
+  return prior.toolCalls === input.toolCalls
     ? { status: "replayed", record }
     : blocked("invalid-input", record);
 }
@@ -356,7 +354,6 @@ class SqliteCiRepairBudgetStore implements CodingRuntimeCiRepairBudgetStore {
       deadlineMs: scope.now + scope.context.limits.maxRuntimeMs,
       limits: { ...scope.context.limits },
       toolCalls: 0,
-      promptTokens: 0,
       failedAttempts: 0,
       attempts: [newCiRepairAttempt(scope.context.runId, input, scope.now)],
     });
@@ -491,11 +488,9 @@ class SqliteCiRepairBudgetStore implements CodingRuntimeCiRepairBudgetStore {
                 attemptCount: record.attempts.length,
                 failedAttemptCount: record.failedAttempts,
                 toolCallCount: record.toolCalls,
-                promptTokenCount: record.promptTokens,
                 deadlineMs: record.deadlineMs,
                 maxRuntimeMs: record.limits.maxRuntimeMs,
                 maxToolCalls: record.limits.maxToolCalls,
-                maxPromptTokens: record.limits.maxPromptTokens,
               }),
         },
       ),

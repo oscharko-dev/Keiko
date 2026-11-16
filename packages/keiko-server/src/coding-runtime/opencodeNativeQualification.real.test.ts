@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -38,6 +38,7 @@ import {
   openCodePlanDirectory,
   openCodeRepositoryInstructionsPath,
 } from "./opencodeLaunchProfile.js";
+import { resolveNativeGitMetadata } from "./opencodeNativeGitMetadata.js";
 import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
 import { resolveNativeExternalReadRoots } from "./opencodeNativeExternalRoots.js";
 import { nativeLinkedFilesField } from "./opencodeNativeLinkedFiles.js";
@@ -515,7 +516,10 @@ function launch(
       workspaceAccess: "read-write",
       privateStateRoot: fixture.state,
       runtimeReadRoot: runtimeRoot,
-      protectedWriteRoots: [openCodeConfigDirectory(fixture.state)],
+      protectedWriteRoots: [
+        openCodeConfigDirectory(fixture.state),
+        ...resolveNativeGitMetadata(fixture.workspace, undefined).protectedWriteRoots,
+      ],
       // As production opens them: the admitted local MCP servers' install prefixes (#3903) and the
       // launcher's toolchain `PATH` (#3901 AC1).
       ...toolchainReadRoots(options, fixture),
@@ -602,6 +606,8 @@ interface Run {
   readonly client: OpenCodeV2HttpClient;
   readonly sessionId: string;
   readonly child: ChildProcessByStdio<null, Readable, Readable>;
+  /** The run's server password, which no child of the runtime may read. */
+  readonly password: string;
   /** A GET of the runtime's own API for the run's location (`/api/mcp`, say). */
   readonly raw: (path: string) => Promise<unknown>;
 }
@@ -664,6 +670,7 @@ async function withRun(
       client,
       sessionId: session.id,
       child: launched.child,
+      password: launched.password,
       raw,
     });
   } finally {
@@ -790,6 +797,15 @@ const liveCount = (marker: string): number => processesCarrying(marker).length;
  * A loopback HTTP server that records its port in the workspace, the shape of a dev server. macOS
  * ships the Ruby it runs on; the kernel proofs in `runtime-gateway.test.ts` rely on it as well.
  */
+/** `sysctl(KERN_PROCARGS2)`, syscall 202 with `{CTL_KERN, 49, pid}`: what any process may call. */
+const READ_PROCESS_ARGUMENTS = [
+  'my $mib = pack("i3", 1, 49, $ARGV[0] + 0);',
+  'my $answer = "\\0" x (1024 * 1024);',
+  'my $size = pack("Q", length $answer);',
+  'syscall(202, $mib, 3, $answer, $size, 0, 0) == 0 or die "sysctl: $!";',
+  'print substr($answer, 0, unpack("Q", $size));',
+].join(" ");
+
 function loopbackServerCommand(marker: string): string {
   const program = [
     's=TCPServer.new("127.0.0.1",0);',
@@ -1493,7 +1509,7 @@ describe("pinned native OpenCode plan tool (T19)", () => {
   // producer change to any tool's parameters is a reviewed diff before admission, and the gateway
   // admits exactly that advertisement. `KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS=1` rewrites the fixture.
   it.skipIf(skip)(
-    "advertises exactly the committed 2.1.4 tool schemas, and the gateway admits them",
+    "advertises exactly the committed tool schemas, and the gateway admits them",
     async () => {
       await withRun({}, async (run) => {
         await scriptedTurn(run, PLAN_CALL);
@@ -1509,7 +1525,7 @@ describe("pinned native OpenCode plan tool (T19)", () => {
           .map(({ name, parameters }) => ({ name, parameters }))
           .sort((left, right) => left.name.localeCompare(right.name));
         const fixture = new URL(
-          "./opencodeToolSchemas.opencode-2.1.4-advertised.fixture.json",
+          `./opencodeToolSchemas.opencode-${OPENCODE_PINNED_VERSION}-advertised.fixture.json`,
           import.meta.url,
         );
         if (process.env.KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS === "1")
@@ -1528,7 +1544,7 @@ describe("pinned native OpenCode plan tool (T19)", () => {
   // projection that drifts from the producer's bytes fails here rather than at a customer's first
   // turn. `KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS=1` rewrites the fixture.
   it.skipIf(skip)(
-    "advertises exactly the committed 2.1.4 direct-profile tool schemas, and the gateway admits them",
+    "advertises exactly the committed direct-profile tool schemas, and the gateway admits them",
     async () => {
       await withRun({ toolProfile: "direct" }, async (run) => {
         await run.client.prompt(run.sessionId, "Answer without calling a tool.");
@@ -1539,13 +1555,134 @@ describe("pinned native OpenCode plan tool (T19)", () => {
           .map(({ name, parameters }) => ({ name, parameters }))
           .sort((left, right) => left.name.localeCompare(right.name));
         const fixture = new URL(
-          "./opencodeToolSchemas.opencode-2.1.4-direct-advertised.fixture.json",
+          `./opencodeToolSchemas.opencode-${OPENCODE_PINNED_VERSION}-direct-advertised.fixture.json`,
           import.meta.url,
         );
         if (process.env.KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS === "1")
           writeFileSync(fixture, `${JSON.stringify(advertised, null, 2)}\n`);
         expect(advertised).toEqual(JSON.parse(readFileSync(fixture, "utf8")));
         expect(hasExactOpenCodeVisibleToolContract(advertised)).toBe(true);
+      });
+    },
+    120_000,
+  );
+
+  // The producer runs a model's `bash` call as its `shell` tool when no tool has that name, so the
+  // alias must reach the same mode decision as an ordinary `shell` call.
+  it.skipIf(skip)(
+    // The keychain service shares this rule; the backend test pins its names. No test runs `security`.
+    "keeps the person's clipboard out of a shell's reach, at Full access too",
+    async () => {
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        for (const command of [
+          // A pasteboard nothing uses: this test never reads what the person copied.
+          "/usr/bin/pbpaste -pboard ruler > /dev/null",
+        ]) {
+          const result = await scriptedTurn(run, shell(`${command}; echo "exit=$?"`));
+          expect(result, command).not.toContain("exit=0");
+        }
+        // Positive control: the same shell runs an ordinary program.
+        expect(await scriptedTurn(run, shell('/usr/bin/true; echo "exit=$?"'))).toContain("exit=0");
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "keeps what Keiko's own Git runs out of a shell's reach, and ordinary repository work in it",
+    async () => {
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        const config = join(run.fixture.workspace, ".git", "config");
+        const before = readFileSync(config, "utf8");
+        const tampering = [
+          `printf '[filter "x"]\\n\\tclean = touch OWNED\\n' >> .git/config`,
+          "/usr/bin/env git config --file .git/config core.worktree /",
+          "mv .git/config .git/config.moved",
+          "mv .git .git.moved",
+          "printf /elsewhere > .git/commondir",
+          "mkdir -p .git/modules/x && echo x > .git/modules/x/config",
+        ];
+        for (const command of tampering) {
+          const result = await scriptedTurn(run, shell(`${command}; echo "exit=$?"`));
+          expect(result, command).not.toContain("exit=0");
+        }
+        expect(readFileSync(config, "utf8")).toBe(before);
+        expect(existsSync(join(run.fixture.workspace, ".git.moved"))).toBe(false);
+        const work = "echo tracked > tracked.txt && /usr/bin/env git add tracked.txt; echo exit=$?";
+        expect(await scriptedTurn(run, shell(work))).toContain("exit=0");
+        const nested = "/usr/bin/env git init -q nested; echo exit=$?";
+        expect(await scriptedTurn(run, shell(nested))).toContain("exit=0");
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "leaves no launch secret readable in the runtime's exec environment",
+    async () => {
+      const control = "launch-secrets-positive-control";
+      await withRun({ env: { LAUNCH_SECRETS_CONTROL: control } }, async (run) => {
+        expect(run.child.pid).toBeDefined();
+        // `/api/plugin` lists the required plugin active only after its read-back passed.
+        const readable = (): string =>
+          execFileSync("/usr/bin/perl", ["-e", READ_PROCESS_ARGUMENTS, String(run.child.pid)], {
+            encoding: "utf8",
+            maxBuffer: 8 * 1_024 * 1_024,
+          });
+        await expect
+          .poll(
+            async () => {
+              const plugins = await run.client.plugins();
+              return plugins.find(({ id }) => id === "keiko.launch-secrets")?.state;
+            },
+            { timeout: 20_000 },
+          )
+          .toMatchObject({ status: "active" });
+        await expect.poll(readable, { timeout: 20_000 }).not.toContain(run.password);
+        const environment = readable();
+        // The kernel call does show this process's environment: the control is still there.
+        expect(environment).toContain(control);
+        for (const secret of [GATEWAY_CAPABILITY, FACADE_CAPABILITY])
+          expect(environment).not.toContain(secret);
+        // The runtime keeps working from its own copy of the password.
+        expect((await run.client.info()).version).toBe(OPENCODE_PINNED_VERSION);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "governs a model's bash alias as the shell tool it runs, in every mode",
+    async () => {
+      const aliased = { name: "bash", arguments: { command: "touch ALIASED" } };
+      await withRun({ mode: "governed-assist", approveAsks: false }, async (run) => {
+        await scriptedTurn(run, aliased);
+        expect(existsSync(join(run.fixture.workspace, "ALIASED"))).toBe(false);
+        expect(run.facade.decisions).toEqual([
+          expect.objectContaining({ permission: "shell", effect: "ask" }),
+        ]);
+      });
+      const supervisedDecisions = async (call: typeof aliased): Promise<unknown[]> => {
+        let decisions: unknown[] = [];
+        await withRun({ mode: "supervised-coding", approveAsks: false }, async (run) => {
+          await scriptedTurn(run, call);
+          decisions = run.facade.decisions.map(({ permission, effect }) => ({
+            permission,
+            effect,
+          }));
+        });
+        return decisions;
+      };
+      const supervised = await supervisedDecisions(aliased);
+      expect(supervised).toEqual([expect.objectContaining({ permission: "shell" })]);
+      expect(supervised).toEqual(await supervisedDecisions({ ...aliased, name: "shell" }));
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        const result = await scriptedTurn(run, aliased);
+        expect(existsSync(join(run.fixture.workspace, "ALIASED"))).toBe(true);
+        expect(result).toContain('ran as "shell"');
+        expect(run.facade.decisions).toEqual([
+          expect.objectContaining({ permission: "shell", effect: "allow" }),
+        ]);
       });
     },
     120_000,

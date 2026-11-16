@@ -1,11 +1,12 @@
 services:
   tls:
-    image: node:24.22.0-bookworm-slim@sha256:91acba91b842bec0bf7ea6f5e09c644c7ccad72c4996ed9616d861d1c7cd60d4
+    image: node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
     restart: "no"
     depends_on:
       jira: { condition: service_started }
-    ports: ["127.0.0.1:18443:18443"]
-    command: [node, /opt/tls-front.mjs, /tls, "18443", "8080", compose]
+    ports: ["127.0.0.1:${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}:${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}"]
+    command:
+      [node, /opt/tls-front.mjs, /tls, "${KEIKO_JIRA_LAB_HTTPS_PORT:-18443}", "8080", compose]
     volumes:
       - ./tls-front.mjs:/opt/tls-front.mjs:ro
       - ${KEIKO_JIRA_LAB_STATE_DIR:?private laboratory state directory required}/secrets/tls/server.key:/tls/server.key:ro
@@ -35,7 +36,7 @@ services:
     logging:
       options: { max-size: 10m, max-file: "3" }
   jira:
-    image: atlassian/jira-software:10.3.26@sha256:ddcddc61ee43067fa274538b888d36408c47bc6a4ec14e41113dc304b8529168
+    image: atlassian/jira-software:${KEIKO_JIRA_LAB_JIRA_VERSION:-10.3.26}@sha256:${KEIKO_JIRA_LAB_JIRA_SHA256:-ddcddc61ee43067fa274538b888d36408c47bc6a4ec14e41113dc304b8529168}
     restart: "no"
     depends_on:
       database: { condition: service_healthy }
@@ -49,6 +50,14 @@ services:
       JVM_MAXIMUM_MEMORY: 2048m
       CLUSTERED: "false"
       ATL_TOMCAT_ACCESSLOG: "false"
+      # Jira 10.3 refuses POST /rest/auth/1/session with 403 "two-step verification being enabled"
+      # unless the authentication plugin runs in legacy mode, so no administrator cookie session
+      # (and therefore no websudo or session-bound avatar proof) exists. The documented system
+      # property restores the pre-2SV login contract of the instance a customer upgrades from.
+      # The synced-sprints feature flag lets an administrator create the genuinely synced sprints
+      # the sprint unmap qualification needs; Jira answers "cannot create a synced sprint when the
+      # feature is disabled" otherwise. The flag is the `.enabled` dark feature of its definition.
+      JVM_SUPPORT_RECOMMENDED_ARGS: "-Datlassian.authentication.legacy.mode=true -Datlassian.darkfeature.com.atlassian.jira.agile.darkfeature.synced.sprints.enabled=true"
     entrypoint: [/bin/sh, /opt/keiko-jira-entrypoint.sh]
     secrets: [database_password]
     volumes:

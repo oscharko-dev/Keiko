@@ -63,7 +63,8 @@ text line counts. Rename and binary are orthogonal, so a renamed binary file rem
 Each hunk carries parsed old/new start and count coordinates plus an explicit truncation marker.
 Only complete, header-consistent hunks are actionable: when process output ends mid-record or
 mid-hunk, Issue #2228 drops the incomplete tail or returns it as explicitly truncated and
-non-actionable. The response exposes true pre-cap `totalFiles` and `totalBytes` plus the applied
+non-actionable. A file with an undecodable content line stays listed: only that hunk is dropped and
+the file is marked truncated (#4235). The response exposes true pre-cap `totalFiles` and `totalBytes` plus the applied
 fixed caps.
 
 The concrete structured-diff caps are:

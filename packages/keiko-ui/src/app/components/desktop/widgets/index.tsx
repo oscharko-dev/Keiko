@@ -13,6 +13,8 @@ import { workspaceRootTargets } from "../workspaceRootTargets";
 import type { BoundRootSurfaceType } from "./BoundRootTarget";
 import { ManagedTaskWorkspaceGate } from "./ManagedTaskWorkspaceGate";
 import { createWindowChunkFallback } from "./WindowChunkFallback";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 
 const windowChunkFallback = createWindowChunkFallback("window chunk"); // i18n-exempt: diagnostic stage id, never rendered
 const BoundRootTarget = dynamic(
@@ -327,6 +329,11 @@ function completeRepositoryConnection(
 ): void {
   const returnWindow = str(cfg, "repositoryReturnWindow");
   if (!returnWindow) return;
+  // Only the window that asked for the folder takes it; the line records that, body-free (#4371).
+  reportCodingWorkbenchInteraction(
+    { interaction: "repository-returned" },
+    newClientCorrelationId(),
+  );
   ctx.updateWindow(returnWindow, { cfg: { repositoryPath: root } });
   ctx.focusWindow(returnWindow);
   ctx.updateCfg({ repositoryReturnWindow: "" });
@@ -505,7 +512,7 @@ function SettingsPanelSessionHost({
   initialTab,
 }: {
   readonly ctx: WindowRenderContext;
-  readonly initialTab?: "mcp" | undefined;
+  readonly initialTab?: "mcp" | "models" | undefined;
 }): ReactNode {
   const { activeProject } = useChatSessionContext();
   return (
@@ -522,7 +529,12 @@ function SettingsPanelSessionHost({
 }
 
 registerWindowRender("settings", (cfg, ctx) => (
-  <SettingsPanelSessionHost ctx={ctx} initialTab={cfg.initialTab === "mcp" ? "mcp" : undefined} />
+  <SettingsPanelSessionHost
+    ctx={ctx}
+    initialTab={
+      cfg.initialTab === "mcp" || cfg.initialTab === "models" ? cfg.initialTab : undefined
+    }
+  />
 ));
 registerWindowRender("workspaceTrust", () => <WorkspaceTrustPanel />);
 registerWindowRender("updates", () => <UpdateWindow />);
@@ -555,13 +567,7 @@ registerWindowRender("debug", (cfg, ctx) => {
   );
 });
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
-  <PdfCitationPreviewWindow
-    cfg={cfg}
-    focusWindow={ctx.focusWindow}
-    restoreWindow={ctx.restoreWindow}
-    updateCfg={ctx.updateCfg}
-    windowId={ctx.windowId}
-  />
+  <PdfCitationPreviewWindow cfg={cfg} updateCfg={ctx.updateCfg} windowId={ctx.windowId} />
 ));
 
 // Epic #270 — Quality Intelligence. The hub is a singleton tool window; selecting/finishing a run

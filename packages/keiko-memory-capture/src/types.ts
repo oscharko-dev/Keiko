@@ -23,6 +23,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 
 import type { RejectionReason } from "./errors.js";
+import type { FactDropReason } from "./fact-admission.js";
+import type { FactChangeBasis, FactRelationLabel, KnownFact } from "./fact-relation.js";
 
 // Capture context — the caller's slice of identity and clock for one capture call.
 //
@@ -78,31 +80,27 @@ export interface CapturePolicyOptions {
   // a governed MemoryForget or MemoryUpdate operation, so callers that want those intents to work
   // must provide a scope-limited resolver.
   readonly resolver?: CaptureMemoryResolver;
+  // Resolves a forget target when the caller can see further than one scope: a person forgetting
+  // a fact does not know which scope the learner chose for it. Falls back to `resolver`.
+  readonly forgetResolver?: CaptureMemoryResolver;
   // Whether `{ kind: "global" }` scope is allowed. Defaults to false (fail-closed) so a stray
   // scope hint cannot silently elevate a candidate to a cross-user fact.
   readonly allowGlobalScope?: boolean;
   // Optional override for the scope kind. When unset, scope-inference picks the most specific
   // coordinate available on the context (project > workspace > workflow > user).
   readonly scopeKind?: MemoryScopeKind;
+  // Where a person's "Merke dir" lands when neither the statement nor scopeKind names a scope.
+  readonly rememberScopeKind?: MemoryScopeKind;
   // Hard cap on body length BEFORE secret scanning. Captures longer than this reject with
   // `exceeds-length-limit`. The default mirrors the contract validator's body cap.
   readonly maxBodyChars?: number;
 }
 
-// Structured workflow outcome handed to the workflow extractor. Local to this package; full
-// workflow contracts live elsewhere. The structured report is a short caller-rendered summary
-// (a few hundred chars) — NOT the raw run log. `capturedAt` is the authoritative observation
-// timestamp for the workflow outcome and is copied into proposal provenance / validity.
-export interface WorkflowOutcomeInput {
-  readonly runId: WorkflowRunId;
-  readonly outcomeKind: "success" | "corrected" | "failed";
-  readonly structuredReport: string;
-  readonly capturedAt: number;
-}
-
 // Discriminated outcome union. Every kind carries the minimum payload the next layer needs.
 // `kind:"candidate"` always carries `requiresApproval` so the BFF route can immediately decide
 // whether to display a confirmation prompt without re-reading the proposal's sensitivity.
+export type CaptureStatementKind = "forget" | "update" | "correction" | "remember" | "ambient";
+
 export type CaptureOutcome =
   | {
       readonly kind: "candidate";
@@ -116,36 +114,72 @@ export type CaptureOutcome =
       readonly requiresConfirmation: boolean;
     }
   | { readonly kind: "supersession"; readonly operation: MemorySupersession }
-  | { readonly kind: "rejected"; readonly reason: RejectionReason };
+  | {
+      readonly kind: "rejected";
+      readonly reason: RejectionReason;
+      // Which statement was refused. Absent when the text was no statement at all, such as an
+      // ordinary message over the length limit.
+      readonly statement?: CaptureStatementKind;
+    };
 
 // ─── Salience capture (model-assisted) ───────────────────────────────────────
-// The scope-kind hints the salience model is allowed to express. A narrower subset of
-// MemoryScopeKind: salience never infers `workflow` or `global` scope from free text — a
-// conversation fact is personal (`user`) or tied to the current project/workspace.
-export type MemoryScopeKindHint = Extract<MemoryScopeKind, "user" | "project" | "workspace">;
-
-// Input for `extractSalientMemories`. `existingBodies` are the bodies already stored for the
-// conversation's scopes (used for dedup); `assistantText` is CONTEXT ONLY — the extractor never
-// stores the assistant's own claims as user facts.
+// Input for `extractSalientMemories`. `knownFacts` are the facts already stored for the
+// conversation's scopes; `assistantText` is CONTEXT ONLY — the extractor never stores the assistant's
+// own claims as user facts. `sourceMessageIds` name the person's turns the facts come from.
 export interface SalienceInput {
   readonly userText: string;
+  // The person's previous message in this conversation: context for a pronoun, never a source.
+  readonly previousUserText?: string;
   readonly assistantText?: string;
-  readonly existingBodies: readonly string[];
+  readonly knownFacts: readonly KnownFact[];
+  readonly sourceMessageIds?: readonly string[];
   readonly context: CaptureContext;
   readonly policy?: CapturePolicyOptions;
 }
+
+export type SalienceDropReason = FactDropReason | "unknown-type" | "denied-content";
+
+// How a learned candidate stands to what is already stored. "same-unconfirmed" is stored only as a
+// confirmation of a semantic duplicate, never as a new record.
+export type LearnedFactRelation =
+  | { readonly kind: "new" }
+  | { readonly kind: "same-unconfirmed" }
+  | { readonly kind: "supersede"; readonly memoryId: MemoryId; readonly basis: FactChangeBasis };
+
+export type SalienceOutcome =
+  | {
+      readonly kind: "candidate";
+      readonly proposal: MemoryProposal;
+      readonly requiresApproval: boolean;
+      readonly relation: LearnedFactRelation;
+      readonly relationLabel: FactRelationLabel;
+    }
+  // The person said it again. Nothing new is stored; the existing memory records the confirmation.
+  | {
+      readonly kind: "confirmation";
+      readonly memoryId: MemoryId;
+      readonly relationLabel: FactRelationLabel;
+    };
 
 export type SalienceDiagnostic =
   | { readonly kind: "parse-or-empty-output"; readonly rawItemCount: 0 }
   | {
       readonly kind: "dropped-model-items";
-      readonly reason: "non-user-source" | "unknown-type" | "unknown-scope";
+      readonly reason: SalienceDropReason;
       readonly count: number;
     }
   | {
       readonly kind: "zero-candidates-after-filter";
       readonly rawItemCount: number;
       readonly acceptedCount: 0;
+    }
+  | {
+      readonly kind: "extraction-summary";
+      readonly rawItemCount: number;
+      readonly acceptedCount: number;
+      readonly knownFactCount: number;
+      /** Facts learned or confirmed from the person's own stated preference after the model gave none. */
+      readonly statedPreferenceCount?: number;
     };
 
 export type SalienceModelMessageRole = "system" | "user" | "assistant";

@@ -291,6 +291,38 @@ function feedWithVerificationOutcomes(): AvailableCodingSafeActivityFeed {
   return { ...feed, turns: [{ turnId: "turn-verify", messages: [], tools, truncated: false }] };
 }
 
+// One governed Git step of every closed outcome (lab T37, #4271). The facade answers a refused step as
+// a completed call, so every card here is a succeeded tool state; only the server knows what happened.
+function feedWithGitOutcomes(): AvailableCodingSafeActivityFeed {
+  const feed = feedWithRepeatedTools();
+  const call = (
+    callId: string,
+    gitOutcome: NonNullable<
+      NonNullable<
+        AvailableCodingSafeActivityFeed["turns"][number]["tools"][number]["presentation"]
+      >["gitOutcome"]
+    >,
+  ): AvailableCodingSafeActivityFeed["turns"][number]["tools"][number] => ({
+    callId,
+    tool: "keiko_git",
+    state: "succeeded",
+    occurredAt: AT,
+    presentation: { gitOutcome, bridgeDurationMs: 9 },
+  });
+  const tools = [
+    call("git-done", "completed"),
+    call("git-verification-failed", "verification-failed"),
+    call("git-verification-missing", "verification-missing"),
+    call("git-not-staged", "not-staged"),
+    call("git-unsaved-changes", "unsaved-changes"),
+    call("git-blocked", "blocked"),
+    call("git-changed", "changed"),
+    call("git-not-done", "not-done"),
+    call("git-waiting", "waiting-for-approval"),
+  ];
+  return { ...feed, turns: [{ turnId: "turn-git", messages: [], tools, truncated: false }] };
+}
+
 const IDLE_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
   questions: [],
@@ -393,7 +425,9 @@ describe("CodingWorkbenchTimeline", () => {
     expect(empty.querySelector('[data-state="no-runnable-steps"]')).toHaveTextContent(
       "Nothing to run",
     );
-    expect(empty).toHaveTextContent("defines no script the verifier can run");
+    expect(empty).toHaveTextContent("found nothing it can run for this request");
+    // Target-scoped, never repository-wide (lab T37): the repository may well define a test script.
+    expect(empty).not.toHaveTextContent("this repository defines no script");
 
     const skipped = card("not-run");
     expect(skipped.open).toBe(true);
@@ -440,6 +474,108 @@ describe("CodingWorkbenchTimeline", () => {
     expect(passed).toHaveTextContent("Every requested verification check passed.");
   });
 
+  // Lab T37 (2026-11-07, #4271): a commit Keiko refused showed "Git commit - Succeeded". A refused
+  // Git step reads as not done, with its reason, and opens like the other cards that need a reading.
+  it("shows a refused Git step as not done instead of succeeded", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithGitOutcomes())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const notDone = [
+      ...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="not-done"]'),
+    ];
+    expect(notDone).toHaveLength(7);
+    for (const card of notDone) {
+      expect(card.open).toBe(true);
+      expect(card.querySelector('[data-state="not-done"]')).toHaveTextContent("Not done");
+      expect(card).not.toHaveTextContent("Succeeded");
+    }
+    const text = notDone.map((card) => card.textContent ?? "").join("\n");
+    expect(text).toContain("the verification of the staged change failed");
+    expect(text).toContain("no passing verification covers the staged change");
+    expect(text).toContain("part of the change is not staged yet");
+    expect(text).toContain("files open in the editor hold unsaved changes");
+    expect(text).toContain("policy or authority checks refused");
+    expect(text).toContain("changed after this step was proposed");
+    expect(text).toContain("failed or its result is uncertain");
+
+    const waiting = container.querySelector<HTMLDetailsElement>(
+      '[data-tool-state="waiting-for-approval"]',
+    );
+    expect(waiting?.open).toBe(true);
+    expect(waiting).toHaveTextContent("Waiting for approval");
+    expect(waiting).not.toHaveTextContent("Succeeded");
+
+    const done = container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="succeeded"]');
+    expect(done).toHaveLength(1);
+    expect(done[0]).toHaveTextContent("Succeeded");
+    expect(done[0]?.open).toBe(false);
+    // A carried-out step says no more than its badge.
+    expect(done[0]).not.toHaveTextContent("Keiko carried out this step.");
+  });
+
+  // Lab T37 audit (#4271): a refused Git step between succeeded calls must not fold into the
+  // collapsed "N steps" group, where its reason would hide behind a success summary.
+  it("keeps a refused Git step out of the group of succeeded steps", () => {
+    const feed = feedWithGitOutcomes();
+    const plain = (
+      callId: string,
+    ): AvailableCodingSafeActivityFeed["turns"][number]["tools"][number] => ({
+      callId,
+      tool: callId.startsWith("read") ? "read" : "edit",
+      state: "succeeded",
+      occurredAt: AT,
+    });
+    const refused = feed.turns[0]?.tools.find((tool) => tool.callId === "git-verification-missing");
+    if (refused === undefined) throw new Error("fixture lacks the refused commit");
+    const tools = [plain("read-1"), plain("edit-1"), refused, plain("read-2"), plain("edit-2")];
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike({
+          ...feed,
+          turns: [{ turnId: "turn-git", messages: [], tools, truncated: false }],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const card = container.querySelector('[data-tool-state="not-done"]');
+    expect(card).not.toBeNull();
+    expect(card?.closest('[data-timeline-kind="group"]')).toBeNull();
+    expect(container.querySelectorAll('[data-timeline-kind="group"]')).toHaveLength(2);
+  });
+
+  it("shows a refused Git step in German as not done", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const { container } = render(
+        <I18nProvider>
+          <Timeline
+            active={false}
+            events={[]}
+            activity={activityLike(feedWithGitOutcomes())}
+            questions={IDLE_QUESTIONS}
+          />
+        </I18nProvider>,
+      );
+      const notDone = [...container.querySelectorAll('[data-tool-state="not-done"]')];
+      expect(notDone).toHaveLength(7);
+      for (const card of notDone) {
+        expect(card.textContent).toContain("Nicht durchgeführt");
+        expect(card.textContent).not.toContain("Erfolgreich");
+      }
+      expect(notDone[0]?.textContent).toContain("Nicht committet");
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
+  });
+
   it("does not let a verification outcome change a call that did not fail", () => {
     const feed = feedWithVerificationOutcomes();
     const tool = feed.turns[0]?.tools[0];
@@ -479,7 +615,8 @@ describe("CodingWorkbenchTimeline", () => {
       expect(text("waiting-for-trust")).toContain("Wartet auf Freigabe");
       expect(text("waiting-for-trust")).toContain("noch nicht zugelassen");
       expect(text("no-runnable-steps")).toContain("Nichts auszuführen");
-      expect(text("no-runnable-steps")).toContain("kein Skript");
+      expect(text("no-runnable-steps")).toContain("für diese Anfrage nichts gefunden");
+      expect(text("no-runnable-steps")).not.toContain("definiert kein Skript");
       expect(text("not-run")).toContain("Nicht ausgeführt");
       expect(text("not-run")).toContain("übersprungen, abgelehnt oder abgebrochen");
       expect(text("failed")).toContain("Fehlgeschlagen");
@@ -710,11 +847,11 @@ describe("CodingWorkbenchTimeline", () => {
     expect(rows[2]).not.toHaveTextContent("runtime-failed");
   });
 
-  // F9 (#3873, live Gemma qualification): a run its prompt allowance ended read "The model or a
+  // F9 (#3873, live Gemma qualification): a run its time limit ended read "The model or a
   // Workbench guard rejected this turn" and then "The coding run ended with an internal error". The
-  // settled failure now names the exhausted allowance with its next step, and nothing on the
+  // settled failure now names the exhausted time limit with its next step, and nothing on the
   // timeline claims an internal error.
-  it("names the exhausted prompt allowance on the failed run instead of an internal error", async () => {
+  it("names the exhausted time limit on the failed run instead of an internal error", async () => {
     const turnRejected: CodingWorkbenchRuntimeSseEvent = {
       schemaVersion: "1",
       cursor: "cursor-4",
@@ -732,7 +869,7 @@ describe("CodingWorkbenchTimeline", () => {
       kind: "status",
       state: "failed",
       occurredAt: "2026-07-19T12:00:01.000Z",
-      failureCode: "prompt-allowance-exhausted",
+      failureCode: "envelope-duration-exhausted",
     };
     const { container } = render(
       <Timeline
@@ -745,12 +882,12 @@ describe("CodingWorkbenchTimeline", () => {
     const settled = [...container.querySelectorAll('[data-timeline-kind="event"]')].at(-1);
     expect(settled).toHaveTextContent("Coding run failed");
     expect(settled).toHaveAttribute("data-event-tone", "attention");
-    expect(settled).toHaveTextContent(/used up its prompt allowance/iu);
+    expect(settled).toHaveTextContent(/used up its time limit/iu);
     expect(settled).toHaveTextContent(/start the task again as a new run/iu);
-    expect(settled).toHaveTextContent("KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS");
-    expect(settled).toHaveTextContent(/up to 20,000,000 tokens/iu);
+    expect(settled).toHaveTextContent("KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES");
+    expect(settled).toHaveTextContent(/up to 480 minutes/iu);
     expect(settled).toHaveTextContent(/restart Keiko after changing it/iu);
-    expect(settled).not.toHaveTextContent("prompt-allowance-exhausted");
+    expect(settled).not.toHaveTextContent("envelope-duration-exhausted");
     expect(container).not.toHaveTextContent(/internal error/iu);
 
     const report = await axe(container);
@@ -2512,5 +2649,68 @@ describe("CodingWorkbenchTimeline render cost", () => {
     );
 
     expect(collate).not.toHaveBeenCalled();
+  });
+});
+
+// #4068 W12: a feed message's segments are the transport bound of 4,096 characters, not
+// paragraphs. A long operator prompt pasted from a Windows console (CRLF line endings) used to
+// render as one paragraph per segment, so a gap opened at an arbitrary character — here between
+// the CR and the LF of one line ending.
+describe("CodingWorkbenchTimeline long operator messages", () => {
+  function feedWithLongPrompt(truncated: boolean): AvailableCodingSafeActivityFeed {
+    return {
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-long",
+          messages: [
+            {
+              messageId: "message-long",
+              role: "user",
+              occurredAt: AT,
+              segments: [
+                { kind: "text", text: `${"a".repeat(4_095)}\r`, truncated: false },
+                { kind: "text", text: "\nnpm ERR! code 1\r\n", truncated },
+              ],
+              truncated,
+            },
+          ],
+          tools: [],
+          truncated,
+        },
+      ],
+    };
+  }
+
+  it("renders every segment of one message as one text block", () => {
+    const { container } = render(
+      <Timeline
+        events={[]}
+        activity={activityLike(feedWithLongPrompt(false))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const message = container.querySelector(`[data-message-role="user"] .${styles.messageText}`);
+    const paragraphs = message?.querySelectorAll("p") ?? [];
+    expect(paragraphs).toHaveLength(1);
+    expect(paragraphs[0]?.textContent).toBe(`${"a".repeat(4_095)}\r\nnpm ERR! code 1\r\n`);
+    expect(message?.querySelector(`.${styles.truncationMark}`)).toBeNull();
+  });
+
+  it("discloses a cut message once, at the end of its text", () => {
+    const { container } = render(
+      <Timeline
+        events={[]}
+        activity={activityLike(feedWithLongPrompt(true))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const message = container.querySelector(`[data-message-role="user"] .${styles.messageText}`);
+    const marks = message?.querySelectorAll(`.${styles.truncationMark}`) ?? [];
+    expect(marks).toHaveLength(1);
+    expect(message?.querySelector("p")?.lastElementChild).toBe(marks[0]);
+    expect(container).toHaveTextContent("Activity truncated.");
   });
 });

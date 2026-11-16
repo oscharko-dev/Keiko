@@ -181,7 +181,9 @@ function insertAccepted(vault: MemoryVaultStore, id: string, body: string): Memo
     id: id as MemoryId,
     schemaVersion: "1",
     scope,
-    type: "preference",
+    // A fact, not a preference: preferences reach every answer through the standing profile
+    // (#4228), and this fixture proves retrieval by the question.
+    type: "semantic-fact",
     body,
     provenance: {
       sourceKind: "explicit-user-instruction",
@@ -363,7 +365,7 @@ describe("semantic memory retrieval (#204)", () => {
     vault.close();
   });
 
-  it("records access only after the assistant uses a surfaced memory", async () => {
+  it("records only the use, not a reinforcement, after the assistant uses a surfaced memory (#4212)", async () => {
     const memoryDir = join(tmp, "vault-access");
     mkdirSync(memoryDir);
     const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
@@ -382,8 +384,9 @@ describe("semantic memory retrieval (#204)", () => {
     const chatId = await createChat();
     await sendChat(chatId, "Wie heißt mein Produkt");
 
-    const stats = vault.getAccessStats(["mem-product" as MemoryId]);
-    expect(stats.get("mem-product" as MemoryId)?.accessCount).toBe(1);
+    const stats = vault.getAccessStats(["mem-product" as MemoryId]).get("mem-product" as MemoryId);
+    expect(stats?.accessCount).toBe(0);
+    expect(stats?.lastUsedAt).toBeGreaterThan(0);
     vault.close();
   });
 

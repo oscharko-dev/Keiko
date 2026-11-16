@@ -9,7 +9,7 @@ import {
   ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { OpenAiAdapter } from "./openai-adapter.js";
+import { OpenAiAdapter, ResponseRedactionError } from "./openai-adapter.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
 import type {
   GatewayRequest,
@@ -80,6 +80,41 @@ async function chunksOf(stream: AsyncIterable<GatewayStreamChunk>): Promise<Gate
   for await (const chunk of stream) chunks.push(chunk);
   return chunks;
 }
+
+describe("opaque reasoning credential floor (#4059)", () => {
+  it.each([false, true])(
+    "refuses altered required state before accepting the answer (stream=%s)",
+    async (stream) => {
+      const config = { ...CONFIG, reasoningContinuation: "required-with-tools" as const };
+      const request = { ...REQUEST, reasoningDelivery: "forward" as const };
+      const adapter = adapterAnswering(() =>
+        stream
+          ? sse([
+              streamDelta({ role: "assistant", reasoning_content: `State ${CONFIG.apiKey}` }),
+              streamDelta({ content: "Answer" }),
+              finish("stop"),
+              DONE,
+            ])
+          : json({
+              choices: [
+                {
+                  message: {
+                    role: "assistant",
+                    content: "Answer",
+                    reasoning_content: `State ${CONFIG.apiKey}`,
+                  },
+                  finish_reason: "stop",
+                },
+              ],
+            }),
+      );
+      const result = stream
+        ? chunksOf(adapter.callStream(request, config, BOUNDS))
+        : adapter.call(request, config);
+      await expect(result).rejects.toBeInstanceOf(ResponseRedactionError);
+    },
+  );
+});
 
 // Every chunk but the terminal one, in arrival order, as `kind:token`.
 function sequence(chunks: readonly GatewayStreamChunk[]): string[] {

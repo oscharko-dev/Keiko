@@ -1,32 +1,22 @@
 import { randomUUID } from "node:crypto";
-import {
-  extractCandidatesFromWorkflowOutcome,
-  type CaptureContext,
-} from "@oscharko-dev/keiko-memory-capture";
 import type {
   MemoryAuditEvent,
   MemoryId,
-  MemoryProposalId,
   MemoryScope,
   MemoryWorkflowContext,
   MemoryWorkflowPort,
-  MemoryWorkflowRunId,
 } from "@oscharko-dev/keiko-contracts";
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { recordMemoryAudit, recordMemoryAudits } from "./memory-audit-handler.js";
 import { vaultAsQueryPort } from "./memory-conv-handlers.js";
-import { LOCAL_CONVERSATION_MEMORY_USER_ID } from "./memory-conversation-context.js";
-import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
-import { isPersistableMemoryCandidate } from "./memory-capture-policy.js";
 
 interface WorkflowMemoryPortOptions {
   readonly vault: MemoryVaultStore;
   readonly evidenceStore: EvidenceStore;
   readonly runId: string;
   readonly redactString: (input: string) => string;
-  readonly customerIdentifierMatchers?: readonly RegExp[] | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -154,97 +144,6 @@ function recordWorkflowUsedAudit(
   );
 }
 
-export function describeWorkflowWriteCandidateSummary(
-  proposedMemoryIdsCount: number,
-  source: string,
-): string {
-  if (proposedMemoryIdsCount === 0) {
-    return `Workflow produced a memory write candidate that was not eligible for review (${source}).`;
-  }
-  if (proposedMemoryIdsCount === 1) {
-    return `Workflow produced 1 governed memory write candidate (${source}).`;
-  }
-  return `Workflow produced ${String(proposedMemoryIdsCount)} governed memory write candidates (${source}).`;
-}
-
-function recordWorkflowWriteCandidateAudit(
-  options: WorkflowMemoryPortOptions,
-  now: () => number,
-  event: Parameters<NonNullable<MemoryWorkflowPort["onMemoryWriteCandidate"]>>[0],
-  proposedMemoryIds: readonly MemoryId[],
-): void {
-  const auditEvent: MemoryAuditEvent = {
-    schemaVersion: "1",
-    kind: "memory:workflow-write-candidate",
-    eventId: randomUUID(),
-    occurredAt: now(),
-    initiatorSurface: "workflow",
-    summary: describeWorkflowWriteCandidateSummary(proposedMemoryIds.length, event.source),
-    workflowRunId: options.runId,
-    source: event.source,
-    scope: event.scope,
-    proposedMemoryIds,
-  };
-  recordMemoryAudit(
-    {
-      evidenceStore: options.evidenceStore,
-      redactString: options.redactString,
-      now,
-    },
-    auditEvent,
-  );
-}
-
-function persistWorkflowCandidates(
-  options: WorkflowMemoryPortOptions,
-  event: Parameters<NonNullable<MemoryWorkflowPort["onMemoryWriteCandidate"]>>[0],
-  capturedAt: number,
-): readonly MemoryId[] {
-  const outcomes = extractCandidatesFromWorkflowOutcome(
-    {
-      runId: options.runId as MemoryWorkflowRunId,
-      outcomeKind: event.source === "workflow-correction" ? "corrected" : "success",
-      structuredReport: event.proposalSummary,
-      capturedAt,
-    },
-    captureContextFor(event.scope, capturedAt, options.runId),
-    {
-      scopeKind: event.scope.kind,
-      ...(options.customerIdentifierMatchers === undefined
-        ? {}
-        : { customerIdentifierMatchers: options.customerIdentifierMatchers }),
-    },
-  );
-  const proposedMemoryIds: MemoryId[] = [];
-  for (const outcome of outcomes) {
-    if (!isPersistableMemoryCandidate(outcome)) {
-      continue;
-    }
-    const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
-    const record = buildMemoryRecordFromProposal(proposalId, outcome);
-    options.vault.insertMemory(record);
-    proposedMemoryIds.push(record.id);
-  }
-  return proposedMemoryIds;
-}
-
-function captureContextFor(scope: MemoryScope, nowMs: number, runId: string): CaptureContext {
-  return {
-    userId: LOCAL_CONVERSATION_MEMORY_USER_ID,
-    ...(scope.kind === "workspace" ? { workspaceId: scope.workspaceId } : {}),
-    ...(scope.kind === "project" ? { projectId: scope.projectId } : {}),
-    sourceWorkflowRunId: runId as MemoryWorkflowRunId,
-    ...(scope.kind === "workflow"
-      ? {
-          workflowDefinitionId: scope.workflowDefinitionId,
-        }
-      : {}),
-    nowMs,
-    newMemoryId: () => randomUUID() as MemoryId,
-    newProposalId: () => randomUUID() as MemoryProposalId,
-  };
-}
-
 function createWorkflowContextGetter(
   options: WorkflowMemoryPortOptions,
   now: () => number,
@@ -293,11 +192,6 @@ export function createWorkflowMemoryPort(options: WorkflowMemoryPortOptions): Me
         reason: event.reason,
         scopes: [],
       });
-    },
-    onMemoryWriteCandidate(event): void {
-      const capturedAt = now();
-      const proposedMemoryIds = persistWorkflowCandidates(options, event, capturedAt);
-      recordWorkflowWriteCandidateAudit(options, () => capturedAt, event, proposedMemoryIds);
     },
   };
 }

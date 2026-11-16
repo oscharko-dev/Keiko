@@ -32,6 +32,7 @@ import {
   PortableUpdateStagingError,
   type PortableUpdateStageInput,
 } from "./update-portable-staging-shared.js";
+import { OPENCODE_RUNTIME_VERSION_PINS } from "./coding-runtime/opencodeRuntimeVersions.js";
 
 const ENC = new TextEncoder();
 const TARGET_VERSION = "0.2.11";
@@ -221,9 +222,9 @@ function sidecarRuntime(
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "2.0.10",
-      tag: "v2.0.10",
-      commit: "b8cedc1a7a5e2916bbb65dc1d4b620729c261638",
+      version: "2.2.5",
+      tag: "v2.2.5",
+      commit: "9bbb8ce18c80f099e0e448775f59d965ead40a21",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -232,7 +233,7 @@ function sidecarRuntime(
     },
     protocolSchema: {
       path: "packages/protocol/openapi.json",
-      sha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
+      sha256: OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "",
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
       digestInput: "upstream-raw-bytes",
@@ -1050,7 +1051,7 @@ describe("portable update staging", () => {
 
     expect(summary.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "2.0.10",
+      upstreamVersion: "2.2.5",
       payloadSha256: sidecarPayloadSha256(files),
       payloadSha256Prefix: sidecarPayloadSha256(files).slice(0, 12),
       status: "verified",

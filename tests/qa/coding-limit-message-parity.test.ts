@@ -1,10 +1,9 @@
-// The Coding Workbench's two limit messages state the hard caps of the operator settings they name
-// (#3873 review). The server owns the caps — `configuredRuntimePromptTokenBudget` and
-// `configuredRuntimeMaxDurationMinutes` refuse a value above them — and the UI catalogs may not
-// import the server, so the numbers in the operator text are pinned against the server's own
-// constants here instead of being restated in a second place that could drift: a raised cap that
-// left "up to 20,000,000 tokens" in the message would send an operator past the limit into a
-// composition failure.
+// The Coding Workbench's limit message states the hard cap of the operator setting it names
+// (#3873 review). The server owns the cap — `configuredRuntimeMaxDurationMinutes` refuses a value
+// above it — and the UI catalogs may not import the server, so the number in the operator text is
+// pinned against the server's own constant here instead of being restated in a second place that
+// could drift: a raised cap that left "up to 480 minutes" in the message would send an operator
+// past the limit into a composition failure.
 //
 // The catalogs are read as text, not imported: keiko-ui is built with its own bundler module
 // resolution (no `.js` extensions) and does not type-check under this suite's stricter node16
@@ -13,10 +12,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  MAX_RUNTIME_MAX_DURATION_MINUTES,
-  MAX_RUNTIME_PROMPT_TOKENS,
-} from "../../packages/keiko-server/src/coding-runtime/productionRuntimeWorkspaceAuthority.js";
+import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "../../packages/keiko-server/src/coding-runtime/productionRuntimeWorkspaceAuthority.js";
 
 const CATALOG_DIRECTORY =
   "../../packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench";
@@ -36,16 +32,6 @@ function catalogMessage(catalog: string, key: string): string {
 }
 
 describe("Coding Workbench limit messages", () => {
-  it("state the server's hard cap of the prompt allowance in both languages", () => {
-    const key = "codingWorkbench.event.failure.prompt-allowance-exhausted";
-    expect(catalogMessage(EN_CATALOG, key)).toContain(
-      `up to ${MAX_RUNTIME_PROMPT_TOKENS.toLocaleString("en-US")} tokens`,
-    );
-    expect(catalogMessage(DE_CATALOG, key)).toContain(
-      `bis höchstens ${MAX_RUNTIME_PROMPT_TOKENS.toLocaleString("de-DE")} Tokens`,
-    );
-  });
-
   it("state the server's hard cap of the envelope duration in both languages", () => {
     const key = "codingWorkbench.event.failure.envelope-duration-exhausted";
     expect(catalogMessage(EN_CATALOG, key)).toContain(

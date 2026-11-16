@@ -6,6 +6,7 @@ import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { EditMemoryDialog } from "./EditMemoryDialog";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
+import { PROFILE_EXCLUDED_MEMORY_TAG } from "@oscharko-dev/keiko-contracts/runtime/memory";
 
 function makeRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
   return {
@@ -43,6 +44,18 @@ describe("EditMemoryDialog — rendering", () => {
     expect(screen.getByLabelText(/body/i)).toHaveValue("Original body text");
     expect(screen.getByLabelText(/tags/i)).toHaveValue("typescript, style");
     expect(screen.getByLabelText(/sensitivity/i)).toHaveValue("public");
+  });
+
+  it("leaves Keiko's profile exclusion out of the editable tags (#4228)", () => {
+    render(
+      <EditMemoryDialog
+        record={makeRecord({ tags: ["typescript", PROFILE_EXCLUDED_MEMORY_TAG] })}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        editMemoryImpl={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText(/tags/i)).toHaveValue("typescript");
   });
 
   it("renders correction mode with correction-specific copy", () => {

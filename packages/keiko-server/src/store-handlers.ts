@@ -1,3 +1,6 @@
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { memoryLearningRuntime } from "./memory-learning.js";
+import { browserChatMessages, type ChatLifecycleRefresh } from "./chat-message-projection.js";
 import {
   revokeChangedJiraChatAuthority,
   revokeJiraChatAccess,
@@ -7,6 +10,7 @@ import { logChatContextManagement } from "./chat-context-log.js";
 import {
   contextWindowProbeInFlight,
   discoverAssumedContextWindow,
+  noteWithheldContextWindowProbe,
 } from "./gateway-context-window.js";
 // ADR-0013 D7 — Route handlers for UI-local store routes. All inputs are validated;
 // every error path uses the redacted `{ error: { code, message } }` envelope; SECURITY_HEADERS are
@@ -33,10 +37,16 @@ import {
   parseExpectedGroundingScopeIdentity,
 } from "./store/chat-grounding-scope-identity.js";
 import { logChatScopeUpdate } from "./chat-scope-update-log.js";
+import { refuseUnavailableKnowledgeScopes } from "./chat-knowledge-scope-availability.js";
 import { jiraChatPatchFields, jiraChatUpdateOptions } from "./atlassian/jiraChatBindingPatch.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentGroundingLimits } from "./deps.js";
+import {
+  currentConversationReadinessObservation,
+  currentGatewayConfig,
+  currentGroundingLimits,
+  modelUsedByPerson,
+} from "./deps.js";
 import { findCapability, findConfiguredCapability } from "@oscharko-dev/keiko-model-gateway";
 import {
   UiStoreError,
@@ -65,13 +75,13 @@ import {
   projectWithWorkspaceAvailability,
   userFacingProjects,
 } from "./workspace-root-membership.js";
-import {
-  openKnowledgeStore,
-  resolveKnowledgeStorePath,
-  type KnowledgeStore,
-} from "@oscharko-dev/keiko-local-knowledge";
+import { openKnowledgeStore, resolveKnowledgeStorePath } from "@oscharko-dev/keiko-local-knowledge";
 import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import {
+  currentCapsuleStampLookup,
+  type CapsuleStampSource,
+} from "./local-knowledge-capsule-stamps.js";
 import { refreshGroundedAnswerIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
 import { pathIsDenied } from "./files-deny.js";
 import {
@@ -1264,6 +1274,7 @@ function patchTouchesGroundingScope(patch: UpdateChatPatch): boolean {
     patch.localKnowledgeScope !== undefined ||
     patch.gitChangeScopes !== undefined ||
     patch.jiraPodId !== undefined ||
+    patch.jiraAdministrationEnabled !== undefined ||
     patch.toolMode !== undefined ||
     patch.mcpServers !== undefined
   );
@@ -1317,6 +1328,8 @@ function interruptChangedScopeTurn(
   if (existing === undefined) return notFoundResult("Chat not found.");
   const conflict = groundingPatchConflict(deps, existing, patch, correlationId);
   if (conflict !== undefined) return conflict;
+  const refused = knowledgeScopeRefusal(deps, existing, patch, correlationId);
+  if (refused !== undefined) return refused;
   const safePatch = canonicalizeGitChangeScopePatch(
     deps,
     existing,
@@ -1329,6 +1342,20 @@ function interruptChangedScopeTurn(
   });
   interruptChangedChatGenerations(deps, existing, preview, correlationId, patch);
   return undefined;
+}
+
+// A newly added Knowledge Pod that does not exist or is being deleted refuses the whole update before
+// any state changes or running turn is interrupted (#4371).
+function knowledgeScopeRefusal(
+  deps: UiHandlerDeps,
+  existing: Chat,
+  patch: UpdateChatPatch,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const refusal = refuseUnavailableKnowledgeScopes(deps, existing, patch);
+  if (refusal === undefined) return undefined;
+  logChatScopeUpdate("denied", existing, existing, patch, correlationId, undefined, refusal.reason);
+  return { status: refusal.status, body: errorBody(refusal.code, refusal.message, correlationId) };
 }
 
 function groundingPatchConflict(
@@ -1367,6 +1394,8 @@ function applyChatUpdate(
   if (existing === undefined) return notFoundResult("Chat not found.");
   const conflict = groundingPatchConflict(deps, existing, patch, correlationId);
   if (conflict !== undefined) return conflict;
+  const refused = knowledgeScopeRefusal(deps, existing, patch, correlationId);
+  if (refused !== undefined) return refused;
   const scopesToCheck = scopesRequiringAccessValidation(patch);
   const needsGitChangeCheck = gitChangeScopePatchNeedsAccessValidation(patch);
   let safePatch = patch;
@@ -1464,47 +1493,70 @@ function hasLocalKnowledgeLifecycle(message: ChatMessage): boolean {
   return false;
 }
 
-function openLocalKnowledgeStoreForProjection(deps: UiHandlerDeps): {
-  readonly store: KnowledgeStore;
-  readonly close: () => void;
-} {
+function localKnowledgeProjectionStoreSource(deps: UiHandlerDeps): CapsuleStampSource {
   const root = dirname(deps.uiDbPath ?? resolve(process.cwd(), "keiko-ui.db"));
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
-  const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
-  // The chat-message projection opens the SAME store file as the capsule handlers, so it can be
-  // the call that first meets a corrupt or wrongly-keyed database. It carries the same sink for
-  // the same reason: a quarantine that leaves no line is a data-losing decision nobody can trace.
-  const logSink = processServerLogSink();
-  const store =
-    protection === undefined
-      ? openKnowledgeStore({ dbPath, logSink })
-      : openKnowledgeStore({ dbPath, protection, logSink });
   return {
-    store,
-    close: (): void => {
-      store.close();
+    dbPath,
+    open: (): ReturnType<CapsuleStampSource["open"]> => {
+      const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
+      // The chat-message projection opens the SAME store file as the capsule handlers, so it can be
+      // the call that first meets a corrupt or wrongly-keyed database. It carries the same sink for
+      // the same reason: a quarantine that leaves no line is a data-losing decision nobody can trace.
+      const logSink = processServerLogSink();
+      const store =
+        protection === undefined
+          ? openKnowledgeStore({ dbPath, logSink })
+          : openKnowledgeStore({ dbPath, protection, logSink });
+      return {
+        store,
+        close: (): void => {
+          store.close();
+        },
+      };
     },
   };
+}
+
+function lifecycleCapsuleIds(messages: readonly ChatMessage[]): readonly KnowledgeCapsuleId[] {
+  const ids = new Set<KnowledgeCapsuleId>();
+  for (const message of messages) {
+    const answer = message.groundedAnswer;
+    let lifecycle;
+    if (answer?.groundingKind === "local-knowledge") lifecycle = answer.contextPack.indexLifecycle;
+    else if (answer?.groundingKind === "hybrid")
+      lifecycle = answer.contextPack.knowledge.indexLifecycle;
+    for (const stamp of lifecycle?.capsules ?? []) ids.add(stamp.capsuleId);
+  }
+  return [...ids];
+}
+
+interface LifecycleProjection {
+  readonly messages: readonly ChatMessage[];
+  readonly refresh?: ChatLifecycleRefresh;
 }
 
 function projectMessagesWithCurrentLocalKnowledgeLifecycle(
   deps: UiHandlerDeps,
   messages: readonly ChatMessage[],
-): readonly ChatMessage[] {
-  if (!messages.some(hasLocalKnowledgeLifecycle)) return messages;
-  const env = openLocalKnowledgeStoreForProjection(deps);
-  try {
-    return messages.map((message) =>
+): LifecycleProjection {
+  if (!messages.some(hasLocalKnowledgeLifecycle)) return { messages };
+  const capsuleIds = lifecycleCapsuleIds(messages);
+  const { lookup, outcome } = currentCapsuleStampLookup(
+    localKnowledgeProjectionStoreSource(deps),
+    capsuleIds,
+  );
+  return {
+    messages: messages.map((message) =>
       message.groundedAnswer === undefined
         ? message
         : {
             ...message,
-            groundedAnswer: refreshGroundedAnswerIndexLifecycle(env.store, message.groundedAnswer),
+            groundedAnswer: refreshGroundedAnswerIndexLifecycle(lookup, message.groundedAnswer),
           },
-    );
-  } finally {
-    env.close();
-  }
+    ),
+    refresh: { stampMemo: outcome, capsuleCount: capsuleIds.length },
+  };
 }
 
 export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -1520,12 +1572,17 @@ export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): Rout
     if (!chatBelongsToProject(deps, projectPath, chatId)) {
       return notFoundResult("Chat not found.");
     }
+    // #4213: opening another Chat is a moment to learn what was said in the one before.
+    memoryLearningRuntime(deps).noteChatOpened(chatId, ctx.correlationId);
     const messages = deps.store
       .listMessages(chatId, limit)
       .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
+    const projection = projectMessagesWithCurrentLocalKnowledgeLifecycle(deps, messages);
     return {
       status: 200,
-      body: { messages: projectMessagesWithCurrentLocalKnowledgeLifecycle(deps, messages) },
+      body: {
+        messages: browserChatMessages(projection.messages, ctx.correlationId, projection.refresh),
+      },
     };
   });
 }
@@ -1559,7 +1616,7 @@ export async function handleCreateMessage(
       shortResult: optionalString(body, "shortResult"),
       taskType: optionalTaskType(body),
     });
-    return { status: 201, body: { message } };
+    return { status: 201, body: { message: browserChatMessages([message], ctx.correlationId)[0] } };
   });
 }
 
@@ -1601,7 +1658,7 @@ export async function handleUpdateMessage(
     const body = await readJsonObject(ctx.req);
     const patch = buildMessagePatch(body);
     const message = deps.store.updateMessage(id, patch);
-    return { status: 200, body: { message } };
+    return { status: 200, body: { message: browserChatMessages([message], ctx.correlationId)[0] } };
   });
 }
 
@@ -1629,6 +1686,26 @@ export function handleChatContextStatus(
 // without generating; a slow gateway only delays the reading, never fails it.
 const CONTEXT_WINDOW_PROBE_WAIT_MS = 3_000;
 
+// A read never loads a model (#4351): the probe is a streamed completion, so it runs only for a model
+// a person has used (an actual call completed in this configuration generation, or an explicit
+// Settings verification passed) and that was not since observed failing. A startup observation is not
+// use. Any other model reports the window it is planned with and dispatches nothing, which the
+// activity log records once per deployment and generation; the first overflow still teaches the
+// real window.
+function measuredWindowProbe(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+): Promise<void> {
+  if (
+    modelUsedByPerson(deps, modelId) &&
+    currentConversationReadinessObservation(deps, modelId) !== false
+  )
+    return discoverAssumedContextWindow(deps, modelId, correlationId);
+  noteWithheldContextWindowProbe(deps, modelId, correlationId);
+  return Promise.resolve();
+}
+
 async function contextStatusWithMeasuredWindow(
   deps: UiHandlerDeps,
   chatId: string,
@@ -1636,11 +1713,7 @@ async function contextStatusWithMeasuredWindow(
   correlationId: string | undefined,
 ): Promise<ChatContextStatusWire> {
   const status = readChatContextStatus(deps, chatId, modelId, correlationId);
-  const probe = discoverAssumedContextWindow(
-    deps,
-    modelId,
-    correlationId ?? UNKNOWN_CORRELATION_ID,
-  );
+  const probe = measuredWindowProbe(deps, modelId, correlationId ?? UNKNOWN_CORRELATION_ID);
   // A provider-reported window is re-checked in the background; only an assumed one delays.
   if (status.contextWindowAssumed === true) {
     let timer: NodeJS.Timeout | undefined;

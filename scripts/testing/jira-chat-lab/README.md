@@ -2,12 +2,171 @@
 
 This development/qualification harness supports #4081/#4082. It uses synthetic
 data only and is independent of the product’s in-process MCP host. Jira Software
-Data Center 10.3.26, PostgreSQL 16 and the TLS frontend have digest-pinned images.
+Data Center 10.3.26 is the default digest-pinned release; PostgreSQL 16 and the TLS
+frontend also have digest-pinned images. A new isolated session can select an exact
+10.3/10.4/11.2/11.3 patch release with its independently verified image digest.
 Published ports bind loopback only; the frontend forwards to one fixed Jira service.
 
 Prerequisites: Docker Compose, the repository’s supported Node version, OpenSSL
 and built workspace packages. State, passwords, PATs, license material and private
 keys stay outside the repository in a private session directory.
+
+## Model-free API qualification (AC7)
+
+Run `api-qualification-prepare.mjs <private-session>` after normal first-run setup
+in the exclusive lab window. It reuses `seed.mjs` and its one-use PAT creation,
+then verifies the disposable administrator's identity and native administration
+permission. It never starts Jira or configures a model.
+
+A fresh session needs no manual step. `seed.mjs` grants the qualification actors (`keiko-admin`,
+`keiko-api`) the worklog, comment/attachment deletion, sprint and voter permissions the write cases need
+(the editor, assignee and restricted actors keep their narrow grants, and the run proves it).
+These widened grants live only in the lab's own permission scheme `Keiko synthetic KEIKO permissions`,
+which is associated with the synthetic project KEIKO alone; ISOLATED and every other project keep their
+own schemes. The denial cases (restricted cannot read KEIKO, editor cannot assign or transition) rely on
+the unchanged narrow grants, which `keikoGrantPlan` and the native `mypermissions` check pin. The
+preparation then runs every operator step independently and prints one outcome per step: synced
+sprints (a disabled lab feature is reported as `sprint-sync-feature-disabled`), the select option, the
+permission attribute, the dashboard and item (Jira's own create form with its XSRF token, then the
+dashboard plugin's gadget resource; the failing stage is named), the issue-security scheme (bounded
+retries) and one owned record for each collection the lab can populate (`api-qualification-collection-seeds.mjs`).
+A failed step never hides the others; a step that names a failed `needs` entry is skipped as
+`dependency-failed`. A collection read is nonempty by default: only a per-case `emptyAllowed` reason
+admits an empty native collection, and such rows are recorded as `vacuous` in the evidence and in the
+report's `vacuousReads` list and counted separately as `executableVacuous` in the console summary,
+report and archive. They stay executable but prove no projection. An `emptyAllowed` reason must be nonblank
+text or the case fails at construction. The native expected side is
+paged completely (bounded) before it is compared.
+
+The required-field proof lifts the field's requirement in Jira's default field configuration for
+a moment; `requirements/seed-projects.mjs` therefore brackets its writes with `withFixtureFieldOptional`,
+which restores the requirement on exit, also on failure. It writes a private marker
+`required-field-lifted.json` in the session directory while the requirement is lifted; the next bracket and
+`qualify-fields.mjs` restore first when the marker survived a crash. A failed restore keeps the work's own
+error (the restore failure is its `cause`) and leaves the marker for that recovery.
+
+`api-qualification.mjs <private-session> [comma-separated-tools] [owned-snapshot-id]` uses this lab's
+paired production server, credential vault, verified TLS connection, accepted Chat
+turn, operation-selected managed provider, catalog authority, budget and durable
+mutation journal. It does not configure or call a model or LiteLLM. Commit the
+complete sources first: reports bind one clean source revision, native release,
+image digest and the complete 439-identity inventory. A focused run still accounts
+for every untested identity as unknown and exits nonzero; it cannot update the
+ledger or supply final acceptance.
+
+The driver runs at most 32 accepted turns in each sequential paired-product
+lifecycle against the same owned Jira. This preserves the production registry's
+64 retained-authority bound without clearing, increasing or expiring that bound.
+Each lifecycle retains its own product database in `productStateFiles`; fixture
+identities carry forward across batches and uncertain effects stop the whole run.
+
+Private qualification Chats are created through the existing store, with a
+descriptive model-free label and no gateway configuration. Credential creation,
+verification and binding retain their authenticated production routes. Each call
+mints its authority from an admitted stored turn, accepts its read disclosure
+through the production owner, dispatches the selected catalog operation and
+settles the stored turn. The ordinary model-backed Chat entry point is unchanged.
+
+Read cases live in `api-qualification-cases.mjs`,
+`api-qualification-observation-cases.mjs` and `api-qualification-configuration-cases.mjs`.
+Configuration cases select actual scheme, screen, tab and grant IDs through read-only
+fixture preparation immediately before their governed operation. Each case supplies typed tool
+arguments and an independent readback using `lab-client.mjs`; direct REST calls
+are observations and fixture preparation only. A transport witness observes the
+real selected method/path and forwards responses unchanged. An unexpected or
+repeated mutation is refused before transport. A local refusal, missing fixture,
+timeout, resource 404 or mismatching readback remains unknown. Native denials and
+missing capabilities require their own independent evidence. No policy deferral
+is decided by this driver.
+
+`docs/local-knowledge/jira-api-coverage/qualification-proposals.json` records the
+integrator's 2026-11-08 decision: seven cluster mutations, upgrade execution,
+notification delivery, the two temporary-avatar mutations (Jira 10.3 documents no
+resource identity or GET, and another session cannot observe the product session's
+temporary state) and the reciprocal remote link (it needs an owned second laboratory
+instance with mutual application links, which the single laboratory lacks) are
+deferred. Those twelve rows carry the decision reference,
+never a native receipt or passing readback. Cluster reads and filter deletion still
+need native qualification; deletion preserves the product's unconfirmed outcome.
+Additional exceptions require another explicit owner decision.
+
+The planning, application-role, asset, filter, link and index case modules supply
+the first 48 entries in the shared AC7 split. Preparatory writes use the same
+governed provider and produce separate private receipts, settled journals and native
+readbacks. Declared same-turn prerequisites share one bounded accepted authority
+and private lifetime; their evidence cannot replace the frozen primary witness.
+File sources are attached to the actual Chat through its protected Files scope.
+
+Every session's Jira starts with `-Datlassian.authentication.legacy.mode=true` (set in
+`compose.yaml`). Jira 10.3 otherwise answers `POST /rest/auth/1/session` with a 403 "two-step
+verification" refusal, so the private administrator session that websudo, session and user-avatar
+recipes need could not exist. The setting is part of provisioning: a session started from this
+compose file needs no UI step, and the credentials stay read programmatically from its private files.
+
+Some recipes require genuine operator fixtures in the owned session's `fixture.json`:
+`planningSyncedSprintIds` and `planningAllSyncedSprintIds` identify real synced sprints;
+`assetDashboard: { id, itemId, name }` identifies a disposable dashboard/item created
+through native Jira UI, with a name beginning `Synthetic AC7 `; `optionFieldId` and
+`optionId` identify a real editable option; `permissionAttributeSchemeId` and
+`permissionAttributeKey` identify a real permission-scheme attribute. Native reads
+verify these bindings before any corresponding effect. Missing bindings fail closed.
+
+The programmatic entry point is
+`qualifyApi(directory, only, snapshotId, { emailDefaultOracle })`.
+`emailDefaultOracle`
+must bind the fresh owned image's complete native default template manifest before
+synthetic uploads. The ordinary CLI supplies no such binding, so a missing required
+oracle remains a failure, without creating new deferrals.
+
+The issue lifecycle cases in `api-qualification-issue-cases.mjs` use their own
+newly created issue and native acknowledgement IDs. Property lifecycle cases in
+`api-qualification-property-cases.mjs` create an absent synthetic key, compare
+its exact native value, then independently confirm its removal while the parent
+remains readable. Writes retain the normal persisted tool preview and its
+canonical action digest, source preparation, mutation outcome and settled
+transcript through the production owners. Cases not yet authored remain
+explicitly unknown in the complete report. The driver is incomplete while any
+inventory identity lacks native qualification; a source checkpoint does not
+close AC7.
+
+`api-qualification-release-cases.mjs` creates its own named component and version,
+checks ordinary metadata and native issue counts, and exercises version remote-link
+lifecycles with independent complete-set comparisons. Destructive cases require the
+same owned snapshot proof as other administration; they never reuse another session's
+resources. Issue lifecycle property reads compare the production `items` node list.
+
+Before destructive administration, run
+`api-qualification-snapshot.mjs <private-session>` within the exclusive lab
+window. It reuses `verification.mjs` service/image ownership checks, stops this
+session's Jira and TLS writer, and writes a private PostgreSQL dump and Jira-home
+tar with SHA-256 evidence. It leaves the services stopped and never restores a
+backup automatically. Only after the exclusive window is available, restart the
+same session normally. Supply the returned snapshot ID as the qualifier's third
+argument; destructive cases refuse absent, foreign or changed backup bytes.
+Use `api-qualification.mjs <private-session> '*' <owned-snapshot-id>` to select all
+authored cases with a snapshot, or supply an explicit comma-separated tool list.
+
+Private run directories retain the product database, body-free operation evidence
+and an exclusive per-case pending intent. Reconcile an interrupted or uncertain
+effect before another attempt; never remove a pending intent to replay a write.
+Only complete reports can pass `applyQualificationReport`, and each non-unknown
+ledger state must have verification references. Run the governor's headroom check
+before heavy setup, builds, tests and qualification. Use separate session
+directories and release-bound images; never reuse another operator's lab.
+
+## Connect the existing local lab
+
+For ordinary local development, the lab needs a running, licensed Jira, the basic seed
+and the generated CA configured through `egress.caBundlePath`. The seed supplies its own
+non-admin API actor and private `secrets/api-token` file. In Keiko's Knowledge Hub, choose
+**Create Jira Pod**, enter its name, the lab's HTTPS URL and that PAT, then submit the form.
+That single submit saves and verifies the connection automatically. Verification binds the
+saved URL; no second address list,
+comparison code or private-network switch is required.
+
+The connection probe below checks this production path using an isolated temporary vault.
+The larger Chat, mutation and requirements groups are separate acceptance qualifications;
+their successful completion is recorded independently of ordinary local connection setup.
 
 ## Finite normal-Chat catalog qualification
 
@@ -47,6 +206,143 @@ does not count as acceptance and must be qualified again as a complete new group
 after reconciliation. Raw REST fixture setup is not a substitute for this product
 path. The final acceptance record identifies the exact tested product artifact.
 
+## Project setup and Agile lifecycle through the visible UI
+
+The AC5/AC6 browser group uses the real model, connected Jira Pods, composer,
+administration opt-in and exact write approvals. Supply two existing actors through
+private PAT files: the permitted actor must independently have native `ADMINISTER`
+permission and private default filter sharing; the denied actor must lack that
+permission. The group grants no permissions and changes no global defaults.
+
+```sh
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  npm run jira:lab:browser-project-agile -- /absolute/private/session actual-model-id \
+  /absolute/private/permitted-PAT /absolute/private/denied-PAT
+
+npm run jira:lab:browser-project-agile -- /absolute/private/session --reconcile \
+  /absolute/private/permitted-PAT
+```
+
+Twelve steps cover allowed/denied project creation, Epic and Task creation with the
+intended relation, a private filter, Scrum board, sprint creation and assignment,
+start and completion, and two refused invalid state changes. Independent native
+reads require exact fields, relations, membership and state. Keys and links must
+remain visible after reload. The native dispatch witness forwards real responses
+unchanged and refuses unexpected or repeated writes before forwarding.
+
+This group creates uniquely named projects and retains its effects. It never resets
+`REQ`, restarts Jira or removes remote fixtures. A failure retains its exclusive
+pending intent and product state. `--reconcile` reads the retained targets without
+resuming writes or deleting that marker. The current license must have at least
+thirty minutes remaining. Run groups sequentially in a coordinated machine/Gateway
+window; never stop another session's instance. Source tests and a prepared driver
+are not live acceptance evidence. The finite fourteen-operation catalog group
+above is separate from the epic's 439-identity accounting.
+
+## Daily Jira role journeys through the visible Chat UI
+
+AC5/AC6/AC8/AC9 use three independent Chats and verified Jira Pods for project lead, developer and tech lead. Preparation uses only the administrative lab client: one fresh Scrum project derived from the reserved group identity, one board, two Epics, eight Stories, one Task and the real numeric Story Points field on the create/edit screens. The existing identity and permission seed owners provide separate PATs and native permission readback. The developer has no Manage Sprints permission; additional create/comment/link/resolve rights support the requested daily tasks.
+
+The administrator owns the filter and board. A single view-only project share is bounded by the
+fresh project's exact direct-user permission scheme for the three roles and administrative oracle.
+Setup verifies the scheme before and after sharing, and each role PAT must independently read the
+same board before any model turn begins.
+
+Run the group only in the integrator’s coordinated real Jira/Keiko/model window:
+
+```sh
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  npm run jira:lab:browser-roles -- /absolute/private/session actual-model-id
+
+# Offline: print all thirty expected write signatures without opening a session.
+npm run jira:lab:browser-roles -- --plan
+
+# Observe retained remote targets only; never resume or replay an uncertain write.
+npm run jira:lab:browser-roles -- /absolute/private/session --reconcile
+```
+
+Each natural-language German/English prompt is one visible composer turn. PL1–PL7 run first, then all developer turns while sprint 1 is active, then PL8–PL11 and all tech-lead turns. The three Chat/Pod/authentication bindings are independently checked on opening and again before PL8. Read questions allow the existing search/report operations and require exactly the independently queried issue keys and numeric totals; they forward zero writes.
+
+Every write must match its ordered method/path/body admission and one visible approval per native forward. Fresh resource IDs come from independent Jira reads, including IDs needed by a later write in the same turn. Native readback verifies fields, relationships, membership and lifecycle state. A rejected developer delete is exactly one 403 with a single readable refusal and unchanged sprint. Generic visible “Jira action” and unavailable/raw result rows are counted as presentation findings. A complete read may correctly have no result card.
+
+Each opened role gets a reload/transcript/no-replay observation and a private screenshot; an unsettled turn is captured without replaying it and retains an unverified reload. Contradictory evidence stops later turns, whose initialized scorecard rows stay unverified. JSON and Markdown scorecards named roles-scorecard-<group>-<role> contain only static step descriptions, classifications, counts and digests. Screenshots and reports remain in the private lab session. Product receipts that remain unconfirmed, including rank/delete receipts, stay unverified despite separate native observations.
+
+The exclusive roles-browser.pending.json intent is persisted before setup and each turn. A failure retains both that marker and the product state. Reconciliation never clears the marker or issues writes. A completed group requires all steps/reloads verified and all three browsers closed; no automatic reset, retry, Jira restart or removal of project fixtures occurs. At least thirty minutes of license remain before starting. Offline stubs and prepared drivers are not live acceptance evidence.
+
+The following signatures count writes only; normal metadata/JQL reads are independently observed. PL8 closes sprint 1 before moving open issues to sprint 2; Dev10 targets that still-empty future sprint; PL11 creates and deletes only the new empty third sprint. Issue/version/component IDs are bound from the corresponding native observations.
+
+### Projektleitung
+
+| Schritt                                         | Writes | Signatur                                                                                                                       |
+| ----------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| 1. Create the first sprint                      | 1      | POST /rest/agile/1.0/sprint                                                                                                    |
+| 2. Rename the sprint and change its goal        | 1      | POST /rest/agile/1.0/sprint/{sprint1Id}                                                                                        |
+| 3. Create the second sprint                     | 1      | POST /rest/agile/1.0/sprint                                                                                                    |
+| 4. Plan four stories                            | 1      | POST /rest/agile/1.0/sprint/{sprint1Id}/issue                                                                                  |
+| 5. Rank one story before another                | 1      | PUT /rest/agile/1.0/issue/rank                                                                                                 |
+| 6. Create version 1.0 and assign three stories  | 4      | POST /rest/api/2/version; PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey} |
+| 7. Start the first sprint                       | 1      | POST /rest/agile/1.0/sprint/{sprint1Id}                                                                                        |
+| 8. Complete the sprint and move unfinished work | 2      | POST /rest/agile/1.0/sprint/{sprint1Id}; POST /rest/agile/1.0/sprint/{sprint2Id}/issue                                         |
+| 9. Release version 1.0                          | 1      | PUT /rest/api/2/version/{versionId}                                                                                            |
+| 10. Read the sprint report                      | 0      | keine                                                                                                                          |
+| 11. Create and delete an empty sprint           | 2      | POST /rest/agile/1.0/sprint; DELETE /rest/agile/1.0/sprint/{createdSprintId}                                                   |
+
+### Entwicklung
+
+| Schritt                                 | Writes | Signatur                                                      |
+| --------------------------------------- | ------ | ------------------------------------------------------------- |
+| 1. Read my current sprint issues        | 0      | keine                                                         |
+| 2. Assign a story to myself             | 1      | PUT /rest/api/2/issue/{issueKey}/assignee                     |
+| 3. Start the story                      | 1      | POST /rest/api/2/issue/{issueKey}/transitions                 |
+| 4. Log two hours                        | 1      | POST /rest/api/2/issue/{issueId}/worklog?adjustEstimate=leave |
+| 5. Comment on the story                 | 1      | POST /rest/api/2/issue/{issueKey}/comment                     |
+| 6. Create a subtask                     | 1      | POST /rest/api/2/issue                                        |
+| 7. Create a blocking bug                | 2      | POST /rest/api/2/issue; POST /rest/api/2/issueLink            |
+| 8. Finish the story with a resolution   | 1      | POST /rest/api/2/issue/{issueKey}/transitions                 |
+| 9. Watch the story                      | 1      | POST /rest/api/2/issue/{issueId}/watchers                     |
+| 10. Attempt to delete the future sprint | 1      | DELETE /rest/agile/1.0/sprint/{sprint2Id}                     |
+
+### Technikverantwortung
+
+| Schritt                                        | Writes | Signatur                                                                                             |
+| ---------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------- |
+| 1. Create the Backend component                | 1      | POST /rest/api/2/component                                                                           |
+| 2. Assign the component to three stories       | 3      | PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey} |
+| 3. Link two stories with a blocking dependency | 1      | POST /rest/api/2/issueLink                                                                           |
+| 4. Read blocked issues                         | 0      | keine                                                                                                |
+| 5. Label two stories as tech debt              | 2      | PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey}                                   |
+| 6. Move a story to the other epic              | 1      | POST /rest/agile/1.0/epic/{epicId}/issue                                                             |
+| 7. Estimate three stories                      | 3      | PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey}; PUT /rest/api/2/issue/{issueKey} |
+| 8. Read unfinished version work                | 0      | keine                                                                                                |
+| 9. Attach the pull request                     | 1      | POST /rest/api/2/issue/{issueId}/remotelink                                                          |
+
+## Formal rules and knowledge-grounded authoring through the visible UI
+
+The AC1/AC2/AC4 source journey uses ordinary skill upload, validation and selection,
+Pod creation and connection, source selection, indexing, the composer and exact
+approvals. Supply the actual configured chat and embedding model identifiers and
+an existing seeded `REQ` board:
+
+```sh
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  npm run jira:lab:browser-rules-knowledge -- /absolute/private/session actual-model-id \
+  actual-embedding-model-id existing-REQ-board-id
+```
+
+The group checks refused and corrected Epic writes in all three modes; Task, Bug
+and subtask writes use Ask for approval. A prose skill must create no enforcement
+record or formal refusal. The parent-type clause must reject an Epic as a subtask's
+parent and accept its intended Task. Independent native reads check required
+fields, exact types and the Subtask → Task → Epic relations.
+
+Supported documents and folders are selected and indexed in the actual Knowledge
+UI before model-assisted Epic creation. Native Jira readback checks readable
+descriptions and meaningful document/page/section references; visible Epics and
+board backlog rows are evaluated separately. Keys and links must survive reload.
+An exclusive persisted intent prevents replay after an interrupted run; this group
+does not reset or clean up Jira. These authored sources still require current-head
+live execution and do not establish acceptance by themselves.
+
 ## Complete paginated search through ordinary Chat
 
 After the same licensed HTTPS/read/write preflight, use the existing seeded project with
@@ -82,12 +378,60 @@ node scripts/testing/jira-chat-lab/session.mjs status "$HOME/.local/share/keiko-
 ```
 
 Every initialization creates an independent Compose project, persistent volumes,
-three independent private passwords, and a private seven-day development CA and
-server certificate under `secrets/tls`. The frontend container receives only its
+three independent private passwords, and a private 365-day development CA and
+server certificate under `secrets/tls` (renewed by `session.mjs start` when seven days or less remain). The frontend container receives only its
 server key/certificate as read-only mounts; the CA key remains on the host. System
-trust is unchanged. HTTP administration uses port 18081 (an optional final `init`
-argument changes it); product-path qualification uses HTTPS port 18443. Stop the
-previous session before starting another frontend on that port.
+trust is unchanged. HTTP administration defaults to port 18081; product-path
+qualification defaults to HTTPS port 18443. The existing initializer also accepts:
+
+`session.mjs init <private-directory> [http-port] [https-port] [exact-jira-version] [sha256-hex]`
+
+Supply version and digest together; the digest is 64 lowercase hexadecimal
+characters without a `sha256:` prefix. The repository remains fixed to
+`atlassian/jira-software`. New manifests persist the complete HTTPS/version/digest
+binding. Old manifests retain the original defaults without being rewritten;
+partial or malformed pins are refused. Start, stop and status use the saved
+manifest and accept no port/image overrides.
+
+Start and runtime service inspection refuse a foreign running Compose Jira
+service before proceeding. Docker inspection failures also refuse the start.
+Separate sessions own separate projects, ports and licenses, so an operator may
+declare side-by-side runs with the exact `KEIKO_JIRA_LAB_PARALLEL=allow`, for
+example the model-free API qualification beside one model-driven run; Docker must
+still answer, and any other value keeps the window exclusive.
+Stopping the owned session remains available. This check supplements the
+coordinated exclusive window; it never stops another operator's containers.
+
+Use a new private directory, separate Compose project/volumes and unused distinct
+HTTP/HTTPS ports for each release. Never reuse an existing Jira data volume for
+another release or stop another session to free its port. The TLS listener and its
+outside/inside port match, preserving the exact Host guard. Runtime inspection
+checks the selected image ID/repository digest and owned listener bindings. Normal
+production verification must independently observe the exact saved native Jira
+version; an image tag alone is insufficient.
+
+Parameterization does not establish live compatibility. Session isolation does not
+replace the coordinated machine/Gateway window.
+
+Official Registry metadata was read on 2026-11-08 without pulling image layers or
+starting containers. The following `linux/arm64` child-manifest bytes matched their
+immutable digest, preserving the default laboratory's platform. These are prepared
+image selections, not evidence that Jira or any operation ran successfully:
+
+| Exact release / official manifest                                                                                                                    | ARM64 SHA-256 (without prefix for `init`)                          |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| [10.4.0](https://registry-1.docker.io/v2/atlassian/jira-software/manifests/sha256:56e6ea7ef5915b8c1f01e8161b17409fc0a32267e4425543ace0c888d49ff6a2)  | `56e6ea7ef5915b8c1f01e8161b17409fc0a32267e4425543ace0c888d49ff6a2` |
+| [11.2.1](https://registry-1.docker.io/v2/atlassian/jira-software/manifests/sha256:8c61da4dbb35444793a080b63c75639886688c2fb253c3ba88f7d77826f32d83)  | `8c61da4dbb35444793a080b63c75639886688c2fb253c3ba88f7d77826f32d83` |
+| [11.3.13](https://registry-1.docker.io/v2/atlassian/jira-software/manifests/sha256:68d5536e2e1278d3fd94060dd9dcecfaf776c17ab6b78919afc7ea516e187ad3) | `68d5536e2e1278d3fd94060dd9dcecfaf776c17ab6b78919afc7ea516e187ad3` |
+
+The existing 10.3.26 digest remains available and unchanged. Its current tag points
+at a different index; that moving tag is never substituted for the saved pin.
+The direct connection probe additionally accepts the private session directory:
+
+`verify-connection.mjs <private-PAT-file> <private-TLS-directory> [private-session-directory]`
+
+Omitting that directory preserves the historical default release/HTTPS invocation.
+The ordinary preflight, Chat and browser groups use their loaded session binding.
 
 Save the published Jira Software Data Center test license in a private regular file
 (mode 0600) outside the repository, then run the normal first-run setup:
@@ -123,7 +467,53 @@ the containers at that boundary, because two lanes outlast one license.
 
 `session.mjs stop <directory>` stops only that manifest’s containers and retains
 its volumes. This harness does not delete existing laboratories or renew licenses
-in the background. Use a new directory/project for an independent session.
+in the background. Before a live or model-free product run, the existing lane lock
+checks a 45-minute run window plus five minutes of margin and restarts only the
+owned lab, at that boundary, if the published test license needs renewal. Another
+active lane blocks that restart. Docker must be available to perform renewal;
+a failed renewal withholds the run. Use a new directory/project for an independent session.
+
+The same preflight requires at least twelve hours of native PAT validity for each
+seeded actor, renews a nearly
+expired fixture PAT with that actor's existing basic credentials, verifies the
+replacement by native identity and token readback, then retires only its predecessor.
+Creation, promotion and retirement hold the same exclusive lane lock as license
+renewal; any active lane delays them. The returned PAT is synchronized privately
+in `<actor>-token.next` before any readback, together with its native id and
+nonce-bound creation intent. `<actor>-token.json` binds the promoted raw file to
+its native id and digest; the pending marker records creation and retirement.
+
+Preflight reconciles these records automatically: a staged candidate is verified
+by native inventory, expiry and actor identity before promotion; interrupted
+retirement is retried only for the bound predecessor id. A lost creation response
+is compensated only when the nonce and prior-id inventory identify exactly one
+owned orphan, with native absence verified before a replacement POST. A missing
+pending marker is reconstructed from the complete private `.next` bundle. A
+marker alone never authorizes another creation. If no creation is observed, an
+existing credential may continue only while its native proof covers the requested
+window; otherwise preflight refuses with `creation-not-observed`.
+
+To run the same recovery explicitly, at an idle boundary:
+
+```sh
+node scripts/testing/jira-chat-lab/fixture-tokens.mjs /absolute/private/session actor 43200
+```
+
+A corrupt or ambiguous intent, or an old raw `.next` with no recoverable id
+binding, fails closed with a specific recovery reason. Preserve these files;
+reconcile the owned native token inventory before any manual repair. Never print
+token contents or remove a pending marker to replay a POST. Renewal completes
+before Keiko binds the credential, never halfway through a turn.
+
+New lab CA and server certificates last 365 days. `session.mjs start` renews existing
+TLS material with seven days or less remaining and recreates only the owned TLS
+front after renewal so the new certificates are served. A partial publication or
+mismatched key/certificate generation is refused and regenerated as a complete
+validated generation on the next start; symlink targets are refused before any
+write. The run preflight refuses
+a TLS interval shorter than its run window; restart the owned session at an idle
+boundary before retrying. Each retained product state has its own `memory/` directory
+via `KEIKO_MEMORY_DIR`; it never shares the user's ordinary Memory store.
 
 ## Seed and inspect basic fixtures
 
@@ -185,10 +575,13 @@ node scripts/testing/jira-chat-lab/verify-connection.mjs \
 ```
 
 The PAT must be a private regular file. The harness invokes the production custody,
-encrypted vault, HTTP adapter and domain verifier, then removes its temporary vault.
-It checks trusted HTTPS, rejection without CA trust, and refusal after exact admission
-is removed, using the same already-created HTTP port throughout. It emits only closed
-outcomes. This probe alone does not qualify mutations, model calls or Chat UX.
+encrypted vault, explicit connection verification and HTTP adapter, then removes its
+temporary vault. The saved Data Center URL is sufficient: its address class is bound
+automatically during verification and retained privately. No `privateTargets` entry or
+global private-network setting is added. The probe checks trusted HTTPS, rejection
+without CA trust, and successful reuse of the saved connection after restoring trust.
+It emits only closed outcomes. This probe alone does not qualify mutations, model calls
+or Chat UX.
 
 ```sh
 node scripts/testing/jira-chat-lab/preflight.mjs "$HOME/.local/share/keiko-jira-4081-new"
@@ -203,18 +596,28 @@ remote effects by read-only inspection before removing that marker. Never assume
 transport failure means a mutation was not committed. Finish each group with a license
 check; an interrupted or expired-license group is not acceptance evidence.
 
-The equivalent operator-owned configuration is:
+The generated development CA still needs the ordinary configured trust setting:
 
 ```json
 {
-  "atlassian": {
-    "privateTargets": [{ "baseUrl": "https://127.0.0.1:18443", "addressClass": "loopback" }]
+  "egress": {
+    "caBundlePath": "/absolute/private/session/secrets/tls/ca.pem"
   }
 }
 ```
 
-Use the existing gateway `egress.caBundlePath` setting for the generated `ca.pem`.
-Never disable certificate validation or enable global private-network access.
+This is certificate trust, not a second address approval. A connector with a certificate
+already trusted by the configured runtime needs no extra trust file. Never disable
+certificate validation or enable global private-network access. The connector remains
+bound to the exact saved HTTPS origin, port and context path; metadata/link-local targets,
+Keiko's own listener ports and redirects remain refused.
+
+A newly completed Jira setup can be `RUNNING` and licensed while still having zero
+projects or fixture users. Run the basic seed before claiming a Live Pod has useful test
+data. The seed's non-admin PAT, project/issue readback and permission checks are distinct
+from Docker health, and a successful connection probe is distinct from a complete Chat
+or mutation qualification. Keep passwords and PATs in the existing private session files;
+never copy the administrator credential into a product config or qualification receipt.
 
 Checkpoint (2026-10-26): the fresh licensed instance passed basic PAT/non-admin,
 three-create/three-read and repeat-seed checks. All three production HTTPS probes
@@ -318,6 +721,141 @@ model answer. There are no mocked browser, model or Jira transports.
 Stage diagnostics contain no request bodies or credentials. Screenshots stay in
 the private synthetic session directory. A failed or license-budget-rejected run
 is not a completed journey; repeat the entire group in a valid session.
+
+## AC7 ledger publication
+
+`api-qualification-ledger.mjs` publishes one complete model-free run on its exact
+clean source revision. Run it in the existing verification container after all
+439 identities have qualified, with the private report path mounted there:
+
+```sh
+docker exec -e KEIKO_OS_KEYCHAIN=off -w /absolute/checkout CONTAINER \
+  node scripts/testing/jira-chat-lab/api-qualification-ledger.mjs \
+  /absolute/private/session/api-qualification-RUN/qualification-VERSION-RUN.json
+```
+
+The driver records a per-case source/run/release/image binding, the closed
+product result, receipt, journal and independent readback. Only an unchanged
+source and a zero-unknown final report receive `phase: complete`. Publication
+regrades every row with the same evidence classifier and checks its tool effect
+against the inventory. Missing or duplicate identities, mixed runs, model calls,
+open reconciliation markers, native validation errors and unapproved policy
+proposals withhold the ledger. Old partial reports cannot be upgraded by adding
+references. No cross-head or cross-run pooling is supported.
+
+The writer archives only counts, closed native statuses and readback digests,
+then atomically replaces the ledger using the existing synchronized private-file
+writer. References point into that committed body-free archive. A failed archive
+publication leaves the previous ledger intact; an already identical archive can
+be reused on recovery. Case bodies remain in the private run directory. The
+export is `writeQualificationLedger({ ledgerPath, reportPath, sourceRevision })`;
+the CLI additionally verifies the clean repository before publication. An
+independent readback never turns `malformed-payload` or `not-found` into native
+success. Failed/unconfirmed writes qualify only with native 2xx, the matching
+settled journal and receipt, reason `unavailable`, and a nonvacuous readback.
+
+### Grading, measured proof and causes (#4327)
+
+- **Measured assertions.** Every recipe, fixture and oracle helper imports
+  `api-qualification-assert.mjs`, a drop-in for `node:assert/strict` that counts the
+  assertions that held. The driver resets the counter around each readback and persists
+  `readback.measuredAssertionCount`; `executable`, `denied` and `unavailable` evidence needs
+  it above zero. The recipe's declared `proof(n)` is only a documentation hint and can no
+  longer satisfy the grader.
+- **`priorPresence`.** A DELETE whose product read answers "not found" qualifies only when
+  the recipe measurably read, natively before the dispatch, the exact object the DELETE removed:
+  one of `readback.presenceReadPaths` (pathnames recorded by `read()`) must equal the pathname the
+  witness saw the DELETE use. Shared transport helpers use the uncounted `plumbingAssert`, so only
+  assertions the recipe's own readback makes count toward `measuredAssertionCount`.
+- **Documented non-2xx.** A read may declare an exact documented status set with
+  `documentedStatusProof` (`readback.documentedNativeStatuses`). The grader accepts only the
+  closed allow-list `[404]`, only for reads, only when the witness observed exactly those
+  statuses and the oracle independently proved the state (`GET /rest/api/2/reindex` before any
+  reindex task ran). 405 stays reserved for proven capability absence.
+- **Non-clustered 405.** `GET /rest/api/2/cluster/nodes` grades `unavailable` only when the
+  lab actor's own native read answers the identical 405, the running release is observed
+  again, and the readback carries `capabilityAbsent` (`nonClusteredAbsence`); the lab Jira is a
+  single node by construction. The release inventory path does not apply because the route is
+  published for 10.3.
+- **Causes.** Every row that is not graded keeps its disposition (unknown stays unknown and
+  `applyQualificationReport` still refuses it) and gains a closed `cause`:
+  `product` (a local product refusal before dispatch, or Keiko failed while Jira answered
+  2xx), `lab` (preparation, fixture, argument-builder or oracle fault), `cascade` (with
+  `blockedBy`: the auxiliary fixture tool or earlier case that failed), `infrastructure`
+  (a transport signal such as ECONNRESET, or 408/425/429; a 5xx or timeout alone stays
+  `undetermined` unless the lab's own health read also fails), `not-attempted` and `undetermined` (Jira refused Keiko's
+  request, or the oracle disagreed after a native 2xx). Evidence also carries the closed
+  failure word (`product-refused` for a refusal before any native request, `outcome-refused`,
+  `result-unavailable` for a settled dispatch without any outcome, which is never blamed on the
+  product, `oracle-read-refused`, `dispatch-failed` with recipe/product frame sites and error type),
+  the product's closed `outcome`/`reason`, and the Jira status class. No raw Jira text is
+  persisted. The report summary adds `causeCounts`; the console summary prints them.
+- **Cascades and order.** Cases may declare `dependsOn` (tool names). The driver runs a root
+  case before its dependents in a deterministic stable order, and a dependent of a root that
+  did not qualify is recorded `blocked-by-root` as a cascade instead of being dispatched.
+- **Certain effects do not stop the run.** A mutation whose journal settled with a native 2xx
+  the witness itself observed but whose oracle mismatched is recorded unknown with
+  `certainEffect: true` and cause `undetermined`; dependents cascade and the run continues.
+  The witnessed response count must equal the started effects, and the case id is listed in
+  `report.leftoverState`. A row where the product succeeded after a native 2xx but the oracle
+  disagreed also carries `suspect: "product"`, counted in `report.suspectCounts`. An unsettled or
+  unknown journal, 408/425/429/5xx and a lost transport still raise
+  `ReconcileRequiredError`, and the pending intent is never removed or replayed.
+
+## Limit-run fault plan (Amendment 3)
+
+`browser-bulk-fault.mjs` exports exactly
+`createFaultPlan({ scope, at, kinds })`, returning `{ maybeInject(ctx, progress01) }`.
+The closed scopes are `bulk-epics`, `hierarchy` and `progress`. Threshold/kind
+pairs stay together; the normal plan pairs `0.4` with `response-drop` and `0.8`
+with `server-kill`. Call before the next ordinary unit to arm a drop and again
+after independently observing and recording the completed unit. Call once more
+at progress `1` and include that StepResult in the block's final grade. A pending,
+skipped or unverified fault check must never be ignored when grading the run.
+
+F records only through `ctx.intent.record("faults", value)`. Each
+`<scope>:<kind>` key is reserved as `injecting` before an effect. Any existing key,
+including an interrupted or skipped record, prevents another injection. The
+existing private intent stores native issue identities and summary/state digests;
+summary bodies and exception contents are absent. F writes no other journal and
+does not modify another block's checkpoint.
+
+A response drop targets only the signed-in loopback page's ordinary Chat POST
+routes. It forwards the original request once with redirects and retries disabled,
+then aborts the browser response with `connectionreset`, disposes the fetched
+response and removes only its own handler. GETs and other origins cannot consume
+it. F never sends a prompt or retries a turn. The block and product retain their
+normal canonical resume path. Cancellation removes the handler; a response
+already forwarded is delivered from the fetched response rather than forwarded
+again. If forwarding fails, the paused request is closed without a retry and the
+fault remains unverified.
+
+Server crashes go exclusively through
+`ctx.recovery.restartServer({ signal })`. The orchestrator owns its process,
+SIGKILL, same-state restart, health wait, page reload and launcher pairing. F
+requires `{ restarted: true, downtimeMs }`; it neither discovers nor kills a PID.
+A missing handle records `skipped` / `recovery-unavailable` and stays `unverified`,
+also if a handle appears later. F does not arm a missed fault after the final unit.
+
+Fresh `ctx.search` reads the complete target project through the existing native
+JQL owner; `ctx.read` verifies its native project identity. Known issue keys/IDs
+in intent and the pre-fault native population must remain present with the same
+summary. Recorded `sprintId` or `sprint.id` values additionally trigger complete
+Agile membership readback through the existing paginator. This preserves observed
+membership prefixes across more than three pages. Completed-unit cursors in
+`bulkEpics`, `hierarchyBulk`, `progressSimulation` and `sprintBulk` must not regress.
+A progress argument alone cannot prove recovery: new native units (creation
+scopes), or changed native issue/sprint state (progress scope), must corroborate
+continuation. Recovery is recorded only after those facts agree. A second pending
+fault cannot overtake an unresolved first one.
+
+StepResult contains the closed step/status/detail and numeric `injected`,
+`recovered`, `duplicates`, `lost` counts. Missing handles or evidence stay
+`unverified`; observed duplicates or lost records are `red`. Only a complete,
+freshly reverified fault plan can be `green`. The hermetic factory tests use an
+in-memory intent, fake page routing and the bound recovery stub; they include a
+370-unit sequence and multi-page sprint membership. They are not live crash or
+model qualification.
 
 ## Ordinary Chat response-loss and restart qualification
 
@@ -681,6 +1219,27 @@ KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
 
 The probes of S05, S07, S08 and S09 prove `fields-writable` by writing. `field-writes.mjs` takes every field Jira lists for the issue type on create and on edit, writes it alone through Keiko's production mutation path into its own project `FLD`, and reads it back from Jira. Comment, attachment and link take their own calls and must land the same way. Jira's own refusal of a value, such as a sprint on a sub-task, is listed in the check's detail and does not count against Keiko. A refusal that never reached Jira, a failure after the write, or a value Jira did not keep turns the scenario red.
 
+A scenario is `green` only when every obligation is covered AND its end-to-end journey is green;
+probes that cover everything beside an `unverified` journey leave it `partial`. A check the
+laboratory cannot trust is `invalid`, never `red`: a native-Jira, fixture, license or transport
+exception (`lab-error`), a model that fails a short readiness turn before the journey while the
+Activity Log of that turn shows an infrastructure failure or the error is a transport signature
+(`model-unavailable`), and a non-green journey during which the gateway failed (`gateway-failure`). Infrastructure failure is read from the Activity Log lines of this server
+process inside the window, grouped by correlation: a `gateway.chat.failed`/`gateway.stream.failed`
+correlation that contains `gateway.retry.exhausted` or a `gateway.circuit.*` event; circuit events alone are only reported. A readiness-turn deadline abort (by error name) is `model-unavailable`. A failure with neither (context overflow, refused attempt) is a product
+outcome and stays red. A failed Keiko route (`Live Chat HTTP stage failed`, also from the readiness
+turn when no outage is shown) is red with reason `product-route-failed`. A green journey stays
+green. Any red check decides the scenario before invalid. `latest.md` and `trend.tsv` carry an
+`invalid` column; a run with any invalid scenario is labelled `INVALID RUN` / `validity=invalid`
+and is not a data point (an older trend file with another layout is kept aside).
+`modelUnavailable` (`journeys.mjs`) and `isTransportFailure` (`validity.mjs`) are reusable by other
+lanes.
+
+`--repeat N` (default 1, at most 20) runs every journey N times in fresh Chats. Each scenario
+reports every run, the pass rate over valid runs and the invalid count (shown next to the status).
+It is green only when every valid run is green and at least ceil(N/2) runs are valid, red when a
+valid run is red, otherwise invalid (`insufficient-valid-runs`).
+
 The scorecard writes `requirements-scorecard/<timestamp>.json`, `latest.md` and `trend.tsv` into
 the private session. Before a group it checks the remaining license time: the published test
 license counts from Jira's start, so `requirements/license-window.mjs` stops and starts the
@@ -694,6 +1253,52 @@ PowerPoint, PDF) carries all of it; `jira-lab-corpus-documents.test.mjs` extract
 out of each format and compares them, including the v1 to v2 changes, with the truth; `STRUCTURE_RULES` is the lab's stand-in for the issue
 templates a project lead defines. Lab code may know Jira Software's field schemas to seed ground
 truth; the product under test may not.
+
+## Baseline templates: every lab write is governed (#4369, #4354)
+
+The product refuses a Jira write that no stored template governs. The existing lab lanes write
+without a template of their own (the document lanes, the project and role journeys, catalog Chat,
+the selection write cases, the restricted cases and the whole model-free AC7 driver), so one module
+keeps them working: `requirements/baseline-templates.mjs`.
+
+- **What it seeds.** At every lab product start, one fixture template per lab project and per issue
+  type that project has, imported through the product's own skill library routes (the path
+  `withTemplate` uses) and read back from the listing. Each template is named `Lab baseline <PROJECT>
+<Issue type>`, activates on `[create, edit]`, and carries one rule that no Jira summary can break
+  (`summaryMaxLength: 255`; the parser requires at least one rule). A plain activation governs every
+  write of that project and type under the current and the planned contract; `transition:<target>`
+  only adds rules for entering one status.
+- **Where it runs.** The templates live in the product's skill library, which is per product
+  instance, so the hook is the product start in `chat-read.mjs` (`runLabProduct` and the owned-child
+  path), shared by the Chat lanes and the model-free `withModelFreeJira`. A retained state that
+  already holds a pair is left untouched (idempotent); a missing pair is imported.
+- **Projects and issue types** are read natively as the lab administrator on every start
+  (`GET /rest/api/2/project`, then each project's `statuses`), bounded to 100 projects, 50 types per
+  project and 96 pairs in all (the library holds 128 skills). A listing that cannot be read or a
+  library that does not list every pair afterwards fails the lane as a lab error, never silently.
+- **Lab instances only.** The seed asserts `KEIKO_OS_KEYCHAIN=off` and a state directory the lab
+  created itself (`keiko-jira-live-chat-*`, under the session or the OS temporary directory). It is
+  never written into a real state directory.
+- **Journeys that install their own templates** keep them in full: the product ANDs every governing
+  template, so the rule-free baseline never narrows a journey's rules, and the journey's cleanup
+  removes only its own template.
+- **Opting out.** A lane that proves "no template governs" starts without the baseline. The
+  per-call option `baselineTemplates: false` (default on) exists on `withLiveChat` and
+  `withModelFreeJira`, so one journey of a run can differ from the others; the environment value
+  `KEIKO_JIRA_LAB_BASELINE_TEMPLATES=off` is the global switch and wins over a `true` option.
+  `withBaselineSuspended(request, projects, body)` removes the baseline for the duration of `body`
+  and seeds it again, verified, afterwards; it is for a journey that must switch inside one product
+  instance and is not wired anywhere.
+- **Effect before #4354.** The baseline adds no refusal: a template that cannot be violated changes
+  no verdict. It is not free of side effects, though. A template that activates on `create` switches
+  on the product's draft preflight (`firstJiraDraftTemplateRefusal`), which reads Jira once per draft
+  item before approval. A lab draft therefore causes extra native Jira reads (the create metadata
+  and field catalog) and a different read order. Writes, their dispatch count and their order are
+  unchanged. Of the lane observers, only `consent-lifecycle` counts reads (`GET` of one issue key)
+  and `pagination-chat` inspects search pages; neither observes the reads the preflight adds, and
+  the write witnesses (`restricted-cases`, the project-agile witness, the AC7 runtime) let `GET`
+  requests pass uncounted. A new lane that counts or orders native Jira reads of create drafts must
+  start without the baseline. After #4354 the baseline is what lets the existing lanes write.
 
 ## Moving the laboratory to the next Jira Data Center release
 
@@ -714,3 +1319,391 @@ and the requirements scorecard with a model. Compare the new scorecard with the 
 `trend.tsv`; a changed REST schema, permission refusal status (the content seed records Jira's
 400 for a denied write) or field schema shows up there first, and the oracles that name such a
 detail are the lab code to adjust. Product code never gains a version-specific branch for it.
+
+## Reusable limit-run blocks
+
+The orchestrator imports these six async exports directly:
+
+- `installTemplates(ctx)` from `templates.mjs`.
+- `runRuleProbes(ctx, { modes })` from `browser-rules-knowledge-journey.mjs`.
+- `runProjectSetup(ctx, { deniedActor: true })` and
+  `runSprintBulk(ctx, { size: 300, batch: 50 })` from `browser-project-agile-journey.mjs`.
+- `assertCardsReadable(ctx, { reload: true })` and `setUiLanguage(ctx, "de" | "en")`
+  from `browser-a11y.mjs`.
+
+All blocks use the runtime `ctx.projectKey`, the orchestrator's existing Chats and
+`ctx.turn(chat, prompt, extra)`. State is stored only through `ctx.intent.record`.
+Project setup requires the separate verified restricted `ctx.deniedChat`; its
+absence returns `unverified` with `denied-chat-unavailable`. No block creates or
+rebinds a Chat or persists a PAT value.
+
+Sprint bulk selects 200–300 existing unfinished backlog Tasks, records their exact
+identities and moves them in batches of at most 50. The native oracle compares
+more than three membership pages, both full-size lifecycle refusals, five Done
+Tasks and the remaining backlog after completion. It creates no issues: 200 Tasks
+require 12 writes, 300 require 14. Unconfirmed receipts remain `unverified`.
+Card checks use the ordinary Settings language control, reject raw JSON and
+generic result rows, require zero serious/critical axe findings and compare keys,
+links, history and native state across reload without replay. Hermetic tests are
+not live Jira/Keiko/model acceptance; the integrator owns that coordinated run.
+
+### License window of the limit run
+
+The published three-hour test license is shorter than a full limit run. At each step boundary
+(never inside a step or a browser turn) `browser-limit-run.mjs` therefore calls the scorecard's
+`renewLicenseWindow` (`requirements/license-window.mjs`) with the step's minimum
+(`limit-run-license.mjs`): 1800 seconds by default, 7200 for `ac2-epics`, 5400 for `ac4-hierarchy`,
+`ac6-sprint` and `progress-simulation`, and 3600 for `ac3-report`. If less remains, the owned
+session is restarted normally (`session.mjs stop` then `start`, its own compose project only, which
+opens a new window; never clocks, licensing code or data) and the run continues once Jira reports a
+valid license. Keiko and the browser keep running: the Jira Pod sends its stored PAT on every
+request to the unchanged lab origin, and the PAT lives in the retained database. A renewal waits
+for other active lanes of the same session directory, and a failed renewal or a window that is
+still too short stops the run. Each restart is recorded in the run intent as `licenseRenewal`
+(`phase`, `count`, `step`, `remainingBefore`, `remainingAfter`, `downtimeMs`). A side-by-side lab
+of another project is never touched; starting this session beside it needs the exact
+`KEIKO_JIRA_LAB_PARALLEL=allow` for the restart too.
+
+## Selective follow-up steps: Story and Coding Workbench
+
+`browser-limit-run.mjs` always runs every step and reserves `browser-limit-run.pending.json`
+exclusively, so it cannot be started again for the same session. Two steps that the limit run does not
+cover run afterwards, on the finished run's retained product state, without repeating any earlier step:
+
+```bash
+node scripts/testing/jira-chat-lab/browser-limit-followup.mjs \
+  <session-dir> <model-id> <embedding-model-id> <permitted-token-file> <denied-token-file> \
+  <LIM-project-key> story,coding-jira
+```
+
+The first six arguments are exactly those of the limit run. The last one selects the steps, `story`,
+`coding-jira` or both (always in that order); each step may be selected alone and run again. The
+follow-up refuses to start unless `browser-limit-run.pending.json` is `completed` with
+`steps-verified`, green `ac2-epics` and `ac4-hierarchy`, and the same inputs. It reopens the retained
+state directory, the three Chats and both Pods, copies the finished run's state into its own
+`browser-limit-followup.pending.json` and never rewrites the original file. An interrupted follow-up
+resumes from its own checkpoints; it never replays a write whose outcome is unknown. It takes the same
+`browser-limit-run-owner` lock, so it cannot overlap a limit run. The Jira license window of 30 minutes
+and an idle Jira laboratory, model and Keiko instance are required, as for the limit run.
+
+**`story` (`ac4-story`), about 25 to 40 minutes.** A project lead's templates come first: through the
+Skills dialog the step installs a `Story` template (sections Nutzerziel, Akzeptanzkriterien,
+Definition of Done, Epic link required) and replaces the limit run's `Sub-task` template, which admits
+only a Task parent, by the same template with `parentIssueTypes: ["Task", "Story"]`. Only a template
+byte-identical to what the limit run installed is replaced; any other content stops the step as
+`unverified`. Then two ordinary Chat turns in the document Chat (Lastenheft Knowledge Pod plus Jira
+Pod) create three Stories under the Epics of three requirements that carry at least two acceptance
+criteria, and then one Sub-task under each Story. Summaries are `[REQ-...] [ST-n] <title>` and
+`[REQ-...] [ST-n-S1] <title>`. The oracle reads Jira over REST and asserts: issue type `Story` and
+`Sub-task`; Epic link of every Story; `parent` of every Sub-task, whose parent type is `Story`;
+template sections and required create fields of both types; the product's own Keiko traceability
+footer with the requirement id and source; every acceptance criterion verbatim, once, with none
+invented; zero duplicate keys, ids, summaries or draft identities; zero Story or marked issue outside
+the plan. A partial or unknown earlier write is `unverified`, never repeated.
+
+**`coding-jira` (`ac10-coding-jira`), about 10 to 20 minutes.** A second, headless browser pairs with
+the same Keiko instance, opens the Coding Workbench on the lab workspace, selects the model, Full
+access and `Jira: Limit Run Jira`, and starts a run through the ordinary UI that asks for the number
+of Epics and the first five Epic keys without editing anything. It is green only if the run succeeded,
+its answer states the exact Epic count and all five lowest keys that a Jira REST readback holds, Jira
+itself is unchanged (same issues, same update times), and the Activity Log holds, inside the run, a
+`coding-runtime.jira-pod` `bind` line, at least one completed `jira-read` `call` line and no
+`jira-write` line. That operation is emitted only by Coding runs, so it proves the Jira tool was
+called from the Coding surface. A Keiko without an available coding runtime reports `unverified`
+(`coding-runtime-unavailable`), not green.
+
+Evidence: `story-bulk.json` and `coding-jira.json` in the session directory (counts only) and the
+results in `browser-limit-followup.pending.json`. The earlier `ac4-hierarchy` oracle counts a Story as
+unexpected, so do not run the limit run's hierarchy step against a project that holds these Stories.
+Hermetic tests: `scripts/__tests__/jira-lab-story-bulk.test.mjs`, `jira-lab-story-templates.test.mjs`,
+`jira-lab-coding-jira.test.mjs` and `jira-lab-limit-followup.test.mjs`; they are not live acceptance.
+
+## Release 1 lab: fixtures, German session, private address, renewal (#4369)
+
+**Which fixtures a fresh session holds.** `node release-1-fixtures.mjs <session> --inventory` reads them
+natively and prints closed facts; a missing fixture reads `false` or `0`, never an error.
+
+| Need of the Release 1 walk                                          | Provided by                                                                                      | Inventory fact                                     |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
+| A restricted second identity (reads `ISOLATED`, refused on `KEIKO`) | `seed.mjs` (restricted PAT) and `seed-permissions.mjs`                                           | `restrictedSecondIdentity`                         |
+| A required custom field (`Keiko required text`)                     | `qualify-fields.mjs`                                                                             | `requiredCustomFieldOnCreate`                      |
+| The required field on a transition screen (Done)                    | `qualify-fields.mjs`                                                                             | `requiredFieldOnTransitionScreen`                  |
+| Pagination volume beyond three pages of 100                         | `LRG` of `requirements/seed-projects.mjs` (2,490 issues) and the 21 issues of `seed-content.mjs` | `paginationIssues`, `paginationMoreThanThreePages` |
+| A project whose issue types differ in their estimate field          | `requirements/seed-estimate-mix.mjs` (`EST`)                                                     | `estimateMixTypes`                                 |
+| Epic Link and Parent Link side by side                              | `requirements/seed-parent-fields.mjs` (`PAR`)                                                    | `parentFieldsSideBySideTypes`                      |
+| A German-language Jira                                              | `seed-language.mjs`                                                                              | `language`                                         |
+
+`node release-1-fixtures.mjs <session> [--language de]` completes a seeded session with the last three in
+the one order that works and prints the inventory. Seed first (`seed.mjs`, `qualify-fields.mjs`,
+`seed-content.mjs`, `requirements/seed-projects.mjs`, `requirements/seed-estimates.mjs`).
+
+- **`EST` (estimate mix).** A project created from the Scrum template through REST offers Story Points on
+  Epic and Story only, through the field's own Jira Software context. The seed adds Story Points to the
+  default screen and time tracking to the Bug screen alone, so one project holds three shapes: Epic and
+  Story carry Story Points, Bug carries Original Estimate, Task and Sub-task carry no estimate field.
+  `<session>/estimate-mix-truth.json` holds, per type, what Jira's create metadata offers and the
+  `estimated`, `unestimated` (offered but empty) and `notApplicable` counts, read back natively. A report
+  that stops at the first issue of a type without the field, or that counts "not applicable" as
+  unestimated, is graded against it.
+- **`PAR` (parent fields).** Epic Link (Jira Software) and Parent Link (Advanced Roadmaps,
+  `com.atlassian.jpo:jpo-custom-field-parent`) are found by schema type and offered together on Epic,
+  Story, Task and Sub-task; Bug keeps Epic Link only. An instance without the Parent Link type fails the
+  seed closed: the lab never stands in for it with a text field of the same name.
+- **German session.** Jira Data Center localizes per user, and Keiko acts as the lab actor whose token it
+  holds. `seed-language.mjs <session> de` sets `de_DE` for every actor except the administrator through
+  `PUT /rest/api/2/mypreferences?key=jira.user.locale` (the body is the bare locale text) and proves it
+  by native reads: statuses read `Zu erledigen`, `In Arbeit`, `Fertig`. `en` restores the default. The
+  administrator stays English because the lab's administration automation drives labelled English pages,
+  and the German locale is applied last: `qualify-fields.mjs` failed on localized names (observed
+  2026-11-13). The report counts by status and the JQL by issue type name must work in this session.
+- **HTTPS front on a private address.** `KEIKO_JIRA_LAB_PRIVATE_ADDRESS=<private IP>` at
+  `session.mjs init` records one RFC 1918 or link-local IPv4 address. The certificate then names
+  it, the Host guard accepts it and `compose.private.yaml` publishes the TLS port on it beside loopback, so
+  a private-class Jira URL can be walked live and a Windows guest reaches the lab without a tunnel.
+  Loopback, wildcard, IPv6 and public addresses are refused; without the variable nothing changes.
+
+**Limit of the renewal (AC4).** A token revoked outside the lab is not recreated automatically: the owner of the
+tokens refuses to guess (`active-token-not-observed`, `initial-creation-unreconciled`) and the operator restores it by
+hand (remove the actor's `*-token` files and its `pat-creation-started` marker, then run `fixture-tokens.mjs`).
+
+**Document set and language.** The requirements (document) set reads the oracles as the administrator for a session
+without `language.json`, for any `en_*` and for any other locale, and as the localized lab actor only for `de_DE`; it
+refuses nothing, so its default path stays byte-identical for sessions that never ran `seed-language.mjs`. The Composer
+set refuses a session without a language record and any locale other than `en_*` and `de_DE`.
+
+**Renewal and isolation.** Every run starts with `prepareLabRun`: the license window (`ensureLicenseWindow`
+restarts the owned lab), the Personal Access Tokens (`ensureFixtureToken`) and the TLS certificate
+(`tls-window.mjs` runs the owned session's `start`, which regenerates the certificate generation and
+recreates only the TLS front) are renewed by the run itself, at a boundary where no other lane uses Jira.
+The limit run additionally checks the license window before every step (`ctx.checkLicense`). The lab sets
+`KEIKO_STATE_DIR` to `<session>/chat-read-logs` for its process and every child beside `KEIKO_MEMORY_DIR`,
+so no diagnostics writer falls back to `<cwd>/.keiko`.
+
+**Selection lane.** `catalog-selection.mjs` holds a case for `jira.update-comment`, `jira.get-comment`,
+`jira.create-issue-link`, `jira.link-types`, `jira.users`, `jira.myself`, `jira.fields`,
+`jira.priorities`, `jira.statuses`, `jira.resolutions`, `jira.project-statuses` and `jira.delete-issue`, all
+on lab-owned objects (a comment the api actor owns, and a fresh issue for each delete attempt). The report
+and `latest.md` carry a `jira.describe` line counting, per valid turn, the catalog's `invalid-arguments`
+refusals of the model's selection call, which the gateway-level refusal count never sees. Run new cases
+alone and repeat them: `node catalog-selection.mjs <session> <model> --only <ids> --repeat 3`.
+
+**Oracles.** Every report grader reads numbers and rows through `requirements/answer-cells.mjs`
+(German `1.170`, `;`, TAB and Markdown rows). S16 names the failed check (`summary`, `label` or `section`)
+with a count of issues each. S17 grades the interruption `unverified` when the 1,800 s lab limit ended the
+turn, like the refresh part.
+
+**Limit run without the sprint package.** `node browser-limit-run.mjs <session> <model> <embedding> <permitted-token>
+<denied-token> <LIMn> --steps without-sprint` runs templates and probes, the bulk write with deliberate
+violations and the kill at about 40 %, the hierarchy with relations, the report compared with JQL, and the
+English and German card checks, and leaves out the sprint-at-scale package (Agile child). It prints one
+closed verdict per step. Because a package was left out, its overall verdict is `partial`, never `green`:
+the printed line and the orchestrator record carry `steps: "without-sprint"`, `partial: true` and the skipped
+step names, and only a full set can end `green`.
+
+## How the lab differs from an installed Keiko
+
+A lab green proves the product code under THESE conditions, not an installation as a person meets it
+(#4369: a real-browser walk on a default installation met a staged draft whose commit tool was not
+offered, while C01 had been green on the same code: the model created with three `jira.create` calls,
+in Full access, and the catalog was the same 24 tools). Read every green with this list:
+
+| Difference     | Lab                                                                                                                                                                                                                                                           | Installed Keiko                                    | Where                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------- |
+| Start          | The product runs **in-process** from `packages/*/dist` through `buildUiHandlerDeps` with an explicit environment object; no launcher, no server start, no startup readiness probe                                                                             | Launcher, server start and the startup checks      | `chat-read.mjs` (`createLiveDeps`)          |
+| Environment    | Only `KEIKO_OS_KEYCHAIN=off`, `KEIKO_STATE_DIR`, `KEIKO_MEMORY_DIR`, the launcher pairing secret, `KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY`, the model API key variable and `KEIKO_CA_BUNDLE_PATH`; every other `KEIKO_*` variable is unset (code defaults) | The process environment                            | `chat-read.mjs`                             |
+| Release scope  | No switch is set (`jiraOperationInReleaseScope` reads a constant)                                                                                                                                                                                             | The same constant                                  | `keiko-contracts/src/jira-release-scope.ts` |
+| Logging        | Activity-log level `debug`                                                                                                                                                                                                                                    | The default level                                  | `chat-read.mjs`                             |
+| Memory         | **Off** in every Chat payload (`memory: { enabled: false }`)                                                                                                                                                                                                  | Depends on the person's setting                    | `requirements/journeys.mjs`                 |
+| Pod and Chat   | The Jira Pod is **bound through the API** with the lab actor's token; the Chat is created by `POST /api/chats`; the Composer Chat has **no Knowledge scope** and no skill; no browser                                                                         | Created and bound in the UI                        | `journeys.mjs` (`composerChat`)             |
+| Mode           | The Composer lane's default is **Full access** (`composerTurn`); C01 several Tasks now runs in all three modes and both wordings                                                                                                                              | The selected mode defaults to **Ask for approval** | `requirements/composer.mjs`                 |
+| Templates      | **Seeded**: baseline templates for every lab project and, per scenario, templates for Epic, Story, Task, Sub-task and Bug (C03, C04 and C10 run without the baseline)                                                                                         | None: every create is `template-missing`           | `baseline-templates.mjs`, `composer.mjs`    |
+| Required field | A field required in every project is **lifted** for a Composer or selection run (`withComposerFieldLift`)                                                                                                                                                     | The customer's own required fields                 | `scorecard-finish.mjs`                      |
+| Model          | The Gateway configuration of the run (`KEIKO_JIRA_LAB_GATEWAY_CONFIG`; `catalogOrigin: discovered` is dropped), a model configuration the lab writes, one gateway retry                                                                                       | The person's Gateway setup                         | `chat-read.mjs`, `journeys.mjs`             |
+| Jira           | A lab Data Center 10.3.26 with a lab licence, its own CA, the language of the session (`en_US`, optionally `de_DE`)                                                                                                                                           | The customer's Jira                                | `session.mjs`, `seed-language.mjs`          |
+| Prompts        | The scenario wording; C01 several Tasks and C05 also use a plain wording a person types, the other scenarios do not                                                                                                                                           | Free wording                                       | `composer.mjs`                              |
+
+`KEIKO_JIRA_LAB_RETAIN_STATE` and `KEIKO_JIRA_LAB_PARALLEL` only keep evidence and schedule runs; they
+change nothing the model is offered.
+
+## Composer lane: Jira writes from the Chat composer (Release 1, #4369)
+
+A second lane inside this lab, not a second lab: same Jira, fixtures, template helpers, native oracles,
+scorecard, coverage, repeat and validity machinery. It needs **no Knowledge Pod and no requirements
+document** and **assumes no model**: it runs with any lab gateway configuration. Its Chats are bound to the
+Jira Pod only (no Knowledge scope, no structure skill, no `prepareDataPod`), and its scenarios have their own
+ids, `C01`–`C09`. `S01`–`S20` and the document lane are unchanged; the lane adds only parameters and exports
+to existing modules, and a hermetic test pins that a run without `--set composer` still prepares the Pod
+and binds it.
+
+```sh
+# The whole lane, three rounds each (a reachable Jira and a model slot are required)
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  node scripts/testing/jira-chat-lab/requirements/scorecard.mjs /absolute/private/session \
+  --project REQ --set composer --model <chat-model-id> --repeat 3
+
+# One scenario, one type, one mode (a first functional pass on any gateway)
+... scorecard.mjs /absolute/private/session --project REQ --set composer --model <id> \
+  --only C02 --types task --modes ask
+```
+
+`--only` takes only ids of the selected set (`C01`…`C09` with `--set composer`); anything else is a usage
+error, never an empty report. `--types` (`epic,story,task,sub-task,bug`) and `--modes`
+(`ask,supervised,full-access`) narrow C01, C02 and C03; obligations of what was not selected stay uncovered,
+so the scenario reads `partial`. The report goes to `<session>/composer-scorecard/<model id>/` (`latest.md`,
+a JSON report and `trend.tsv`), apart from `requirements-scorecard/`, and its header names the model.
+
+Every journey empties the work project REQ first and creates its own parents natively (an Epic and a Task;
+required fields are read from REQ's own create metadata). From `requirements-truth.json` the lane reads only
+`fieldIds.epicName` and `fieldIds.epicLink`; C07 (S10 and S11) needs the whole file. A template of the
+work project that this lane did not create stops the journey as a lab state (`invalid`), a leftover of this
+lane (named `…-Composer-<Type>`) is removed at journey start, and a template named as a baseline is allowed for
+the types a journey governs itself. C03 and C04 prove a missing template, so the scorecard runs them in their
+own product start with `KEIKO_JIRA_LAB_BASELINE_TEMPLATES=off`.
+
+| Id  | Obligation (graded from Jira, never from the product's answer)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C01 | With templates for Epic, Story, Task, Sub-task and Bug active at once, a plain titled instruction creates each type conformant (Story, Task and Bug in the named Epic, the Sub-task under the named Task, the Bug linked to it); one request creates three Tasks, in each of the three modes and in two wordings (the lab's and a plain one a person types; ids `multi-create-<part>-<mode>-<wording>`), and per run the report records the path the model took (`3 creates`, `stage plus commit`, `staged, not committed` = red, never unverified) and, in Ask for approval, how many review cards the person got: all exist natively (hard), every key stands in a stored write result of the turn (hard, `multi-create-keys-listed`), the stored conversation read again names exactly the created keys, none missing and none invented (hard, `multi-create-keys-after-reread`: derived from the stored write results a result card is rebuilt from; the lab has no browser, so the keys are not read as links and no page is reloaded), and the answer lists every key (soft, `multi-create-answer-keys`)                                                                                                         |
+| C02 | A request that violates the template is refused before any approval card and before any effect, per type and in each of the three autonomy modes; the corrected request then succeeds (the request carries the section content for the repair; a model that asks the person for missing content instead of repairing is a model observation, `unverified`, never red). A violating issue that exists in Jira is red whatever the tool trace says (15 runs)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| C03 | No template for the type, per type and mode, three obligations: `no-template-refused-*` (hard) nothing was created natively, any type; `no-template-hint-*` (hard) the stored tool exchange of the turn carries the product's closed missing-template refusal and its own guidance text, both derived from the producer of the build; `no-template-answer-*` (soft) the answer mentions the template and claims no created issue. **The hard hint half is `unverified` until the producer defines the refusal (#4354)**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| C04 | The edit rules, compared natively before and after: a breaking edit (clear a section, remove the parent) is refused through any tool; an edit of an issue with a pre-existing violation in an untouched field passes with the product's stored notice (hard, `edit-preexisting-notice`) and the answer names the violation (soft, `edit-preexisting-answer`); an edit of a type without template and a status change without template pass. The breaking-edit obligations are red until #4354 lands                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| C05 | One conversation, three turns in ONE Chat: an order creates one Task; the product's stored conversation is read again and must hold the messages the turn observed (`stored-conversation-matches-turn`; the lab has no browser and performs no page reload: it is a second read of the stored messages); after that read a question that orders nothing new ("Kam das an? Ist der Vorgang … angelegt?", `repeat-after-reread-*`) and, straight away, a second one ("Gibt es den Vorgang … jetzt wirklich in Jira?", `repeat-in-chat-*`): an identical order text is not told apart from a deliberate second order (gpt-5.4 created a second issue from the identical text, in English and in German), so only a question makes a duplicate unambiguous. Each repeat has a hard obligation (`repeat-after-reread-no-duplicate`, `repeat-in-chat-no-duplicate`): it created no issue of ANY summary or type and the issue of the first order still carries its title (a second issue is red as a model finding), and a soft obligation (`…-reply-refers`): the reply refers to the first issue by key in the answer or in a stored result card. A step that failed or answered nothing leaves the obligations unverified |
+| C06 | The three modes and a readable approval, with the document lane's S18 grader and a plain Bug request                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| C07 | S10 and S11 unchanged, in a Jira-Pod-only Chat                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| C08 | "Add me as a watcher", "write this comment" and "remove me again" by plain instruction: the native watcher list, the comment body and its author; no template involved                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| C10 | A template written for a LOCALIZED issue type (a German lead types the name the German session shows, `Aufgabe`) must govern a create, whoever asks. One violating Task request is sent three times: template by name with a German profile (`localized-template-german-user-governs`), template by name with an English profile (`localized-template-english-user-governs`, the customer's case: the product compares the free string with the type name the calling user's token shows, so it answers `template-missing`; red until the product binds by id) and template by id with an English profile (`id-template-english-user-governs`). Hard: the stored refusal is a content rule of the template, never `template-missing`; an issue created without any refusal is red too. Needs a session that recorded its type names, else `unverified` with no turn; runs without the baseline template set                                                                                                                                                                                                                                                                                                            |
+| C09 | A request to attach a file: nothing reaches Jira, no attach call succeeds or is offered and no write succeeds (hard, `attachment-refused`; a turn that failed or answered nothing is `unverified`), and the answer says attachments are not part of this release (soft, `attachment-answer-readable`). Red until #4354 lands; no attachment case exists anywhere else                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+
+Reused by parameter, not copied: `templateMarkdown` (`activateOn`), `gradeTemplateRepair` (`conforms`),
+`templateRefusals`, `modesAndReadableApproval` (`promptFor`, `query`), `runJourneys` (`set: "composer"`),
+`JOURNEYS.S10`/`S11`. A grade of `red` is a product finding, never `invalid`: only a lab outage, a transport
+failure, a lab state (a foreign template) or missing gateway evidence makes a run `invalid`.
+
+The selection lane (`catalog-selection.mjs`) holds one create case per issue type: `create-task` and
+`create-subtask` in the fixture project, and `create-epic`, `create-story` and `create-bug` in the Scrum
+work project REQ (the fixture project offers only Task and Sub-task; a session without REQ makes those three
+invalid, never wrong). The REQ cases hold the work-project lock a journey's reset takes.
+
+**What the REQ create cases ask of the product.** `create-epic`, `create-story` and `create-bug` name only the issue type
+and the summary. REQ's own required fields are the Epic Name (Epic) and, on every type, the system field `reporter`. The
+product's creates in the Azure pass of 2026-11-13 carried no `reporter` and succeeded, so the product path needs none; the
+lab's own native fixture creates fill it with the creating account. The Epic Name is not filled by the product: finding it
+through `jira.create-fields` and supplying it is part of what the case asks the model, and a refusal that names it is
+recoverable in the same turn. The baseline templates of the lab add no rule (see "Baseline templates"), so no template
+refuses these prompts.
+
+**German session and the Composer lane.** `seed-language.mjs <session> de` sets the actors' profile language and
+records the localized issue type and status names next to the administrator's English ones, joined by id
+(`language.json`: `issueTypes`, `statuses`). The Composer lane takes every localized name from that record, never from
+a word list: templates are written by the name the German session shows (`Aufgabe`, `Sub-Task`) or by id, the parent
+type of the Sub-task template likewise, and the requests speak a German person's words (`eine Aufgabe`, `eine
+Teilaufgabe`, no English type name). Every Composer journey but C07 reads the native state as the administrator
+(English names), so nothing is loosened: the graders keep comparing native state. C07's S10/S11 read as the product's
+own account, as in the document lane. A German session WITHOUT recorded type names (seeded before this record) still
+takes only `--only C07 --parts s10` and is refused for the rest; run `seed-language.mjs <session> de` again to record
+them. `withActorLocale` (seed-language.mjs) sets one actor's profile language for a run and puts it back, which is how
+C10 shows an acting user whose profile differs from the template author's.
+
+**S10 and the product's estimate rule.** S10 derives its expected estimate from native data: the board's
+configured estimation field is the figure when any issue holds a value in it; otherwise the other field
+(Original Estimate, or Story Points) becomes a labelled fallback and the configured field is stated unused;
+when both hold values the other field's count and sum are named; when neither does the figure is zero of N.
+The prompt asks for the statements as `QUELLE;…`, `UNGENUTZT;…` and `WEITERES;…` lines, graded as the
+obligations `estimate-source-labelled`, `configured-unused-stated` and `other-estimate-field-named`.
+`requirements/seed-estimate-cases.mjs` seeds one project per case (`ESF` fallback, `ESR` reverse, `ESB` both,
+`ESN` neither; configuring the board for `ESR` uses Jira's greenhopper estimation endpoint and fails closed
+when the board does not report the field afterwards) and `KEIKO_JIRA_LAB_ESTIMATE_PROJECT=ESF` points S10 at
+one of them. A lab context without a native reader keeps the truth file's estimate.
+
+**S10 without native estimate facts.** When the board's estimation field or the native reader is unavailable, the
+estimate figure and the three rule statements are `unverified` with the reason in the detail line, never green and never
+graded against the truth file's estimate. The prompt states that the WEITERES sum is a bare number (hours for the time
+field, points otherwise); a unit inside a cell is unparseable and red. Where no issue holds any estimate an UNGENUTZT
+statement naming the configured field is accepted. The report header lists two limits: S10's native reads are made as the
+lab administrator (an account that cannot read the field is not graded) and S11's unavailable case is graded partly on the
+product's own statement. The limit-run step set `release-1` was renamed `without-sprint`; the old name is refused.
+
+**Oracle changes since the #4173 catalog (the list a result must be read against).** Every change of what a
+grader accepts is recorded here with its reason, the evidence it came from and the counter-cases that keep it
+honest; a result from before a row is not comparable with one after it for that obligation.
+
+| Date          | Oracle                                  | Change                                                                                                                                                                                                       | Reason (evidence)                                                                                                                                                 | Counter-cases that stay red/unverified                                                                                                                                                                     |
+| ------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-11-13    | S10 `estimate-*`                        | three obligations (`estimate-source-labelled`, `configured-unused-stated`, `other-estimate-field-named`) derived from native data by the product's estimate rule (422458c60)                                 | the product's rule picks the board's estimation field, falls back to the other one                                                                                | the three cases of `jira-lab-estimate-rule.test.mjs`                                                                                                                                                       |
+| 2026-11-13/14 | S10 `answer-clean`, large project       | the answer must not repeat raw result keys; the large-project figures are read by the reading account's names (76ea6e9f9, 1f7530a1f)                                                                         | a report answer once showed `reportId`-style keys                                                                                                                 | `jira-lab-raw-keys.test.mjs`, `jira-lab-regrade-large-project.test.mjs`                                                                                                                                    |
+| 2026-11-14    | S11 `deviation-detail`: rule ids        | a hyphenated rule id of the report itself (`section-missing`, `summary-pattern`, `label-missing`) counts as stating a violation (692a60a52)                                                                  | Gemma C07: a table of the tool's own rule ids under a lead "…die von der Strukturvorgabe abweichen" credited 0 of 53 deviations because a hyphen continues a word | a bare field word and a denial ("Label … ist korrekt", "section-missing ist nicht der Fall") stay undescribed: `jira-lab-requirements-oracles.test.mjs` "rule ids as the description of a deviation (S11)" |
+| 2026-11-14    | S11 `deviation-detail`: German negation | a negator AFTER the fine-word ("erfüllt Muster nicht", "entspricht der Vorgabe nicht") negates it (75de1d36a)                                                                                                | gpt-5.4 C07: "Summary erfüllt Muster nicht" was read as a fine-claim, 7 of 53 deviations credited to nobody                                                       | "Summary erfüllt das Muster" stays a denial; same test file                                                                                                                                                |
+| 2026-11-14    | C09 / C03 hard "no write succeeded"     | a write is a result bound to POST/PUT/PATCH/DELETE or a draft item `created`, not any `outcome: succeeded` (692a60a52)                                                                                       | a succeeded `jira.discover` was counted as a write and turned a correct C09 red                                                                                   | a succeeded write and a created draft item stay red: `jira-lab-composer.test.mjs`                                                                                                                          |
+| 2026-11-14    | C03 soft "claims an issue was created"  | a creation verb counts only when nothing negates it ("nichts erstellt"), defers it ("sobald … kann ich"), applies it to the template ("Vorlage angelegt") and an issue key the model merely read is no claim | gpt-5.4 C03: all 10 "claims" were negations, template offers or cited parent keys; the product stored no uncertainty because the answer made no false claim       | a real claim ("Der Vorgang REQ-5 wurde angelegt", "I created REQ-6 although the template is missing") stays an observation                                                                                 |
+| 2026-11-14    | selection lane (not a grader)           | the work project's creates run inside the required-field bracket; a Sub-task's back-link `subtasks` on its owned parent is no stray write                                                                    | Jira refused the Epic/Story/Bug creates for the lab's own required field; the parent's `subtasks` changed by the very effect under test                           | any other change of the owned issue still counts as a stray write: `jira-chat-lab-catalog-selection-objects.test.mjs`                                                                                      |
+
+**Comparability of S10 (from 2026-11-13).** S10 always receives the estimate-rule prompt and carries three more
+obligations (`estimate-source-labelled`, `configured-unused-stated`, `other-estimate-field-named`) in the document
+lane and in C07. Its results are not comparable with any run before 2026-11-13.
+
+**Composer runs need a language record.** A Composer run reads the session's `language.json` (written by
+`seed-language.mjs <session> en|de`) and accepts only `en_*` (oracles read as the administrator) and `de_DE` (only
+`--only C07 --parts s10`); a missing record or another locale is refused before any journey, because the English
+graders would misjudge a Jira that shows other names.
+
+**What a Composer verdict rests on.** The hard verdict comes from what Jira and the PRODUCT state
+deterministically; the model's prose is graded softly and apart. A soft failure is a model observation: it is shown
+as `unverified` with the words "model observation", never red. The expected refusal ids and the hint text are derived
+from the producer (the built contracts and connectors packages: `JIRA_TEMPLATE_RULE_IDS` and
+`jiraTemplateViolationGuidance`), never from a copy; a producer that defines no such refusal in this build leaves the
+hard half `unverified`. `no-template-refused-*` is green only when nothing was created AND the turn ran and attempted a write or stored a refusal (a turn that only talked, stayed silent or failed is `unverified`; an issue that exists is red whatever the turn did). The stored guidance is compared with the producer's text for the union of every violation of the exchange (a draft carries one refusal per failed item); a replayed refusal (`replayed`, carrying `JIRA_ALREADY_REFUSED_GUIDANCE`) or a draft that mixes uncertain, pending or field-error items is `unverified`, never red. With a producer that defines no missing-template refusal the hint half still reds an approval card shown for the write and a write that succeeded. C03 is three obligations (nothing created natively, the stored product refusal and its own
+guidance, then the answer mentioning the template without claiming a created issue); the unrepairable parent request of
+C01 likewise (nothing created, the stored `parent-type-mismatch` refusal whose subject names the allowed parent type and
+whose text is the producer's guidance, then an answer without the bare rule id that names the parent type; the product's
+refusal does not name the type that was found). The two breaking edits of C04 require a traced `jira.edit` rejection
+naming a content rule of the template (`section-missing`, `section-empty`, `parent-missing`, `field-missing`); the
+pre-existing violation of C04 requires a succeeded `jira.edit` carrying a `templateNotices` entry for `section-missing`,
+and no other field of the issue may change. The wording of the answer (naming the remaining violation, saying
+attachments are not part of the release, listing the created keys, referring to the first issue) is never part of a hard obligation: each has its own soft obligation, a model observation.
+C09 binds to the `jira.attach` operation (model alias `jira_attach`): a call of it that succeeded, or that was
+offered to a human as an approval card, is red until #4354 switches attachments off; with it off no call can exist.
+In both states the native attachment count must stay and no write of any kind may have succeeded in the turn. A create of any other type than the requested one is red in C01 and C02. C01's
+several-at-once request is graded on the three requested titles. C08 reads the watcher list before the turn
+(the user already watching is an `invalid` lab state) and a comment on the fixture's other issue is red.
+**No-model rehearsal.** `scorecard.mjs <session> --project KEIKO --set composer --rehearse` (no `--model`, refused
+with one) runs every journey of the selected scenarios against the live Jira and a model-free product, with only the
+model turn replaced by an empty one: template preparation and hygiene, native fixture creation per issue type with the
+project's own required fields (a required user field such as `reporter` is the creating account; `parent` only from the
+fixture; any other unknown required field fails closed naming the field, its schema type and the issue type), native
+reads, and cleanup of every issue the rehearsal created in REQ. It prints one JSON line: `passed`, `exercised`,
+`failed` (the lab error per journey), `removedLeftovers` and `notExercised` (the model turn, the verdicts, the gate
+against a model's write). The verdicts of an empty turn are never read. A lane head goes to a model only after a green
+rehearsal on a live Jira. The rehearsal and the real Composer run write REQ inside `withFixtureFieldOptional`: a
+session that ran `qualify-fields.mjs` holds a field required in every project (not on REQ's screens, so unfillable),
+which the bracket lifts for the run and restores afterwards; without that field the bracket does nothing.
+
+**Disclosed limits of C05.** There is no same-summary detection across Chats: an explicit order in a new Chat is a new order,
+Jira itself permits equal summaries, and a title block would refuse legitimate work, so a duplicate across two fresh Chats
+is NOT covered, by design. Release 1 promises that a reload never duplicates a write; C05 proves that a repeated request (a question
+whether the issue arrived, never a second order) in one conversation, after the product's stored conversation was read again and straight away, creates none, and makes no
+claim about reconciliation. The lab has no browser: no page reload is performed.
+
+**Declared exceptions to hard and soft.** Two kinds of obligation are graded from the answer's content and may go
+red from it, for the same reason: in them the stated figure or the absence of a raw key IS the product output under
+test, graded against an independent truth. (1) `answer-clean` (#4355): no raw result key in the answer, read against
+the stored result and the stored message flag. (2) The report graders C07 reuses from S10 and S11:
+`counts-by-type-status`, `per-epic-progress`, `estimate-totals`, `estimate-source-labelled`,
+`configured-unused-stated`, `other-estimate-field-named`, `deviating-issues` and `deviation-detail`; each compares the
+figure the report states with Jira's native truth. Inside C07 the S10 and S11 parts use the strict aggregate too, so an
+unverified part makes the scenario `unverified`, not `partial`. Every other Composer obligation is hard or soft as
+described above.
+
+**The unrepairable-parent gate on a build without the rule.** `unrepairable-refused-by-gate` is `unverified` on a build
+whose producer does not define `parent-type-mismatch` (the same way the missing-template hint is `unverified` without
+`template-missing` / `template-not-activated`): the expected value cannot be derived, and it is never guessed.
+
+**Statuses and exit code.** A journey with any part that could not be verified (a turn that never ran, evidence the
+product did not store, a model observation) is `unverified` and never logs `green`; its green parts still credit their own
+obligations, and the scenario is reported `unverified` in its own column of `latest.md` and `trend.tsv`, distinct from
+`partial` (which only misses obligations). A model run (`--model`) exits 0 only when EVERY selected scenario is green;
+red, partial, unverified, invalid, probe-only and unchecked exit 1. The rule applies to the document lane's model runs as well (a run without `--model`, the probes only, writes its report and exits 0).
+`--rehearse` keeps its own rule: it exits 0 when no
+journey stopped on a lab error.
+
+The Composer lane takes from `requirements-truth.json` only the work project and the two parent field ids
+(`projects.work`, `fieldIds.epicName`, `fieldIds.epicLink`); a group that contains C07 receives the whole record
+because S10 and S11 compare against it.

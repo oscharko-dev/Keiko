@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 import {
+  OPENCODE_PIN,
   PORTABLE_RUNTIME_APPROVALS_FILE,
   validatePortableRuntimeApprovals,
 } from "./portable-runtime-approvals.mjs";
@@ -22,8 +23,8 @@ import { sha256 } from "./lib/digest.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DOWNLOAD_TIMEOUT_MS = 300_000;
-const APPROVED_OPENCODE_VERSION = "2.1.4";
-const APPROVED_OPENCODE_COMMIT = "68bc26b7da1990ce10ffecfbc1e09eb13aa5d824";
+const APPROVED_OPENCODE_VERSION = OPENCODE_PIN.version;
+const APPROVED_OPENCODE_COMMIT = OPENCODE_PIN.commit;
 const ARCHIVE_MAX_BYTES = 512 * 1024 * 1024;
 const TEXT_MAX_BYTES = 16 * 1024 * 1024;
 const NODE_HOSTS = Object.freeze(["nodejs.org", "dist.nodejs.org"]);

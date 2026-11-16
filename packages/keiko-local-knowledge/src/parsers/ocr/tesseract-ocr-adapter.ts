@@ -54,9 +54,11 @@ export interface OcrRuntimeResolution {
   readonly configured: boolean;
 }
 
+// A limit below 1 is invalid like a missing one: clamping it to 1 would arm a 1 ms timer or a
+// 1-byte input cap and fail every page.
 function positiveInteger(raw: number | undefined, fallback: number): number {
-  if (raw === undefined || !Number.isFinite(raw)) return fallback;
-  return Math.max(1, Math.floor(raw));
+  if (raw === undefined || !Number.isFinite(raw) || raw < 1) return fallback;
+  return Math.floor(raw);
 }
 
 // A timer armed with more than 2^31 - 1 ms fires at once, so a larger OCR timeout would end every
@@ -77,8 +79,8 @@ function envText(env: EnvSource, key: string): string | undefined {
 function envInteger(env: EnvSource, key: string, fallback: number): number {
   const raw = envText(env, key);
   if (raw === undefined) return fallback;
-  const value = Number.parseInt(raw, 10);
-  return positiveInteger(value, fallback);
+  // Digits only: parseInt would read "30s" as 30 and "1e4" as 1.
+  return /^\d+$/u.test(raw) ? positiveInteger(Number(raw), fallback) : fallback;
 }
 
 function ocrDisabled(raw: string | undefined): boolean {

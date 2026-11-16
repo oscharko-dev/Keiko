@@ -2,7 +2,7 @@
 // twice (#3873 review, PR #3876): as an empty part when the block starts and as the complete part
 // when it ends. `session.text.delta` and `session.reasoning.delta` are ephemeral events: they reach
 // the live event stream, are never persisted, and the history a read returns never contains them.
-// Measured against the pinned 2.0.10 runtime: a reasoning phase of a few seconds left the history
+// Measured against the OpenCode 2.0.10 runtime: a reasoning phase of a few seconds left the history
 // read at `""` until the response finished, while the event stream carried each delta as it arrived.
 //
 // The timeline reads history, so what the history cannot show it takes from here: this overlay
@@ -241,8 +241,21 @@ class LiveTextOverlay implements OpenCodeV2LiveText {
     if (!oldest.done) this.retired.delete(oldest.value);
   }
 
+  // A frozen part is never extended again, so at capacity it is the one to give way: the oldest
+  // frozen part is evicted and the history alone decides its text. A refused start needs no count
+  // of its own, because every delta of the untracked part is counted dropped.
+  private makeRoom(): boolean {
+    if (this.parts.size < MAX_LIVE_PARTS) return true;
+    for (const [key, part] of this.parts) {
+      if (!part.frozen) continue;
+      this.parts.delete(key);
+      return true;
+    }
+    return false;
+  }
+
   private start(key: string): void {
-    if (this.parts.has(key) || this.retired.has(key) || this.parts.size >= MAX_LIVE_PARTS) return;
+    if (this.parts.has(key) || this.retired.has(key) || !this.makeRoom()) return;
     this.parts.set(key, {
       text: "",
       bytes: 0,

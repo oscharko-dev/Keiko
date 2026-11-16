@@ -30,11 +30,15 @@ export const REUSED_JOB_NAMES = Object.freeze([
   "Semantic duplication",
   "Core quality",
   "Coverage suite (keiko-ui)",
-  "Coverage suite (scripts)",
   "Coverage and SonarCloud",
   "Build, scan, SBOM, smoke",
-  "Node 26 compatibility (shard 1/2)",
-  "Node 26 compatibility (shard 2/2)",
+  "Coverage shard (packages 1/4)",
+  "Coverage shard (packages 2/4)",
+  "Coverage shard (packages 3/4)",
+  "Coverage shard (packages 4/4)",
+  "Coverage shard (scripts 1/3)",
+  "Coverage shard (scripts 2/3)",
+  "Coverage shard (scripts 3/3)",
   "Portable secure-read smoke (linux-x64)",
   "Portable secure-read smoke (windows-x64)",
   "Portable secure-read smoke (macos-arm64)",
@@ -45,10 +49,7 @@ export const REUSED_JOB_NAMES = Object.freeze([
 ]);
 
 /** Job-name prefixes whose verdict this run reuses (matrix legs carry a suffix). */
-export const REUSED_JOB_PREFIXES = Object.freeze([
-  "Cross-platform smoke",
-  "Coverage shard (packages",
-]);
+export const REUSED_JOB_PREFIXES = Object.freeze(["Cross-platform smoke"]);
 
 const API_ROOT = "https://api.github.com";
 

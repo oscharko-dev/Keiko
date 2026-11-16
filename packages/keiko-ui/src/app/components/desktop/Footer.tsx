@@ -27,6 +27,19 @@ function installedVersionLabel(backendHealth: BackendHealth, t: I18nTranslate): 
     : t("footer.versionUnavailable");
 }
 
+function memoryStatus(health: BackendHealth, t: I18nTranslate): ReactNode {
+  if (health.state !== "loaded" || health.health.memory?.readiness !== "withheld") return null;
+  const reason =
+    health.health.memory.reason === "vault-migration-failed"
+      ? "memory.readiness.migrationFailed"
+      : "memory.readiness.unreadable";
+  return (
+    <span className="ft-seg" title={t(reason)}>
+      {t("memory.readiness.withheld")}
+    </span>
+  );
+}
+
 interface FooterProps {
   readonly winCount: number;
   readonly windows: readonly AppWindow[];
@@ -121,6 +134,7 @@ function FooterImpl({
       >
         Keiko | {installedVersion}
       </span>
+      {memoryStatus(backendHealth, t)}
       <span className={`ft-window-wrap ${styles.cmpWindows}`} ref={windowPaletteRef}>
         <button
           ref={windowTriggerRef}

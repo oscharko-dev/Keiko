@@ -3,6 +3,11 @@ import { ApiError } from "@/lib/api";
 import { formatError } from "./format-error";
 
 describe("memoriaviva formatError", () => {
+  it("does not promise a transient retry for a withheld Memory vault", () => {
+    const message = formatError(new ApiError("MEMORY_UNAVAILABLE", "Memory withheld", 503));
+    expect(message).not.toMatch(/retry in a moment/iu);
+    expect(message).toContain("restart Keiko");
+  });
   it("maps known memory API codes to actionable user copy", () => {
     expect(formatError(new ApiError("NOT_FOUND", "raw not found", 404))).toBe(
       "The memory could not be found. It may have been deleted. (NOT_FOUND)",

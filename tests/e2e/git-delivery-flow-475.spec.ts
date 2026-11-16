@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -299,26 +300,29 @@ async function interceptGovernedCommitRoutes(page: Page, ledger: RouteLedger): P
 // WindowsRegistry renders GitClientWindow with cfg.projectPath = the fixture root. governedGit
 // persists as "fs-reference", so an absolute path survives sanitizeCfgForPersistence unchanged.
 async function seedGitClientWindow(page: Page, projectPath: string): Promise<void> {
-  await page.addInitScript((root) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-475-governed-git",
-          type: "governedGit",
-          x: 24,
-          y: 24,
-          w: 1200,
-          h: 900,
-          z: 20,
-          cfg: { projectPath: root },
-          // Maximized so the commit composer sits inside the viewport without scrolling.
-          max: true,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, projectPath);
+  await page.addInitScript(
+    ({ argument: root, storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-475-governed-git",
+            type: "governedGit",
+            x: 24,
+            y: 24,
+            w: 1200,
+            h: 900,
+            z: 20,
+            cfg: { projectPath: root },
+            // Maximized so the commit composer sits inside the viewport without scrolling.
+            max: true,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, projectPath),
+  );
 }
 
 function ensureEvidenceDir(): void {

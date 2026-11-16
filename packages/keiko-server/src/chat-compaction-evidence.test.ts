@@ -14,7 +14,7 @@ import { resetServerLogger } from "../../../tests/support/activity-log-test-supp
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { mockRequest } from "./_support.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -55,8 +55,7 @@ let projectDir: string;
 let store: UiStore;
 
 function makeReq(body: Record<string, unknown>): IncomingMessage {
-  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
-  return req as unknown as IncomingMessage;
+  return mockRequest({ body: JSON.stringify(body) });
 }
 
 function captureRes(): { res: ServerResponse; writes: string[] } {

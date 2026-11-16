@@ -6,7 +6,6 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,11 +18,18 @@ import {
   npmLanePackageRoot,
   type DevLaneOpenCodeDiscovery,
 } from "./devLanePortableCodingRuntime.js";
+import {
+  OPENCODE_PINNED_VERSION,
+  OPENCODE_RUNTIME_VERSION_PINS,
+} from "./opencodeRuntimeVersions.js";
 import { resolveOpenCodeRipgrep } from "./opencodeRipgrepLaunch.js";
 import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
-  NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "../../../../tests/support/symlink-fixture.js";
+import {
   NPM_LANE_RUNTIME_APPROVALS,
   type NpmLaneRuntimeApproval,
 } from "./npmLaneRuntimeApprovals.js";
@@ -61,13 +67,13 @@ const HELPER = "helper-binary";
 function approvalFor(): NpmLaneRuntimeApproval {
   return {
     packageName: PACKAGE_NAME,
-    upstreamVersion: "2.0.10",
+    upstreamVersion: OPENCODE_PINNED_VERSION,
     adapterName: "keiko-coding-sidecar",
     adapterVersion: "2",
     executableTreeSha256: sha256(`bin/opencode\0${sha256(EXECUTABLE)}\0`),
     licenseSha256: sha256(LICENSE),
     // The approved version's own producer-derived schema digest (opencodeRuntimeVersions.ts).
-    protocolSchemaSha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
+    protocolSchemaSha256: OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "",
     sbomSha256: sha256(SBOM),
     helperSha256: sha256(HELPER),
     helperSizeBytes: HELPER.length,
@@ -120,36 +126,33 @@ afterEach(() => {
 });
 
 describe("npm-lane OpenCode discovery", () => {
-  it("keeps a previously approved helper usable with its narrower wire capability", () => {
+  // #4359: Keiko admits exactly one OpenCode. The retired 1.1.4 packages carry 2.1.4; an
+  // installation that still holds one is told to update (its own refusal), never silently run.
+  it("refuses a retired runtime package as outdated, not as tampered", () => {
     const install = globalInstall();
-    const previous = { ...install.approval, helperMaxBytes: 65_536 };
-    const current = { ...install.approval, helperSha256: sha256("new-helper-binary") };
-    const discovery = discoverNpmLaneOpenCode({
-      env: install.env,
-      platform: "darwin",
-      arch: "arm64",
-      npmLaneApprovals: { "macos-arm64": current },
-      npmLanePreviousApprovals: { "macos-arm64": previous },
-    });
-    expect(discovery.outcome).toBe("activated");
-    if (discovery.outcome !== "activated") return;
-    expect(discovery.runtime.secureRead.artifact).toMatchObject({
-      sha256: previous.helperSha256,
-      sourceTreeSha256: previous.helperSourceTreeSha256,
-      byteCap: 65_536,
-    });
-    write(
-      join(install.runtimeRoot, "native", "keiko-secure-workspace-read"),
-      "unknown-helper",
-      0o755,
-    );
     expect(
       discoverNpmLaneOpenCode({
         env: install.env,
         platform: "darwin",
         arch: "arm64",
-        npmLaneApprovals: { "macos-arm64": current },
-        npmLanePreviousApprovals: { "macos-arm64": previous },
+        npmLaneApprovals: {
+          "macos-arm64": { ...install.approval, executableTreeSha256: "d".repeat(64) },
+        },
+        npmLaneRetiredTrees: new Set([install.approval.executableTreeSha256]),
+      }),
+    ).toEqual({ outcome: "refused", reason: "payload-outdated" });
+  });
+
+  it("refuses a package whose helper is not the approved one, as stale", () => {
+    const install = globalInstall();
+    expect(
+      discoverNpmLaneOpenCode({
+        env: install.env,
+        platform: "darwin",
+        arch: "arm64",
+        npmLaneApprovals: {
+          "macos-arm64": { ...install.approval, helperSha256: sha256("new-helper-binary") },
+        },
       }),
     ).toEqual({ outcome: "refused", reason: "secure-read-helper-stale" });
   });
@@ -183,8 +186,8 @@ describe("npm-lane OpenCode discovery", () => {
   it("declares the native protocol for a helper of the current approved source and no other", () => {
     const install = globalInstall();
     const currentSource = NPM_LANE_RUNTIME_APPROVALS["macos-arm64"].helperSourceTreeSha256;
-    const previousSource =
-      NPM_LANE_PREVIOUS_RUNTIME_APPROVALS["macos-arm64"].helperSourceTreeSha256;
+    // The helper source of the retired 1.1.3 packages: published bytes that only ever spoke text IO.
+    const previousSource = "97a7a11c6dc2e1512b976c846141e0459d26094097a77b822dc7b895ad3bb4aa";
     for (const [sourceTreeSha256, expected] of [
       [currentSource, "KSR3/KSS3"],
       [previousSource, undefined],
@@ -346,18 +349,28 @@ describe("npm-lane OpenCode discovery", () => {
       });
     });
 
-    it.each([
+    // `redirected` is the directory form of the link: a junction on Windows (no privilege needed),
+    // a directory symlink elsewhere.
+    it.for([
       ["tampered", "digest-mismatch"],
       ["linked", "not-regular-file"],
+      ["redirected", "not-regular-file"],
     ] as const)(
       "keeps the engine active and degrades search for a %s ripgrep (%s)",
-      (kind, reason) => {
+      ([kind, reason], context) => {
         const install = globalInstall({ ripgrep: kind === "tampered" ? "other bytes" : RG });
+        const executable = join(install.runtimeRoot, "native", "rg");
         if (kind === "linked") {
           const elsewhere = join(dirname(install.runtimeRoot), "real-rg");
           write(elsewhere, RG, 0o755);
-          rmSync(join(install.runtimeRoot, "native", "rg"));
-          symlinkSync(elsewhere, join(install.runtimeRoot, "native", "rg"));
+          rmSync(executable);
+          plantSymlinkOrSkip(context, elsewhere, executable);
+        }
+        if (kind === "redirected") {
+          const elsewhere = join(dirname(install.runtimeRoot), "real-rg-directory");
+          write(join(elsewhere, "rg"), RG, 0o755);
+          rmSync(executable);
+          plantDirectoryRedirect(elsewhere, executable);
         }
         const discovery = discover(install);
         expect(discovery.outcome).toBe("activated");
@@ -425,5 +438,111 @@ describe("npm-lane OpenCode discovery", () => {
       JSON.stringify({ executableTreeSha256: "whatever the attacker likes" }),
     );
     expect(discover(install)).toEqual({ outcome: "refused", reason: "payload-tampered" });
+  });
+});
+
+// #4068 (owner decision 2026-11-09): a Windows npm installation gets the same lane. Windows runs
+// are confined by the Job Object supervisor and the installed D18 broker, so the package carries
+// that supervisor too, and it is admitted only at the digest compiled into this server.
+describe("npm-lane OpenCode discovery on Windows", () => {
+  const WINDOWS_PACKAGE = "@oscharko-dev/keiko-coding-runtime-win32-x64";
+  const SUPERVISOR = "supervisor-binary";
+
+  function windowsApproval(): NpmLaneRuntimeApproval {
+    return {
+      ...approvalFor(),
+      packageName: WINDOWS_PACKAGE,
+      executableTreeSha256: sha256(`bin/opencode.exe\0${sha256(EXECUTABLE)}\0`),
+      runtimeSupervisor: {
+        sha256: sha256(SUPERVISOR),
+        sizeBytes: SUPERVISOR.length,
+        sourceTreeSha256: "d".repeat(64),
+      },
+    };
+  }
+
+  function windowsInstall(supervisor: string | null = SUPERVISOR): GlobalInstall {
+    const prefix = realpathSync(mkdtempSync(join(tmpdir(), "keiko-npm-lane-win-")));
+    roots.push(prefix);
+    // `npm install -g` on Windows places packages directly below `<prefix>/node_modules`.
+    const scope = join(prefix, "node_modules", "@oscharko-dev");
+    const keikoRoot = join(scope, "keiko");
+    write(join(keikoRoot, "package.json"), JSON.stringify({ name: "@oscharko-dev/keiko" }));
+    write(join(keikoRoot, "dist", "cli", "index.js"), "");
+    const runtimeRoot = join(scope, "keiko-coding-runtime-win32-x64", "runtime");
+    write(join(runtimeRoot, "..", "package.json"), JSON.stringify({ name: WINDOWS_PACKAGE }));
+    const payload = join(runtimeRoot, "opencode-compatible", "payload");
+    write(join(payload, "bin", "opencode.exe"), EXECUTABLE, 0o755);
+    write(join(payload, "evidence", "LICENSE"), LICENSE);
+    write(join(payload, "evidence", "sbom.cdx.json"), SBOM);
+    write(join(runtimeRoot, "native", "keiko-secure-workspace-read.exe"), HELPER, 0o755);
+    if (supervisor !== null) {
+      write(join(runtimeRoot, "native", "keiko-runtime-supervisor.exe"), supervisor, 0o755);
+    }
+    write(join(runtimeRoot, "native", "rg.exe"), "rg", 0o755);
+    return {
+      approval: windowsApproval(),
+      env: { KEIKO_CLI_BIN_PATH: join(keikoRoot, "dist", "cli", "index.js") },
+      runtimeRoot,
+    };
+  }
+
+  function discoverWindows(
+    install: GlobalInstall,
+    approval: NpmLaneRuntimeApproval = install.approval,
+  ): DevLaneOpenCodeDiscovery {
+    return discoverNpmLaneOpenCode({
+      env: install.env,
+      platform: "win32",
+      arch: "x64",
+      npmLaneApprovals: { "windows-x64": approval },
+    });
+  }
+
+  it("activates the package with its supervisor as the native helper", () => {
+    const install = windowsInstall();
+    const discovery = discoverWindows(install);
+    if (discovery.outcome !== "activated")
+      throw new Error(`expected activation: ${discovery.outcome}`);
+    expect(discovery.runtime).toMatchObject({
+      lane: "npm-runtime-package",
+      target: "windows-x64",
+      nativeHelperPath: join(install.runtimeRoot, "native", "keiko-runtime-supervisor.exe"),
+      nativeHelperSha256: sha256(SUPERVISOR),
+      qualification: { platform: "win32", arch: "x64", backend: "windows-job-object" },
+    });
+    expect(discovery.runtime.secureRead).toMatchObject({
+      helperPath: join(install.runtimeRoot, "native", "keiko-secure-workspace-read.exe"),
+      artifact: {
+        target: "win32-x64",
+        installRelativePath: "runtime/native/keiko-secure-workspace-read.exe",
+      },
+    });
+    expect(npmLanePackageRoot(discovery.runtime)).toBe(dirname(install.runtimeRoot));
+  });
+
+  it("refuses a package without its supervisor", () => {
+    expect(discoverWindows(windowsInstall(null))).toEqual({
+      outcome: "refused",
+      reason: "payload-missing",
+    });
+  });
+
+  it("refuses a supervisor that is not the approved binary, even at the same size", () => {
+    const tampered = "supervisor-bin4ry";
+    expect(tampered).toHaveLength(SUPERVISOR.length);
+    expect(discoverWindows(windowsInstall(tampered))).toEqual({
+      outcome: "refused",
+      reason: "payload-tampered",
+    });
+  });
+
+  it("refuses a Windows approval that pins no supervisor", () => {
+    const install = windowsInstall();
+    const { runtimeSupervisor: _pin, ...unpinned } = install.approval;
+    expect(discoverWindows(install, unpinned)).toEqual({
+      outcome: "refused",
+      reason: "payload-unapproved",
+    });
   });
 });

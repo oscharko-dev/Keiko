@@ -79,6 +79,17 @@ is removed unless `--keep` is given. The state directory is named
 `<scenario>-<arm>-r<repetition>-<random>`, which `usage.mjs` reads back. A server whose parent died
 exits on its own when the parent's IPC channel closes.
 
+**The first turn waits for the product's startup check.** Before the first turn the lab reads the
+models through the product's settling read (`/api/models?settleStartup=1`), as a person waits for the
+start. A model that reports no readiness yet is still being checked, so the lab reads again once a
+second for up to 60 seconds. A subject without the startup fix of ADR-0171 D2 answers the settling
+read while catalog discovery's renewed check is still running: seen on dev 4e1f07ea0 with a LiteLLM
+endpoint that serves more models than the configuration names. That model was ready two seconds
+later. A model that is not configured, or whose check answered not ready, ends the instance at once;
+a model that never reports readiness ends it after the 60 seconds. The wait stays visible: every
+unit's row in `timing.json` carries `startupRereads` (a sealed run keeps only its means per arm and
+repetition, as before).
+
 **A unit that cannot be measured costs that unit, not the run.** Any error inside a unit (an instance
 that does not start, a request that fails, learning that does not settle in time) is recorded as a
 result with an `error` (the error's class name, and a message with paths and credential shapes
@@ -100,7 +111,8 @@ first page.
 
 Offline, both model ids point at the scripted model (`scripted-model.mjs`), an OpenAI-compatible
 loopback server. The answerer replies `OK.` during learning turns and, during probes, echoes exactly
-the memory bodies the product placed inside its untrusted fence, so an offline answer measures
+the memory bodies the product placed inside its untrusted fences: the standing profile (#4228), which
+travels with the system prompt, then the memories retrieved for the turn. An offline answer measures
 retrieval and injection and nothing else. The learner replies with whatever the scenario queued for
 the next extraction call: a correct learner returns the verbatim sentences the scenario names, a
 broken one returns the whole message, a credential or an invented fact.
@@ -161,7 +173,17 @@ An `answer` probe passes when its terms are present and no forbidden term counts
 `expect.forbidden`, and the scenario's forgotten and forbidden facts, under the rules above). An
 `abstain` probe passes when the answer abstains and no true, superseded, forgotten or forbidden fact
 of the scenario leaks; a probe may `allow` true facts by key, so the person's own preference, supplied
-when a colleague's is asked for, is no leak. A `no-memory` probe passes when nothing was supplied.
+when a colleague's is asked for, is no leak. A `no-memory` probe passes when nothing was retrieved
+for it and nothing leaked.
+
+What reached the model is the standing profile together with the retrieved memories; the lab reads
+both from the turn's response (`memory.context.profile` and `memory.context.memories`). The profile
+carries the person's own standing facts to every answer by the owner's decision of #4228, so through
+it only a superseded, forgotten or forbidden fact leaks, and its presence on an unrelated question is
+no over-application; a memory retrieved for that question is. Recall of an answer probe
+(`relevantSupplied`) counts the profile as well. A subject without a standing profile supplies none,
+and its scoring is unchanged. Each probe row records `retrievedCount` and `profileCount` beside
+`suppliedCount`.
 
 An `answer` probe may name a form (`expect.format`, `table` or `list`): a preference for a form shows in
 the form of the answer, so a Markdown table counts for a preference for tables even when the answer
@@ -203,9 +225,10 @@ kind): the explicit route stores in project scope today, which is why the oracle
   records, so a provider added half way through a long run ends it. Everything a run reads and
   writes stays on the machine.
 - The same configuration may name no chat model the run does not measure, so every model gets its own
-  file. The product checks each configured chat model at every start, and a lab run starts one instance
-  per unit: a second model stayed loaded beside the measured one (39 GB in the run that found this) and
-  took the GPU from it, in every timing of the run and in no line of its evidence. A provider of another
+  file. Until #4351 the product checked each configured chat model at every start; it now checks only the
+  model in use and a model a person picks, and the lab still starts one instance per unit: a second
+  model stayed loaded beside the measured one (39 GB in the run that found this) and took the GPU from
+  it, in every timing of the run and in no line of its evidence. A provider of another
   kind, such as an embedding model, is not affected.
 - Every instance reads a **private copy** of that file (`<state>/gateway.json`, mode 0600), never the
   operator's file: the product writes its configuration back (credentials it persists at start, a
@@ -225,6 +248,14 @@ runner with a real instance, from outside, by the process tree and the port. The
 of the runner cannot clean up by definition, so its instance ends with the runner's IPC channel and the
 state of the run stays in its `--out` directory; and `--keep` asks for that state on purpose, and keeps
 state only.
+
+Every settled unit is atomically checkpointed before the next unit starts. Repeat an interrupted
+command with the same options and `--resume` to skip those units and rebuild the final report over
+all of them. A unit interrupted before settlement runs again; settled failed units remain explicitly
+failed. Resume refuses changes to the scenario set, model/configuration, budgets, timing settings,
+repository environment, instrument or built product. A fresh invocation refuses unfinished progress
+until `--resume` is explicit. Completed reports are never overwritten. The private journal is
+removed after the final evidence scan.
 
 ## What a run proves about itself
 
@@ -257,9 +288,9 @@ the product head and the options. Its `metadata` records `sealed` (true for a `-
 the judge requires of the holdout part), `allowFoldedEnv`, `foldedKeys`, `budgetTokens`,
 `brokenLearner` and `configDigest`: the SHA-256 of the gateway configuration file in live mode,
 `offline` otherwise. It also records the **instrument**: `instrumentDigest`, a SHA-256 over the lab
-sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `corpus/sequence.mjs`,
+sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `../jira-chat-lab/requirements/work-project-lock.mjs`, `corpus/holdout.mjs`, `corpus/sequence.mjs`,
 `corpus/values.mjs`, `driver.mjs`, `evidence-scan.mjs`, `gateway-calls.mjs`, `instance.mjs`,
-`isolation.mjs`, `log-text.mjs`, `report.mjs`, `run.mjs`, `scenario.mjs`, `score.mjs`,
+`isolation.mjs`, `log-text.mjs`, `progress.mjs`, `report.mjs`, `run.mjs`, `scenario.mjs`, `score.mjs`,
 `scripted-model.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
 `labHead` and `labDirty` (the lab's commit, and whether its sources carried uncommitted changes) for
 people; and the **product build**: `productHead` and `productDistDigest`, a SHA-256 over every built
@@ -281,8 +312,19 @@ only after its learner call completed, so a wait that merely saw the call end wo
 the gap before the capture lands. Live, a call that was seen to start and end ends the wait after that
 quiet period; when no call was seen at all, the grace period (`--learner-grace-ms`) is waited through,
 because the learner's call may start a moment after the answer and a quiet ledger alone would miss it.
-Offline, the scripted learner's queue is the signal, bounded by the same grace period. The same wait
-runs after the probes, before the store and the ledger are read, so `probeCaptures` does not depend on
+Offline, the scripted learner's queue is the signal, bounded by the same grace period.
+
+A subject that learns in background passes (#4213; recognized by its own operation catalog
+registering `memory.learn.pass.settled`) learns only after the person paused, seconds after the
+answer. For it the wait additionally requires its passes to have settled, read from the same Activity
+Log: no pass is open, and either a pass settled since the wait began without leaving a Chat for a
+continuation (`pendingChatCount` 0), or none started within the pause plus a slack of three seconds
+(the turn left nothing to learn). A pass that settled as `unavailable` or `failed` fails the unit:
+the product retries it only after a minute and learns no later turn until then, so the unit would
+otherwise measure a subject that does not learn. The
+lab's person pauses for two seconds (`KEIKO_MEMORY_LEARNING_IDLE_MS=2000`); a pass learns the same
+turns whatever pause preceded it. Without this, the wait ended before the pass ran and the probes read
+a vault nothing had been learned into. The same wait runs after the probes, before the store and the ledger are read, so `probeCaptures` does not depend on
 timing.
 
 Five hard counters must read zero and are never averaged away: credentials stored, customer or
@@ -541,7 +583,11 @@ Plan the time of a run on a big person: every learning turn waits for the captur
 `--quiet-ms 300`, so a 10,000-message person takes in the order of an hour per arm and repetition.
 
 `--out` must lie outside the checkout (symbolic links are followed), an existing manifest or scenario
-file is never overwritten, and nothing is written when a conversation fails its validation.
+file is never overwritten, and a failed conversation is never published. Completed scenarios are atomically saved in the
+owner-private `<out>/.progress/` journal before the next scenario starts. After a failed build, repeat
+the same command with `--resume` to reuse them; a different blueprint, seed, writer setting or
+generator code is refused. The final manifest still marks a complete validated corpus. The journal
+is removed once publication completes.
 `<out>/scenarios/<person>-m<size>.json` holds one scenario per blueprint and size (with `--focused`, the
 focused scenarios under their ids). `<out>/manifest.json`
 holds the scenario manifest of the lab (set digest and one digest per scenario), the `corpusVersion`
@@ -554,11 +600,16 @@ and no key.
 The model writer posts a plain HTTP request per block (no provider SDK, ADR-0019 trust-1). It writes
 only filler and the words around the facts, is never sent a fact, and the generator inserts every fact
 sentence itself, so a model cannot rewrite or drop a truth. One request yields a block of ten filler
-exchanges or a pool of paragraphs or sentences; each request is bounded in tokens (4,096 at most), has a
-timeout (`--timeout-ms`, default 120 s) and three attempts. Text that states a fact, holds a
+exchanges or a pool of paragraphs or sentences; each request has an answer allowance of at most
+4,096 tokens plus the reasoning allowance (`--reasoning-tokens`, default 8,192; set 0 for a
+nonreasoning endpoint with a smaller output ceiling, maximum 65,536), a timeout (`--timeout-ms`, default 120 s) and three attempts. Text that states a fact, holds a
 value-shaped string, opens with a memory command or breaks the marker contract is dropped and asked
-for again; an error names an HTTP status or an error class and never echoes a response body. Without
-the key variable a request carries no authorization header.
+for again; an error names an HTTP status or an error class and never echoes a response body.
+An empty answer with `finish_reason=length` is reported as an exhausted output budget.
+Filter failures report closed refusal classes and counts (`blueprint-fact`, `forbidden-value`,
+`memory-command`, `reserved-marker`, `missing-message`, `invalid-json-array`, `filtered-text`, or
+`item-shape`), never rejected text.
+Without the key variable a request carries no authorization header.
 
 ### Variety
 
@@ -599,7 +650,10 @@ with mode 0600 and is created when absent; a key file that others can read, a li
 checkout and an existing holdout are refused. Delete the plaintext directory after sealing.
 
 A run on a holdout opens it only in memory. `--scenarios` and `--keep` are refused, bodies are never
-retained, no per-run file is written, and the instance state of each unit lives in a private temporary
+retained, no readable per-run file is written. Interrupted runs retain authenticated encrypted
+checkpoints in `<out>/.progress/`, with a separate key derived from the holdout key. Resume decrypts
+them only in memory, and successful completion removes them. No per-unit verdict is readable in
+the journal. The instance state of each unit lives in a private temporary
 directory that is removed afterwards. The report carries masked names
 `holdout:<class>:<language>:<first 12 hex of the HMAC-SHA256 of the id>`, keyed with a key derived
 from the holdout key, so that a guessed scenario id cannot be checked against a name (the unkeyed

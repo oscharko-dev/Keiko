@@ -21,6 +21,7 @@ import {
   realRootIsDeniedViaSymlink,
   resolveExistingAllowedWorkspaceRealRoot,
   boundWorkspaceFs,
+  workspaceFsWithOperationRootIdentity,
 } from "./realpath.js";
 
 class PrototypeWorkspaceFs implements WorkspaceFs {
@@ -642,5 +643,89 @@ describe("boundWorkspaceFs", () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+});
+
+// #4068 W14: a repository search resolved its root's realpath again for every file it read, four
+// times per file. On Windows each native realpath opens a handle, which made a no-match search of a
+// 9,923-file repository take 22.5 s.
+describe("workspaceFsWithOperationRootIdentity", () => {
+  function countingRootFs(
+    root: string,
+    resolveRoot: (calls: number) => string,
+  ): { readonly fs: WorkspaceFs; readonly rootCalls: () => number } {
+    const base = memFs(root, { "a.ts": "a", "b.ts": "b" });
+    let calls = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      realPath: (path): string => {
+        if (path !== root) return base.realPath(path);
+        calls += 1;
+        return resolveRoot(calls);
+      },
+    };
+    return { fs, rootCalls: () => calls };
+  }
+
+  it("resolves the root once for every read of one operation", () => {
+    const { fs, rootCalls } = countingRootFs("/ws", () => "/ws");
+    const operation = workspaceFsWithOperationRootIdentity(fs);
+    for (const name of ["a.ts", "b.ts", "a.ts", "b.ts"]) {
+      expect(containedRealPathInfo(operation, "/ws", `/ws/${name}`).realRelative).toBe(name);
+    }
+    expect(rootCalls()).toBe(1);
+  });
+
+  it("lets a later operation admit the root on its own", () => {
+    const { fs, rootCalls } = countingRootFs("/ws", () => "/ws");
+    containedRealPathInfo(workspaceFsWithOperationRootIdentity(fs), "/ws", "/ws/a.ts");
+    containedRealPathInfo(workspaceFsWithOperationRootIdentity(fs), "/ws", "/ws/a.ts");
+    expect(rootCalls()).toBe(2);
+  });
+
+  it("does not remember a failed resolution", () => {
+    const { fs, rootCalls } = countingRootFs("/ws", (calls) => {
+      if (calls === 1) throw new Error("ENOENT: /ws");
+      return "/ws";
+    });
+    const operation = workspaceFsWithOperationRootIdentity(fs);
+    expect(() => containedRealPathInfo(operation, "/ws", "/ws/a.ts")).toThrow("ENOENT");
+    expect(containedRealPathInfo(operation, "/ws", "/ws/a.ts").realRelative).toBe("a.ts");
+    expect(rootCalls()).toBe(2);
+  });
+
+  it("keeps the admitted identity when the root is repointed during the operation", () => {
+    const { fs } = countingRootFs("/ws", (calls) => (calls === 1 ? "/ws" : "/elsewhere"));
+    const repointed: WorkspaceFs = {
+      ...fs,
+      realPath: (path): string => (path === "/ws/b.ts" ? "/elsewhere/b.ts" : fs.realPath(path)),
+    };
+    const operation = workspaceFsWithOperationRootIdentity(repointed);
+    expect(containedRealPathInfo(operation, "/ws", "/ws/a.ts").realBase).toBe("/ws");
+    // Unbound, the second read would re-admit the root as /elsewhere and accept the file below it.
+    expect(containedRealPathInfo(repointed, "/ws", "/ws/b.ts").realBase).toBe("/elsewhere");
+    expect(() => containedRealPathInfo(operation, "/ws", "/ws/b.ts")).toThrow(PathEscapeError);
+  });
+
+  it("keeps a Keiko-owned root's authority and its relocation refusal", () => {
+    const root = "/home/user/.keiko/dev/ui/task-workspaces/repo_a/ws_b";
+    const baseFs = memFs("/home/user", {});
+    const owned = workspaceFsWithOwnedRootAuthority(
+      { ...baseFs, realPath: (path): string => path },
+      root,
+    );
+    expect(
+      resolveExistingAllowedWorkspaceRealRoot(workspaceFsWithOperationRootIdentity(owned), root),
+    ).toBe(root);
+    const relocated = workspaceFsWithOwnedRootAuthority(
+      { ...baseFs, realPath: (): string => "/home/user/.keiko/dev/ui/task-workspaces/repo_c/ws_d" },
+      root,
+    );
+    expect(() =>
+      resolveExistingAllowedWorkspaceRealRoot(
+        workspaceFsWithOperationRootIdentity(relocated),
+        root,
+      ),
+    ).toThrow(PathDeniedError);
   });
 });

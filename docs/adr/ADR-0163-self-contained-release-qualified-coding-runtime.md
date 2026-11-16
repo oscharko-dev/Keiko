@@ -12,6 +12,9 @@
   - [ADR-0177](ADR-0177-rehearse-the-stable-release-on-every-dev-push.md) D4 for D2: a `dev`
     release rehearsal signs the Linux receipt under its own identity, which production discovery
     never accepts.
+  - [ADR-0183](ADR-0183-linux-desktop-community-tier.md) for D1: `linux-x64` stays in the release
+    matrix as a community-tier target; new operating-system features are qualified on Windows and
+    macOS only.
 
 ## Context
 
@@ -83,6 +86,11 @@ production ZIP contains:
 Staging, signing, qualification, assembly, publishing, and fresh-runner smoke checks fail closed if
 any required component is absent, duplicated, unsigned, unnotarized where applicable,
 architecture-mismatched, stale, or not bound to the source commit and target.
+
+**Amended 2026-11-12 — Linux community tier (ADR-0183).** The matrix and every gate on the
+`linux-x64` ZIP are unchanged. Only `windows-x64`, `macos-arm64` and `macos-x64` carry a parity
+commitment: a new operating-system capability either reuses an existing Linux implementation or
+reports itself unavailable on Linux and fails closed.
 
 **Amended 2026-09-03 — Windows native-helper CRT packaging.** The Windows launcher, setup
 bootstrap, secure workspace-read helper, and Job Object supervisor are compiled with `/MT`, so
@@ -350,7 +358,7 @@ SDKs and credentials.
 
 OpenCode knows exactly one provider, the gateway-bound `keiko-runtime`, and one model. Which
 upstream serves it (LiteLLM, Azure or a later one) is the gateway's concern and invisible to the
-runtime. Because the pinned 2.1.4 runtime otherwise lists OpenCode's hosted free models and
+runtime. Because the pinned runtime otherwise lists OpenCode's hosted free models and
 discovers local model servers such as Ollama on their default loopback ports, every launch binds
 the producer's own provider policy (`provider.use` denied for `*`, allowed for `keiko-runtime`) on
 the server-owned configuration layer and sets `OPENCODE_DISABLE_FREE_MODELS` and
@@ -380,7 +388,10 @@ invalid explicit configuration fails closed to **Ask for approval**.
 This owner decision (2026-09-27) intentionally honors an existing human Coding mode selection when
 it becomes available. It does not widen Memory: production composition retains the previously
 configured Memory ceiling or `governed-assist` when absent. Legacy capture calls, the policy
-projection and standing maintenance all consume that Memory ceiling.
+projection and standing maintenance all consume that Memory ceiling, which still bounds Memory's
+mode and standing maintenance. Since #4206 it no longer decides whether a routine fact waits for
+review: only an explicitly configured `governed-assist` ceiling holds routine facts for review
+(ADR-0146 D2).
 
 The three existing modes and their monotonic stricter-wins policy remain the only authority model.
 
@@ -462,6 +473,12 @@ notarization and platform-attestation gates. It waives nothing else:
 | both native-helper digests and byte lengths, re-hashed from disk    |
 | the closed 12-key secure-read helper shape, its KSR1/KSS1 protocol pin, source commit/path/tree pin, size ceiling and SBOM bom-ref binding |
 | the point-of-use same-identity open, link-count and metadata equality, and full re-hash of every byte read |
+
+A complete point-of-use verification vouches for the helper's exact file identity (device, inode,
+size, mtime, ctime, link count; one `lstat`, no read) for at most 60 seconds. Every governed read
+re-proves that identity and the symlink-free path; any difference, an elapsed verdict, a platform
+without the stat, or any refusal takes the complete verification again and clears the verdict, so a
+replaced helper is never served from a cache. The proof itself is unchanged.
 
 The waived platform booleans are **asserted present and FALSE**, never skipped. A signing or
 security block that omits `verificationChecks`, or asserts any single platform check, or claims
@@ -640,3 +657,5 @@ done exactly that; an evaluation runtime is not such a fact and stays in the det
 | 1.7     | 2026-10-23 | Shipped the pinned ripgrep 15.1.0 executable and MIT license in every production ZIP (`nativeTools`, `runtime/native/rg`), so the OpenCode search tools never download at run time (#3897). |
 | 1.8     | 2026-10-24 | D6: the runtime knows one provider. Every launch binds the producer's gateway-only provider policy on the server-owned layer and disables OpenCode's hosted free models and the models.dev catalog fetch, after the original 2.1.4 executable was shown to list free models and a local Ollama beside the gateway model (#3905, parity row S11). |
 | 1.9     | 2026-10-29 | D4: recorded that orphaned runtime trees are reaped by the Linux, Windows and macOS supervisors/monitor themselves and deleted the unused server-side native recovery port (#4106). |
+| 1.10    | 2026-11-05 | Pinned OpenCode 2.2.5 (#4271). Every version fact reads from `opencode-runtime-pins.json`. The new built-in plugins are removed at the source, so the shipped payload offers no capability the previous one did not. |
+| 1.11    | 2026-11-12 | D1: `linux-x64` stays in the matrix with all its gates as a community-tier target; new operating-system features are qualified on Windows and macOS only (ADR-0183). |

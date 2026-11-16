@@ -8,7 +8,7 @@
 // --------------------
 //   * `LOCAL_KNOWLEDGE_SCHEMA_VERSION` (string `"1"`, from `local-knowledge.ts`) pins the
 //     *in-memory* type-contract surface. A breaking type change adds a new literal member.
-//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `33`, here) pins the *on-disk* DDL and is
+//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `34`, here) pins the *on-disk* DDL and is
 //     stored via `PRAGMA user_version`. The two evolve independently — a new column with a
 //     non-breaking JS-side mapping bumps only the DB version; a contract-breaking type
 //     addition bumps only the string version.
@@ -46,7 +46,7 @@
 //   migration below v33) keeps running exactly as before: batched with its neighbors in the
 //   shared migration transaction, foreign keys enforced throughout.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 33 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 34 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -910,7 +910,8 @@ FROM capsule_audit_events;
 // diagnostics, never raw extracted text. capsule_id cascades on capsule deletion; document_id is
 // a lineage column rather than an FK so a checkpoint can be written before the document row is
 // persisted during progressive extraction.
-const CREATE_EXTRACTION_CHECKPOINTS = `
+// The shape the migration that introduced this table created; the v34 migration is its delta.
+const CREATE_EXTRACTION_CHECKPOINTS_BEFORE_V34 = `
 CREATE TABLE extraction_checkpoints (
   capsule_id TEXT NOT NULL,
   document_id TEXT NOT NULL,
@@ -939,8 +940,16 @@ CREATE TABLE extraction_checkpoints (
 ) STRICT;
 `.trim();
 
+const CREATE_EXTRACTION_CHECKPOINTS = CREATE_EXTRACTION_CHECKPOINTS_BEFORE_V34.replace(
+  "  updated_at INTEGER NOT NULL,\n",
+  "  updated_at INTEGER NOT NULL,\n  learned_furniture_json TEXT NOT NULL DEFAULT '[]',\n",
+);
+
 const CREATE_EXTRACTION_CHECKPOINTS_PHASE_INDEX =
   "CREATE INDEX idx_extraction_checkpoints_capsule_phase ON extraction_checkpoints(capsule_id, phase);";
+
+const ADD_EXTRACTION_CHECKPOINTS_LEARNED_FURNITURE =
+  "ALTER TABLE extraction_checkpoints ADD COLUMN learned_furniture_json TEXT NOT NULL DEFAULT '[]';";
 
 const CREATE_EXTRACTION_CHECKPOINTS_JOB_INDEX =
   "CREATE INDEX idx_extraction_checkpoints_job ON extraction_checkpoints(capsule_id, job_id);";
@@ -1402,7 +1411,7 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "Persist durable per-document extraction checkpoints for bounded large-document ingestion " +
       "so interrupted large-document jobs resume from progress instead of restarting (Epic #1160, Issue #1286).",
     up: [
-      CREATE_EXTRACTION_CHECKPOINTS,
+      CREATE_EXTRACTION_CHECKPOINTS_BEFORE_V34,
       CREATE_EXTRACTION_CHECKPOINTS_PHASE_INDEX,
       CREATE_EXTRACTION_CHECKPOINTS_JOB_INDEX,
     ],
@@ -1643,6 +1652,15 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       '"Suspended-enforcement migrations" note at the top of this file.',
     up: REBUILD_CAPSULE_SOURCES_FOR_SOURCE_FK,
     requiresForeignKeysSuspended: true,
+  },
+  {
+    version: 34,
+    reason:
+      "Persist what a progressive PDF extraction learned about repeated page furniture, as " +
+      "content-free digests, so a resumed run removes the same lines as a continuous one (#4235). " +
+      "Rows written before it hold an empty list; they belong to an older parser version, whose " +
+      "fingerprint already refuses the resume.",
+    up: [ADD_EXTRACTION_CHECKPOINTS_LEARNED_FURNITURE],
   },
 ] as const;
 

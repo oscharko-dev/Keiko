@@ -42,20 +42,35 @@ function chatModel(id: string): Record<string, unknown> {
   };
 }
 
-async function mockModelList(page: Page): Promise<void> {
-  await page.route("**/api/models", async (route) => {
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        models: [
-          chatModel("e2e-chat-model"),
-          chatModel("gpt-3.5-turbo-0125"),
-          chatModel(OVERFLOW_MODEL_ID),
-          chatModel("gpt-4o-2024-08-06"),
-        ],
-      }),
-    });
-  });
+async function mockModelList(
+  page: Page,
+  modelIds: readonly string[] = [
+    "e2e-chat-model",
+    "gpt-3.5-turbo-0125",
+    OVERFLOW_MODEL_ID,
+    "gpt-4o-2024-08-06",
+  ],
+  onRequest?: () => void,
+): Promise<void> {
+  await page.route(
+    (url) => url.pathname === "/api/models",
+    async (route) => {
+      expect(route.request().method()).toBe("GET");
+      const params = new URL(route.request().url()).searchParams;
+      expect(params.size).toBeLessThanOrEqual(1);
+      for (const [key, value] of params) {
+        expect(["refresh", "settleStartup"]).toContain(key);
+        expect(value).toBe("1");
+      }
+      onRequest?.();
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          models: modelIds.map(chatModel),
+        }),
+      });
+    },
+  );
 }
 
 async function openChatModelDropdown(page: Page): Promise<void> {
@@ -92,7 +107,7 @@ async function runVisibleReadiness(page: Page): Promise<void> {
   await settings.getByRole("button", { name: "Close Settings window" }).click();
 }
 
-async function createProjectFixture(request: APIRequestContext): Promise<() => void> {
+async function createProjectFixture(request: APIRequestContext): Promise<() => Promise<void>> {
   const projectPath = mkdtempSync(join(tmpdir(), "keiko-e2e-fresh-chat-"));
   mkdirSync(join(projectPath, "src"));
   const response = await request.post("/api/projects", {
@@ -100,7 +115,12 @@ async function createProjectFixture(request: APIRequestContext): Promise<() => v
     data: { name: "Fresh Chat E2E", path: projectPath },
   });
   expect(response.status(), await response.text()).toBe(201);
-  return (): void => {
+  return async (): Promise<void> => {
+    const removal = await request.delete("/api/projects", {
+      params: { path: projectPath },
+      headers: { ...MUTATION_HEADERS, "Content-Type": "application/json" },
+    });
+    expect(removal.status(), await removal.text()).toBe(204);
     rmSync(projectPath, { force: true, recursive: true });
   };
 }
@@ -134,21 +154,27 @@ async function expectTooltipOffsetFromOption(page: Page, optionName: string): Pr
 
 test("model dropdown overflow tooltips appear from row hover and clear consistently", async ({
   page,
+  request,
 }) => {
   const assertNoPageErrors = collectPageErrors(page);
-  await mockModelList(page);
-  await openChatModelDropdown(page);
-  await expectTooltipOffsetFromOption(page, OVERFLOW_MODEL_ID);
+  const removeProjectFixture = await createProjectFixture(request);
+  try {
+    await mockModelList(page);
+    await openChatModelDropdown(page);
+    await expectTooltipOffsetFromOption(page, OVERFLOW_MODEL_ID);
 
-  const shortOption = page.getByRole("option", { name: "gpt-4o-2024-08-06" });
-  await shortOption.hover({ position: { x: 6, y: 6 } });
-  await expect(page.getByRole("tooltip")).toBeHidden();
+    const shortOption = page.getByRole("option", { name: "gpt-4o-2024-08-06" });
+    await shortOption.hover({ position: { x: 6, y: 6 } });
+    await expect(page.getByRole("tooltip")).toBeHidden();
 
-  await expectTooltipOffsetFromOption(page, OVERFLOW_MODEL_ID);
+    await expectTooltipOffsetFromOption(page, OVERFLOW_MODEL_ID);
 
-  await page.mouse.move(1, 1);
-  await expect(page.getByRole("tooltip")).toBeHidden();
-  assertNoPageErrors();
+    await page.mouse.move(1, 1);
+    await expect(page.getByRole("tooltip")).toBeHidden();
+    assertNoPageErrors();
+  } finally {
+    await removeProjectFixture();
+  }
 });
 
 test("fresh chats remain distinct and reopening a model picker refetches its catalog", async ({
@@ -158,12 +184,8 @@ test("fresh chats remain distinct and reopening a model picker refetches its cat
   const assertNoPageErrors = collectPageErrors(page);
   const removeProjectFixture = await createProjectFixture(request);
   let modelRequestCount = 0;
-  await page.route("**/api/models", async (route) => {
+  await mockModelList(page, ["e2e-chat-model"], () => {
     modelRequestCount += 1;
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({ models: [chatModel("e2e-chat-model")] }),
-    });
   });
 
   try {
@@ -188,6 +210,6 @@ test("fresh chats remain distinct and reopening a model picker refetches its cat
     await expect(page.getByRole("option", { name: "e2e-chat-model" })).toBeVisible();
     assertNoPageErrors();
   } finally {
-    removeProjectFixture();
+    await removeProjectFixture();
   }
 });

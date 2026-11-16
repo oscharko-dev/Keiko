@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -71,8 +72,10 @@ import {
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
+import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLayoutLock";
+import { WorkspaceStorageScopeContext, workspaceStorageKey } from "./workspace-storage";
 
 export type { AppWindow, View };
 export type { UseWorkspaceResult, ViewportWorld };
@@ -97,6 +100,7 @@ const CONN_LS = "keiko.conns.v1";
 const VIEW_LS = "keiko.view";
 const WORKSPACE_STATE_API = "/api/workspace/state";
 const WORKSPACE_STATE_POLL_MS = 1_500;
+const WORKSPACE_STATE_IDLE_POLL_MS = 6_000;
 // Exported so the zoom controls in Workspace.tsx can disable themselves at the
 // clamp limits instead of swallowing clicks silently (audit C132/C361).
 export const MIN_ZOOM = 0.3;
@@ -120,10 +124,10 @@ function clampViewPan(value: number): number {
   return Math.max(-MAX_VIEW_PAN, Math.min(MAX_VIEW_PAN, value));
 }
 
-function readView(): View {
+function readView(storageScope: string | undefined): View {
   if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
   try {
-    const raw = window.localStorage.getItem(VIEW_LS);
+    const raw = window.localStorage.getItem(workspaceStorageKey(VIEW_LS, storageScope));
     if (raw === null) return { zoom: 1, x: 0, y: 0 };
     const parsed: unknown = JSON.parse(raw);
     if (
@@ -179,9 +183,9 @@ function topZ(ws: readonly AppWindow[]): AppWindow | null {
   return best;
 }
 
-function persistList<T>(key: string, value: T): void {
+function persistList<T>(key: string, value: T, storageScope: string | undefined): void {
   try {
-    window.localStorage.setItem(key, JSON.stringify(value));
+    window.localStorage.setItem(workspaceStorageKey(key, storageScope), JSON.stringify(value));
   } catch {
     /* ignore */
   }
@@ -312,6 +316,105 @@ function nextContentZoom(current: number, key: string): number {
   return clampContentZoom(current + 0.1);
 }
 
+function stepContentWheelZoom(current: number, deltaY: number): number {
+  const next = current * Math.exp(-deltaY * 0.0015);
+  return Number.isNaN(next) ? 1 : Math.max(CONTENT_MIN_ZOOM, Math.min(CONTENT_MAX_ZOOM, next));
+}
+
+export function nextContentZoomFromWheel(current: number, deltaY: number): number {
+  return clampContentZoom(stepContentWheelZoom(current, deltaY));
+}
+
+export function applyContentWheelZoom(win: AppWindow, deltaY: number): AppWindow {
+  const current = win.zoom ?? 1;
+  const zoom = nextContentZoomFromWheel(current, deltaY);
+  return zoom === current ? win : { ...win, zoom };
+}
+
+function accumulatedContentWheelZoom(current: number, deltas: readonly number[]): number {
+  let zoom = current;
+  for (const deltaY of deltas) zoom = stepContentWheelZoom(zoom, deltaY);
+  return zoom;
+}
+
+interface ContentWheelContinuation {
+  readonly expectedZoom: number;
+  readonly rawZoom: number;
+}
+
+// Retain fractional movement until publication, while clamping each event in order. A clamp
+// reversal cannot be represented by summing deltas. A snapped no-op preserves array identity.
+export function applyWheelZoomToWindows(
+  ws: AppWindow[] | null,
+  windowId: string,
+  deltas: readonly number[],
+  continuation?: ContentWheelContinuation,
+): AppWindow[] | null {
+  if (ws === null) return ws;
+  const index = ws.findIndex((w) => w.id === windowId);
+  const current = index === -1 ? undefined : ws[index];
+  if (current === undefined) return ws;
+  const currentZoom = current.zoom ?? 1;
+  const initial = continuation?.expectedZoom === currentZoom ? continuation.rawZoom : currentZoom;
+  const zoom = clampContentZoom(accumulatedContentWheelZoom(initial, deltas));
+  if (zoom === currentZoom) return ws;
+  const next = ws.slice();
+  next[index] = { ...current, zoom };
+  return next;
+}
+
+export interface WheelContentZoomQueue {
+  readonly flush: () => void;
+  readonly queue: (windowId: string, deltaY: number) => void;
+  readonly cancel: () => void;
+}
+
+// Issue #2402 — a trackpad pinch synthesizes ctrl-wheel at 60-120+Hz. Mirror queueView's rAF
+// coalescing: deltas for one window accumulate per animation frame and flush as ONE commit.
+//
+// Replay preserves event order so hitting a bound and reversing behaves the same across frames.
+// Exported so cancellation and target-switch bookkeeping can be checked independently.
+export function createWheelContentZoomQueue(
+  apply: (windowId: string, deltas: readonly number[]) => void,
+): WheelContentZoomQueue {
+  let frame: number | null = null;
+  let pendingWindowId: string | null = null;
+  let pendingDeltas: number[] = [];
+  const cancelScheduledFrame = (): void => {
+    if (frame !== null && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(frame);
+    }
+    frame = null;
+  };
+  const flush = (): void => {
+    // queue() calls this on a mid-frame target switch and then schedules a new frame; cancelling
+    // first keeps at most one frame outstanding, so cancel() below is always complete.
+    cancelScheduledFrame();
+    const windowId = pendingWindowId;
+    const deltas = pendingDeltas;
+    pendingWindowId = null;
+    pendingDeltas = [];
+    if (windowId !== null) apply(windowId, deltas);
+  };
+  const queue = (windowId: string, deltaY: number): void => {
+    // A mid-frame target switch flushes the previous window so deltas never leak across windows.
+    if (pendingWindowId !== null && pendingWindowId !== windowId) flush();
+    pendingWindowId = windowId;
+    pendingDeltas.push(deltaY);
+    if (typeof window.requestAnimationFrame !== "function") {
+      flush();
+      return;
+    }
+    frame ??= window.requestAnimationFrame(flush);
+  };
+  const cancel = (): void => {
+    cancelScheduledFrame();
+    pendingWindowId = null;
+    pendingDeltas = [];
+  };
+  return { queue, cancel, flush };
+}
+
 // GEN-UI-KEYBOARD-006 — resolve which window a keyboard chord (move/resize/content
 // zoom/snap) acts on from where focus currently is, instead of always the topmost
 // window. Walk up from document.activeElement to the nearest
@@ -327,6 +430,7 @@ function focusedWindowId(): string | null {
 }
 
 interface UsePanZoomArgs {
+  readonly storageScope: string | undefined;
   readonly layoutLocked: boolean;
   readonly isLayoutLocked: () => boolean;
   readonly wsRef: RefObject<HTMLElement | null>;
@@ -335,6 +439,7 @@ interface UsePanZoomArgs {
   readonly winsRef: CurrentRef<AppWindow[]>;
   readonly selectionRef: CurrentRef<WorkspaceUiSelectionState>;
   readonly setView: Dispatch<SetStateAction<View>>;
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
 
 interface QueueViewOptions {
@@ -459,6 +564,84 @@ function activeWindowOwnsWheelTarget(
 ): boolean {
   const activeWindowId = activeSelectedWindowId(selection);
   return activeWindowId !== null && windowIdFromWheelTarget(target) === activeWindowId;
+}
+
+// GEN-PERF-WORKSPACE-005 — the ctrl/cmd-wheel zoom branch re-read
+// el.getBoundingClientRect() on EVERY wheel event. A Windows trackpad pinch
+// synthesizes ctrl-wheel at 60-120+Hz, so each step paid a synchronous layout
+// read (a forced reflow whenever anything — e.g. a streaming chat — dirtied
+// layout between events). Cache the rect with a TTL matching the view-active
+// settle window: at most one layout read per 160ms of continuous gesture, and
+// staleness is bounded by the same window (the workspace rect cannot
+// meaningfully change mid-pinch; a real resize refreshes within 160ms).
+function createGestureRectReader(el: HTMLElement): () => DOMRect {
+  let zoomRect: DOMRect | null = null;
+  let zoomRectReadAt = 0;
+  return (): DOMRect => {
+    const now = Date.now();
+    if (zoomRect === null || now - zoomRectReadAt > VIEW_ACTIVE_SETTLE_MS) {
+      zoomRect = el.getBoundingClientRect();
+      zoomRectReadAt = now;
+    }
+    return zoomRect;
+  };
+}
+
+interface ActiveWindowContentZoom {
+  readonly route: (event: WheelEvent, selection: WorkspaceUiSelectionState) => boolean;
+  readonly cancel: () => void;
+}
+
+// Issue #3657 — the active window owns a Ctrl/Command wheel gesture: it zooms that window's content
+// and never moves the camera. Any other window keeps routing to workspace zoom (route is false).
+function createActiveWindowContentZoom(
+  setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
+  getWins: () => AppWindow[] | null,
+  beforeZoom: () => void,
+): ActiveWindowContentZoom {
+  let carry: (ContentWheelContinuation & { readonly windowId: string }) | undefined;
+  const queue = createWheelContentZoomQueue((windowId, deltas) => {
+    const target = getWins()?.find((win) => win.id === windowId);
+    if (target === undefined) {
+      carry = undefined;
+      return;
+    }
+    const current = target.zoom ?? 1;
+    const rawZoom =
+      carry?.windowId === windowId && carry.expectedZoom === current ? carry.rawZoom : current;
+    const continuation = { expectedZoom: current, rawZoom };
+    const nextRaw = accumulatedContentWheelZoom(rawZoom, deltas);
+    carry = { windowId, expectedZoom: clampContentZoom(nextRaw), rawZoom: nextRaw };
+    // The updater stays pure under React replay; an intervening keyboard change uses its new zoom.
+    setWins((ws) => applyWheelZoomToWindows(ws, windowId, deltas, continuation));
+  });
+  let lastEventAt = Number.NEGATIVE_INFINITY;
+  const route = (event: WheelEvent, selection: WorkspaceUiSelectionState): boolean => {
+    const windowId = activeWindowOwnsWheelTarget(event.target, selection)
+      ? windowIdFromWheelTarget(event.target)
+      : null;
+    if (windowId === null) return false;
+    beforeZoom();
+    // One body-free line per gesture, not one per 60-120+Hz wheel event.
+    const now = Date.now();
+    if (now - lastEventAt > VIEW_ACTIVE_SETTLE_MS) {
+      queue.flush();
+      carry = undefined;
+      reportClientDiagnostic("[keiko] workspace window content zoomed by wheel.", {
+        composerActivity: "workspace-window-content-zoomed",
+      });
+    }
+    lastEventAt = now;
+    queue.queue(windowId, normalizeWheelDelta(event).y);
+    return true;
+  };
+  return {
+    route,
+    cancel: (): void => {
+      queue.cancel();
+      carry = undefined;
+    },
+  };
 }
 
 function frontmostLayoutWindowId(
@@ -597,6 +780,7 @@ function interpolateView(from: View, to: View, progress: number): View {
 }
 
 function usePanZoom({
+  storageScope,
   layoutLocked,
   isLayoutLocked,
   wsRef,
@@ -605,6 +789,7 @@ function usePanZoom({
   winsRef,
   selectionRef,
   setView,
+  setWins,
 }: UsePanZoomArgs): PanZoomResult {
   const viewRef = useRef<View>(view);
   viewRef.current = view;
@@ -622,8 +807,10 @@ function usePanZoom({
   viewPersistDebounceRef.current ??= createTrailingDebounce(PERSIST_DEBOUNCE_MS);
 
   const scheduleViewPersist = useCallback((): void => {
-    viewPersistDebounceRef.current?.schedule(() => persistList(VIEW_LS, viewRef.current));
-  }, []);
+    viewPersistDebounceRef.current?.schedule(() =>
+      persistList(VIEW_LS, viewRef.current, storageScope),
+    );
+  }, [storageScope]);
 
   useEffect(() => {
     if (!layoutLocked) return;
@@ -749,6 +936,15 @@ function usePanZoom({
     [cameraSmoothness, isLayoutLocked, setView],
   );
 
+  const settleCameraAnimation = useCallback((): void => {
+    if (animationFrameRef.current !== null && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+      setView(animationTargetRef.current);
+      renderedViewRef.current = animationTargetRef.current;
+    }
+  }, [setView]);
+
   const queueView = useCallback(
     (next: View | ((current: View) => View), options: QueueViewOptions = {}): void => {
       if (isLayoutLocked()) return;
@@ -790,32 +986,22 @@ function usePanZoom({
   useEffect(() => {
     const el = wsRef.current;
     if (el === null) return;
-    // GEN-PERF-WORKSPACE-005 — the ctrl/cmd-wheel zoom branch re-read
-    // el.getBoundingClientRect() on EVERY wheel event. A Windows trackpad pinch
-    // synthesizes ctrl-wheel at 60-120+Hz, so each step paid a synchronous layout
-    // read (a forced reflow whenever anything — e.g. a streaming chat — dirtied
-    // layout between events). Cache the rect with a TTL matching the view-active
-    // settle window: at most one layout read per 160ms of continuous gesture, and
-    // staleness is bounded by the same window (the workspace rect cannot
-    // meaningfully change mid-pinch; a real resize refreshes within 160ms).
-    let zoomRect: DOMRect | null = null;
-    let zoomRectReadAt = 0;
-    const gestureRect = (): DOMRect => {
-      const now = Date.now();
-      if (zoomRect === null || now - zoomRectReadAt > VIEW_ACTIVE_SETTLE_MS) {
-        zoomRect = el.getBoundingClientRect();
-        zoomRectReadAt = now;
-      }
-      return zoomRect;
-    };
+    const gestureRect = createGestureRectReader(el);
+    // Issue #2402 — the wallpaper shader's gesture suppression (data-view-active,
+    // GEN-PERF-WORKSPACE-004) must engage for content zoom exactly as for camera zoom.
+    const contentZoom = createActiveWindowContentZoom(
+      setWins,
+      () => winsRef.current,
+      () => {
+        settleCameraAnimation();
+        markViewActive();
+      },
+    );
     const onWheel = (e: WheelEvent): void => {
       if (routeLockedWorkspaceWheel(e, isLayoutLocked())) return;
       if (e.metaKey || e.ctrlKey) {
-        if (activeWindowOwnsWheelTarget(e.target, selectionRef.current)) {
-          e.preventDefault();
-          return;
-        }
         e.preventDefault();
+        if (contentZoom.route(e, selectionRef.current)) return;
         const r = gestureRect();
         const v = viewRef.current;
         const delta = normalizeWheelDelta(e);
@@ -842,8 +1028,21 @@ function usePanZoom({
         smoothnessScale: DIRECT_PAN_SMOOTHNESS_SCALE,
       });
     };
-    return installWorkspaceWheelListener(el, onWheel);
-  }, [wsRef, queueView, selectionRef, isLayoutLocked]);
+    const removeWheelListener = installWorkspaceWheelListener(el, onWheel);
+    return (): void => {
+      removeWheelListener();
+      contentZoom.cancel();
+    };
+  }, [
+    wsRef,
+    queueView,
+    selectionRef,
+    isLayoutLocked,
+    setWins,
+    winsRef,
+    settleCameraAnimation,
+    markViewActive,
+  ]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -892,6 +1091,7 @@ function usePanZoom({
 }
 
 interface UseHydrateArgs {
+  readonly storageScope: string | undefined;
   readonly retireAutomaticGeometry: () => void;
   readonly worldVP: () => ViewportWorld | null;
   readonly wsRef: RefObject<HTMLElement | null>;
@@ -941,11 +1141,37 @@ function readPersistedArray(key: string): readonly unknown[] {
   return [];
 }
 
-function readPersistedWorkspaceSnapshot(): {
+function readPersistedWorkspaceSnapshot(storageScope: string | undefined): {
   readonly wins: AppWindow[];
   readonly conns: Connection[];
 } {
-  return snapshotFromRaw(readPersistedArray(WS_LS), readPersistedArray(CONN_LS));
+  return snapshotFromRaw(
+    readPersistedArray(workspaceStorageKey(WS_LS, storageScope)),
+    readPersistedArray(workspaceStorageKey(CONN_LS, storageScope)),
+  );
+}
+
+function reportWorkspaceRestoration(
+  snapshot: WorkspaceSnapshot,
+  storageScope: string | undefined,
+): void {
+  if (storageScope === undefined) return;
+  let activity:
+    "workspace-layout-restored" | "workspace-layout-empty" | "workspace-layout-unowned" =
+    snapshot.wins.length > 0 ? "workspace-layout-restored" : "workspace-layout-empty";
+  try {
+    if (
+      window.localStorage.getItem(workspaceStorageKey(WS_LS, storageScope)) === null &&
+      window.localStorage.getItem(WS_LS) !== null
+    )
+      activity = "workspace-layout-unowned";
+  } catch {
+    reportClientDiagnostic("Workspace layout storage is unavailable.", {
+      kind: "other",
+      errorKind: "unavailable",
+    });
+  }
+  reportClientDiagnostic("Workspace layout restoration settled.", { composerActivity: activity });
 }
 
 function workspaceStateEtag(revision: number): string {
@@ -960,15 +1186,17 @@ function revisionFromWorkspaceEtag(value: string | null): number | null {
 
 async function fetchServerWorkspaceSnapshot(
   knownRevision: number,
-): Promise<ServerWorkspaceSnapshot | null> {
+  storageScope: string | undefined,
+): Promise<ServerWorkspaceSnapshot | "unchanged" | null> {
   if (typeof fetch !== "function") return null;
   try {
     const headers: Record<string, string> = { Accept: "application/json" };
     headers["If-None-Match"] = workspaceStateEtag(knownRevision);
+    if (storageScope !== undefined) headers["X-Keiko-Workspace-Storage"] = storageScope;
     const response = await fetch(WORKSPACE_STATE_API, { headers });
     if (response.status === 304) {
       noteWorkspaceSyncRecovered();
-      return null;
+      return "unchanged";
     }
     if (!response.ok) {
       surfaceWorkspaceSyncFailure("pull", `failed with status ${String(response.status)}`);
@@ -1115,6 +1343,10 @@ function noteWorkspaceSyncRecovered(): void {
   workspaceSyncFailureSurfaced = false;
 }
 
+function workspaceStorageHeaders(scope: string | undefined): Readonly<Record<string, string>> {
+  return scope === undefined ? {} : { "X-Keiko-Workspace-Storage": scope };
+}
+
 async function putServerWorkspaceSnapshot(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
@@ -1122,6 +1354,7 @@ async function putServerWorkspaceSnapshot(
     readonly baseRevision: number;
     readonly signal?: AbortSignal;
     readonly keepalive?: boolean;
+    readonly storageScope?: string | undefined;
   },
 ): Promise<
   | { readonly kind: "ok"; readonly revision: number }
@@ -1151,6 +1384,7 @@ async function putServerWorkspaceSnapshot(
         "Content-Type": "application/json",
         "If-Match": workspaceStateEtag(opts.baseRevision),
         "X-Keiko-CSRF": "1",
+        ...workspaceStorageHeaders(opts.storageScope),
       },
       body: serializedBody,
       // keepalive lets the final flush survive page unload; disabled above when the
@@ -1298,6 +1532,7 @@ function applyPersistedWorkspaceSnapshot(
 }
 
 function useHydrate({
+  storageScope,
   retireAutomaticGeometry,
   worldVP,
   wsRef,
@@ -1311,17 +1546,28 @@ function useHydrate({
     if (el === null) return;
     // M1 (#532) — no seeded windows on first launch; the empty-state "New window" button
     // in Workspace.tsx and the FAB (+) are always reachable even when `wins` is [].
-    const snapshot = readPersistedWorkspaceSnapshot();
+    const snapshot = readPersistedWorkspaceSnapshot(storageScope);
+    reportWorkspaceRestoration(snapshot, storageScope);
     // GEN-PERF-PERSISTENCE-001 — seed the applied-serialization baseline from the
     // hydrated snapshot so an immediate cross-tab storage event echoing this exact
     // value is recognised as a no-op (before the debounced local persist runs).
     lastAppliedSerializedRef.current = serializePersistedSnapshot(snapshot);
     retireAutomaticGeometry();
     applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc, worldVP());
-  }, [wsRef, worldVP, setWins, setConns, zc, lastAppliedSerializedRef, retireAutomaticGeometry]);
+  }, [
+    wsRef,
+    worldVP,
+    setWins,
+    setConns,
+    zc,
+    lastAppliedSerializedRef,
+    retireAutomaticGeometry,
+    storageScope,
+  ]);
 }
 
 interface UseStorageSyncArgs {
+  readonly storageScope: string | undefined;
   readonly worldVP: () => ViewportWorld | null;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
@@ -1345,6 +1591,7 @@ function serializePersistedSnapshot(snapshot: {
 }
 
 function useWorkspaceStorageSync({
+  storageScope,
   worldVP,
   setWins,
   setConns,
@@ -1356,8 +1603,12 @@ function useWorkspaceStorageSync({
   useEffect(() => {
     const onStorage = (event: StorageEvent): void => {
       if (event.storageArea !== null && event.storageArea !== window.localStorage) return;
-      if (event.key !== WS_LS && event.key !== CONN_LS) return;
-      const snapshot = readPersistedWorkspaceSnapshot();
+      if (
+        event.key !== workspaceStorageKey(WS_LS, storageScope) &&
+        event.key !== workspaceStorageKey(CONN_LS, storageScope)
+      )
+        return;
+      const snapshot = readPersistedWorkspaceSnapshot(storageScope);
       // GEN-PERF-PERSISTENCE-001 — a cross-tab storage event unconditionally
       // re-applied the whole snapshot with brand-new object identities (defeating
       // every WindowFrame memo and bumping useLinkRevision) even when the incoming
@@ -1386,10 +1637,108 @@ function useWorkspaceStorageSync({
     beforeApplyRemote,
     lastAppliedSerializedRef,
     suppressNextLocalPersistRef,
+    storageScope,
   ]);
 }
 
+interface WorkspacePullPoller {
+  readonly sync: () => void;
+  readonly stop: () => void;
+  readonly changed: () => void;
+}
+
+// A timer never supersedes an owned read. Visibility catch-up is one trailing read;
+// local changes keep the fast cadence even when their PUT settles before that read.
+class WorkspacePullPolling implements WorkspacePullPoller {
+  private stopped = false;
+  private pending = false;
+  private catchup = false;
+  private deferredReported = false;
+  private generation = 0;
+  private idleCount = 0;
+  private intervalMs = WORKSPACE_STATE_POLL_MS;
+  private readonly poller: ReturnType<typeof createVisibilityPoller>;
+
+  constructor(
+    private readonly pull: () => Promise<boolean>,
+    private readonly isDirty: () => boolean,
+  ) {
+    this.poller = createVisibilityPoller(
+      () => {
+        void this.refresh();
+      },
+      () => this.intervalMs,
+    );
+  }
+
+  private cadence(idle: boolean): void {
+    this.idleCount = idle ? this.idleCount + 1 : 0;
+    const next =
+      idle && this.idleCount >= 2
+        ? Math.min(this.intervalMs * 2, WORKSPACE_STATE_IDLE_POLL_MS)
+        : WORKSPACE_STATE_POLL_MS;
+    if (next === this.intervalMs) return;
+    this.intervalMs = next;
+    reportClientDiagnostic(
+      idle
+        ? "Workspace polling slowed while idle."
+        : "Workspace polling resumed its active interval.",
+      { composerActivity: idle ? "workspace-sync-idle" : "workspace-sync-active" },
+    );
+    this.poller.reset();
+  }
+  private async refresh(): Promise<void> {
+    if (this.pending) {
+      if (!this.deferredReported) {
+        this.deferredReported = true;
+        reportClientDiagnostic("Workspace polling deferred while a pull is pending.", {
+          composerActivity: "workspace-sync-pull-pending",
+        });
+      }
+      return;
+    }
+    this.pending = true;
+    this.catchup = false;
+    this.deferredReported = false;
+    const startedGeneration = this.generation;
+    try {
+      const unchanged = await this.pull();
+      if (!this.stopped)
+        this.cadence(unchanged && !this.isDirty() && startedGeneration === this.generation);
+    } finally {
+      this.pending = false;
+      if (!this.stopped && this.catchup && document.visibilityState !== "hidden")
+        void this.refresh();
+    }
+  }
+  readonly sync = (): void => {
+    if (document.visibilityState !== "hidden" && this.pending) this.catchup = true;
+    this.poller.sync();
+  };
+  readonly stop = (): void => {
+    this.stopped = true;
+    this.poller.stop();
+  };
+  readonly changed = (): void => {
+    this.generation += 1;
+    this.cadence(false);
+  };
+}
+
+function preserveRestoredWorkspace(
+  serverSnapshot: ServerWorkspaceSnapshot,
+  revisionRef: CurrentRef<number>,
+  winsRef: CurrentRef<AppWindow[] | null>,
+): boolean {
+  return (
+    revisionRef.current === 0 &&
+    serverSnapshot.windows.length === 0 &&
+    (winsRef.current?.length ?? 0) > 0
+  );
+}
+
 interface UseServerSyncArgs {
+  readonly storageScope: string | undefined;
   readonly retireAutomaticGeometry: () => void;
   readonly worldVP: () => ViewportWorld | null;
   readonly wins: AppWindow[] | null;
@@ -1401,6 +1750,7 @@ interface UseServerSyncArgs {
 }
 
 function useWorkspaceServerSync({
+  storageScope,
   retireAutomaticGeometry,
   worldVP,
   wins,
@@ -1430,6 +1780,7 @@ function useWorkspaceServerSync({
   const serverSyncStoppedRef = useRef(false);
   const putAbortRef = useRef<AbortController | null>(null);
   const localDirtyRef = useRef(false);
+  const pullPollerRef = useRef<WorkspacePullPoller | null>(null);
   const lastAcknowledgedSnapshotRef = useRef<string | null>(null);
   if (wins !== null && wins.length > 0 && lastAcknowledgedSnapshotRef.current === null) {
     localDirtyRef.current = true;
@@ -1440,50 +1791,54 @@ function useWorkspaceServerSync({
   // One sanitize+PUT of the LATEST snapshot (read from refs so a debounced/flush run
   // never sends stale geometry). Supersedes any in-flight PUT via AbortController and
   // advances the revision monotonically (issue #1580).
-  const runServerPut = useCallback((keepalive: boolean): void => {
-    const latestWins = winsRef.current;
-    if (latestWins === null) return;
-    const snapshot = buildServerWorkspaceSnapshot(latestWins, connsRef.current);
-    if (snapshot.serialized === lastAcknowledgedSnapshotRef.current) {
-      localDirtyRef.current = false;
-      return;
-    }
-    putAbortRef.current?.abort();
-    const controller = typeof AbortController === "function" ? new AbortController() : null;
-    putAbortRef.current = controller;
-    const baseRevision = revisionRef.current;
-    void putServerWorkspaceSnapshot(snapshot.wins, snapshot.conns, {
-      baseRevision,
-      ...(controller !== null ? { signal: controller.signal } : {}),
-      keepalive,
-    }).then((result) => {
-      if (result?.kind === "conflict") {
-        // A 412 is a handled concurrency signal: adopt a usable conflict revision when doing so is
-        // safe, and ALWAYS schedule the bounded retry — the send uses the freshest adopted revision
-        // at fire time, so a stale, equal, restart-reset, or missing conflict ETag never parks the
-        // dirty snapshot. The per-snapshot marker and the unmount guard inside the scheduler bound
-        // the attempt; no revision comparison is needed for loop safety.
-        adoptConflictRevision(result.revision, baseRevision, revisionRef);
-        scheduleWorkspaceConflictRetry(
-          snapshot.serialized,
-          localDirtyRef,
-          serverSyncStoppedRef,
-          conflictRetriedSnapshotRef,
-          putDebounceRef,
-          runServerPutRef,
-        );
+  const runServerPut = useCallback(
+    (keepalive: boolean): void => {
+      const latestWins = winsRef.current;
+      if (latestWins === null) return;
+      const snapshot = buildServerWorkspaceSnapshot(latestWins, connsRef.current);
+      if (snapshot.serialized === lastAcknowledgedSnapshotRef.current) {
+        localDirtyRef.current = false;
         return;
       }
-      if (result?.kind !== "ok") return;
-      lastAcknowledgedSnapshotRef.current = snapshot.serialized;
-      localDirtyRef.current = false;
-      // An acknowledged save ends the conflict sequence: re-arm the one-retry cap so a LATER
-      // conflict of the same serialization (state B, then back to byte-identical A) gets its
-      // retry instead of being parked by a marker from a long-finished sequence.
-      conflictRetriedSnapshotRef.current = null;
-      if (result.revision > revisionRef.current) revisionRef.current = result.revision;
-    });
-  }, []);
+      putAbortRef.current?.abort();
+      const controller = typeof AbortController === "function" ? new AbortController() : null;
+      putAbortRef.current = controller;
+      const baseRevision = revisionRef.current;
+      void putServerWorkspaceSnapshot(snapshot.wins, snapshot.conns, {
+        storageScope,
+        baseRevision,
+        ...(controller !== null ? { signal: controller.signal } : {}),
+        keepalive,
+      }).then((result) => {
+        if (result?.kind === "conflict") {
+          // A 412 is a handled concurrency signal: adopt a usable conflict revision when doing so is
+          // safe, and ALWAYS schedule the bounded retry — the send uses the freshest adopted revision
+          // at fire time, so a stale, equal, restart-reset, or missing conflict ETag never parks the
+          // dirty snapshot. The per-snapshot marker and the unmount guard inside the scheduler bound
+          // the attempt; no revision comparison is needed for loop safety.
+          adoptConflictRevision(result.revision, baseRevision, revisionRef);
+          scheduleWorkspaceConflictRetry(
+            snapshot.serialized,
+            localDirtyRef,
+            serverSyncStoppedRef,
+            conflictRetriedSnapshotRef,
+            putDebounceRef,
+            runServerPutRef,
+          );
+          return;
+        }
+        if (result?.kind !== "ok") return;
+        lastAcknowledgedSnapshotRef.current = snapshot.serialized;
+        localDirtyRef.current = false;
+        // An acknowledged save ends the conflict sequence: re-arm the one-retry cap so a LATER
+        // conflict of the same serialization (state B, then back to byte-identical A) gets its
+        // retry instead of being parked by a marker from a long-finished sequence.
+        conflictRetriedSnapshotRef.current = null;
+        if (result.revision > revisionRef.current) revisionRef.current = result.revision;
+      });
+    },
+    [storageScope],
+  );
   runServerPutRef.current = runServerPut;
 
   const applyServerSnapshot = useCallback(
@@ -1505,16 +1860,13 @@ function useWorkspaceServerSync({
   useEffect(() => {
     if (!serverSyncEnabled) return;
     let stopped = false;
-    const pull = async (): Promise<void> => {
-      const serverSnapshot = await fetchServerWorkspaceSnapshot(revisionRef.current);
-      if (stopped || serverSnapshot === null) return;
-      if (serverSnapshot.revision <= revisionRef.current) return;
-      if (
-        revisionRef.current === 0 &&
-        serverSnapshot.windows.length === 0 &&
-        (winsRef.current?.length ?? 0) > 0
-      ) {
-        return;
+    const pull = async (): Promise<boolean> => {
+      const serverSnapshot = await fetchServerWorkspaceSnapshot(revisionRef.current, storageScope);
+      if (stopped || serverSnapshot === null) return false;
+      if (serverSnapshot === "unchanged") return true;
+      if (serverSnapshot.revision <= revisionRef.current) return true;
+      if (preserveRestoredWorkspace(serverSnapshot, revisionRef, winsRef)) {
+        return false;
       }
       if (localDirtyRef.current) {
         adoptPolledRevisionWhileDirty(
@@ -1524,21 +1876,22 @@ function useWorkspaceServerSync({
           putDebounceRef,
           runServerPutRef,
         );
-        return;
+        return false;
       }
       applyServerSnapshot(serverSnapshot);
+      return false;
     };
-    const poller = createVisibilityPoller(() => {
-      void pull();
-    }, WORKSPACE_STATE_POLL_MS);
+    const poller = new WorkspacePullPolling(pull, () => localDirtyRef.current);
+    pullPollerRef.current = poller;
     poller.sync();
     document.addEventListener("visibilitychange", poller.sync);
     return () => {
       stopped = true;
+      pullPollerRef.current = null;
       poller.stop();
       document.removeEventListener("visibilitychange", poller.sync);
     };
-  }, [applyServerSnapshot, serverSyncEnabled]);
+  }, [applyServerSnapshot, serverSyncEnabled, storageScope]);
 
   // Debounced server PUT (issue #1580): an uncoalesced drag previously fired one
   // full-snapshot PUT per pointer frame. The echo-suppression flag is consumed
@@ -1566,6 +1919,7 @@ function useWorkspaceServerSync({
       return;
     }
     localDirtyRef.current = true;
+    pullPollerRef.current?.changed();
     putDebounceRef.current?.schedule(() => runServerPut(false));
   }, [wins, conns, suppressNextPersistRef, serverSyncEnabled, runServerPut]);
 
@@ -1904,6 +2258,7 @@ export interface UseWorkspaceOptions extends Pick<
   | "onGitChangeBind"
   | "onGitChangeUnbind"
 > {
+  readonly storageScope?: string | undefined;
   readonly cameraSmoothness?: number | undefined;
   readonly onWindowLimitReached?: ((limit: number) => void) | undefined;
 }
@@ -1953,8 +2308,16 @@ function canonicalFilesWindow(
   if (current === null || scope.root === undefined || !isScopeConnected([current], requested))
     return window;
   const cfg = { ...window.cfg };
+  // The request carries the normalized `/` spelling while the window keeps the native one (`C:\`
+  // on Windows), so the roots are compared by connected-scope identity, not as strings (#4068).
+  const requestedIdentity = chatConnectedScopeIdentity(requested);
   for (const key of ["root", "resolvedRoot"]) {
-    if (cfg[key] === requested.root) cfg[key] = scope.root;
+    const value = cfg[key];
+    if (
+      typeof value === "string" &&
+      chatConnectedScopeIdentity({ ...requested, root: value }) === requestedIdentity
+    )
+      cfg[key] = scope.root;
   }
   return { ...window, cfg };
 }
@@ -2105,6 +2468,8 @@ export function useWorkspace(
   wsRef: RefObject<HTMLElement | null>,
   opts: UseWorkspaceOptions = {},
 ): UseWorkspaceResult {
+  const inheritedStorageScope = useContext(WorkspaceStorageScopeContext);
+  const storageScope = opts.storageScope ?? inheritedStorageScope;
   const { setWins, wins, winsReadyRef, winsRef } = useWorkspaceWindowState();
   const automaticSizing = useAutomaticWindowSizing(wins);
   const [selection, setSelection] = useState<WorkspaceUiSelectionState>({
@@ -2122,7 +2487,7 @@ export function useWorkspace(
   const [conns, setConns] = useState<Connection[]>([]);
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
   const [connectionOutcome, setConnectionOutcome] = useState<ConnectionOutcome>();
-  const [view, setView] = useState<View>(readView);
+  const [view, setView] = useState<View>(() => readView(storageScope));
   // Issue #1580 — destructure the optional scope-bind callbacks so the memoized
   // action factories below depend on their (stable) identities rather than on the
   // `opts` object, which defaults to a fresh `{}` every render and would otherwise
@@ -2298,6 +2663,7 @@ export function useWorkspace(
   const snapChordRef = useRef<SnapChordActions | null>(null);
 
   const { viewRef, worldVP, zoomTo, fitView, resetView, panBy, rect } = usePanZoom({
+    storageScope,
     layoutLocked,
     isLayoutLocked,
     wsRef,
@@ -2306,9 +2672,11 @@ export function useWorkspace(
     winsRef,
     selectionRef,
     setView,
+    setWins,
   });
 
   useHydrate({
+    storageScope,
     wsRef,
     worldVP,
     setWins,
@@ -2318,6 +2686,7 @@ export function useWorkspace(
     retireAutomaticGeometry: automaticSizing.retire,
   });
   useWorkspaceStorageSync({
+    storageScope,
     worldVP,
     setWins,
     setConns,
@@ -2327,6 +2696,7 @@ export function useWorkspace(
     suppressNextLocalPersistRef,
   });
   useWorkspaceServerSync({
+    storageScope,
     retireAutomaticGeometry: automaticSizing.retire,
     worldVP,
     wins,
@@ -2365,15 +2735,15 @@ export function useWorkspace(
       return;
     }
     const persisted = sanitizePersistedWorkspace(wins, conns);
-    persistList(WS_LS, persisted.wins);
-    persistList(CONN_LS, persisted.conns);
+    persistList(WS_LS, persisted.wins, storageScope);
+    persistList(CONN_LS, persisted.conns, storageScope);
     // Track what is now durably applied so a cross-tab storage event echoing this
     // exact value is recognised as a no-op (PERSISTENCE-001 equality guard).
     lastAppliedSerializedRef.current = JSON.stringify({
       windows: persisted.wins,
       connections: persisted.conns,
     });
-  }, [conns, wins]);
+  }, [conns, wins, storageScope]);
 
   useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef: snapChordRef, isLayoutLocked });
   useFitMaximized({ wsRef, viewRef, setWins, automatic: automaticSizing });

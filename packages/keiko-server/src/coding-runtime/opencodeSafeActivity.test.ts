@@ -294,9 +294,19 @@ describe("OpenCode safe-activity normalization", () => {
   // #3897: OpenCode 2.1.4 Code Mode catches a JavaScript exception thrown inside the `execute`
   // program (or by a nested `tools.opencode.*` call it did not catch) and returns a COMPLETED part
   // with `metadata.error: true`. This projection must agree with the history projection
-  // (opencodeV2History.ts): both use `isOpenCodeCodeModeExecutionFailure`.
+  // (opencodeV2History.ts): both use `isOpenCodeToolExecutionFailure`.
   describe("a Code Mode execute part (#3897)", () => {
     const thrown = "PRIVATE_THROWN_MESSAGE";
+
+    it.each([
+      ["a non-zero exit", { exit: 1 }, "failed"],
+      ["a timeout", { timeout: true }, "failed"],
+      ["a signal", { signal: "SIGTERM" }, "failed"],
+      ["an exit of zero", { exit: 0 }, "succeeded"],
+      ["a job moved to the background", { status: "running", shellID: "s" }, "succeeded"],
+    ])("reads a shell part ending with %s like the history does (#4271)", (_name, meta, state) => {
+      expect(states([executeRow(1, meta, "shell")])).toEqual([state]);
+    });
 
     function executeRow(sequence: number, metadata: unknown, tool = "execute"): unknown {
       return row(sequence, "message.part.updated.1", {
@@ -498,7 +508,7 @@ describe("OpenCode safe-activity normalization", () => {
     expect(normalized).toEqual({ signals: [], dropped: 2 });
   });
 
-  // #3897: the pinned 2.1.4 runtime ships the merged `todo` plan tool; it is the same governed
+  // #3897: the pinned runtime ships the merged `todo` plan tool; it is the same governed
   // plan surface as `todowrite`: a completed part projects as a plan, a call never as a tool.
   it("projects the native todo carrier as a plan and keeps its call dead", () => {
     const todos = [{ content: "Read the entry point", status: "in_progress", priority: "high" }];

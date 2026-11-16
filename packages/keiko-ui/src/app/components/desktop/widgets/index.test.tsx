@@ -1,3 +1,4 @@
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect, useRef, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -7,6 +8,10 @@ import type { AppWindow } from "../windows/types";
 type UpdateCfg = (patch: AppWindow["cfg"]) => void;
 
 const boundRootModuleLoaded = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client-diagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/client-diagnostics")>()),
+  reportClientDiagnostic: vi.fn(),
+}));
 vi.mock("./BoundRootTarget", async (importOriginal) => {
   boundRootModuleLoaded();
   return await importOriginal<typeof import("./BoundRootTarget")>();
@@ -536,6 +541,11 @@ vi.mock("./cards/git-client/GitClientWindow", () => ({
       {initialRepositoryDialog === "clone" ? (
         <button type="button" onClick={() => onRepositoryConnected?.("/repos/cloned")}>
           Complete issue clone
+        </button>
+      ) : null}
+      {initialRepositoryDialog === "open" ? (
+        <button type="button" onClick={() => onRepositoryConnected?.("/repos/opened")}>
+          Complete folder choice
         </button>
       ) : null}
       <button type="button" onClick={() => onOpenFiles?.(projectId ?? "")}>
@@ -1320,6 +1330,41 @@ describe("active workspace binding override (Issue #446)", () => {
     });
     expect(ctx.focusWindow).toHaveBeenCalledWith("coding-source");
     expect(ctx.updateCfg).toHaveBeenCalledWith({ repositoryReturnWindow: "" });
+  });
+
+  // #4371 F22: only the window that asked for the folder takes it; the line says so, without a path.
+  it("returns a chosen folder to the asking Workbench window only, and says so body-free", async () => {
+    const reports = vi.mocked(reportClientDiagnostic);
+    reports.mockClear();
+    const ctx = makeCtx();
+    render(
+      <>
+        {WIN_TYPES.governedGit.render(
+          { repositoryDialog: "open", repositoryReturnWindow: "asking-window" },
+          ctx,
+        )}
+      </>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Complete folder choice" }));
+
+    expect(ctx.updateWindow).toHaveBeenCalledTimes(1);
+    expect(ctx.updateWindow).toHaveBeenCalledWith("asking-window", {
+      cfg: { repositoryPath: "/repos/opened" },
+    });
+    const lines = reports.mock.calls.filter(([note]) => note.includes("repository-returned"));
+    expect(lines).toHaveLength(1);
+    expect(JSON.stringify(lines[0])).not.toContain("/repos/opened");
+  });
+
+  it("does not report a return when no window asked for the folder", async () => {
+    const reports = vi.mocked(reportClientDiagnostic);
+    reports.mockClear();
+    const ctx = makeCtx();
+    render(<>{WIN_TYPES.governedGit.render({ repositoryDialog: "open" }, ctx)}</>);
+    fireEvent.click(await screen.findByRole("button", { name: "Complete folder choice" }));
+
+    expect(ctx.updateWindow).not.toHaveBeenCalled();
+    expect(reports.mock.calls.filter(([note]) => note.includes("repository-returned"))).toEqual([]);
   });
 
   it("preserves an explicit dormant Coding Workbench repository selection for Git", async () => {

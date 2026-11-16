@@ -1,6 +1,11 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { I18nProvider, I18N_STORAGE_KEY, loadLocaleMessages } from "@/lib/i18n";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticWriter,
+} from "@/lib/client-diagnostics";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchRuntimeSnapshot,
@@ -109,6 +114,36 @@ describe("CodingWorkbenchRunStatus", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("records human readiness disclosure activation without publishing its facts", () => {
+    const writer = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(writer);
+    try {
+      render(<CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="model" />);
+      const summary = screen.getByText("Readiness details");
+      const disclosure = summary.closest("details");
+      expect(disclosure).not.toBeNull();
+
+      fireEvent.click(summary);
+      expect(disclosure).toHaveAttribute("open");
+      fireEvent.click(summary);
+      expect(disclosure).not.toHaveAttribute("open");
+      if (disclosure !== null) {
+        disclosure.open = true;
+        fireEvent(disclosure, new Event("toggle"));
+      }
+
+      const interactions = writer.mock.calls
+        .map(([, meta]) => meta?.codingWorkbenchInteraction)
+        .filter((value) => value?.interaction === "details-toggled");
+      expect(interactions).toEqual([
+        { interaction: "details-toggled", section: "readiness", expanded: true },
+        { interaction: "details-toggled", section: "readiness", expanded: false },
+      ]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 
   // #3873 live review: the run status region read "Running. Revision 4. Model source ready.

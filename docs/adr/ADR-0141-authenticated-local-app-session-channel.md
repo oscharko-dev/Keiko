@@ -137,6 +137,88 @@ pairing port is never itself client attestation: an absent, forged, revoked or e
 mint a new session. The launcher fragment is redeemed only by the existing single-use `/pair`
 endpoint. Valid-cookie reloads remain automatic and do not widen authority.
 
+The active inventory includes the `/api/atlassian-connectors/chat-write-approval` projection for
+ordinary Chat Jira review observation and decisions (#4288). A cookie Path matches by prefix, and
+the approval id is the last segment of the route, so the Chat review routes (`GET` and `POST`
+`/api/atlassian-connectors/chat-write-approval/:approvalId`) own their own prefix and the generic
+connector approval routes under `/api/atlassian-connectors/action-approvals` never receive the
+cookie. The route table, not a convention, proves this (`chatWriteApprovalCookieScope.test.ts`), and
+no generic approval handler consults the session. The projection carries the same existing HttpOnly,
+SameSite=Strict bearer, and sign-out clears it through the same inventory. A retained pending review
+checks the original live session, exact action and original expiry before a claim and before
+dispatch. An observed review may keep its bounded worker across page reload; the worker's timers are
+unreferenced and released on Stop, expiry and session end. Explicit Stop of a turn awaiting the
+human's decision targets that canonical turn through the authenticated `/api/desktop/chat/cancel`
+endpoint, which answers every authenticated caller with HTTP 200 and `cancelled` (true only for the
+caller's own running worker) and keeps a 404 for a missing session; any other in-flight send stops
+at once by aborting its transport. The restore route supplies the projection to existing valid
+sessions after an upgrade.
+
+#### Simple local browser connection (owner decision, 2026-11-04)
+
+The normal launcher still opens an authenticated browser automatically. An unpaired desktop offers
+one **Connect browser** action instead of a comparison-code dialog. Its content-free POST asks the
+running trusted launcher to open Keiko in the matching installed browser. The launcher creates the
+existing fresh, single-use attestation and delivers it **only to the native OS browser opener** in
+the existing fragment flow. The requester receives a closed outcome, never an attestation, cookie,
+redirect, public-key approval, or content. It remains unauthenticated until that browser independently
+redeems the attestation. Other tabs in the same browser profile then observe the verified cookie.
+After a server restart the same action reconnects; `dev:start` can also request this handoff from an
+already running server without restarting it or recovering its private secret.
+
+**Restart behaviour (owner-delegated decision, #4370).** A server restart ends every launcher-paired
+session by design, because the registry holds no durable bearer (D5); nothing is added to what the
+server keeps across a restart, and no trust boundary changes. A browser the person explicitly
+remembered continues after the restart without a manual step: the existing remembered-browser
+renewal (below) runs after the next refused repair. Every other browser needs one click. When a tab
+finds its session gone, it compares the random server instance identity that `GET /api/health`
+reports (`instanceId`, regenerated at every process start, not a credential) with the one it
+remembered in its own tab storage while it was connected. Only a different identity makes the page
+say, in plain words and without error styling, that Keiko was restarted, that one click on the
+existing Connect control reconnects, that the open Chat and its draft are kept, and that a browser
+remembered under Settings → Security → Browser approvals reconnects on its own. While the session is
+valid the page keeps the remembered identity current (on every active read and every thirty seconds),
+so a restart the session survived is not blamed for a later, unrelated loss. An absent, unreadable or
+malformed identity makes no restart claim and the ordinary wording shows. The notice offers no way to
+remember a browser: remembering stays the explicit two-sided approval below.
+
+A mutation refused with HTTP 401, or HTTP 403 carrying `DENIED`, `FORBIDDEN` or `UNAUTHORIZED`,
+requests a fresh browser-session inspection through the existing notification port. For a 404,
+`NOT_FOUND` triggers inspection only on the session-concealing skill-library, Chat skill-selection,
+private-draft and run-control routes; per-run Coding runtime mutations use
+`CODING_RUNTIME_RUN_NOT_FOUND`. An ordinary missing Chat or Pod does not invalidate the held session
+inspection. A 404 alone never proves missing session authority or a missing resource.
+
+Requests join one inspection notification in flight and publish at most once every five seconds,
+including its diagnostic. The banner follows a fresh authoritative inventory read. The original
+refusal is preserved and no mutation is replayed. Follow-up GET/HEAD reads never publish another
+notification, so an unpaired skill or draft read cannot cause a refresh loop. The core API transport
+uses this notification for the closed trigger set above, including `403 DENIED`; the shared satellite
+HTTP transport instead keeps `403 DENIED` on its existing bounded session-confirmation and read-only
+repair/replay path. Diagnostic delivery opts out of both mechanisms and counts its own refusals
+without recursively reporting them through the failing transport.
+
+The destination is an exact HTTP loopback origin on the server-owned public UI port; no supplied
+URL, path, executable, principal or additional arguments are admitted. Browser selection uses a
+closed target list and fixed native application identifiers/commands with no shell. Calls are
+serialized and limited to one per ten seconds per server graph, and native launch is bounded to
+five seconds. On Windows that bound applies to the launch itself (`Start-Process`), counted from the
+first statement of the fixed opener program and enforced inside it; the inbox PowerShell host that
+runs the program has a separate start allowance of sixty seconds, so the server waits at most
+sixty-five seconds for the opener (amended 2026-11-13, #4358, ADR-0182 D6: a host that needed
+longer than five seconds to start was otherwise ended before it could launch anything). The
+destination and target-list guards above are unchanged. Child processes receive only desktop
+environment fields. Native errors and proof-bearing
+arguments never enter responses or logs; the Activity Log records the closed handoff outcome.
+A local HTTP client can at most cause a bounded browser window to open: it cannot obtain that
+browser's proof or read authority. Missing launcher configuration, unsupported browser, opener
+failure and blocked profile delivery leave protected APIs closed and present a retry. Private or
+nondefault browser profiles may require reopening Keiko through their normal launcher profile.
+
+The older explicit cross-browser approval protocol below remains available to its existing
+management/renewal consumers, but the ordinary desktop entry point does not invoke it. Remembering
+is still opt-in; this change does not silently persist browser keys or extend any session lifetime.
+
 #### Explicit browser approval (#4043)
 
 The same channel and session registry support approval of another browser by an already approved
@@ -144,8 +226,8 @@ local session. The requester supplies only a public P-256 point and an explicit 
 choice. A bounded five-minute request carries a random identifier and an eight-digit comparison
 code. The human compares that code in the requesting browser and in the authenticated approval
 surface. Merely knowing the request identifier or comparison code cannot issue a session: completion
-also proves possession of the exact approved private key. There is no unauthenticated launcher
-invocation, fallback bearer, browser-supplied principal, or grant of task/autonomy authority.
+also proves possession of the exact approved private key. This protocol grants no fallback bearer, browser-supplied principal, or task/autonomy authority.
+The separate native-open request above is content-free and cannot approve a posted key.
 
 Completion and remembered renewal use distinct, single-use challenges valid for at most sixty
 seconds. Domain-separated signed bytes bind the installation, current server instance, exact
@@ -176,6 +258,8 @@ removes the durable approval, pending completion state and every associated live
 the same registry. Within the single BFF owner, verification, store mutation and mint/revocation
 contain no asynchronous gap. A lost completion response can rotate its existing session with a
 fresh proof during the original request window; it cannot mint again after revocation or eviction.
+While that browser has an active operation, the registry atomically defers this completion retry
+without replacing its secret. A later fresh proof can complete after the operation releases.
 
 Management distinguishes remembered and session-only approvals explicitly. Approved session-only
 decisions are manageable during their original request window. After successful completion, their
@@ -190,8 +274,7 @@ and retires only matching completion/renewal challenges. The existing approval A
 pending-request, session-only and remembered counts without identities, public points or bearers.
 
 The browser keeps a session-only private key in its mounted request controller and remembers an
-explicitly approved, nonextractable private CryptoKey only in origin-scoped IndexedDB. The desktop
-notice starts an explicit request; Settings → Security owns comparison, session-only or remembered
+explicitly approved, nonextractable private CryptoKey only in origin-scoped IndexedDB. The legacy approval controller starts an explicit request; Settings → Security owns comparison, session-only or remembered
 approval, expiry, last-use display and revocation. Remembering defaults off, requires both human
 choices, and is reported successful only after the IndexedDB transaction commits. Request success
 alone is insufficient; abort, blocked storage and quota failure retain an honest unconfirmed result
@@ -250,7 +333,8 @@ appears hashed.
 ### D5 — Sessions are process-scoped and fail closed on restart, rotation, revocation, and expiry
 
 The session registry is in process memory and holds no durable bearer material, so a server restart
-invalidates every prior session by construction (restart expiry). A session additionally expires on
+invalidates every prior session by construction (restart expiry). That is deliberate and unchanged (#4370): a restart ends launcher-paired sessions, and only a
+browser the person explicitly remembered continues, through the existing public-key renewal. A session additionally expires on
 explicit revocation (launcher revocation or sign-out), or when its inactivity or absolute lifetime
 limit is reached; rotation issues a fresh secret and invalidates the prior one. In every one
 of these cases the prior cookie immediately yields the content-free projection. There is exactly one
@@ -280,7 +364,13 @@ successful persisted observation.
 Secret rotation preserves the original issuance time and absolute deadline, including repeated
 rotations. The registry rejects direct rotation of idle-expired or absolutely expired authority;
 knowing an old session id cannot revive it. A valid replacement starts a new inactivity window,
-but does not inherit an old operation lease, and releasing an old lease cannot touch the replacement.
+and inherits the exact active operation count. Each idempotent release resolves the live entry by
+session id, so it decrements that inherited count and refreshes inactivity after completion.
+Revoked, evicted or expired sessions cannot be revived. The registry records the count and a closed
+deferred-rotation reason under the originating request correlation, without bearer material.
+Both browser completion retries and the ordinary rotate route defer while an operation is active;
+the rotate route returns the closed `deferred` status without replacing any cookie. Only the
+existing successful rotation event records its operation count, avoiding duplicate success lines.
 Snapshots, repaired cookies and replacement live streams all remain bounded by the original
 absolute lifetime. Rotated HTTP cookie projections use only that lifetime's remaining full seconds,
 clamped by the existing cookie ceiling; the registered rotation event records the actual
@@ -288,6 +378,50 @@ clamped by the existing cookie ceiling; the registered rotation event records th
 Rotation requires at least one full second of remaining original authority, matching cookie repair.
 The channel checks this before replacing the original secret and again after minting; if time crosses
 that boundary, it revokes the unusable replacement and cannot report a successful zero-age cookie.
+
+A refused `local-session` cookie repair (an unpaired browser, a stale cookie or no composed channel is
+an ordinary state of a page load) returns the content-free acknowledgement with HTTP 200 and no
+cookie, never a 401 that would surface as a browser console error on every unpaired load. The
+existing Activity Log records `coding-app-session.local-session.denied` with the single closed
+reason `authority-unavailable`, the window `count` and a closed reason histogram, one integer per
+refusal reason (`approval`, `inactivity`, `invalid-clock`, `lifetime`, `proof-malformed`,
+`proof-missing`, `secret-mismatch`, `session-unregistered`, `lifetime-insufficient`,
+`proof-unavailable`, `channel-unavailable`). It is written at most twice per minute per composed
+server: a warning alert when the pairing-denial threshold is reached (`windowClosed` false) and a
+summary when the window closes (`windowClosed` true; information below the threshold), so a single
+refusal below the threshold is counted under its reason instead of leaving no line (#4370). The
+histogram total equals `count`. The closing summary carries the correlation id of the last refusal counted in its window; a window
+belongs to no single request, so read its `count` and histogram, not its correlation, as its content.
+A write that fails takes the structured diagnostic path instead of
+escaping the window timer, and graph disposal writes the pending window's summary instead of
+dropping it. It contains no identity, cookie or caller-provided content. A
+missing, malformed, foreign or wrong proof and an absent channel are caller-controlled: any page that
+reaches the loopback server can repeat them without limit, so they never write a line per request and
+remain only in that aggregate. A refusal
+only a registered session's holder can reach is recorded for its request:
+`coding-app-session.proof.refused` names the closed expiry reason (`approval`, `inactivity`,
+`invalid-clock`, `lifetime`) once, because the expiry removes the session, and
+`coding-app-session.local-session.refused` records that expiry or `lifetime-insufficient` (the final
+second of the absolute lifetime) with count one. These lines carry only the request correlation,
+closed purpose, registered flag and counts (including presented/distinct cookie counts where
+available).
+They expose no bearer, session identity or personal content. Every `sessionCount` the registry and
+the approval log report counts only sessions that would still verify; expired entries that nothing has
+swept yet are not counted (#4370). Repeated observations of the same
+HTTP request reuse its canonical generated correlation.
+
+Reconnect evidence (#4370): `coding-app-session.paired` and the `prove` action of
+`coding-app-session.browser-approval.state` record a closed `reconnect` class that says what happened
+to the credential the browser presented. `no-credential` presented none (or an unreadable one);
+`live-credential` still held a valid session; `ended-credential` held a session this process issued
+that is no longer valid (expired, including an entry nothing has swept yet, revoked or evicted);
+`after-restart` held a session id this process never issued, which an earlier process explains (a
+foreign value looks the same, so the class is evidence, not proof). The registry classifies by validity
+through a non-touching, non-mutating lookup before the mint, against a bounded set (4,096, oldest
+forgotten first) of the ids (never secrets) it issued, so a second tab after a restart is `after-restart` as well;
+beyond that bound a forgotten ended id also reads as `after-restart`. It verifies no secret and grants
+nothing. These diagnostics do not widen authority
+or refresh rejected proofs. Pairing acknowledgement semantics remain unchanged.
 
 Explicit normal Chat sends verify an optionally presented existing session so active conversation
 refreshes the inactivity window. Ordinary Chat does not require a launcher session, and verification
@@ -299,9 +433,10 @@ bodies, rejected plaintext requests and replay responses do not acquire protecti
 expiry through this activity path. Existing protected image or workspace authority checks remain
 independent. Pre-admission queue waits do not acquire protection. Completion and request abort release the count
 idempotently. While a valid operation is pending the session is active, even during a long provider
-wait. The last release starts the normal inactivity window from completion. Revocation, rotation,
-process restart, capacity eviction and the absolute lifetime still invalidate authority immediately;
-release cannot revive a removed or replaced session. At capacity, admission first removes expired
+wait. The last release starts the normal inactivity window from completion. Rotation invalidates the old
+secret while preserving the replacement session's admitted operations. Revocation, process restart,
+capacity eviction and the absolute lifetime still invalidate authority immediately; release cannot
+revive a removed session. At capacity, admission first removes expired
 sessions, then prefers the oldest inactive session over a valid active operation. If every session
 is active, the existing bounded capacity remains authoritative and evicts the oldest session. The
 registered pairing result records expired-session count and a closed eviction class, without IDs.
@@ -318,10 +453,11 @@ states (paused by the human, settled, taken over, recovery-required or gone); it
 extends or re-acquires anything, and holding the session again after a pause takes a new admitted
 mutation. A run paused for an operator decision (a `pauseReason` is recorded) is waiting on the human
 exactly like `awaiting-approval`, so it keeps the lease; a pause the human chose does not.
-A rotation replaces the session record without its operations, so the rotated credential holds the
-lease again on its next admitted mutation, which first ends the predecessor's lease. An unreadable
+A rotation preserves the run's existing lease even before another mutation. On the next admitted
+mutation, the lease owner transfers its tracked credential by releasing the preserved lease and
+acquiring exactly one replacement lease. An unreadable
 run state counts as settled, each lease releases independently, and either failure records a
-body-free server diagnostic. The lease protects only inactivity, like every other: revocation, rotation, restart, capacity
+body-free server diagnostic. The lease protects only inactivity, like every other: revocation, restart, capacity
 eviction and the absolute lifetime still end the session at once. Leases are bounded per composed
 channel (eight runs, four sessions per run); a session the registry revoked, evicted or expired
 gives up its place before that bound refuses another session, and graph disposal releases every one

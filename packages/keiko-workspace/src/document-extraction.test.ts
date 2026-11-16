@@ -328,6 +328,29 @@ describe("extractDocumentContext — happy path", () => {
     expect(result.context.mimeType).toBe("application/sql");
   });
 
+  it.each(["le", "be"] as const)(
+    "keeps a capped UTF-16%s document text when the cut falls inside a surrogate pair",
+    async (endian) => {
+      // Every byte count that leaves the cut between a high and a low surrogate; the document
+      // must stay text, never be classified as binary because of where the budget ended.
+      const text = "ab\u{1f600}".repeat(40);
+      const bytes = utf16Bytes(text, endian);
+      const fs = binaryFs(`${ROOT}/notes.txt`, bytes);
+      for (let cap = 20; cap < 30; cap += 1) {
+        const result = await extractDocumentContext(fs, ROOT, "notes.txt", {
+          perDocBytes: cap,
+          totalBudgetUsedBytes: 0,
+          totalBudgetBytes: MAX_TOTAL_EXTRACTED_BYTES,
+        });
+        expect(result.ok, `cap ${String(cap)}`).toBe(true);
+        if (!result.ok) return;
+        expect(result.context.truncated).toBe(true);
+        expect(result.context.text.startsWith("ab\u{1f600}ab")).toBe(true);
+        expect(result.context.text).not.toContain("\uFFFD");
+      }
+    },
+  );
+
   it("extracts UTF-32LE text when a BOM is present", async () => {
     const text = "let answer = 42;\n";
     const fs = binaryFs(`${ROOT}/answer.ts`, utf32LeBytes(text));

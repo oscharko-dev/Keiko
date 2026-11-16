@@ -3,11 +3,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import type {
-  KnowledgeCapsuleId,
-  KnowledgePodModelUsePolicy,
-  CapsuleSetId,
-} from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleId, CapsuleSetId } from "@oscharko-dev/keiko-contracts";
+import { createVisibilityPoller } from "@/lib/visibility-poller";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
 import {
   capsulesForKnowledgePodUi,
   capsuleSetsForKnowledgePodUi,
@@ -33,6 +34,31 @@ function emptyCapsuleSets(): ReturnType<typeof fetchCapsuleSets> {
   return Promise.resolve({ capsuleSets: [] });
 }
 
+function useIndexingRefresh(active: boolean, reload: (background: boolean) => Promise<void>): void {
+  useEffect(() => {
+    if (!active) return;
+    let pending = false;
+    const pull = async (): Promise<void> => {
+      if (pending) return;
+      pending = true;
+      try {
+        await reload(true);
+      } finally {
+        pending = false;
+      }
+    };
+    const poller = createVisibilityPoller((): void => {
+      void pull();
+    }, 2_000);
+    poller.start();
+    document.addEventListener("visibilitychange", poller.sync);
+    return (): void => {
+      poller.stop();
+      document.removeEventListener("visibilitychange", poller.sync);
+    };
+  }, [active, reload]);
+}
+
 function useCapsuleLoader(
   fetchCapsulesImpl: typeof fetchCapsules,
   fetchCapsuleSetsImpl: typeof fetchCapsuleSets,
@@ -48,26 +74,39 @@ function useCapsuleLoader(
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const reload = useCallback(async (): Promise<void> => {
-    setLoadStatus("loading");
-    setLoadError(null);
-    try {
-      const [capsuleResponse, capsuleSetResponse] = await Promise.all([
-        fetchCapsulesImpl({ includeKnowledgePods: true }),
-        fetchCapsuleSetsImpl({ includeKnowledgePods: true }),
-      ]);
-      setCapsules(capsulesForKnowledgePodUi(capsuleResponse));
-      setCapsuleSets(capsuleSetsForKnowledgePodUi(capsuleSetResponse));
-      setLoadStatus("ready");
-    } catch (error) {
-      setLoadError(formatError(error));
-      setLoadStatus("error");
-    }
-  }, [fetchCapsulesImpl, fetchCapsuleSetsImpl]);
+  const reload = useCallback(
+    async (background = false): Promise<void> => {
+      // Polls keep the mounted catalog available while the next native snapshot is in flight.
+      if (!background) setLoadStatus("loading");
+      setLoadError(null);
+      try {
+        const [capsuleResponse, capsuleSetResponse] = await Promise.all([
+          fetchCapsulesImpl({ includeKnowledgePods: true }),
+          fetchCapsuleSetsImpl({ includeKnowledgePods: true }),
+        ]);
+        setCapsules(capsulesForKnowledgePodUi(capsuleResponse));
+        setCapsuleSets(capsuleSetsForKnowledgePodUi(capsuleSetResponse));
+        setLoadStatus("ready");
+      } catch (error) {
+        reportClientDiagnostic("Knowledge Pod catalog load failed.", {
+          correlationId: correlationIdOf(error),
+          errorKind: bffRequestErrorKind(error),
+          errorEvidence: clientErrorEvidence(error),
+        });
+        setLoadError(formatError(error));
+        setLoadStatus("error");
+      }
+    },
+    [fetchCapsulesImpl, fetchCapsuleSetsImpl],
+  );
 
   useEffect(() => {
     void reload();
   }, [reload]);
+  useIndexingRefresh(
+    capsules.some((capsule) => capsule.lifecycleState === "indexing"),
+    reload,
+  );
 
   // Wrap the async callback in a void-returning function so that callers typed
   // as `() => void` (button onClick, useConnectorGraph return) never receive a
@@ -205,19 +244,21 @@ function useCapsuleCreate(
   creating: boolean;
   createError: string | null;
   clearCreateError: () => void;
-  handleCreateCapsule: (name: string, modelUsePolicy: KnowledgePodModelUsePolicy) => Promise<void>;
+  handleCreateCapsule: (name: string) => Promise<KnowledgeCapsuleId>;
 } {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  async function doCreate(name: string, modelUsePolicy: KnowledgePodModelUsePolicy): Promise<void> {
+  async function doCreate(name: string): Promise<KnowledgeCapsuleId> {
     setCreating(true);
     setCreateError(null);
     try {
-      await createCapsuleImpl({ displayName: name, modelUsePolicy });
+      const created = await createCapsuleImpl({ displayName: name });
       reload();
+      return created.capsule.id;
     } catch (error) {
       setCreateError(formatError(error));
+      throw error;
     } finally {
       setCreating(false);
     }

@@ -143,6 +143,12 @@ formats. Defaults remain annotations; validation never inserts defaults, coerces
 properties or prunes constraints. Gateway projections retain the admitted schema. Existing managed
 OpenCode built-in projections retain their lossless closed/required-field invariant.
 
+The server-owned `jira.draft` declaration also explicitly selects this existing standard dialect
+to express its two closed input forms: either nonempty `items` alone or `draftId` and
+`draftDigest` together. The same bounded compiler, argument validator and lossless gateway
+projection apply; this does not add composition keywords to the internal subset. Stored draft
+ownership, existence and current digest remain handler checks.
+
 External schemas are untrusted metadata. Before either catalog compilation or the external MCP
 SDK's argument/result validation, the shared contracts guard bounds the schema to 64 KiB, JSON
 depth 16, 128 entries per container, 2,048 JSON nodes, 256 schema nodes and 2,048 expanded reference
@@ -214,6 +220,15 @@ re-verification. The offer, its expiry and its tool subset are still captured an
 a frozen pair that failed verification is never remembered, and anything not deeply frozen takes the
 full copy, bounds and verification path as before. Re-capturing the unchanged catalog on every Chat
 tool round had made a long Jira turn copy and hash every descriptor dozens of times (#4173).
+The one copy of a binding — catalog, projection and offer (`captureCatalogBinding`) — bounds each part by the
+envelope limit for itself (262,144 bytes); the total is bounded by their sum, not by one bound across all
+three. The projection is derived from the catalog and compared with its recompilation, so a single bound
+across both would only halve what a catalog may hold: it refused a Chat's selection of two to twenty
+natives in the round after the selection had been admitted. The gateway binds a round with this copy and
+the Chat tool turn admits a selection with it, so the two cannot disagree; a selection the gateway could
+not bind is refused as `selection-too-large` and the earlier selection kept. The limit that governs what a
+model can take remains its context window, which the existing selection admission checks separately and
+refuses with `budget-exhausted`.
 An offer bounds admission, not the call it admitted: an invocation admitted under a live offer keeps
 it through its own settlement, bounded by its descriptor's budget, the live authority, the workspace
 revision and its handler's readiness, so an effect that starts after a long step or a human decision
@@ -776,3 +791,16 @@ request, as its description states.
 | 1.2 | 2026-09-10 | D4: the catalog ceilings also bound the arguments recorded in the sidecar's durable tool-part rows and derive the history response budget; a refused part row is named body-free in the reconciliation diagnostic (PR #3452). |
 | 1.1 | 2026-09-09 | Record the completed #3394 squash-delivery semantics: final signed source and dev-reachable merge are distinct identities with equal complete Git trees; pin exact-schema required-check and review-settlement receipts and the refreshed owned-source closure (#3414, #3415). |
 | 1.0 | 2026-09-04 | Accept the governed-tool ownership, pure package boundary, version/digest/result/state/evidence contract and workspace-only coding raw-coordinate lane (#3411); implementation belongs to the named delivery owners. Consolidate delivery into owner-selected PR #3394 with reviewed producer checkpoints instead of dedicated dev merges. |
+
+
+### Native alias correction in Chat (2026-11-06, PR #4276)
+
+An unknown native function name is never bound or executed. When the current catalog, projection
+and offer still validate, the existing Chat turn may spend its single correction allowance to show
+a fixed protocol instruction containing only current offered aliases (at most 128 names and 8192
+UTF-8 bytes). The model must issue a new valid call; Keiko never guesses a closest name or replays
+arguments. This correction does not make the gateway error retryable and grants no provider retry.
+The next call still enters ordinary authority and caller-budget admission. A second unusable round
+without tool progress ends with nonretryable `GATEWAY_MALFORMED_TOOL_CALL` (HTTP 502); the human turn
+is retained. Invalid catalog identities, altered offer bindings, expired metadata and OpenCode's
+separate native-extension transport retain their hard refusal and never receive spelling guidance.

@@ -3,7 +3,10 @@ import type {
   JiraFieldReference,
   JiraMutationFailureDetail,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import {
@@ -12,12 +15,18 @@ import {
   type JiraMetadataResult,
 } from "./jira-field-metadata.js";
 
+/**
+ * The read failures that carry Jira's own explanation. The model-facing `data` of a failure holds only
+ * `fieldErrors` and `messages`, so who refused cannot ride in it; it is remembered here, out of band,
+ * by the very result object (#4357 AC3). A model cannot forge it and it is never serialized.
+ */
+const FROM_JIRA = new WeakSet<ManagedMcpToolResult>();
 /** A refused read carries Jira's own bounded explanation (an invalid JQL, say) when it gave one. */
 export function jiraReadFailure(
   reason: string,
   detail?: JiraMutationFailureDetail,
 ): ManagedMcpToolResult {
-  return {
+  const result: ManagedMcpToolResult = {
     data: {
       outcome: "failed",
       reason,
@@ -28,6 +37,15 @@ export function jiraReadFailure(
     },
     isError: true,
   };
+  if (detail?.fromJira === true) FROM_JIRA.add(result);
+  return result;
+}
+/** The detail of a failed read, with the fact that Jira wrote it when this very result says so. */
+export function jiraReadFailureDetail(
+  result: ManagedMcpToolResult,
+  detail: JiraMutationFailureDetail | undefined,
+): JiraMutationFailureDetail | undefined {
+  return detail !== undefined && FROM_JIRA.has(result) ? { ...detail, fromJira: true } : detail;
 }
 function referenceProjection(value: JiraFieldReference): CatalogJsonObject {
   return {
@@ -156,11 +174,28 @@ export function projectJiraCollection(
   values: readonly unknown[],
   max: number,
   project: (value: unknown) => CatalogJsonObject | undefined,
-  identity: "id" | "name",
+  identity: "id" | "name" | "key" | "directoryId",
 ): readonly CatalogJsonObject[] | undefined {
   if (values.length > max) return undefined;
   const projected = values.map(project);
   if (projected.includes(undefined)) return undefined;
   const valid = projected.filter((value) => value !== undefined);
   return new Set(valid.map((value) => value[identity])).size === valid.length ? valid : undefined;
+}
+
+/** Only caller-owned field names are selected; absence stays unknown and false/zero/empty stay observed. */
+export function projectJiraOptionalFields<K extends string>(
+  raw: Record<string, unknown>,
+  fields: readonly K[],
+  project: (value: unknown, field: K) => CatalogJsonValue | undefined,
+): CatalogJsonObject | undefined {
+  const entries: [string, CatalogJsonValue][] = [];
+  for (const field of fields) {
+    const value = raw[field];
+    if (value === undefined || value === null) continue;
+    const projected = project(value, field);
+    if (projected === undefined) return undefined;
+    entries.push([field, projected]);
+  }
+  return Object.fromEntries(entries);
 }

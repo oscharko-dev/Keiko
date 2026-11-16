@@ -31,7 +31,7 @@ function expectWrapped(command: WrappedCommand | undefined): WrappedCommand {
 
 describe("buildWrappedCommand", () => {
   it("pins the default container backend to the governed Node.js 24 LTS patch", () => {
-    expect(DEFAULT_CONTAINER_IMAGE).toBe("node:24.18.0-slim");
+    expect(DEFAULT_CONTAINER_IMAGE).toBe("node:26.13.1-slim");
   });
 
   it("bubblewrap preserves compatibility mode for network-only runs", () => {
@@ -354,6 +354,31 @@ describe("buildWrappedCommand", () => {
     ]);
   });
 
+  // #4068: a Windows host runs the container fallback in a Linux engine (Docker Desktop, podman
+  // machine). Mirroring `C:\work\root` as the container path gave `C:\work\root:C:\work\root:rw`,
+  // which the engine rejects before the step starts ("too many colons", exit 125), so every
+  // enforced verification step on Windows failed. A host path that is not POSIX-absolute is mounted
+  // at the sandbox's own execution-root path instead, and the step runs from there.
+  it("container backends mount a Windows execution root at a POSIX container path", () => {
+    for (const cwd of ["C:\\work\\root", "\\\\?\\C:\\work\\root", "\\\\server\\share\\root"]) {
+      for (const filesystem of ["inherit", "execution-root"] as const) {
+        const wrapped = expectWrapped(
+          buildWrappedCommand("container-docker", { ...plan, cwd, filesystem }),
+        );
+        const volume = wrapped.args.indexOf("--volume");
+        const workdir = wrapped.args.indexOf("--workdir");
+        expect(wrapped.args[volume + 1]).toBe(`${cwd}:${EXECUTION_ROOT_MOUNT}:rw`);
+        expect(wrapped.args[workdir + 1]).toBe(EXECUTION_ROOT_MOUNT);
+        expect(wrapped.args.slice(-4)).toEqual([
+          DEFAULT_CONTAINER_IMAGE,
+          "node",
+          "-e",
+          "process.exit(0)",
+        ]);
+      }
+    }
+  });
+
   it("returns undefined for the 'none' backend (no enforcing wrapper)", () => {
     expect(buildWrappedCommand("none", plan)).toBeUndefined();
   });
@@ -435,6 +460,15 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
     );
   }
 
+  // OpenCode reads machine-wide configuration from these two trees and lets it win over the
+  // configuration Keiko hands the run. The read boundary is what keeps it out on macOS.
+  it("keeps machine-wide OpenCode configuration outside the native read boundary", () => {
+    const profile = nativeProfile("inherited");
+    expect(profile).not.toContain('(subpath "/Library")');
+    expect(profile).not.toContain('(subpath "/Library/Application Support');
+    expect(profile).not.toContain('(subpath "/Library/Managed Preferences');
+  });
+
   it("compiles the native profile with inherited exec and egress at Full access", () => {
     const wrapped = buildGatewaySeatbeltCommand(
       gateway,
@@ -452,6 +486,18 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
     expect(profile).not.toContain("(deny mach-lookup)");
     for (const denied of ["appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);
+    // #4271: named services only; a toolchain's other lookups stay open (see the pin above).
+    for (const service of [
+      "com.apple.pasteboard.1",
+      "com.apple.pboard",
+      "com.apple.SecurityServer",
+      "com.apple.secd",
+      "com.apple.securityd.xpc",
+      "com.apple.security.agent",
+      "com.apple.SecurityAgent",
+    ])
+      expect(profile).toContain(`(global-name "${service}")`);
+    expect(profile).toContain('(subpath "/usr/local/var")');
     expect(profile).toContain('(subpath "/accepted/workspace")');
     expect(profile).toContain('(deny file-read* file-write* (subpath "/Users/owner/.ssh")');
     // The workspace and the private state root are re-allowed after the denied roots, so Keiko's

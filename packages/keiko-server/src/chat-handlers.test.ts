@@ -415,7 +415,7 @@ describe("desktop chat production gateway reuse", () => {
         status: 400,
         body: {
           error: {
-            code: "BAD_REQUEST",
+            code: "CONVERSATION_MODEL_NOT_READY",
             message:
               "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
@@ -425,19 +425,15 @@ describe("desktop chat production gateway reuse", () => {
         status: 400,
         body: {
           error: {
-            code: "BAD_REQUEST",
+            code: "CONVERSATION_MODEL_NOT_READY",
             message:
               "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
         },
       });
-      // Relocated pin (fresh-install on-demand readiness): a never-observed model now gets a
-      // bounded on-demand READINESS PROBE before the honest rejection — so outbound calls may
-      // happen, but they carry only the static probe prompt. The load-bearing invariant is
-      // unchanged and strengthened below: the USER'S content never reaches the provider, on
-      // any call, in any body — and the probe outcome is recorded so retries stay probe-free.
-      // Evidence the on-demand probe actually happened, bounded: the create attempt probes
-      // once; the send attempt hits the recorded not-ready observation without re-probing.
+      // Configuration-owned initialization above sends only the static readiness prompt.
+      // Both interactive requests consume its stored refusal without starting another probe;
+      // the user's content must remain off every provider request.
       expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
       expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(4);
       expect(fetchSpy).toHaveBeenCalledTimes(initializationCalls);
@@ -566,10 +562,8 @@ describe("desktop chat production gateway reuse", () => {
         }),
         true,
       );
-      // Never previously probed: the on-demand readiness check `handleCreateDesktopChat` runs
-      // before admission attempts a real chat completion. Mirrors "keeps user content off the
-      // provider while probing an unready model on demand" above — an invalid provider host would
-      // otherwise mean a real DNS lookup on every run.
+      // The request consumes the stored initialization state without probing this newly
+      // configured provider. No user content or caller-supplied model label may reach evidence.
       const fetchSpy = vi.fn();
       vi.stubGlobal("fetch", fetchSpy);
 
@@ -582,7 +576,10 @@ describe("desktop chat production gateway reuse", () => {
         fixture.deps,
       );
 
-      expect(rejected).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(rejected).toMatchObject({
+        status: 400,
+        body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
+      });
       const rejectionEvents = sink.events.filter((event) => event.op === "chat.creation.rejected");
       expect(rejectionEvents).toHaveLength(1);
       const [rejectionEvent] = rejectionEvents;

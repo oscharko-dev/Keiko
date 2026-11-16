@@ -30,7 +30,7 @@ The constraints carried over from the platform baseline:
 
 `keiko-security/secret-vault.ts` adds two reusable primitives, exported under the `./secret-vault` subpath (leaf package; no new package-graph edge):
 
-- `resolveLocalVaultKey({ env, vaultDir, envVarName, keychainService, keyfileName, keychainAccess? })` — the generalized env → macOS Keychain → `0600` keyfile precedence (the pattern previously inlined per vault), parameterized by namespace.
+- `resolveLocalVaultKey({ env, vaultDir, envVarName, keychainService, keyfileName, keychainAccess? })` — the generalized env → macOS Keychain → `0600` keyfile precedence (the pattern previously inlined per vault), parameterized by namespace. The keychain tier honours the shared `realKeychainWithheld` rule (ADR-0035): a test process and `KEIKO_OS_KEYCHAIN=off` skip it, falling through to the keyfile tier. A key item read from the keychain is remembered for the life of the process (`KeychainSecretMemo`, shared with ADR-0035's reader), so repeated vault opens do not spawn `security` again; a write forgets the item, a generated key is not remembered, and failures are never remembered. A generated key reaches `security` over stdin, never in the argument vector (#4271).
 - `createLocalSecretVault({ key, storePath })` — a multi-entry sealed store (`{ "version": 1, "entries": { "<ref>": "<kv1 envelope>" } }`), the multi-credential analogue of the single-value Figma store. Atomic temp-then-rename writes, mode `0600`, dir `0700`, symlink-segment guard. Each value is sealed with the shared `sealString`; references are opaque, non-secret identifiers.
 
 Cross-vault replay is prevented by **key separation, not by the AAD**: every vault resolves a distinct key (distinct env var, keychain service, and keyfile), so a ciphertext sealed for one vault fails GCM authentication when opened with another's key regardless of the shared `keiko-memory-v1` AAD. Note: the AAD constant name is a legacy artifact of its first consumer (ADR-0035's memory vault); it is intentionally vault-agnostic and shared by design. The existing memory and Figma vaults are intentionally left untouched (out of scope); they may adopt this helper in a future consolidation.
@@ -58,6 +58,32 @@ override, so removing that override restores the same durable source.
 ### D3 — Setup writes references; the Figma PAT routes to its vault
 
 Gateway setup seals each persistable provider apiKey into the credential vault (`<config-dir>/credentials/provider-credentials.vault`, namespace `KEIKO_PROVIDER_CREDENTIALS_KEY` / keychain `keiko-provider-credentials-vault`) and the Figma PAT into the existing encrypted Figma token vault, then writes a credential-free config holding only references and non-secret metadata. The in-memory runtime config still carries the resolved secret for live calls; only the on-disk file is stripped. An env-provided credential (one the environment already supplies) is written neither as plaintext nor as a reference, so environment credentials stay transient.
+
+*A seal prunes only what its own config owned (2026-11-14).* The vault lives next to the config
+file's directory, so every config file in one directory shares one vault. After the config rewrite
+succeeds, a seal removes only the references the previous version of THIS config file named, the
+new version no longer names, and no other config file in the same directory names. A reference this
+config never named (a second config beside it, a credential stored by hand) is not its to delete
+and stays. References are `cred:<modelId>`, so two configs in one folder that name the same model
+share ONE entry, and the last save of either overwrites its key; the entry is kept for as long as
+either names it. The first seal of a config with no readable previous version prunes nothing. A
+seal that cannot read the previous file or a neighbouring `.json` file in the folder (unreadable,
+malformed, over 1 MiB, more than 64 of them) cannot prove what is its own and prunes nothing; it
+records the existing body-free diagnostic `credential.previous-config-unreadable` once (closed error
+class, no path). Both writers, the startup migration of a plaintext config and the Gateway Setup
+save, go through `persistSealedGatewayConfig`, the one owner of the rule. The vault's own
+`security.vault.entries-deleted` line reports counts only: `count` of entries removed and
+`foreignRetainedCount` of entries left as not this config's alone. Earlier text, which removed every
+entry the sealed config did not name, deleted another config's stored provider credentials without
+asking.
+
+*Limit: an entry can outlive its config.* An entry that no readable config names any more (a seal
+that crashed between the vault write and the config rewrite, a config deleted by hand, a previous or
+neighbouring config that could not be read) is not removed on anyone's behalf: it stays until its
+owner names it again. It remains encrypted at rest with the vault key, but it is not removed. A
+person who wants a revoked or retired key gone must remove the provider through Gateway Setup while
+its config is readable (the seal then removes the reference that config gave up), and revoke the key
+at the provider as well.
 
 ### D4 — Crash-aware, idempotent one-time migration
 

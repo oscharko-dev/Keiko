@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveWindowsSystemBinary } from "../../packages/keiko-security/src/windows-system-directory.ts";
 import { prepareRuntimeStagingPlan } from "../stage-publish-package.mjs";
 
 import {
@@ -53,7 +54,7 @@ import {
   smokeGateFailureLogSummary,
   smokeGateFailureSetupSummary,
   startLocalRegistry,
-  terminateProcessTree,
+  terminatePosixProcessGroup,
   vendoredDependencyNames,
   vendoredDependencyRequirements,
   withCorepackYarnCacheLock,
@@ -293,6 +294,13 @@ function isolatedChildEnv(root, extraEnv = {}) {
   mkdirSync(sandboxTmp, { recursive: true });
   mkdirSync(sandboxHome, { recursive: true });
   return {
+    // Keep PATH fixture-only. Node still needs an absolute shell to run the Windows .cmd fixtures.
+    ...(process.platform === "win32"
+      ? {
+          ComSpec: resolveWindowsSystemBinary("cmd.exe"),
+          PATHEXT: ".COM;.EXE;.BAT;.CMD",
+        }
+      : {}),
     HOME: sandboxHome,
     PATH: join(root, "bin"),
     TMPDIR: sandboxTmp,
@@ -3068,20 +3076,21 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
-  it("copies locked Corepack into the Node 26 runtime trust root", () => {
-    const job = ciJobs().find((candidate) => candidate.name === "node-26-compatibility");
-    expect(job).toBeDefined();
-    if (job === undefined) throw new Error("node-26-compatibility job is missing");
+  it("prepares locked Corepack before every install-smoke job on Node 26", () => {
     const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
     expect(manifest.devDependencies.corepack).toMatch(/^\d+\.\d+\.\d+$/u);
-    const prepareBinAt = job.text.indexOf("npm run prepare:bin");
-    const buildAt = job.text.indexOf("npm run build:ui");
-    const shimAt = job.text.indexOf("node scripts/prepare-trusted-corepack.mjs");
-    const provisionAt = job.text.indexOf("npm run provision:smoke");
-    expect(job.text).not.toContain("npm install --global");
-    expect(buildAt).toBeGreaterThan(prepareBinAt);
-    expect(shimAt).toBeGreaterThan(buildAt);
-    expect(provisionAt).toBeGreaterThan(shimAt);
+    const jobs = ciJobs().filter((job) => SMOKE_INVOCATION.test(job.text));
+    expect(jobs.length).toBeGreaterThan(0);
+    for (const job of jobs) {
+      const installAt = job.text.indexOf("npm ci");
+      const shimAt = job.text.indexOf("node scripts/prepare-trusted-corepack.mjs");
+      const provisionAt = job.text.indexOf("npm run provision:smoke");
+      expect(shimAt, `${job.name}: locked Corepack must follow npm ci`).toBeGreaterThan(installAt);
+      expect(provisionAt, `${job.name}: prepare Corepack before the smoke seed`).toBeGreaterThan(
+        shimAt,
+      );
+      expect(job.text).toContain("GITHUB_PATH");
+    }
   });
 
   it("prepares an executable Corepack copy inside the supplied runtime root", () => {
@@ -3093,7 +3102,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     writeFileSync(join(sourceRoot, "dist", "corepack.js"), 'process.stdout.write("trusted");\n');
     try {
       const prepared = prepareTrustedCorepack({ runtimeRoot, sourceRoot });
-      const result = spawnSync(join(prepared.binDir, "corepack"), [], { encoding: "utf8" });
+      const result =
+        process.platform === "win32"
+          ? spawnSync(`"${join(prepared.binDir, "corepack.cmd")}"`, [], {
+              shell: resolveWindowsSystemBinary("cmd.exe"),
+              encoding: "utf8",
+            })
+          : spawnSync(join(prepared.binDir, "corepack"), [], { encoding: "utf8" });
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toBe("trusted");
       expect(prepared.version).toBe(ROOT_MANIFEST.devDependencies.corepack);
@@ -3390,6 +3405,9 @@ describe("installable package smoke optional-dependency coverage", () => {
     // Actual archive bytes/peer edges are pinned by stage-publish-package.test; real consumers
     // separately prove the published runtime. This test retains the installed-closure oracle.
     const plan = prepareRuntimeStagingPlan(ROOT);
+    const tufModels = plan.packages.find((record) => record.manifest.name === "@tufjs/models");
+    expect(tufModels?.stagedManifest.peerDependencies.minimatch).toBe("11.0.3");
+    expect(plan.rootManifest.dependencies.minimatch).toBe("11.0.3");
     const { packages, stubs, missing } = resolveVendorClosure(
       join(ROOT, "node_modules"),
       plan.rootManifest,
@@ -3490,7 +3508,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     });
     const childKill = vi.fn();
 
-    terminateProcessTree({ pid: 42, kill: childKill });
+    terminatePosixProcessGroup({ pid: 42, kill: childKill });
 
     expect(kill).toHaveBeenCalledWith(-42, "SIGKILL");
     expect(childKill).not.toHaveBeenCalled();
@@ -3504,7 +3522,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     });
     const childKill = vi.fn();
 
-    terminateProcessTree({ pid: 42, kill: childKill });
+    terminatePosixProcessGroup({ pid: 42, kill: childKill });
 
     expect(childKill).toHaveBeenCalledWith("SIGKILL");
   });
@@ -4017,21 +4035,20 @@ describe("release publish security posture", () => {
   });
 });
 
-// #3565 removed the global-prefix leg; the printed verdict must name only the paths the smoke
-// still proves, or an operator reads a global-install proof that no longer runs.
+// #3582 restores the isolated global-prefix proof alongside both existing consumer installs.
 describe("smoke success summary", () => {
   it("names the npm tarball and Yarn registry paths with optional deps included", () => {
     const line = smokeSuccessSummary({ includeOptional: true }, 24);
     expect(line).toBe(
-      "installable-smoke ok: npm tarball + Yarn registry installs passed (optional deps included), " +
+      "installable-smoke ok: npm tarball + isolated global npm + Yarn registry installs passed (optional deps included), " +
         "24 vendored packages present, root runtime/types + CLI + UI/lifecycle reachable.",
     );
   });
 
-  it("reports omitted optional deps and never claims a global-prefix install", () => {
+  it("reports omitted optional deps and the actual isolated global install", () => {
     const line = smokeSuccessSummary({ includeOptional: false }, 0);
     expect(line).toContain("(optional deps omitted)");
     expect(line).toContain("0 vendored packages present");
-    expect(line).not.toMatch(/global/u);
+    expect(line).toContain("isolated global npm");
   });
 });

@@ -24,7 +24,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { unwiredSecurityLogSink, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { chmodIfPresent, openMemoryDatabase } from "./db.js";
 import { resolveMemoryDir, resolveMemoryDbPath } from "./paths.js";
 import {
@@ -65,9 +65,12 @@ import {
 } from "./embeddings.js";
 import {
   getAccessStatsRows,
+  getConversationTouchRows,
   recordAccessRows,
+  recordUseRows,
   recordOutcomeRows,
   type MemoryAccessStat,
+  type MemoryConversationTouch,
 } from "./access.js";
 import {
   deleteTombstonesByScopeBeforeRows,
@@ -107,6 +110,7 @@ import type {
   MemoryEmbeddingInput,
   MemoryEmbeddingRow,
   MemoryEvent,
+  MemoryForgottenStatement,
   MemoryUpdatePreImage,
   MemoryGraphMutation,
   MemoryGraphPrecondition,
@@ -402,6 +406,31 @@ function resolveBodySuppressionKey(db: DatabaseSync, cipher: MemoryContentCipher
   return key;
 }
 
+function isSecretboxOpenFailure(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as { readonly code?: unknown }).code === "SECRETBOX_OPEN_FAILED"
+  );
+}
+
+// The vault's sealed suppression key is the first value every open decrypts, so a key that does
+// not match the stored vault (a keychain entry that changed or is withheld, a state directory
+// moved to another device) fails here. That is a classified, recoverable state of the stored data,
+// not a defect: the database is closed untouched — never re-keyed, overwritten or quarantined — so
+// the original key opens it again, and the caller can run without memory instead of crashing.
+function openBodySuppressionKey(db: DatabaseSync, cipher: MemoryContentCipher): Buffer {
+  try {
+    return resolveBodySuppressionKey(db, cipher);
+  } catch (error) {
+    if (!isSecretboxOpenFailure(error)) throw error;
+    db.close();
+    throw new MemoryStorageError(
+      "vault-unreadable",
+      "The memory vault cannot be opened with the available key.",
+    );
+  }
+}
+
 interface ResolvedCipherWithSource {
   readonly cipher: MemoryContentCipher;
   // `undefined` for a test-injected cipher/vaultKey, where no key-resolution tier ran at all —
@@ -434,7 +463,7 @@ function resolveCipherWithSource(
   }
   const memoryDir = resolveMemoryDir(opts?.memoryDir, env);
   const resolved = resolveVaultKey(env, memoryDir, () =>
-    keyFromKeychain({ sink: securityLogSink }),
+    keyFromKeychain({ sink: securityLogSink ?? unwiredSecurityLogSink(), env }),
   );
   return { cipher: createMemoryContentCipher(resolved.key), keySource: resolved.source };
 }
@@ -525,6 +554,62 @@ function buildTombstone(
     ...(options.reviewerId === undefined ? {} : { reviewerId: options.reviewerId }),
     ...(reason === undefined ? {} : { reason }),
   };
+}
+
+function buildStatementTombstone(
+  statement: MemoryForgottenStatement,
+  memoryId: MemoryId,
+  opts: ResolvedOptions,
+): MemoryTombstone {
+  gateMemoryScope(statement.scope);
+  const reason = sanitizeMemoryTombstoneReason(statement.reason);
+  return redactTombstone(
+    {
+      id: opts.newTombstoneId(),
+      memoryId,
+      scopeKind: scopeKindOf(statement.scope),
+      scopeCoordinate: scopeCoordinateOf(statement.scope),
+      type: "semantic-fact",
+      forgottenAt: statement.nowMs,
+      forgetterSurface: statement.forgetterSurface,
+      bodyHash: opts.bodySuppressionHash(statement.body),
+      ...(statement.reviewerId === undefined ? {} : { reviewerId: statement.reviewerId }),
+      ...(reason === undefined ? {} : { reason }),
+    },
+    opts.redactString,
+  );
+}
+
+// All or nothing, through the same commit hook as a deletion, so a tombstone the audit ledger cannot
+// record is not written.
+function recordForgottenStatementRows(
+  db: DatabaseSync,
+  statements: readonly MemoryForgottenStatement[],
+  opts: ResolvedOptions,
+): readonly MemoryTombstone[] {
+  const memoryId = opts.newTombstoneId() as MemoryId;
+  const prepared = statements.map((statement) => ({
+    statement,
+    tombstone: buildStatementTombstone(statement, memoryId, opts),
+  }));
+  const tombstones = prepared.map((entry) => entry.tombstone);
+  const events = tombstones.map((tombstone): MemoryEvent => ({
+    kind: "memory:tombstoned",
+    tombstone,
+  }));
+  db.exec("BEGIN");
+  try {
+    for (const { statement, tombstone } of prepared) {
+      insertTombstoneRow(db, tombstone, opts.cipher, statement.bodyEmbedding);
+    }
+    opts.beforeDeleteCommit(events);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  for (const event of events) opts.emit(event);
+  return tombstones;
 }
 
 function assertTombstoneMatchesRecord(record: MemoryRecord, tombstone: MemoryTombstone): void {
@@ -693,13 +778,21 @@ function runGraphMutation(
   db: DatabaseSync,
   mutation: MemoryGraphMutation,
   opts: ResolvedOptions,
-): { readonly memories: readonly UpdatedMemory[]; readonly edges: readonly MemoryEdge[] } {
+): {
+  readonly inserted: readonly MemoryRecord[];
+  readonly memories: readonly UpdatedMemory[];
+  readonly edges: readonly MemoryEdge[];
+} {
+  const inserted = (mutation.inserts ?? []).map((record) => preparedForWrite(record, opts));
   const edges = mutation.edges.map((edge) => preparedEdgeForWrite(edge, opts));
   const memories: UpdatedMemory[] = [];
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const precondition of mutation.preconditions ?? []) {
       assertGraphPrecondition(db, precondition, opts.cipher);
+    }
+    for (const record of inserted) {
+      insertMemoryRow(db, record, opts.cipher);
     }
     for (const update of mutation.updates) {
       memories.push(updateMemoryInPlace(db, update, opts));
@@ -712,7 +805,7 @@ function runGraphMutation(
     db.exec("ROLLBACK");
     throw error;
   }
-  return { memories, edges };
+  return { inserted, memories, edges };
 }
 
 function assertGraphPrecondition(
@@ -821,6 +914,26 @@ type MemoryReadOps = Pick<
   | "countAcceptedMemoriesMissingEmbedding"
 >;
 
+function applyGraphMutationWithEvents(
+  db: DatabaseSync,
+  mutation: MemoryGraphMutation,
+  opts: ResolvedOptions,
+): MemoryGraphMutationResult {
+  const ready = runGraphMutation(db, mutation, opts);
+  for (const record of ready.inserted) {
+    opts.emit({ kind: "memory:inserted", record });
+  }
+  emitUpdatedRecords(ready.memories, opts);
+  for (const edge of ready.edges) {
+    opts.emit({ kind: "edge:inserted", edge });
+  }
+  return {
+    inserted: ready.inserted,
+    memories: ready.memories.map((updated) => updated.record),
+    edges: ready.edges,
+  };
+}
+
 function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWriteOps {
   return {
     insertMemory: (record: MemoryRecord): MemoryRecord => {
@@ -845,16 +958,8 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
         return ready.map((updated) => updated.record);
       });
     },
-    applyGraphMutation: (mutation: MemoryGraphMutation): MemoryGraphMutationResult => {
-      return withSidecarHardening(opts, () => {
-        const ready = runGraphMutation(db, mutation, opts);
-        emitUpdatedRecords(ready.memories, opts);
-        for (const edge of ready.edges) {
-          opts.emit({ kind: "edge:inserted", edge });
-        }
-        return { memories: ready.memories.map((updated) => updated.record), edges: ready.edges };
-      });
-    },
+    applyGraphMutation: (mutation: MemoryGraphMutation): MemoryGraphMutationResult =>
+      withSidecarHardening(opts, () => applyGraphMutationWithEvents(db, mutation, opts)),
     deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {
       withSidecarHardening(opts, () => {
         deleteMemoryWithEvents(db, id, options, opts);
@@ -996,12 +1101,15 @@ type TombstoneAndAccessOps = Pick<
   MemoryVaultStore,
   | "listTombstonesByScope"
   | "listTombstonesPage"
+  | "recordForgottenStatements"
   | "hasForgetTombstoneForBody"
   | "hasSemanticallySimilarForgetTombstone"
   | "purgeTombstonesByScopeBefore"
   | "recordAccess"
+  | "recordUse"
   | "recordOutcome"
   | "getAccessStats"
+  | "getConversationTouches"
 >;
 
 // The public route requests one look-ahead row beyond its maximum 200-item response page so it can
@@ -1153,6 +1261,27 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
   };
 }
 
+function hasForgetTombstoneForBodyRow(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  scope: MemoryScope,
+  body: string,
+): boolean {
+  gateMemoryScope(scope);
+  const currentHash = opts.bodySuppressionHash(body);
+  const legacyHash = memoryBodySuppressionHash(body);
+  // GEN-PERF-PERSISTENCE-014 — presence-only check keyed on body_hash; never decrypts the sealed
+  // reason column. Same suppression decision as scanning + decrypting every tombstone, but O(1)
+  // rows and zero reason decrypts (strengthens confidentiality on this hot path).
+  const presence = selectForgetSuppressionBodyHashPresence(db, scope, currentHash, legacyHash);
+  if (presence.current) return true;
+  if (!presence.legacy) return false;
+  withSidecarHardening(opts, () => {
+    updateTombstoneBodyHashByScopeRows(db, scope, legacyHash, currentHash);
+  });
+  return true;
+}
+
 function buildTombstoneAndAccessOps(
   db: DatabaseSync,
   opts: ResolvedOptions,
@@ -1164,21 +1293,10 @@ function buildTombstoneAndAccessOps(
     },
     listTombstonesPage: (scopes, limit, after): MemoryTombstonePage =>
       validatedTombstonePage(db, opts, scopes, limit, after),
-    hasForgetTombstoneForBody: (scope: MemoryScope, body: string): boolean => {
-      gateMemoryScope(scope);
-      const currentHash = opts.bodySuppressionHash(body);
-      const legacyHash = memoryBodySuppressionHash(body);
-      // GEN-PERF-PERSISTENCE-014 — presence-only check keyed on body_hash; never decrypts the sealed
-      // reason column. Same suppression decision as scanning + decrypting every tombstone, but O(1)
-      // rows and zero reason decrypts (strengthens confidentiality on this hot path).
-      const presence = selectForgetSuppressionBodyHashPresence(db, scope, currentHash, legacyHash);
-      if (presence.current) return true;
-      if (!presence.legacy) return false;
-      withSidecarHardening(opts, () => {
-        updateTombstoneBodyHashByScopeRows(db, scope, legacyHash, currentHash);
-      });
-      return true;
-    },
+    recordForgottenStatements: (statements): readonly MemoryTombstone[] =>
+      withSidecarHardening(opts, () => recordForgottenStatementRows(db, statements, opts)),
+    hasForgetTombstoneForBody: (scope: MemoryScope, body: string): boolean =>
+      hasForgetTombstoneForBodyRow(db, opts, scope, body),
     hasSemanticallySimilarForgetTombstone: (scope, candidate, threshold): boolean => {
       gateMemoryScope(scope);
       return hasSemanticallySimilarForgetTombstoneRow(db, scope, opts.cipher, candidate, threshold);
@@ -1189,9 +1307,14 @@ function buildTombstoneAndAccessOps(
         return deleteTombstonesByScopeBeforeRows(db, scope, forgottenBeforeMs);
       });
     },
-    recordAccess: (ids: readonly MemoryId[], nowMs: number): void => {
+    recordAccess: (ids: readonly MemoryId[], nowMs: number, conversationId?: string): void => {
       withSidecarHardening(opts, () => {
-        recordAccessRows(db, ids, nowMs);
+        recordAccessRows(db, ids, nowMs, conversationId);
+      });
+    },
+    recordUse: (ids: readonly MemoryId[], nowMs: number, conversationId: string): void => {
+      withSidecarHardening(opts, () => {
+        recordUseRows(db, ids, nowMs, conversationId);
       });
     },
     recordOutcome: (ids: readonly MemoryId[], utility: number, nowMs: number): void => {
@@ -1201,6 +1324,10 @@ function buildTombstoneAndAccessOps(
     },
     getAccessStats: (ids?: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryAccessStat> =>
       getAccessStatsRows(db, ids),
+    getConversationTouches: (
+      conversationId: string,
+    ): ReadonlyMap<MemoryId, MemoryConversationTouch> =>
+      getConversationTouchRows(db, conversationId),
   };
 }
 
@@ -1209,8 +1336,9 @@ function buildStore(db: DatabaseSync, opts: ResolvedOptions): MemoryVaultStore {
     ...buildMemoryMutators(db, opts),
     ...buildEdgeAndEmbeddingOps(db, opts),
     ...buildTombstoneAndAccessOps(db, opts),
+    // Idempotent: a composition closes the vault on every dispose, and a process may dispose twice.
     close: (): void => {
-      db.close();
+      if (db.isOpen) db.close();
     },
   };
 }
@@ -1251,8 +1379,17 @@ export function createMemoryVault(options?: CreateMemoryVaultOptions): MemoryVau
   // without the activity log ever reporting the open as having succeeded. Emitting right after
   // `openMemoryDatabase` (as this line used to) reported a successful open even when either
   // operation below then threw and the vault never actually became usable.
-  const bodySuppressionKey = resolveBodySuppressionKey(db, cipher);
-  hardenVaultSidecars(dbPath);
+  let bodySuppressionKey: Buffer;
+  try {
+    bodySuppressionKey = openBodySuppressionKey(db, cipher);
+    hardenVaultSidecars(dbPath);
+  } catch (error) {
+    // #4068: the failed vault is never returned, so nothing else can close its handle. Left open,
+    // the database and its WAL siblings stay locked, which on Windows blocks removing or
+    // quarantining them. An unreadable vault is already closed; the error is rethrown unchanged.
+    if (db.isOpen) db.close();
+    throw error;
+  }
   emitVaultOpened(options?.logSink, keySource, elapsedMs());
   return buildStore(db, resolveOptions(options, cipher, dbPath, bodySuppressionKey));
 }

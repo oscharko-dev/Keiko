@@ -7,6 +7,20 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.progress.paused": "Paused",
   "codingWorkbench.progress.review": "Review now",
   "codingWorkbench.progress.answer": "Answer question",
+  "codingWorkbench.schedules.title": "Scheduled continuations",
+  "codingWorkbench.schedules.unnamed": "Scheduled continuation",
+  "codingWorkbench.schedules.next": "{label} · next {time}",
+  "codingWorkbench.schedules.paused": "{label} · paused",
+  "codingWorkbench.schedules.done": "{label} · done",
+  "codingWorkbench.schedules.wait.run-active": "{label} · due, waits for the current run",
+  "codingWorkbench.schedules.wait.workspace-inactive":
+    "{label} · due, waits for this task's workspace",
+  "codingWorkbench.schedules.wait.retrying": "{label} · due, tries again shortly",
+  "codingWorkbench.schedules.pause": "Pause",
+  "codingWorkbench.schedules.resume": "Resume",
+  "codingWorkbench.schedules.delete": "Delete",
+  "codingWorkbench.schedules.error": "The schedules could not be read or changed. Try again.",
+  "codingWorkbench.history.scheduled": "Scheduled continuation",
   "codingWorkbench.history.title": "Coding History",
   "codingWorkbench.history.new": "New task",
   "codingWorkbench.history.noBranch": "Folder",
@@ -269,6 +283,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.runState": "Run state",
   "codingWorkbench.info.model": "Model",
   "codingWorkbench.info.agent": "Agent",
+  "codingWorkbench.info.toolProfile": "Tool profile",
+  "codingWorkbench.info.toolProfile.native": "OpenCode native tools",
+  "codingWorkbench.info.toolProfile.mapped": "Keiko mapped tools, not full native parity",
   "codingWorkbench.info.modelReadiness": "Model readiness",
   "codingWorkbench.info.runtime": "Runtime verification",
   "codingWorkbench.info.runtimeVersion": "OpenCode runtime",
@@ -490,6 +507,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.noBranch": "No branch",
   "codingWorkbench.repository.loading": "Loading repositories…",
   "codingWorkbench.repository.none": "Select a repository",
+  "codingWorkbench.repository.noProject": "No project chosen yet: choose a folder.",
+  "codingWorkbench.repository.chooseFolder": "Choose folder",
   "codingWorkbench.repository.unavailable": "unavailable",
   "codingWorkbench.repository.unavailableHelp":
     "This repository is no longer available in Git. Choose another repository or reconnect it in Git.",
@@ -497,8 +516,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
   "codingWorkbench.repository.folderModeHint":
     "Not a Git repository: the agent edits, runs and verifies here, without commits or pushes.",
+  "codingWorkbench.repository.folderModeUnsupported":
+    "On this installation, Keiko runs a coding task only in a new worktree of a Git repository, so it cannot work in this folder. Choose a Git repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
+  "codingWorkbench.repository.deniedBlocker":
+    "Keiko may not read this folder. Choose a repository in another location.",
   "codingWorkbench.repository.loadError":
     "Repositories could not be loaded. Refresh the list and try again.",
   "codingWorkbench.repository.retryLoad": "Retry",
@@ -553,10 +576,26 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairFailed":
     "The repair did not complete. Refresh the task workspaces, then try again.",
   "codingWorkbench.setup.findingUnknown": "its state could not be re-verified",
+  "codingWorkbench.gatewayService.absent":
+    "Coding runs need the Windows runtime gateway, which is not installed. In a terminal, run: keiko gateway-service install. Windows asks for approval once.",
+  "codingWorkbench.gatewayService.stopped":
+    "The Windows runtime gateway is stopped. It starts shortly after Windows starts. If this stays, in a terminal, run: keiko gateway-service repair",
+  "codingWorkbench.gatewayService.stale":
+    "The Windows runtime gateway does not match this Keiko version. In a terminal, run: keiko gateway-service repair. Windows asks for approval once.",
+  "codingWorkbench.gatewayService.unknown":
+    "Keiko could not read the state of the Windows runtime gateway. In a terminal, run: keiko gateway-service status",
+  "codingWorkbench.gatewayService.unqualified":
+    "This Keiko build cannot start coding runs on Windows. They need the Windows runtime gateway, which only a release-qualified Keiko package can use. Selecting another repository does not change this.",
+  "codingWorkbench.installVolume.notLocal":
+    "Coding runs cannot start because Keiko is installed in a network or redirected folder. Install Keiko on a local drive of this computer.",
+  "codingWorkbench.installVolume.unverified":
+    "Keiko could not check its installation folder just now because Windows answered too slowly. Try again in a moment; if it keeps happening, restart Keiko.",
+  "codingWorkbench.runtime.outdated":
+    "Coding runs cannot start because the coding engine installed with this Keiko is an older version that Keiko no longer approves. Update Keiko to the latest version.",
   "codingWorkbench.setup.repairAndBind": "Repair and bind",
   "codingWorkbench.setup.repairing": "Repairing…",
   "codingWorkbench.setup.runtimeUnavailable":
-    "Starting a coding run is unavailable on this installation until the coding runtime is active. You can still bind a workspace. On Windows, npm installations do not include a supported coding runtime: the required Windows network isolation is not implemented yet. Rebinding the workspace or installing a macOS runtime package will not enable Windows coding runs. On a Mac, npm normally installs the optional runtime automatically. If it is missing, run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
+    "Starting a coding run is unavailable on this installation until the coding runtime is active. You can still bind a workspace. On Windows, coding runs also need the Windows runtime gateway. On a Mac, npm normally installs the optional runtime automatically. If it is missing, run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
   "codingWorkbench.setup.runtimeEvaluation":
     "This installation runs an unverified evaluation runtime. It carries no Apple or Microsoft code signature, and on macOS it runs without the Endpoint Security containment a release build uses. Its payload integrity is still checked byte for byte on every start.",
   "codingWorkbench.readiness.modelSource.label": "Model source",
@@ -701,6 +740,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.waiting-for-trust": "Waiting for approval",
   "codingWorkbench.activity.toolState.no-runnable-steps": "Nothing to run",
   "codingWorkbench.activity.toolState.not-run": "Not run",
+  "codingWorkbench.activity.toolState.not-done": "Not done",
+  "codingWorkbench.activity.toolState.waiting-for-approval": "Waiting for approval",
   "codingWorkbench.activity.toolState.denied": "Denied",
   "codingWorkbench.activity.toolState.cancelled": "Cancelled",
   "codingWorkbench.activity.plan.title": "Current plan",
@@ -846,6 +887,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.connectorScope.source-control.write": "Source control (write)",
   "codingWorkbench.approval.connectorScope.issue-tracker.read": "Issue tracker (read)",
   "codingWorkbench.approval.connectorScope.issue-tracker.write": "Issue tracker (write)",
+  "codingWorkbench.approval.connectorScope.issue-tracker.admin": "Jira instance administration",
   "codingWorkbench.approval.connectorScope.knowledge-base.read": "Knowledge base (read)",
   "codingWorkbench.approval.connectorScope.knowledge-base.write": "Knowledge base (write)",
   "codingWorkbench.approval.research.title": "Research destination",
@@ -1074,6 +1116,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Runs this Code Mode program once in OpenCode's script sandbox.",
   "codingWorkbench.approval.native.help.worktree":
     "Creates a new task workspace on its own branch; this run keeps working here.",
+  "codingWorkbench.approval.native.help.jira": "Makes exactly this change in Jira, once.",
+  "codingWorkbench.approval.native.help.schedule":
+    "Changes when Keiko continues this task on its own, in the mode you chose for it.",
   "codingWorkbench.approval.native.resources": "Requested command, paths, or addresses",
   "codingWorkbench.approval.native.noResources": "No command, path, or address was named.",
   "codingWorkbench.approval.native.nothingNamed":
@@ -1090,12 +1135,15 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.native.permission.websearch": "Web search",
   "codingWorkbench.approval.native.permission.execute": "Code Mode script",
   "codingWorkbench.approval.native.permission.worktree": "New task workspace",
+  "codingWorkbench.approval.native.permission.jira": "Jira change",
+  "codingWorkbench.approval.native.permission.schedule": "Scheduled continuation",
   "codingWorkbench.approval.native.permission.other": "Native action",
   "codingWorkbench.approval.native.label.native-shell": "Native shell command",
   "codingWorkbench.approval.native.label.native-edit": "Native file change",
   "codingWorkbench.approval.native.label.native-egress": "Native internet access",
   "codingWorkbench.approval.native.label.native-execute": "Native Code Mode script",
   "codingWorkbench.approval.native.label.native-read": "Native read",
+  "codingWorkbench.approval.native.label.native-schedule": "Native schedule",
   "codingWorkbench.approval.evidenceRequired":
     "Approval stays unavailable until what this request would touch has loaded. Retry that read, or deny the request.",
   "codingWorkbench.approval.approve": "Approve once",
@@ -1115,9 +1163,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Recovery required",
   "codingWorkbench.recovery.title": "Reconcile before retrying",
   "codingWorkbench.recovery.summary":
-    "A previous action may already have changed files. Check its result before retrying; Keiko will not repeat it.",
+    "Keiko does not know whether the last action went through, for example a change in Jira or an edit to files. Check the result there first. Keiko never sends it again by itself.",
   "codingWorkbench.recovery.retry": "Retry as a fresh run",
   "codingWorkbench.recovery.acknowledge": "Acknowledge recovery",
+  "codingWorkbench.recovery.newTask": "Start a new task",
+  "codingWorkbench.recovery.retryHint":
+    "To try the task again as a fresh run, describe it in the box below. Or start a new task.",
   "codingWorkbench.header.notReady": "Not ready to start",
   "codingWorkbench.header.readyEvaluation": "Start — unverified evaluation runtime",
   "codingWorkbench.runState.idle": "Ready to start",
@@ -1209,10 +1260,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The coding run ended with an internal error after the actions shown above. Start the task again; if it recurs, check the Activity Log.",
   "codingWorkbench.event.failure.invalid-intent":
     "Keiko refused the task before it ran, for example because a file you referenced with @ is missing, outside the workspace or protected, or because the slash command is not available. Check the referenced files and the command, then start the task again.",
+  "codingWorkbench.event.failure.workspace-unqualified":
+    "Keiko does not let an agent work in this folder because it contains Keiko's own installation, which the agent could otherwise change. Choose a project folder outside the Keiko installation, then start the task again.",
   "codingWorkbench.event.failure.generic":
     "This step could not be completed. Check the Activity Log and try again.",
-  "codingWorkbench.event.failure.prompt-allowance-exhausted":
-    "The run used up its prompt allowance, the total prompt tokens one run may send to the model, so Keiko refused its next model call. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh allowance, or split the task into smaller ones. An operator can raise the allowance with KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS, up to 20,000,000 tokens. Keiko reads the setting only when it starts: restart Keiko after changing it.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":
     "The run used up its time limit, how long one run may work, so it ended before the task was done. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh time limit, or split the task into smaller ones. An operator can lengthen the limit with KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES, up to 480 minutes. Keiko reads the setting only when it starts: restart Keiko after changing it.",
   "codingWorkbench.event.failure.output-exhausted-repeated":
@@ -1280,9 +1331,24 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.verification.waiting-for-trust":
     "Verification has not run: this workspace's package scripts are not allowed yet. Allow package scripts for verification in the Coding Workbench header, then verify again.",
   "codingWorkbench.activity.verification.no-runnable-steps":
-    "Verification has not run: this repository defines no script the verifier can run, such as test, lint or build. That is not a failing check.",
+    "Verification has not run: the verifier found nothing it can run for this request, for example because the selected package has no test, lint or build script. That is not a failing check.",
   "codingWorkbench.activity.verification.not-run":
     "Verification did not run to completion: a step was skipped, denied or cancelled. That is not a failing check.",
+  "codingWorkbench.activity.git.waiting-for-approval":
+    "Waiting for a decision before this step is carried out.",
+  "codingWorkbench.activity.git.verification-failed":
+    "Not committed: the verification of the staged change failed. Fix the failing check, verify again, then commit.",
+  "codingWorkbench.activity.git.verification-missing":
+    "Not committed: no passing verification covers the staged change yet. Verify the staged change, then commit.",
+  "codingWorkbench.activity.git.not-staged":
+    "Not committed: part of the change is not staged yet. Stage the whole change, verify the staged change, then commit.",
+  "codingWorkbench.activity.git.unsaved-changes":
+    "Not committed: files open in the editor hold unsaved changes. Save them, verify the staged change, then commit.",
+  "codingWorkbench.activity.git.blocked":
+    "Not done: Keiko's policy or authority checks refused this step.",
+  "codingWorkbench.activity.git.changed":
+    "Not done: the change or the repository changed after this step was proposed.",
+  "codingWorkbench.activity.git.not-done": "Not done: the step failed or its result is uncertain.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",
@@ -1345,6 +1411,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The selected model's context window is too small for a coding run (minimum 32,000 tokens; {code}). Keiko could not confirm 32,000 tokens for it. Choose a larger model, or have the gateway declare this model's max_input_tokens, then start again.",
   "codingWorkbench.alert.startRefusedModelVerificationPending":
     "Keiko is still verifying the selected model's context window with the gateway ({code}). On a busy gateway this can take a few minutes; start again once the check has settled.",
+  "codingWorkbench.alert.startEndedModelChanged":
+    "The model changed while it was being checked, so no run was started ({code}). Choose the model you want and press Start again.",
+  "codingWorkbench.alert.startRefusedWorkspaceLocation":
+    "On Windows, Keiko runs a coding task only in a new worktree, not in your own checkout or folder ({code}). Choose New local worktree as the work location of a Git repository, then start again.",
+  "codingWorkbench.alert.startRefusedWorkspaceVolume":
+    "Keiko keeps its worktrees on another drive than Windows, where the Windows sandbox cannot run a coding task ({code}). An operator must set KEIKO_STATE_DIR to a folder on the Windows drive, usually C:, and restart Keiko.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "The bound repository could not be qualified for a coding run ({code}). Choose the repository again with Browse… so its real path is bound, then start again.",
   "codingWorkbench.alert.actionFailedSupportId": "Support id: {correlationId}.",
@@ -1354,7 +1426,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.modelSourceRefreshFailed": "Model source could not be refreshed.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime could not be refreshed.",
   "codingWorkbench.alert.runtimeUnqualified":
-    "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active. On Windows, npm installations do not include a supported coding runtime: the required Windows network isolation is not implemented yet. Rebinding the workspace or installing a macOS runtime package will not enable Windows coding runs. On a Mac, npm normally installs the optional runtime automatically. If it is missing, run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
+    "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active. On Windows, coding runs also need the Windows runtime gateway. On a Mac, npm normally installs the optional runtime automatically. If it is missing, run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
   "codingWorkbench.alert.workspaceRefreshFailed": "Workspace could not be refreshed.",
   "codingWorkbench.alert.workspaceBindFailed":
     "The workspace could not be bound. Review the repository path and target branch.",

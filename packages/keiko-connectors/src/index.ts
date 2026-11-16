@@ -4,6 +4,7 @@
 // instance, the metadata store, and the gatewayFetch-backed AtlassianHttpPort adapter.
 
 export { KEIKO_CONNECTORS_VERSION } from "./version.js";
+export { JIRA_PROJECT_LEAD_MAX_CHARS, JIRA_PROJECT_URL_MAX_CHARS } from "./jira-native-values.js";
 
 export {
   ATLASSIAN_ACCOUNT_EMAIL_MAX_CHARS,
@@ -26,16 +27,67 @@ export {
   type CreatedAtlassianCredentialCustody,
 } from "./atlassian-credential-custody.js";
 export {
+  JiraHumanInputCustodyError,
+  type JiraHumanInputCustody,
+  type JiraHumanInputExecutionResolver,
+} from "./jira-human-input-custody.js";
+export {
+  copyHumanInputBinding,
+  humanInputView,
+  parseHumanInputValues,
+  type JiraHumanInputBinding,
+  type JiraHumanInputContext,
+  type JiraHumanInputValues,
+} from "./jira-human-input-values.js";
+export {
+  prepareJiraHumanInput,
+  type JiraHumanInputSelection,
+} from "./jira-human-input-preparation.js";
+export { prepareJiraHumanInputReview } from "./jira-human-input-review.js";
+export { jiraNativeId } from "./jira-native-values.js";
+export { parseJsonRecord, parseJsonObjectOrArray } from "./atlassian-sync-classify.js";
+export { jiraApplicationLinkId } from "./jira-reciprocal-link-values.js";
+export {
+  JiraPrivateSessionError,
+  type JiraPrivateSessionAccess,
+  type JiraPrivateSessionExecutionResolver,
+} from "./jira-private-session-custody.js";
+export {
+  jiraPrivateCookie,
+  jiraSessionBindingForInput,
+  jiraPrivateSessionReference,
+  copyJiraSessionBinding,
+  type JiraPrivateSessionBinding,
+  type JiraPrivateSessionScope,
+  type JiraPrivateCookie,
+} from "./jira-private-session-values.js";
+export type {
+  JiraPrivateIdentityPorts,
+  JiraHumanInputHttpRequest,
+} from "./jira-private-identity-ports.js";
+export { executeAdmittedJiraRequest } from "./jira-request-admission.js";
+export type {
+  JiraAvatarPorts,
+  JiraAvatarSession,
+  JiraAvatarTarget,
+  JiraAvatarMutation,
+  JiraAvatarAttempt,
+} from "./jira-avatar-mutation-values.js";
+export {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
   ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
   type AtlassianHttpUpload,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
+  isAtlassianApplicationRoleVersion,
   type AtlassianHttpBodyResult,
   type AtlassianHttpPort,
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
+  type AtlassianAuthenticationObservation,
+  type AtlassianAuthenticationFailure,
 } from "./atlassian-http-port.js";
+export { maintenancePathNode } from "./jira-maintenance-mutation-values.js";
 export {
   ATLASSIAN_SYNC_ITEM_MAX_BYTES,
   ATLASSIAN_SYNC_PAGINATED_FETCH_TIMEOUT_MS,
@@ -76,7 +128,12 @@ export {
   type AtlassianConnectionVerificationStatus,
   type VerifyAtlassianConnectionInput,
 } from "./atlassian-connection-verification.js";
-export { verifyJiraDataCenterConnection } from "./jira-connection-verification.js";
+export {
+  verifyJiraDataCenterConnection,
+  verifyJiraDataCenterCompatibility,
+  verifyJiraDataCenterIdentity,
+  type JiraDataCenterCompatibilityResult,
+} from "./jira-connection-verification.js";
 export {
   ADF_SUPPORTED_DOC_VERSION,
   ADF_TO_TEXT_MAX_DEPTH,
@@ -155,20 +212,7 @@ export {
 export {
   JIRA_ISSUE_LABELS_MAX_ENTRIES,
   JIRA_SUMMARY_MAX_CHARS,
-  addJiraIssueComment,
-  createJiraIssue,
-  transitionJiraIssue,
-  updateJiraIssueFields,
-  type AddJiraIssueCommentInput,
-  type AddJiraIssueCommentResult,
   type AtlassianWriteActionFailure,
-  type CreateJiraIssueInput,
-  type CreateJiraIssueResult,
-  type JiraWriteActionDeps,
-  type TransitionJiraIssueInput,
-  type TransitionJiraIssueResult,
-  type UpdateJiraIssueFieldsInput,
-  type UpdateJiraIssueFieldsResult,
 } from "./jira-write-actions.js";
 export {
   CONFLUENCE_TITLE_MAX_CHARS,
@@ -189,7 +233,64 @@ export {
   type JiraManagedConnection,
   type JiraManagedProviderDeps,
   type JiraManagedMutationExecutor,
+  type JiraDraftBatchExecutor,
 } from "./jira-managed-tools.js";
+export {
+  executeJiraAgileRead,
+  JIRA_AGILE_READ_OPERATIONS,
+  type JiraAgileReadOperation,
+} from "./jira-agile-reads.js";
+export {
+  executeJiraAgileMutation,
+  checkJiraAgileMutation,
+  checkJiraAgileMutationTemplates,
+} from "./jira-agile-mutations.js";
+export {
+  JIRA_AGILE_MUTATIONS,
+  parseAgileMutation,
+  isJiraAgileMutation,
+  type JiraAgileMutation,
+  type AgileMutationInput,
+} from "./jira-agile-inputs.js";
+export { executeJiraFilterRead, JIRA_FILTER_READ_OPERATIONS } from "./jira-filter-reads.js";
+export {
+  executeJiraIssueDetailRead,
+  isJiraIssueDetailRead,
+  JIRA_ISSUE_DETAIL_READS,
+} from "./jira-managed-issue-details.js";
+export {
+  executeJiraCommentRead,
+  executeJiraCommentMutation,
+  isJiraCommentRead,
+  isJiraCommentMutation,
+} from "./jira-managed-comments.js";
+export {
+  executeJiraComponentRead,
+  executeJiraComponentMutation,
+  isJiraComponentRead,
+  isJiraComponentMutation,
+} from "./jira-managed-components.js";
+export {
+  executeJiraVersionRead,
+  executeJiraVersionMutation,
+  isJiraVersionRead,
+  isJiraVersionMutation,
+} from "./jira-managed-versions.js";
+export {
+  readJiraCreateTemplateRules,
+  type JiraCreateTemplateRules,
+  type JiraCreateTemplateRulesResult,
+} from "./jira-create-template-metadata.js";
+export {
+  isJiraIssueTypeReference,
+  isJiraProjectReference,
+  JIRA_PROJECT_REFERENCE_PATTERN,
+  resolveJiraDraftPlacement,
+  resolveJiraDraftPlacementWith,
+  JIRA_PLACEMENT_TYPE_NAMES_MAX,
+  type JiraDraftPlacement,
+  type JiraDraftPlacementResult,
+} from "./jira-draft-placement.js";
 export { JIRA_METADATA_MAX_UPDATES } from "./jira-field-metadata.js";
 export {
   JIRA_ISSUE_LINKS_MAX,
@@ -212,6 +313,7 @@ export {
   jiraDraftDependencies,
   jiraDraftIdentity,
   checkJiraDraft,
+  isJiraDraftItem,
   parseJiraDraft,
   type JiraDraft,
   type JiraDraftCheck,
@@ -234,6 +336,15 @@ export {
 } from "./jira-managed-mutations.js";
 export { jiraBrowseUrl } from "./jira-browse-url.js";
 export {
+  readJiraProjectIdentity,
+  type JiraProjectIdentityResult,
+} from "./jira-project-identity.js";
+export { readJiraFieldNames, type JiraFieldNamesResult } from "./jira-field-names.js";
+export {
+  readJiraTransitionIdentity,
+  type JiraTransitionIdentityResult,
+} from "./jira-transition-identity.js";
+export {
   JIRA_TEMPLATE_FINDING_CODES,
   checkJiraIssueTemplate,
   checkJiraIssueTemplates,
@@ -242,6 +353,8 @@ export {
   matchingJiraIssueTemplates,
   resolveJiraTemplateFieldIds,
   jiraTemplateViolationGuidance,
+  jiraTemplateGuidanceVariants,
+  jiraNoGoverningTemplateGuidance,
   validateJiraIssueTemplateAgainstInstance,
   type JiraFieldCatalogEntry,
   type JiraTemplateFinding,
@@ -249,8 +362,10 @@ export {
   type JiraTemplateInstanceMetadata,
   type JiraTemplateSubject,
 } from "./jira-issue-template-check.js";
+export { jiraInstanceIdentity } from "./jira-instance-identity.js";
 export {
   gateJiraMutationByTemplates,
+  JIRA_TEMPLATE_SYSTEM_FIELDS,
   type JiraIssueTemplateSet,
   type JiraIssueTemplateSource,
   type JiraTemplateGateInput,
@@ -261,32 +376,50 @@ export {
   requestFor as createJiraReadRequest,
 } from "./jira-managed-mutations.js";
 export {
+  boundJiraTemplateWithoutProposal,
   deriveJiraTemplateSections,
+  JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX,
   proposeJiraIssueTemplates,
   readJiraTemplateInstanceMetadata,
   renderProposedJiraIssueTemplate,
+  resolveJiraTemplateBinding,
+  type JiraTemplateBindingResolution,
   type JiraTemplateInstanceRead,
   type JiraTemplateProposal,
+  type JiraTemplateProposalPartial,
+  type JiraTemplateWithoutProposal,
+  type JiraTemplateWithoutProposalReason,
   type JiraTemplateProposalInput,
 } from "./jira-issue-template-instance.js";
 export { createJiraReportTemplateChecker } from "./jira-report-template-checker.js";
 export { createJiraReportStore, type JiraReportStore } from "./jira-report-store.js";
 export {
   createJiraDraftStore,
+  type JiraDraftSourceBinding,
   type JiraDraftStore,
   type StagedJiraDraft,
+  type StagedJiraDraftItem,
 } from "./jira-draft-store.js";
 export {
+  executeJiraDraftStageTool,
   firstJiraDraftTemplateRefusal,
+  JIRA_DRAFT_TEMPLATE_UNREADABLE,
   parseJiraDraftReference,
   resolveJiraDraftArguments,
   type JiraDraftActivity,
+  type JiraDraftPreparation,
   type JiraDraftTemplateRefusal,
   type JiraDraftRefusal,
   type JiraDraftResolution,
   type JiraDraftToolDeps,
 } from "./jira-draft-stage-tool.js";
+export {
+  withJiraCreateMetadataMemo,
+  withJiraDraftReadMemo,
+  type JiraDraftReadCounts,
+} from "./jira-draft-read-memo.js";
 export { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
+export { connectionFingerprint } from "./jira-report-tool.js";
 export type {
   JiraReportActivity,
   JiraReportRequirementIds,
@@ -301,3 +434,15 @@ export type {
   JiraReportDeviation,
   JiraReportIssueFacts,
 } from "./jira-report-types.js";
+export { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
+export { jiraPropertyPathKey, jiraPropertyUserText } from "./jira-entity-property-values.js";
+export { jiraRemoteVersionLinkGlobalId } from "./jira-managed-remote-version-links.js";
+export { rolePrincipalText } from "./jira-role-values.js";
+export { isJiraFieldId } from "./jira-field-metadata.js";
+export { JIRA_NONSECRET_PREFERENCE_KINDS } from "./jira-managed-application-settings.js";
+export type {
+  JiraEmailTemplateEntry,
+  JiraEmailTemplatePack,
+  JiraEmailTemplateObservation,
+} from "./jira-email-template-values.js";
+export { jiraEpicLinkRefusalMessage } from "./jira-epic-link-target.js";

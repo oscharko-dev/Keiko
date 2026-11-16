@@ -57,6 +57,7 @@ export default defineConfig({
     reuseExistingServer: process.env.KEIKO_E2E_REUSE_SERVER === "1",
     timeout: 600_000,
     env: {
+      KEIKO_OS_KEYCHAIN: "off",
       KEIKO_E2E_STATE_DIR: stateDir,
       KEIKO_E2E_UI_PORT: String(publicPort),
       KEIKO_STATE_DIR: join(stateDir, "bff-state", "state"),

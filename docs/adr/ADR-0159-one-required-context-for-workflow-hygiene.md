@@ -85,6 +85,16 @@ with `--config=osv-scanner.toml --recursive ./`. The job holds `permissions: con
 union of the four, which is also each of the four, so no step gains an authority its own job did not
 have.
 
+Since #4271, both OSV lanes (this job and the scheduled `osv-scanner.yml`) pass
+`--x-exclude=g:**/tests/fixtures/coding-workbench-lab`. That directory holds the foreign
+repositories that the Coding Workbench live lab copies and builds. They are not Keiko's dependency
+graph. Inside them, a Maven reactor module resolves from no public registry, so the transitive
+resolver stopped the whole scan with exit 127.
+
+The exclusion is the only one. `scripts/__tests__/osv-scanner-workflow.test.mjs` pins it in both
+lanes, and Socket still scans those manifests. Their test dependencies follow the same license
+policy, which is why the Maven fixture uses TestNG (Apache-2.0).
+
 Since #3130 the job also runs `node scripts/check-zizmor-anchors.mjs` immediately ahead of zizmor.
 It is not a fifth external tool and adds no authority — it reads the repository with Node builtins
 and needs no dependency install. It is here because the finding it explains is emitted by the step

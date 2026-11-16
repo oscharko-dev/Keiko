@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -138,11 +139,11 @@ function createProjectFixture(): string {
 async function seedLiveEditor(page: Page, root: string, mode: ModeDefinition): Promise<void> {
   await page.emulateMedia({ colorScheme: mode.colorScheme, contrast: mode.contrast });
   await page.addInitScript(
-    ({ projectRoot, theme }) => {
+    ({ argument: { projectRoot, theme }, storageKeys }) => {
       window.localStorage.setItem("keiko.theme", theme);
-      window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: `issue-1296-editor-${theme}`,
@@ -157,9 +158,9 @@ async function seedLiveEditor(page: Page, root: string, mode: ModeDefinition): P
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { projectRoot: root, theme: mode.colorScheme },
+    await workspaceStorageArgs(page, { projectRoot: root, theme: mode.colorScheme }),
   );
   await page.goto("/");
 }

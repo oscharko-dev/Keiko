@@ -7,6 +7,7 @@ import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
 import { parseOpenCodeHistory } from "./opencodeProtocol.js";
+import { OpenCodeV2HttpStatusError } from "./opencodeV2HttpClient.js";
 import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import {
   DEFAULT_SANDBOX_POLICY,
@@ -110,6 +111,7 @@ interface OpenCodeRuntimeAdapter {
   readonly turnInFlight: () => boolean;
   readonly cancelTurn: () => void;
   readonly waitForTerminal: (signal: AbortSignal) => Promise<boolean | "interrupted">;
+  readonly turnWaitExpired?: () => boolean;
 }
 
 interface OpenCodeRuntimeAdapterModule {
@@ -348,6 +350,41 @@ async function* hints(
 async function* finiteHints(values: readonly OpenCodeSyncHint[]): AsyncIterable<OpenCodeSyncHint> {
   await Promise.resolve();
   for (const value of values) yield value;
+}
+
+// A live stream the test feeds: the first hint opens it, every later push wakes its reader.
+function hintChannel(first: OpenCodeSyncHint): {
+  readonly subscribe: (signal: AbortSignal) => AsyncIterable<OpenCodeSyncHint>;
+  readonly push: (hint: OpenCodeSyncHint) => void;
+} {
+  const queue: OpenCodeSyncHint[] = [first];
+  let wake: (() => void) | undefined;
+  const take = (): IteratorResult<OpenCodeSyncHint> => {
+    const hint = queue.shift();
+    return hint === undefined ? { done: true, value: undefined } : { done: false, value: hint };
+  };
+  const next = (signal: AbortSignal): Promise<IteratorResult<OpenCodeSyncHint>> => {
+    if (queue.length > 0 || signal.aborted) return Promise.resolve(take());
+    return new Promise((resolve) => {
+      const settle = (): void => {
+        wake = undefined;
+        resolve(take());
+      };
+      wake = settle;
+      signal.addEventListener("abort", settle, { once: true });
+    });
+  };
+  return {
+    subscribe: (signal) => ({
+      [Symbol.asyncIterator]: (): AsyncIterator<OpenCodeSyncHint> => ({
+        next: (): Promise<IteratorResult<OpenCodeSyncHint>> => next(signal),
+      }),
+    }),
+    push: (hint): void => {
+      queue.push(hint);
+      wake?.();
+    },
+  };
 }
 
 function record(value: unknown): Readonly<Record<string, unknown>> {
@@ -770,6 +807,60 @@ describe("OpenCode runtime adapter readiness", () => {
       correlationId: "run-handshake-1",
       phase: "sse-history-reconciliation",
     });
+  });
+
+  // #4068: a confined Windows runtime announced its server, then the first request to it failed
+  // with no Keiko-code frame and a bare `Error` cause, which named neither a refusal nor a timeout.
+  it.each([
+    [
+      "a refused socket",
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error(`connect ECONNREFUSED ${SECRET}`), {
+          code: "ECONNREFUSED",
+        }),
+      }),
+      { errorClass: "TypeError", transportCode: "ECONNREFUSED" },
+    ],
+    [
+      "a socket code outside the closed set",
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error(SECRET), { code: "EWHATEVER" }),
+      }),
+      { errorClass: "TypeError", transportCode: "other" },
+    ],
+    [
+      "an HTTP refusal",
+      new OpenCodeV2HttpStatusError(503),
+      { errorClass: "OpenCodeV2HttpStatusError", httpStatus: 503 },
+    ],
+  ])("records the error class, socket code and status of %s", async (_name, thrown, facts) => {
+    const harness = readinessPorts();
+    const events: ServerLogEvent[] = [];
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      readiness: {
+        ...harness.ports.readiness,
+        health: (): Promise<never> => Promise.reject(thrown),
+      },
+      correlationId: "run-4068-health",
+      activityLog: {
+        write: (entry): void => {
+          events.push(entry);
+        },
+      },
+    });
+    await expect(adapter.start()).resolves.toMatchObject({
+      ok: false,
+      phase: "authenticated-health",
+    });
+    const failure = events.find((event) => event.op === "coding-runtime.readiness.failed");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.readiness.failed.emitted-line",
+        formatActivityLogProofLine(failure ?? {}),
+      ),
+    ).toMatchObject({ correlationId: "run-4068-health", phase: "authenticated-health", ...facts });
+    expect(JSON.stringify(events)).not.toContain(SECRET);
   });
 
   // #3873: this wait bounds one submitted task's WHOLE agent loop (every model turn until the
@@ -1640,7 +1731,16 @@ describe("OpenCode runtime adapter readiness", () => {
     });
 
     const reconnects = records.filter((record) => record.source === "opencode.monitor.reconnect");
-    expect(reconnects.map((record) => record.code)).toEqual([
+    // Each code is the pinned text plus one closed `cause` token, and nothing else: a cause outside
+    // the closed vocabulary leaves its suffix in place and fails the comparison below.
+    expect(
+      reconnects.map((record) =>
+        record.code?.replace(
+          /:cause=(?:events-ended|events-invalid|history-incomplete|stream-error)$/u,
+          "",
+        ),
+      ),
+    ).toEqual([
       "stage=monitor:reason=backoff:attempt=1:delayMs=250:failingForMs=0",
       "stage=monitor:reason=backoff:attempt=2:delayMs=500:failingForMs=250",
       "stage=monitor:reason=backoff:attempt=3:delayMs=1000:failingForMs=750",
@@ -1651,6 +1751,81 @@ describe("OpenCode runtime adapter readiness", () => {
       "stage=monitor:reason=budget-exhausted:attempt=8:delayMs=8000:failingForMs=23750",
     ]);
     expect(reconnects.every((record) => record.correlationId === "run-reconnect-1")).toBe(true);
+    dispose();
+    await adapter.close();
+  });
+
+  // Audit finding 2: a half-dead runtime that delivers one hint and then drops used to reset the
+  // reconnect budget on every hint, so the monitor reconnected every 250 ms forever.
+  it("fails a flapping stream (one hint, then a drop) instead of reconnecting forever", async () => {
+    const harness = readinessPorts();
+    let subscriptions = 0;
+    harness.ports.readiness.subscribe = (): AsyncIterable<OpenCodeSyncHint> => {
+      subscriptions += 1;
+      if (subscriptions === 1) return finiteHints([{ id: "evt_0" }]);
+      return (async function* (): AsyncIterable<OpenCodeSyncHint> {
+        await Promise.resolve();
+        yield { requiresHistoryIdentity: false };
+        throw new TypeError("socket-reset");
+      })();
+    };
+    const records: ServerDiagnosticRecord[] = [];
+    const clock = backoffClock();
+    // Each wait yields to the macrotask queue, so an unbounded reconnect loop fails the wait below
+    // instead of starving the test's own timers.
+    const advance = clock.reconnect.delay;
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      diagnostics: { record: (record) => void records.push(record) },
+      reconnect: {
+        ...clock.reconnect,
+        delay: async (ms, signal): Promise<void> => {
+          await advance?.(ms, signal);
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        },
+      },
+    });
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    const failures: string[] = [];
+    const dispose = adapter.monitor(() => failures.push("failed"));
+
+    await vi.waitFor(() => {
+      expect(failures).toEqual(["failed"]);
+    });
+    expect(subscriptions).toBeLessThan(60);
+    expect(Math.max(...clock.delays)).toBe(8_000);
+    const lines = records.filter((record) => record.source === "opencode.monitor.reconnect");
+    expect(lines.at(-1)?.code).toContain("reason=budget-exhausted");
+    // The first line is the finished first subscription; every later one is the dropped stream.
+    expect(lines.slice(1).every((r) => r.code?.endsWith(":cause=stream-error") === true)).toBe(
+      true,
+    );
+    dispose();
+    await adapter.close();
+  });
+
+  it("records the closed cause of each reconnect on the reconnect line", async () => {
+    const harness = readinessPorts();
+    failStreamAfterReady(harness);
+    const records: ServerDiagnosticRecord[] = [];
+    const clock = backoffClock();
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      diagnostics: { record: (record) => void records.push(record) },
+      reconnect: clock.reconnect,
+    });
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    const failures: string[] = [];
+    const dispose = adapter.monitor(() => failures.push("failed"));
+    await vi.waitFor(() => {
+      expect(failures).toEqual(["failed"]);
+    });
+    const lines = records.filter((record) => record.source === "opencode.monitor.reconnect");
+    // The first subscription ended; every reopened one ended before its first hint.
+    expect(lines[0]?.code).toMatch(/:cause=events-ended$/u);
+    expect(lines.slice(1).every((r) => r.code?.endsWith(":cause=events-invalid") === true)).toBe(
+      true,
+    );
     dispose();
     await adapter.close();
   });
@@ -1962,6 +2137,110 @@ describe("OpenCode runtime adapter readiness", () => {
     caller.abort();
     await expect(waiting).resolves.toBe(false);
     await adapter.close();
+  });
+
+  // Audit finding 6: the status poll ran every 250 ms for the whole turn even while the live
+  // stream was healthy and would have woken the wait on any change.
+  it("backs off the status poll while the live stream is healthy", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = readinessPorts();
+      let statusCalls = 0;
+      harness.ports.control.status = (): Promise<"activity"> => {
+        statusCalls += 1;
+        return Promise.resolve("activity");
+      };
+      const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+      await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+      const stopMonitor = adapter.monitor(() => undefined);
+      expect(adapter.armTurn()).toBe(true);
+      const waiting = adapter.waitForTerminal(new AbortController().signal);
+
+      await vi.advanceTimersByTimeAsync(4_000);
+
+      expect(statusCalls).toBeLessThanOrEqual(6);
+      expect(statusCalls).toBeGreaterThanOrEqual(3);
+      adapter.cancelTurn();
+      stopMonitor();
+      await expect(waiting).resolves.toBe(false);
+      await adapter.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns the status poll to its base delay when a live notification ends a wait", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = readinessPorts();
+      const channel = hintChannel({ id: "evt_0" });
+      harness.ports.readiness.subscribe = channel.subscribe;
+      const pollTimes: number[] = [];
+      harness.ports.control.status = (): Promise<"activity"> => {
+        pollTimes.push(Date.now());
+        return Promise.resolve("activity");
+      };
+      const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+      await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+      const stopMonitor = adapter.monitor(() => undefined);
+      expect(adapter.armTurn()).toBe(true);
+      const waiting = adapter.waitForTerminal(new AbortController().signal);
+      await vi.advanceTimersByTimeAsync(5_000);
+      const gaps = (times: readonly number[]): number[] =>
+        times.slice(1).map((time, index) => time - (times[index] ?? time));
+      expect(gaps(pollTimes).at(-1)).toBe(2_000);
+
+      const quietPolls = pollTimes.length;
+      channel.push({
+        requiresHistoryIdentity: false,
+        control: { sessionId: "ses_1", state: "terminal" },
+      });
+      await vi.advanceTimersByTimeAsync(260);
+
+      // The notification ends the wait at once; the next wait starts again at 250 ms, not 2 s.
+      expect(gaps(pollTimes.slice(quietPolls - 1)).slice(1)).toEqual([250]);
+      adapter.cancelTurn();
+      stopMonitor();
+      await expect(waiting).resolves.toBe(false);
+      await adapter.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records a failing status poll on a bounded diagnostic line", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = readinessPorts();
+      harness.ports.control.status = (): Promise<never> =>
+        Promise.reject(new TypeError("status-unreachable"));
+      const records: ServerDiagnosticRecord[] = [];
+      const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+        ...harness.ports,
+        diagnostics: { record: (record) => void records.push(record) },
+        correlationId: "run-poll-1",
+      });
+      await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+      expect(adapter.armTurn()).toBe(true);
+      const waiting = adapter.waitForTerminal(new AbortController().signal);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      const lines = records.filter((line) => line.source === "opencode.turn.poll");
+      expect(lines.map((line) => line.code)).toEqual([
+        "stage=turn-poll:reason=status-failed:streak=1",
+        "stage=turn-poll:reason=status-failed:streak=2",
+        "stage=turn-poll:reason=status-failed:streak=4",
+        "stage=turn-poll:reason=status-failed:streak=8",
+      ]);
+      expect(lines.every((line) => line.correlationId === "run-poll-1")).toBe(true);
+      expect(lines.every((line) => line.errorClass === "TypeError")).toBe(true);
+      adapter.cancelTurn();
+      await expect(waiting).resolves.toBe(false);
+      await adapter.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits for the bounded poll interval after activity before requesting status again", async () => {
@@ -2532,6 +2811,39 @@ describe("OpenCode runtime adapter native session tree and interrupted turns", (
       // the turn but its deadline.
       await harness.deliver(control("interrupted"));
       await expect(turn.result).resolves.toBe(false);
+    } finally {
+      await stop();
+    }
+  });
+
+  // W9 (#4068): a turn wait that ran out of its own time is the run's duration bound, not a runtime
+  // failure, so the composition must be able to tell it apart from a failed or abandoned turn.
+  it("reports a turn whose own wait ran out of time as expired", async () => {
+    const harness = turnHarness({ maxTurnWaitMs: 200 });
+    harness.status = (): TreeStatus => "activity";
+    const { adapter, stop } = await armed(harness);
+    try {
+      expect(adapter.turnWaitExpired?.()).toBe(false);
+      await expect(waiting(adapter).result).resolves.toBe(false);
+      expect(adapter.turnWaitExpired?.()).toBe(true);
+      // The next turn starts unexpired.
+      expect(adapter.armTurn()).toBe(true);
+      expect(adapter.turnWaitExpired?.()).toBe(false);
+    } finally {
+      await stop();
+    }
+  });
+
+  it("does not report a turn its caller abandoned as expired", async () => {
+    const harness = turnHarness({ maxTurnWaitMs: 10_000 });
+    harness.status = (): TreeStatus => "activity";
+    const { adapter, stop } = await armed(harness);
+    try {
+      const caller = new AbortController();
+      const result = adapter.waitForTerminal(caller.signal);
+      caller.abort();
+      await expect(result).resolves.toBe(false);
+      expect(adapter.turnWaitExpired?.()).toBe(false);
     } finally {
       await stop();
     }

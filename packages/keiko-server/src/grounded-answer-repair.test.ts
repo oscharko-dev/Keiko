@@ -20,6 +20,41 @@ function context(content: string, numeric = false): GroundedRepairContext {
 }
 
 describe("citation repair dispatch eligibility", () => {
+  it.each([17, 34])(
+    "does not consume the repair input window with %i observed prompt tokens",
+    async (promptTokens) => {
+      const ctx = context("Feature is true.", true);
+      const repair = vi.fn((): Promise<GroundedAnswerPayload> =>
+        Promise.resolve({
+          content: JSON.stringify({ insertions: [{ after: "Feature is true.", marker: "[1]" }] }),
+          usage: { promptTokens: 11, completionTokens: 5 },
+        }),
+      );
+      const result = await repairGroundedAnswer({
+        ...ctx,
+        budget: {
+          ...DEFAULT_EXPLORATION_BUDGET,
+          modelInputTokensMax: 17,
+          modelOutputTokensMax: 20,
+        },
+        answer: { ...ctx.answer, usage: { promptTokens, completionTokens: 7 } },
+        invokeRepair: repair,
+      });
+      expect(repair).toHaveBeenCalledWith(
+        ctx.answer.content,
+        expect.objectContaining({
+          modelInputTokensMax: 17,
+          modelOutputTokensMax: 13,
+        }),
+      );
+      expect(result.disposition).toBe("applied");
+      expect(result.answer.usage).toEqual({
+        promptTokens: promptTokens + 11,
+        completionTokens: 12,
+      });
+    },
+  );
+
   it.each([
     "```java\nclass ExampleTest {}\n```",
     " \n```tsx\nrender(<Example />);\n```\n ",
@@ -139,6 +174,19 @@ describe("citation repair dispatch eligibility", () => {
       expect(result.answer).toBe(ctx.answer);
     },
   );
+
+  it("keeps an answer that reports a sent tool change (#4173)", async () => {
+    const ctx = context("Feature is true.");
+    const repair = vi.fn((): Promise<GroundedAnswerPayload> => Promise.resolve("Unused."));
+    const result = await repairGroundedAnswer({
+      ...ctx,
+      invokeRepair: repair,
+      deps: { toolTurn: { reportsToolAction: true } },
+    });
+    expect(result.disposition).toBe("skipped-tool-action");
+    expect(repair).not.toHaveBeenCalled();
+    expect(result.answer).toBe(ctx.answer);
+  });
 
   it("propagates cancellation instead of turning it into a completed repair", async () => {
     const controller = new AbortController();

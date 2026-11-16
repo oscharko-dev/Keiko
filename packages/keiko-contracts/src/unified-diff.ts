@@ -45,6 +45,55 @@ export class PatchParseError extends Error {
   }
 }
 
+const OCTAL_ESCAPE = /^[0-7]{3}$/u;
+const SIMPLE_ESCAPES: ReadonlyMap<string, number> = new Map([
+  ["a", 7],
+  ["b", 8],
+  ["t", 9],
+  ["n", 10],
+  ["v", 11],
+  ["f", 12],
+  ["r", 13],
+  ['"', 34],
+  ["\\", 92],
+]);
+
+/**
+ * Decodes a path written in the C-style quoted form of a diff header
+ * (`"dir/Gr\303\266\303\237e.txt"`): a name that holds a control character, a quote, a backslash
+ * or (by default) a non-ASCII byte is quoted this way. Returns undefined when the text is not a
+ * well-formed quoted path or its bytes are not valid UTF-8. Shared by every reader of such headers.
+ */
+export function decodeGitQuotedPath(raw: string): string | undefined {
+  if (raw.length < 2 || !raw.startsWith('"') || !raw.endsWith('"')) return undefined;
+  const bytes: number[] = [];
+  const encoder = new TextEncoder();
+  const content = raw.slice(1, -1);
+  let index = 0;
+  while (index < content.length) {
+    const value = String.fromCodePoint(content.codePointAt(index) ?? 0);
+    if (value !== "\\") {
+      bytes.push(...encoder.encode(value));
+      index += value.length;
+      continue;
+    }
+    const octal = content.slice(index + 1, index + 4);
+    const simple = SIMPLE_ESCAPES.get(content.charAt(index + 1));
+    if (OCTAL_ESCAPE.test(octal)) {
+      bytes.push(Number.parseInt(octal, 8));
+      index += 4;
+    } else if (simple !== undefined) {
+      bytes.push(simple);
+      index += 2;
+    } else {
+      return undefined;
+    }
+  }
+  // Bytes that are not valid UTF-8 decode to U+FFFD; a path that holds one has no reliable identity.
+  const decoded = new TextDecoder("utf-8").decode(Uint8Array.from(bytes));
+  return decoded.includes("\uFFFD") ? undefined : decoded;
+}
+
 function stripPrefix(raw: string): string {
   if (raw === "/dev/null") {
     return raw;
@@ -60,8 +109,11 @@ function stripPrefix(raw: string): string {
 function headerPath(line: string, marker: string): string {
   const rest = line.slice(marker.length);
   const tab = rest.indexOf("\t");
-  const raw = tab === -1 ? rest : rest.slice(0, tab);
-  return stripPrefix(raw.trim());
+  const raw = (tab === -1 ? rest : rest.slice(0, tab)).trim();
+  if (!raw.startsWith('"')) return stripPrefix(raw);
+  const decoded = decodeGitQuotedPath(raw);
+  if (decoded === undefined) throw new PatchParseError("malformed quoted path in file header");
+  return stripPrefix(decoded);
 }
 
 function classify(oldPath: string, newPath: string): { kind: PatchChangeKind; path: string } {
@@ -104,6 +156,13 @@ function toHunk(acc: HunkAccumulator): PatchHunk {
   };
 }
 
+// A header number past the safe integer range would be rounded, so it could name another line.
+function lineNumber(digits: string | undefined): number {
+  const value = Number(digits);
+  if (!Number.isSafeInteger(value)) throw new PatchParseError("hunk header number out of range");
+  return value;
+}
+
 function parseHunkHeader(
   line: string,
   source: UnifiedDiffSourceRange | undefined,
@@ -112,12 +171,12 @@ function parseHunkHeader(
   if (match === null) {
     throw new PatchParseError("malformed hunk header");
   }
-  const oldLines = match[2] === undefined ? 1 : Number(match[2]);
-  const newLines = match[4] === undefined ? 1 : Number(match[4]);
+  const oldLines = match[2] === undefined ? 1 : lineNumber(match[2]);
+  const newLines = match[4] === undefined ? 1 : lineNumber(match[4]);
   return {
-    oldStart: Number(match[1]),
+    oldStart: lineNumber(match[1]),
     oldLines,
-    newStart: Number(match[3]),
+    newStart: lineNumber(match[3]),
     newLines,
     lines: [],
     oldRemaining: oldLines,
@@ -178,6 +237,9 @@ function finishFile(
 ): void {
   finishHunk(file);
   if (file.oldPath === undefined || file.newPath === undefined) {
+    // A `--- ` line without its `+++ ` line owns nothing, unless hunks followed it: dropping those
+    // would apply the rest of the patch without this file's changes.
+    if (file.hunks.length > 0) throw new PatchParseError("file header has no +++ line");
     return;
   }
   const { kind, path } = classify(file.oldPath, file.newPath);
@@ -293,7 +355,14 @@ function handleBodyLine(
     return;
   }
   if (file.current === undefined) {
-    return; // lines outside a hunk (e.g. `diff --git`, `index …`) are ignored
+    // A change line between the `+++ ` header and the file's first hunk header has no hunk to belong
+    // to; ignoring it would drop a change. Lines after a finished hunk stay ignored, as do lines
+    // that are not change lines (`diff --git`, `index …`): prose after a diff, such as a Markdown
+    // list, is not part of it.
+    if (file.newPath !== undefined && file.hunks.length === 0 && isHunkBodyLine(line)) {
+      throw new PatchParseError("body line outside a hunk");
+    }
+    return;
   }
   // Only genuine body lines (context/add/remove) belong to the hunk. An empty trailing line
   // (the split artifact of a final newline) or any other token ends the hunk so it is not
@@ -307,6 +376,12 @@ function handleBodyLine(
   recordSourceLine(file.current, line, source);
   countBody(file, line);
   consumeBudget(file.current, line);
+}
+
+// The signature delimiter of `git format-patch` (and of mail). With the hunk's budget spent, a
+// removal line spelled like this could only be an extra line, so it ends the patch body instead.
+function isSignatureDelimiter(line: string): boolean {
+  return line === "-- " || line === "--";
 }
 
 function handleLine(
@@ -326,6 +401,10 @@ function handleLine(
   }
   if (state.current === undefined) {
     return; // skip preamble before the first file header
+  }
+  if (isSignatureDelimiter(line)) {
+    finishHunk(state.current);
+    return;
   }
   if (line.startsWith("+++ ")) {
     state.current.newPath = headerPath(line, "+++ ");

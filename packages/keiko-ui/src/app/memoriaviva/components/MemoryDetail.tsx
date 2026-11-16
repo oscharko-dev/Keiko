@@ -16,10 +16,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
+import { personMemoryTags } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { fetchMemory, type MemoryDetailResponse } from "@/lib/memory-api";
 
 import { formatError } from "./format-error";
 import { MemoryActions } from "./MemoryActions";
+import { sourceKindLabel } from "@/lib/memory-source-label";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -140,7 +142,10 @@ function ProvenanceSection({
     <section aria-label={t("memoria.provenance")} className="mc-section">
       <h2 className="lk-section-head">{t("memoria.provenance")}</h2>
       <dl className="mc-meta">
-        <MetaField label={t("memoria.sourceKind")} value={provenance.sourceKind} />
+        <MetaField
+          label={t("memoria.sourceKind")}
+          value={sourceKindLabel(provenance.sourceKind, t)}
+        />
         <MetaField label={t("memoria.capturedAt")} value={formatTs(provenance.capturedAt)} />
         <MetaField
           label={t("memoria.confidence")}
@@ -429,7 +434,7 @@ export function MemoryDetail({
 
       <section aria-label={t("memoria.tags")} className="mc-section">
         <h2 className="lk-section-head">{t("memoria.tags")}</h2>
-        <TagsList tags={record.tags} t={t} />
+        <TagsList tags={personMemoryTags(record.tags)} t={t} />
       </section>
 
       <section aria-label={t("memoria.actions")} className="mc-section">

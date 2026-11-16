@@ -27,7 +27,7 @@ describe("the instrument digest of a run", () => {
     const start = page.indexOf("`INSTRUMENT_FILES` in `instrument.mjs`:");
     const paragraph = page.slice(start, page.indexOf("), beside", start)).replace(/\s+/gu, " ");
     expect(start).toBeGreaterThan(0);
-    const named = [...paragraph.matchAll(/`([\w/-]+\.mjs)`/gu)].map((match) => match[1]);
+    const named = [...paragraph.matchAll(/`([\w./-]+\.mjs)`/gu)].map((match) => match[1]);
     expect(named.filter((name) => name !== "instrument.mjs")).toEqual([...INSTRUMENT_FILES]);
   });
 

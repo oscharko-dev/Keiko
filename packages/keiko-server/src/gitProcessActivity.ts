@@ -229,8 +229,16 @@ function gitFailureErrorKind(
 // checked `aborted` first — dropped entirely under `KEIKO_LOG_LEVEL=warn`, the threshold an
 // operator investigating a launch failure would actually run at. Kind and level must agree about
 // which cause won, or the level can silence the very line the kind correctly named.
-function gitFailureLevel(result: GitProcessResult): ServerLogLevel {
+//
+// Asking whether a folder is a repository is routine: a folder without Git is a supported workspace
+// (#4271), so that answer is recorded at `info`. Any other command meeting no repository still warns.
+function gitFailureLevel(
+  result: GitProcessResult,
+  subcommand: string,
+  failureKind: string,
+): ServerLogLevel {
   if (result.exitCode === 127) return "warn";
+  if (subcommand === "rev-parse" && failureKind === "not-a-repository") return "info";
   return result.aborted === true ? "info" : "warn";
 }
 
@@ -437,7 +445,7 @@ function writeGitFailure(
     activityLogEvent(
       GIT_PROCESS_FAILED_OPERATION,
       {
-        level: gitFailureLevel(result),
+        level: gitFailureLevel(result, fields.subcommand, failureKind),
         correlationId,
         errorKind: closedGitErrorKind(failureKind),
         durationMs,

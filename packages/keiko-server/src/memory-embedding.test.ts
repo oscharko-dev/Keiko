@@ -571,12 +571,76 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
     const before = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
 
-    const dup = makeRecord("the user's database is postgresql", "id-dup");
+    const dup = makeRecord("postgres is the database the user works with", "id-dup");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
     expect(result).toEqual({ kind: "merged", mergedInto: canonical.id });
     expect(vault.getMemory(dup.id)).toBeUndefined();
     const after = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
     expect(after).toBe(before + 1);
+  });
+
+  it("keeps a changed value in the same slot apart from a semantic near-duplicate (#4212)", async () => {
+    // okAdapter returns one fixed vector for every input, so only the fact check can tell them apart.
+    const deps = makeDeps();
+    const vault = makeVault();
+    const known = makeRecord("the user runs postgres 14", "id-known");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, known);
+
+    const changed = makeRecord("the user runs postgres 16", "id-changed");
+    expectInserted(await insertSalienceMemoryWithNoveltyGate(deps, vault, changed), changed.id);
+  });
+
+  it("keeps using and liking one tool as two facts through the semantic gate (#4212)", async () => {
+    // One fixed vector for every input: only the predicate class can tell the two apart.
+    const deps = makeDeps();
+    const vault = makeVault();
+    const use = makeRecord("The user uses Python", "id-use");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, use);
+    const before = vault.getAccessStats([use.id]).get(use.id)?.accessCount ?? 0;
+
+    const like = makeRecord("The user likes Python", "id-like");
+    expectInserted(await insertSalienceMemoryWithNoveltyGate(deps, vault, like), like.id);
+    expect(vault.getMemory(use.id)?.status).toBe("accepted");
+    expect(vault.getMemory(like.id)?.status).toBe("accepted");
+    expect(vault.getAccessStats([use.id]).get(use.id)?.accessCount ?? 0).toBe(before);
+  });
+
+  it("does not confirm a clause whose values were reassigned (#4212)", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const known = makeRecord("The user has 2 cats and 3 dogs", "id-known");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, known);
+    const before = vault.getAccessStats([known.id]).get(known.id)?.accessCount ?? 0;
+
+    const swapped = makeRecord("The user has 3 cats and 2 dogs", "id-swapped");
+    expectInserted(await insertSalienceMemoryWithNoveltyGate(deps, vault, swapped), swapped.id);
+    expect(vault.getMemory(known.id)?.body).toBe("The user has 2 cats and 3 dogs");
+    expect(vault.getAccessStats([known.id]).get(known.id)?.accessCount ?? 0).toBe(before);
+  });
+
+  it("does not take the fact a candidate replaces for its duplicate (#4212)", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const known = makeRecord("the user prefers postgres", "id-known");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, known);
+
+    const replacement = makeRecord("postgres is the database the user works with", "id-new");
+    const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, replacement, {
+      replaces: known.id,
+    });
+    expectInserted(outcome, replacement.id);
+  });
+
+  it("stores nothing for a claim of sameness that nothing confirms (#4212)", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const claim = makeRecord("the user prefers postgres", "id-claim");
+
+    const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, claim, {
+      onlyConfirm: true,
+    });
+    expect(outcome).toEqual({ kind: "unconfirmed" });
+    expect(vault.getMemory(claim.id)).toBeUndefined();
   });
 
   it("RB-4 (GEN-AI-MEMORY-003): suppresses a PARAPHRASED re-capture of a forgotten memory (semantic, not exact-hash)", async () => {
@@ -663,7 +727,7 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     };
     await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
 
-    const dup = makeRecord("the user's database is postgresql", "id-dup");
+    const dup = makeRecord("postgres is the database the user works with", "id-dup");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
     expect(result).toEqual({ kind: "merged", mergedInto: canonical.id });
     expect(vault.getMemory(dup.id)).toBeUndefined();
@@ -677,7 +741,7 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
     vault.updateMemory(canonical.id, { status: "superseded" }, Date.now());
 
-    const dup = makeRecord("the user's database is postgresql", "id-dup");
+    const dup = makeRecord("postgres is the database the user works with", "id-dup");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
     expectInserted(result, dup.id);
   });
@@ -934,7 +998,11 @@ describe("memory embedding activity log", () => {
     const sink = capture("info");
 
     await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("the user prefers postgres"));
-    await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("the user's db is postgres"));
+    await insertSalienceMemoryWithNoveltyGate(
+      deps,
+      vault,
+      makeRecord("postgres is the database the user works with"),
+    );
 
     const decisions = sink.events.filter((event) => event.op === "memory.capture.novelty-gate");
     expect(decisions.map((event) => event.extra?.outcome)).toEqual(["inserted", "merged"]);

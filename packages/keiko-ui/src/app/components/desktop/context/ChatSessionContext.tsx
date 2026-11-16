@@ -52,6 +52,7 @@ export type ChatSessionCatalog = Pick<
   | "models"
   | "configuredModelIds"
   | "modelCatalogRead"
+  | "modelCatalogStatus"
   | "activeProject"
   | "activeChat"
   | "selectedModel"
@@ -149,6 +150,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       models: value.models,
       configuredModelIds: value.configuredModelIds,
       modelCatalogRead: value.modelCatalogRead,
+      modelCatalogStatus: value.modelCatalogStatus,
       activeProject: value.activeProject,
       activeChat: value.activeChat,
       selectedModel: value.selectedModel,
@@ -162,6 +164,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.models,
       value.configuredModelIds,
       value.modelCatalogRead,
+      value.modelCatalogStatus,
       value.activeProject,
       value.activeChat,
       value.selectedModel,
@@ -180,6 +183,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       chats: value.chats,
       messages: value.messages,
       models: value.models,
+      modelCatalogStatus: value.modelCatalogStatus,
       activeProject: value.activeProject,
       activeChat: value.activeChat,
       selectedModel: value.selectedModel,
@@ -209,6 +213,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.chats,
       value.messages,
       value.models,
+      value.modelCatalogStatus,
       value.activeProject,
       value.activeChat,
       value.selectedModel,

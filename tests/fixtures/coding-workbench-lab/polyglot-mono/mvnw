@@ -1,0 +1,30 @@
+#!/bin/sh
+# Minimal Maven wrapper for the lab fixture (not Apache's generated script): it reads the
+# distribution named in .mvn/wrapper/maven-wrapper.properties, downloads it once into
+# ${MAVEN_USER_HOME:-$HOME/.m2}/wrapper/dists and runs it. It honours JAVA_HOME and the user's
+# settings.xml through Maven itself, and needs the network only for that first download.
+set -eu
+
+base_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+properties="$base_dir/.mvn/wrapper/maven-wrapper.properties"
+url=$(sed -n 's/^distributionUrl=//p' "$properties")
+[ -n "$url" ] || { echo "mvnw: no distributionUrl in $properties" >&2; exit 1; }
+
+dists="${MAVEN_USER_HOME:-$HOME/.m2}/wrapper/dists"
+name=$(basename "$url" -bin.zip)
+home="$dists/$name"
+
+if [ ! -x "$home/bin/mvn" ]; then
+  mkdir -p "$dists"
+  archive="$dists/$name-bin.zip"
+  echo "mvnw: downloading $url" >&2
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$archive" "$url"
+  else
+    wget -q -O "$archive" "$url"
+  fi
+  unzip -q -o "$archive" -d "$dists"
+  rm -f "$archive"
+fi
+
+exec "$home/bin/mvn" "$@"

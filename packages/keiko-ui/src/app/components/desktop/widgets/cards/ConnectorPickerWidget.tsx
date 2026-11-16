@@ -39,13 +39,10 @@ import {
   type LocalKnowledgeMessageKey,
 } from "@/app/local-knowledge/local-knowledge-i18n";
 import { STATUS_LABEL_KEYS } from "@/app/local-knowledge/connector-graph-types";
-import { Icons } from "../../Icons";
+import { PodIcon } from "@/app/local-knowledge/pod-icon";
 import KeikoSelect from "../../KeikoSelect";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { useKnowledgeCatalog } from "../../knowledge-catalog";
-
-// PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
-const ServerIcon = Icons.server;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -330,13 +327,13 @@ function KnowledgeConnectorNode({
   selectedState,
   onManageConnectors,
   stateLabel,
-  meta,
+  kind = "capsule",
 }: {
   readonly selectedLabel: string | undefined;
   readonly selectedState: string | undefined;
   readonly onManageConnectors: () => void;
   readonly stateLabel?: string;
-  readonly meta?: string;
+  readonly kind?: "capsule" | "jira-live";
 }): ReactNode {
   const t = useLocalKnowledgeTranslate();
   const label =
@@ -344,24 +341,29 @@ function KnowledgeConnectorNode({
       ? selectedLabel.trim()
       : t("localKnowledge.node.defaultLabel");
   return (
-    <div className="connector-node" data-testid="knowledge-connector-node">
-      <div className="connector-node-icon" aria-hidden="true">
-        <ServerIcon size={42} />
-      </div>
-      <div className="connector-node-copy">
+    <div
+      className={`connector-node ${styles.lazyWidgetScope}`}
+      data-testid="knowledge-connector-node"
+    >
+      <button
+        type="button"
+        className="connector-node-manage"
+        onClick={onManageConnectors}
+        aria-label={`${t("localKnowledge.node.manage")}: ${label}`}
+        title={t("localKnowledge.node.manage")}
+      >
+        <span className="connector-node-icon">
+          <PodIcon kind={kind} size={32} />
+        </span>
+        <span className="connector-node-title" title={label}>
+          {label}
+        </span>
+      </button>
+      {selectedState === "ready" ? null : (
         <p className="connector-node-kicker">
           {stateLabel ?? connectorNodeStateLabel(t, selectedState)}
         </p>
-        {/* Non-heading element: this compact Knowledge Pod node is a leaf card with no
-            sectioning context, so a real <h2> was an orphan heading (GEN-UI-A11Y-018). */}
-        <p className="connector-node-title" title={label}>
-          {label}
-        </p>
-        <p className="connector-node-meta">{meta ?? t("localKnowledge.node.meta")}</p>
-      </div>
-      <button type="button" className="connector-node-manage" onClick={onManageConnectors}>
-        {t("localKnowledge.node.manage")}
-      </button>
+      )}
     </div>
   );
 }
@@ -448,9 +450,9 @@ function BoundJiraConnectorNode({
   return (
     <KnowledgeConnectorNode
       selectedLabel={connector?.displayName ?? selectedLabel}
-      selectedState={undefined}
+      kind="jira-live"
+      selectedState={ready ? "ready" : CONNECTOR_NODE_UNAVAILABLE}
       stateLabel={t(ready ? "chat.jira.liveReady" : "chat.jira.liveUnavailable")}
-      meta={t("chat.jira.liveTools")}
       onManageConnectors={onManageConnectors}
     />
   );

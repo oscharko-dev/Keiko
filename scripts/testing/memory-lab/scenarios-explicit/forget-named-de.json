@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "forget-named-de",
+  "language": "de",
+  "class": "forget",
+  "difficulty": "plain",
+  "description": "The person forgets a fact by naming it (\"Vergiss, dass ...\"). Nothing may survive.",
+  "truth": [],
+  "forgotten": [
+    {
+      "terms": [["Tabellen"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Vergiss, dass ich Tabellen mag.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ]
+}

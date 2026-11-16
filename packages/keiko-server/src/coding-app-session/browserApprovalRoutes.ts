@@ -12,6 +12,8 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import { readPairingBody } from "./codingAppSessionRoutes.js";
+import { classifyReconnect, type SessionReconnectKind } from "./sessionChannel.js";
+import type { BrowserApprovalService } from "./browserApproval.js";
 import { readSessionCookie, requestIsSecure, serializeSessionCookies } from "./sessionCookie.js";
 
 const APPROVAL_OPERATION = defineActivityLogOperation({
@@ -37,6 +39,14 @@ const APPROVAL_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: ["pending", "challenge", "active", "accepted", "unavailable"],
+    },
+    // Only on `prove`: how the issued session relates to the credential the browser presented, so a
+    // remembered browser renewing after a server restart reads `after-restart` (#4370).
+    reconnect: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["no-credential", "live-credential", "ended-credential", "after-restart"],
     },
   },
   causal: "correlation",
@@ -67,6 +77,7 @@ function recordApproval(
   action: ApprovalAction,
   outcome: ApprovalOutcome,
   snapshot?: BrowserApprovalManagementSnapshot,
+  reconnect?: SessionReconnectKind,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -76,6 +87,7 @@ function recordApproval(
         action,
         outcome,
         sessionCount: deps.codingAppSessionChannel?.sessionCount() ?? 0,
+        ...(reconnect === undefined ? {} : { reconnect }),
         ...(snapshot === undefined
           ? {}
           : {
@@ -104,6 +116,7 @@ async function handleRequest(ctx: RouteContext, deps: UiHandlerDeps): Promise<Ro
 function handleInspect(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const snapshot = deps.codingAppSessionChannel?.browserApproval?.snapshot(
     readSessionCookie(ctx.req),
+    { correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID, purpose: "inspection" },
   );
   recordApproval(
     ctx,
@@ -123,8 +136,9 @@ async function handleApprove(ctx: RouteContext, deps: UiHandlerDeps): Promise<Ro
   const body = await readPairingBody(ctx.req);
   const accepted =
     requestOrigin(ctx) !== undefined &&
-    deps.codingAppSessionChannel?.browserApproval?.approve(readSessionCookie(ctx.req), body) ===
-      true;
+    deps.codingAppSessionChannel?.browserApproval?.approve(readSessionCookie(ctx.req), body, {
+      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    }) === true;
   recordApproval(ctx, deps, "approve", accepted ? "accepted" : "unavailable");
   return {
     status: 200,
@@ -144,14 +158,43 @@ async function handleChallenge(ctx: RouteContext, deps: UiHandlerDeps): Promise<
   return { status: 200, body: result, headers: PRIVATE_HEADERS };
 }
 
-async function handleProof(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
-  const origin = requestOrigin(ctx);
-  const body = await readPairingBody(ctx.req);
+function proofOutcome(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  origin: string | undefined,
+  body: unknown,
+): {
+  readonly result: ReturnType<BrowserApprovalService["prove"]> | typeof UNAVAILABLE;
+  readonly reconnect: SessionReconnectKind | undefined;
+} {
+  const channel = deps.codingAppSessionChannel;
+  // Classified before the proof mints a session: the mint itself counts as the process's first issuance.
+  const standing = channel?.proofStanding?.(readSessionCookie(ctx.req));
   const result =
     origin === undefined
       ? UNAVAILABLE
-      : (deps.codingAppSessionChannel?.browserApproval?.prove(body, origin) ?? UNAVAILABLE);
-  recordApproval(ctx, deps, "prove", result.state);
+      : (channel?.browserApproval?.prove(
+          body,
+          origin,
+          ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+        ) ?? UNAVAILABLE);
+  return {
+    result,
+    reconnect: standing === undefined ? undefined : classifyReconnect(standing),
+  };
+}
+
+async function handleProof(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
+  const body = await readPairingBody(ctx.req);
+  const { result, reconnect } = proofOutcome(ctx, deps, requestOrigin(ctx), body);
+  recordApproval(
+    ctx,
+    deps,
+    "prove",
+    result.state,
+    undefined,
+    result.state === "active" ? reconnect : undefined,
+  );
   if (result.state !== "active")
     return { status: 200, body: UNAVAILABLE, headers: PRIVATE_HEADERS };
   return {
@@ -175,8 +218,9 @@ async function handleRevoke(ctx: RouteContext, deps: UiHandlerDeps): Promise<Rou
   const accepted =
     requestOrigin(ctx) !== undefined &&
     isBrowserApprovalId(body) &&
-    deps.codingAppSessionChannel?.browserApproval?.revoke(readSessionCookie(ctx.req), body) ===
-      true;
+    deps.codingAppSessionChannel?.browserApproval?.revoke(readSessionCookie(ctx.req), body, {
+      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    }) === true;
   recordApproval(ctx, deps, "revoke", accepted ? "accepted" : "unavailable");
   return {
     status: 200,

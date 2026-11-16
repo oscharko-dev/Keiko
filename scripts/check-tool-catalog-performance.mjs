@@ -45,6 +45,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { isMainModule } from "./lib/is-main-module.mjs";
+import { EXPECTED_NODE_BASELINE } from "./check-runtime-toolchain.mjs";
 import { listFilesSorted } from "./stage-dev-coding-runtime.mjs";
 import {
   canonicalD12ArtifactBytes,
@@ -85,7 +86,7 @@ const MANAGED_PERFORMANCE_CASE_ID = "managed-opencode-v2";
 const LEGACY_PERFORMANCE_CASE_ID = "legacy-native-6-tool";
 const SYNTHETIC_PERFORMANCE_CASE_ID = `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool`;
 export const TOOL_CATALOG_REFERENCE_IMAGE =
-  "node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059";
+  "node:26.13.1-bookworm@sha256:b7087bc4d973034b30854b378ba107f9fab622b47514cb7e2592e41b8bab8d49";
 const TOOL_CATALOG_RULER_PATHS = [
   "scripts/check-perf-evidence.mjs",
   "scripts/check-tool-catalog-conformance.mjs",
@@ -436,7 +437,10 @@ function validateReferenceEnvironment(environment) {
     environment.platform === "linux" && environment.architecture === "arm64",
     "catalog performance requires the Linux arm64 reference",
   );
-  assertEvidence(environment.nodeVersion === "v24.18.0", "catalog performance Node differs");
+  assertEvidence(
+    environment.nodeVersion === `v${EXPECTED_NODE_BASELINE}`,
+    "catalog performance Node differs",
+  );
   assertEvidence(environment.logicalCores >= 14, "catalog performance requires fourteen cores");
   assertEvidence(
     Number.isSafeInteger(environment.totalMemoryBytes) && environment.totalMemoryBytes > 0,
@@ -469,7 +473,10 @@ function validatePortableEnvironment(environment) {
       new Set(["x64", "arm64"]).has(environment.architecture),
     "unsupported catalog portable host",
   );
-  assertEvidence(environment.nodeVersion === "v24.18.0", "catalog performance Node differs");
+  assertEvidence(
+    environment.nodeVersion === `v${EXPECTED_NODE_BASELINE}`,
+    "catalog performance Node differs",
+  );
   assertEvidence(
     Number.isSafeInteger(environment.logicalCores) && environment.logicalCores >= 14,
     "catalog performance requires fourteen cores",

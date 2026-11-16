@@ -34,6 +34,7 @@ import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation } from "./lib/host-npm-invocation.mjs";
 
 const RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml";
 const RELEASE_LINE = /^release\/(\d+\.\d+)$/u;
@@ -318,7 +319,10 @@ function realSeams() {
   return {
     runGh: (args) => spawnResult(resolveHostExecutable("gh"), args),
     runGit: (args) => spawnResult(resolveHostExecutable("git"), args),
-    runNpm: (args) => spawnResult(resolveHostExecutable("npm"), args),
+    runNpm: (args) => {
+      const npm = hostNpmInvocation(resolveHostExecutable("npm"));
+      return spawnResult(npm.command, [...npm.args, ...args]);
+    },
   };
 }
 

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   isAdmissibleOpenCodeToolName,
   isAdmittedOpenCodeNativeToolContract,
-  isOpenCodeCodeModeExecutionFailure,
+  isOpenCodeToolExecutionFailure,
   isOpenCodeNativeToolName,
   openCodeNativeToolSetDigest,
   openCodeToolLogLabel,
@@ -81,32 +81,59 @@ describe("Code Mode execution failure predicate", () => {
   });
 
   it("marks only a completed execute part with the boolean metadata.error true", () => {
-    expect(isOpenCodeCodeModeExecutionFailure("execute", completed({ error: true }))).toBe(true);
-    expect(isOpenCodeCodeModeExecutionFailure("execute", completed({ error: false }))).toBe(false);
-    expect(isOpenCodeCodeModeExecutionFailure("execute", completed({}))).toBe(false);
-    expect(isOpenCodeCodeModeExecutionFailure("execute", completed())).toBe(false);
+    expect(isOpenCodeToolExecutionFailure("execute", completed({ error: true }))).toBe(true);
+    expect(isOpenCodeToolExecutionFailure("execute", completed({ error: false }))).toBe(false);
+    expect(isOpenCodeToolExecutionFailure("execute", completed({}))).toBe(false);
+    expect(isOpenCodeToolExecutionFailure("execute", completed())).toBe(false);
   });
 
   it.each(["true", 1, {}, [true], null, undefined, "PRIVATE"])(
     "ignores a non-boolean error value %j",
     (error) => {
-      expect(isOpenCodeCodeModeExecutionFailure("execute", completed({ error }))).toBe(false);
+      expect(isOpenCodeToolExecutionFailure("execute", completed({ error }))).toBe(false);
     },
   );
 
+  it.each([
+    ["a non-zero exit", { exit: 3 }],
+    ["a timeout with no exit status", { timeout: true, truncated: false }],
+    ["a kill by signal with no exit status", { signal: "SIGKILL", truncated: false }],
+    ["a timeout with an exit status of zero", { timeout: true, exit: 0 }],
+  ])("marks a completed shell part with %s as failed (#4271)", (_name, metadata) => {
+    expect(isOpenCodeToolExecutionFailure("shell", completed(metadata))).toBe(true);
+  });
+
+  it.each([
+    ["an exit status of zero", { exit: 0, truncated: false }],
+    ["a job moved to the background", { status: "running", shellID: "s", truncated: false }],
+    ["no metadata fields", {}],
+    ["a false timeout", { timeout: false, exit: 0 }],
+    ["a non-string signal", { signal: 9 }],
+    ["a non-numeric exit", { exit: "1" }],
+    ["a fractional exit", { exit: 1.5 }],
+  ])("does not mark a completed shell part with %s as failed", (_name, metadata) => {
+    expect(isOpenCodeToolExecutionFailure("shell", completed(metadata))).toBe(false);
+  });
+
+  it("does not read one tool's failure field for another", () => {
+    expect(isOpenCodeToolExecutionFailure("shell", completed({ error: true }))).toBe(false);
+    expect(isOpenCodeToolExecutionFailure("execute", completed({ exit: 1 }))).toBe(false);
+    expect(isOpenCodeToolExecutionFailure("read", completed({ timeout: true }))).toBe(false);
+  });
+
   it("ignores another tool, another status and a malformed state or metadata", () => {
-    expect(isOpenCodeCodeModeExecutionFailure("read", completed({ error: true }))).toBe(false);
-    expect(isOpenCodeCodeModeExecutionFailure(undefined, completed({ error: true }))).toBe(false);
+    expect(isOpenCodeToolExecutionFailure("read", completed({ error: true }))).toBe(false);
+    expect(isOpenCodeToolExecutionFailure(undefined, completed({ error: true }))).toBe(false);
     for (const status of ["running", "error", "streaming", undefined, true]) {
-      expect(
-        isOpenCodeCodeModeExecutionFailure("execute", { status, metadata: { error: true } }),
-      ).toBe(false);
+      expect(isOpenCodeToolExecutionFailure("execute", { status, metadata: { error: true } })).toBe(
+        false,
+      );
     }
     for (const state of [undefined, null, "completed", [], 7]) {
-      expect(isOpenCodeCodeModeExecutionFailure("execute", state)).toBe(false);
+      expect(isOpenCodeToolExecutionFailure("execute", state)).toBe(false);
     }
     for (const metadata of [true, "error", [{ error: true }], null]) {
-      expect(isOpenCodeCodeModeExecutionFailure("execute", completed(metadata))).toBe(false);
+      expect(isOpenCodeToolExecutionFailure("execute", completed(metadata))).toBe(false);
     }
   });
 });

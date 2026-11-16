@@ -25,7 +25,8 @@ the palette or adding another runtime theme mechanism.
 
 PDF and Terminal windows compose the common action ancestor from `TerminalWidget.module.css`.
 Only that ancestor class is shared; each window retains its own scope, focus and disabled-state
-styles. The existing compatibility register remains at 38 sources and loses eight stale entries.
+styles. The compatibility register now contains 37 sources: the prior migration removed eight stale
+entries, and retiring the Knowledge Pod create-dialog stylesheet removed one further source.
 The evidence reader expands local CSS imports and this limited scope composition, checking real
 path containment and rejecting cycles or unsupported projection. The original fidelity, keyboard,
 accessibility, browser and updater gates retain their thresholds. Their records also pin the

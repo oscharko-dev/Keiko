@@ -7,7 +7,6 @@ import {
   realpathSync,
   renameSync,
   rmSync,
-  symlinkSync,
   truncateSync,
   unlinkSync,
   writeFileSync,
@@ -25,12 +24,16 @@ import {
 import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
+import { plantSymlinkOrSkip, WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
+
 import { verifyPortableAttestedSidecars } from "../update-portable-sidecar-verification.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
 import {
   discoverQualifiedPortableOpenCode,
   portableInstallCarriesReleaseSignature,
+  releasedWindowsGatewayHelperPin,
 } from "./productionPortableCodingRuntime.js";
+import { OPENCODE_RUNTIME_VERSION_PINS } from "./opencodeRuntimeVersions.js";
 
 const TARGET = "windows-x64";
 const COMMIT = "c".repeat(40);
@@ -41,6 +44,28 @@ const LINUX_TARGET = "linux-x64";
 const LINUX_LAUNCHER = "qualified Linux launcher";
 const LINUX_NODE = "qualified Linux Node.js";
 const LINUX_USEARCH = "qualified Linux USearch";
+
+describe("released Windows gateway helper pin", () => {
+  const released = {
+    target: "windows-x64",
+    platformAssurance: "release-qualified",
+    nativeHelperSha256: "a".repeat(64),
+  } as const;
+
+  it("yields the digest only for a release-qualified Windows package", () => {
+    expect(releasedWindowsGatewayHelperPin(released)).toBe("a".repeat(64));
+    expect(
+      releasedWindowsGatewayHelperPin({ ...released, platformAssurance: "evaluation-unqualified" }),
+    ).toBeUndefined();
+    expect(releasedWindowsGatewayHelperPin({ ...released, target: "linux-x64" })).toBeUndefined();
+    expect(
+      releasedWindowsGatewayHelperPin({
+        target: "windows-x64",
+        platformAssurance: "release-qualified",
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("production portable OpenCode discovery", () => {
   it("discovers only a disk-verified sidecar with a signed exact-byte attestation", () => {
@@ -114,18 +139,18 @@ describe("production portable OpenCode discovery", () => {
     },
   );
 
-  it.each([
+  it.for([
     ["setup", "symbolic"],
     ["setup", "hard"],
     ["launcher", "symbolic"],
     ["launcher", "hard"],
-  ] as const)("refuses a Windows generation with a %s %s link", (identity, linkKind) => {
+  ] as const)("refuses a Windows generation with a %s %s link", ([identity, linkKind], context) => {
     const fixture = windowsGenerationInstall();
     const path = identity === "setup" ? fixture.setupPath : join(fixture.installRoot, "Keiko.exe");
     const replacement = `${path}.linked`;
     renameSync(path, replacement);
     if (linkKind === "symbolic") {
-      symlinkSync(replacement, path);
+      plantSymlinkOrSkip(context, replacement, path);
     } else {
       linkSync(replacement, path);
     }
@@ -212,46 +237,51 @@ describe("production portable OpenCode discovery", () => {
     },
   );
 
-  it("binds the native Linux helper without replacing namespace gateway confinement", () => {
-    const fixture = linuxPortableInstall();
-    const native = join(fixture.root, "runtime", "native", "keiko-runtime-supervisor");
-    writeFileSync(native, SUPERVISOR);
-    const path = join(fixture.root, ".portable", "runtime-activation.json");
-    const activation = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-    const helpers = activation.nativeHelpers as Record<string, unknown>[];
-    const supervisor = helpers.find((helper) => helper.name === "keiko-runtime-supervisor");
-    if (supervisor === undefined) throw new TypeError("fixture supervisor is missing");
-    supervisor.executablePath = "runtime/native/keiko-runtime-supervisor";
-    writeFileSync(path, JSON.stringify(activation));
-    const bound = {
-      ...fixture,
-      receipt: { ...fixture.receipt, activationManifestSha256: sha256(readFileSync(path)) },
-    };
-    const activityLog = createBufferedServerLogSink();
-    expect(
-      discoverQualifiedPortableOpenCode({
-        env: {},
-        installRoot: bound.root,
-        platform: "linux",
-        arch: "x64",
-        attestation: { readReceipt: () => bound.receipt },
-        activityLog,
-      }),
-    ).toMatchObject({
-      nativeHelperPath: realpathSync(native),
-      qualification: { backend: "linux-namespace-gateway" },
-    });
-    const event = activityLog.events[0];
-    if (event === undefined) throw new TypeError("native helper binding log is missing");
-    expect(
-      expectActivityLogProof(
-        "portable.runtime.native-helper-bound.emitted-line",
-        formatActivityLogProofLine(event),
-      ),
-    ).toMatchObject({ target: "linux-x64", helperSha256: sha256(SUPERVISOR) });
-    writeFileSync(native, "changed native owner");
-    expect(discoverLinux(bound)).toBeUndefined();
-  });
+  // The Linux target is only reachable on a Linux host in production; the helper-binding record keys
+  // on the POSIX `/runtime/native/` suffix of the host realpath, which a Windows host never produces.
+  it.skipIf(WINDOWS_HOST)(
+    "binds the native Linux helper without replacing namespace gateway confinement",
+    () => {
+      const fixture = linuxPortableInstall();
+      const native = join(fixture.root, "runtime", "native", "keiko-runtime-supervisor");
+      writeFileSync(native, SUPERVISOR);
+      const path = join(fixture.root, ".portable", "runtime-activation.json");
+      const activation = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      const helpers = activation.nativeHelpers as Record<string, unknown>[];
+      const supervisor = helpers.find((helper) => helper.name === "keiko-runtime-supervisor");
+      if (supervisor === undefined) throw new TypeError("fixture supervisor is missing");
+      supervisor.executablePath = "runtime/native/keiko-runtime-supervisor";
+      writeFileSync(path, JSON.stringify(activation));
+      const bound = {
+        ...fixture,
+        receipt: { ...fixture.receipt, activationManifestSha256: sha256(readFileSync(path)) },
+      };
+      const activityLog = createBufferedServerLogSink();
+      expect(
+        discoverQualifiedPortableOpenCode({
+          env: {},
+          installRoot: bound.root,
+          platform: "linux",
+          arch: "x64",
+          attestation: { readReceipt: () => bound.receipt },
+          activityLog,
+        }),
+      ).toMatchObject({
+        nativeHelperPath: realpathSync(native),
+        qualification: { backend: "linux-namespace-gateway" },
+      });
+      const event = activityLog.events[0];
+      if (event === undefined) throw new TypeError("native helper binding log is missing");
+      expect(
+        expectActivityLogProof(
+          "portable.runtime.native-helper-bound.emitted-line",
+          formatActivityLogProofLine(event),
+        ),
+      ).toMatchObject({ target: "linux-x64", helperSha256: sha256(SUPERVISOR) });
+      writeFileSync(native, "changed native owner");
+      expect(discoverLinux(bound)).toBeUndefined();
+    },
+  );
 
   it("emits body-free diagnostics for a rejected Linux component binding", () => {
     const fixture = linuxPortableInstall();
@@ -1011,9 +1041,9 @@ function sidecarFixture(lane: FixtureLane = "production"): {
         owner: "anomalyco",
         repository: "opencode",
         name: "opencode",
-        version: "2.0.10",
-        tag: "v2.0.10",
-        commit: "b8cedc1a7a5e2916bbb65dc1d4b620729c261638",
+        version: "2.2.5",
+        tag: "v2.2.5",
+        commit: "9bbb8ce18c80f099e0e448775f59d965ead40a21",
       },
       adapterCompatibility: {
         adapterName: "keiko-coding-sidecar",
@@ -1022,7 +1052,7 @@ function sidecarFixture(lane: FixtureLane = "production"): {
       },
       protocolSchema: {
         path: "packages/protocol/openapi.json",
-        sha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
+        sha256: OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "",
         hashAlgorithm: "sha256",
         hashEncoding: "lowercase-hex",
         digestInput: "upstream-raw-bytes",

@@ -68,3 +68,66 @@ describe("createKeikoToolCatalog compatibility threading (b1-4)", () => {
     expect(lookupCatalogTool(catalog, descriptor.toolRef)).toBeDefined();
   });
 });
+
+// Each Jira chat selection composes a new catalog from the same issued descriptors. Copying them
+// lost their issued identity, so every selection re-verified, re-copied and re-hashed every tool.
+describe("createKeikoToolCatalog issued descriptor retention", () => {
+  function bulkSet(
+    descriptors: readonly ReturnType<typeof createToolDescriptor>[],
+  ): CatalogRegistrationSet {
+    return {
+      ...registrationSet(descriptors[0] ?? createToolDescriptor(declaration(1))),
+      entries: descriptors.map((descriptor, index) => ({
+        alias: `fixture_read_${String(index)}`,
+        descriptor,
+      })),
+    };
+  }
+  function bulkDescriptors(
+    count: number,
+    descriptionBytes: number,
+  ): ReturnType<typeof createToolDescriptor>[] {
+    return Array.from({ length: count }, (_, index) =>
+      createToolDescriptor({
+        ...declaration(1),
+        toolRef: createToolRef(`keiko.fixture.read${"abcdefgh"[index] ?? "z"}`, 1),
+        description: "x".repeat(descriptionBytes),
+      }),
+    );
+  }
+
+  it("keeps each issued descriptor by identity instead of a re-verified copy", () => {
+    const descriptor = createToolDescriptor(declaration(1));
+    const catalog = createKeikoToolCatalog([registrationSet(descriptor)]);
+    expect(catalog.descriptors[0]).toBe(descriptor);
+    expect(lookupCatalogTool(catalog, descriptor.toolRef)).toBe(descriptor);
+  });
+
+  it("still verifies an equal descriptor it did not issue and refuses a tampered one", () => {
+    const descriptor = createToolDescriptor(declaration(1));
+    const copy = structuredClone(descriptor);
+    const catalog = createKeikoToolCatalog([registrationSet(copy)]);
+    expect(catalog.descriptors[0]).not.toBe(copy);
+    expect(catalog.descriptors[0]).toEqual(descriptor);
+    expect(() =>
+      createKeikoToolCatalog([registrationSet({ ...copy, description: "Tampered." })]),
+    ).toThrow("invalid-identity");
+  });
+
+  it("charges a kept descriptor against the catalog byte bound exactly like a copied one", () => {
+    // Five 60,000-byte descriptions exceed the 262,144-byte catalog envelope.
+    const issued = bulkDescriptors(5, 60_000);
+    expect(() => createKeikoToolCatalog([bulkSet(issued)])).toThrow("input-bound");
+    expect(() =>
+      createKeikoToolCatalog([bulkSet(issued.map((descriptor) => structuredClone(descriptor)))]),
+    ).toThrow("input-bound");
+    // Four fit, on both paths, and the issued path keeps every descriptor.
+    const fitting = bulkDescriptors(4, 60_000);
+    const catalog = createKeikoToolCatalog([bulkSet(fitting)]);
+    expect(fitting.every((descriptor) => catalog.descriptors.includes(descriptor))).toBe(true);
+    expect(
+      createKeikoToolCatalog([bulkSet(fitting.map((descriptor) => structuredClone(descriptor)))])
+        .catalogRevision,
+    ).toBe(catalog.catalogRevision);
+  });
+});

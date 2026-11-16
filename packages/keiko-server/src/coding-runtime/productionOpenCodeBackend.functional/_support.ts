@@ -987,7 +987,7 @@ function productiveResponse(step: number, script: ScriptState): NormalizedRespon
  */
 export const NATIVE_VERIFICATION_COMMAND = "npm run typecheck";
 
-// The native journey (#3897): the original runtime's own tools, as the pinned 2.1.4 child offers
+// The native journey (#3897): the original runtime's own tools, as the pinned child offers
 // them to the model on macOS. Search, read and the repository skill are its `grep`, `read` and
 // `skill`; the contained edit is its `edit`; the verification is the project's own check through
 // its `shell`, which the native policy reads as the run's verification evidence. Keiko's governed

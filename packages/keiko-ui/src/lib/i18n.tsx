@@ -51,7 +51,11 @@ function translateFromCatalog(
   key: MessageKey,
   values: MessageValues = {},
 ): string {
-  const template = catalog[key] ?? EN_MESSAGES[key];
+  return formatI18nMessage(catalog[key] ?? EN_MESSAGES[key], values);
+}
+
+/** Interpolate named values without changing unfilled placeholders or literal text. */
+export function formatI18nMessage(template: string, values: MessageValues = {}): string {
   return template.replace(/\{(\w+)\}/gu, (match, name: string) => {
     const value = values[name];
     return value === undefined ? match : String(value);

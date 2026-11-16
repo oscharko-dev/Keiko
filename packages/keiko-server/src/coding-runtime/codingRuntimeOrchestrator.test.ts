@@ -35,7 +35,7 @@ import {
   MAX_QUEUED_APPROVALS_PER_RUN,
   type CodingRuntimeDescriptionSupport,
   type CodingRuntimeIssueIntake,
-  type CodingRuntimeOrchestratorResult,
+  type CodingRuntimeStartResult,
   type CodingRuntimeLaunchResolver,
   type WorkbenchDescriptionDispatchOutcome,
   type WorkbenchDescriptionDispatcher,
@@ -93,6 +93,7 @@ import type {
   MemoryId,
   SkillDiscoveryResultV1,
   WorkspaceInstance,
+  CodingWorkbenchRuntimeVersion,
 } from "@oscharko-dev/keiko-contracts";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -105,6 +106,11 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import {
+  ACTIVITY_LOG_OPERATION_REGISTRY,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { CODING_WORKBENCH_RUNTIME_ORIGINS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 type OptionalOrchestratorDeps = Pick<
   Parameters<typeof createCodingRuntimeOrchestrator>[0],
@@ -115,11 +121,12 @@ type OptionalOrchestratorDeps = Pick<
   | "repositoryInstructions"
   | "terminalFacts"
   | "runEffort"
+  | "runtimeVersion"
 >;
 type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
 type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
 
-function successfulSnapshot(result: CodingRuntimeOrchestratorResult) {
+function successfulSnapshot(result: CodingRuntimeStartResult) {
   if (!result.ok) throw new Error(`expected success, received ${result.failureCode}`);
   return result.snapshot;
 }
@@ -179,6 +186,7 @@ function optionalOrchestratorDeps(input: {
     Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun"> | undefined;
   readonly terminalFacts?: CodingRuntimeTerminalFacts | undefined;
   readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
 }): Partial<OptionalOrchestratorDeps> {
   return {
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
@@ -190,6 +198,7 @@ function optionalOrchestratorDeps(input: {
       : {}),
     ...(input.terminalFacts ? { terminalFacts: input.terminalFacts } : {}),
     ...(input.runEffort ? { runEffort: input.runEffort } : {}),
+    ...(input.runtimeVersion ? { runtimeVersion: input.runtimeVersion } : {}),
   };
 }
 
@@ -262,6 +271,40 @@ const APPROVED_SKILLS: SkillDiscoveryResultV1 = (() => {
   return validated.value;
 })();
 
+/** The named inputs of the orchestrator fixture; every one is optional (#4359 audit: no padding). */
+interface FixtureOptions {
+  readonly activityProjection?: CodingSafeActivityProjection | undefined;
+  readonly clock?: (() => Date) | undefined;
+  readonly seededRows?: readonly CodingRuntimeSnapshot[] | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
+  readonly descriptionSupport?: CodingRuntimeDescriptionSupport | undefined;
+  readonly verifiedCommits?: ReadonlyMap<string, VerifiedCommitResult> | undefined;
+  // #3384 B3-22: overridable so the automatic-description-dispatch suite (the one path here that
+  // reaches the real codingRuntimeDescriptionJobStore, which now enforces correlation.ts's
+  // 8-character floor) can mint ids that satisfy it, without changing every other describe block's
+  // established "run-1"/"run-2" convention.
+  readonly newRunId?: (() => string) | undefined;
+  readonly snapshotStore?: CodingRuntimeSnapshotStore | undefined;
+  readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
+  readonly history?: CodingRuntimeHistory | undefined;
+  readonly repositoryInstructions?:
+    Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun"> | undefined;
+  readonly terminalFacts?: CodingRuntimeTerminalFacts | undefined;
+  readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
+  // #3873 review: the workspace the global active pointer resolves to, overridable so a test can
+  // switch it while a run starts.
+  readonly activeRoot?: (() => string) | undefined;
+  // S02/S03 (#3904): the native session continuity the orchestrator declares to and reads from.
+  readonly sessionContinuity?: CodingSessionContinuity | undefined;
+  // #3903 AC4: the persisted task workspaces, the inventory a fork's provisioning source is read from.
+  readonly workspaceInventory?: readonly WorkspaceInstance[] | undefined;
+  // #4359: the activated runtime's version facts, named on the run's start line.
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+}
+
+/** The positional form every older suite uses; new inputs are named through `fixtureFrom`. */
 function fixture(
   activityProjection?: CodingSafeActivityProjection,
   clock?: () => Date,
@@ -271,10 +314,6 @@ function fixture(
   issueIntake?: CodingRuntimeIssueIntake,
   descriptionSupport?: CodingRuntimeDescriptionSupport,
   verifiedCommits?: ReadonlyMap<string, VerifiedCommitResult>,
-  // #3384 B3-22: overridable so the automatic-description-dispatch suite (the one path here that
-  // reaches the real codingRuntimeDescriptionJobStore, which now enforces correlation.ts's
-  // 8-character floor) can mint ids that satisfy it, without changing every other describe block's
-  // established "run-1"/"run-2" convention.
   newRunId?: () => string,
   snapshotStore?: CodingRuntimeSnapshotStore,
   projectMemory?: CodingRuntimeProjectMemoryPort,
@@ -282,14 +321,53 @@ function fixture(
   repositoryInstructions?: Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun">,
   terminalFacts?: CodingRuntimeTerminalFacts,
   runEffort?: (runId: string) => CodingRuntimeHostRunEffort | undefined,
-  // #3873 review: the workspace the global active pointer resolves to, overridable so a test can
-  // switch it while a run starts.
-  activeRoot: () => string = (): string => "/workspace",
-  // S02/S03 (#3904): the native session continuity the orchestrator declares to and reads from.
+  activeRoot?: () => string,
   sessionContinuity?: CodingSessionContinuity,
-  // #3903 AC4: the persisted task workspaces, the inventory a fork's provisioning source is read from.
   workspaceInventory?: readonly WorkspaceInstance[],
 ) {
+  return fixtureFrom({
+    activityProjection,
+    clock,
+    seededRows,
+    diagnostics,
+    activityLog,
+    issueIntake,
+    descriptionSupport,
+    verifiedCommits,
+    newRunId,
+    snapshotStore,
+    projectMemory,
+    history,
+    repositoryInstructions,
+    terminalFacts,
+    runEffort,
+    activeRoot,
+    sessionContinuity,
+    workspaceInventory,
+  });
+}
+
+function fixtureFrom({
+  activityProjection,
+  clock,
+  seededRows = [],
+  diagnostics,
+  activityLog,
+  issueIntake,
+  descriptionSupport,
+  verifiedCommits,
+  newRunId,
+  snapshotStore,
+  projectMemory,
+  history,
+  repositoryInstructions,
+  terminalFacts,
+  runEffort,
+  activeRoot = (): string => "/workspace",
+  sessionContinuity,
+  workspaceInventory,
+  runtimeVersion,
+}: FixtureOptions) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
   const deletePruned = vi.fn();
@@ -528,6 +606,7 @@ function fixture(
         repositoryInstructions,
         terminalFacts,
         runEffort,
+        runtimeVersion,
       }),
       ...(history === undefined ? {} : { history }),
       ...(sessionContinuity === undefined ? {} : { sessionContinuity }),
@@ -1003,7 +1082,7 @@ function issueIntake(
   };
 }
 
-function refusedStart(result: CodingRuntimeOrchestratorResult) {
+function refusedStart(result: CodingRuntimeStartResult) {
   if (result.ok) throw new Error("expected a refused start");
   return result;
 }
@@ -1033,6 +1112,209 @@ describe("CodingRuntimeOrchestrator", () => {
     );
     expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
   });
+  // #4359: a support export must say which runtime ran; the start line names the version the
+  // verified runtime metadata reports and its origin, and nothing when the server cannot name them.
+  it("registers the runtime origins the readiness knows, no more and no fewer", () => {
+    const registry: readonly ActivityLogOperationRegistration[] = ACTIVITY_LOG_OPERATION_REGISTRY;
+    const registered = registry.find((entry) => entry.op === "coding-runtime.run.started");
+    expect(registered?.fields.runtimeOrigin?.values).toEqual([...CODING_WORKBENCH_RUNTIME_ORIGINS]);
+  });
+  it("names the activated runtime's version and origin on the start line, never a guess", async () => {
+    const withVersion = captureActivityLog();
+    const f = fixtureFrom({
+      activityLog: withVersion.activityLog,
+      runtimeVersion: { opencode: "2.1.4", pinned: "2.2.5", origin: "npm-runtime-package" },
+    });
+    await f.orchestrator.start(start);
+    const event = requireLoggedEvent(
+      withVersion.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.started.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ opencodeVersion: "2.1.4", runtimeOrigin: "npm-runtime-package" });
+
+    const without = captureActivityLog();
+    const g = fixture(undefined, undefined, [], undefined, without.activityLog);
+    await g.orchestrator.start(start);
+    const bare = requireLoggedEvent(
+      without.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(bare.extra).not.toHaveProperty("opencodeVersion");
+    expect(bare.extra).not.toHaveProperty("runtimeOrigin");
+  });
+  // Audit of #4359: a version the metadata reports is a string, not a promise of a version. A value
+  // the registry refuses (a space, a URL, over-long) would throw while the start line is built, on
+  // the run's start path; it is omitted instead and the run still starts.
+  it.each([
+    ["a value with a space", "2.1.4 beta"],
+    ["a URL", "https://host.example/x"],
+    ["a path", "../2.1.4"],
+    ["an over-long value", `2.1.4-${"a".repeat(80)}`],
+    ["an empty value", ""],
+  ])("starts the run and omits the runtime version fields for %s", async (_name, reported) => {
+    const captured = captureActivityLog();
+    const f = fixtureFrom({
+      activityLog: captured.activityLog,
+      runtimeVersion: { opencode: reported, pinned: "2.2.5", origin: "npm-runtime-package" },
+    });
+    await expect(f.orchestrator.start(start)).resolves.toBeDefined();
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra).not.toHaveProperty("opencodeVersion");
+    expect(event.extra).not.toHaveProperty("runtimeOrigin");
+    expect(JSON.stringify(captured.records)).not.toContain("host.example");
+  });
+  it("keeps a pre-release or build suffix of a version", async () => {
+    const captured = captureActivityLog();
+    const f = fixtureFrom({
+      activityLog: captured.activityLog,
+      runtimeVersion: {
+        opencode: "2.2.5-rc.1+build.7",
+        pinned: "2.2.5",
+        origin: "portable-release",
+      },
+    });
+    await f.orchestrator.start(start);
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra).toMatchObject({
+      opencodeVersion: "2.2.5-rc.1+build.7",
+      runtimeOrigin: "portable-release",
+    });
+  });
+  it("records the started run's agent kind and a model digest, never their names (#4068 W12)", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start({ ...start, modelId: "PRIVATE_MODEL_CANARY", agent: "plan" });
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra).toMatchObject({
+      primaryAgent: "plan",
+      modelIdDigest: sha256Hex("PRIVATE_MODEL_CANARY"),
+    });
+    expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_MODEL_CANARY");
+  });
+
+  // #4279 (lifecycle audit): a start that shutdown overtook would launch a runtime nobody stops.
+  describe("a start that shutdown overtook", () => {
+    it("launches nothing when it reaches the lane after shutdown began", async () => {
+      const f = fixture();
+      await f.orchestrator.shutdown();
+
+      const result = await f.orchestrator.start(start);
+
+      expect(result).toEqual({ ok: false, failureCode: "runtime-unavailable" });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+      expect(f.manager.start).not.toHaveBeenCalled();
+    });
+
+    it("mints nothing when shutdown began while it was prepared", async () => {
+      const f = fixture();
+      let shutdown: Promise<unknown> | undefined;
+      Object.assign(f.launchResolver, {
+        prepare: (): Promise<void> => {
+          shutdown = f.orchestrator.shutdown();
+          return Promise.resolve();
+        },
+      });
+
+      const result = await f.orchestrator.start(start);
+      await shutdown;
+
+      expect(result).toMatchObject({ ok: false, failureCode: "runtime-unavailable" });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+      expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.orchestrator.status().state).toBe("idle");
+    });
+
+    it("releases what its launch minted when shutdown began while it resolved", async () => {
+      const f = fixture();
+      let shutdown: Promise<unknown> | undefined;
+      const resolve = f.launchResolver.resolve.getMockImplementation();
+      if (resolve === undefined) throw new Error("expected a launch resolver");
+      f.launchResolver.resolve.mockImplementation((input) => {
+        shutdown = f.orchestrator.shutdown();
+        return resolve(input);
+      });
+
+      const result = await f.orchestrator.start(start);
+      await shutdown;
+
+      expect(result.ok).toBe(true);
+      expect(successfulSnapshot(result).state).toBe("failed");
+      expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.manager.stop).toHaveBeenCalled();
+      expect(f.orchestrator.hasLiveRun()).toBe(false);
+    });
+  });
+
+  // #4271: the client's start deadline ended its wait, and the run still started where nobody saw it.
+  describe("a start its client gave up", () => {
+    const abandonedDuringPrepare = (f: ReturnType<typeof fixture>): AbortController => {
+      const client = new AbortController();
+      Object.assign(f.launchResolver, {
+        prepare: (): Promise<void> => {
+          client.abort();
+          return Promise.resolve();
+        },
+      });
+      return client;
+    };
+
+    it("creates no run when the client left while it was being prepared", async () => {
+      const f = fixture();
+      const client = abandonedDuringPrepare(f);
+      const result = await f.orchestrator.start(start, undefined, client.signal);
+      expect(result).toMatchObject({ ok: false, startAbandoned: true });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+      expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.orchestrator.status().state).toBe("idle");
+    });
+
+    it("creates no run when the client left before the start reached the lane", async () => {
+      const f = fixture();
+      const result = await f.orchestrator.start(start, undefined, AbortSignal.abort());
+      expect(result).toMatchObject({ ok: false, startAbandoned: true });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+    });
+
+    it("leaves the next start free", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start, undefined, abandonedDuringPrepare(f).signal);
+      Object.assign(f.launchResolver, { prepare: undefined });
+      expect((await f.orchestrator.start(start)).ok).toBe(true);
+    });
+
+    // The client leaves while the start is still in progress, once the run is being minted: the run
+    // stays, because the client can then find it and a reload must not end it.
+    it("keeps a run that exists when the client leaves afterwards", async () => {
+      const f = fixture();
+      const client = new AbortController();
+      const resolve = f.launchResolver.resolve.getMockImplementation();
+      if (resolve === undefined) throw new Error("expected a launch resolver");
+      f.launchResolver.resolve.mockImplementation((input) => {
+        client.abort();
+        return resolve(input);
+      });
+      const result = await f.orchestrator.start(start, undefined, client.signal);
+      expect(client.signal.aborted).toBe(true);
+      expect(result.ok).toBe(true);
+      expect(f.manager.start).toHaveBeenCalledOnce();
+      expect(f.orchestrator.status().state).not.toBe("idle");
+    });
+  });
+
   it("records body-free activity log lines for run start and settlement", async () => {
     const captured = captureActivityLog();
     const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
@@ -2579,6 +2861,45 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(JSON.stringify([...f.rows.values()])).not.toContain(start.taskIntent);
   });
 
+  it("refreshes durable input history through status revision without changing run authority or state", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    const before = structuredClone(f.rows.get("run-1"));
+    if (before === undefined) throw new TypeError("Missing running snapshot");
+    f.eventHub.publish.mockClear();
+    const issued = f.manager.issueApproval.mock.calls.length;
+    await f.orchestrator.refreshHistory("run-1");
+    expect(f.rows.get("run-1")).toEqual({
+      ...before,
+      revision: before.revision + 1,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(f.eventHub.publish).toHaveBeenCalledExactlyOnceWith({
+      schemaVersion: "1",
+      kind: "status",
+      runId: "run-1",
+      state: "running",
+      revision: before.revision + 1,
+    });
+    expect(f.manager.issueApproval).toHaveBeenCalledTimes(issued);
+    f.eventHub.publish.mockClear();
+    await f.orchestrator.refreshHistory("unrelated-run");
+    expect(f.rows.get("run-1")?.revision).toBe(before.revision + 1);
+    expect(f.eventHub.publish).not.toHaveBeenCalled();
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      kind: "runtime-stopped",
+      runId: "run-1",
+      eventId: "history-refresh-stopped",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+    });
+    const stopped = structuredClone(f.rows.get("run-1"));
+    f.eventHub.publish.mockClear();
+    await f.orchestrator.refreshHistory("run-1");
+    expect(f.rows.get("run-1")).toEqual(stopped);
+    expect(f.eventHub.publish).not.toHaveBeenCalled();
+  });
+
   // #3390: the initial turn used to dispatch while the run's own public projection still read
   // "ready", flipping to "running" only after the sidecar accepted it -- untruthful for the whole
   // window the model could already be getting its first prompt, and the same window in which
@@ -2674,6 +2995,37 @@ describe("CodingRuntimeOrchestrator", () => {
     );
   });
 
+  // A workspace that holds the runtime is the one managed start failure the operator can repair, so
+  // it alone leaves the internal-error code. Its precise reason stays in the diagnostic either way.
+  it.each([
+    ["workspace-unqualified", "workspace-unqualified"],
+    ["sidecar-unmanaged", "runtime-failed"],
+    ["spawn-failed", "runtime-failed"],
+  ] as const)(
+    "settles a start the manager refused with %s as %s",
+    async (managerCode, failureCode) => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.manager.start.mockResolvedValueOnce({
+        ok: false,
+        retryable: false,
+        failureCode: managerCode,
+      });
+
+      expect(successfulSnapshot(await f.orchestrator.start(start))).toMatchObject({
+        state: "failed",
+        failureCode,
+      });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: `stage=start:reason=${managerCode}`,
+        }),
+      );
+    },
+  );
+
   // #3565 Observation 17: a model the gateway does not admit reached the customer as
   // `authority-resolution-failed` (403) and the log named no cause. The start now answers with
   // `model-unavailable` and the diagnostic carries the sidecar's closed reason.
@@ -2726,6 +3078,29 @@ describe("CodingRuntimeOrchestrator", () => {
         operation: "coding-runtime.start",
         message: "runtime-start-failed",
         code: "stage=start:reason=launch-resolution:model-unavailable:model-context-window-insufficient",
+      }),
+    );
+  });
+
+  // #4068: a Windows start the broker cannot confine is refused before any run exists, with a code
+  // the Workbench names and the diagnostic's closed reason.
+  it.each([
+    ["workspace-location-unsupported", "local-checkout"],
+    ["workspace-volume-unsupported", "non-system-volume"],
+  ] as const)("refuses a Windows start as %s and records %s", async (failureCode, reason) => {
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new CodingRuntimeLaunchRejectedError(failureCode, false, reason);
+    });
+
+    expect(await f.orchestrator.start(start)).toEqual({ ok: false, failureCode, runId: "run-1" });
+    expect(f.orchestrator.getSnapshot("run-1")).toBeUndefined();
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.start",
+        message: "runtime-start-failed",
+        code: `stage=start:reason=launch-resolution:${failureCode}:${reason}`,
       }),
     );
   });
@@ -2831,9 +3206,11 @@ describe("CodingRuntimeOrchestrator", () => {
       const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
       const f = fixture();
 
-      await f.orchestrator.start({ ...start, jiraPodId });
+      await f.orchestrator.start({ ...start, jiraPodId, connectorScopes: ["issue-tracker.admin"] });
 
-      expect(f.launchResolver.resolve).toHaveBeenCalledWith(expect.objectContaining({ jiraPodId }));
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ jiraPodId, connectorScopes: ["issue-tracker.admin"] }),
+      );
       const bare = fixture();
       await bare.orchestrator.start(start);
       expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("jiraPodId");
@@ -2857,6 +3234,62 @@ describe("CodingRuntimeOrchestrator", () => {
         }),
       );
       expect(JSON.stringify(captured.records)).not.toContain("d5f5681e");
+    });
+
+    it("states the live run's model and agent on its snapshot across follow-ups (#4068 W12)", async () => {
+      const f = fixture();
+      const started = successfulSnapshot(
+        await f.orchestrator.start({ ...start, modelId: "gemma-4-31b-it", agent: "plan" }),
+      );
+      expect(started).toMatchObject({ modelId: "gemma-4-31b-it", agent: "plan" });
+
+      const switched = successfulSnapshot(
+        await f.orchestrator.submitFollowUp("run-1", {
+          requestId: "follow-up-build",
+          expectedRevision: started.revision,
+          taskIntent: "now implement it",
+          agent: "build",
+        }),
+      );
+      expect(switched).toMatchObject({ modelId: "gemma-4-31b-it", agent: "build" });
+
+      const kept = await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-plain",
+        expectedRevision: switched.revision,
+        taskIntent: "and test it",
+      });
+      expect(successfulSnapshot(kept)).toMatchObject({ agent: "build" });
+    });
+
+    it("keeps the run's agent when its follow-up was refused (#4068 W12)", async () => {
+      const f = fixture();
+      const started = successfulSnapshot(await f.orchestrator.start({ ...start, agent: "plan" }));
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false, reason: "agent-unsupported" });
+
+      await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-refused",
+        expectedRevision: started.revision,
+        taskIntent: "try another agent",
+        agent: "build",
+      });
+
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({ agent: "plan" });
+    });
+
+    it("states a default start's agent and no model it was not told (#4068 W12)", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const snapshot = f.orchestrator.getSnapshot("run-1");
+      expect(snapshot).toMatchObject({ agent: "build" });
+      expect(snapshot).not.toHaveProperty("modelId");
+    });
+
+    it("reports no identity for a run this process did not start (#4068 W12)", () => {
+      const f = fixture(undefined, undefined, [settledRow("run-9", "2026-07-13T12:00:00.000Z", 3)]);
+      const snapshot = f.orchestrator.getSnapshot("run-9");
+      expect(snapshot).toBeDefined();
+      expect(snapshot).not.toHaveProperty("agent");
+      expect(snapshot).not.toHaveProperty("modelId");
     });
 
     it("hands a follow-up's agent to the dispatch and omits the key when none was named", async () => {
@@ -4746,6 +5179,37 @@ describe("CodingRuntimeOrchestrator", () => {
     });
     expect(JSON.stringify(projection.currentContent())).not.toContain("RESTART_CANARY_2479");
   });
+
+  it.each([
+    ["workspace-unqualified", "workspace-unqualified"],
+    ["runtime-state-unavailable", "runtime-failed"],
+  ] as const)(
+    "settles a manager start refusal %s as %s on the run and its settled line (#4335)",
+    async (managerCode, runCode) => {
+      const captured = captureActivityLog();
+      const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+      f.manager.start.mockResolvedValueOnce({
+        ok: false,
+        retryable: false,
+        failureCode: managerCode,
+      });
+
+      const snapshot = successfulSnapshot(await f.orchestrator.start(start));
+
+      expect(snapshot).toMatchObject({ state: "failed", failureCode: runCode });
+      const settled = requireLoggedEvent(
+        captured.records.find((candidate) => candidate.op === "coding-runtime.run.settled"),
+        "expected coding runtime settlement log",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.run.settled.emitted-line",
+          formatActivityLogProofLine(settled),
+        ),
+      ).toMatchObject({ runId: "run-1", state: "failed", failureCode: runCode });
+      expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
+    },
+  );
 
   it("contains rejected host lifecycle promises as recovery-required", async () => {
     const captured = captureDiagnostics();
@@ -7362,14 +7826,10 @@ describe("terminal run cause (F9, #3873)", () => {
 
   function terminalFacts(
     lastModelCallFailure: CodingWorkbenchTurnFailureCode | undefined,
-    promptAllowanceExhausted = false,
     envelopeDurationExhausted = false,
     providerUnavailable = false,
   ) {
     return {
-      promptAllowanceExhausted: vi.fn(
-        (runId: string) => runId === RUN_ID && promptAllowanceExhausted,
-      ),
       envelopeDurationExhausted: vi.fn(
         (runId: string) => runId === RUN_ID && envelopeDurationExhausted,
       ),
@@ -7442,62 +7902,11 @@ describe("terminal run cause (F9, #3873)", () => {
     expect(uncaused.f.orchestrator.unprovenTurnFailureCode(RUN_ID)).toBeUndefined();
   });
 
-  it("settles a run its prompt allowance refused as prompt-allowance-exhausted, never internal", async () => {
-    const { f, records } = settledWith("failed", terminalFacts("turn-rejected", true));
-    await f.orchestrator.start(start);
-    await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      });
-    });
-
-    expect(f.eventHub.publish).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "status",
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      }),
-    );
-    expect(f.evidence.settle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-      }),
-    );
-    const settled = settledLine(records);
-    expect(settled).toMatchObject({
-      correlationId: RUN_ID,
-      errorKind: "authority-denied",
-      extra: {
-        runId: RUN_ID,
-        state: "failed",
-        failureCode: "prompt-allowance-exhausted",
-        failureBasis: "prompt-allowance",
-        modelCallFailure: "turn-rejected",
-        taskOutcomeStatus: "failed",
-      },
-    });
-    expect(
-      expectActivityLogProof(
-        "coding-runtime.run.settled.emitted-line",
-        formatActivityLogProofLine(settled),
-      ),
-    ).toMatchObject({
-      failureCode: "prompt-allowance-exhausted",
-      failureBasis: "prompt-allowance",
-      modelCallFailure: "turn-rejected",
-    });
-    expect(JSON.stringify(records)).not.toContain(start.taskIntent);
-  });
-
   // Run `run-272120967981827964065820685403290179367` reached its 30-minute envelope with a model
   // call in flight: the gateway's outcome line said `cancelled` with `cancellationCause=run-stopped`,
   // no call had failed, and the run settled `runtime-failed`, an internal error.
   it("settles a run whose envelope ran out of time as envelope-duration-exhausted, never internal", async () => {
-    const facts = terminalFacts(undefined, false, true);
+    const facts = terminalFacts(undefined, true);
     const { f, records } = settledWith("failed", facts);
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
@@ -7564,10 +7973,7 @@ describe("terminal run cause (F9, #3873)", () => {
   // provider could not serve the call. The run settles on the outage, and the line says which fact
   // named it.
   it("settles a run whose last call the gateway found the provider unable to serve as provider-unavailable", async () => {
-    const { f, records } = settledWith(
-      "failed",
-      terminalFacts("provider-failed", false, false, true),
-    );
+    const { f, records } = settledWith("failed", terminalFacts("provider-failed", false, true));
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
@@ -7599,19 +8005,16 @@ describe("terminal run cause (F9, #3873)", () => {
   });
 
   it("keeps a bound of the run ahead of the provider outage it also read", async () => {
-    const { f, records } = settledWith(
-      "failed",
-      terminalFacts("provider-failed", true, false, true),
-    );
+    const { f, records } = settledWith("failed", terminalFacts("provider-failed", true, true));
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
         state: "failed",
-        failureCode: "prompt-allowance-exhausted",
+        failureCode: "envelope-duration-exhausted",
       });
     });
     expect(settledLine(records)).toMatchObject({
-      extra: { failureCode: "prompt-allowance-exhausted", failureBasis: "prompt-allowance" },
+      extra: { failureCode: "envelope-duration-exhausted", failureBasis: "envelope-duration" },
     });
   });
 
@@ -7633,7 +8036,7 @@ describe("terminal run cause (F9, #3873)", () => {
   });
 
   it("reads the terminal facts before the runtime is stopped for settlement", async () => {
-    const facts = terminalFacts("provider-failed", false, false, true);
+    const facts = terminalFacts("provider-failed", false, true);
     const { f } = settledWith("failed", facts);
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
@@ -7644,7 +8047,6 @@ describe("terminal run cause (F9, #3873)", () => {
     expect(facts.lastModelCallProviderUnavailable.mock.invocationCallOrder[0]).toBeLessThan(
       stopOrder,
     );
-    expect(facts.promptAllowanceExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
     expect(facts.envelopeDurationExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
   });
 
@@ -7666,7 +8068,7 @@ describe("terminal run cause (F9, #3873)", () => {
   it.each(["succeeded", "cancelled"] as const)(
     "never names a bound or model-call cause for a %s task outcome",
     async (outcome) => {
-      const facts = terminalFacts("stream-incomplete", true, true);
+      const facts = terminalFacts("stream-incomplete", true);
       const { f, records } = settledWith(outcome, facts);
       await f.orchestrator.start(start);
       await vi.waitFor(() => {
@@ -7676,9 +8078,8 @@ describe("terminal run cause (F9, #3873)", () => {
         expect(settledLine(records).extra).not.toHaveProperty("failureBasis");
       });
       expect(f.orchestrator.getSnapshot(RUN_ID)?.failureCode).not.toBe(
-        "prompt-allowance-exhausted",
+        "envelope-duration-exhausted",
       );
-      expect(facts.promptAllowanceExhausted).not.toHaveBeenCalled();
       expect(facts.envelopeDurationExhausted).not.toHaveBeenCalled();
       expect(facts.lastModelCallFailure).not.toHaveBeenCalled();
       expect(facts.lastModelCallProviderUnavailable).not.toHaveBeenCalled();
@@ -7688,7 +8089,7 @@ describe("terminal run cause (F9, #3873)", () => {
   // An operator stop settles `cancelled` through the stop path, before the turn's own cancelled
   // completion arrives, so the run's terminal state names the operator, not a failure.
   it("settles an operator-stopped run as cancelled with no failure cause", async () => {
-    const facts = terminalFacts("stream-incomplete", true, true);
+    const facts = terminalFacts("stream-incomplete", true);
     const log = captureActivityLog();
     const f = fixture(
       undefined,
@@ -7715,7 +8116,6 @@ describe("terminal run cause (F9, #3873)", () => {
     expect(settled).toMatchObject({ errorKind: "cancelled", extra: { state: "cancelled" } });
     expect(settled.extra).not.toHaveProperty("failureCode");
     expect(settled.extra).not.toHaveProperty("failureBasis");
-    expect(facts.promptAllowanceExhausted).not.toHaveBeenCalled();
   });
 });
 
@@ -8076,7 +8476,7 @@ describe("verification truth at task settlement", () => {
   });
 
   it("does not repair an impossible selected verifier", async () => {
-    const { f, finish } = await runningTask();
+    const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     const target = "a".repeat(64);
     await verification(f, "failed", undefined, target);
@@ -8086,6 +8486,21 @@ describe("verification truth at task settlement", () => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    // The settlement line names the blocker that stopped repair (#4271).
+    const settled = requireLoggedEvent(
+      log.records.find(
+        (event) =>
+          event.op === "coding-runtime.run.verification-continuation" &&
+          event.extra?.state === "not-evidenced",
+      ),
+      "Expected the not-evidenced settlement line",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(settled),
+      ),
+    ).toMatchObject({ state: "not-evidenced", attempt: 0, blockedReason: "NO_RUNNABLE_STEPS" });
   });
 
   it("still repairs a selected failing test when unrelated lint is unavailable", async () => {
@@ -8098,6 +8513,17 @@ describe("verification truth at task settlement", () => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  // #4271 lab (T39): a refusal for a target nobody selected is not an impossible selected verifier.
+  it("still repairs when the verifier refused a target before any target was selected", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("records an edit that applied during a script-trust decision wait", async () => {
@@ -8643,6 +9069,100 @@ describe("native session continuity requested by a start", () => {
 
     expect(w.spies.begin).toHaveBeenCalledOnce();
     expect(w.continuity.take("run-2")).toEqual({ kind: "resume", taskId: "task-prior" });
+  });
+
+  // #4271 (ADR-0137, scheduled continuations): the server's own start of a due schedule's task.
+  describe("a scheduled wake", () => {
+    const plan = (
+      consentMode: "governed-assist" | "supervised-coding" | "autonomous-delivery",
+    ) => ({
+      taskId: "task-prior",
+      scheduleId: "sch_1",
+      intent: "  Check the build  ",
+      consentMode,
+    });
+
+    it("resumes the task in the narrower of its consent and the latest run's mode, without a prompt", async () => {
+      const w = world();
+      const host = w.f.orchestrator.scheduledWakeHost();
+
+      const started = await host.start(plan("autonomous-delivery"));
+
+      // The latest run was Supervised workspace: the wider consent cannot widen it.
+      expect(started).toEqual({ ok: true, runId: "run-2", mode: "supervised-coding" });
+      expect(w.f.orchestrator.getSnapshot("run-2")?.requestedMode).toBe("supervised-coding");
+      expect(w.continuity.take("run-2")).toEqual({ kind: "resume", taskId: "task-prior" });
+      expect(w.spies.begin).toHaveBeenCalledWith(
+        expect.objectContaining({ taskIntent: "Check the build", conversationId: "task-prior" }),
+        expect.anything(),
+        "run-2",
+        { scheduled: true },
+      );
+      const dispatched = firstTaskDispatchRequest(w.f.taskDispatcher.dispatch.mock.calls);
+      expect(dispatched).toMatchObject({ origin: "schedule-wake" });
+      expect(dispatched.initialContext).toBeUndefined();
+      expect(w.spies.initialContext).not.toHaveBeenCalled();
+    });
+
+    it("keeps a narrower consent than the latest run's mode", async () => {
+      const w = world();
+      const resolve = w.f.launchResolver.resolve.getMockImplementation();
+      if (resolve === undefined) throw new Error("expected a launch resolver");
+      // The launch clamps to the requested mode, as the real resolver does.
+      w.f.launchResolver.resolve.mockImplementation((input) => ({
+        ...resolve(input),
+        effectiveMode: "governed-assist",
+      }));
+
+      await expect(
+        w.f.orchestrator.scheduledWakeHost().start(plan("governed-assist")),
+      ).resolves.toMatchObject({ ok: true, mode: "governed-assist" });
+      expect(w.f.orchestrator.getSnapshot("run-2")?.requestedMode).toBe("governed-assist");
+    });
+
+    it("waits while a run holds the slot, and blocks nothing once the run is gone", async () => {
+      const w = world();
+      const host = w.f.orchestrator.scheduledWakeHost();
+      expect(host.blocked()).toBeUndefined();
+
+      await host.start(plan("supervised-coding"));
+
+      expect(host.blocked()).toBe("run-active");
+      expect(host.liveTaskId()).toBeUndefined();
+      await expect(host.start(plan("supervised-coding"))).resolves.toEqual({
+        ok: false,
+        refusal: "active-run-conflict",
+      });
+    });
+
+    it("refuses a wake without an intent or a run to continue", async () => {
+      const w = world();
+      const host = w.f.orchestrator.scheduledWakeHost();
+
+      await expect(host.start({ ...plan("supervised-coding"), intent: "   " })).resolves.toEqual({
+        ok: false,
+        refusal: "invalid-intent",
+      });
+      vi.spyOn(w.history, "previousRunId").mockReturnValue(undefined);
+      expect(host.taskOwned("task-prior")).toBe(false);
+      await expect(host.start(plan("supervised-coding"))).resolves.toEqual({
+        ok: false,
+        refusal: "invalid-intent",
+      });
+      expect(w.f.manager.start).not.toHaveBeenCalled();
+    });
+
+    it("starts nothing once the orchestrator shuts down", async () => {
+      const w = world();
+      const host = w.f.orchestrator.scheduledWakeHost();
+      const stop = vi.fn();
+      w.f.orchestrator.attachScheduledWakes({ stop });
+
+      await w.f.orchestrator.shutdown();
+
+      expect(stop).toHaveBeenCalledOnce();
+      expect(host.blocked()).toBe("shutting-down");
+    });
   });
 
   it("declares nothing for a start that continues nothing", async () => {

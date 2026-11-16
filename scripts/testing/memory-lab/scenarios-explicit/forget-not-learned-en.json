@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "forget-not-learned-en",
+  "language": "en",
+  "class": "forget",
+  "difficulty": "plain",
+  "description": "\"Forget that\" about a statement the learner has not stored yet. The later pass must store nothing.",
+  "truth": [],
+  "forgotten": [
+    {
+      "terms": [["tables"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "I prefer tables when you show me numbers.",
+      "learner": []
+    },
+    {
+      "user": "Forget that.",
+      "learner": [
+        {
+          "body": "I prefer tables when you show me numbers.",
+          "type": "preference"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "How should you show me numbers?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ]
+}

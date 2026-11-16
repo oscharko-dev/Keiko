@@ -1,8 +1,4 @@
-import { looksLikePersonalIdentifier, looksLikeSecret } from "./activity-log-label-policy.js";
-import {
-  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
-  isActivityLogCorrelationId,
-} from "./observability.js";
+import { normalizeSupportReportCorrelationId } from "./support-report-correlation.js";
 import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
@@ -83,16 +79,6 @@ export interface ClientOnlySupportReportInput {
 }
 
 const CLIENT_ONLY_ROOT_CORRELATION_ID = "id000001";
-
-/** A selected failure reference, never a transport sentinel, credential or personal label. */
-export function normalizeSupportReportCorrelationId(value: unknown): string | undefined {
-  return isActivityLogCorrelationId(value) &&
-    value !== ACTIVITY_LOG_UNKNOWN_CORRELATION_ID &&
-    !looksLikeSecret(value) &&
-    !looksLikePersonalIdentifier(value)
-    ? value
-    : undefined;
-}
 
 function clientOnlyIncident(input: ClientOnlySupportReportInput): SupportIncidentPrivateProjection {
   return {

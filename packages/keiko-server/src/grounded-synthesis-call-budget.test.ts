@@ -5,6 +5,8 @@ import {
   withConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
 import {
+  groundedToolAttemptConfirmation,
+  groundedNestedToolCallRelease,
   createGroundedSynthesisCallBudget,
   createGroundedSynthesisAttemptAdmission,
   groundedSynthesisAttemptUsage,
@@ -12,6 +14,35 @@ import {
 } from "./grounded-answer.js";
 
 describe("factory-owned physical synthesis allowance", () => {
+  it("keeps retry decisions read-only and refuses the caller's ended deadline or signal", () => {
+    const budget = createGroundedSynthesisCallBudget();
+    const controller = new AbortController();
+    let now = 1;
+    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+      inputTokensMax: 220,
+      outputTokensMax: 80,
+      signal: controller.signal,
+      deadlineAtMs: 100,
+      nowMs: () => now,
+      retryFollows: () => true,
+    });
+    tracker
+      .admission({ promptTokens: 100, maxOutputTokens: 80 })
+      ?.settle({ promptTokens: 100, completionTokens: 0 }, true, "none");
+    const failure = new Error("Synthetic owner-confirmed retry");
+    expect(tracker.retryFollows?.(failure)).toBe(true);
+    expect(tracker.retryFollows?.(failure)).toBe(true);
+    expect(budget.remaining()).toBe(1);
+    expect(budget.pendingUsage()).toEqual({ promptTokens: 100, completionTokens: 0 });
+    now = 100;
+    expect(tracker.retryFollows?.(failure)).toBe(false);
+    now = 99;
+    controller.abort();
+    expect(tracker.retryFollows?.(failure)).toBe(false);
+    expect(budget.remaining()).toBe(1);
+    expect(budget.pendingUsage()).toEqual({ promptTokens: 100, completionTokens: 0 });
+  });
+
   it("does not charge provider usage for a readiness refusal before dispatch", async () => {
     const budget = createGroundedSynthesisCallBudget();
     const tracker = createGroundedSynthesisAttemptAdmission(budget, {
@@ -94,17 +125,32 @@ describe("factory-owned physical synthesis allowance", () => {
     expect(budget.remaining()).toBe(0);
   });
 
-  it("refuses an internal retry whose prompt no longer fits the original input grant", () => {
-    const budget = createGroundedSynthesisCallBudget();
-    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
-      inputTokensMax: 150,
-      outputTokensMax: 80,
-    });
-    tracker.admission({ promptTokens: 100, maxOutputTokens: 80 })?.settle(undefined, true);
-    expect(tracker.admission({ promptTokens: 100, maxOutputTokens: 80 })).toBeUndefined();
-    expect(budget.remaining()).toBe(1);
-    expect(budget.pendingUsage()).toEqual({ promptTokens: 100, completionTokens: 0 });
-  });
+  it.each([100, 150])(
+    "fits each retry independently after %i observed prompt tokens",
+    (promptTokens) => {
+      const budget = createGroundedSynthesisCallBudget();
+      const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+        inputTokensMax: 150,
+        outputTokensMax: 80,
+        retryFollows: () => true,
+      });
+      tracker
+        .admission({ promptTokens, maxOutputTokens: 80 })
+        ?.settle({ promptTokens, completionTokens: 7 }, true, "observed");
+      expect(tracker.retryFollows?.(new Error("Synthetic retry"))).toBe(true);
+      expect(tracker.admission({ promptTokens: 151, maxOutputTokens: 80 })).toBeUndefined();
+      expect(budget.remaining()).toBe(1);
+      const second = tracker.admission({ promptTokens: 100, maxOutputTokens: 80 });
+      expect(second?.maxOutputTokens).toBe(73);
+      second?.settle({ promptTokens: 100, completionTokens: 5 }, true, "observed");
+      expect(budget.pendingUsage()).toEqual({
+        promptTokens: promptTokens + 100,
+        completionTokens: 12,
+      });
+      expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
+      expect(budget.remaining()).toBe(0);
+    },
+  );
 
   it("releases a local reservation when spend admission refuses before provider dispatch", () => {
     const budget = createGroundedSynthesisCallBudget();
@@ -279,4 +325,62 @@ it("never releases an unsettled attempt for an announced correction", () => {
   expect(
     tracker.admission({ promptTokens: 1, maxOutputTokens: 1, correctsUnusableAttempt: true }),
   ).toBeUndefined();
+});
+
+describe("exact nested synthesis attempt confirmation", () => {
+  it("confirms only its fully observed exact reservation despite a later concurrent admission", () => {
+    const budget = createGroundedSynthesisCallBudget();
+    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+      inputTokensMax: 1000,
+      outputTokensMax: 1000,
+    });
+    const first = tracker.admission({ promptTokens: 100, maxOutputTokens: 25 });
+    const second = tracker.admission({
+      promptTokens: 200,
+      maxOutputTokens: 25,
+    });
+    if (first === undefined || second === undefined) throw new Error("Expected exact reservations");
+    first.settle({ promptTokens: 100, completionTokens: 5 }, true, "observed");
+    second.settle({ promptTokens: 200, completionTokens: 7 }, true, "unknown");
+    groundedToolAttemptConfirmation(first)?.();
+    groundedToolAttemptConfirmation(first)?.();
+    expect(budget.remaining()).toBe(1);
+    expect(budget.pendingUsage()).toEqual({
+      promptTokens: 200,
+      completionTokens: 25,
+    });
+    expect(() => groundedToolAttemptConfirmation(second)?.()).toThrow(CallerAttemptAdmissionError);
+    expect(budget.remaining()).toBe(1);
+    expect(groundedToolAttemptConfirmation({ settle: vi.fn() })).toBeUndefined();
+  });
+});
+
+it("releases only the owned nested call slot and preserves unconfirmed and unknown output charges", () => {
+  const budget = createGroundedSynthesisCallBudget();
+  const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+    inputTokensMax: 1000,
+    outputTokensMax: 100,
+  });
+  const first = tracker.admission({ promptTokens: 100, maxOutputTokens: 25 });
+  if (first === undefined) throw new TypeError("Missing first reservation");
+  first.settle({ promptTokens: 100, completionTokens: 5 }, true, "observed");
+  const confirm = groundedToolAttemptConfirmation(first);
+  const release = groundedNestedToolCallRelease(first);
+  release?.();
+  expect(budget.remaining()).toBe(2);
+  const next = tracker.admission({ promptTokens: 100, maxOutputTokens: 25 });
+  if (next === undefined) throw new TypeError("Missing next reservation");
+  confirm?.();
+  release?.();
+  expect(budget.remaining()).toBe(1);
+  next.settle({ promptTokens: 100, completionTokens: 0 }, true, "unknown");
+  groundedNestedToolCallRelease(next)?.();
+  expect(budget.remaining()).toBe(2);
+  expect(budget.pendingUsage()).toEqual({ promptTokens: 100, completionTokens: 25 });
+  expect(budget.reservedOutputTokens()).toBe(25);
+  expect(() => {
+    tracker.confirmToolRound();
+  }).toThrow(CallerAttemptAdmissionError);
+  expect(budget.takeUsage()).toEqual({ promptTokens: 200, completionTokens: 30 });
+  expect(groundedNestedToolCallRelease({ settle: () => undefined })).toBeUndefined();
 });

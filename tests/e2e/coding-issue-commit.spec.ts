@@ -339,7 +339,10 @@ test("#3386 @coding-issue-commit dirty worktree cannot become an approvable prop
   await openWorkbench(page);
   const root = await startVerified(page, "autonomous-delivery", "dirty");
   const before = git(root, ["rev-parse", "HEAD"]);
-  writeFileSync(join(root, "untracked-fixture.txt"), "Unverified fixture state.\n");
+  // Full access may leave untracked files outside the verified staged candidate (#3907).
+  // Change that candidate's working copy instead, so this is real verification drift in Full.
+  writeFileSync(join(root, COMMIT_TARGET), "export const value = 'UNVERIFIED_COMMIT_3386';\n");
+  expect(git(root, ["diff", "--name-only"])).toBe(COMMIT_TARGET);
   const proposed = await control("propose");
   expect(proposed.result?.verifiedCommit).toMatchObject({
     status: "drift",

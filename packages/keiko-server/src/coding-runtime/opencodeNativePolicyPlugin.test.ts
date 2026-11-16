@@ -303,6 +303,46 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
     ]);
   });
 
+  // #4271: the producer's schedule tools assert no permission, so the hook asks for one.
+  it("asks policy for every schedule change and names a check alone", async () => {
+    const harness = await pluginHarness("supervised-coding", { effect: "allow" });
+    await harness.toolBefore({
+      ...nested("schedule_create"),
+      input: { when: { type: "in", in: "30m" }, name: "Build", prompt: "run the build" },
+    });
+    await harness.toolBefore({
+      ...nested("opencode_schedule_create"),
+      input: { when: { type: "in", in: "1m" }, if: { shell: "test -f x" }, prompt: "p" },
+    });
+    await harness.toolBefore({ ...nested("schedule_delete"), input: { id: "sch_1" } });
+    await harness.toolBefore({ ...nested("schedule_list"), input: {} });
+
+    expect(harness.requests).toHaveLength(3);
+    expect(harness.requests[0]).toMatchObject({
+      permission: "opencode_schedule",
+      resources: expect.arrayContaining([
+        "create",
+        'when:{"type":"in","in":"30m"}',
+        "name:Build",
+      ]) as unknown,
+    });
+    expect(harness.requests.slice(1)).toMatchObject([
+      { permission: "opencode_schedule", resources: ["create", "condition:if"] },
+      { permission: "opencode_schedule", resources: ["delete", "sch_1"] },
+    ]);
+  });
+
+  it("blocks a schedule change the policy refuses", async () => {
+    const refused = await pluginHarness("governed-assist", {
+      effect: "deny",
+      message: "no schedule",
+    });
+
+    await expect(
+      refused.toolBefore({ ...nested("schedule_pause"), input: { id: "sch_1" } }),
+    ).rejects.toThrow("no schedule");
+  });
+
   // #3897 review: the producer asserts no permission for a Code Mode program, so without this the
   // mode policy never gated model-authored JavaScript (its `fetch` reaches loopback services) even in
   // Ask for approval. The program is decided like a command, before it starts.
@@ -343,12 +383,30 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
     expect(harness.requests).toHaveLength(0);
   });
 
+  // #4359: a rename asserted no permission and was decided by nothing; it is now governed like a
+  // move, by the title it sets and the session it renames.
+  it("sends a session rename's title and target session, and blocks it on refusal", async () => {
+    const harness = await pluginHarness("supervised-coding", { effect: "allow" });
+    await harness.toolBefore({ ...nested("opencode_session_rename"), input: { title: "Plan" } });
+    await harness.toolBefore({
+      ...nested("opencode_session_rename"),
+      input: { title: "Other", sessionID: "ses_other" },
+    });
+    expect(harness.requests).toMatchObject([
+      { permission: "opencode_session_rename", resources: ["Plan"], targetSessionID: null },
+      { permission: "opencode_session_rename", resources: ["Other"], targetSessionID: "ses_other" },
+    ]);
+    const refused = await pluginHarness("supervised-coding", { effect: "deny", message: "no" });
+    await expect(
+      refused.toolBefore({ ...nested("opencode_session_rename"), input: { title: "x" } }),
+    ).rejects.toThrow("no");
+  });
+
   it("leaves Code Mode's read-only or self-asserting tools to the runtime", async () => {
     const harness = await pluginHarness("supervised-coding", { effect: "deny" });
     for (const tool of [
       "opencode_models",
       "opencode_worktree_list",
-      "opencode_session_rename",
       "opencode_list_mcp_resources",
       "opencode_read_mcp_resource",
       "opencode_worktree_remove",

@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Page } from "@playwright/test";
 
 // Issue #1388 (ADR-0070) — browser smoke for the container status surface. Drives the real Studio
@@ -14,37 +15,40 @@ const TAG = "@container-status-1388";
 // Containers the way a human does, through its "Containers" action. That is also the only entry
 // point the product offers: `containerStatus` is in neither TYPE_ORDER nor the workspace command lists.
 async function seedRuntimeHubWindow(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-1388-runtime",
-          type: "runtime",
-          x: 64,
-          y: 56,
-          w: 620,
-          h: 480,
-          z: 10,
-          cfg: {},
-          max: false,
-        },
-        // A sibling Tasks window proves the rest of Keiko stays usable next to the unavailable card.
-        {
-          id: "issue-1388-tasks",
-          type: "commands",
-          x: 720,
-          y: 56,
-          w: 480,
-          h: 360,
-          z: 9,
-          cfg: {},
-          max: false,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  });
+  await page.addInitScript(
+    ({ storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-1388-runtime",
+            type: "runtime",
+            x: 64,
+            y: 56,
+            w: 620,
+            h: 480,
+            z: 10,
+            cfg: {},
+            max: false,
+          },
+          // A sibling Tasks window proves the rest of Keiko stays usable next to the unavailable card.
+          {
+            id: "issue-1388-tasks",
+            type: "commands",
+            x: 720,
+            y: 56,
+            w: 480,
+            h: 360,
+            z: 9,
+            cfg: {},
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, undefined),
+  );
 }
 
 async function openContainersFromRuntimeHub(page: Page): Promise<void> {

@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const binaryExtensions = new Set([
   "7z",
@@ -16,6 +17,7 @@ const binaryExtensions = new Set([
   "class",
   "dll",
   "dmg",
+  "docx",
   "dylib",
   "eot",
   "exe",
@@ -35,6 +37,7 @@ const binaryExtensions = new Set([
   "otf",
   "pdf",
   "png",
+  "pptx",
   "so",
   "svg",
   "tar",
@@ -48,6 +51,7 @@ const binaryExtensions = new Set([
   "webp",
   "woff",
   "woff2",
+  "xlsx",
   "zip",
 ]);
 const codeExtensions = new Set([
@@ -113,14 +117,20 @@ const approvedScopeValueDigests = new Map([
   // and the test inclusions (KEIKO-1028, #3340 review follow-up): `vitest bench` files carry the
   // same Sonar disposition as `.test.`/`.spec.` — asserts nothing, never packaged. Re-computed
   // the SHA-256 of the raw value after `=` via `createHash("sha256").update(value).digest("hex")`.
-  ["sonar.exclusions", "dc113fa197390651bc9f0377b9a1395d19c5cadb60a9754b92c3f93e3c19b135"],
+  // Re-pinned for PR #4292: Office Open XML containers (`docx`, `pptx`, `xlsx`) are zip archives
+  // like the other binary formats; the golden requirements fixture made the scanner warn about
+  // invalid UTF-8, which the analysis-log gate rejects. Same change in sonar.test.exclusions.
+  ["sonar.exclusions", "3aaaa5af6e53b7c0d7462794cb16ee93624c281a047d74324359a685c8948e17"],
   ["sonar.test.inclusions", "8db9d0077b198b3b047e46ea3c5151f1b30aef42dabc06be1e589c8c475e1704"],
   // Re-pinned for PR #3876: `tests/fixtures/coding-workbench-lab/ledger-lab/**` is the live lab's
   // target repository, fixture data with deliberately planted defects, excluded from test analysis
   // as it is from the root tsconfig, ESLint and Prettier. Re-pinned for PR #4150: the Python lab
   // fixture `inventory-py/**` is data of the same kind; analysing it made the scanner warn about an
-  // unset Python version, which the analysis-log gate rejects. SHA-256 of the raw value after `=`.
-  ["sonar.test.exclusions", "c421fc74639972f7a1fbe743c60dbf47aa5f07fc344e0eddd777b382738966e3"],
+  // unset Python version, which the analysis-log gate rejects. Re-pinned for #4271: the nested
+  // monorepo lab fixture `polyglot-mono/**` is data of the same kind, already outside ESLint, and
+  // its `node:test` files are lab targets, not Keiko tests. Re-pinned for PR #4292: the Office Open
+  // XML containers named above. SHA-256 of the raw value after `=`.
+  ["sonar.test.exclusions", "f2acd88bdf310da1e71b6b95f5869e9cb46d9d514039541db9337449da67a222"],
   [
     "sonar.typescript.tsconfigPaths",
     "016c8b1bfc0b97a73ee1b5680a7b1f46ccb5c24206229367ea88a266fe20c0d5",
@@ -220,10 +230,11 @@ export function partitionSonarInclusions(paths) {
 
 export function sonarInclusionPathsNeedFullScan(paths) {
   if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string")) return true;
+  // Sonar's WildcardPattern treats brackets literally; only * and ? are wildcard characters.
   return paths.some(
     (path) =>
       path.length === 0 ||
-      /[,*?[\]\\\r\n]/u.test(path) ||
+      /[,*?\\\r\n]/u.test(path) ||
       (path.codePointAt(0) ?? 0) <= 0x20 ||
       (path.codePointAt(path.length - 1) ?? 0) <= 0x20,
   );
@@ -382,11 +393,12 @@ export function coverageDisposition(input, nativeSources = new Set()) {
   return "static-analysis";
 }
 
-export function systemGitExecutable(platform = process.platform) {
+export function systemGitExecutable(
+  platform = process.platform,
+  resolveExecutable = resolveHostExecutable,
+) {
   if (platform !== "win32") return "/usr/bin/git";
-  const programFiles = process.env.ProgramFiles ?? "C:/Program Files";
-  const separator = programFiles.endsWith("/") || programFiles.endsWith("\\") ? "" : "/";
-  return `${programFiles}${separator}Git/cmd/git.exe`;
+  return resolveExecutable("git", { platform });
 }
 
 export function optionValue(argv, name) {
@@ -463,7 +475,7 @@ function requiredPropertyFailures(properties) {
     "sonar.plsql.file.suffixes=-",
     "sonar.test.inclusions=",
     "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts",
-    "sonar.cpd.exclusions=packages/keiko-ui/src/lib/i18n-messages.*.ts,packages/keiko-ui/src/**/*-i18n.ts,packages/keiko-ui/src/**/*-i18n.de.ts,packages/keiko-ui/src/**/*-i18n.en.ts,scripts/__tests__/windows-rfc3161-fixtures.ps1,scripts/__tests__/windows-native-policy-fixtures.ps1",
+    "sonar.cpd.exclusions=packages/keiko-ui/src/lib/i18n-messages.*.ts,packages/keiko-ui/src/**/*-i18n.ts,packages/keiko-ui/src/**/*-i18n.de.ts,packages/keiko-ui/src/**/*-i18n.en.ts,scripts/__tests__/windows-rfc3161-fixtures.ps1,scripts/testing/test-windows-gateway-scm.ps1,scripts/testing/windows-gateway-firewall.ps1,scripts/__tests__/windows-native-policy-fixtures.ps1",
     "native/portable-launcher/**",
     "scripts/windows-portable-rfc3161.cs",
   ];

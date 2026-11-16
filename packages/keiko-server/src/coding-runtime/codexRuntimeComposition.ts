@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { join, posix, win32 } from "node:path";
+import { posix, win32 } from "node:path";
 
 import type {
   CodingWorkbenchMode,
@@ -758,7 +758,7 @@ function validInitialize(value: unknown, stateRoot: string): boolean {
 function codexHomeFor(stateRoot: string): string {
   return win32.isAbsolute(stateRoot) && !posix.isAbsolute(stateRoot)
     ? win32.join(stateRoot, "codex-home")
-    : join(stateRoot, "codex-home");
+    : posix.join(stateRoot, "codex-home");
 }
 function validAccount(value: unknown): boolean {
   return (

@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
-import { useWorkbenchExecutionLocation } from "./useWorkbenchExecutionLocation";
+import {
+  activeExecutionLocation,
+  useWorkbenchExecutionLocation,
+} from "./useWorkbenchExecutionLocation";
 
 const mocks = vi.hoisted(() => ({
   fetchGitStatus: vi.fn(),
@@ -35,6 +38,26 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// #4068: behind the Windows broker the runtime confines only a Keiko-managed worktree, so neither a
+// saved Local choice nor the Local default may bind a checkout the server would refuse.
+describe("the location a runtime can confine", () => {
+  const local = { ...managed, executionLocation: "local" } as WorkspaceInstance;
+
+  it("keeps every preference when the runtime names no locations", () => {
+    expect(activeExecutionLocation(null, "/repo", undefined)).toBe("local");
+    expect(activeExecutionLocation(null, "/repo", "worktree")).toBe("worktree");
+    expect(activeExecutionLocation(local, "/repo", undefined)).toBe("local");
+    expect(activeExecutionLocation(null, "/repo", undefined, ["local", "worktree"])).toBe("local");
+  });
+
+  it("turns a saved or default Local into a worktree where only a worktree is confined", () => {
+    expect(activeExecutionLocation(null, "/repo", undefined, ["worktree"])).toBe("worktree");
+    expect(activeExecutionLocation(null, "/repo", "local", ["worktree"])).toBe("worktree");
+    expect(activeExecutionLocation(local, "/repo", undefined, ["worktree"])).toBe("worktree");
+    expect(activeExecutionLocation(managed, "/repo", undefined, ["worktree"])).toBe("worktree");
+  });
+});
+
 describe("workbench execution location restoration", () => {
   it("does not revert an external branch change on active-workspace refresh", async () => {
     const initial = {
@@ -50,6 +73,7 @@ describe("workbench execution location restoration", () => {
       workspaceError: false,
       branchLoading: false,
       branchError: false,
+      branchDenied: false,
       runIsActive: false,
       folderMode: false,
       refresh,
@@ -81,6 +105,7 @@ describe("workbench execution location restoration", () => {
       workspaceError: false,
       branchLoading: status === "loading",
       branchError: status === "failed",
+      branchDenied: false,
       runIsActive: false,
       folderMode: false,
       refresh,
@@ -93,6 +118,54 @@ describe("workbench execution location restoration", () => {
     await waitFor(() => expect(mocks.selectLocalCheckout).toHaveBeenCalledOnce());
   });
 
+  // #4068: before readiness answers, the runtime's confinable locations are unknown, so the default
+  // Local must not be bound against the operator's own checkout.
+  describe("while the runtime has not named its locations", () => {
+    const settled = {
+      root: "/repo",
+      branch: "main",
+      activeInstance: null,
+      workspaceLoading: false,
+      workspaceError: false,
+      branchLoading: false,
+      branchError: false,
+      branchDenied: false,
+      runIsActive: false,
+      folderMode: false,
+      refresh,
+    };
+
+    it("binds only the worktree once readiness offers nothing else", async () => {
+      mocks.bindVerifiedTaskWorkspace.mockResolvedValue({ ok: true });
+      const { rerender, result } = renderHook(useWorkbenchExecutionLocation, {
+        initialProps: {
+          ...settled,
+          location: "local" as "local" | "worktree",
+          locationsPending: true,
+        },
+      });
+      await act(async () => {});
+      expect(result.current.pending).toBe(true);
+      expect(result.current.ready).toBe(false);
+      expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+      expect(mocks.bindVerifiedTaskWorkspace).not.toHaveBeenCalled();
+      rerender({ ...settled, location: "worktree", locationsPending: false });
+      await waitFor(() => expect(mocks.bindVerifiedTaskWorkspace).toHaveBeenCalledOnce());
+      expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+    });
+
+    it("binds the local checkout as before once readiness offers both locations", async () => {
+      mocks.selectLocalCheckout.mockResolvedValue({});
+      const { rerender } = renderHook(useWorkbenchExecutionLocation, {
+        initialProps: { ...settled, location: "local" as const, locationsPending: true },
+      });
+      await act(async () => {});
+      expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+      rerender({ ...settled, location: "local", locationsPending: false });
+      await waitFor(() => expect(mocks.selectLocalCheckout).toHaveBeenCalledOnce());
+    });
+  });
+
   it("refreshes a failed branch inventory when the user retries", async () => {
     const { result } = renderHook(useWorkbenchExecutionLocation, {
       initialProps: {
@@ -102,6 +175,7 @@ describe("workbench execution location restoration", () => {
         activeInstance: null,
         branchLoading: false,
         branchError: true,
+        branchDenied: false,
         workspaceLoading: false,
         workspaceError: false,
         runIsActive: false,
@@ -126,6 +200,7 @@ describe("workbench execution location restoration", () => {
       workspaceError: false,
       branchLoading: false,
       branchError: false,
+      branchDenied: false,
       runIsActive: false,
       folderMode: false,
       refresh,
@@ -150,6 +225,7 @@ describe("workbench execution location restoration", () => {
         activeInstance: null,
         branchLoading: false,
         branchError: false,
+        branchDenied: false,
         workspaceLoading: false,
         workspaceError: false,
         runIsActive: false,
@@ -178,6 +254,7 @@ describe("workbench execution location restoration", () => {
         activeInstance: null,
         branchLoading: false,
         branchError: false,
+        branchDenied: false,
         workspaceLoading: false,
         workspaceError: false,
         runIsActive: false,
@@ -204,6 +281,7 @@ describe("workbench execution location restoration", () => {
       activeInstance: null as WorkspaceInstance | null,
       branchLoading: false,
       branchError: false,
+      branchDenied: false,
       workspaceLoading: true,
       workspaceError: false,
       runIsActive: false,
@@ -220,6 +298,7 @@ describe("workbench execution location restoration", () => {
       activeInstance: managed,
       branchLoading: false,
       branchError: false,
+      branchDenied: false,
       workspaceLoading: false,
     });
     expect(result.current.ready).toBe(true);
@@ -241,6 +320,7 @@ describe("workbench execution location restoration", () => {
       activeInstance: null as WorkspaceInstance | null,
       branchLoading: false,
       branchError: false,
+      branchDenied: false,
       workspaceLoading: false,
       workspaceError: false,
       runIsActive: false,
@@ -288,6 +368,7 @@ describe("workbench execution location in an ordinary folder", () => {
     workspaceError: false,
     branchLoading: false,
     branchError: false,
+    branchDenied: false,
     runIsActive: false,
     refresh,
   };
@@ -344,5 +425,38 @@ describe("workbench execution location in an ordinary folder", () => {
       result.current.retry();
     });
     await waitFor(() => expect(mocks.selectFolderWorkspace).toHaveBeenCalledTimes(2));
+  });
+});
+
+// #4371: when the server refused the folder (the closed DENIED reason) the checkout says so once.
+describe("a checkout failure the server named as a refusal", () => {
+  const input = {
+    root: "/repo",
+    branch: "main",
+    location: "worktree" as const,
+    folderMode: false,
+    activeInstance: null,
+    branchLoading: false,
+    branchError: true,
+    workspaceLoading: false,
+    workspaceError: false,
+    runIsActive: false,
+    refresh,
+  };
+
+  it("is denied when the branch read was refused", () => {
+    const { result } = renderHook(() =>
+      useWorkbenchExecutionLocation({ ...input, branchDenied: true }),
+    );
+    expect(result.current.error).toBe(true);
+    expect(result.current.denied).toBe(true);
+  });
+
+  it("is not denied for an ordinary failure", () => {
+    const { result } = renderHook(() =>
+      useWorkbenchExecutionLocation({ ...input, branchDenied: false }),
+    );
+    expect(result.current.error).toBe(true);
+    expect(result.current.denied).toBe(false);
   });
 });

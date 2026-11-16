@@ -37,7 +37,7 @@ import { CODING_RUNTIME_FAILURE_TRACE_FIELDS } from "./codingRuntimeActivityOper
  * stay unadmitted, with one owner-approved exception: `.claude/skills/<name>/SKILL.md`, read through
  * the same helper under that named exception and nothing else of `.claude`.
  *
- * The discovery layout is the one the pinned 2.1.4 producer reads from a configuration directory,
+ * The discovery layout is the one the pinned producer reads from a configuration directory,
  * proven against the original executable: `agents/<name>.md`, `commands/<name>.md` and
  * `skills/<name>/SKILL.md`, loaded after the location is first used.
  */

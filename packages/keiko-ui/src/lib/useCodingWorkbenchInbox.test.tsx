@@ -37,6 +37,7 @@ const SECOND: CodingWorkbenchRuntimeInboxItem = {
 const LIVE: UseCodingWorkbenchInboxInput = {
   runId: "run-1",
   live: true,
+  offered: true,
   revision: 4,
   deliveredSignal: 1,
 };
@@ -87,6 +88,22 @@ describe("useCodingWorkbenchInbox", () => {
       await elapse();
       expect(result.current).toMatchObject({ status: "idle", items: [] });
     }
+    expect(fetchInboxMock).not.toHaveBeenCalled();
+  });
+
+  // #4068: under the mapped profile (Windows) the runtime takes no message while a turn runs, and
+  // readiness says so (`promptInputs.delivery: false`). Every read of a running turn was refused as
+  // `unsupported` and left a warn line in the Activity Log, four per scripted run on Windows 11.
+  it("reads nothing for a running turn whose profile takes no message while it runs", async () => {
+    const { result, rerender } = renderHook(
+      (input: UseCodingWorkbenchInboxInput) => useCodingWorkbenchInbox(input),
+      { initialProps: { ...LIVE, offered: false } },
+    );
+    await elapse();
+    rerender({ ...LIVE, offered: false, revision: 5 });
+    await elapse();
+
+    expect(result.current).toMatchObject({ status: "idle", items: [] });
     expect(fetchInboxMock).not.toHaveBeenCalled();
   });
 

@@ -23,6 +23,7 @@ export type {
   ChatToolAuthoritySubject,
   JiraChatToolAuthoritySubject,
   McpChatToolAuthoritySubject,
+  KnowledgeChatToolAuthoritySubject,
   McpChatToolReadGrantView,
   McpChatToolWriteApprovalView,
   ChatToolReadGrant,
@@ -32,6 +33,7 @@ export type {
   ChatToolWriteApprovalState,
   ChatToolWriteApprovalDecision,
 } from "./chat-tool-authority.js";
+export type { isDesktopChatStreamEvent } from "./desktop-chat-stream-wire.js";
 export type { KEIKO_UI_LAUNCH_ID_ENV, UI_LAUNCH_ID_FLAG, isKeikoUiLaunchId } from "./ui-launch.js";
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
@@ -1384,6 +1386,8 @@ export type {
   CodingWorkbenchRuntimeExecutionBinding,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeIntent,
+  CodingWorkbenchRuntimeStartFailureCode,
+  CodingWorkbenchRuntimeStartRefusalCode,
   CodingWorkbenchRuntimeMintConfirmation,
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateName,
@@ -1459,6 +1463,8 @@ export type {
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeProjectMemoryRequest,
   CodingWorkbenchRuntimePromptInputs,
+  CodingWorkbenchRuntimeToolProfile,
+  CodingWorkbenchExecutionLocation,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -1510,6 +1516,26 @@ export type {
   validateCodingWorkbenchRuntimeStatus,
 } from "./coding-workbench-runtime-api.js";
 export type {
+  CODING_WORKBENCH_SCHEDULE_ACTIONS,
+  CODING_WORKBENCH_SCHEDULE_CADENCES,
+  CODING_WORKBENCH_SCHEDULE_STATUSES,
+  CODING_WORKBENCH_SCHEDULE_WAITS,
+  isCodingWorkbenchScheduleAction,
+  isCodingWorkbenchScheduleId,
+  isCodingWorkbenchTaskIdForSchedules,
+  parseCodingWorkbenchScheduleControlRequest,
+} from "./coding-workbench-runtime-schedules.js";
+export type {
+  CodingWorkbenchSchedule,
+  CodingWorkbenchScheduleAction,
+  CodingWorkbenchScheduleCadence,
+  CodingWorkbenchScheduleControlRequest,
+  CodingWorkbenchScheduleControlResponse,
+  CodingWorkbenchSchedulesResponse,
+  CodingWorkbenchScheduleStatus,
+  CodingWorkbenchScheduleWait,
+} from "./coding-workbench-runtime-schedules.js";
+export type {
   CodingWorkbenchRuntimeQuestionAnswerRequest,
   CodingWorkbenchRuntimeQuestion,
   CodingWorkbenchRuntimeQuestionOption,
@@ -1536,6 +1562,8 @@ export type {
 } from "./coding-workbench-runtime-questions.js";
 export type {
   CodingWorkbenchNativeActionReview,
+  CodingWorkbenchNativeJiraNames,
+  CodingWorkbenchNativeJiraWriteReview,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeApprovalReviewSession,
   CodingWorkbenchRuntimePendingApprovalReview,
@@ -2677,7 +2705,6 @@ export type {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES,
   DESKTOP_CHAT_SEND_ABORT_CONTRACT,
-  isDesktopChatStreamEvent,
   isDesktopChatStreamTerminalEvent,
   eventIsDesktopChatStreamTerminal,
   resolveGroundingLimits,
@@ -2699,6 +2726,7 @@ export type {
   containsAbsolutePath,
   containsBidiOrZeroWidth,
   containsPseudoRoleMarker,
+  isLocalAbsolutePath,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
@@ -2822,7 +2850,7 @@ export type {
   validateManualRefreshChangeSummary,
 } from "./html-manual-refresh.js";
 
-// ─── HTML Manual Knowledge Pod live create/refresh job (Issue #2063) ────────────────
+// ─── HTML Manual Knowledge Pod retained refresh job (Issue #2063) ────────────────
 export type {
   HtmlManualPodJobOperation,
   HtmlManualPodJobState,
@@ -2832,7 +2860,6 @@ export type {
   HtmlManualPodJobRemediation,
   HtmlManualPodJob,
   HtmlManualPodRefreshRequest,
-  HtmlManualPodCreateRequest,
 } from "./html-manual-job.js";
 export type {
   HTML_MANUAL_POD_JOB_SCHEMA_VERSION,
@@ -2840,7 +2867,6 @@ export type {
   HTML_MANUAL_POD_JOB_STATES,
   HTML_MANUAL_POD_JOB_PHASES,
   validateHtmlManualPodRefreshRequest,
-  validateHtmlManualPodCreateRequest,
 } from "./html-manual-job.js";
 
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
@@ -3601,7 +3627,6 @@ export type {
   MemoryUsedEvent,
   MemoryWorkflowContext,
   MemoryWorkflowPort,
-  MemoryWriteCandidateEvent,
 } from "./memory-workflow-port.js";
 
 // ─── Quality Intelligence (Issue #277 / Epic #270) ─────────────────────────────

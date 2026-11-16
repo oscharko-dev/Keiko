@@ -1,3 +1,4 @@
+import { decodeStoredDocumentContext } from "./chatDocumentContext.js";
 // ADR-0013 — chat_messages CRUD. shortResult is redacted+truncated to ≤200 chars BEFORE persist.
 
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
@@ -243,6 +244,77 @@ beforeEach(() => {
 afterEach(() => {
   store.close();
   rmSync(tmp, { recursive: true, force: true });
+});
+
+describe("durable user document context (#4157)", () => {
+  it.each(["", "null", "42", "{}", "[null]", '[{"text":"private-corrupt-canary"}]'])(
+    "refuses damaged stored document metadata without echoing its body (%s)",
+    (raw) => {
+      expect(() => decodeStoredDocumentContext(raw, "user")).toThrow(
+        "Stored document context is invalid.",
+      );
+      expect(() => decodeStoredDocumentContext(raw, "user")).not.toThrow(/private-corrupt-canary/u);
+    },
+  );
+
+  const document = {
+    id: "doc-history",
+    displayName: "sample.md",
+    mimeType: "text/markdown",
+    sizeBytes: 64,
+    extractedBytes: 64,
+    truncated: false,
+    text: "Release fact cobalt-lantern. SECRET-TOKEN",
+  };
+  const draft = (): Parameters<UiStore["createMessage"]>[0] => ({
+    chatId,
+    role: "user" as const,
+    content: "Read the attachment",
+    timestamp: 10,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+    documentContext: [document],
+  });
+
+  it("redacts before persistence and survives a real database reopen", () => {
+    const fixture = createOnDiskStoreFixture();
+    const message = fixture.store.createMessage({ ...draft(), chatId: fixture.chatId });
+    expect(message.documentContext?.[0]?.text).toBe("Release fact cobalt-lantern. [REDACTED]");
+    fixture.store.close();
+    const reopened = createNodeUiStore(fixture.dbPath);
+    try {
+      expect(reopened.findMessageById(message.id)?.documentContext).toEqual(
+        message.documentContext,
+      );
+      expect(reopened.findMessageById(message.id)?.content).toBe("Read the attachment");
+      reopened.deleteChat(fixture.chatId);
+      expect(reopened.findMessageById(message.id)).toBeUndefined();
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("refuses non-user context and malformed or oversized attachment data", () => {
+    expect(() => store.createMessage({ ...draft(), role: "assistant" })).toThrow(
+      /user attachment/u,
+    );
+    for (const value of [
+      null,
+      [null],
+      [{ ...document, text: "x".repeat(65537) }],
+      Array(17).fill(document),
+    ]) {
+      expect(() =>
+        store.createMessage({ ...draft(), documentContext: value } as unknown as Parameters<
+          UiStore["createMessage"]
+        >[0]),
+      ).toThrow();
+    }
+    expect(store.listMessages(chatId)).toEqual([]);
+  });
 });
 
 describe("discardLegacyTurnUserMessage", () => {

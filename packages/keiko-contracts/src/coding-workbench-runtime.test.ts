@@ -66,7 +66,6 @@ function authority(): CodingWorkbenchAuthorityEnvelope {
     budget: {
       maxRuntimeMs: 60_000,
       maxToolCalls: 10,
-      maxPromptTokens: 10_000,
       maxPatchBytes: 65_536,
     },
     expiresAt: "2026-07-11T13:00:00.000Z",

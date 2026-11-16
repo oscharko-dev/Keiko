@@ -1,3 +1,4 @@
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -20,7 +21,7 @@ import {
   type NativeSessionTreeRun,
 } from "./opencodeNativeSessionTree.js";
 
-const WORKSPACE = "/workspace/repository";
+const WORKSPACE = resolve("/workspace/repository");
 const PRIMARY = "ses_primary";
 
 type SessionRecord = Readonly<Record<string, unknown>>;
@@ -524,7 +525,7 @@ describe("interrupting the run's native session tree", () => {
 // #3903 AC4: Code Mode's admitted `session_move` takes a session of the run to another directory
 // inside the workspace; the tree follows it there, so its children and jobs stay the run's.
 describe("the run's native session tree after a move inside the workspace", () => {
-  const MOVED = `${WORKSPACE}/src`;
+  const MOVED = join(WORKSPACE, "src");
 
   function movedTree(children: readonly string[] = []): NativeSessionTreeRun {
     return { ...tree(children), locations: new Set<string>() };

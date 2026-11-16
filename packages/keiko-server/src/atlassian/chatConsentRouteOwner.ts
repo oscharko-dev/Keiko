@@ -6,6 +6,8 @@ import { errorBody } from "../route-error.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { recordChatAuthorityResult } from "../editor/chatAuthorityActivity.js";
 import type { AtlassianActionApprovalRegistry } from "./actionApprovals.js";
+import { chatApprovalDecisionIsLive } from "../chat-approval-continuation-state.js";
+import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 
 type ConsentPhase = "read-grant" | "write-approval";
 export interface ChatConsentRouteOwner<Entry, Decision> {
@@ -66,6 +68,7 @@ export function currentChatConsent<Entry, Decision>(
   deps: UiHandlerDeps,
   owner: ChatConsentRouteOwner<Entry, Decision>,
   nowIso: string,
+  observe = false,
 ): CurrentConsent<Entry> | undefined {
   const id = ctx.params.approvalId;
   const registry = deps.atlassianActionApprovalRegistry;
@@ -73,6 +76,17 @@ export function currentChatConsent<Entry, Decision>(
   const correlation = correlationIdOrUnknown(ctx.correlationId);
   const entry = owner.retained(registry, id, correlation);
   if (entry === undefined || !owner.isCurrent(deps, entry, nowIso, correlation)) return undefined;
+  // Resolve the retained worker's session last, after current-state observation and body reads.
+  if (
+    owner.phase === "write-approval" &&
+    !chatApprovalDecisionIsLive(
+      deps.store,
+      id,
+      () => resolveAppSessionReadAuthority(deps, ctx.req)?.sessionId,
+      observe,
+    )
+  )
+    return undefined;
   return { entry, registry };
 }
 
@@ -80,7 +94,7 @@ export function getChatConsent<Entry, Decision>(
   owner: ChatConsentRouteOwner<Entry, Decision>,
 ): (ctx: RouteContext, deps: UiHandlerDeps) => RouteResult {
   return (ctx, deps): RouteResult => {
-    const current = currentChatConsent(ctx, deps, owner, new Date().toISOString());
+    const current = currentChatConsent(ctx, deps, owner, new Date().toISOString(), true);
     if (current === undefined) return chatConsentFailure(ctx, owner.phase, 404);
     return {
       status: 200,

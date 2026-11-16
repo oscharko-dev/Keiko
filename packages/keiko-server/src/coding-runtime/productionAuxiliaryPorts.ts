@@ -97,7 +97,7 @@ const CODING_RUNTIME_SKILL_DISCOVERY_OPERATION = defineActivityLogOperation({
 
 export interface ProductionAuxiliaryPortInput {
   readonly authority: Pick<CodingRuntimeAuthorityService, "state">;
-  readonly reservePromptTokens: (promptTokens: number) => boolean;
+  readonly admitModelCall: () => boolean;
   readonly taskId: string;
   readonly runId: string;
   readonly workspaceId: () => string;
@@ -131,7 +131,7 @@ export function createProductionAuxiliaryPorts(
   const runner = createProductionReadOnlyChildRunner({
     modelPortFactory: input.modelPortFactory,
     secureWorkspaceTextRead: authorizedInput.secureWorkspaceTextRead,
-    reservePromptTokens: input.reservePromptTokens,
+    admitModelCall: input.admitModelCall,
   });
   const discovery: SkillDiscoveryBinding = { catalogDigest: undefined };
   return {

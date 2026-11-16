@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,48 +34,51 @@ async function seedWorkspace(page: Page): Promise<void> {
   writeFileSync(join(fixtureRoot, "README.md"), "# Keiko issue 2055 fixture\n", "utf8");
   writeFileSync(join(fixtureRoot, "docs", "notes.md"), "# Notes\n", "utf8");
 
-  await page.addInitScript((root) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-2055-files-a",
-          type: "files",
-          x: 160,
-          y: 130,
-          w: 220,
-          h: 190,
-          z: 1,
-          cfg: { root },
-          max: false,
-        },
-        {
-          id: "issue-2055-files-b",
-          type: "files",
-          x: 440,
-          y: 160,
-          w: 220,
-          h: 190,
-          z: 2,
-          cfg: { root },
-          max: false,
-        },
-        {
-          id: "issue-2055-files-c",
-          type: "files",
-          x: 760,
-          y: 130,
-          w: 220,
-          h: 190,
-          z: 3,
-          cfg: { root },
-          max: false,
-        },
-      ]),
-    );
-    window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, fixtureRoot);
+  await page.addInitScript(
+    ({ argument: root, storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-2055-files-a",
+            type: "files",
+            x: 160,
+            y: 130,
+            w: 220,
+            h: 190,
+            z: 1,
+            cfg: { root },
+            max: false,
+          },
+          {
+            id: "issue-2055-files-b",
+            type: "files",
+            x: 440,
+            y: 160,
+            w: 220,
+            h: 190,
+            z: 2,
+            cfg: { root },
+            max: false,
+          },
+          {
+            id: "issue-2055-files-c",
+            type: "files",
+            x: 760,
+            y: 130,
+            w: 220,
+            h: 190,
+            z: 3,
+            cfg: { root },
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, fixtureRoot),
+  );
 }
 
 function windowById(page: Page, id: string): Locator {

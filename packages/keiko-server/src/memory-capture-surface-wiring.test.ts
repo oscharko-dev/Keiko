@@ -43,6 +43,7 @@ import { handleListMemories } from "./memory-handlers.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import { memoryLearningRuntime } from "./memory-learning.js";
 
 interface RecentCaptureWire {
   readonly outcome: "captured" | "proposed" | "auto-accepted" | "rejected";
@@ -50,6 +51,15 @@ interface RecentCaptureWire {
 }
 
 const temporaryDirectories: string[] = [];
+
+// A plain Chat message: no workflow run is attached to it.
+const NO_RUN = {
+  runId: undefined,
+  workflowId: undefined,
+  workflowStatus: undefined,
+  shortResult: undefined,
+  taskType: undefined,
+} as const;
 const activeVaults: MemoryVaultStore[] = [];
 
 afterEach(() => {
@@ -81,9 +91,7 @@ function fakeModel(content: string): ModelPort {
 }
 
 function modelFact(body: string): string {
-  return JSON.stringify([
-    { source: "user", body, type: "fact", confidence: 0.8, scope: "project", tags: ["surface"] },
-  ]);
+  return JSON.stringify([{ about: "self", body, evidence: body, type: "fact", tags: ["surface"] }]);
 }
 
 function context(): ConversationMemoryRuntimeContext {
@@ -137,7 +145,10 @@ function depsFor(
     memoryVault: vault,
     memoryAuthorization: {
       reviewerId: "local-operator" as MemoryReviewerId,
-      authorizedScopes: () => [{ kind: "project", projectId: ctx.projectId }],
+      authorizedScopes: () => [
+        { kind: "project", projectId: ctx.projectId },
+        { kind: "user", userId: ctx.userId },
+      ],
     },
     codingRuntimeDeploymentCeiling: "autonomous-delivery",
   };
@@ -187,7 +198,49 @@ function sendRequest(content: string, surface?: "desktop" | "voice"): SendDeskto
   };
 }
 
+// #4213: a committed turn is learned by a later pass from the Chat's stored messages.
+interface StoredTurn {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly userMessageId: string;
+  readonly context: ConversationMemoryRuntimeContext;
+}
+
+function storeTurn(deps: UiHandlerDeps, content: string): StoredTurn {
+  const projectPath = mkdtempSync(join(realpathSync(tmpdir()), "keiko-capture-surface-project-"));
+  temporaryDirectories.push(projectPath);
+  deps.store.createProject(projectPath);
+  const chat = deps.store.createChat(projectPath, "Surface", "gpt-test");
+  const now = Date.now();
+  const user = deps.store.createMessage({
+    ...NO_RUN,
+    chatId: chat.id,
+    role: "user",
+    content,
+    timestamp: now,
+  });
+  deps.store.createMessage({
+    ...NO_RUN,
+    chatId: chat.id,
+    role: "assistant",
+    content: "Noted.",
+    timestamp: now + 1,
+  });
+  return {
+    chatId: chat.id,
+    projectPath,
+    userMessageId: user.id,
+    context: {
+      ...context(),
+      workspaceId: projectPath as WorkspaceId,
+      projectId: projectPath as ProjectId,
+      conversationId: chat.id as ConversationId,
+    },
+  };
+}
+
 async function surfaceOfSingleCapture(deps: UiHandlerDeps): Promise<string> {
+  await memoryLearningRuntime(deps).runPass("inactivity", undefined);
   let captures: readonly RecentCaptureWire[] = [];
   await vi.waitFor(() => {
     captures = recentCaptures(deps);
@@ -221,13 +274,16 @@ describe("post-commit capture-surface attribution", () => {
   it("files a voice-declared desktop-chat turn under the voice audit surface", async () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
-    const deps = depsFor(vault, evidenceStore, modelFact("The user prefers stand-ups at 9am."));
+    const deps = depsFor(vault, evidenceStore, modelFact("I prefer stand-ups at 9am."));
+    const turn = storeTurn(deps, "I prefer stand-ups at 9am.");
 
     runPostCommitConversationMemorySideEffects(
       deps,
-      sendRequest("The user prefers stand-ups at 9am.", "voice"),
-      context(),
-      "gpt-test",
+      {
+        ...sendRequest("I prefer stand-ups at 9am.", "voice"),
+        sourceMessageId: turn.userMessageId,
+      },
+      turn.context,
       EMPTY_MEMORY_RESULT,
       "ok",
       "correlation-voice",
@@ -239,13 +295,13 @@ describe("post-commit capture-surface attribution", () => {
   it("keeps an undeclared turn on the desktop audit surface", async () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
-    const deps = depsFor(vault, evidenceStore, modelFact("The user's timezone is UTC+1."));
+    const deps = depsFor(vault, evidenceStore, modelFact("My timezone is UTC+1."));
+    const turn = storeTurn(deps, "My timezone is UTC+1.");
 
     runPostCommitConversationMemorySideEffects(
       deps,
-      sendRequest("The user's timezone is UTC+1."),
-      context(),
-      "gpt-test",
+      { ...sendRequest("My timezone is UTC+1."), sourceMessageId: turn.userMessageId },
+      turn.context,
       EMPTY_MEMORY_RESULT,
       "ok",
       "correlation-desktop",
@@ -257,27 +313,71 @@ describe("post-commit capture-surface attribution", () => {
   it("files a voice-declared canonical (grounded) turn under the voice audit surface", async () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
-    const deps = depsFor(vault, evidenceStore, modelFact("The user ships on Fridays."));
+    const deps = depsFor(vault, evidenceStore, modelFact("I ship on Fridays."));
+    const turn = storeTurn(deps, "I ship on Fridays.");
 
     runPostCommitCanonicalTurnMemorySideEffects(
       deps,
       {
-        chatId: "conversation-a",
-        projectPath: "project-a",
+        chatId: turn.chatId,
+        projectPath: turn.projectPath,
         messages: [
-          { role: "user", content: "The user ships on Fridays." },
+          { role: "user", content: "I ship on Fridays." },
           { role: "assistant", content: "Noted." },
         ],
         modelId: "gpt-test",
         memory: { enabled: true, surface: "voice", context: { userId: context().userId } },
       },
-      context(),
-      "gpt-test",
+      turn.context,
       EMPTY_MEMORY_RESULT,
       "ok",
       "correlation-voice-canonical",
     );
 
     expect(await surfaceOfSingleCapture(deps)).toBe("voice");
+  });
+
+  it("names the committed turn a canonical caller passes as the learned fact's source", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const vault = makeVault(evidenceStore);
+    const deps = depsFor(vault, evidenceStore, modelFact("I ship on Fridays."));
+    const turn = storeTurn(deps, "I ship on Fridays.");
+    // A repeated sentence has many rows; the committed id the caller passes names the source.
+    const repeated = deps.store.createMessage({
+      ...NO_RUN,
+      chatId: turn.chatId,
+      role: "user",
+      content: "I ship on Fridays.",
+      timestamp: Date.now() + 2,
+    });
+
+    runPostCommitCanonicalTurnMemorySideEffects(
+      deps,
+      {
+        chatId: turn.chatId,
+        projectPath: turn.projectPath,
+        messages: [
+          { role: "user", content: "I ship on Fridays." },
+          { role: "assistant", content: "Noted." },
+        ],
+        modelId: "gpt-test",
+        memory: { enabled: true, context: { userId: context().userId } },
+        sourceMessageId: turn.userMessageId,
+      },
+      turn.context,
+      EMPTY_MEMORY_RESULT,
+      "ok",
+      "correlation-canonical-source",
+    );
+
+    await surfaceOfSingleCapture(deps);
+    const learned = vault.listMemoriesByScope(
+      { kind: "user", userId: context().userId },
+      { status: ["accepted", "proposed"] },
+    );
+    expect(learned.map((record) => record.provenance.sourceMessageIds)).toEqual([
+      [turn.userMessageId],
+    ]);
+    expect(repeated.id).not.toBe(turn.userMessageId);
   });
 });

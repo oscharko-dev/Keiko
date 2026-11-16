@@ -15,6 +15,10 @@ on one independently reviewable result; split unrelated changes so a failed expe
 reverted without undoing unrelated work. Use the existing gates to verify the actual changed
 behavior and report command, result, environment and limitations in the PR.
 
+Rules that read free text (memory capture, redaction, intent parsing) carry seeded property tests
+beside their examples, on the shared harness in `tests/support/property-testing.ts`; AGENTS.md §10
+describes replay, scaling and the failure-first proof each property needs.
+
 Consult [EXPERIENCE.md](EXPERIENCE.md) for relevant repository traps and maintain a lesson only
 when evidence changes it. Review follows the existing
 [review standards](docs/qa/review-standards.md) and
@@ -23,6 +27,23 @@ permission to skip required checks or the owner's integration authorization. Use
 analysis for authorization, persistence, migrations, updater, supply-chain and workflow changes.
 
 ## Local development
+
+Desktop window layouts belong to the current UI database, not merely its browser origin. The
+desktop resolves the existing database installation identity before restoring windows; restarting
+the same data store preserves its layout. Replacing a data store must not replay former chat or
+repository references. Preserve unowned legacy browser snapshots, and never clear chat or file
+content to repair layout restoration. See ADR-0027 for the storage and revision preconditions.
+
+The local starter opens a connected browser automatically. If a session expires or the dev BFF
+restarts, **Connect browser** opens a connected window directly, without a comparison code or a
+second browser. The native handoff keeps private API authentication intact and returns no credentials
+to the request. Running `npm run dev:start` again can reopen the running instance.
+
+Knowledge Pods remain local, with no sharing roadmap or sharing placeholders (owner decision,
+2026-11-04). The ordinary creation dialog asks only for a name and uses the existing server-side
+`standard` policy default. Model routing stays in the central gateway configuration; local pod
+storage does not imply local model providers. Keep existing policy, containment and audit guards.
+See [Knowledge Pods](docs/local-knowledge/knowledge-pods.md) for the compatibility contract.
 
 ```bash
 npm install                # install all workspaces from the single root lockfile
@@ -49,22 +70,26 @@ remain truthful and cannot become a hidden prerequisite for an unsigned update.
 
 ### Activity Log runtime changes
 
-The deployment operator can set `KEIKO_CONTENT_REDACTION=off` before startup so Chat preserves
-authorized document context, answers and private chat history (#4098). The server resolves the
-setting once at startup and records `chat.content-policy.resolved` (`policy`, `setting`; `warn` for
-an unrecognized value, which keeps redaction). Only Chat model ports and the Chat connected-context
-workspace receive the preserving policy from it; the gateway, workspace and store never read the
-environment. Independently of the setting, the Coding Workbench sidecar route always gives the
-OpenCode runtime the model's answer under the preserving policy (credential floor only), because
-OpenCode is its own producer and uses the gateway as infrastructure; Coding repository search and
-Coding History exports and imports keep the default projection. Preserved content still loses
-configured infrastructure-secret literals, private keys, URL credentials, `Authorization` header
-values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens and known token shapes, and memory proposals keep the
-default projection. Diagnostics, audit evidence, support exports and
-tool-argument protections remain unconditional. The setting applies to every configured provider;
-it does not infer trust from a provider hostname. `chat.request.dispatch` records the per-call
-`contentRedactionEnabled` without source text. See
-[the operator procedure](docs/troubleshooting/chat-content-redaction.md).
+What a person reads and what the model receives lose only the credential floor by default (owner
+decision, 2026-11-04). `KEIKO_CONTENT_REDACTION=on` before startup lowers the threshold back to the
+strict projection; `off` or an absent value preserves. The server resolves the setting once at startup
+and records `chat.content-policy.resolved` (`policy`, `setting`; `warn` for an unrecognized value, which
+keeps redaction). `deps.redactor`, the Chat model ports and the Chat connected-context workspace follow
+it; the gateway, workspace and store never read the environment. Independently of the setting, the
+Coding Workbench sidecar route always gives the OpenCode runtime the model's answer under the preserving
+policy, because OpenCode is its own producer. `keiko_research_fetch` arguments leave for the public
+internet and keep the full redaction. Evidence, audit records, memory proposals and Quality Intelligence
+stay on `strictRedactor`; Coding repository search, Coding History exports and imports and support
+exports keep their own redaction. Preserved content still loses configured infrastructure-secret
+literals, private keys, URL credentials, `Authorization` header values, encoded-looking Bearer/Basic
+values, JWT-shaped bearer tokens and known token shapes.
+
+The Activity Log is the only thing that ever leaves the machine and carries no personal data: its sink
+refuses a value with a space, a name, IBAN, telephone, card or account number, a date with a year, an
+IPv4 address, a remote URL or host and personal field names, whatever field carries them. Never loosen it to keep a value
+readable; emit a count, a closed value or a digest. The setting applies to every configured provider; it does not infer
+trust from a provider hostname. `chat.request.dispatch` records the per-call `contentRedactionEnabled`
+without source text. See [the operator procedure](docs/troubleshooting/chat-content-redaction.md).
 
 Source redaction uses the shared security owner to preserve language syntax while masking credential
 values under the default content policy, including escaped JSON/JSONC and YAML scalars. An unsafe or
@@ -78,6 +103,8 @@ counts; it never records source, credentials or parser diagnostics containing so
 Chat draft recovery reuses the private UiStore and authenticated chat-bound revision checks.
 The `chat.draft.operation` Activity Log records lifecycle and status without draft text;
 concurrent stale writes must preserve the local draft and require explicit conflict resolution.
+The Coding Workbench composer reuses the same store and revision checks per Workbench window
+(`surface: "coding-workbench"`); never add a second draft store for another composer.
 
 An unchanged privacy-elided Files connection may reuse its conversation-bound canonical
 acknowledgement only when the persisted fingerprint and visible scope both match. Restore the
@@ -112,6 +139,12 @@ evaluates the complete registered inventory by composing `check:op-catalog`,
 `arch:check`, `arch:check:negative`, and `check:release-impact`; it takes no changed-file input, so
 a narrower change set never narrows what it proves.
 
+Expected Memory capability states and salience extraction/capture summaries use the registered
+`server.diagnostic.observation` timeline at info, without an error kind or automatic failure incident
+(#4247). Producers explicitly declare `diagnosticOutcome: "routine"`; unclassified diagnostics and
+real model, vault or vector-index failures retain the failure channel. Shutdown start is info even
+with work in flight; faulted cleanup retains its warning and failure evidence.
+
 `client.citation.activated` records a citation click and its source selection under the
 activation correlation. `reason` describes the source fingerprint: `matched` (one root),
 `unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records
@@ -135,8 +168,10 @@ truncated.". Counts only — never a message, path or run name.
 `client.coding-workbench.interaction` records, at info and on the routine budget, what the human
 did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
 progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
-agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
-and a changeset received for review (`fileCount`). These were warn/unknown `client.diagnostic`
+agent's name), a start the human gave up before it had a run (`start-cancelled`), a jump to a pending decision, a repository bound for trust (its two body-free ids)
+and a changeset received for review (`fileCount`). Once per mounted window, `repository-resolved`
+records where its repository came from (`repositorySource`: `window`, `shell` or `none`; never the
+path; #4068). These were warn/unknown `client.diagnostic`
 notes before and buried the rare real browser failures. `gateway.setup.target.accepted` records,
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
 and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
@@ -148,27 +183,107 @@ request the Coding Workbench gave up on at its own client-side deadline (#4109):
 `question-reject`) and `deadlineMs`, under the failed request's correlation id; a mutation that
 Stop preempted is not a timeout and is not reported. The deadlines come from measurements: 10 s for
 status and snapshot reads, 15 s for Stop, 180 s for start (a cold start is unmeasured) and 60 s for
-every other, unmeasured, mutation. Stop is never queued behind another mutation: it ends the client
+every other, unmeasured, mutation. A start that hit its deadline re-reads the run, because the
+server may have started it; when the client hung up before a run existed, the server creates none
+and records `coding-runtime.operation.refused` with the route-level reason `start-abandoned`, a
+reason never stored or sent as a failure code. Stop is never queued behind another mutation: it ends the client
 wait of the one in flight (no alert, no failure) and drops those still waiting, and stays enabled
 while another mutation is pending. Closed values and one duration only.
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,
-with admitted and current configuration generations and the request correlation. A fresh probe
-and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
-responses cannot establish that continuation. A turn call whose admission merely expired is checked
-once more like a new request and proceeds only on a fresh positive observation (a second admission
-line records that decision). Refusals distinguish model or
-generation replacement, absent observations, failed probes, invalid timestamps and expiry without
-recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
-attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. Each chat model is checked once per connection at startup; nothing
-renews or recovers a model on a timer. A conversation request, a coding run start, a Workbench
-model choice (`check=1`), opening the Workbench or a model list, or a page load checks a model that is not ready now; only an observed
-failure waits out the 30 s not-ready cooldown. Other Workbench reads never start a check. The
-Workbench profile describes the model chosen in its picker (`modelId`): `model-verification-pending`
-only while a check of that model runs, an expired or unknown answer usable with
-`verification: "unverified"`, and its `verification` is that model's own observation, not the
-gateway-wide state (customer 1.3.4). The Workbench's tool-calling probe that the gateway never answered is no verdict (`tool-calling-unverified`) and is retried only when someone asks: startup, a page load or a `check=1` read when the Workbench opens or a model is chosen; a stale proof runs again once. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+with admitted and current configuration generations and the request correlation. A successful startup
+observation remains usable for the same configuration generation; its age is diagnostic only
+(`allowed-fresh` or `allowed-cached`). Conversation requests, page loads, model-list reads and
+Workbench choices never initiate another readiness probe. Configuration replacement invalidates the
+observation; a failed or missing result requires explicit verification in Settings > Models.
+A definitive authentication or missing-model failure on a real model call withdraws that exact
+current observation (`provider-rejected`); a late failure cannot overwrite a replacement generation
+or a newer verification. Rate limits, timeouts and transient provider errors do not erase a proved
+capability. Refusals distinguish model or generation replacement, absent observations, failed probes
+and invalid timestamps without recording model names, requests or answers. An uninvoked model port
+consumes no physical synthesis attempt or uncertain output reservation; actual interrupted provider
+calls retain conservative accounting.
+
+Keiko lists every model a gateway offers through metadata requests, which cost nothing, and sends
+an inference request only to a model a person uses (#4351, owner decision 2026-11-13): a check loads
+the model, which on a shared gateway evicts a model somebody else is using. Startup checks the chat
+model in use once per connection, the elected default; only a definitive refusal of that model moves
+the walk one model at a time along the election order to the first ready model, and a check that
+ended without a verdict (a timeout, a busy gateway) moves nothing on. A person's first explicit
+pick of a chat model that has no current observation (the Chat or Coding Workbench picker) starts
+exactly one check of that model, and in the Workbench its tool-calling proof; the picker shows that
+it is being checked. Startup also probes only the embedding model in use, and Gateway Setup verifies
+only the model that becomes the default and the embedding model in use: the other listed models are
+configured as listed and unverified, and a rejection surfaces at their first selection.
+The walk uses the election Chat makes for its default (`electConversationDefault`), stops at a
+refused credential (HTTP 401/403) instead of sweeping the catalog, and an explicit Settings
+verification that answers definitively ends its pause on a model. The tool-calling proof at startup
+follows the model in use; a model nobody picked receives none unless the walk itself found it ready.
+A restored selection is never checked on page load, restore or opening a Chat: the first Send (Chat)
+or Start (Workbench) on a model without a current observation is the first use that checks it, shows
+that it is being checked and goes ahead when it answers; a refusal shows its reason and keeps the
+draft. A window opening reads the Workbench profile with `check=use`, which dispatches nothing; a
+pick or Start reads with `check=1`. A check that ended without a verdict may be checked
+again by a pick or the next Send, only after the existing not-ready cooldown has passed; a definitive refusal
+stays refused. Gateway Setup keeps the full verification round for explicitly named deployments;
+for a discovered listing, a candidate the walk reaches and the gateway rejects is dropped, a wildcard
+route pattern is dropped by its shape without a request (a listing of nothing else fails with its own
+reason), a default that got no verdict from a gateway that answers (a timeout of its completion, a rate
+limit, an overloaded status) is kept unverified and the walk stops, a failure to reach the gateway at
+all (refused connection, unknown host, TLS or proxy fault) is no verdict and takes the existing
+base-URL fallback and deferred admission without saving anything, and the listed models no request
+reached are configured and reported as unverified. A model kept without a verdict is saved only
+because the answer names it as not verified (the dialog tells the person to choose it in Chat or the
+Coding Workbench, or to verify it in Settings > Models), its tool-calling record is `unverified`, and
+no successful observation is recorded for it. A request for a model with no current positive
+observation that did not come through the UI's first-use check (a Voice canonical target, a direct
+API call) is refused and starts no check: Chat create, send and regeneration answer 400
+`CONVERSATION_MODEL_NOT_READY`, a coding run start is refused as model-unavailable, and the Voice
+queue retries a bounded number of times and then suspends with the transcript kept. A window opening
+or restored selection reads the Workbench profile with `check=use`, which may join a check that
+already runs and report the state but never dispatches one; only a person's pick or Start sends
+`check=1`, and a Start belongs to the model it was pressed for (a model adopted or picked meanwhile
+ends its wait with a plain message and starts no run). `gateway.readiness.scope` records how many models were listed and checked and why,
+only for a check that actually sent a request; `gateway.readiness.selection` records the outcome of
+every pick under its own correlation id; and `gateway.readiness.automatic.started` carries the
+closed `checkReason` (`startup`, `fallback`, `selection`). Nothing renews or recovers a model on a
+timer or passive read. Explicit Settings verification may retry an unsuccessful check. Startup-owned
+work can be observed with a bounded, cancellable metadata wait; disconnecting a browser does not
+cancel shared discovery or start another provider call. The Workbench profile describes the model
+chosen in its picker (`modelId`) and its own observed verification, rather than the gateway-wide
+state. `model-verification-pending` means that a configuration-owned check of that model is already
+running; `tool-calling-unverified` records an unknown tool capability without dispatching a probe.
+See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+
+The tool-calling check runs in two steps (#4351, owner decision 2026-11-13): first as production works, the
+tool offered and no forced `tool_choice`; only a model that called no tool is asked once more with the
+forced named call. It ends in one of six closed outcomes (`called-unforced`, `called-only-forced`,
+`forced-refused`, `no-call`, `tools-refused`, `inconclusive`), recorded as `toolCallingOutcome` on the
+existing readiness completion lines and told in plain words in the tool-calling evidence of
+Settings > Models. A forced call the provider refuses (a thinking mode answers HTTP 400 to
+`tool_choice`) is never a verdict that the model cannot call tools, and writes no "unsupported"
+record, but it confirms nothing either: the conversation stays admitted and tool turns stay
+`unverified` until a check passes. `called-only-forced` is admitted. Settings > Models words every closed outcome in one plain
+sentence per language (`settings.models.toolOutcome.<outcome>`, informal German), saying what it was
+and what to do next, in place of the server's English evidence; a new outcome without a sentence
+fails a test. A check a
+person starts in Settings waits at least the interactive silence floor for a slow model when the stored
+configuration does not name a provider timeout (a timeout a person named, whatever its value, stays as
+configured; a person's value is stored with `timeoutNamed: true`, and Setup's own 30 s default is
+stored bare, as are the 30 s and 120 s defaults of installations written before the marker, so those
+read as defaults); it is bounded, cancelled when
+the request closes, shown on the start line as `chatProbeTimeoutMs` and announced as still running; no
+conversation turn is affected. Every tool definition leaves the gateway as a plain object schema (no
+`oneOf`, `anyOf`, `allOf`, `enum`, `const` or `not` at the top level; the alternatives are named in the
+description), and Keiko's own validation keeps using the original schema; a hermetic walk over every
+registered tool definition fails on any other construct at the root; alternatives nested below the root
+pass unchanged (the captured provider 400 and rule name the top level; a live pass is the evidence for
+nested ones). A meter read that withholds the window probe for an unused model records
+`gateway.context-window.probe` state `skipped-unused` once per deployment and generation. The meter read of a Chat's context window
+sends its probe only for a model a person has used: an actual model call completed through the
+current configuration generation, or an explicit Settings check passed (a startup observation is not
+use). Operator procedure:
+[`docs/troubleshooting/model-does-not-call-tools.md`](docs/troubleshooting/model-does-not-call-tools.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
@@ -506,18 +621,25 @@ reasons emit INFO. Inspection evidence remains body-free.
 declaration counts, repair disposition, and actual follow-up trigger, pass/admission counts,
 outcome and configuration disposition. Technical failures retain the existing closed error header,
 reduced frames and causes. Initial synthesis, marker repair, follow-up and their gateway transport or
-context-window retries share at most two physical adapter attempts and the original cumulative
-input/output and remaining elapsed grants. Admission occurs before each actual dispatch and spend
-reservation. Charged input retains the greater of the canonical sent prompt estimate and reported
-usage; measured partial output survives a discarded attempt, while uncertain failed stream output
-retains its requested cap. These conservative charges are distinct from provider-measured usage.
+context-window retries share at most two physical adapter attempts, the original cumulative output
+grant and the remaining elapsed grant. Each prompt must fit the current model and caller input caps;
+previous prompts never consume those caps (owner decision 2026-11-11, ADR-0137 D2).
+Admission occurs before each actual dispatch and spend reservation. Recorded input retains the
+greater of the canonical sent prompt estimate and reported usage, including discarded attempts.
+Measured partial output survives a discarded attempt, while uncertain failed stream output retains
+its requested cap. These conservative output charges are distinct from provider-measured usage.
 Caller attempt/cap refusals use nonretryable `GATEWAY_ATTEMPT_ADMISSION_DENIED` and HTTP 403;
 streamed notices retain the same code. The localized request-limit notice distinguishes those
 refusals from `GATEWAY_CONTEXT_OVERFLOW` without asserting exact unknown output consumption.
-Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
+Prompt fitting retains separate model and caller input caps for each request. Mandatory overhead that
 fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
 the model retains context-overflow handling. Best-effort citation repair keeps the completed
-answer when its remaining input allowance or synthesis attempt slots cannot fund the repair.
+answer when its current prompt does not fit, its cumulative output grant is exhausted, or no
+synthesis attempt slot remains. Citation
+repair only inserts markers through the same admitted, turn-metered model port, without offering
+a catalog or entering the tool loop. Unexpected tool-call output is refused and charged; current
+readiness, authority, cancellation and synthesis/spend grants remain binding. The existing
+answer-details event records its disposition.
 Unrelated gateway retries and separately bounded entailment/embedding stages retain their existing
 contracts without supplying another synthesis attempt. Normalized output is buffered before
 publication; rejected declarations cannot escape through streamed chunks. The existing allocator's
@@ -537,7 +659,12 @@ streaming and regenerated turns. Its request correlation joins the compacted/ret
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
 effective input budget and image reserve. This evidence survives generation timeout or
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
-not provider-measured usage, and no conversation or image content is recorded.
+not provider-measured usage, and no conversation or image content is recorded. With memory on it and
+the grounded `chat.response.message` also count the standing profile and recall (#4228):
+`profileEntryCount`, `profileTokens`, `profileDroppedCount`, `profileRetrievedCount` (profile
+facts the question was about, sent once with recall), `retrievedMemoryCount` and
+`belowFloorMemoryCount`, never a fact
+([MemoriaViva standing profile](docs/memory/memoria-viva-standing-profile.md)).
 
 Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
 `imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,
@@ -647,14 +774,54 @@ and, when a repair ran, `repairOutcome` (`recovered`, `exhausted-again`, `empty-
 naming how the repaired attempt ended) — a line written before the gateway call settled (a byte cut,
 a cancellation) omits both, because it cannot know; a repaired turn that failed the same way again
 is final for the coding runtime (`runtimeRetry=refused`). The provider usage of the attempts a call
-discarded (a repair's first answer, a rejected tool call) counts against the run's prompt
-allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
+discarded (a repair's first answer, a rejected tool call) remains in the run's cumulative usage
+roll-up without a prompt-token allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
 `discardedPromptTokens`, `discardedCompletionTokens`). The correction the model receives is one fixed
-sentence, and the failed answer's reasoning is never recorded. Prior reasoning is never resent
-upstream: the coding sidecar drops the reasoning fields of prior assistant messages and every
-assistant message that carries nothing but reasoning, and `coding-sidecar.gateway.request-validated`
-records the number dropped as `droppedReasoningMessageCount`. The text a model wrote beside its tool
-calls is resent as written, like a standalone OpenCode run (#3907); only a tool-calling turn without
+sentence, and the failed answer's reasoning is never recorded. For default and shared-history profiles, runtime reasoning fields are
+never forwarded directly: the coding sidecar drops echoed reasoning fields and reasoning-only assistant
+messages, and `coding-sidecar.gateway.request-validated` counts the dropped messages. By default
+prior reasoning is omitted. A qualified provider can explicitly select `reasoningHistory`:
+`required-with-tools` restores all previous assistant reasoning when tools are advertised;
+`current-turn` restores only assistants after the latest user message. The gateway restores only
+completed responses from bounded, session- and provider-bound transient state, independently of
+`codingReasoningDisplay`; `reasoningHistoryField` selects `reasoning_content` (default) or `reasoning`.
+Missing, expired or ambiguous required state fails closed. Same-generation context refinements
+share state; a configuration generation change starts independent state. Full-history providers use a fresh
+native Coding session and the existing history replay instead of resuming/forking incomplete
+protocol state. `gateway.reasoning-history` records only closed state and counts; reasoning never
+enters evidence, logs, history exports or repository files. Identifying echoed reasoning requires
+the runtime to preserve part types: reasoning already relabelled as ordinary text cannot be identified from
+the wire body. ADR-0137 D8 records the pinned runtime's interrupted-reasoning qualification limit.
+A deployment with no such setting is detected, not configured (#4351): an unattributed HTTP 400 on a
+tool-turn continuation is answered once with the current turn's retained reasoning restored (the closed
+retry reason `reasoning-restore-repair`; the model request only, never a re-run tool, never a replayed
+write; a stream only before its first chunk); only a successful retry marks the deployment as wanting
+its reasoning back, held in memory for the gateway instance (gone with a generation change, never
+persisted or logged beyond the closed states `learned` and `unlearned`) and shown in Settings > Models;
+a second rejection surfaces the original error; an explicit setting always wins; the current turn's
+reasoning is kept in memory for this purpose only and dropped when the turn ends (a final answer, a
+failure or a cancellation of a gateway call; a turn that ends outside the gateway waits for the next
+turn of the session or the 30-minute idle TTL). A learned deployment that rejects a continuation which carried its
+reasoning is answered once without it (the closed retry reason `reasoning-withhold-repair`, still one
+retry per call); when that succeeds the deployment is unlearned, and a second rejection surfaces the
+original error and changes nothing.
+
+For the authenticated native Coding path, the separate explicit provider policy
+`reasoningContinuation: "required-with-tools"` uses the existing native session as the sole
+continuation owner (#4059). It is mutually exclusive with `reasoningHistory` and
+`reasoningHistoryField`; its qualified wire field remains `reasoning_content`. The native context
+hook reads canonical session context and removes excluded rounds from lowered context before
+provider serialization, excluding aborted, unfinished
+and foreign-model assistant rounds and orphaned tool results. Existing run and retained-session
+route bindings prevent continuation under changed or unproven routes. This native path retains exact
+completed reasoning independently of live display, checks the current credential floor, and applies
+full byte, context and spend limits. Missing, conflicting, secret-bearing or oversized state fails
+closed. It bypasses the shared transient history cache and preserves native resume/fork ownership;
+no additional reasoning store is introduced. Activity evidence contains counts and closed outcomes
+only.
+
+The text a model wrote beside its tool calls is resent as written, like a standalone OpenCode run
+(#3907); only a tool-calling turn without
 text goes upstream as `content: null`, and the same line counts the others as
 `toolCallTextMessageCount`. The gateway hands reasoning only to a call that asks for it with the
 explicit `reasoningDelivery: "forward"` (the coding sidecar route alone); the `coding-workbench`
@@ -805,13 +972,24 @@ and follow the **Symptom**, **Root Cause**, **Diagnostic Steps**, and
 **Resolution** structure. Do not include API keys, customer data,
 internal endpoints, or unredacted log lines in examples.
 
+## Platform tiers
+
+macOS and Windows are the parity platforms. The Linux desktop package is a community tier
+(owner decision of 2026-11-12, [ADR-0183](docs/adr/ADR-0183-linux-desktop-community-tier.md)).
+Qualify a new or changed operating-system feature on macOS and Windows. On Linux it reuses an
+existing implementation or reports itself unavailable and fails closed. Keep the `linux-x64`
+archive, the existing Linux capabilities and their CI jobs green. A contributed Linux implementation
+is reviewed under the usual rules, but it never blocks a macOS or Windows delivery. Linux remains
+the development and CI platform.
+
 ## Coding mode availability
 
 The owner decision of 2026-09-27 exposes all three Coding Workbench modes on a normal installation
 without extra configuration (ADR-0124 D2, ADR-0163 D7). The default selected mode remains Ask for
 approval. Explicit narrower deployment ceilings and every mode-independent denial remain enforced.
 Do not propagate Coding's availability default to Memory: its absent-configuration ceiling stays
-`governed-assist` for capture, policy projection and maintenance. Regression coverage must exercise
+`governed-assist` for policy projection and standing maintenance; since #4206 it holds routine
+facts for review only when an operator configured it explicitly (ADR-0146 D2). Regression coverage must exercise
 both production composition and these consumers when changing this wiring.
 
 ## Support reports
@@ -891,3 +1069,11 @@ binding receives only a run-bound relay capability. Preserve issuer/resource/sco
 one-use app-session-bound callbacks, credential-generation revocation and no-replay semantics.
 Changes to tool metadata must be refused before dispatch even without notifications. Include
 real SDK, restart/revocation and browser proofs; legacy native OAuth tests do not replace them.
+
+**Document retention and npm delivery (#4157, #3582).**
+Chat's extracted document text belongs to its admitted user message in the existing private store;
+keep the visible draft separate, redact before persistence and prompt use, include attachment text
+in history accounting/compaction and the existing private recall index, and keep evidence body-free.
+Publish staging keeps external ownership in vendor archives and the root, while the physical npm
+bundle omits equivalently promoted external edges. Preserve required/optional reachability and
+qualify project npm, isolated global npm and Yarn installs without bundling the external closure.

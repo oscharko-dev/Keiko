@@ -11,6 +11,7 @@ import type { RuntimeMutationActions, RuntimeResources } from "./coding-workbenc
 function mutations(): RuntimeMutationActions {
   return {
     start: vi.fn(() => Promise.resolve()),
+    cancelStart: vi.fn(),
     decideApproval: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()),
     takeover: vi.fn(() => Promise.resolve()),
@@ -48,6 +49,7 @@ function renderActions(dispatch: Dispatch<CodingWorkbenchRuntimeStateAction>): {
       dispatch,
       resources,
       mutations: mutations(),
+      intent: { current: { pickedModelId: null, startWait: null } },
     });
   });
   if (resources === undefined) throw new Error("resources were not initialized");

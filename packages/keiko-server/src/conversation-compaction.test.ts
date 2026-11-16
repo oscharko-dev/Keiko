@@ -542,6 +542,19 @@ describe("structured Chat tool transcript selection", () => {
     );
     return { ...turn, toolTranscript };
   }
+  // The model reads the outcome, effect and data of a call; Keiko's per-call bookkeeping
+  // (invocation id, tool ref, projection digest, metrics) stays out of the prompt.
+  function modelVisibleResult(turn: ChatMessage): Record<string, unknown> {
+    const result = turn.toolTranscript?.exchanges[0]?.result;
+    if (result === undefined) throw new Error("Missing fixture result");
+    return {
+      status: result.status,
+      reason: result.reason,
+      effectStarted: result.effectStarted,
+      page: result.page,
+      data: result.data,
+    };
+  }
   it.each(["succeeded", "succeeded-unconfirmed", "unknown"] as const)(
     "retains a reloaded %s mutation observation despite cancelled execution",
     (mutationOutcome) => {
@@ -551,7 +564,7 @@ describe("structured Chat tool transcript selection", () => {
       const result = messages.find((message) => message.toolCallId === "call-1");
       expect(call?.toolCalls).toEqual([turn.toolTranscript?.exchanges[0]?.call]);
       expect(JSON.parse(result?.content ?? "null")).toEqual({
-        result: turn.toolTranscript?.exchanges[0]?.result,
+        result: modelVisibleResult(turn),
         mutationOutcome,
       });
     },
@@ -572,7 +585,7 @@ describe("structured Chat tool transcript selection", () => {
       const responses = result.messages.filter((message) => message.toolCallId === "call-1");
       expect(responses).toHaveLength(1);
       expect(JSON.parse(responses[0]?.content ?? "null")).toEqual({
-        result: turn.toolTranscript?.exchanges[0]?.result,
+        result: modelVisibleResult(turn),
         mutationOutcome: "unknown",
       });
     },

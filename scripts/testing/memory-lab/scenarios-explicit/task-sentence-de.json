@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "task-sentence-de",
+  "language": "de",
+  "class": "preference",
+  "difficulty": "plain",
+  "description": "A task sentence that starts like a memory statement touches no memory: \"Lösche ...\" and \"Speichere ...\" are work, not memory.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "must": true,
+      "private": true,
+      "terms": [["Tabelle*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Merke dir: Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": []
+    },
+    {
+      "user": "Lösche die Tabellen aus dem Bericht.",
+      "learner": []
+    },
+    {
+      "user": "Speichere die Datei unter bericht.txt.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*"]]
+      }
+    }
+  ]
+}

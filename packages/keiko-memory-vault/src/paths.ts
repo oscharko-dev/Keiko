@@ -12,7 +12,7 @@
 
 import { homedir } from "node:os";
 import { realpathSync } from "node:fs";
-import { isAbsolute, join, normalize, resolve, sep } from "node:path";
+import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { assertSqliteStatePath } from "@oscharko-dev/keiko-security/fs-hardening";
 import type { MemoryVaultLogSink } from "./vault-log.js";
 import { MemoryStorageError } from "./errors.js";
@@ -25,16 +25,27 @@ function invalidPath(message: string): MemoryStorageError {
   return new MemoryStorageError("invalid-path", message);
 }
 
+// Containment under the platform's filesystem identity, matching keiko-git's containsPath:
+// case-insensitive on win32 and darwin, where process.cwd() keeps the drive letter or path case
+// as the shell spelled it and a byte comparison let a path inside the workspace pass (#4068 W7).
+function comparable(path: string): string {
+  const resolved = resolve(path);
+  return process.platform === "win32" || process.platform === "darwin"
+    ? resolved.normalize("NFC").toLowerCase()
+    : resolved;
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const rel = relative(comparable(root), comparable(candidate));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
 function isInsideCwd(candidate: string): boolean {
-  const cwd = resolve(process.cwd());
-  const r = resolve(candidate);
-  return r === cwd || r.startsWith(`${cwd}${sep}`);
+  return isInside(process.cwd(), candidate);
 }
 
 function isInsideRuntimeStateRoot(candidate: string): boolean {
-  const runtimeRoot = resolve(process.cwd(), DEFAULT_STATE_DIR);
-  const r = resolve(candidate);
-  return r === runtimeRoot || r.startsWith(`${runtimeRoot}${sep}`);
+  return isInside(join(process.cwd(), DEFAULT_STATE_DIR), candidate);
 }
 
 function guard(path: string, label: string, sink?: MemoryVaultLogSink): string {

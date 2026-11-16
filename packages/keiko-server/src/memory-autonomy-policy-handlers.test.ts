@@ -50,6 +50,34 @@ describe("memory autonomy policy routes", () => {
     });
   });
 
+  it("says routine facts wait for review only under a configured Ask-for-approval ceiling (#4206)", () => {
+    const held = (extra: Partial<UiHandlerDeps>): unknown =>
+      (
+        handleGetMemoryAutonomyPolicy(context(), { ...deps(), ...extra }).body as {
+          routineFactsHeldForReview?: boolean;
+        }
+      ).routineFactsHeldForReview;
+    // A configured (or invalid, which resolves fail-closed) governed-assist ceiling holds them.
+    expect(
+      held({ memoryDeploymentCeiling: "governed-assist", memoryDeploymentCeilingConfigured: true }),
+    ).toBe(true);
+    // The absent default resolves to governed-assist too, but restricts nothing.
+    expect(
+      held({
+        codingRuntimeDeploymentCeiling: undefined,
+        memoryDeploymentCeiling: "governed-assist",
+        memoryDeploymentCeilingConfigured: false,
+      }),
+    ).toBe(false);
+    // A wider configured ceiling never holds them.
+    expect(
+      held({
+        memoryDeploymentCeiling: "supervised-coding",
+        memoryDeploymentCeilingConfigured: true,
+      }),
+    ).toBe(false);
+  });
+
   it("defaults safely and persists a requested mode clamped by the deployment ceiling", async () => {
     const handlerDeps = deps();
     expect(handleGetMemoryAutonomyPolicy(context(), handlerDeps)).toMatchObject({
@@ -68,6 +96,7 @@ describe("memory autonomy policy routes", () => {
         effectiveMode: "supervised-coding",
         deploymentCeiling: "supervised-coding",
         revision: 1,
+        routineFactsHeldForReview: false,
       },
     });
     expect(handlerDeps.store.readMemoryAutonomyPolicy()).toEqual({

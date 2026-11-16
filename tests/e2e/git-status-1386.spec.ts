@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,25 +30,28 @@ function createNestedProject(): { readonly parent: string; readonly nested: stri
 }
 
 async function seedFilesWindow(page: Page, root: string): Promise<void> {
-  await page.addInitScript((projectRoot) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-1386-files",
-          type: "files",
-          x: 64,
-          y: 56,
-          w: 640,
-          h: 680,
-          z: 10,
-          cfg: { root: projectRoot },
-          max: false,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, root);
+  await page.addInitScript(
+    ({ argument: projectRoot, storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-1386-files",
+            type: "files",
+            x: 64,
+            y: 56,
+            w: 640,
+            h: 680,
+            z: 10,
+            cfg: { root: projectRoot },
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, root),
+  );
 }
 
 function changedGitStatus(root: string, path: string): Readonly<Record<string, unknown>> {

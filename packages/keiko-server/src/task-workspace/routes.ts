@@ -75,6 +75,13 @@ function requireLifecycle(deps: UiHandlerDeps): RouteOrLifecycle {
   return deps.workspaceLifecycle ?? unavailable();
 }
 
+function selectableWorkspace(lifecycle: WorkspaceLifecycleService, workspaceId: string): boolean {
+  return (
+    lifecycle.selectable?.(workspaceId) ??
+    lifecycle.listAll().some((instance) => instance.workspaceId === workspaceId)
+  );
+}
+
 function requireReconciliation(deps: UiHandlerDeps): RouteOrReconciliation {
   return deps.workspaceReconciliation ?? unavailable();
 }
@@ -433,7 +440,7 @@ export async function handleSetActiveTaskWorkspace(
       }
       // requestedBy is persisted as the active-pointer setBy — reject control/zero-width/bidi chars.
       assertSafeFieldValue(requestedBy, "requestedBy");
-      if (!guard.listAll().some((instance) => instance.workspaceId === workspaceId)) {
+      if (!selectableWorkspace(guard, workspaceId)) {
         throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
       }
       await admitWorkspaceSelection(deps);

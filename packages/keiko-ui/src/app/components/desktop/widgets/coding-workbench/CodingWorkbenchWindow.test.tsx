@@ -55,6 +55,7 @@ import {
 } from "./CodingWorkbenchWindow";
 import type { CodingTaskSession } from "./useCodingTaskSession";
 import * as codingHistoryApi from "@/lib/coding-history-api";
+import { readCodingWorkbenchDraft, writeCodingWorkbenchDraft } from "@/lib/chat-draft-api";
 import { restoreConversation } from "./codingWorkbenchRestoredRun";
 import {
   resetClientDiagnosticWriter,
@@ -108,6 +109,12 @@ const chatCatalogMock = vi.hoisted(() => ({
 // PR #3625 review: whether the latest catalog refresh settled, so a test can tell an empty list
 // published mid-refresh from one a successful refresh settled on.
 const catalogRefreshMock = vi.hoisted(() => ({ settled: false }));
+vi.mock("@/lib/chat-draft-api", () => ({
+  readChatDraft: vi.fn(),
+  writeChatDraft: vi.fn(),
+  readCodingWorkbenchDraft: vi.fn(),
+  writeCodingWorkbenchDraft: vi.fn(),
+}));
 vi.mock("../../hooks/useChatSession", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../hooks/useChatSession")>()),
   useGatewayModelCatalogSettled: (): boolean => catalogRefreshMock.settled,
@@ -308,12 +315,14 @@ function actions(): CodingWorkbenchRuntimeActions {
     setAgent: vi.fn(),
     setRuntimePreference: vi.fn(),
     setSelectedModel: vi.fn(),
+    adoptModel: vi.fn(),
     setReasoningEffort: vi.fn(),
     refreshProfile: vi.fn(() => Promise.resolve()),
     refreshSource: vi.fn(() => Promise.resolve()),
     refreshRuntime: vi.fn(() => Promise.resolve()),
     refreshRun: vi.fn(() => Promise.resolve()),
     start: vi.fn(() => Promise.resolve()),
+    cancelStart: vi.fn(),
     decideApproval: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()),
     takeover: vi.fn(() => Promise.resolve()),
@@ -1329,6 +1338,65 @@ describe("CodingWorkbenchWindow", () => {
     view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
 
     expect(taskInput).toHaveValue("");
+  });
+
+  it("restores the unsent task text after a reload while Start was pending (#4271)", async () => {
+    const user = userEvent.setup();
+    const liveActions = actions();
+    vi.mocked(readCodingWorkbenchDraft).mockReset().mockResolvedValue({ text: "", revision: 0 });
+    vi.mocked(writeCodingWorkbenchDraft)
+      .mockReset()
+      .mockImplementation(async (_id, update) => ({
+        text: update.text,
+        revision: update.expectedRevision + 1,
+      }));
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+    const first = render(<CodingWorkbenchWindow draftKey="coding" selectedRoot="/repo" />);
+    await waitFor(() => expect(readCodingWorkbenchDraft).toHaveBeenCalled());
+    await user.type(screen.getByLabelText("Task instructions"), "Investigate the failing test");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        mutation: { status: "pending", kind: "start", requestId: "req-1", error: null },
+      }),
+      actions: liveActions,
+    });
+    first.rerender(<CodingWorkbenchWindow draftKey="coding" selectedRoot="/repo" />);
+    await waitFor(() =>
+      expect(writeCodingWorkbenchDraft).toHaveBeenLastCalledWith("coding", {
+        text: "Investigate the failing test",
+        expectedRevision: expect.any(Number) as unknown as number,
+      }),
+    );
+
+    // The reload ends the pending start without a run; the page comes back with the saved text.
+    first.unmount();
+    vi.mocked(readCodingWorkbenchDraft).mockResolvedValue({
+      text: "Investigate the failing test",
+      revision: 1,
+    });
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+    render(<CodingWorkbenchWindow draftKey="coding" selectedRoot="/repo" />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Task instructions")).toHaveValue(
+        "Investigate the failing test",
+      ),
+    );
+  });
+
+  // #4068: a Workbench window restored under an id the server keeps no drafts for stays local, so it
+  // never asks for a draft the route can only refuse.
+  it("keeps the task text local for a window id the draft route does not admit", async () => {
+    const user = userEvent.setup();
+    vi.mocked(readCodingWorkbenchDraft).mockReset().mockResolvedValue({ text: "", revision: 0 });
+    vi.mocked(writeCodingWorkbenchDraft).mockReset();
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: actions() });
+    render(<CodingWorkbenchWindow draftKey="issue-2253-coding-unavailable" selectedRoot="/repo" />);
+    await user.type(screen.getByLabelText("Task instructions"), "Local only");
+
+    expect(screen.getByLabelText("Task instructions")).toHaveValue("Local only");
+    expect(readCodingWorkbenchDraft).not.toHaveBeenCalled();
+    expect(writeCodingWorkbenchDraft).not.toHaveBeenCalled();
   });
 
   it("shows one repository and branch control above the composer", () => {
@@ -3028,7 +3096,10 @@ describe("CodingWorkbenchWindow", () => {
   );
 
   it("#3386: shows exact paths before one-use Git stage approval", async () => {
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reports: unknown[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
     const user = userEvent.setup();
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
@@ -3045,15 +3116,26 @@ describe("CodingWorkbenchWindow", () => {
     const actions = renderWorkbench(editApprovalState("git-stage"));
     expect(screen.getByRole("heading", { name: "Stage changes" })).toBeInTheDocument();
     expect(screen.getByText("src/stage-only.ts")).toBeInTheDocument();
-    expect(warning).toHaveBeenCalledWith("[keiko] git stage review ready: files 1");
-    expect(JSON.stringify(warning.mock.calls)).not.toContain("src/stage-only.ts");
+    // #4271: what the review showed is a closed step and state, never its paths.
+    expect(reports).toContainEqual(
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          codingWorkbenchInteraction: {
+            interaction: "delivery-step-shown",
+            deliveryStep: "stage-review",
+            deliveryState: "ready",
+          },
+        }),
+      }),
+    );
+    expect(JSON.stringify(reports)).not.toContain("src/stage-only.ts");
+    resetClientDiagnosticWriter();
     expect(
       screen.queryByRole("region", { name: "Reviewed commit message" }),
     ).not.toBeInTheDocument();
     expect(actions.decideApproval).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Approve once" }));
     expect(actions.decideApproval).toHaveBeenCalledExactlyOnceWith("approved");
-    warning.mockRestore();
   });
 
   function commitApprovalState(
@@ -3354,15 +3436,29 @@ describe("CodingWorkbenchWindow", () => {
     },
   );
   it("#3387: records the unavailable delivery display without its rejected text", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reports: unknown[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
       review: draftDeliveryReview("push"),
       retry: vi.fn(),
     });
     renderWorkbench(deliveryApprovalState("pull-request"));
-    expect(warn).toHaveBeenCalledWith("[keiko] draft delivery review displayed: unavailable");
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("Original template");
+    expect(reports).toContainEqual(
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          codingWorkbenchInteraction: {
+            interaction: "delivery-step-shown",
+            deliveryStep: "delivery-review",
+            deliveryState: "unavailable",
+          },
+        }),
+      }),
+    );
+    expect(JSON.stringify(reports)).not.toContain("Original template");
+    resetClientDiagnosticWriter();
   });
 
   it("#3387: denies an unavailable delivery without granting and retries its existing review channel", async () => {
@@ -3556,6 +3652,63 @@ describe("CodingWorkbenchWindow", () => {
 
     await user.click(screen.getByRole("button", { name: "Acknowledge recovery" }));
     expect(liveActions.acknowledgeRecovery).toHaveBeenCalledOnce();
+  });
+
+  // F30: after an outcome-unknown Jira write the window stuck on "Recovery required" with no
+  // control left. Every recovery state names a way forward: acknowledge, retry with a description
+  // or leave with a new task, and nothing is sent again by itself.
+  describe("the way out of Recovery required (F30)", () => {
+    const recoveryState = (acknowledged: boolean): ReturnType<typeof liveState> =>
+      liveState({
+        canStart: acknowledged,
+        canRetry: acknowledged,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "recovery-required",
+            runId: "run-1",
+            failureCode: "recovery-required",
+            ...(acknowledged ? { recoveryAcknowledged: true } : {}),
+          }),
+        },
+      });
+
+    it("says plainly that Keiko does not know whether the change went through", () => {
+      renderWorkbench(recoveryState(false));
+      expect(screen.getByText(/does not know whether the last action went through/)).toBeVisible();
+    });
+
+    it("offers a new task before the recovery is acknowledged", async () => {
+      const user = userEvent.setup();
+      const newTask = vi.fn(() => Promise.resolve());
+      taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), newTask });
+      const liveActions = renderWorkbench(recoveryState(false));
+      await user.click(screen.getByRole("button", { name: "Start a new task" }));
+      expect(newTask).toHaveBeenCalledOnce();
+      expect(liveActions.acknowledgeRecovery).not.toHaveBeenCalled();
+      expect(liveActions.retry).not.toHaveBeenCalled();
+    });
+
+    it("explains why Retry waits and still offers a new task once acknowledged", async () => {
+      const user = userEvent.setup();
+      const newTask = vi.fn(() => Promise.resolve());
+      taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), newTask });
+      const liveActions = renderWorkbench(recoveryState(true));
+      expect(screen.getByRole("button", { name: "Retry as a fresh run" })).toBeDisabled();
+      expect(screen.getByText(/describe it in the box below/)).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Start a new task" }));
+      expect(newTask).toHaveBeenCalledOnce();
+      expect(liveActions.retry).not.toHaveBeenCalled();
+    });
+
+    it("retries only with the person's own description", async () => {
+      const user = userEvent.setup();
+      const liveActions = renderWorkbench(recoveryState(true));
+      await user.type(screen.getByLabelText("Task instructions"), "Try again");
+      await user.click(screen.getByRole("button", { name: "Retry as a fresh run" }));
+      expect(liveActions.retry).toHaveBeenCalledWith("Try again");
+    });
   });
 
   // #3390: after a server restart the operator's actual control was the composer's single "Start
@@ -5020,8 +5173,8 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       { ...MODEL_B, conversationReady: true },
     ];
     const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith("model-a");
+    expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
+    expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-a");
   });
 
   it("preserves a saved unknown choice ahead of a freshly healthy fallback", () => {
@@ -5029,8 +5182,8 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     chatCatalogMock.models = [MODEL_A, { ...MODEL_B, conversationReady: undefined }];
     try {
       const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
-      expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith("model-a");
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
+      expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-a");
     } finally {
       window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
     }
@@ -5046,12 +5199,12 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
     runtimeHookMock.mockReturnValue({ state, actions: liveActions });
     const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-a");
+    expect(liveActions.adoptModel).toHaveBeenCalledWith("model-a");
     const user = userEvent.setup();
     await user.click(screen.getByRole("combobox", { name: /Coding model/u }));
     expect(screen.queryByRole("option", { name: "model-b" })).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
-    vi.mocked(liveActions.setSelectedModel).mockClear();
+    vi.mocked(liveActions.adoptModel).mockClear();
     chatCatalogMock.models = [
       { ...MODEL_A, conversationReady: true },
       { ...MODEL_B, conversationReady: true },
@@ -5059,7 +5212,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
     await user.click(screen.getByRole("combobox", { name: /Coding model/u }));
     expect(screen.getByRole("option", { name: "model-b" })).toBeInTheDocument();
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
   });
 
   it("restores the saved choice after all refuted coding models recover", () => {
@@ -5073,15 +5226,15 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     });
     const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
     try {
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
-      vi.mocked(liveActions.setSelectedModel).mockClear();
+      expect(liveActions.adoptModel).toHaveBeenCalledWith(null);
+      vi.mocked(liveActions.adoptModel).mockClear();
       runtimeHookMock.mockReturnValue({
         state: liveState({ selectedModelId: null }),
         actions: liveActions,
       });
       chatCatalogMock.models = [{ ...MODEL_B, conversationReady: true }];
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
     } finally {
       window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
     }
@@ -5114,7 +5267,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     expect(screen.getByRole("button", { name: "Start coding run" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledOnce();
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
   });
 
   it("withholds Start for a selection the server observed failing", async () => {
@@ -5152,21 +5305,21 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
 
     // Baseline: the mocked state already matches the catalog, so there is nothing to reconcile.
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
 
     // The refresh goes pending: the shared catalog reports an empty list, exactly as it does
     // while the fetch is in flight. The operator's choice must not be wiped by this alone.
     chatCatalogMock.models = [];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
 
     // The refresh succeeds and returns the SAME models: the selection must still be there,
     // rather than falling back to models[0] because the mid-refresh empty list already cleared it.
     chatCatalogMock.models = [MODEL_A, MODEL_B];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
   });
 
@@ -5181,11 +5334,11 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
     chatCatalogMock.models = [MODEL_A];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
     chatCatalogMock.models = [MODEL_A, MODEL_B];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.adoptModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
   });
 
@@ -5218,7 +5371,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       correlationId: "actual-catalog-123",
     };
     const liveActions = renderWorkbench(liveState({ selectedModelId: MODEL_B.id }));
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_A.id);
+    expect(liveActions.adoptModel).toHaveBeenCalledWith(MODEL_A.id);
   });
 
   // #3905 AC4: a human choice whose forced tool-call proof lapsed, or was withdrawn because the
@@ -5252,7 +5405,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     it("keeps the choice pending instead of replacing it with the first ready model", () => {
       present(renewing());
       const liveActions = renderWorkbench(liveState({ selectedModelId: MODEL_B.id }));
-      expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+      expect(liveActions.adoptModel).not.toHaveBeenCalled();
     });
 
     it("keeps it through the renewal and offers it again once the proof is fresh", () => {
@@ -5270,7 +5423,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         correlationId: "renewal-catalog-456",
       };
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
-      expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+      expect(liveActions.adoptModel).not.toHaveBeenCalled();
     });
 
     it("withholds Start while the choice is pending", async () => {
@@ -5311,7 +5464,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     ])("still falls back from $title even when it is flagged", ({ patch }) => {
       present(renewing(patch));
       const liveActions = renderWorkbench(liveState({ selectedModelId: MODEL_B.id }));
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_A.id);
+      expect(liveActions.adoptModel).toHaveBeenCalledWith(MODEL_A.id);
     });
 
     it("records the pending choice as held, never as refused, then as restored", () => {
@@ -5346,15 +5499,15 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     const special = { ...MODEL_A, id: "dotsocr" };
     chatCatalogMock.models = [special, MODEL_B];
     const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith(special.id);
+    expect(liveActions.adoptModel).toHaveBeenCalledWith(MODEL_B.id);
+    expect(liveActions.adoptModel).not.toHaveBeenCalledWith(special.id);
   });
 
   it("prefers a gateway-declared chat model among ready candidates", () => {
     const declared = { ...MODEL_B, chatModeDeclared: true };
     chatCatalogMock.models = [MODEL_A, declared];
     const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
+    expect(liveActions.adoptModel).toHaveBeenCalledWith(MODEL_B.id);
   });
 
   it("records actual Workbench catalog and held/restored selection without raw identifiers", () => {
@@ -5455,7 +5608,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       const liveActions = actions();
       runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
       const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
+      expect(liveActions.adoptModel).toHaveBeenCalledWith(MODEL_B.id);
       runtimeHookMock.mockReturnValue({
         state: liveState({ selectedModelId: MODEL_B.id }),
         actions: liveActions,
@@ -5484,14 +5637,14 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       });
       observeCatalog([MODEL_A], "origin-fallback-123");
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
-      expect(liveActions.setSelectedModel).toHaveBeenLastCalledWith(MODEL_A.id);
+      expect(liveActions.adoptModel).toHaveBeenLastCalledWith(MODEL_A.id);
       runtimeHookMock.mockReturnValue({
         state: liveState({ selectedModelId: MODEL_A.id }),
         actions: liveActions,
       });
       observeCatalog([MODEL_B], "origin-reelected-123");
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
-      expect(liveActions.setSelectedModel).toHaveBeenLastCalledWith(MODEL_B.id);
+      expect(liveActions.adoptModel).toHaveBeenLastCalledWith(MODEL_B.id);
       runtimeHookMock.mockReturnValue({
         state: liveState({ selectedModelId: MODEL_B.id }),
         actions: liveActions,
@@ -5514,7 +5667,10 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         });
         const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
         if (storageFails)
-          vi.spyOn(Storage.prototype, "setItem").mockImplementationOnce(() => {
+          vi.spyOn(
+            Object.getPrototypeOf(window.localStorage) as Storage,
+            "setItem",
+          ).mockImplementationOnce(() => {
             throw new DOMException("storage unavailable", "SecurityError");
           });
         const user = userEvent.setup();
@@ -5548,8 +5704,11 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       chatCatalogMock.models = [MODEL_A, MODEL_B];
       const liveActions = renderWorkbench(liveState());
 
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
-      expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith("model-a");
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
+      expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-a");
+      // The window's own adoption of the saved model is not a person's pick: it must never reach
+      // `setSelectedModel`, whose next read asks the server to check that model (#4351).
+      expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
     });
 
     it("falls back to the current default when the saved model is no longer offered", () => {
@@ -5557,7 +5716,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       chatCatalogMock.models = [MODEL_A, MODEL_B];
       const liveActions = renderWorkbench(liveState());
 
-      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-a");
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-a");
       expect(window.localStorage.getItem(CODING_MODEL_STORAGE_KEY)).toBe("retired-model");
     });
 
@@ -5585,7 +5744,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     chatCatalogMock.models = [MODEL_A];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
 
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-a");
+    expect(liveActions.adoptModel).toHaveBeenCalledWith("model-a");
   });
 
   // A catalog that answers with models but no coding-capable one is conclusive: the stale choice
@@ -5600,7 +5759,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     chatCatalogMock.models = [{ ...MODEL_A, id: "model-no-tools", toolCalling: false }];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
 
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
+    expect(liveActions.adoptModel).toHaveBeenCalledWith(null);
   });
 
   // PR #3625 review: an empty catalog a SUCCESSFUL refresh settled on is conclusive — the gateway
@@ -5616,7 +5775,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     catalogRefreshMock.settled = true;
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
 
-    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
+    expect(liveActions.adoptModel).toHaveBeenCalledWith(null);
     expect(liveActions.setReasoningEffort).toHaveBeenCalledWith(null);
   });
 });
@@ -6080,8 +6239,10 @@ describe("messages waiting for the running turn (S07)", () => {
 
   function runningState(
     state: CodingWorkbenchRuntimeStateName = "running",
+    delivery = true,
   ): CodingWorkbenchRuntimeState {
     return liveState({
+      promptInputs: { delivery, references: false },
       run: {
         status: "ready",
         value: snapshot({ state, runId: "run-1", revision: 4 }),
@@ -6100,10 +6261,20 @@ describe("messages waiting for the running turn (S07)", () => {
     expect(inboxHookMock).toHaveBeenCalledWith({
       runId: "run-1",
       live: true,
+      offered: true,
       revision: 4,
       deliveredSignal: null,
     });
     expect(screen.queryByRole("region", { name: "Messages waiting for this task" })).toBeNull();
+  });
+
+  // #4068: the mapped profile (Windows) takes no message while a turn runs, so its inbox is never read.
+  it("tells the hook the runtime's profile takes no waiting message when readiness offers no delivery", () => {
+    renderWorkbench(runningState("running", false));
+
+    expect(inboxHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", live: true, offered: false }),
+    );
   });
 
   it("counts the messages of the conversation the feed holds as the delivered signal", () => {

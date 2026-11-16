@@ -1,7 +1,14 @@
 import {
   JIRA_MUTATION_OPERATIONS,
+  isJiraApprovalNamedIds,
+  isJiraApprovalProjects,
+  isJiraApprovalTransition,
   isJiraAttachmentPreview,
+  isJiraAvatarUploadOperation,
   isJiraDraftRef,
+  type JiraApprovalNamedId,
+  type JiraApprovalProject,
+  type JiraApprovalTransition,
   type JiraAttachmentPreview,
   type JiraMutationOperation,
 } from "./jira-tool-execution.js";
@@ -41,7 +48,18 @@ export interface McpChatToolAuthoritySubject {
   readonly bindingGeneration?: never;
   readonly authenticationGeneration?: never;
 }
-export type ChatToolAuthoritySubject = JiraChatToolAuthoritySubject | McpChatToolAuthoritySubject;
+/** Local Knowledge selection is separate from external MCP configuration and Jira credentials. */
+export interface KnowledgeChatToolAuthoritySubject {
+  readonly kind: "knowledge-pods";
+  readonly actorDigest: string;
+  readonly chatId: string;
+  readonly configurationDigest: string;
+  readonly podId?: never;
+  readonly bindingGeneration?: never;
+  readonly authenticationGeneration?: never;
+}
+export type ChatToolAuthoritySubject =
+  JiraChatToolAuthoritySubject | McpChatToolAuthoritySubject | KnowledgeChatToolAuthoritySubject;
 
 /** Ordinary Chat authority has no repository, branch, Editor session or Coding runtime. */
 export interface ChatToolAuthorityEnvelope {
@@ -52,8 +70,15 @@ export interface ChatToolAuthorityEnvelope {
   readonly requestedMode: CodingWorkbenchMode;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly effectiveMode: CodingWorkbenchMode;
-  readonly actionClasses: readonly ["connector-access", "network-egress"];
-  readonly connectorScopes: readonly ("issue-tracker.read" | "issue-tracker.write" | "mcp.tools")[];
+  readonly actionClasses:
+    readonly ["connector-access"] | readonly ["connector-access", "network-egress"];
+  readonly connectorScopes: readonly (
+    | "issue-tracker.read"
+    | "issue-tracker.write"
+    | "issue-tracker.admin"
+    | "mcp.tools"
+    | "knowledge.read"
+  )[];
   readonly budget: CodingWorkbenchBudget & { readonly maxPatchBytes: 0 };
   readonly expiresAt: string;
   /** Digest of server-validated human acceptance; never a model-supplied approval. */
@@ -82,8 +107,16 @@ const ENVELOPE_KEYS = [
   "expiresAt",
   "approvalProofDigest",
 ] as const;
-const BUDGET_KEYS = ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens", "maxPatchBytes"] as const;
-const CONNECTOR_SCOPES = new Set(["issue-tracker.read", "issue-tracker.write"]);
+const BUDGET_KEYS = ["maxRuntimeMs", "maxToolCalls", "maxPatchBytes"] as const;
+// Envelopes minted before the cumulative prompt-token allowance was removed (#4346) may still carry
+// this key: it is accepted while it keeps its old shape (a positive safe integer), never required
+// and never enforced.
+const LEGACY_BUDGET_KEY = "maxPromptTokens";
+const CONNECTOR_SCOPES = new Set([
+  "issue-tracker.read",
+  "issue-tracker.write",
+  "issue-tracker.admin",
+]);
 
 function validateKeys(
   value: Record<string, unknown>,
@@ -110,10 +143,16 @@ export function validateChatToolAuthoritySubject(
 ): CodingWorkbenchValidationResult<ChatToolAuthoritySubject> {
   if (!isRecord(value)) return invalid("chatAuthority.subject must be an object");
   const errors: string[] = [];
-  validateKeys(value, value.kind === "configured-mcp" ? MCP_SUBJECT_KEYS : SUBJECT_KEYS, errors);
+  validateKeys(
+    value,
+    value.kind === "configured-mcp" || value.kind === "knowledge-pods"
+      ? MCP_SUBJECT_KEYS
+      : SUBJECT_KEYS,
+    errors,
+  );
   validateDigest(value.actorDigest, "chatAuthority.subject.actorDigest", errors);
   validateSafeId(value.chatId, "chatAuthority.subject.chatId", errors, 128);
-  if (value.kind === "configured-mcp") {
+  if (value.kind === "configured-mcp" || value.kind === "knowledge-pods") {
     validateDigest(value.configurationDigest, "chatAuthority.subject.configurationDigest", errors);
     return result(value, errors);
   }
@@ -138,25 +177,31 @@ function validateModes(value: Record<string, unknown>, errors: string[]): void {
 }
 
 function scopesFor(subject: unknown): ReadonlySet<string> {
+  if (isRecord(subject) && subject.kind === "knowledge-pods") return new Set(["knowledge.read"]);
   return isRecord(subject) && subject.kind === "configured-mcp"
     ? new Set(["mcp.tools"])
     : CONNECTOR_SCOPES;
 }
+function validActionClasses(subject: unknown, actions: unknown): boolean {
+  if (!Array.isArray(actions)) return false;
+  const expected =
+    isRecord(subject) && subject.kind === "knowledge-pods"
+      ? ["connector-access"]
+      : ["connector-access", "network-egress"];
+  return (
+    actions.length === expected.length &&
+    expected.every((action, index) => actions[index] === action)
+  );
+}
 function validateCapabilities(value: Record<string, unknown>, errors: string[]): void {
-  if (
-    !Array.isArray(value.actionClasses) ||
-    value.actionClasses.length !== 2 ||
-    value.actionClasses[0] !== "connector-access" ||
-    value.actionClasses[1] !== "network-egress"
-  ) {
-    errors.push("chatAuthority.actionClasses must contain only connector and network access");
-  }
+  if (!validActionClasses(value.subject, value.actionClasses))
+    errors.push("chatAuthority.actionClasses must match its local or connected subject");
   const scopes: unknown = value.connectorScopes;
   const allowed = scopesFor(value.subject);
   if (
     !Array.isArray(scopes) ||
     scopes.length < 1 ||
-    scopes.length > 2 ||
+    scopes.length > allowed.size ||
     !scopes.every((scope: unknown) => typeof scope === "string" && allowed.has(scope)) ||
     new Set(scopes).size !== scopes.length
   ) {
@@ -164,13 +209,21 @@ function validateCapabilities(value: Record<string, unknown>, errors: string[]):
   }
 }
 
+function legacyBudgetKeys(budget: Record<string, unknown>): readonly string[] {
+  return Object.hasOwn(budget, LEGACY_BUDGET_KEY) ? [LEGACY_BUDGET_KEY] : [];
+}
+
 function validateBudget(value: unknown, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push("chatAuthority.budget must be an object");
     return;
   }
-  validateKeys(value, BUDGET_KEYS, errors);
-  for (const key of ["maxRuntimeMs", "maxToolCalls", "maxPromptTokens"]) {
+  validateKeys(
+    Object.fromEntries(Object.entries(value).filter(([key]) => key !== LEGACY_BUDGET_KEY)),
+    BUDGET_KEYS,
+    errors,
+  );
+  for (const key of ["maxRuntimeMs", "maxToolCalls", ...legacyBudgetKeys(value)]) {
     if (!positiveCount(value[key]))
       errors.push(`chatAuthority.budget.${key} must be a positive safe integer`);
   }
@@ -214,7 +267,7 @@ interface ChatToolReadGrantFacts {
   readonly schemaVersion: "1";
   readonly kind: "jira-chat-read-grant" | "mcp-chat-read-grant";
   readonly grantId: string;
-  readonly subject: ChatToolAuthoritySubject;
+  readonly subject: JiraChatToolAuthoritySubject | McpChatToolAuthoritySubject;
   /** Consent covers model transmission and retention in this conversation, not writes or import. */
   readonly disclosureVersion: ReadDisclosureVersion;
   readonly requestedAt: number;
@@ -288,6 +341,12 @@ function readGrantFamily(subject: unknown): { kind: string; disclosure: ReadDisc
     ? { kind: "mcp-chat-read-grant", disclosure: MCP_CHAT_READ_DISCLOSURE_VERSION }
     : { kind: "jira-chat-read-grant", disclosure: CHAT_TOOL_READ_DISCLOSURE_VERSION };
 }
+function validateReadGrantSubject(value: unknown, errors: string[]): void {
+  if (isRecord(value) && value.kind === "knowledge-pods")
+    errors.push("chatReadGrant.subject is invalid");
+  const subject = validateChatToolAuthoritySubject(value);
+  if (!subject.ok) errors.push(...subject.errors);
+}
 /** Structural validation does not establish consent or extend its lifetime. */
 export function validateChatToolReadGrant(
   value: unknown,
@@ -296,13 +355,12 @@ export function validateChatToolReadGrant(
   const errors: string[] = [];
   validateKeys(value, READ_GRANT_KEYS, errors, "chatReadGrant");
   const family = readGrantFamily(value.subject);
+  validateReadGrantSubject(value.subject, errors);
   if (value.schemaVersion !== "1" || value.kind !== family.kind)
     errors.push("chatReadGrant kind or schemaVersion is invalid");
   validateSafeId(value.grantId, "chatReadGrant.grantId", errors, 128);
   if (value.disclosureVersion !== family.disclosure)
     errors.push("chatReadGrant.disclosureVersion is invalid");
-  const subject = validateChatToolAuthoritySubject(value.subject);
-  if (!subject.ok) errors.push(...subject.errors);
   if (
     !positiveCount(value.requestedAt) ||
     !positiveCount(value.expiresAt) ||
@@ -345,6 +403,23 @@ export interface JiraChatToolWriteApprovalView {
    * name, size and digest, never content. The upload is refused if the file no longer matches (#4176).
    */
   readonly attachment?: JiraAttachmentPreview;
+  /**
+   * The projects the action targets, by key and name, read by the server when the approval was
+   * requested so that every card names them, the first of a Chat included. A project Jira did not
+   * answer is listed by its reference alone; the card never invents a name.
+   */
+  readonly projects?: readonly JiraApprovalProject[];
+  /**
+   * The status change a `jira.transition` approval covers, by the transition's name and target status
+   * as Jira's list for the issue answered when the approval was requested; the reference alone when it
+   * could not be read. Display only, never identity.
+   */
+  readonly transition?: JiraApprovalTransition;
+  /**
+   * The names Jira gives this person for the fields the call carries (a Jira field id such as
+   * `customfield_10112`), read by the server when the approval was requested. Display only.
+   */
+  readonly fields?: readonly JiraApprovalNamedId[];
 }
 export interface McpChatToolWriteApprovalView {
   readonly kind: "mcp-chat-write";
@@ -425,6 +500,44 @@ function validateWriteApprovalSubject(value: Record<string, unknown>, errors: st
       errors.push("chatWriteApproval.operation is invalid");
   }
 }
+function uploadWriteApproval(value: Record<string, unknown>): boolean {
+  return (
+    value.operation === "jira.upload-email-template-pack" ||
+    (typeof value.operation === "string" && isJiraAvatarUploadOperation(value.operation))
+  );
+}
+function validateWriteApprovalAttachment(value: Record<string, unknown>, errors: string[]): void {
+  if (!isJiraAttachmentPreview(value.attachment))
+    errors.push("chatWriteApproval.attachment is invalid");
+  if (value.operation !== "jira.attach" && !uploadWriteApproval(value))
+    errors.push("chatWriteApproval.operation is invalid");
+}
+const JIRA_OPTIONAL_APPROVAL_KEYS = [
+  "excludedItemRefs",
+  "attachment",
+  "projects",
+  "transition",
+  "fields",
+] as const;
+function validateWriteApprovalOptionals(value: Record<string, unknown>, errors: string[]): void {
+  if (Object.hasOwn(value, "excludedItemRefs")) {
+    validateExcludedItemRefs(value.excludedItemRefs, "chatWriteApproval.excludedItemRefs", errors);
+    if (value.operation !== "jira.draft") errors.push("chatWriteApproval.operation is invalid");
+  }
+  if (Object.hasOwn(value, "attachment")) validateWriteApprovalAttachment(value, errors);
+  if (Object.hasOwn(value, "projects") && !isJiraApprovalProjects(value.projects))
+    errors.push("chatWriteApproval.projects is invalid");
+  validateWriteApprovalNames(value, errors);
+}
+/** The display names the server read for the card: the fields of the call and a transition's names. */
+function validateWriteApprovalNames(value: Record<string, unknown>, errors: string[]): void {
+  if (Object.hasOwn(value, "fields") && !isJiraApprovalNamedIds(value.fields))
+    errors.push("chatWriteApproval.fields is invalid");
+  if (!Object.hasOwn(value, "transition")) return;
+  if (!isJiraApprovalTransition(value.transition))
+    errors.push("chatWriteApproval.transition is invalid");
+  if (value.operation !== "jira.transition") errors.push("chatWriteApproval.operation is invalid");
+}
 function validateWriteApprovalKeys(
   value: Record<string, unknown>,
   mcp: boolean,
@@ -434,27 +547,18 @@ function validateWriteApprovalKeys(
     validateKeys(value, MCP_WRITE_APPROVAL_KEYS, errors, "chatWriteApproval");
     return;
   }
-  const excluded = Object.hasOwn(value, "excludedItemRefs");
-  const attached = Object.hasOwn(value, "attachment");
+  if (!Object.hasOwn(value, "attachment") && uploadWriteApproval(value))
+    errors.push("chatWriteApproval.attachment is required");
   validateKeys(
     value,
     [
       ...WRITE_APPROVAL_KEYS,
-      ...(excluded ? ["excludedItemRefs"] : []),
-      ...(attached ? ["attachment"] : []),
+      ...JIRA_OPTIONAL_APPROVAL_KEYS.filter((key) => Object.hasOwn(value, key)),
     ],
     errors,
     "chatWriteApproval",
   );
-  if (excluded) {
-    validateExcludedItemRefs(value.excludedItemRefs, "chatWriteApproval.excludedItemRefs", errors);
-    if (value.operation !== "jira.draft") errors.push("chatWriteApproval.operation is invalid");
-  }
-  if (attached) {
-    if (!isJiraAttachmentPreview(value.attachment))
-      errors.push("chatWriteApproval.attachment is invalid");
-    if (value.operation !== "jira.attach") errors.push("chatWriteApproval.operation is invalid");
-  }
+  validateWriteApprovalOptionals(value, errors);
 }
 export function validateChatToolWriteApprovalView(
   value: unknown,

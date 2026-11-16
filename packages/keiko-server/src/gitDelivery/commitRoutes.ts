@@ -118,6 +118,7 @@ import {
   signatureRequirementOf,
   type GitDeliverySignatureRequirement,
 } from "./branchProtectionPreflight.js";
+import { withChatContentPolicy } from "../content-redactor.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -815,7 +816,7 @@ function resolveCommitDraftModel(deps: UiHandlerDeps): ResolvedCommitDraftModel 
   const capability = findConfiguredCapability(config, modelId);
   if (model === undefined || capability === undefined) return undefined;
   return {
-    model,
+    model: withChatContentPolicy(deps, model),
     capability,
     configDigest: sha256Hex(JSON.stringify(config)),
     modelId,

@@ -64,8 +64,10 @@ function issueDetails(
   const result = referenceDetails(fields, includeDescription);
   if (fields.assignee === null) result.assigneeEmpty = true;
   if (includeDescription && fields.description !== undefined) {
+    // Length is judged once, by the catalog byte limit, where it is a bounds failure; a string that
+    // passes here and fails there must not be reported as a malformed payload.
     const description = fields.description ?? "";
-    if (!text(description, 32768)) return undefined;
+    if (typeof description !== "string") return undefined;
     result.description = description;
   }
   if (fields.labels !== undefined) {
@@ -103,12 +105,13 @@ function issue(
         ...details,
       };
 }
-function comment(value: unknown): CatalogJsonObject | undefined {
+/** Shared read projection; no rendered HTML, remote URLs or author email enters the result. */
+export function jiraCommentProjection(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (
     raw === undefined ||
     !isSafeAtlassianIdentifier(raw.id) ||
-    !text(raw.body, 32768) ||
+    typeof raw.body !== "string" ||
     !text(raw.created, 64)
   )
     return undefined;
@@ -120,6 +123,26 @@ function comment(value: unknown): CatalogJsonObject | undefined {
     ...(author === undefined ? {} : { author }),
   };
 }
+/** Reuse the existing issue-summary boundary for native issue-reference collections. */
+export function jiraIssueSummary(value: unknown, baseUrl: string): CatalogJsonObject | undefined {
+  return issue(value, false, baseUrl);
+}
+// The result row already carries these standard fields under these members, so a request for one
+// of them is answered by the row itself and is not repeated in `fieldValues`.
+const ROW_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["summary", ["summary"]],
+  ["status", ["status"]],
+  ["issuetype", ["issuetype"]],
+  ["project", ["project"]],
+  ["assignee", ["assignee", "assigneeEmpty"]],
+  ["priority", ["priority"]],
+  ["labels", ["labels"]],
+  ["created", ["created"]],
+  ["updated", ["updated"]],
+]);
+function carriedByRow(row: CatalogJsonObject, id: string): boolean {
+  return ROW_MEMBERS.get(id)?.some((member) => Object.hasOwn(row, member)) === true;
+}
 /** A search result with the fields the caller asked for, typed by the instance's own names/schema. */
 function searchIssue(
   value: unknown,
@@ -128,13 +151,30 @@ function searchIssue(
   baseUrl: string,
 ): CatalogJsonObject | undefined {
   const summary = issue(value, false, baseUrl);
-  if (summary === undefined || selected.length === 0) return summary;
+  if (summary === undefined) return summary;
+  // Only what the row does not already say is added: a repeated status or label list would cost
+  // every row of a page its own copy for nothing. An absent standard field stays visible.
+  const extra = selected.filter((id) => !carriedByRow(summary, id));
+  if (extra.length === 0) return summary;
   const fields = jiraSelectedFieldValues(
     { fields: asRecord(value)?.fields, names: body.names, schema: body.schema },
-    selected,
+    extra,
     SEARCH_FIELD_VALUES_MAX_BYTES,
   );
   return fields === undefined ? undefined : { ...summary, fieldValues: fields };
+}
+/**
+ * One closed sentence for a model that asked for field values across more issues than this page
+ * holds. It is built from the total alone: no query, field value or issue text reaches it.
+ */
+function searchGuidance(total: number): string {
+  return `This search matched ${String(total)} issues. Each result lists the requested fields with a state; a field marked unavailable, empty or unsupported carries no value, and a value too large for its row is cut and marked unavailable. Field values and progress across many issues come from jira.report; read a few specific issues with jira.issue, or narrow the JQL.`;
+}
+function withSearchGuidance(result: ManagedMcpToolResult): ManagedMcpToolResult {
+  const { items, total } = result.data;
+  if (!Array.isArray(items) || typeof total !== "number" || total <= items.length) return result;
+  const bodies = items.some((item) => asRecord(item)?.fieldValues !== undefined);
+  return bodies ? { ...result, data: { ...result.data, guidance: searchGuidance(total) } } : result;
 }
 function items(
   value: unknown,
@@ -189,6 +229,13 @@ function singleIssueResult(
     ? { data }
     : jiraReadFailure("bounds-exceeded");
 }
+/** A comment body no catalog string can carry: a bounds failure of the whole page, named as such. */
+function oversizedCommentBody(comments: unknown): boolean {
+  return (asArray(comments) ?? []).some((entry) => {
+    const body = asRecord(entry)?.body;
+    return typeof body === "string" && !jiraProjectionTextFits(body);
+  });
+}
 export function jiraIssueReadResult(
   name: string,
   baseUrl: string,
@@ -198,14 +245,18 @@ export function jiraIssueReadResult(
   selectedFields: readonly string[] = [],
 ): ManagedMcpToolResult {
   if (name === "jira.issue") return singleIssueResult(body, selectedFields, baseUrl);
+  if (name === "jira.comments" && oversizedCommentBody(body.comments))
+    return jiraReadFailure("bounds-exceeded");
   return name === "jira.search"
-    ? page(
-        body,
-        items(body.issues, (value) => searchIssue(value, body, selectedFields, baseUrl)),
-        startAt,
-        maxResults,
+    ? withSearchGuidance(
+        page(
+          body,
+          items(body.issues, (value) => searchIssue(value, body, selectedFields, baseUrl)),
+          startAt,
+          maxResults,
+        ),
       )
-    : page(body, items(body.comments, comment), startAt, maxResults);
+    : page(body, items(body.comments, jiraCommentProjection), startAt, maxResults);
 }
 
 /** Retain a fitting prefix and resume at its first unreturned item; never silently skip a page. */

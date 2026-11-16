@@ -8,6 +8,29 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiStore } from "./types.js";
 import { invalidRequest, notFound } from "./errors.js";
+import {
+  chatToolTranscriptOccupancy,
+  type ChatToolTranscriptUpdate,
+} from "./chatToolTranscript.js";
+
+export interface CodingNativeTurn {
+  readonly chatId: string;
+  readonly userMessageId: string;
+  readonly turnRef: string;
+}
+export interface CodingNativeToolTranscript {
+  readonly occupancy: () => { readonly bytes: number; readonly exchangeCount: number };
+  readonly capture: (
+    update: Extract<ChatToolTranscriptUpdate, { kind: "captured" }>,
+    correlationId: string,
+  ) => void;
+  /** Public pending input metadata on the actual native call; no secret value or result. */
+  readonly humanInput: (
+    started: Extract<ChatToolTranscriptUpdate, { kind: "started" }>,
+    view: import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors").JiraHumanInputView,
+    correlationId: string,
+  ) => void;
+}
 
 export interface CodingHistoryCreateInput {
   readonly projectPath: string;
@@ -23,6 +46,11 @@ export interface CodingHistoryBeginInput extends CodingHistoryCreateInput {
   readonly conversationId?: string;
   readonly runId: string;
   readonly intent: string;
+  /**
+   * `scheduled`: the run is a scheduled wake (#4271), and its intent is the prompt the task's model
+   * scheduled, never a message the human wrote. The message is marked so it is shown as such.
+   */
+  readonly intentKind?: "scheduled" | undefined;
 }
 
 /** Where a fork ends in its source, as Coding History counts the source's user turns. */
@@ -119,6 +147,11 @@ export interface CodingHistoryStore {
   ) =>
     | { readonly chatId: string; readonly userMessageId: string; readonly turnRef: string }
     | undefined;
+  /** Private run/turn-bound access; generic Chat methods remain unable to reach Coding rows. */
+  readonly nativeToolTranscript: (
+    runId: string,
+    expected: CodingNativeTurn,
+  ) => CodingNativeToolTranscript;
   readonly bindRun: (id: string, runId: string) => void;
   readonly update: (
     id: string,
@@ -246,6 +279,20 @@ function createTask(
 
 /** The source id of the user message a run's task intent is stored as. */
 const INTENT_SOURCE_ID = "intent";
+/**
+ * How Coding History shows a scheduled wake's intent message (#4271): its words are the prompt the
+ * task's model scheduled, not a message the operator wrote. The message is bound to its run a second
+ * time under `SCHEDULED_SOURCE_ID`, and the detail reads it with this `taskType`.
+ */
+export const CODING_HISTORY_SCHEDULED_TASK_TYPE = "scheduled-continuation";
+const SCHEDULED_SOURCE_ID = "scheduled-intent";
+
+function markScheduledIntent(db: DatabaseSync, runId: string): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO coding_history_message_bindings (run_id, source_id, message_id)
+       SELECT run_id, ?, message_id FROM coding_history_message_bindings WHERE run_id = ? AND source_id = ?`,
+  ).run(SCHEDULED_SOURCE_ID, runId, INTENT_SOURCE_ID);
+}
 
 function beginTask(
   db: DatabaseSync,
@@ -267,6 +314,7 @@ function beginTask(
       role: "user",
       content: input.intent,
     });
+    if (input.intentKind === "scheduled") markScheduledIntent(db, input.runId);
     return requireTask(db, store, task.id);
   });
 }
@@ -527,7 +575,7 @@ function repeatedIntentMessageIds(db: DatabaseSync, id: string): ReadonlySet<str
          JOIN chat_messages echoed ON echoed.id = echo.message_id
          JOIN chat_messages stored ON stored.id = intent.message_id
         WHERE run.chat_id = ?
-          AND echo.source_id <> 'intent'
+          AND echo.source_id NOT IN ('intent', 'scheduled-intent')
           AND echo.message_id <> intent.message_id
           AND echoed.role = 'user'
           AND stored.role = 'user'
@@ -537,7 +585,7 @@ function repeatedIntentMessageIds(db: DatabaseSync, id: string): ReadonlySet<str
               FROM coding_history_message_bindings earlier
               JOIN chat_messages prior ON prior.id = earlier.message_id
              WHERE earlier.run_id = echo.run_id
-               AND earlier.source_id <> 'intent'
+               AND earlier.source_id NOT IN ('intent', 'scheduled-intent')
                AND (prior.timestamp < echoed.timestamp
                     OR (prior.timestamp = echoed.timestamp AND prior.rowid < echoed.rowid))
                AND ((prior.role = 'user' AND prior.content = stored.content)
@@ -546,6 +594,17 @@ function repeatedIntentMessageIds(db: DatabaseSync, id: string): ReadonlySet<str
           )`,
     )
     .all(id);
+  return new Set(rows.map((row) => String(row.message_id)));
+}
+
+function scheduledIntentMessageIds(db: DatabaseSync, chatId: string): ReadonlySet<string> {
+  const rows = db
+    .prepare(
+      `SELECT b.message_id FROM coding_history_message_bindings b
+         JOIN coding_history_runs r ON r.run_id = b.run_id
+        WHERE r.chat_id = ? AND b.source_id = ?`,
+    )
+    .all(chatId, SCHEDULED_SOURCE_ID);
   return new Set(rows.map((row) => String(row.message_id)));
 }
 
@@ -562,11 +621,16 @@ function readDetail(
   );
   const listed = store.listMessages(id, 200);
   const repeated = repeatedIntentMessageIds(db, id);
+  const scheduled = scheduledIntentMessageIds(db, id);
   const messages = listed
     .filter((message) => !repeated.has(message.id))
     .map((message) => {
       const row = binding.get(message.id);
-      return { ...message, ...(typeof row?.run_id === "string" ? { runId: row.run_id } : {}) };
+      return {
+        ...message,
+        ...(typeof row?.run_id === "string" ? { runId: row.run_id } : {}),
+        ...(scheduled.has(message.id) ? { taskType: CODING_HISTORY_SCHEDULED_TASK_TYPE } : {}),
+      };
     });
   return { task, messages, truncated: store.countMessages(id) > listed.length };
 }
@@ -693,6 +757,70 @@ function bindNativeTurnMessage(
   return row.message_id;
 }
 
+function nativeToolTranscript(
+  db: DatabaseSync,
+  store: UiStore,
+  runId: string,
+  expected: CodingNativeTurn,
+): CodingNativeToolTranscript {
+  const bound = Object.freeze({ ...expected });
+  const requireBound = (): void => {
+    const current = nativeTurn(db, runId);
+    if (
+      current?.chatId !== bound.chatId ||
+      current.userMessageId !== bound.userMessageId ||
+      current.turnRef !== bound.turnRef
+    )
+      throw invalidRequest("Coding tool result owner changed.");
+    const message = db
+      .prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=? AND role='user'")
+      .get(bound.userMessageId, bound.chatId);
+    if (message === undefined) throw invalidRequest("Coding tool result owner changed.");
+  };
+  requireBound();
+  return {
+    occupancy: (): ReturnType<typeof chatToolTranscriptOccupancy> => {
+      requireBound();
+      return chatToolTranscriptOccupancy(db, bound.userMessageId);
+    },
+    capture: (update, correlationId): void => {
+      withImmediateTransaction(db, () => {
+        requireBound();
+        store.updateChatToolTranscript(bound.userMessageId, update, correlationId);
+      });
+    },
+    humanInput: (started, view, correlationId): void => {
+      withImmediateTransaction(db, () => {
+        requireBound();
+        if (!started.call.id.startsWith("mcp-"))
+          throw invalidRequest("Invalid pending native call.");
+        store.updateChatToolTranscript(bound.userMessageId, started, correlationId);
+        store.updateChatToolTranscript(
+          bound.userMessageId,
+          { kind: "human-input", callId: started.call.id, view },
+          correlationId,
+        );
+      });
+    },
+  };
+}
+
+function messagesBeforeRun(
+  db: DatabaseSync,
+  store: UiStore,
+  id: string,
+  runId: string,
+): readonly ChatMessage[] {
+  const ids = new Set(
+    db
+      .prepare("SELECT message_id FROM coding_history_message_bindings WHERE run_id = ?")
+      .all(runId)
+      .map((row) => row.message_id),
+  );
+  const repeated = repeatedIntentMessageIds(db, id);
+  const listed = store.listMessages(id, 200);
+  return listed.filter((message) => !ids.has(message.id) && !repeated.has(message.id));
+}
 export function createCodingHistoryStore(
   db: DatabaseSync,
   store: UiStore,
@@ -712,17 +840,7 @@ export function createCodingHistoryStore(
         )
         .all(operator)
         .map((row) => requireTask(db, store, String(row.chat_id))),
-    messagesBeforeRun: (id, runId): readonly ChatMessage[] => {
-      const ids = new Set(
-        db
-          .prepare("SELECT message_id FROM coding_history_message_bindings WHERE run_id = ?")
-          .all(runId)
-          .map((row) => row.message_id),
-      );
-      const repeated = repeatedIntentMessageIds(db, id);
-      const listed = store.listMessages(id, 200);
-      return listed.filter((message) => !ids.has(message.id) && !repeated.has(message.id));
-    },
+    messagesBeforeRun: (id, runId) => messagesBeforeRun(db, store, id, runId),
     detail: (id, operator) => readDetail(db, store, id, operator),
     forRun: (runId): CodingHistoryTask | undefined => {
       const row = db.prepare("SELECT chat_id FROM coding_history_runs WHERE run_id = ?").get(runId);
@@ -732,6 +850,7 @@ export function createCodingHistoryStore(
     bindNativeTurn: (runId, nativeMessageId, text) =>
       bindNativeTurn(db, store, now, runId, nativeMessageId, text),
     nativeTurn: (runId) => nativeTurn(db, runId),
+    nativeToolTranscript: (runId, expected) => nativeToolTranscript(db, store, runId, expected),
     bindRun: (id, runId): void => {
       bindRun(db, store, id, runId, now);
     },

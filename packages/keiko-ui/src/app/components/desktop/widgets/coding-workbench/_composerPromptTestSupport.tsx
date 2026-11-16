@@ -47,6 +47,7 @@ export interface ActionMocks extends TaskComposerActions {
   readonly onSend: Mock<Fn<"onSend">>;
   readonly onDeliver: Mock<Fn<"onDeliver">>;
   readonly onStop: Mock<Fn<"onStop">>;
+  readonly onCancelStart: Mock<Fn<"onCancelStart">>;
 }
 
 export function actions(): ActionMocks {
@@ -57,6 +58,7 @@ export function actions(): ActionMocks {
     onSend: vi.fn<Fn<"onSend">>(),
     onDeliver: vi.fn<Fn<"onDeliver">>(),
     onStop: vi.fn<Fn<"onStop">>(),
+    onCancelStart: vi.fn<Fn<"onCancelStart">>(),
   };
 }
 
@@ -75,6 +77,7 @@ export function props(
     mutationPending: false,
     stopPending: false,
     startBusy: false,
+    startCancellable: false,
     startBlockedReason: null,
     projectMemoryEnabled: true,
     onProjectMemoryEnabledChange: vi.fn(),

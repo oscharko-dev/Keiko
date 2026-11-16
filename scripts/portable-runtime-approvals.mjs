@@ -23,15 +23,19 @@ const EXECUTABLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const REVIEW_REFERENCE_PATTERN =
   /^https:\/\/github\.com\/oscharko-dev\/Keiko\/(?:issues|pull)\/\d+$/u;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
-const OPENCODE_PIN = Object.freeze({
-  owner: "anomalyco",
-  repository: "opencode",
-  name: "opencode",
-  version: "2.1.4",
-  tag: "v2.1.4",
-  commit: "68bc26b7da1990ce10ffecfbc1e09eb13aa5d824",
-  schemaPath: "packages/protocol/openapi.json",
-  schemaSha256: "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9",
+const OPENCODE_RUNTIME_PINS = JSON.parse(
+  readFileSync(
+    new URL("../packages/keiko-contracts/src/opencode-runtime-pins.json", import.meta.url),
+    "utf8",
+  ),
+);
+const [CURRENT_OPENCODE_PIN] = OPENCODE_RUNTIME_PINS.pins;
+export const OPENCODE_PIN = Object.freeze({
+  ...OPENCODE_RUNTIME_PINS.upstream,
+  version: CURRENT_OPENCODE_PIN.version,
+  tag: CURRENT_OPENCODE_PIN.tag,
+  commit: CURRENT_OPENCODE_PIN.commit,
+  schemaSha256: CURRENT_OPENCODE_PIN.rawSchemaSha256,
 });
 
 class ApprovalsError extends Error {}

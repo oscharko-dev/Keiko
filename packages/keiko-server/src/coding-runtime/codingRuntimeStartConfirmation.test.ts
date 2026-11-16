@@ -55,6 +55,7 @@ describe("coding runtime start confirmation binding", () => {
       { repositoryIdentity: { kind: "github-origin" as const, digest: "f".repeat(64) } },
       { repositoryIdentity: { kind: "local" as const, digest: "f".repeat(64) } },
       { jiraPod: JIRA_POD },
+      { connectorScopes: ["issue-tracker.admin"] as const },
     ]) {
       expect(
         codingRuntimeStartConfirmationClaim({ ...facts, ...changed }, 1).bindingDigest,
@@ -83,4 +84,26 @@ describe("coding runtime start confirmation binding", () => {
       codingRuntimeStartConfirmationClaim(facts, 1),
     );
   });
+});
+
+it("binds explicit administrative scopes independently of the same Pod and Full access mode", () => {
+  const ordinary = {
+    ...facts,
+    jiraPod: JIRA_POD,
+    requestedMode: "autonomous-delivery" as const,
+    connectorScopes: ["issue-tracker.read", "issue-tracker.write"] as const,
+  };
+  const admin = {
+    ...ordinary,
+    connectorScopes: [...ordinary.connectorScopes, "issue-tracker.admin"] as const,
+  };
+  expect(codingRuntimeStartConfirmationClaim(admin, 1).bindingDigest).not.toBe(
+    codingRuntimeStartConfirmationClaim(ordinary, 1).bindingDigest,
+  );
+  expect(
+    codingRuntimeStartConfirmationClaim(
+      { ...admin, connectorScopes: [...admin.connectorScopes].reverse() },
+      1,
+    ).bindingDigest,
+  ).toBe(codingRuntimeStartConfirmationClaim(admin, 1).bindingDigest);
 });

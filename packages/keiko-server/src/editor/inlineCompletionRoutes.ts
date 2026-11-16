@@ -77,6 +77,7 @@ import {
   type EditorModelTokenBudget,
   type EditorModelTokenReservation,
 } from "./editorModelTokenBudget.js";
+import { strictRedactor } from "../content-redactor.js";
 
 // Body cap: the overlay buffer may be up to the document-size cap; allow 64 KiB of JSON on top. The
 // language-service document cap is reused via the coding-context completion budget's source ceiling.
@@ -336,7 +337,7 @@ function recordInlineModelEvidence(
 ): void {
   recordEditorCompletionModelEvidence(
     ctx.deps.evidenceStore,
-    ctx.deps.redactor,
+    strictRedactor(ctx.deps),
     {
       modelId: ctx.modelId,
       modelMode: ctx.selection.mode,
@@ -388,7 +389,7 @@ async function runElectedInlineModel(ctx: ElectedInlineModelContext): Promise<In
   });
   recordCodingContextEvidence(
     ctx.deps.evidenceStore,
-    ctx.deps.redactor,
+    strictRedactor(ctx.deps),
     toCodingContextWirePack(pack),
     ctx.nowMs,
   );
@@ -709,7 +710,7 @@ export async function handleEditorInlineCompletionTelemetry(
     const now = options.now ?? Date.now;
     recordInlineCompletionTelemetryEvidence(
       deps.evidenceStore,
-      deps.redactor,
+      strictRedactor(deps),
       { ...parsed.value, root: root.access.canonicalRoot },
       now(),
     );

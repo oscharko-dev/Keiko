@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { OPENCODE_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/opencode-runtime-pins";
 import type { CanonicalToolId } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   DEFAULT_SANDBOX_POLICY,
@@ -307,11 +308,11 @@ describe("opencode registration set", () => {
     expect(projection.tools.map((tool) => tool.alias)).not.toContain("todowrite");
   });
 
-  it("pins the managed-runtime dialect: opencode 2.1.4, every projected schema all-required and closed", () => {
+  it("pins the managed-runtime dialect: the pinned opencode, every projected schema all-required and closed", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     expect(projection.adapterDialect).toEqual({ id: "managed-runtime-json-schema", version: 1 });
-    expect(projection.adapterRuntime).toEqual({ id: "opencode", version: "2.1.4" });
+    expect(projection.adapterRuntime).toEqual(OPENCODE_CATALOG_RUNTIME);
     for (const tool of projection.tools) assertManagedShape(tool.inputSchema);
   });
 

@@ -3,8 +3,20 @@ import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runti
 import { ManagedMcpError } from "./definitions.js";
 
 type JsonObject = Record<string, unknown>;
-const MAX_TOOLS = 64;
 const MAX_BYTES = 1024 * 1024;
+interface ListLimits {
+  readonly tools: number;
+  readonly bytes: number;
+  readonly nodes: number;
+}
+/** The strict bound for one admitted listing; a direct caller gets exactly this. */
+const STRICT_LIMITS: ListLimits = { tools: 64, bytes: MAX_BYTES, nodes: 8192 };
+/**
+ * What one `tools/list` reply may carry on the wire. The client then keeps only the tools the
+ * registry allows, so a large server is narrowed instead of refused. Every tool, kept or not, still
+ * passes the per-tool schema admission below before the SDK parses it.
+ */
+const LIST_LIMITS: ListLimits = { tools: 512, bytes: 4 * MAX_BYTES, nodes: 65_536 };
 const HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~A-Za-z0-9]+$/u;
 const HEADER_TYPES: ReadonlySet<unknown> = new Set(["string", "integer", "boolean"]);
 const SCHEMA_MAPS = new Set(["patternProperties", "dependentSchemas", "$defs", "definitions"]);
@@ -53,6 +65,7 @@ function appendChildren(
   depth: number,
   pending: Position[],
   seen: Set<object>,
+  maxNodes: number,
 ): boolean {
   if (!plainJsonObject(value) || seen.has(value)) return false;
   seen.add(value);
@@ -63,23 +76,23 @@ function appendChildren(
     if (descriptor.get !== undefined || descriptor.set !== undefined) return false;
     values.push(descriptor.value);
   }
-  if (values.length + pending.length > 8192) return false;
+  if (values.length + pending.length > maxNodes) return false;
   for (const child of values) pending.push({ value: child, depth: depth + 1 });
   return true;
 }
 /** Bound the whole document before JSON serialization or any SDK recursive schema walk. */
-function boundedMetadata(value: unknown): boolean {
+function boundedMetadata(value: unknown, limits: ListLimits): boolean {
   const pending: Position[] = [{ value, depth: 0 }];
   const seen = new Set<object>();
   let count = 0;
   while (pending.length > 0) {
     const item = pending.pop();
-    if (item === undefined || ++count > 8192 || item.depth > 32) return false;
+    if (item === undefined || ++count > limits.nodes || item.depth > 32) return false;
     if (item.value === null || typeof item.value !== "object") {
       if (!jsonScalar(item.value)) return false;
-    } else if (!appendChildren(item.value, item.depth, pending, seen)) return false;
+    } else if (!appendChildren(item.value, item.depth, pending, seen, limits.nodes)) return false;
   }
-  return Buffer.byteLength(JSON.stringify(value), "utf8") <= MAX_BYTES;
+  return Buffer.byteLength(JSON.stringify(value), "utf8") <= limits.bytes;
 }
 interface SchemaPosition {
   readonly value: unknown;
@@ -143,12 +156,15 @@ function toolAdmitted(tool: unknown): tool is JsonObject & { name: string } {
     (tool.outputSchema === undefined || isBoundedExternalJsonSchema(tool.outputSchema))
   );
 }
-export function admitExternalToolList(value: unknown): readonly string[] | undefined {
+export function admitExternalToolList(
+  value: unknown,
+  limits: ListLimits = STRICT_LIMITS,
+): readonly string[] | undefined {
   if (
     !object(value) ||
-    !boundedMetadata(value) ||
+    !boundedMetadata(value, limits) ||
     !Array.isArray(value.tools) ||
-    value.tools.length > MAX_TOOLS
+    value.tools.length > limits.tools
   )
     return undefined;
   const names: string[] = [];
@@ -183,10 +199,10 @@ export function installExternalMetadataAdmission(
       !("result" in message)
     )
       return;
-    const admitted = admitExternalToolList(message.result);
+    const admitted = admitExternalToolList(message.result, LIST_LIMITS);
     if (
       admitted !== undefined &&
-      names.size + admitted.length <= MAX_TOOLS &&
+      names.size + admitted.length <= LIST_LIMITS.tools &&
       admitted.every((name) => !names.has(name))
     ) {
       for (const name of admitted) names.add(name);

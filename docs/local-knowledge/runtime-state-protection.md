@@ -65,9 +65,12 @@ a credential-like value indexed into FTS is release-visible instead of hidden be
 
 ## Key resolution
 
-The store key is resolved per store-open through the shared `resolveLocalVaultKey` seam with a
+The store key is resolved through the shared `resolveLocalVaultKey` seam with a
 Local-Knowledge namespace (distinct from the credential and memory vaults so a ciphertext sealed for
-one store cannot open with another's key):
+one store cannot open with another's key). The server resolves it once per process and store
+directory (`resolveLocalVaultKeyOnce`) and reuses it for every later store-open, so the Keychain
+child process and the `security.vault.key-resolved` line occur once; a failed resolution is not
+remembered:
 
 1. `KEIKO_LOCAL_KNOWLEDGE_KEY` — base64 of exactly 32 bytes. Explicit operator override (strongest;
    the key lives outside the state directory). Use this to pin a deterministic key in CI/tests.

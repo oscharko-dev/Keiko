@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import {
@@ -447,27 +448,30 @@ async function interceptGitRoutes(page: Page, browserProjectPath: string): Promi
 // persistence strategy for governedGit is "fs-reference" (not "evidence-reference"), so
 // slash-bearing absolute filesystem paths survive sanitizeCfgForPersistence unchanged.
 async function seedGitClientWindow(page: Page, fixtureRoot: string): Promise<void> {
-  await page.addInitScript((projectPath) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-1575-git-changes",
-          type: "governedGit",
-          x: 24,
-          y: 24,
-          w: 1200,
-          h: 900,
-          z: 20,
-          cfg: { projectPath },
-          // Maximized so the sidebar (file list + commit composer) and the diff pane are all
-          // within the tall viewport; no scrolling required to reach any assertion target.
-          max: true,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, fixtureRoot);
+  await page.addInitScript(
+    ({ argument: projectPath, storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-1575-git-changes",
+            type: "governedGit",
+            x: 24,
+            y: 24,
+            w: 1200,
+            h: 900,
+            z: 20,
+            cfg: { projectPath },
+            // Maximized so the sidebar (file list + commit composer) and the diff pane are all
+            // within the tall viewport; no scrolling required to reach any assertion target.
+            max: true,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, fixtureRoot),
+  );
 }
 
 // ─── Evidence helpers ─────────────────────────────────────────────────────────────────────────────

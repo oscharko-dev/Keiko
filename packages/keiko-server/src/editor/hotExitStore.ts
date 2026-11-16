@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
   createLocalSecretVault,
-  resolveLocalVaultKey,
+  resolveLocalVaultKeyOnce,
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
@@ -123,7 +123,7 @@ function isSnapshotRef(value: string): boolean {
 
 function hotExitVault(options: CreateEditorHotExitStoreOptions): LocalSecretVault {
   const vaultDir = join(options.stateDir, HOT_EXIT_SUBDIR);
-  const { key } = resolveLocalVaultKey({
+  const { key } = resolveLocalVaultKeyOnce({
     env: options.env,
     vaultDir,
     envVarName: HOT_EXIT_KEY_ENV,

@@ -31,6 +31,18 @@ describe("citation markers follow the rendered Markdown blocks", () => {
     ["a block quote", `${TICK}\n> The API uses TLS [1]\n${TICK}`],
     ["table rows", "| a ` | b |\n| --- | :-: |\n| TLS [1] | c ` |"],
     ["table cells", "| a ` | TLS [1] | c ` |\n|---|---|---|"],
+    [
+      "an escaped pipe in a code cell",
+      "| Code | Evidence |\n| --- | --- |\n| `a \\| [1]` | TLS [2] |",
+    ],
+    [
+      "an escaped pipe after code",
+      "| Code | Evidence |\n| --- | --- |\n| `[1]` \\| text | TLS [2] |",
+    ],
+    [
+      "an even backslash run before a real boundary",
+      "| Code | Evidence |\n| --- | --- |\n| `a \\\\| TLS [2] ` |",
+    ],
     ["a fence", "Tick ` here [1]\n```\ncode\n```\nand ` there [2]."],
     [
       "an indented closing fence",

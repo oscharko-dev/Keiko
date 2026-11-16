@@ -1,3 +1,4 @@
+import { browserChatMessages } from "./chat-message-projection.js";
 import { withToolResultsAsSource } from "./chat-tool-turn-ending.js";
 import {
   type ParsedDesktopChatSend,
@@ -8,6 +9,7 @@ import {
   parseClientTurnId,
   parseMemoryRequest,
   logChatRejection,
+  rememberRequestRefusedIn,
   runPostCommitCanonicalTurnMemorySideEffects,
   type CanonicalTurnMemoryRequest,
   type ParsedConversationMemoryRequest,
@@ -18,8 +20,12 @@ import {
   scopeChatToolTurn,
 } from "./chat-tool-runtime.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
+import { chatAuthenticationInterruption } from "./chat-authentication-interruption.js";
 import {
+  assertCitationRepairTurnActive,
   callGroundedSynthesisModel,
+  sentEvidenceSources,
+  type GroundedSynthesisPurpose,
   requiresObservedToolResult,
 } from "./grounded-plural-synthesis.js";
 import {
@@ -45,6 +51,7 @@ import {
   logGroundedPromptSelection,
   logChatResponseMessage,
   type ChatResponseMemoryActivity,
+  memorySelectionLogFields,
 } from "./chat-activity.js";
 import {
   citationBehaviourFor,
@@ -240,7 +247,7 @@ import {
   canonicalChatTurnMemorySemantics,
 } from "./chat-turn-identity.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
-import { createRequestCancellation } from "./request-cancellation.js";
+import { createChatApprovalRequest } from "./chat-approval-continuation.js";
 import {
   beginAppSessionOperation,
   resolveAppSessionReadAuthority,
@@ -260,7 +267,11 @@ import {
   resolveConversationMemoryContext,
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
-import { renderConversationMemoryContextBlock } from "./conversation-prompt.js";
+import {
+  CONVERSATION_REMEMBER_REFUSED_NOTICE,
+  renderConversationMemoryContextBlock,
+  renderStandingProfileBlock,
+} from "./conversation-prompt.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
@@ -1465,9 +1476,11 @@ export function packBudgetSummary(pack: ConnectedContextPack): string {
     `model input tokens ${String(usage.modelInputTokens)}/${String(budget.modelInputTokensMax)}`,
     `model output tokens ${String(usage.modelOutputTokens)}/${String(budget.modelOutputTokensMax)}`,
     `rerank calls ${String(usage.rerankCalls)}/${String(budget.rerankCallsMax)}`,
+    // The configured limit only: the measured search time depends on machine load, and as prompt
+    // text it changed the fitted evidence of an otherwise identical request (#4335).
     budget.elapsedMsMax === null
-      ? `elapsed ${String(usage.elapsedMs)} ms (no search time limit)`
-      : `elapsed ${String(usage.elapsedMs)}/${String(budget.elapsedMsMax)} ms`,
+      ? "search time limit none"
+      : `search time limit ${String(budget.elapsedMsMax)} ms`,
   ].join("; ");
 }
 
@@ -1686,6 +1699,7 @@ function groundedPromptBuilder(options?: GroundedGatewayPromptOptions): Grounded
 }
 
 interface GroundedGatewayAnswerContext {
+  readonly purpose?: GroundedSynthesisPurpose | undefined;
   readonly userMessageId: string | undefined;
   readonly assistantReferences: NonNullable<OrchestratorInput["assistantReferents"]>;
   readonly synthesis: GroundedSynthesisCallBudget;
@@ -1730,7 +1744,7 @@ function createGatewayAnswerer(
     answer: (question, pack, options) => gatewayGroundedAnswer(ctx, question, pack, options ?? {}),
     repair: (question, pack, original, options) =>
       gatewayGroundedAnswer(
-        ctx,
+        { ...ctx, purpose: "citation-repair" },
         `${question}\n\n${buildCitationRepairPrompt(original)}`,
         pack,
         options,
@@ -1760,11 +1774,7 @@ async function gatewayGroundedAnswer(
   const remainingBefore = ctx.synthesis.remaining();
   const reservedBefore = ctx.synthesis.reservedOutputTokens();
   const completedBefore = ctx.synthesis.completed();
-  const attempt = await withAdoptedContextWindowRetry(
-    ctx.deps,
-    { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
-    () => groundedGatewayAttempt(ctx, question, pack, options),
-  );
+  const attempt = await groundedGatewayWindowAttempt(ctx, question, pack, options);
   if (attempt.response === undefined)
     return {
       content: connectedSearchNoEvidenceAnswer(options.currentQuestion ?? question),
@@ -1788,6 +1798,48 @@ async function gatewayGroundedAnswer(
       currentContextProfileForModel(ctx.deps, ctx.modelId),
     ),
   };
+}
+
+interface GroundedGatewayAttemptResult {
+  readonly sent: SentGroundedPrompt;
+  readonly response?: NormalizedResponse;
+}
+
+function groundedGatewayWindowAttempt(
+  ctx: GroundedGatewayAnswerContext,
+  question: string,
+  pack: ConnectedContextPack,
+  options: GroundedAnswerOptions,
+): Promise<GroundedGatewayAttemptResult> {
+  let sent: SentGroundedPrompt | undefined;
+  return withAdoptedContextWindowRetry(
+    ctx.deps,
+    {
+      modelId: ctx.modelId,
+      surface: "grounded",
+      correlationId: ctx.correlationId,
+      settleRetryFailure: (error, originalFailure) => {
+        if (sent === undefined) return undefined;
+        const response = ctx.deps.chatToolTurn?.settleRetryFailure(
+          error,
+          originalFailure,
+          ctx.modelId,
+          ctx.signal,
+        );
+        return response === undefined ? undefined : { sent, response };
+      },
+    },
+    (attempt) =>
+      groundedGatewayAttempt(
+        ctx,
+        question,
+        pack,
+        { ...options, retryFollows: attempt.retryFollows },
+        (selected) => {
+          if (!attempt.retrying) sent = selected;
+        },
+      ),
+  );
 }
 
 function settledSynthesisFields(
@@ -1815,10 +1867,7 @@ function groundedRemainingOptions(
   const pending = ctx.synthesis.pendingUsage();
   return {
     ...options,
-    modelInputTokensMax: Math.max(
-      0,
-      (options.modelInputTokensMax ?? pack.budget.modelInputTokensMax) - pending.promptTokens,
-    ),
+    modelInputTokensMax: options.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
     modelOutputTokensMax: Math.max(
       0,
       (options.modelOutputTokensMax ?? pack.budget.modelOutputTokensMax) - pending.completionTokens,
@@ -1831,7 +1880,8 @@ async function groundedGatewayAttempt(
   question: string,
   pack: ConnectedContextPack,
   options: GroundedAnswerOptions,
-): Promise<{ readonly sent: SentGroundedPrompt; readonly response?: NormalizedResponse }> {
+  observeSent: (sent: SentGroundedPrompt) => void,
+): Promise<GroundedGatewayAttemptResult> {
   if (ctx.synthesis.remaining() <= 0)
     throw new CallerAttemptAdmissionError("Grounded synthesis attempt allowance exhausted");
   const remaining = groundedRemainingOptions(ctx, pack, options);
@@ -1846,6 +1896,7 @@ async function groundedGatewayAttempt(
     requiredEvidenceAtomIds: assistantReferenceExcerptIds(pack, ctx.assistantReferences),
     callerInputTokensMax: remaining.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
   });
+  observeSent(sent);
   if (!requiredEvidenceSent(sent, options.requiredEvidencePaths)) return { sent };
   if (
     sent.sentReferenceCount === 0 &&
@@ -1866,6 +1917,7 @@ async function dispatchGroundedSynthesis(
   remaining: GroundedAnswerOptions,
 ): Promise<NormalizedResponse> {
   assertGroundedGatewayDispatchActive(ctx, original);
+  assertCitationRepairTurnActive(ctx.purpose, ctx.deps.chatToolTurn);
   logGroundedPromptSelection(
     ctx.correlationId,
     sent,
@@ -1878,6 +1930,7 @@ async function dispatchGroundedSynthesis(
     outputTokensMax: original.modelOutputTokensMax ?? pack.budget.modelOutputTokensMax,
     signal: ctx.signal,
     deadlineAtMs: original.deadlineAtMs,
+    retryFollows: original.retryFollows,
   });
   const promptTokens = countGatewayPromptTokens({ messages: sent.messages }, ctx.tokenAccounting);
   try {
@@ -1895,6 +1948,7 @@ async function dispatchGroundedSynthesis(
       tracker,
       ctx.deps.chatToolTurn,
       requiresObservedToolResult(ctx.deps, sent.sentReferenceCount),
+      { purpose: ctx.purpose, evidenceSources: sentEvidenceSources(sent.sentReferenceCount) },
     );
     ctx.synthesis.recordCompleted();
     tracker.settleFallback(promptTokens, response.usage);
@@ -1965,7 +2019,6 @@ function resolveGroundedAnswerModel(
     modelId,
     readinessAdmission,
     deps,
-    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
 }
 
@@ -2026,6 +2079,7 @@ function runDefaultGroundedExploration(
     ...groundedExplorationPolicies(deps),
     reliableCitationBehaviour: citationBehaviourFor(deps, modelId),
     observeCitationBehaviour: citationBehaviourObserverFor(deps, modelId, runnerCtx.correlationId),
+    toolTurn: deps.chatToolTurn,
     answerer: createGatewayAnswerer(
       deps,
       model,
@@ -2223,6 +2277,7 @@ interface AskWorkerCtx extends GroundedRetrievalContinuityInput {
 }
 
 interface PreparedGroundedAsk {
+  readonly onAdmitted?: ((message: ChatMessage) => void) | undefined;
   readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
   readonly messageCountBeforeTurn?: number;
   readonly continuityStartedAt?: number;
@@ -2234,6 +2289,9 @@ interface PreparedGroundedAsk {
   readonly commitTurnId?: string | undefined;
   readonly scopeIdentity?: string | undefined;
   readonly turnIdentityContent?: string | undefined;
+  // What the person wrote, frozen before a long prompt is compacted: memory learns from and
+  // recalls for these words, never for the model-written summary that replaces them in the answer.
+  readonly spokenContent?: string | undefined;
   readonly memoryContext?: ConversationMemoryRuntimeContext | undefined;
   readonly userMessage?: ChatMessage | undefined;
   readonly memory?: GroundedMemoryPreparation | undefined;
@@ -2307,6 +2365,15 @@ function groundedTurnIdentityContent(
   });
 }
 
+// No fallback to the prompt text: after compaction that is the model's summary, and memory must
+// never learn or recall from it.
+function groundedSpokenContent(prepared: PreparedGroundedAsk): string {
+  if (prepared.spokenContent === undefined) {
+    throw new Error("Grounded spoken content was not frozen before memory use.");
+  }
+  return prepared.spokenContent;
+}
+
 function frozenGroundedTurnIdentity(prepared: PreparedGroundedAsk): string {
   if (prepared.turnIdentityContent === undefined) {
     throw new Error("Grounded turn identity was not frozen before admission.");
@@ -2333,6 +2400,7 @@ function freezeGroundedTurn(
     input,
     scopeIdentity,
     memoryContext,
+    spokenContent: input.content,
     turnIdentityContent: groundedTurnIdentityContent(
       input,
       canonicalChatTurnGroundingScopeIdentity(prepared.chat),
@@ -2575,7 +2643,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
         ? { promptContext: output.promptContext }
         : {}),
     },
-    deps.store,
+    deps.chatToolTurn,
   );
   deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   if (sourceEvidenceAvailable) {
@@ -2732,7 +2800,6 @@ function resolveMultiSourceSeam(
     modelId,
     readinessAdmission,
     deps,
-    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
   return {
     retriever: defaultRetriever(signal, deps, correlationId),
@@ -3025,17 +3092,24 @@ async function dispatchPreparedGroundedAsk(
   return dispatchHybridAsk(preparedWithCanonicalFolders, deps, skippedFolders, hybrid);
 }
 
-function admitGroundedUser(
+function groundedSkillSelectionRefusal(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
-): PreparedGroundedAsk | RouteResult {
-  if (prepared.userMessage !== undefined) return prepared;
-  const skillRefusal = markdownSkillSelectionRefusal(
+): RouteResult | undefined {
+  return markdownSkillSelectionRefusal(
     deps,
     prepared.chat.id,
     prepared.input.expectedSkillSelectionRevision,
     prepared.correlationId,
   );
+}
+
+function admitGroundedUser(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): PreparedGroundedAsk | RouteResult {
+  if (prepared.userMessage !== undefined) return prepared;
+  const skillRefusal = groundedSkillSelectionRefusal(prepared, deps);
   if (skillRefusal !== undefined) return skillRefusal;
   const messageCountBeforeTurn = deps.store.countMessages(prepared.chat.id);
   const newUserMessage = {
@@ -3054,6 +3128,7 @@ function admitGroundedUser(
     identityContent: frozenGroundedTurnIdentity(prepared),
   });
   if (admission.kind === "admitted") {
+    prepared.onAdmitted?.(admission.userMessage);
     return {
       ...prepared,
       commitTurnId,
@@ -3194,12 +3269,34 @@ function persistGroundedContinuity(
   });
 }
 
-function groundedAnswerContent(content: string, memory: ConversationMemoryResultWire): string {
+// The grounded answer carries the standing profile ahead of the retrieved memories (#4228). Both
+// stay untrusted data; the sent evidence alone decides what a source says. A refused "Merke dir"
+// travels with them, so a grounded answer cannot claim it was stored either (#4213).
+function groundedMemoryBlocks(memory: ConversationMemoryResultWire): {
+  readonly profile: readonly string[];
+  readonly recalled: readonly string[];
+} {
+  if (!memory.context.enabled) return { profile: [], recalled: [] };
   const memoryText = memory.context.text.trim();
-  if (!memory.context.enabled || memoryText.length === 0) return content;
-  return ["User question:", content, "", renderConversationMemoryContextBlock(memoryText)].join(
-    "\n",
+  const profile = renderStandingProfileBlock(
+    memory.context.profile?.entries.map((entry) => entry.text) ?? [],
   );
+  return {
+    profile: profile === undefined ? [] : [profile],
+    recalled: memoryText.length === 0 ? [] : [renderConversationMemoryContextBlock(memoryText)],
+  };
+}
+
+function groundedAnswerContent(
+  content: string,
+  memory: ConversationMemoryResultWire,
+  rememberRefused: boolean,
+): string {
+  const { profile, recalled } = groundedMemoryBlocks(memory);
+  const notice = rememberRefused ? [CONVERSATION_REMEMBER_REFUSED_NOTICE] : [];
+  const blocks = [...profile, ...notice, ...recalled];
+  if (blocks.length === 0) return content;
+  return ["User question:", content, "", blocks.join("\n\n")].join("\n");
 }
 
 function groundedMemoryPreparationFailure(
@@ -3215,6 +3312,7 @@ function withPreparedGroundedMemory(
   prepared: PreparedGroundedAsk,
   context: ConversationMemoryRuntimeContext,
   result: ConversationMemoryResultWire,
+  rememberRefused: boolean,
 ): PreparedGroundedAsk {
   return {
     ...prepared,
@@ -3223,6 +3321,7 @@ function withPreparedGroundedMemory(
       answerContent: groundedAnswerContent(
         prepared.input.answerContent ?? prepared.input.content,
         result,
+        rememberRefused,
       ),
     },
     memory: {
@@ -3253,21 +3352,19 @@ async function prepareGroundedMemory(
     );
   }
   try {
-    const result = await buildMemoryResult(
-      {
-        chatId: prepared.chat.id,
-        projectPath: prepared.chat.projectPath,
-        content: prepared.input.content,
-        modelId: prepared.input.modelId,
-        documentContext: [],
-        attachments: [],
-        memory: memoryRequest,
-        discussionMode: undefined,
-      },
-      deps,
-      context,
-    );
-    return withPreparedGroundedMemory(prepared, context, result);
+    const request = {
+      chatId: prepared.chat.id,
+      projectPath: prepared.chat.projectPath,
+      content: groundedSpokenContent(prepared),
+      modelId: prepared.input.modelId,
+      documentContext: [],
+      attachments: [],
+      memory: memoryRequest,
+      discussionMode: undefined,
+    };
+    const result = await buildMemoryResult(request, deps, context);
+    const refused = rememberRequestRefusedIn(deps, request, context);
+    return withPreparedGroundedMemory(prepared, context, result, refused);
   } catch (error) {
     return groundedMemoryPreparationFailure(prepared, deps, error);
   }
@@ -3444,6 +3541,8 @@ async function executeGroundedAskInTurn(
   multiSource?: MultiSourceSeam,
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
+  const skillRefusal = groundedSkillSelectionRefusal(prepared, deps);
+  if (skillRefusal !== undefined) return skillRefusal;
   const modelAdmitted = await admitGroundedModel(
     prepared,
     deps,
@@ -3526,7 +3625,23 @@ async function executeGroundedAsk(
     },
     generation,
   );
-  return result === CHAT_TURN_WAIT_CANCELLED ? groundedCancelledResult() : result;
+  return groundedTurnResult(result, prepared, deps);
+}
+
+function groundedTurnResult(
+  result: RouteResult | typeof CHAT_TURN_WAIT_CANCELLED,
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): RouteResult {
+  if (result !== CHAT_TURN_WAIT_CANCELLED) return result;
+  return (
+    chatAuthenticationInterruption(
+      prepared.signal,
+      deps,
+      prepared.correlationId,
+      "POST /api/chats/messages/grounded",
+    ) ?? groundedCancelledResult()
+  );
 }
 
 function groundedCancelledResult(): RouteResult {
@@ -3598,7 +3713,6 @@ function runGroundedPostCommitMemorySideEffects(
     deps,
     groundedCanonicalMemoryRequest(prepared, answer.content),
     prepared.memory.context,
-    prepared.input.modelId ?? prepared.chat.selectedModel,
     answer.memory,
     answer.content,
     answer.assistantMessageId,
@@ -3611,6 +3725,8 @@ export async function runGroundedAskInput(
   options: {
     readonly signal?: AbortSignal | undefined;
     readonly correlationId?: string | undefined;
+    readonly request?: IncomingMessage | undefined;
+    readonly onAdmitted?: ((message: ChatMessage) => void) | undefined;
     readonly runner?: GroundedRunner | undefined;
     readonly multiSource?: MultiSourceSeam | undefined;
     readonly hybrid?: HybridSeam | undefined;
@@ -3624,6 +3740,8 @@ export async function runGroundedAskInput(
       input,
       signal: options.signal ?? new AbortController().signal,
       correlationId: options.correlationId,
+      request: options.request,
+      onAdmitted: options.onAdmitted,
     },
     deps,
     options.runner,
@@ -3638,6 +3756,10 @@ export async function runMixedGroundedChat(
   deps: UiHandlerDeps,
   signal: AbortSignal,
   correlationId: string | undefined,
+  admission?: {
+    readonly request: IncomingMessage;
+    readonly onAdmitted: (message: ChatMessage) => void;
+  },
 ): Promise<RouteResult> {
   const { request, chat } = parsed;
   if (request.attachments.length > 0 || request.documentContext.length > 0)
@@ -3653,7 +3775,7 @@ export async function runMixedGroundedChat(
       expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
     },
     deps,
-    { signal, correlationId },
+    { signal, correlationId, request: admission?.request, onAdmitted: admission?.onAdmitted },
   );
   if (result.status !== 200 || !groundedAnswerBody(result.body)) return result;
   const user = deps.store.findMessageById(result.body.userMessageId);
@@ -3664,7 +3786,7 @@ export async function runMixedGroundedChat(
     status: 200,
     body: {
       chat: deps.store.findChatById(chat.id) ?? chat,
-      messages: [user, assistant],
+      messages: browserChatMessages([user, assistant], correlationId),
       memory: result.body.memory,
     },
   };
@@ -3707,11 +3829,12 @@ function groundedCanonicalMemoryRequest(
     chatId: prepared.chat.id,
     projectPath: prepared.chat.projectPath,
     messages: [
-      { role: "user", content: prepared.input.content },
+      { role: "user", content: groundedSpokenContent(prepared) },
       { role: "assistant", content: assistantContent },
     ],
     modelId: prepared.input.modelId,
     memory: prepared.input.memory,
+    ...(prepared.userMessage === undefined ? {} : { sourceMessageId: prepared.userMessage.id }),
     ...(prepared.input.clientTurnId === undefined
       ? {}
       : { clientTurnId: prepared.input.clientTurnId }),
@@ -3743,8 +3866,9 @@ async function attachGroundedMemory(
       ),
       memoryPreparation.context,
       {
-        retrievalContent: prepared.input.content,
+        retrievalContent: groundedSpokenContent(prepared),
         precomputedMemory: memoryPreparation.result,
+        correlationId: prepared.correlationId,
       },
     );
     return memory === undefined ? markedResult : { ...markedResult, body: { ...body, memory } };
@@ -3777,6 +3901,7 @@ function finalGroundedMemoryActivity(
   ).length;
   const requestedDisposition = markerCount > 0 ? "included" : "excluded";
   return {
+    ...memorySelectionLogFields(prepared.memory?.result),
     uncitedMemoryContextMarkerCount: markerCount,
     memoryContextDisposition:
       prepared.input.memory?.enabled !== true ? "not-requested" : requestedDisposition,
@@ -3791,12 +3916,18 @@ export async function handleGroundedAsk(
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
   const deps = withMarkdownSkillRequestAuthority(requestDeps, ctx.req);
-  const cancellation = createRequestCancellation(ctx, "grounded request cancelled");
+  const cancellation = createChatApprovalRequest(ctx, deps, "grounded request cancelled");
   try {
     const prepared = await prepareGroundedAsk(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return groundedCancelledResult();
     if ("status" in prepared) return prepared;
-    const result = await executeGroundedAsk(prepared, deps, runner, multiSource, hybrid);
+    const result = await executeGroundedAsk(
+      { ...prepared, onAdmitted: cancellation.admit },
+      deps,
+      runner,
+      multiSource,
+      hybrid,
+    );
     if (result.status === 200 && groundedAnswerBody(result.body)) {
       logChatResponseMessage(
         result.body.assistantMessageId,

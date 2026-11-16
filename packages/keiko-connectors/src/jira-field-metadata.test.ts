@@ -1,6 +1,174 @@
 import { describe, expect, it } from "vitest";
 import type { JiraFieldMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { parseJiraFieldMetadata, validateJiraFieldChanges } from "./jira-field-metadata.js";
+import {
+  parseJiraFieldMetadata,
+  prepareJiraDescriptionFields,
+  validateJiraFieldChanges,
+} from "./jira-field-metadata.js";
+
+describe("Data Center description serialization", () => {
+  it("uses the canonical supported Markdown projection before validation and preparation", () => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    const fields = {
+      description: { format: "markdown", text: "## Criteria\n- **Exact**\n  1. `detail`" },
+    };
+    const expected = {
+      ok: true,
+      fields: { description: "h2. Criteria\n* *Exact*\n*# {{detail}}" },
+      update: {},
+      descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
+    };
+    expect(validateJiraFieldChanges(parsed.fields, fields, "edit", "data-center")).toEqual(
+      expected,
+    );
+    expect(prepareJiraDescriptionFields(fields, parsed.fields)).toMatchObject(expected);
+  });
+
+  it("projects supported Markdown images through the shared dev wiki writer", () => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    const result = prepareJiraDescriptionFields(
+      {
+        description: {
+          format: "markdown",
+          text: "## Heading\n![Image](https://example.invalid/image.png)",
+        },
+      },
+      parsed.fields,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      fields: { description: "h2. Heading\n!https://example.invalid/image.png!" },
+      descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
+    });
+  });
+  it("refuses an oversized Markdown projection without returning partially converted fields", () => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    const text = `## Heading\n${"{".repeat(32752)}`;
+    expect(text.length).toBeLessThan(32768);
+    const result = prepareJiraDescriptionFields(
+      { description: { format: "markdown", text } },
+      parsed.fields,
+    );
+    expect(result).toMatchObject({ ok: false, fieldId: "description", reason: "invalid-field" });
+    expect(result).not.toHaveProperty("fields");
+  });
+  it("serializes only the description and carries an internal actual conversion count", () => {
+    const parsed = parseJiraFieldMetadata([
+      field("description", "string"),
+      field("environment", "string"),
+    ]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic fields");
+    expect(
+      validateJiraFieldChanges(
+        parsed.fields,
+        {
+          description: { format: "markdown", text: "## Criteria\n* exact" },
+          environment: "## Literal environment",
+        },
+        "edit",
+        "data-center",
+      ),
+    ).toEqual({
+      ok: true,
+      fields: { description: "h2. Criteria\n* exact", environment: "## Literal environment" },
+      update: {},
+      descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
+    });
+  });
+
+  it("retains the Cloud ADF branch and unchanged Data Center values", () => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    const cloud = validateJiraFieldChanges(
+      parsed.fields,
+      { description: "## Criteria\nExact" },
+      "edit",
+      "cloud",
+    );
+    expect(cloud).toMatchObject({
+      ok: true,
+      fields: {
+        description: {
+          type: "doc",
+          version: 1,
+          content: [{ type: "heading", attrs: { level: 2 } }, { type: "paragraph" }],
+        },
+      },
+    });
+    expect(cloud).not.toHaveProperty("descriptionConvertedHeadingCount");
+    expect(
+      validateJiraFieldChanges(
+        parsed.fields,
+        { description: { format: "markdown", text: "## Criteria\nExact" } },
+        "edit",
+        "cloud",
+      ),
+    ).toMatchObject({ ok: false, fieldId: "description" });
+    expect(
+      validateJiraFieldChanges(
+        parsed.fields,
+        { description: "h2. Criteria\nExact" },
+        "edit",
+        "data-center",
+      ),
+    ).toEqual({ ok: true, fields: { description: "h2. Criteria\nExact" }, update: {} });
+    const native = "# criterion one\n## nested criterion\nh2. Native section\nExact";
+    expect(
+      validateJiraFieldChanges(parsed.fields, { description: native }, "edit", "data-center"),
+    ).toEqual({ ok: true, fields: { description: native }, update: {} });
+  });
+
+  it.each([
+    { format: "markdown", text: "## Heading\nBody", extra: true },
+    { format: "html", text: "## Heading\nBody" },
+    { format: "markdown", text: "a\u0000b" },
+    { format: "markdown", text: String.raw`## Heading\nBody\n## Next` },
+  ])("refuses invalid or encoded explicit input through the existing field gate", (description) => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    expect(
+      validateJiraFieldChanges(parsed.fields, { description }, "edit", "data-center"),
+    ).toMatchObject({ ok: false, fieldId: "description" });
+  });
+
+  it("does not admit the explicit wrapper on environment or other text fields", () => {
+    const parsed = parseJiraFieldMetadata([
+      field("environment", "string"),
+      field("summary", "string"),
+    ]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic fields");
+    for (const id of ["environment", "summary"])
+      expect(
+        validateJiraFieldChanges(
+          parsed.fields,
+          { [id]: { format: "markdown", text: "## Heading\nBody" } },
+          "edit",
+          "data-center",
+        ),
+      ).toMatchObject({ ok: false, fieldId: id });
+  });
+
+  it("refuses a serialized description that would exceed the existing field bound", () => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    const source = "# A\n".repeat(8192);
+    expect(source).toHaveLength(32768);
+    expect(
+      validateJiraFieldChanges(
+        parsed.fields,
+        { description: { format: "markdown", text: source } },
+        "edit",
+        "data-center",
+      ),
+    ).toMatchObject({ ok: false, fieldId: "description", reason: "invalid-field" });
+  });
+});
 
 function field(
   id: string,
@@ -166,6 +334,31 @@ describe("bounded Jira metadata field/operation matrix", () => {
     expect(write({ id: "10001" })).toMatchObject({ ok: true, fields: { parent: { id: "10001" } } });
     for (const invalid of ["REQ", "12", { key: "REQ-1", id: "1" }, { key: "REQ 1" }])
       expect(write(invalid)).toMatchObject({ ok: false, reason: "invalid-field" });
+  });
+
+  // The live Gemma composer run sent the numeric id Keiko had returned as a bare string and got an
+  // invalid-field refusal that explained nothing. The check is as strict as before; the refusal now
+  // says which forms are accepted (#4354).
+  it("explains a refused issue reference instead of only naming the field", () => {
+    const result = parseJiraFieldMetadata([
+      field("parent", "issuelink", { schema: { type: "issuelink", system: "parent" } }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    for (const invalid of ["13602", 13602, "REQ", { key: "REQ 1" }, { key: "REQ-1", id: "1" }]) {
+      const refused = validateJiraFieldChanges(
+        result.fields,
+        { parent: invalid },
+        "create",
+        "data-center",
+      );
+      expect(refused, JSON.stringify(invalid)).toMatchObject({
+        ok: false,
+        reason: "invalid-field",
+        fieldId: "parent",
+      });
+      if (refused.ok) throw new Error("Expected a refusal");
+      expect(refused.message, JSON.stringify(invalid)).toContain('"PROJ-12"');
+    }
   });
 
   it("keeps dedicated system fields out of plain field writes", () => {
@@ -855,5 +1048,94 @@ describe("schema-type matrix (#4176)", () => {
     expect(
       validateJiraFieldChanges(parsed.fields, { customfield_10500: "x" }, "edit", "data-center"),
     ).toMatchObject({ ok: false, fieldId: "customfield_10500" });
+  });
+});
+
+describe("control characters in rich text (#4235)", () => {
+  const rich = (value: string, deployment: "data-center" | "cloud"): boolean => {
+    const result = parseJiraFieldMetadata([field("description", "string")]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    return validateJiraFieldChanges(result.fields, { description: value }, "edit", deployment).ok;
+  };
+
+  it.each(["data-center", "cloud"] as const)(
+    "refuses a control character other than a line break or tab (%s)",
+    (deployment) => {
+      for (const bad of ["a\u0000b", "a\u001b[31mb", "a\u0007b", "a\u0085b", "a\u007fb"])
+        expect(rich(bad, deployment)).toBe(false);
+    },
+  );
+
+  it.each(["data-center", "cloud"] as const)(
+    "keeps real line breaks and tabs in a description (%s)",
+    (deployment) => {
+      expect(rich("Goal\r\n\tfirst\nsecond", deployment)).toBe(true);
+    },
+  );
+});
+
+describe("description admission before requirement trace", () => {
+  function metadata(): readonly JiraFieldMetadata[] {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    return parsed.fields;
+  }
+
+  it.each([
+    String.raw`h2. Criteria\n* exact\nh2. Source\nReference`,
+    String.raw`## Criteria\n* exact\n## Source\nReference`,
+  ])(
+    "refuses escaped document strings before a trace can add real line breaks (%s)",
+    (description) => {
+      expect(prepareJiraDescriptionFields({ description }, metadata())).toEqual({
+        ok: false,
+        reason: "invalid-field",
+        fieldId: "description",
+        message:
+          "The text contains escaped line breaks (\\n) and no real line break; send real line breaks instead.",
+      });
+    },
+  );
+
+  it.each([
+    "h2. Criteria\n* exact\n\nh2. Source\nReference",
+    "# criterion one\n## nested criterion\n# criterion two",
+    String.raw`Preserve the separator /\n\n/ literally.`,
+  ])("preserves valid native strings byte for byte before trace (%s)", (description) => {
+    expect(prepareJiraDescriptionFields({ description, summary: "Exact" }, metadata())).toEqual({
+      ok: true,
+      fields: { description, summary: "Exact" },
+      update: {},
+    });
+  });
+
+  it("retains explicit Markdown serialization and its internal count before trace", () => {
+    expect(
+      prepareJiraDescriptionFields(
+        { description: { format: "markdown", text: "## Criteria\n* exact" } },
+        metadata(),
+      ),
+    ).toEqual({
+      ok: true,
+      fields: { description: "h2. Criteria\n* exact" },
+      update: {},
+      descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
+    });
+  });
+});
+
+describe("a key that is not a field id (#4357 AC3)", () => {
+  it("names the tool that lists the field ids, as registered, for a create and for an edit", () => {
+    const result = parsed();
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(
+      validateJiraFieldChanges(result.fields, { "not a field id": "x" }, "create", "data-center"),
+    ).toMatchObject({
+      ok: false,
+      reason: "invalid-field",
+      message:
+        "A key in fields is not a field id. Use the field ids jira.create-fields returns for a create, or jira.edit-fields for an edit.",
+    });
   });
 });

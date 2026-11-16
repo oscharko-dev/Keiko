@@ -2,7 +2,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { parseGatewayConfig, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
@@ -10,6 +10,7 @@ import {
   CHAT_MODEL_WALK_BUDGET_MS,
   awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
+  checkSelectedConversationModel,
   initializeConfiguredConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
@@ -119,7 +120,7 @@ function composition(): UiHandlerDeps {
   directories.push(dir);
   const deps = buildUiHandlerDeps({
     configPath: undefined,
-    env: {},
+    env: { KEIKO_MEMORY_DIR: join(dir, "memory") },
     uiDbPath: join(dir, "keiko-ui.db"),
     evidenceDir: join(dir, "evidence"),
   });
@@ -211,38 +212,29 @@ it("disposal cancels recovery timers and ignores subsequent configuration change
   expect(fetch).toHaveBeenCalledTimes(calls);
 });
 
-// Customer 1.3.4 (owner decision 2026-11-01): a model is checked once at startup. A long outage
-// adds no probe on a timer; the next request after the cooldown checks the model once and heals it.
-it("checks a failing model once at startup and leaves recovery to the next request", async () => {
-  const sink = createBufferedServerLogSink();
-  setServerLogger(createServerLogger({ sink, level: "info" }));
+// Owner decision 2026-11-05: cache startup failure until explicit verification, including after
+// a long outage; Chat requests do not become hidden health checks.
+it("retains a failed startup check until an explicit recheck, without probing on Chat requests", async () => {
   const deps = composition();
   vi.useFakeTimers();
-  let available = false;
-  const fetch = vi
-    .fn()
-    .mockImplementation(() =>
-      Promise.resolve(available ? chatProbeAnswer() : new Response("", { status: 503 })),
-    );
+  const gateway = { status: 404 };
+  const fetch = startingGateway(gateway);
   vi.stubGlobal("fetch", fetch);
-  configure(deps, "corr-prolonged-outage");
+  configure(deps, "corr-startup-failed");
   await vi.waitFor(() => {
     expect(chatModelReady(deps)).toBe(false);
   });
-  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-inside-cooldown");
-  expect(fetch).toHaveBeenCalledOnce();
+  await awaitInitializedConversationReadiness(deps, "chat-model");
+  expect(chatModelReady(deps)).toBe(false);
   await vi.advanceTimersByTimeAsync(4 * 60 * 60_000);
+  gateway.status = 200;
+  await awaitInitializedConversationReadiness(deps, "chat-model");
   expect(fetch).toHaveBeenCalledOnce();
-  available = true;
-  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-after-outage");
+  expect(chatModelReady(deps)).toBe(false);
+  initializeConfiguredConversationReadiness(deps, "corr-explicit-recheck", true);
+  await awaitInitializedConversationReadiness(deps, "chat-model");
   expect(fetch).toHaveBeenCalledTimes(2);
   expect(chatModelReady(deps)).toBe(true);
-  const started = sink.events.filter((event) => event.op === "gateway.readiness.automatic.started");
-  expect(started).toHaveLength(2);
-  expect(started[0]?.parentCorrelationId).toBe("corr-prolonged-outage");
-  expect(started[0]?.extra?.backgroundAttempt).toBe(1);
-  expect(started[1]?.correlationId).toBe("corr-after-outage");
-  expect(started[1]?.extra).not.toHaveProperty("backgroundAttempt");
 });
 
 function chatProbeAnswer(): Response {
@@ -268,9 +260,8 @@ function chatModelReady(deps: UiHandlerDeps): boolean | undefined {
   return deps.gatewayConfig?.verifiedCapability("chat-model")?.fields.conversationReady;
 }
 
-// The 1.1.13 incident without a timer: a gateway that is still starting rejects the startup check,
-// and the person's next page load (the models read with refresh=1) checks the model again.
-it("re-checks a startup rejection on the next page load without a Settings or chat request", async () => {
+// A browser reload refreshes discovery, but does not retry a rejected startup chat check.
+it("does not repeat a failed startup check on page reload", async () => {
   const deps = composition();
   vi.useFakeTimers();
   const gateway = { status: 404 };
@@ -280,20 +271,18 @@ it("re-checks a startup rejection on the next page load without a Settings or ch
   await vi.waitFor(() => {
     expect(chatModelReady(deps)).toBe(false);
   });
+  await awaitInitializedConversationReadiness(deps, "chat-model");
   gateway.status = 200;
   await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+  handleModels({ url: new URL("http://127.0.0.1/api/models?refresh=1") } as RouteContext, deps);
+  await vi.advanceTimersByTimeAsync(0);
   expect(fetch).toHaveBeenCalledOnce();
   expect(chatModelReady(deps)).toBe(false);
-  handleModels({ url: new URL("http://127.0.0.1/api/models?refresh=1") } as RouteContext, deps);
-  await vi.waitFor(() => {
-    expect(chatModelReady(deps)).toBe(true);
-  });
-  expect(fetch).toHaveBeenCalledTimes(2);
 });
 
-// Auditor round 2 (customer 1.3.4): an expired success is usable, as in Chat, so a page load does
+// Owner decision 2026-11-05: an old success remains usable, so a page load does
 // not re-probe it; on a large gateway every reload after five idle minutes probed every model.
-it("does not re-check an expired success on a page load", async () => {
+it("does not re-check an old success on a page load", async () => {
   const deps = composition();
   vi.useFakeTimers();
   const gateway = { status: 200 };
@@ -309,96 +298,34 @@ it("does not re-check an expired success on a page load", async () => {
   expect(fetch).toHaveBeenCalledOnce();
 });
 
-it("re-probes a conclusively failed model on the first conversation request after the cooldown", async () => {
-  const sink = createBufferedServerLogSink();
-  setServerLogger(createServerLogger({ sink, level: "info" }));
+it("never adds provider traffic from repeated Chat sends after a failed startup check", async () => {
   const deps = composition();
   vi.useFakeTimers();
-  const gateway = { status: 404 };
-  const fetch = startingGateway(gateway);
+  const fetch = startingGateway({ status: 404 });
   vi.stubGlobal("fetch", fetch);
-  configure(deps, "corr-startup-4xx");
-  await vi.waitFor(() => {
-    expect(fetch).toHaveBeenCalled();
-  });
+  configure(deps, "corr-startup-failed");
   await awaitInitializedConversationReadiness(deps, "chat-model");
-  expect(chatModelReady(deps)).toBe(false);
-
-  // An answered rejection is checked again only by a request after the cooldown; a request inside
-  // the cooldown never adds a readiness request.
-  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-chat-early");
-  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS - 1_000);
-  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-chat-early");
-  expect(fetch).toHaveBeenCalledTimes(1);
-
-  // The gateway has finished starting; the first request after the cooldown heals the model.
-  gateway.status = 200;
-  await vi.advanceTimersByTimeAsync(2_000);
-  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-chat-send");
-  expect(fetch).toHaveBeenCalledTimes(2);
-  expect(chatModelReady(deps)).toBe(true);
-
-  // The recovery is reconstructable from the existing readiness lines, under the request's own
-  // correlation id and without the background marker.
-  const started = sink.events.filter((event) => event.op === "gateway.readiness.automatic.started");
-  expect(started.map((event) => event.correlationId)).toEqual([
-    expect.any(String),
-    "corr-chat-send",
-  ]);
-  expect(started[0]?.extra?.backgroundAttempt).toBe(1);
-  expect(started[1]?.extra?.backgroundAttempt).toBeUndefined();
-  const completed = sink.events.filter(
-    (event) => event.op === "gateway.readiness.automatic.completed",
-  );
-  expect(completed.at(-1)?.correlationId).toBe("corr-chat-send");
-  expect(completed.at(-1)?.extra?.overallStatus).toBe("ready");
-
-  // Fresh readiness avoids one probe per interactive request; nothing renews it in the background.
-  for (let request = 0; request < 5; request += 1) {
-    await awaitInitializedConversationReadiness(
-      deps,
-      "chat-model",
-      `corr-chat-ready-${String(request)}`,
-    );
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS + 1);
+    await awaitInitializedConversationReadiness(deps, "chat-model");
   }
-  expect(fetch).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(2 * 60_000 - 1000);
-  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(chatModelReady(deps)).toBe(false);
 });
 
-it("shares one re-probe between concurrent requests and refreshes the cooldown when it fails", async () => {
-  const sink = createBufferedServerLogSink();
-  setServerLogger(createServerLogger({ sink, level: "info" }));
+it("adds no probe for a concurrent Chat burst after the startup result settled", async () => {
   const deps = composition();
   vi.useFakeTimers();
-  const gateway = { status: 404 };
-  const fetch = startingGateway(gateway);
+  const fetch = startingGateway({ status: 404 });
   vi.stubGlobal("fetch", fetch);
-  configure(deps, "corr-startup-4xx");
-  await vi.waitFor(() => {
-    expect(fetch).toHaveBeenCalled();
-  });
+  configure(deps, "corr-startup-failed");
   await awaitInitializedConversationReadiness(deps, "chat-model");
-  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS + 1_000);
-
+  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS + 1);
   await Promise.all(
-    Array.from({ length: 5 }, (_, request) =>
-      awaitInitializedConversationReadiness(deps, "chat-model", `corr-burst-${String(request)}`),
-    ),
+    Array.from({ length: 5 }, () => awaitInitializedConversationReadiness(deps, "chat-model")),
   );
-  // One probe for the whole burst: the first request started it, the other four joined it.
-  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch).toHaveBeenCalledOnce();
   expect(chatModelReady(deps)).toBe(false);
-  expect(
-    sink.events.filter((event) => event.op === "gateway.readiness.automatic.joined"),
-  ).toHaveLength(4);
-
-  // The failed re-probe refreshed the observation, so the next request waits out a new cooldown.
-  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-after-burst");
-  expect(fetch).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS + 1_000);
-  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-next-window");
-  expect(fetch).toHaveBeenCalledTimes(3);
 });
 
 it("never lets a conversation request probe after the configuration was disposed", async () => {
@@ -440,7 +367,7 @@ it("answers a request whose re-probe cannot reach the gateway instead of throwin
   expect(chatModelReady(deps)).toBe(false);
 });
 
-it("never renews a healthy model on a timer; its first request after expiry checks it once", async () => {
+it("retains a healthy model through a long idle without timer or Chat probes", async () => {
   const deps = composition();
   // The review services' startup sweep (ADR-0182) arms their own daily retention interval once
   // it settles. Settled here, before the fake clock, so the count below still proves that the
@@ -457,13 +384,13 @@ it("never renews a healthy model on a timer; its first request after expiry chec
   expect(fetch).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
   expect(fetch).toHaveBeenCalledOnce();
-  expect(currentConversationReady(deps, "chat-model")).toBe(false);
+  expect(currentConversationReady(deps, "chat-model")).toBe(true);
   await awaitInitializedConversationReadiness(deps, "chat-model", "corr-after-expiry");
-  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch).toHaveBeenCalledOnce();
   expect(currentConversationReady(deps, "chat-model")).toBe(true);
 });
 
-it("refreshes expired readiness on the same generation and shares the selected model join", async () => {
+it("reuses the same generation after repeated initialization and Chat requests", async () => {
   const deps = composition();
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
@@ -490,48 +417,29 @@ it("refreshes expired readiness on the same generation and shares the selected m
     awaitInitializedConversationReadiness(deps, "chat-model", "corr-selected-two"),
   ]);
   expect(deps.gatewayConfig?.generation()).toBe(generation);
-  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch).toHaveBeenCalledOnce();
 });
 
-it("returns local models immediately and joins one held renewal across repeated reloads", async () => {
+it("returns cached local models synchronously after a long idle and repeated reloads", async () => {
   const deps = composition();
   vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
-  let hold = false;
-  let release: ((value: Response) => void) | undefined;
-  const fetch = vi.fn(() =>
-    hold
-      ? new Promise<Response>((resolve) => {
-          release = resolve;
-        })
-      : Promise.resolve(chatProbeAnswer()),
-  );
+  const fetch = startingGateway({ status: 200 });
   vi.stubGlobal("fetch", fetch);
-  configure(deps, "corr-reload-initial");
-  await vi.waitFor(() => {
-    expect(fetch).toHaveBeenCalledOnce();
-  });
+  configure(deps, "corr-startup-success");
+  await awaitInitializedConversationReadiness(deps, "chat-model");
+  await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+  for (let reload = 0; reload < 3; reload += 1) {
+    const result = handleModels(
+      { url: new URL("http://127.0.0.1/api/models?refresh=1") } as RouteContext,
+      deps,
+    );
+    expect(result).toMatchObject({
+      status: 200,
+      body: { models: [expect.objectContaining({ conversationReady: true })] },
+    });
+  }
   await vi.advanceTimersByTimeAsync(0);
-  hold = true;
-  vi.setSystemTime(new Date("2026-10-08T12:06:00.000Z"));
-  const context = { url: new URL("http://127.0.0.1/api/models?refresh=1") } as RouteContext;
-  const response = handleModels(context, deps);
-  expect(response).toMatchObject({ status: 200, body: { models: [{ id: "chat-model" }] } });
-  expect(response.body).not.toMatchObject({ models: [{ conversationReady: true }] });
-  handleModels(context, deps);
-  const selected = awaitInitializedConversationReadiness(
-    deps,
-    "chat-model",
-    "corr-selected-renewal",
-  );
-  await vi.waitFor(() => {
-    expect(fetch).toHaveBeenCalledTimes(2);
-  });
-  release?.(chatProbeAnswer());
-  await selected;
-  await vi.advanceTimersByTimeAsync(0);
-  expect(fetch).toHaveBeenCalledTimes(2);
-  expect(chatModelReady(deps)).toBe(true);
+  expect(fetch).toHaveBeenCalledOnce();
 });
 
 it("keeps the existing two-slot ceiling while background and selected requests share queued work", async () => {
@@ -563,15 +471,20 @@ it("keeps the existing two-slot ceiling while background and selected requests s
     })),
   });
   deps.gatewayConfig?.set(config, true, "corr-two-slot-source");
+  // Startup checks only the model in use (#4351); the other three listed models are untouched.
   await vi.waitFor(() => {
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
   initializeConfiguredConversationReadiness(deps, "corr-two-slot-reload");
-  const selected = awaitInitializedConversationReadiness(
-    deps,
-    "third-chat",
-    "corr-queued-selection",
+  expect(fetch).toHaveBeenCalledTimes(1);
+  // Explicit picks of three more models share the unchanged two-slot ceiling with the running
+  // startup check: the third waits in the queue instead of loading a third model at once.
+  const picks = ["second-chat", "third-chat", "fourth-chat"].map((modelId) =>
+    checkSelectedConversationModel(deps, modelId, `corr-pick-${modelId}`),
   );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(maximum).toBe(2);
   releases.splice(0).forEach((release) => {
     release();
   });
@@ -581,7 +494,7 @@ it("keeps the existing two-slot ceiling while background and selected requests s
   releases.splice(0).forEach((release) => {
     release();
   });
-  await selected;
+  await Promise.all(picks);
   await vi.advanceTimersByTimeAsync(0);
   expect(fetch).toHaveBeenCalledTimes(4);
   expect(maximum).toBe(2);
@@ -682,3 +595,121 @@ it("does not repeat a startup check when only the generation advanced", async ()
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
+
+// Lab run 2026-11-08: startup discovery added a model the endpoint served while the configured
+// model's startup check was still answering. The late answer belonged to the replaced generation
+// and was dropped, and the unchanged connection was never checked again, so every Chat turn was
+// refused as not ready until someone verified the model by hand. The check answers for that same
+// connection, so its answer counts in the new generation, without a second provider call.
+it("keeps an unchanged model's startup check when discovery replaces the generation during it", async () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  const deps = composition();
+  const holder = deps.gatewayConfig;
+  if (holder?.replaceCatalog === undefined) throw new TypeError("Expected catalog owner.");
+  let release: ((response: Response) => void) | undefined;
+  const fetch = vi.fn((_url: unknown, init?: { body?: unknown }) => {
+    const first = release === undefined && String(init?.body).includes('"chat-model"');
+    if (!first) return Promise.resolve(chatProbeAnswer());
+    return new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+  });
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-startup-race");
+  await vi.waitFor(() => {
+    expect(release).toBeDefined();
+  });
+  const current = holder.current();
+  if (current === undefined) throw new TypeError("Expected a configuration.");
+  const replaced = holder.replaceCatalog(
+    withDiscoveredModel(current),
+    holder.generation(),
+    "corr-discovery",
+  );
+  expect(replaced).toBe(true);
+  const generation = holder.generation();
+  try {
+    // The replaced generation joins the running check instead of seeing none: a first turn waits.
+    await vi.waitFor(() => {
+      const joined = sink.events.filter(
+        (event) =>
+          event.op === "gateway.readiness.automatic.joined" &&
+          event.extra?.generation === generation,
+      );
+      expect(joined).toHaveLength(1);
+    });
+    const turn = awaitInitializedConversationReadiness(deps, "chat-model", "corr-first-turn");
+    release?.(chatProbeAnswer());
+    await turn;
+  } finally {
+    release?.(chatProbeAnswer());
+  }
+  expect(currentConversationReady(deps, "chat-model")).toBe(true);
+  expect(runningChatProbes(fetch)).toBe(1);
+});
+
+// The late answer counts only while the new generation has none: it never overwrites a newer one,
+// such as an explicit verification recorded meanwhile.
+it("never lets a late startup answer overwrite a newer observation of the replaced generation", async () => {
+  const deps = composition();
+  const holder = deps.gatewayConfig;
+  if (holder?.replaceCatalog === undefined) throw new TypeError("Expected catalog owner.");
+  let release: ((response: Response) => void) | undefined;
+  const fetch = vi.fn((_url: unknown, init?: { body?: unknown }) => {
+    const first = release === undefined && String(init?.body).includes('"chat-model"');
+    if (!first) return Promise.resolve(chatProbeAnswer());
+    return new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+  });
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-startup-overtaken");
+  await vi.waitFor(() => {
+    expect(release).toBeDefined();
+  });
+  const current = holder.current();
+  if (current === undefined) throw new TypeError("Expected a configuration.");
+  expect(holder.replaceCatalog(withDiscoveredModel(current), holder.generation())).toBe(true);
+  const generation = holder.generation();
+  const newer = new Date().toISOString();
+  holder.recordVerifiedCapability("chat-model", { conversationReady: false }, newer, generation);
+  release?.(chatProbeAnswer());
+  await awaitInitializedConversationReadiness(deps, "chat-model");
+  await vi.waitFor(() => {
+    expect(runningChatProbes(fetch)).toBe(1);
+  });
+  expect(holder.verifiedCapability("chat-model")).toMatchObject({
+    generation,
+    checkedAt: newer,
+    fields: { conversationReady: false },
+  });
+});
+
+function runningChatProbes(fetch: ReturnType<typeof vi.fn>): number {
+  return fetch.mock.calls.filter(([, init]) =>
+    String((init as { body?: unknown } | undefined)?.body).includes('"chat-model"'),
+  ).length;
+}
+
+// What startup discovery does when the endpoint serves one more model: the configured connection
+// stays byte-identical and the generation advances.
+function withDiscoveredModel(current: GatewayConfig): GatewayConfig {
+  const added = parseGatewayConfig({
+    providers: [
+      {
+        modelId: "added-model",
+        baseUrl: "https://provider.example.invalid/v1",
+        apiKey: "throwaway-key",
+        timeoutMs: 1000,
+        maxRetries: 0,
+        retryBaseDelayMs: 1,
+      },
+    ],
+  });
+  return {
+    ...current,
+    providers: [...current.providers, ...added.providers],
+    capabilities: [...(current.capabilities ?? []), ...(added.capabilities ?? [])],
+  };
+}

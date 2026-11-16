@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
+  jiraOperationInReleaseScope,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   mcpToolAction,
@@ -14,17 +16,28 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
+  CODING_JIRA_READS as CODING_READS,
   CODING_JIRA_SERVER_NAME,
   CODING_JIRA_TOOL_RISKS,
   codingJiraServerDefinition,
   codingRunMcpServers,
   sameCodingJiraPodBinding,
   withCodingJiraServer,
+  recordCodingJiraPod,
 } from "./codingJiraPodBinding.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 /** A draft is approved as one reviewed tree in Chat (#4178) and an attachment reads Chat-connected files (#4176); Coding runs offer neither. */
 const CODING_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
-  (operation) => operation !== "jira.draft" && operation !== "jira.attach",
+  (operation) =>
+    operation !== "jira.draft" &&
+    operation !== "jira.attach" &&
+    // Attachments are outside Release 1 (#4354): neither attachment operation is offered.
+    jiraOperationInReleaseScope(operation),
 );
 
 const BINDING = {
@@ -39,14 +52,19 @@ describe("the run's Jira server definition", () => {
       Object.entries(CODING_JIRA_TOOL_RISKS)
         .filter(([, risk]) => risk === "read")
         .map(([n]) => n),
-    ).toEqual([...JIRA_MANAGED_READ_TOOLS]);
+    ).toEqual(["jira.discover", "jira.describe", ...CODING_READS]);
     expect(
       Object.entries(CODING_JIRA_TOOL_RISKS)
         .filter(([, risk]) => risk === "write")
         .map(([n]) => n),
     ).toEqual(CODING_MUTATIONS);
     expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.draft"]);
+    // A draft batch needs the Chat's Knowledge Pods and turn model (#4173); a run has neither.
+    expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.draft-batch"]);
+    expect(CODING_READS).not.toContain("jira.draft-batch");
+    expect(CODING_READS).toHaveLength(JIRA_MANAGED_READ_TOOLS.length - 1);
     expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.attach"]);
+    expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.delete-attachment"]);
   });
 
   it("reaches the policy as jira_<tool> without any two tools sharing an action", () => {
@@ -154,13 +172,48 @@ describe("a run's MCP servers", () => {
 });
 
 describe("the coding-runtime.jira-pod Activity Log operation", () => {
-  // The registration must stay one closed literal; this binds its logged tool names to the contract.
-  it("logs exactly the contract's Jira tool names", () => {
+  it("keeps a bounded log class and an exact digest for every executable Jira tool", () => {
     const registry: readonly ActivityLogOperationRegistration[] = ACTIVITY_LOG_OPERATION_REGISTRY;
     const registration = registry.find((entry) => entry.op === "coding-runtime.jira-pod");
-    expect(registration?.fields.tool?.values).toEqual([
-      ...JIRA_MANAGED_READ_TOOLS,
-      ...CODING_MUTATIONS,
+    expect(registration?.fields.toolClass?.values).toEqual([
+      "jira-read",
+      "jira-write",
+      "jira-discovery",
     ]);
+    // The budget a refused describe stood on and the check that refused it are closed vocabularies.
+    expect(registration?.fields.fitBasis).toMatchObject({
+      dataClass: "closed-enum",
+      values: ["provider-sample", "no-sample", "geometry-mismatch"],
+    });
+    expect(registration?.fields.stage).toMatchObject({
+      dataClass: "closed-enum",
+      values: ["current", "busy", "identity", "scope", "admit", "size", "fits"],
+    });
+    expect(registration?.fields.toolDigest).toMatchObject({ dataClass: "digest", maxLength: 64 });
+    expect(registration?.fields).not.toHaveProperty("tool");
+    const digests = new Set<string>();
+    for (const tool of [...CODING_READS, ...CODING_MUTATIONS]) {
+      const sink = createBufferedServerLogSink();
+      const risk = CODING_JIRA_TOOL_RISKS[tool];
+      recordCodingJiraPod(sink, "synthetic-correlation", {
+        action: "call",
+        outcome: "completed",
+        tool,
+        risk,
+      });
+      const event = sink.events[0];
+      if (event === undefined) throw new TypeError("Missing Jira operation evidence");
+      const line = formatActivityLogProofLine(event);
+      const digest = createHash("sha256").update(tool).digest("hex");
+      expect(expectActivityLogProof("coding-runtime.jira-pod.emitted-line", line)).toMatchObject({
+        toolClass: risk === "read" ? "jira-read" : "jira-write",
+        toolDigest: digest,
+        risk,
+      });
+      expect(line).not.toContain(tool);
+      digests.add(digest);
+    }
+    // The two local discovery tools use ManagedHost's metadata lifecycle, not native Jira receipts.
+    expect(digests.size).toBe(CODING_READS.length + CODING_MUTATIONS.length);
   });
 });

@@ -6,12 +6,14 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "../process-log-sink.js";
+import { JIRA_TEMPLATE_RULE_COUNT_FIELDS, jiraTemplateRuleCountFields } from "./jiraTemplateLog.js";
 
 /**
  * Refusals of the final `jira.draft` call beside the staging ones. `requirements-untraced` is the
  * once-per-turn advisory for a draft whose items name no requirement in a Chat that holds some.
  */
-type JiraDraftSubmitRefusal = "draft-changed" | "draft-invalid" | "requirements-untraced";
+type JiraDraftSubmitRefusal =
+  "draft-changed" | "draft-invalid" | "requirements-untraced" | "approval-expired";
 type JiraDraftRefusalKind = JiraDraftRefusal | JiraDraftSubmitRefusal;
 
 const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
@@ -28,7 +30,7 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["staged", "submitted", "refused", "progress", "executed"],
+      values: ["staged", "submitted", "refused", "progress", "executed", "named", "held"],
     },
     refusal: {
       type: "string",
@@ -46,6 +48,7 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
         "draft-changed",
         "draft-invalid",
         "requirements-untraced",
+        "approval-expired",
       ],
     },
     newDraft: { type: "boolean", dataClass: "closed-enum", required: true },
@@ -55,8 +58,13 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
     byteCount: COUNT_FIELD,
     unresolvedRefCount: COUNT_FIELD,
     violationCount: COUNT_FIELD,
+    ...JIRA_TEMPLATE_RULE_COUNT_FIELDS,
     settledCount: { type: "integer", dataClass: "count", required: false },
     pendingCount: { type: "integer", dataClass: "count", required: false },
+    // A staging call or a create run: Jira reads sent, and reads answered from the invocation's own
+    // memo (a create run shares only batch-identical create metadata; search and read-back stay live).
+    readCount: { type: "integer", dataClass: "count", required: false },
+    readReusedCount: { type: "integer", dataClass: "count", required: false },
     durationMs: { type: "integer", dataClass: "duration", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -70,7 +78,13 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
 });
 
 export interface JiraDraftLogInput extends Omit<JiraDraftActivity, "phase" | "refusal"> {
-  readonly phase: JiraDraftActivity["phase"] | "submitted";
+  /**
+   * `named`: a tool turn told the model which staged draft the Chat holds (#4292). Naming stages,
+   * checks and waits for nothing, so its page, reference, violation and duration counts are zero.
+   * `held`: the draft a write sends was kept as the Chat's open draft before its approval was asked
+   * for (#4354 AC4); `approval-expired` is the refusal of a write whose approval ran out.
+   */
+  readonly phase: JiraDraftActivity["phase"] | "submitted" | "named" | "held";
   readonly refusal?: JiraDraftRefusalKind;
 }
 
@@ -86,7 +100,15 @@ const REFUSAL_KIND: Readonly<Record<JiraDraftRefusalKind, ActivityLogErrorKind>>
   "draft-changed": "conflict",
   "draft-invalid": "invalid-request",
   "requirements-untraced": "invalid-request",
+  "approval-expired": "timeout",
 };
+
+function readFields(input: JiraDraftLogInput): Record<string, number> {
+  return {
+    ...(input.readCount === undefined ? {} : { readCount: input.readCount }),
+    ...(input.readReusedCount === undefined ? {} : { readReusedCount: input.readReusedCount }),
+  };
+}
 
 /** Counts and closed words only: no summary, field value, issue key, ref or draft id. */
 export function recordJiraDraftActivity(
@@ -113,8 +135,10 @@ export function recordJiraDraftActivity(
         byteCount: input.byteCount,
         unresolvedRefCount: input.unresolvedRefCount,
         violationCount: input.violationCount,
+        ...jiraTemplateRuleCountFields(input.violationRuleCounts),
         ...(input.settledCount === undefined ? {} : { settledCount: input.settledCount }),
         ...(input.pendingCount === undefined ? {} : { pendingCount: input.pendingCount }),
+        ...readFields(input),
         durationMs: input.durationMs,
         completeness: errorKind === undefined ? "complete" : "partial",
         loss: "none",

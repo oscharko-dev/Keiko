@@ -1,4 +1,3 @@
-import type { AtlassianPrivateTarget } from "@oscharko-dev/keiko-contracts";
 // Issue #2241 — gatewayFetch-backed AtlassianHttpPort adapter tests. Hermetic: an injected
 // fetchImpl fake replaces the platform fetch, so no request leaves the process. Asserts the
 // ADR-0128 D2/D3 posture directly: the Authorization header is materialised only at the outbound
@@ -33,6 +32,36 @@ const CREDENTIAL: AtlassianResolvedCredential = {
   accountEmail: SYNTHETIC_EMAIL,
   apiToken: SYNTHETIC_TOKEN,
 };
+
+it.each([429, 503])(
+  "does not retry a server-owned one-shot identity GET after HTTP %s",
+  async (status) => {
+    const { fetchImpl, calls } = fetchFake(status);
+    const options = {
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      fetchImpl,
+      singleAttempt: true as const,
+    };
+    const request = {
+      method: "GET",
+      url: "https://acme.example/rest/api/2/myself",
+      timeoutMs: 1000,
+      maxBodyBytes: 4096,
+    } as const;
+    expect(await createGatewayAtlassianHttpBodyPort(options)(request)).toMatchObject({
+      kind: "response",
+      status,
+    });
+    expect(calls).toHaveLength(1);
+    expect(await createGatewayAtlassianHttpPort(options)(request)).toEqual({
+      kind: "response",
+      status,
+    });
+    expect(calls).toHaveLength(2);
+  },
+);
 
 function resolver(): AtlassianCredentialExecutionResolver & { readonly resolvedRefs: string[] } {
   const resolvedRefs: string[] = [];
@@ -456,38 +485,44 @@ describe("createGatewayAtlassianHttpBodyPort — write channel (Issue #2244)", (
     });
   });
 
-  it("issues PUT without a content-type when no body is supplied", async () => {
-    const credentials = resolver();
-    const { fetchImpl, calls } = writeFetchFake(204, "");
-    await bodyPort(
-      fetchImpl,
-      credentials,
-    )({
-      method: "PUT",
-      url: "https://acme.example/rest/api/3/issue/PROJ-9",
-      timeoutMs: 30_000,
-      maxBodyBytes: 1_000,
-    });
-    expect(calls[0]).toMatchObject({ method: "PUT", contentType: null, body: undefined });
-  });
-
-  it("fails closed on a GET carrying a request body", async () => {
-    const credentials = resolver();
-    const { fetchImpl, calls } = writeFetchFake(200, "{}");
-    await expect(
-      bodyPort(
+  it.each(["PUT", "DELETE"] as const)(
+    "issues %s without a body or content-type",
+    async (method) => {
+      const credentials = resolver();
+      const { fetchImpl, calls } = writeFetchFake(204, "");
+      await bodyPort(
         fetchImpl,
         credentials,
       )({
-        method: "GET",
-        url: "https://acme.example/rest/api/3/issue",
+        method,
+        url: "https://acme.example/rest/api/3/issue/PROJ-9",
         timeoutMs: 30_000,
         maxBodyBytes: 1_000,
-        bodyJson: "{}",
-      }),
-    ).rejects.toBeInstanceOf(AtlassianCredentialCustodyError);
-    expect(calls).toHaveLength(0);
-  });
+      });
+      expect(calls[0]).toMatchObject({ method, contentType: null, body: undefined });
+    },
+  );
+
+  it.each(["GET", "DELETE"] as const)(
+    "fails closed on a %s carrying a request body",
+    async (method) => {
+      const credentials = resolver();
+      const { fetchImpl, calls } = writeFetchFake(200, "{}");
+      await expect(
+        bodyPort(
+          fetchImpl,
+          credentials,
+        )({
+          method,
+          url: "https://acme.example/rest/api/3/issue",
+          timeoutMs: 30_000,
+          maxBodyBytes: 1_000,
+          bodyJson: "{}",
+        }),
+      ).rejects.toBeInstanceOf(AtlassianCredentialCustodyError);
+      expect(calls).toHaveLength(0);
+    },
+  );
 
   it("fails closed on an oversized request body before any outbound call", async () => {
     const credentials = resolver();
@@ -561,6 +596,28 @@ describe("createGatewayAtlassianHttpBodyPort — governed upload (#4176)", () =>
     expect(seen[0]?.headers.get("x-atlassian-token")).toBe("no-check");
     expect(Buffer.from(seen[0]?.body as Uint8Array).equals(Buffer.from(upload.bytes))).toBe(true);
   });
+  it.each(["POST", "PUT", "DELETE"] as const)(
+    "adds Jira's XSRF opt-out to a bodiless %s write and never to a read",
+    async (method) => {
+      const { fetchImpl, seen } = recordingFetch();
+      const { upload: _upload, ...bodiless } = request;
+      await bodyPort(fetchImpl, resolver())({ ...bodiless, method });
+      await bodyPort(fetchImpl, resolver())({ ...bodiless, method: "GET" });
+      expect(seen[0]?.headers.get("x-atlassian-token")).toBe("no-check");
+      expect(seen[0]?.headers.get("content-type")).toBeNull();
+      expect(seen[1]?.headers.get("x-atlassian-token")).toBeNull();
+    },
+  );
+  it("asks for text/plain on bulk archive only, which Jira refuses as application/json", async () => {
+    const { fetchImpl, seen } = recordingFetch();
+    const { upload: _upload, ...bodiless } = request;
+    const archive = "https://acme.example/rest/api/2/issue/archive?notifyUsers=true";
+    await bodyPort(fetchImpl, resolver())({ ...bodiless, url: archive, bodyJson: '["PROJ-1"]' });
+    await bodyPort(fetchImpl, resolver())({ ...bodiless, bodyJson: '["PROJ-1"]' });
+    expect(seen[0]?.headers.get("accept")).toBe("text/plain");
+    expect(seen[0]?.headers.get("content-type")).toBe("application/json");
+    expect(seen[1]?.headers.get("accept")).toBe("application/json");
+  });
   it("never adds the opt-out header to an ordinary JSON write", async () => {
     const { fetchImpl, seen } = recordingFetch();
     await bodyPort(fetchImpl, resolver())({ ...request, upload: undefined, bodyJson: "{}" });
@@ -570,6 +627,7 @@ describe("createGatewayAtlassianHttpBodyPort — governed upload (#4176)", () =>
   it.each([
     ["a PUT", { method: "PUT" as const }],
     ["a GET", { method: "GET" as const }],
+    ["a DELETE", { method: "DELETE" as const }],
     ["a JSON body beside it", { bodyJson: "{}" }],
     ["a content type that is not multipart", { upload: { ...upload, contentType: "text/html" } }],
     [
@@ -631,27 +689,27 @@ const INTERNAL_BASE_URLS = [
 ] as const;
 
 describe("Atlassian connector egress posture", () => {
-  it("admits only the exact configured private origin, port, path and address class", async () => {
+  it("admits only the saved private origin, port and context path", async () => {
     const { fetchImpl, calls } = fetchFake(200);
-    const privateTargets = (): readonly AtlassianPrivateTarget[] => [
-      { baseUrl: "https://10.0.0.5:8443/jira", addressClass: "private" as const },
-    ];
-    for (const baseUrl of [
-      "https://10.0.0.5:8443/jira",
+    const baseUrl = "https://10.0.0.5:8443/jira";
+    const connection = createGatewayAtlassianHttpPort({
+      baseUrl,
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      fetchImpl,
+      targetAdmission: () => Promise.resolve({ baseUrl, addressClass: "private" }),
+    });
+    expect(
+      await connection({ method: "GET", url: `${baseUrl}/rest/api/2/myself`, timeoutMs: 100 }),
+    ).toEqual({ kind: "response", status: 200 });
+    for (const otherBaseUrl of [
       "https://10.0.0.5:8444/jira",
       "https://10.0.0.6:8443/jira",
       "https://10.0.0.5:8443/other",
     ]) {
-      const result = await createGatewayAtlassianHttpPort({
-        baseUrl,
-        authRef: AUTH_REF,
-        credentials: resolver(),
-        privateTargets,
-        fetchImpl,
-      })({ method: "GET", url: `${baseUrl}/rest/api/2/myself`, timeoutMs: 100 });
-      expect(result.kind).toBe(
-        baseUrl === "https://10.0.0.5:8443/jira" ? "response" : "network-error",
-      );
+      await expect(
+        connection({ method: "GET", url: `${otherBaseUrl}/rest/api/2/myself`, timeoutMs: 100 }),
+      ).rejects.toThrow(AtlassianCredentialCustodyError);
     }
     expect(calls).toHaveLength(1);
   });
@@ -660,13 +718,14 @@ describe("Atlassian connector egress posture", () => {
     const { fetchImpl, calls } = fetchFake(200);
     let enabled = true;
     const baseUrl = "https://127.0.0.1:18443/jira";
-    const privateTargets = (): readonly AtlassianPrivateTarget[] =>
-      enabled ? [{ baseUrl, addressClass: "loopback" as const }] : [];
+    const targetAdmission = (): Promise<
+      { baseUrl: string; addressClass: "loopback" } | undefined
+    > => Promise.resolve(enabled ? { baseUrl, addressClass: "loopback" } : undefined);
     const connection = createGatewayAtlassianHttpPort({
       baseUrl,
       authRef: AUTH_REF,
       credentials: resolver(),
-      privateTargets,
+      targetAdmission,
       fetchImpl,
     });
     const request = { method: "GET" as const, url: `${baseUrl}/rest/api/2/myself`, timeoutMs: 100 };
@@ -678,7 +737,7 @@ describe("Atlassian connector egress posture", () => {
       baseUrl,
       authRef: AUTH_REF,
       credentials: resolver(),
-      privateTargets,
+      targetAdmission,
       deniedLoopbackPorts: () => [18443],
       fetchImpl,
     });
@@ -877,7 +936,7 @@ describe("Atlassian connector egress posture — proxied DNS-rebinding refusal (
           baseUrl,
           authRef: AUTH_REF,
           credentials: resolver(),
-          privateTargets: () => [{ baseUrl, addressClass: "private" }],
+          targetAdmission: () => Promise.resolve({ baseUrl, addressClass: "private" }),
           egress: () => (proxied ? { httpsProxy: `http://127.0.0.1:${String(port)}` } : undefined),
         })({ method: "GET", url: `${baseUrl}/rest/api/2/myself`, timeoutMs: 1000 });
         expect(result).toEqual({ kind: "network-error" });

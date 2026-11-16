@@ -68,7 +68,6 @@ describe("log field redaction", () => {
   });
   it("keeps the evidence fields the instrumentation surface is built from", () => {
     const fields = redactLogFields({
-      endpoint: "https://gateway.internal:8443",
       modelId: "text-embedding-3-large",
       jobId: "job-1f2e3d",
       inputCount: 36,
@@ -83,7 +82,6 @@ describe("log field redaction", () => {
     });
 
     expect(fields).toStrictEqual({
-      endpoint: "https://gateway.internal:8443",
       modelId: "text-embedding-3-large",
       jobId: "job-1f2e3d",
       inputCount: 36,
@@ -163,7 +161,10 @@ describe("log field redaction", () => {
     expect(redactLogString("line one\nline two")).toBe(REDACTED_SHAPE);
     expect(redactLogString("has\ttab")).toBe(REDACTED_SHAPE);
     // Up to a few spaces stay legible for the rare two-word code.
-    expect(redactLogString("connection refused")).toBe("connection refused");
+    // Owner decision 2026-11-04: the Activity Log is the only thing that leaves the machine, so a
+    // space is refused outright. Log values are identifiers; a name or a street has a space.
+    expect(redactLogString("connection refused")).toBe(REDACTED_SHAPE);
+    expect(redactLogString("connection-refused")).toBe("connection-refused");
   });
 
   it("refuses credential-shaped values whatever they are called", () => {
@@ -261,13 +262,76 @@ describe("log field redaction", () => {
     expect(redactLogString("workspace\\keiko\\state.db")).toBe(REDACTED_PATH);
   });
 
+  // Owner decision 2026-11-04: the Activity Log is the only thing that leaves the machine. A remote
+  // address names a machine and often its owner, whichever field carries it.
+  it.each([
+    "https://gateway.internal:8443",
+    "https://api.openai.com",
+    "https://jane.doe.example/v1",
+    "wss://jira.bank.example",
+    "see https://jira.bank.example",
+  ])("refuses the remote address %s", (value) => {
+    expect(redactLogString(value)).toBe(REDACTED_PERSONAL);
+  });
+  it.each(["jira.bank.example", "janes-macbook.local", "192.168.1.20"])(
+    "refuses the remote host %s under a host field",
+    (value) => {
+      expect(redactLogFields({ host: value, hostname: value })).toEqual({
+        host: REDACTED_PERSONAL,
+        hostname: REDACTED_PERSONAL,
+      });
+    },
+  );
+  it.each(["127.0.0.1", "localhost", "0.0.0.0", "::1"])(
+    "keeps the local bind address %s under a host field",
+    (value) => {
+      expect(redactLogFields({ host: value })).toEqual({ host: value });
+    },
+  );
+  it.each([
+    "tel-491711234567",
+    "phone_4915112345678",
+    "TELEFON:0171123456",
+    "contact-01711234567",
+    "user_01511234567",
+    "fr1420041010050500013m02606",
+    "nl91abna0417164300",
+    "gb29nwbk60161331926819",
+  ])("refuses the telephone number or bank account inside %s", (value) => {
+    expect(redactLogString(value)).toBe(REDACTED_PERSONAL);
+  });
+  it.each([
+    "corr-root-00000001",
+    "chat-0000000001",
+    "2026-11-04T18:29:01.524+02:00",
+    "2026-11-04T18:29:01-05:30",
+    "corr-0123456789",
+    "run-0123456789",
+    // Passes the IBAN checksum by chance; a Bosnian IBAN has 20 characters.
+    "ba57123cc02679485cd5b1d1",
+    "job-1730000000000",
+    "ab12cdef34567890",
+    "de89370400440532",
+    "responseBudgetBytes=114819072",
+    "stage=history:reason=transport-oversized:responseBudgetBytes=114819072",
+    "promptTokens=12000000:durationMs=1234567",
+  ])("keeps the machine value %s", (value) => {
+    expect(redactLogString(value)).toBe(value);
+  });
+  it.each(["accountNumber=123456789", "konto=1234567890", "reference=4915112345678"])(
+    "refuses the number in %s, whose name does not say it is a measurement",
+    (value) => {
+      expect(redactLogString(value)).toBe(REDACTED_PERSONAL);
+    },
+  );
+
   it("keeps the separator-bearing values that are not paths", () => {
     // A media type, a namespaced model id and an endpoint all carry a separator and none of them
     // is a filesystem path. A versioned identifier is not a file extension either.
     expect(redactLogString("text/plain")).toBe("text/plain");
     expect(redactLogString("openai/gpt-4.1")).toBe("openai/gpt-4.1");
-    expect(redactLogString("https://api.openai.com")).toBe("https://api.openai.com");
-    expect(redactLogString("https://gateway.internal:8443")).toBe("https://gateway.internal:8443");
+    expect(redactLogString("http://localhost")).toBe("http://localhost");
+    expect(redactLogString("http://127.0.0.1:8443")).toBe("http://127.0.0.1:8443");
   });
 
   // Requirement 2. The prose guard counted ASCII spaces (0x20), which is a rule about ONE script.
@@ -324,7 +388,92 @@ describe("log field redaction", () => {
     expect(redactLogString("node@24")).toBe("node@24");
     expect(redactLogString("a".repeat(64))).toBe("a".repeat(64));
     expect(redactLogString("http-error")).toBe("http-error");
-    expect(redactLogString("2026-08-21")).toBe("2026-08-21");
+    expect(redactLogString("2026-08-21T10:15:00.000Z")).toBe("2026-08-21T10:15:00.000Z");
+    expect(redactLogString("6f1c2a70-8e1b-4a3a-9c11-0d6a4b7e1f22")).toBe(
+      "6f1c2a70-8e1b-4a3a-9c11-0d6a4b7e1f22",
+    );
+    expect(redactLogString("corr-root-00000001")).toBe("corr-root-00000001");
+    expect(redactLogString("127.0.0.1")).toBe("127.0.0.1");
+    expect(redactLogString("0.0.0.0")).toBe("0.0.0.0");
+    expect(redactLogString("1.4.0")).toBe("1.4.0");
+    expect(redactLogString("v24.18.0")).toBe("v24.18.0");
+    expect(redactLogString("TypeError")).toBe("TypeError");
+    expect(redactLogString("Error")).toBe("Error");
+    expect(redactLogString("mock-chat")).toBe("mock-chat");
+    expect(redactLogString("gemma4:31b")).toBe("gemma4:31b");
+    expect(redactLogString("1".repeat(64))).toBe("1".repeat(64));
+  });
+
+  // Owner decision 2026-11-04: "In das Activity-Log dürfen keine personenbezogenen Daten reinkommen."
+  // Every value here reached a log line under an innocuous field name before this guard.
+  it.each([
+    "DE89370400440532013000",
+    "de89370400440532013000",
+    "ba391290079401028494",
+    "be68539007547034",
+    "ad1200012030200359100100",
+    "DE89 3704 0044 0532 0130 00",
+    "IT60X0542811101000000123456",
+    "0171-1234567",
+    "030 12345678",
+    "0171/1234567",
+    "01711234567",
+    "12 345 678 901",
+    "4111 1111 1111 1111",
+    "4111111111111111",
+    "Selin Aydogan",
+    "Jörg Müller",
+    "Aydogan",
+    "Hans-Peter",
+    "Herr Kolb",
+    "Hauptstr. 12",
+    "12.03.1985",
+    "1.3.1985",
+    "12/03/1985",
+    "1985-03-12",
+    "2026-08-21",
+    "M AB 1234",
+    "192.168.1.20",
+    "12 120385 K 123",
+    "s.kolb@example.org",
+    "+49 30 1234567",
+  ])("never lets %s reach a log line under an innocuous field name", (value) => {
+    const fields = redactLogFields({ innocuous: value, nested: { detail: value } });
+    expect(fields?.innocuous).toMatch(/^\[redacted:/u);
+    expect(JSON.stringify(fields)).not.toContain(value);
+  });
+
+  it.each([
+    "birthDate",
+    "dateOfBirth",
+    "firstName",
+    "lastName",
+    "surname",
+    "displayName",
+    "author",
+    "assignee",
+    "reporter",
+    "iban",
+    "bic",
+    "street",
+    "city",
+    "zip",
+    "postalCode",
+    "ipAddress",
+    "mobile",
+    "taxId",
+  ])("refuses the field name %s whatever its value", (name) => {
+    expect(redactLogFields({ [name]: "x" })?.[name]).toBe(REDACTED_KEY);
+  });
+
+  it("keeps a machine digest or instance id that happens to be digits only", () => {
+    expect(redactLogFields({ recoveredInstanceId: "22222222" })?.recoveredInstanceId).toBe(
+      "22222222",
+    );
+    expect(redactLogFields({ scopeDigest: "1234567890ab" })?.scopeDigest).toBe("1234567890ab");
+    // Only the name and the alphabet together: a digit run elsewhere stays refused.
+    expect(redactLogFields({ recoveredRef: "22222222" })?.recoveredRef).toBe(REDACTED_PERSONAL);
+    expect(redactLogFields({ scopeDigest: "0171-1234567" })?.scopeDigest).toBe(REDACTED_PERSONAL);
   });
 
   it("drops every value type that is not a string, finite number, boolean, array or plain object", () => {
@@ -789,13 +938,6 @@ describe("git repository dialog handoff client diagnostic redaction (b3-21)", ()
 });
 
 describe("verified commit review client diagnostic redaction", () => {
-  it.each(["idle", "loading", "ready", "unavailable"])(
-    "preserves closed stage review %s",
-    (status) => {
-      const clientNote = `[keiko] git stage review ${status}: files 1`;
-      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
-    },
-  );
   it.each(["/private/customer.txt", "token=fixture-secret", "customer-content", "1000001"])(
     "refuses hostile stage review facts %s",
     (content) => {
@@ -814,13 +956,6 @@ describe("verified commit review client diagnostic redaction", () => {
       expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
     },
   );
-  it.each(["succeeded", "blocked", "failed", "recovery-required", "verification-failed", "drift"])(
-    "preserves only closed %s result display facts",
-    (status) => {
-      const clientNote = `[keiko] verified commit result displayed: ${status} tree abcdef012345`;
-      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
-    },
-  );
   it.each(["private message", "token=fixture-secret", "/private/customer.txt"])(
     "refuses foreign result display text %s",
     (status) => {
@@ -828,18 +963,6 @@ describe("verified commit review client diagnostic redaction", () => {
       expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
     },
   );
-  it.each([
-    "push-proposed",
-    "pushing",
-    "pushed",
-    "pr-proposed",
-    "creating-pr",
-    "draft-created",
-    "recovery-required",
-  ])("preserves closed draft delivery phase %s", (phase) => {
-    const clientNote = `[keiko] draft delivery displayed: ${phase} reason completed head abcdef012345`;
-    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
-  });
   it.each(["private content", "/private/customer.txt", "token=fixture-secret", "ABCDEF012345"])(
     "refuses foreign draft delivery diagnostic text %s",
     (value) => {
@@ -850,13 +973,6 @@ describe("verified commit review client diagnostic redaction", () => {
         `[keiko] draft delivery displayed: draft-created reason completed head abcdef012345 ${value}`,
       ])
         expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
-    },
-  );
-  it.each(["technical-ready", "pending", "failed", "blocked", "unknown", "stale", "unobserved"])(
-    "preserves exact CI display state %s",
-    (state) => {
-      const clientNote = `[keiko] CI readiness displayed: ${state} head abcdef012345`;
-      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
     },
   );
   it.each([
@@ -873,20 +989,6 @@ describe("verified commit review client diagnostic redaction", () => {
     ])
       expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
   });
-  it.each(["push-proposed", "pr-proposed"])(
-    "preserves only closed %s pending delivery review",
-    (phase) => {
-      const clientNote = `[keiko] draft delivery review ready: ${phase} head abcdef012345`;
-      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
-    },
-  );
-  it.each(["idle", "loading", "ready", "unavailable"])(
-    "preserves bounded delivery review display %s",
-    (status) => {
-      const clientNote = `[keiko] draft delivery review displayed: ${status}`;
-      expect(redactLogFields({ clientNote })).toEqual({ clientNote });
-    },
-  );
   it.each(["/private/customer.txt", "token=fixture-secret", "private title", "ready\nbody"])(
     "rejects content in delivery display %s",
     (status) => {
@@ -920,10 +1022,6 @@ describe("verified commit review client diagnostic redaction", () => {
     const hostile = "[keiko] verified commit review unavailable: /private/customer.txt";
     expect(redactLogFields({ clientNote: hostile })?.clientNote).not.toBe(hostile);
   });
-  it.each([0, 1, 999_999, 1_000_000])("preserves bounded facts for %i files", (count) => {
-    const clientNote = `[keiko] verified commit review ready: files ${String(count)} tree abcdef012345`;
-    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
-  });
 
   it.each([
     "files 1000001 tree abcdef012345",
@@ -941,7 +1039,7 @@ describe("verified commit review client diagnostic redaction", () => {
   });
 
   it("keeps the exception top-level and clientNote-only", () => {
-    const note = "[keiko] verified commit review ready: files 1 tree abcdef012345";
+    const note = "[keiko] verified commit review unavailable: binding-mismatch";
     expect(redactLogFields({ label: note, nested: { clientNote: note } })).toEqual({
       label: REDACTED_SHAPE,
       nested: { clientNote: REDACTED_SHAPE },
@@ -950,21 +1048,6 @@ describe("verified commit review client diagnostic redaction", () => {
 });
 
 describe("closed issue journey client diagnostics", () => {
-  it.each([
-    "awaiting-ready-approval",
-    "keiko-technical-ready",
-    "ready-for-human-review",
-    "awaiting-human-requirements",
-    "merged-awaiting-issue-closure",
-    "completed",
-    "blocked",
-    "cancelled",
-    "recovery-required",
-    "stale",
-  ])("retains the body-free %s display", (state) => {
-    const clientNote = `[keiko] journey displayed: ${state} head abcdef012345`;
-    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
-  });
   it.each(["refresh", "propose-ready"])("retains the %s action lifecycle", (action) => {
     for (const state of ["started", "completed", "failed"]) {
       const clientNote = `[keiko] journey action: ${action} ${state}`;

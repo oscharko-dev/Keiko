@@ -172,10 +172,10 @@ describe("generated lifecycle contracts and synthetic phase fixtures", () => {
       expect(redactLogFields({ ...extra, query: "private customer body" }).query).toBe(
         "[redacted:key]",
       );
-      // The generic redactor intentionally allows this short string. The closed phase validator
-      // above rejects the key; #3413 must apply that check before its actual runtime sink.
+      // Owner decision 2026-11-04: a log value with a blank is prose, so the generic redactor now
+      // refuses this string as well. The closed phase validator above still rejects the key.
       expect(redactLogFields({ arguments: "private customer body" }).arguments).toBe(
-        "private customer body",
+        "[redacted:shape]",
       );
     }
   });

@@ -675,23 +675,49 @@ function discoveryReadProjection(discovery: CodingToolDiscoveryResult): CodingTo
   };
 }
 
-function discoveryReadResult(result: WorkspacePathDiscoveryResult): CodingToolReadResult {
-  const entries = [...result.entries];
+// The projection that keeps the first `kept` discovered entries; once any entry is cut it names the
+// closed `output-limit` reason, exactly once, after the reasons the discovery already reported.
+function projectDiscoveryPrefix(
+  result: WorkspacePathDiscoveryResult,
+  kept: number,
+): CodingToolReadResult {
   const truncationReasons = [...result.truncationReasons];
-  const project = (): CodingToolReadResult =>
-    discoveryReadProjection({
-      entries,
-      truncationReasons,
-      matchedCount: result.matchedCount,
-      coverageIncomplete: truncationReasons.length > 0,
-    });
-  let read = project();
-  while (Buffer.byteLength(JSON.stringify(read), "utf8") > MAX_READ_BYTES) {
-    entries.pop();
-    if (!truncationReasons.includes("output-limit")) truncationReasons.push("output-limit");
-    read = project();
+  if (kept < result.entries.length && !truncationReasons.includes("output-limit")) {
+    truncationReasons.push("output-limit");
   }
-  return read;
+  return discoveryReadProjection({
+    entries: result.entries.slice(0, kept),
+    truncationReasons,
+    matchedCount: result.matchedCount,
+    coverageIncomplete: truncationReasons.length > 0,
+  });
+}
+
+function fitsReadBound(read: CodingToolReadResult): boolean {
+  return Buffer.byteLength(JSON.stringify(read), "utf8") <= MAX_READ_BYTES;
+}
+
+/**
+ * The discovery as a read result within the read byte bound: the whole listing when it fits, else its
+ * longest prefix that does. A prefix's size never shrinks as the prefix grows, so a binary search
+ * finds that longest prefix in O(log n) projections instead of re-serialising, re-splitting and
+ * re-hashing the whole listing once per dropped entry.
+ */
+export function discoveryReadResult(result: WorkspacePathDiscoveryResult): CodingToolReadResult {
+  const whole = projectDiscoveryPrefix(result, result.entries.length);
+  if (fitsReadBound(whole) || result.entries.length === 0) return whole;
+  let low = 0;
+  let high = result.entries.length - 1;
+  let best = projectDiscoveryPrefix(result, 0);
+  while (low <= high) {
+    const middle = (low + high) >>> 1;
+    const candidate = projectDiscoveryPrefix(result, middle);
+    if (fitsReadBound(candidate)) {
+      best = candidate;
+      low = middle + 1;
+    } else high = middle - 1;
+  }
+  return best;
 }
 
 async function executeRead(
@@ -1052,6 +1078,10 @@ const CODING_RUNTIME_WORKSPACE_READ_OPERATION = defineActivityLogOperation({
     targetPathSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     startLine: { type: "integer", dataClass: "count", required: false },
     maxLines: { type: "integer", dataClass: "count", required: false },
+    // The window was cut to its largest whole-line prefix at the read byte bound (audit
+    // 2026-11-06, finding 6); `keptLines` counts that prefix. Both absent for an uncut window.
+    byteBoundCut: { type: "boolean", dataClass: "closed-enum", required: false },
+    keptLines: { type: "integer", dataClass: "count", required: false },
     frames: CODING_RUNTIME_WORKSPACE_READ_FRAMES_FIELD,
     causeChain: CODING_RUNTIME_WORKSPACE_READ_CAUSE_CHAIN_FIELD,
   },
@@ -1284,7 +1314,11 @@ function completedRead(
 ):
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed"; readonly reasonCode?: string } {
-  const window = readWindow(text, request.startLine, request.maxLines);
+  const requested = readWindow(text, request.startLine, request.maxLines);
+  // A window past the byte bound is cut to its largest whole-line prefix and reports where the next
+  // read starts, exactly like a window cut by `maxLines`; only a first line that alone exceeds the
+  // bound has no prefix to return and stays a closed `too-large` refusal.
+  const window = fitWindowToByteBound(requested, request.startLine ?? 1);
   const byteCount = Buffer.byteLength(window.text, "utf8");
   if (byteCount > MAX_READ_BYTES) {
     recordReadFailure(
@@ -1295,7 +1329,7 @@ function completedRead(
     );
     return readRefusal("too-large");
   }
-  recordCompletedRead(deps, binding, request);
+  recordCompletedRead(deps, binding, request, byteBoundCut(requested, window, request.startLine));
   return {
     status: "completed",
     read: {
@@ -1318,10 +1352,22 @@ export function wholeFileDigest(text: string): string {
   return secureWorkspaceTextDigest(text);
 }
 
+// The prefix length when the byte bound cut the requested window, else nothing.
+function byteBoundCut(
+  requested: ReadWindowResult,
+  fitted: ReadWindowResult,
+  startLine: number | undefined,
+): number | undefined {
+  return fitted === requested || fitted.nextStartLine === undefined
+    ? undefined
+    : fitted.nextStartLine - (startLine ?? 1);
+}
+
 function recordCompletedRead(
   deps: CodingToolReadEditPortDeps,
   binding: RuntimeProducerBinding | undefined,
   request: RepositoryReadRequest,
+  keptLines?: number,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -1333,6 +1379,7 @@ function recordCompletedRead(
         targetPathSha256: targetPathDigest(request.relativePath),
         startLine: request.startLine ?? 1,
         maxLines: request.maxLines ?? 0,
+        ...(keptLines === undefined ? {} : { byteBoundCut: true, keptLines }),
       },
     ),
   );
@@ -1432,6 +1479,25 @@ export function readWindow(
   const first = (startLine ?? 1) - 1;
   if (first >= totalLines) return { text: "", totalLines };
   return slicedWindow({ lines, trailingNewline, totalLines, first, maxLines });
+}
+
+function fitWindowToByteBound(window: ReadWindowResult, firstLine: number): ReadWindowResult {
+  if (Buffer.byteLength(window.text, "utf8") <= MAX_READ_BYTES) return window;
+  const lines = window.text.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  let bytes = 0;
+  let kept = 0;
+  for (const line of lines) {
+    bytes += Buffer.byteLength(line, "utf8") + 1;
+    if (bytes > MAX_READ_BYTES) break;
+    kept += 1;
+  }
+  if (kept === 0) return window;
+  return {
+    text: `${lines.slice(0, kept).join("\n")}\n`,
+    totalLines: window.totalLines,
+    nextStartLine: firstLine + kept,
+  };
 }
 
 interface ReadWindowResult {

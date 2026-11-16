@@ -56,3 +56,23 @@ export function rejectsOutputTokenField(payload: unknown, field: OutputTokenFiel
   const namesField = error.param === field || message.includes(field);
   return namesField && /unsupported|not supported|unrecognized|unknown/.test(`${code} ${message}`);
 }
+
+/**
+ * Whether a provider rejection names `reasoning_effort` and says it (or the value sent) is not
+ * accepted, so a request that only PREFERRED no reasoning can be answered once without the field.
+ * LiteLLM answers an unmapped parameter with "does not support parameters"; OpenAI-style providers
+ * name the param with an unsupported or invalid value. Any other rejection is no reason to retry.
+ */
+export function rejectsReasoningEffortParameter(payload: unknown): boolean {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  if (!isRecord(error)) return false;
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  const code = typeof error.code === "string" ? error.code.toLowerCase() : "";
+  const names = error.param === "reasoning_effort" || /reasoning[ _]effort/.test(message);
+  return (
+    names &&
+    /unsupported|not supported|does not support|unrecognized|unknown|extra inputs|not permitted|invalid/.test(
+      `${code} ${message}`,
+    )
+  );
+}

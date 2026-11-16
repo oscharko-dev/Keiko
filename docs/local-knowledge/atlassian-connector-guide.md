@@ -24,7 +24,7 @@ the three user-facing modes are **Ask for approval**, **Supervised workspace**, 
 ## What the connector does
 
 The Atlassian connector connects Keiko to Atlassian Cloud (Confluence and Jira) with an
-email/API-token pair, or to Jira Data Center 10.3.26 with a personal access token (PAT).
+email/API-token pair, or to compatible Jira Data Center instances with a personal access token (PAT).
 Credentials belong to the local user and stay in the existing encrypted vault. It supports these
 families of operation:
 
@@ -53,13 +53,32 @@ Cloud connectors retain their existing sync and action workflows. See
 
 ### Create and connect a Pod
 
-In the Knowledge Pods hub, select **Create Jira Pod**, enter a name, the HTTPS Jira base URL
-(including any context path), and a PAT, then select **Create Jira Pod** in the form and
-**Verify connection**. Verification checks
+In the Local Knowledge window, select **Create Jira Pod**, enter a name, the HTTPS Jira base URL
+(including any context path), and a PAT, then select **Create Jira Pod** once. Keiko saves the
+connection and verifies it automatically before closing the form. Verification checks
 bounded REST-v2 `serverInfo` and `myself` responses and the active identity. A successful check is
-required before Chat can use the Pod. For a private Jira address, the operator must configure
-exact target admission and the trusted CA through the existing network configuration; the token
-form cannot grant private-network access. See [ADR-0128 D3](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md#d3--governed-egress-single-host-allowlist-shared-transport-fail-closed-redirects).
+required before Chat can use the Pod. Jira Server or Data Center must report an internally consistent
+released version of **10.3.0 or later**; verification does not require one exact patch version.
+The 10.3 minimum is the oldest supported API source baseline. Later releases, including releases
+newer than 11.3, can pass these probes but remain unqualified until their own live acceptance checks
+pass. Verification privately retains the observed REST-v2 identity compatibility and leaves Agile
+capability unverified. It does not grant Jira permissions
+or establish that every API operation is available. Reverify existing Pods to obtain these facts;
+older records do not invent them. The saved Data Center URL supplies the exact target;
+verification automatically determines and privately retains its address class. No separate
+`privateTargets` configuration or global private-network switch is needed. A private certificate
+authority still needs the normal runtime trust configuration, such as `egress.caBundlePath`;
+certificate validation stays enabled. See [ADR-0128 D3](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md#d3--governed-egress-single-host-allowlist-shared-transport-fail-closed-redirects).
+
+Jira answers some permission refusals with HTTP 401, which looks like a failed login. Keiko therefore
+checks the token once with the identity request before it treats any 401 as a rejected token (the
+identity request itself is the only definitive 401). A token that really expired or was revoked is
+reported as "Jira authentication failed" with the remedy: replace the token on the Jira Pod in the
+Local Knowledge window and verify again; the Chat and its draft stay. A Jira release below 10.3.0 is
+refused with the 10.3.0 floor named. A certificate that Keiko does not trust names the
+`KEIKO_CA_BUNDLE_PATH` setting; see
+[the CA bundle note](../troubleshooting/ca-bundle-fallback.md). Never disable certificate
+verification.
 
 Open **Connectors** in the Chat composer and switch the verified Pod on. The same menu lists every
 centrally configured MCP server; switch off what this Chat should not use. A switched-off server or
@@ -121,9 +140,9 @@ citations and retrieval limits; Jira results and issue links remain separately a
 results. Jira text is not presented as a local grounding citation. Tool orchestration and final
 answering share the turn's existing time, token and tool budgets.
 
-Each Pod card shows its status (**Ready**, **Not verified yet**, **Status unknown** or the failure)
-and **Add to workspace**. When the Pod needs attention, the card shows the one action that resolves
-it. The **⋯** menu holds **Verify connection**, **Refresh status**, **Rename Pod**, **Replace token**
+The Knowledge Hub shows a healthy Pod's name, **Add to workspace** and **⋯**. Connector settings
+retain the address and detailed status. When a Pod needs attention, its Hub row shows the status
+and the one action that resolves it. The **⋯** menu holds **Verify connection**, **Refresh status**, **Rename Pod**, **Replace token**
 and **Remove Pod**. Rename preserves the connection. Replacing a token preserves the Pod identity and
 Chat association, advances the credential generation and revokes current access and pending
 permissions. Verify again before continuing. Removal deletes the saved
@@ -298,18 +317,24 @@ tier, and one disposition per mode. This is the normative mapping from ADR-0128 
 [ADR-0138](../adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md),
 restated:
 
-| Action                | Provider   | Connector scope        | Risk   | Ask for approval | Supervised workspace | Full access |
-| --------------------- | ---------- | ---------------------- | ------ | ---------------- | -------------------- | ----------- |
-| `sync-space`          | Confluence | `knowledge-base.read`  | low    | review-required  | review-required      | allowed     |
-| `sync-project`        | Jira       | `issue-tracker.read`   | low    | review-required  | review-required      | allowed     |
-| `search-issues-live`  | Jira       | `issue-tracker.read`   | low    | review-required  | review-required      | allowed     |
-| `create-issue`        | Jira       | `issue-tracker.write`  | high   | review-required  | review-required      | allowed     |
-| `update-issue-fields` | Jira       | `issue-tracker.write`  | medium | review-required  | review-required      | allowed     |
-| `transition-issue`    | Jira       | `issue-tracker.write`  | high   | review-required  | review-required      | allowed     |
-| `add-issue-comment`   | Jira       | `issue-tracker.write`  | low    | review-required  | review-required      | allowed     |
-| `create-page`         | Confluence | `knowledge-base.write` | high   | review-required  | review-required      | allowed     |
-| `update-page`         | Confluence | `knowledge-base.write` | medium | review-required  | review-required      | allowed     |
-| `add-page-comment`    | Confluence | `knowledge-base.write` | low    | review-required  | review-required      | allowed     |
+| Action                          | Provider   | Connector scope        | Risk   | Ask for approval | Supervised workspace | Full access |
+| ------------------------------- | ---------- | ---------------------- | ------ | ---------------- | -------------------- | ----------- |
+| `sync-space`                    | Confluence | `knowledge-base.read`  | low    | review-required  | review-required      | allowed     |
+| `sync-project`                  | Jira       | `issue-tracker.read`   | low    | review-required  | review-required      | allowed     |
+| `search-issues-live`            | Jira       | `issue-tracker.read`   | low    | review-required  | review-required      | allowed     |
+| `create-issue` (retired)        | Jira       | `issue-tracker.write`  | high   | review-required  | review-required      | allowed     |
+| `update-issue-fields` (retired) | Jira       | `issue-tracker.write`  | medium | review-required  | review-required      | allowed     |
+| `transition-issue` (retired)    | Jira       | `issue-tracker.write`  | high   | review-required  | review-required      | allowed     |
+| `add-issue-comment` (retired)   | Jira       | `issue-tracker.write`  | low    | review-required  | review-required      | allowed     |
+| `create-page`                   | Confluence | `knowledge-base.write` | high   | review-required  | review-required      | allowed     |
+| `update-page`                   | Confluence | `knowledge-base.write` | medium | review-required  | review-required      | allowed     |
+| `add-page-comment`              | Confluence | `knowledge-base.write` | low    | review-required  | review-required      | allowed     |
+
+The four rows marked retired (`create-issue`, `update-issue-fields`, `transition-issue`,
+`add-issue-comment`) are the policy classes of the governed Jira tools. Sent to the actions route
+directly they are retired: the route answers `denied` with the reason `connector-write-denied` in every mode,
+before any approval or request (#4354). Jira writes go through the governed Jira tools, which stand
+behind the saved issue templates.
 
 How to read this per mode:
 
@@ -392,14 +417,28 @@ encryption at rest as described above.
 The current platform and operation boundaries below follow ADR-0128 D7. The epic evidence matrix
 separately records incomplete qualification; a passing focused test is not full production acceptance.
 
-- **Bounded Data Center support.** Jira Data Center 10.3.26 is the verified version accepted by
-  the REST-v2/PAT connection path. Other versions, Data Center sync and Confluence Data Center are
-  unsupported. Cloud connectors and their existing records remain compatible; a Cloud connector
+- **Bounded Data Center support.** The REST-v2/PAT connection path requires version 10.3.0 or later
+  with coherent release and active-identity responses. Versions below this supported baseline are
+  refused before the identity request. There is no exact patch allow-list or upper-version ceiling;
+  releases newer than 11.3 remain observed and unqualified until live acceptance is recorded.
+  Connection verification does not certify all operations or replace live qualification of each Data Center baseline. Agile
+  capability stays unverified until its own operations are qualified. Data Center sync and
+  Confluence Data Center remain unsupported. Cloud connectors and their existing records remain compatible; a Cloud connector
   is not automatically converted into a Data Center Live Pod.
-- **Bounded Live Chat operations.** Unsupported plugin fields, issue/page/comment deletion,
-  attachments, worklogs, bulk writes and arbitrary Jira REST requests are unavailable. A live
-  connection does not imply an indexed snapshot. Confluence Live Chat tools remain outside this
-  Epic; see [#2953](https://github.com/oscharko-dev/Keiko/issues/2953).
+- **Bounded Live Chat operations.** Governed Jira operations now cover projects, boards and
+  sprints, issue relationships and lifecycle, comments, attachments, worklogs, saved configuration
+  and supported account and administration work. Discover the required operation, review its
+  fields and follow its result card. Availability still depends on the verified Jira release,
+  actual native permissions and the selected authority. Instance administration requires its
+  separate human opt-in; ordinary write access does not grant it. Acknowledged but unconfirmed
+  changes require inspection before another write. Unsupported plugin fields and arbitrary REST
+  requests remain unavailable. A live connection does not imply an indexed snapshot. Confluence
+  Live Chat tools remain outside this Epic; see [#2953](https://github.com/oscharko-dev/Keiko/issues/2953).
+- **Protected account input.** Supply passwords and licenses only in the protected input card.
+  Check the displayed connection, purpose and target before providing a value. These values stay
+  outside the conversation and model request. Cancellation and expiry do not establish whether a
+  separately acknowledged Jira write completed; use the operation result and Jira readback before
+  deciding how to continue.
 - **No OAuth 2.0 (3LO).** API-token Basic authentication is sufficient for a single local user's own
   credential and needs no redirect-based consent flow, browser round-trip, or refresh-token custody.
   OAuth is deferred until multi-user or app-marketplace distribution creates an actual need.

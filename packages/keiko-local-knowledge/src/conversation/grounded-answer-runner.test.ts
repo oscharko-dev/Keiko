@@ -212,6 +212,31 @@ describe("runGroundedAnswer — happy path", () => {
     expect(result.citationRepair).toBe("skipped-budget");
   });
 
+  // #4173: after the Epic was created the turn regenerated its "Epic KER-3 created" answer for
+  // 94 seconds to add document citations. A report of a sent tool change is kept as written.
+  it("keeps an answer that reports a sent tool change without a citation repair", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-tool-action" });
+    const calls: AnswerGeneratorInput[] = [];
+    const generator: AnswerGenerator = {
+      generate: (input) => {
+        calls.push(input);
+        return Promise.resolve("The Epic was created in Jira.");
+      },
+      repairAvailable: () => true,
+      reportsToolAction: () => true,
+    };
+
+    const result = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+      { conversationId: "conv-tool-action", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(result.answer).toBe("The Epic was created in Jira.");
+    expect(result.citationRepair).toBe("skipped-tool-action");
+  });
+
   it("keeps the completed answer when the repair is refused at admission (S11 of #4173)", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair-refused" });

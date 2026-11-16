@@ -8,16 +8,33 @@ import {
 import { translateCodingWorkbench } from "./coding-workbench-i18n";
 import { CodingWorkbenchCiReadiness } from "./CodingWorkbenchCiReadiness";
 import { ciReadinessSnapshot, CI_OBSERVED_AT } from "./_ciReadinessTestSupport";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import type { ClientDiagnosticCodingWorkbenchInteraction } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 const NOW = new Date("2026-09-05T00:00:05.000Z");
+// #4271: what the card showed is a closed delivery-step interaction, not a warn sentence.
+const shown: ClientDiagnosticCodingWorkbenchInteraction[] = [];
+const step = (deliveryState: string): Record<string, string> => ({
+  interaction: "delivery-step-shown",
+  deliveryStep: "ci-readiness",
+  deliveryState,
+});
+
 describe("exact-head Workbench CI observation", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(NOW.getTime());
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    shown.length = 0;
+    setClientDiagnosticWriter((message, meta) => {
+      const interaction = meta?.codingWorkbenchInteraction;
+      if (interaction?.interaction === "delivery-step-shown") shown.push(interaction);
+      else console.warn(message);
+    });
   });
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    resetClientDiagnosticWriter();
   });
   // #3390: same reason as the delivery card's fact keys — every observation fact and check count
   // was addressable only through its translated label or a translated `aria-label`, so nothing
@@ -51,9 +68,7 @@ describe("exact-head Workbench CI observation", () => {
     expect(within(region).getByText("3".repeat(40))).toBeInTheDocument();
     expect(region.querySelector(`time[datetime="${CI_OBSERVED_AT}"]`)).not.toBeNull();
     expect(within(region).queryByRole("button")).not.toBeInTheDocument();
-    expect(console.warn).toHaveBeenCalledWith(
-      "[keiko] CI readiness displayed: technical-ready head 333333333333",
-    );
+    expect(shown).toEqual([step("technical-ready")]);
     expect(await axe(document.body)).toHaveNoViolations();
   });
   it("expires locally without a provider call or additional snapshot", () => {
@@ -66,9 +81,7 @@ describe("exact-head Workbench CI observation", () => {
     });
     expect(screen.getByText("CI observation is stale")).toBeInTheDocument();
     expect(screen.queryByText("Technical checks ready")).not.toBeInTheDocument();
-    expect(console.warn).toHaveBeenLastCalledWith(
-      "[keiko] CI readiness displayed: stale head 333333333333",
-    );
+    expect(shown.at(-1)).toEqual(step("stale"));
   });
   it.each([
     "stopping",

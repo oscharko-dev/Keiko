@@ -2,6 +2,7 @@ import {
   memoryInputEmbeddingIdentity as inputIdentity,
   memoryStoredEmbeddingIdentity as rowIdentity,
 } from "./memory-embedding-identity.js";
+import { statesChangedFact } from "@oscharko-dev/keiko-memory-capture";
 import { cosineSimilarity } from "@oscharko-dev/keiko-memory-retrieval";
 import { normalizedEndpointFingerprint } from "./embedding-provider-identity.js";
 // Memory embeddings — the model/IO boundary for semantic memory (#204).
@@ -759,7 +760,60 @@ export type NoveltyInsertOutcome =
   | { readonly kind: "merged"; readonly mergedInto: MemoryId }
   // The local human already refused this fact (forgot or rejected it) and the candidate is a
   // PARAPHRASE of it: nothing was stored and nothing was reinforced.
-  | { readonly kind: "suppressed"; readonly reason: MemoryCaptureSuppressionReason };
+  | { readonly kind: "suppressed"; readonly reason: MemoryCaptureSuppressionReason }
+  // The model called it the same fact and no duplicate confirms that: nothing was stored.
+  | { readonly kind: "unconfirmed" };
+
+export interface NoveltyInsertOptions {
+  // Store nothing unless a semantic duplicate confirms the candidate.
+  readonly onlyConfirm?: boolean;
+  // The fact this candidate replaces: it is no duplicate of what it replaces.
+  readonly replaces?: MemoryId;
+  // How the record is stored. Defaults to a plain insert.
+  readonly insert?: (record: MemoryRecord) => MemoryRecord;
+  // A refusal by the person that may have arrived while the embedding was computed. Checked after
+  // the last wait, immediately before anything is merged or stored.
+  readonly refusedSinceStart?: (record: MemoryRecord) => MemoryCaptureSuppressionReason | null;
+  // Replaces the semantic duplicate when the person now gives the fact another end date. Returns
+  // undefined when that duplicate may not be replaced, and the candidate then only confirms it.
+  readonly replaceDuplicate?: (
+    record: MemoryRecord,
+    duplicateOf: MemoryId,
+  ) => MemoryRecord | undefined;
+}
+
+// The person repeated a known fact with another end date than it has: a repeat that changes when the
+// fact stops holding is a change, not a confirmation (#4212).
+function endsDifferently(existing: MemoryRecord | undefined, record: MemoryRecord): boolean {
+  const end = record.validity.validUntil;
+  return end !== undefined && existing !== undefined && existing.validity.validUntil !== end;
+}
+
+function replacedDuplicate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  duplicateOf: MemoryId,
+  options: NoveltyInsertOptions,
+): MemoryRecord | undefined {
+  if (options.replaceDuplicate === undefined) return undefined;
+  if (!endsDifferently(vault.getMemory(duplicateOf), record)) return undefined;
+  return options.replaceDuplicate(record, duplicateOf);
+}
+
+// A semantic near-duplicate that states a changed value or the opposite preference is a new fact,
+// however close the two vectors lie.
+function confirmedDuplicate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  duplicateOf: MemoryId | null,
+  replaces: MemoryId | undefined,
+): MemoryId | null {
+  if (duplicateOf === null || duplicateOf === replaces) return null;
+  const existing = vault.getMemory(duplicateOf);
+  return existing !== undefined && statesChangedFact(existing.body, record.body)
+    ? null
+    : duplicateOf;
+}
 
 // Sealed vectors of the memories the local human has refused in this scope: forget tombstones
 // (deletion-grade, GEN-AI-MEMORY-003 / RB-4) plus records the operator rejected in the review queue.
@@ -855,17 +909,60 @@ function logNoveltyDecision(
   );
 }
 
+// The person's refusal since the capture started comes first, then a paraphrase of a fact they
+// already forgot or rejected.
+function noveltySuppression(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  embedding: MemoryEmbeddingInput | null,
+  dedupThreshold: number,
+  options: NoveltyInsertOptions,
+): MemoryCaptureSuppressionReason | null {
+  return (
+    options.refusedSinceStart?.(record) ??
+    semanticSuppressionReason(vault, record.scope, embedding, dedupThreshold)
+  );
+}
+
+type DuplicateSettlement =
+  | { readonly kind: "none" }
+  | { readonly kind: "merged"; readonly mergedInto: MemoryId }
+  | { readonly kind: "replaced"; readonly record: MemoryRecord };
+
+// A semantic duplicate is confirmed, or replaced when the person now gives it another end date.
+function settleDuplicate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  duplicateOf: MemoryId | null,
+  options: NoveltyInsertOptions,
+): DuplicateSettlement {
+  if (duplicateOf === null) return { kind: "none" };
+  const replaced = replacedDuplicate(vault, record, duplicateOf, options);
+  if (replaced !== undefined) return { kind: "replaced", record: replaced };
+  vault.recordAccess([duplicateOf], Date.now(), record.provenance.sourceConversationId);
+  return { kind: "merged", mergedInto: duplicateOf };
+}
+
+function storeCandidate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  options: NoveltyInsertOptions,
+): MemoryRecord {
+  return options.insert?.(record) ?? vault.insertMemory(record);
+}
+
 export async function insertSalienceMemoryWithNoveltyGate(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   record: MemoryRecord,
+  options: NoveltyInsertOptions = {},
 ): Promise<NoveltyInsertOutcome> {
   const embedding = await embedMemoryText(deps, record.body, "document");
   const embedded = embedding !== null;
   const scopeKind = record.scope.kind;
   const calibration = embedding === null ? {} : memoryEmbeddingCalibrationFor(deps.env, embedding);
   const dedupThreshold = calibration.semanticDedupThreshold ?? SEMANTIC_DEDUP_COSINE_THRESHOLD;
-  const suppression = semanticSuppressionReason(vault, record.scope, embedding, dedupThreshold);
+  const suppression = noveltySuppression(vault, record, embedding, dedupThreshold, options);
   if (suppression !== null) {
     logNoveltyDecision(scopeKind, embedded, {
       outcome: "suppressed",
@@ -876,34 +973,48 @@ export async function insertSalienceMemoryWithNoveltyGate(
   }
   const neighbors = gatherScopeEmbeddings(vault, record.scope);
   const neighborCount = neighbors.size;
-  const duplicateOf = findSemanticDuplicate(embedding, neighbors, dedupThreshold);
-  if (duplicateOf !== null) {
-    vault.recordAccess([duplicateOf], Date.now());
-    logNoveltyDecision(scopeKind, embedded, {
-      outcome: "merged",
-      dedupThreshold,
-      neighborCount,
-    });
-    return { kind: "merged", mergedInto: duplicateOf };
+  const duplicateOf = confirmedDuplicate(
+    vault,
+    record,
+    findSemanticDuplicate(embedding, neighbors, dedupThreshold),
+    options.replaces,
+  );
+  const settled = settleDuplicate(vault, record, duplicateOf, options);
+  if (settled.kind === "merged") {
+    logNoveltyDecision(scopeKind, embedded, { outcome: "merged", dedupThreshold, neighborCount });
+    return settled;
   }
-  const inserted = vault.insertMemory(record);
+  if (settled.kind === "none" && options.onlyConfirm === true) return { kind: "unconfirmed" };
+  const inserted =
+    settled.kind === "replaced" ? settled.record : storeCandidate(vault, record, options);
   logNoveltyDecision(scopeKind, embedded, {
     outcome: "inserted",
     dedupThreshold,
     neighborCount,
   });
   if (embedding !== null) {
-    try {
-      vault.upsertEmbedding(inserted.id, embedding);
-    } catch (error) {
-      // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
-      logEmbeddingStoreRejected("store-rejected", error);
-    }
-    // A-MEM-style associative linking (#204, O-P4). Reuses the neighbour set already fetched for the
-    // novelty gate — no extra IO. Opt-in (default off => no edges, byte-identical).
-    autoLinkRelatedMemories(deps, vault, inserted.id, embedding, neighbors, calibration);
+    storeEmbeddingAndLinks(deps, vault, inserted.id, embedding, neighbors, calibration);
   }
   return { kind: "inserted", record: inserted };
+}
+
+function storeEmbeddingAndLinks(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  id: MemoryRecord["id"],
+  embedding: MemoryEmbeddingInput,
+  neighbors: ReturnType<typeof gatherScopeEmbeddings>,
+  calibration: MemoryEmbeddingCalibration,
+): void {
+  try {
+    vault.upsertEmbedding(id, embedding);
+  } catch (error) {
+    // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
+    logEmbeddingStoreRejected("store-rejected", error);
+  }
+  // A-MEM-style associative linking (#204, O-P4). Reuses the neighbour set already fetched for the
+  // novelty gate — no extra IO. Opt-in (default off => no edges, byte-identical).
+  autoLinkRelatedMemories(deps, vault, id, embedding, neighbors, calibration);
 }
 
 const EMBEDDING_FAILURE_KIND = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;

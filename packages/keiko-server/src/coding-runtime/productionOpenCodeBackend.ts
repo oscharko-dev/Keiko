@@ -1,11 +1,14 @@
 import type { NativeMcpMutationJournal } from "./opencodeNativeMcpMutationJournal.js";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 import { codingRunMcpServers, selectedRunMcpServers } from "./codingJiraPodBinding.js";
-import type { CodingJiraPods } from "./codingJiraPodMcp.js";
+import type { CodingJiraPods, CodingJiraRunAuthority } from "./codingJiraPodMcp.js";
+import { codingJiraCatalogAccounting } from "./codingJiraCatalogBudget.js";
+import { createCodingJiraRunNames } from "./codingJiraWriteReview.js";
 import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
+import { nativeBuildCacheAdmitted } from "./nativeBuildSettings.js";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 
@@ -20,16 +23,17 @@ import { isCodingSafeActivityToolPresentation } from "@oscharko-dev/keiko-contra
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import {
-  activityLogEvent,
-  defineActivityLogOperation,
-} from "@oscharko-dev/keiko-contracts/runtime/observability";
-import {
   createRuntimeGatewayConfinement,
   nativeHomeDeniedReadRoots,
   NATIVE_OPENSSL_ENV_NAMES,
   nativeOpenSslNodeOptions,
+  nativeBuildInheritedEnvNames,
+  nativeBuildCacheReadRoots,
+  nativeBuildToolReadRoots,
+  nativeBuildWrapperReadRoots,
   nativeOpenSslReadRoots,
   nativeToolchainReadRoots,
+  planWindowsGatewayRuntimeSandbox,
   type LongLivedRuntimeSandboxAttestation,
   type RuntimeGatewayEgress,
   type RuntimeGatewayFilesystem,
@@ -45,6 +49,7 @@ import {
   resolveNativeGitMetadata,
 } from "./opencodeNativeGitMetadata.js";
 import {
+  localLaneWindowsGatewayHelperPin,
   devLaneCheckoutRoot,
   npmLanePackageRoot,
   type DevLanePortableOpenCodeRuntime,
@@ -85,6 +90,8 @@ import {
 import { exactWorkspaceRead, type SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
+import { pathIsContained } from "./nativeRuntimeProcessPaths.js";
+import type { WindowsFilesystemGrant } from "./nativeRuntimeProcessProtocol.js";
 import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import type { McpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
@@ -102,7 +109,10 @@ import type {
   ProductionRuntimeBackendResolver,
   QualifiedProductionRuntimeRun,
 } from "./productionCodingRuntimeResolver.js";
-import type { QualifiedPortableOpenCodeRuntime } from "./productionPortableCodingRuntime.js";
+import {
+  releasedWindowsGatewayHelperPin,
+  type QualifiedPortableOpenCodeRuntime,
+} from "./productionPortableCodingRuntime.js";
 import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessSupervisor,
@@ -124,6 +134,7 @@ import {
 } from "./opencodeLaunchProfile.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
+import { nativeCertificateReadFilesField } from "./opencodeNativeCertificates.js";
 import { nativeLinkedFilesField } from "./opencodeNativeLinkedFiles.js";
 import {
   recordOpenCodeRipgrepResolution,
@@ -137,33 +148,6 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 const OPEN_CODE_START_TIMEOUT_MS = 120_000;
-
-const CODING_RUNTIME_CONTEXT_USAGE_OBSERVED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "coding-runtime.context-usage.observed",
-  category: "process",
-  owner: "keiko-server",
-  emitter: "coding-runtime.productionOpenCodeBackend.recordContextTelemetry",
-  fields: {
-    state: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["accepted", "rejected"],
-    },
-    capacityTokens: { type: "integer", dataClass: "count", required: true },
-    usedInputTokens: { type: "integer", dataClass: "count", required: true },
-    reservedOutputTokens: { type: "integer", dataClass: "count", required: true },
-    sampleDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-  },
-  causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["coding-runtime-context-usage"],
-  proofIds: ["coding-runtime.context-usage.observed.emitted-line"],
-  releaseImpact: "patch",
-});
 
 /**
  * Functional-evidence stand-in for a platform-qualified portable OpenCode runtime. It is reachable
@@ -194,6 +178,7 @@ export interface ProductionOpenCodeBackendInput {
   readonly gatewayCodingModelIds?: (() => readonly string[]) | undefined;
   readonly resolveGatewayRunMetadata?:
     ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
+  readonly requiresCompleteReasoningHistory?: ((modelId: string) => boolean) | undefined;
   /**
    * ADR-0043 D11-D14 (#3390): the full loopback URL the tool facade rides -- the SAME attested
    * origin as `gatewayUrl`, at `/api/coding-sidecar/tool` -- never a second listener.
@@ -202,7 +187,7 @@ export interface ProductionOpenCodeBackendInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
     OpenCodeGatewayReadinessRegistry,
-    "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile"
+    "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile" | "bindContinuationRoute"
   >;
   readonly fetch?: typeof globalThis.fetch | undefined;
   /** The host environment the native profile inherits its allowlisted names from (#3897). */
@@ -315,6 +300,66 @@ export function createProductionOpenCodeBackend(
   });
 }
 
+/**
+ * #4068: a confined Windows tree reads only what it is granted, and Keiko grants a workspace only as
+ * a Keiko-managed worktree (ADR-0043 D18). A start in the operator's own checkout or folder would
+ * spawn and then fail inside the runtime with an opaque error, and an AppContainer cannot resolve a
+ * path on another volume than Windows. Both are refused before anything spawns, each with its own
+ * code, so the Workbench can name what to change. A workspace whose access cannot be resolved at all
+ * is left to the existing checks, which name that cause.
+ */
+export function assertWindowsWorkspaceLocation(
+  input: Pick<ProductionOpenCodeBackendInput, "portable" | "processEnv">,
+  run: Pick<ProductionRuntimeBackendInput, "context" | "resolveWorkspaceRootAccess">,
+): void {
+  if (windowsGatewayHelperPin(input.portable) === undefined) return;
+  if (run.resolveWorkspaceRootAccess()?.kind === "ordinary") {
+    throw new CodingRuntimeLaunchRejectedError(
+      "workspace-location-unsupported",
+      false,
+      "local-checkout",
+    );
+  }
+  if (onAnotherWindowsVolume(run.context.workspaceRoot, input.processEnv ?? process.env)) {
+    throw new CodingRuntimeLaunchRejectedError(
+      "workspace-volume-unsupported",
+      false,
+      "non-system-volume",
+    );
+  }
+}
+
+/**
+ * Whether a Windows path lies on another volume than the one Windows runs from (`SystemDrive`,
+ * default `C:`): another drive letter or a UNC share. A path in another form is no Windows host
+ * path, so it names no volume to refuse.
+ */
+export function onAnotherWindowsVolume(path: string, env: NodeJS.ProcessEnv): boolean {
+  if (/^[\\/]{2}/u.test(path)) return true;
+  const drive = /^([a-z]):[\\/]/iu.exec(path)?.[1];
+  if (drive === undefined) return false;
+  return `${drive}:`.toLowerCase() !== (env.SystemDrive ?? "C:").toLowerCase();
+}
+
+function requiredRunGeometry(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): OpenCodeRuntimeCompositionInput["contextGeometry"] {
+  const metadata = input.resolveGatewayRunMetadata?.(run.context.modelProfile.profileId);
+  const geometry = metadata === undefined ? undefined : resolveOpenCodeContextGeometry(metadata);
+  if (geometry === undefined) throw new CodingRuntimeLaunchRejectedError("runtime-unqualified");
+  return geometry;
+}
+
+/** The run's context geometry, once the run may start in its workspace at all. */
+function admittedRunGeometry(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): OpenCodeRuntimeCompositionInput["contextGeometry"] {
+  assertWindowsWorkspaceLocation(input, run);
+  return requiredRunGeometry(input, run);
+}
+
 function createOpenCodeRun(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
@@ -322,12 +367,7 @@ function createOpenCodeRun(
   toolProfile: OpenCodeToolProfile,
 ): QualifiedProductionRuntimeRun {
   assertOpenCodeRun(run);
-  const metadata = input.resolveGatewayRunMetadata?.(run.context.modelProfile.profileId);
-  const contextGeometry =
-    metadata === undefined ? undefined : resolveOpenCodeContextGeometry(metadata);
-  if (contextGeometry === undefined) {
-    throw new CodingRuntimeLaunchRejectedError("runtime-unqualified");
-  }
+  const contextGeometry = admittedAndBoundRunGeometry(input, run);
   const safeActivity = safeActivityController(
     run.minted.authorityRef.runId,
     safeActivityProjection,
@@ -336,6 +376,10 @@ function createOpenCodeRun(
   );
   const launchInput = withVerifiedRipgrep(input, run, toolProfile);
   try {
+    input.gatewayReadiness.bindContinuationRoute(
+      run.minted.authorityRef.runId,
+      contextGeometry.continuationRouteDigest,
+    );
     const composition = composeOpenCodeRun(
       launchInput,
       run,
@@ -360,6 +404,7 @@ function createOpenCodeRun(
       },
     };
   } catch (error) {
+    input.gatewayReadiness.clear(run.minted.authorityRef.runId);
     safeActivity.clear();
     safeActivityProjection.purge(run.minted.authorityRef.runId, "stop");
     throw error;
@@ -457,8 +502,6 @@ function composeOpenCodeRun(
       run.minted.authorityRef.envelopeDigest,
       input.runtimeEvidence,
       run,
-      contextGeometry,
-      input.activityLog ?? processServerLogSink(),
     ),
     onQuestionObserved: liveQuestionSignal(
       run.minted.authorityRef.runId,
@@ -516,24 +559,59 @@ function mcpRelayFor(
       managed:
         jira === undefined
           ? input.mcpConnections
-          : jira.pods.connections(input.mcpConnections, jira.binding),
+          : jira.pods.connections(input.mcpConnections, jira.binding, jira.authority),
     },
   };
 }
 
 interface BoundJira {
   readonly pods: CodingJiraPods;
+  readonly authority: CodingJiraRunAuthority;
   readonly binding: NonNullable<ProductionRuntimeBackendInput["request"]["jiraPod"]>;
 }
 
 // A run the human started with a Jira Pod: the resolver bound it, and this composition must be able
 // to serve it. A run that cannot be served as asked fails closed instead of starting without Jira.
-function boundJira(input: LaunchInput, run: ProductionRuntimeBackendInput): BoundJira | undefined {
+// The model gateway reports each call's real prompt size by run; the registry reads it against
+// the geometry this run was admitted with (#4359).
+function admittedAndBoundRunGeometry(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): OpenCodeRuntimeCompositionInput["contextGeometry"] {
+  const geometry = admittedRunGeometry(input, run);
+  run.contextUsage?.bindGeometry(run.request.runId, {
+    capacityTokens: geometry.contextWindowTokens,
+    reservedOutputTokens: geometry.maxOutputTokens,
+  });
+  return geometry;
+}
+
+function boundJira(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  geometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
+): BoundJira | undefined {
   const binding = run.request.jiraPod;
   if (binding === undefined) return undefined;
-  if (input.codingJiraPods === undefined || input.mcpRelay === undefined)
+  if (
+    input.codingJiraPods === undefined ||
+    input.mcpRelay === undefined ||
+    run.jiraAuthority === undefined
+  )
     throw new Error("jira-pod-unavailable");
-  return { pods: input.codingJiraPods, binding };
+  const authority = run.jiraAuthority;
+  return {
+    pods: input.codingJiraPods,
+    binding,
+    authority: {
+      ...authority,
+      names: createCodingJiraRunNames(),
+      ...codingJiraCatalogAccounting({
+        geometry,
+        usage: () => run.contextUsage?.readLargest(run.request.runId),
+      }),
+    },
+  };
 }
 
 // The registry's servers the human selected, plus the Pod's tools for a bound run.
@@ -566,12 +644,14 @@ function nativeRunInputs(
   | "remoteSkills"
   | "nativeWorktrees"
   | "nativeWebSearch"
+  | "jiraWritePreflight"
+  | "jiraWriteReview"
   | "externalReadRoots"
   | "configDocuments"
   | "agentModelCatalog"
 > {
   if (toolProfile !== "native") return {};
-  const jira = boundJira(input, run);
+  const jira = boundJira(input, run, contextGeometry);
   return {
     repositoryItems: repositoryItemsFor(input, run),
     configDocuments: configDocumentsFor(input, run),
@@ -588,8 +668,29 @@ function nativeRunInputs(
     ...(input.remoteSkills === undefined ? {} : { remoteSkills: input.remoteSkills }),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
     ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
+    ...jiraWritePreflightFor(jira),
+    ...jiraWriteReviewFor(jira),
     externalReadRoots: nativeExternalReadRoots(input, run),
   };
+}
+
+// A run with a bound Jira Pod: the dry run of its writes before the human is asked (#4354 L4).
+function jiraWritePreflightFor(
+  jira: BoundJira | undefined,
+): Pick<OpenCodeRuntimeCompositionInput, "jiraWritePreflight"> {
+  return jira === undefined
+    ? {}
+    : {
+        jiraWritePreflight: (call) => jira.pods.preflightWrite(jira.binding, jira.authority, call),
+      };
+}
+
+// The plain approval of a Jira write: the call and the names this run's reads gave its ids (#4359).
+function jiraWriteReviewFor(
+  jira: BoundJira | undefined,
+): Pick<OpenCodeRuntimeCompositionInput, "jiraWriteReview"> {
+  const names = jira?.authority.names;
+  return names === undefined ? {} : { jiraWriteReview: names.review };
 }
 
 // One resolution per run, shared by the kernel allowlist and the composition's policy, so the two
@@ -645,7 +746,25 @@ function linkedFilesField(
   );
 }
 
-function nativePrivateStateRoot(input: LaunchInput, run: ProductionRuntimeBackendInput): string {
+/** The operator-named certificate bundles, readable although their name is credential-shaped. */
+function certificateReadFilesField(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  macos: boolean,
+): { readonly certificateReadFiles?: readonly string[] } {
+  if (!macos) return {};
+  return nativeCertificateReadFilesField(
+    input.activityLog ?? processServerLogSink(),
+    run.minted.authorityRef.runId,
+    input.processEnv ?? process.env,
+    homedir(),
+  );
+}
+
+function nativePrivateStateRoot(
+  input: Pick<ProductionOpenCodeBackendInput, "runtimeStateRoot">,
+  run: ProductionRuntimeBackendInput,
+): string {
   return join(
     realpathSync(input.runtimeStateRoot),
     "coding-runtime",
@@ -665,6 +784,8 @@ function sessionContinuityFor(
     sessionContinuity: {
       service: input.sessionContinuity,
       workspaceId: run.context.workspaceId,
+      freshReasoningHistory:
+        input.requiresCompleteReasoningHistory?.(run.context.modelProfile.profileId) === true,
       // #3903 AC4, #3902 AC3: a task of the workspace this one was provisioned from may be forked.
       ...(source === undefined
         ? {}
@@ -1237,9 +1358,10 @@ const NATIVE_INHERITED_ENV_ALLOWLIST: readonly string[] = Object.freeze([
  * but Node's OpenSSL and FIPS switches. Its files open read-only through `nativeOpenSslReadRoots`.
  */
 function nativeInheritedEnvAllowlist(env: NodeJS.ProcessEnv): readonly string[] {
-  return nativeOpenSslNodeOptions(env.NODE_OPTIONS)
-    ? [...NATIVE_INHERITED_ENV_ALLOWLIST, "NODE_OPTIONS"]
-    : NATIVE_INHERITED_ENV_ALLOWLIST;
+  // #4271: the build-tool names (JAVA_HOME, MAVEN_*, GRADLE_*, proxy family, certificate bundle,
+  // npm registry) a standalone shell sees, each only when its value carries no credential.
+  const base = [...NATIVE_INHERITED_ENV_ALLOWLIST, ...nativeBuildInheritedEnvNames(env)];
+  return nativeOpenSslNodeOptions(env.NODE_OPTIONS) ? [...base, "NODE_OPTIONS"] : base;
 }
 
 function openCodeLaunchMaterial(
@@ -1295,12 +1417,21 @@ function runtimeSupervisor(
   if (input.portable.target === "linux-x64") {
     return linuxNamespaceGatewaySupervisor(input.portable, input, run, toolProfile);
   }
+  const installedPin = windowsGatewayHelperPin(input.portable);
   if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
     return appSandboxSupervisor(input.portable, input, run, toolProfile);
   }
   return createRuntimeProcessSupervisor({
+    ...(installedPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
     backend: createNativeRuntimeProcessBackend({
       helperPath: input.portable.nativeHelperPath,
+      ...(installedPin
+        ? {
+            useInstalledWindowsGateway: true,
+            expectedHelperSha256: installedPin,
+            windowsFilesystemGrants: windowsFilesystemGrants(input.portable, input, run),
+          }
+        : {}),
       runtimeRoots: [join(input.portable.installRoot, input.portable.sidecar.payloadRootPath)],
       workspaceRoot,
       identity: input.portable.qualification,
@@ -1308,6 +1439,19 @@ function runtimeSupervisor(
     }),
     qualifications: [input.portable.qualification],
   });
+}
+
+/**
+ * The digest the installed D18 broker must carry for this runtime, or `undefined` when no broker may
+ * enforce its gateway policy, which refuses every Windows start (ADR-0043 D14/D19). A
+ * release-qualified package, a Windows dev checkout and the Windows npm runtime package yield one;
+ * an evaluation package and the functional test runtime do not.
+ */
+export function windowsGatewayHelperPin(
+  portable: ResolvedPortableOpenCodeRuntime,
+): string | undefined {
+  if ("platformAssurance" in portable) return releasedWindowsGatewayHelperPin(portable);
+  return isDevLaneRuntime(portable) ? localLaneWindowsGatewayHelperPin(portable) : undefined;
 }
 
 function linuxNamespaceGatewaySupervisor(
@@ -1339,9 +1483,19 @@ function devLaneSupervisor(
   if (portable.target !== "windows-x64")
     return appSandboxSupervisor(portable, input, run, toolProfile);
   if (portable.nativeHelperPath === undefined) throw new Error("dev-lane-supervisor-missing");
+  // A checkout's runs go through the broker it installed with its own supervisor's pin, exactly as
+  // a release's do; without that pin the native backend refuses the gateway launch (ADR-0043 D19).
+  const installedPin = localLaneWindowsGatewayHelperPin(portable);
   return createRuntimeProcessSupervisor({
+    ...(installedPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
     backend: createNativeRuntimeProcessBackend({
       helperPath: portable.nativeHelperPath,
+      ...(installedPin
+        ? {
+            useInstalledWindowsGateway: true,
+            windowsFilesystemGrants: windowsFilesystemGrants(portable, input, run),
+          }
+        : {}),
       expectedHelperSha256: portable.nativeHelperSha256,
       runtimeRoots: [join(portable.installRoot, portable.sidecar.payloadRootPath)],
       workspaceRoot: run.context.workspaceRoot,
@@ -1424,6 +1578,13 @@ function nativeSupportReadRoots(
   return [
     ...nativeToolchainReadRoots(withMcpExecutableDirectories(path, mcpServers), homedir()),
     ...nativeOpenSslReadRoots(input.processEnv ?? process.env, homedir()),
+    // #4271: a JDK or build tool reached through JAVA_HOME / MAVEN_HOME / GRADLE_HOME is not on PATH.
+    ...nativeBuildToolReadRoots({ ...(input.processEnv ?? process.env), PATH: path }, homedir()),
+    // Below Full access there is no network: the user's warm Maven cache opens read-only. At Full
+    // access the run resolves into its own writable private cache instead (`nativeBuildSettings`).
+    ...(nativeBuildCacheAdmitted(run.minted.effectiveMode)
+      ? [...nativeBuildCacheReadRoots(homedir()), ...nativeBuildWrapperReadRoots(homedir())]
+      : []),
   ];
 }
 
@@ -1448,11 +1609,10 @@ function gatewayFilesystem(
         ? {
             deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
             toolchainReadRoots: nativeSupportReadRoots(input, run),
-            ...nativeGitMetadataReadRoots(input, run),
+            ...nativeGitMetadataRoots(input, run, privateStateRoot),
             ...externalReadRootsField(input, run, macos),
             ...linkedFilesField(input, run, macos),
-            // The policy plugin and the private configuration are read-only to the shell.
-            protectedWriteRoots: [openCodeConfigDirectory(privateStateRoot)],
+            ...certificateReadFilesField(input, run, macos),
             // The plan agent's private notes take no link that could name a workspace file.
             linkFreeWriteRoots: [openCodePlanDirectory(privateStateRoot)],
           }
@@ -1461,11 +1621,60 @@ function gatewayFilesystem(
   };
 }
 
+/**
+ * What a confined Windows tree may reach on disk (#4068, ADR-0043 D18). Its runtime and its private
+ * state are granted to the tree alone. A Keiko-managed worktree is readable through that worktree's
+ * capability. The mapped profile's tools act through Keiko's facade, so the private state is the
+ * only writable grant. A user's own checkout gets none.
+ */
+export function windowsFilesystemGrants(
+  portable: ResolvedPortableOpenCodeRuntime,
+  input: Pick<LaunchInput, "runtimeStateRoot" | "ripgrep">,
+  run: ProductionRuntimeBackendInput,
+): readonly WindowsFilesystemGrant[] {
+  const runtimeRoot = join(portable.installRoot, portable.sidecar.payloadRootPath);
+  const grants: WindowsFilesystemGrant[] = [
+    { path: runtimeRoot, access: "read", principal: "tree" },
+    { path: nativePrivateStateRoot(input, run), access: "modify", principal: "tree" },
+  ];
+  // The verified ripgrep directory is the only entry on the runtime's PATH. A checkout keeps it
+  // in its own `.ripgrep`, outside the runtime root, where the tree could not run it (#4068).
+  // The developer override may name any directory whose `rg` verifies; granting the AppContainer a
+  // read of that whole directory (say a user's bin folder) would expose it, so only the Keiko-owned
+  // layouts are granted. The override still verifies and leads the PATH, and the existing
+  // `coding-runtime.ripgrep.resolved` line records `layout=override` (#4068).
+  if (
+    input.ripgrep.outcome === "verified" &&
+    input.ripgrep.layout !== "override" &&
+    !pathIsContained(runtimeRoot, input.ripgrep.directory)
+  )
+    grants.push({ path: input.ripgrep.directory, access: "read", principal: "tree" });
+  if (run.resolveWorkspaceRootAccess()?.kind === "managed-task") {
+    grants.push({
+      path: run.context.workspaceRoot,
+      access: "read",
+      principal: "capability",
+      capability: windowsWorkspaceCapability(run.context.workspaceRoot),
+    });
+  }
+  return grants;
+}
+
+/** One capability per managed worktree, so only that worktree's runs can read it. */
+export function windowsWorkspaceCapability(workspaceRoot: string): string {
+  const identity = createHash("sha256").update(workspaceRoot.toLowerCase()).digest("hex");
+  return `keiko.workspace.${identity.slice(0, 32)}`;
+}
+
 /** A linked worktree's proven common Git directory, recorded body-free (#3897 review). */
-function nativeGitMetadataReadRoots(
+function nativeGitMetadataRoots(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
-): { readonly gitMetadataReadRoots?: readonly string[] } {
+  privateStateRoot: string,
+): {
+  readonly gitMetadataReadRoots?: readonly string[];
+  readonly protectedWriteRoots: readonly string[];
+} {
   const resolution = resolveNativeGitMetadata(
     run.context.workspaceRoot,
     run.resolveWorkspaceRootAccess(),
@@ -1475,7 +1684,15 @@ function nativeGitMetadataReadRoots(
     run.minted.authorityRef.runId,
     resolution,
   );
-  return resolution.readRoots.length === 0 ? {} : { gitMetadataReadRoots: resolution.readRoots };
+  return {
+    ...(resolution.readRoots.length === 0 ? {} : { gitMetadataReadRoots: resolution.readRoots }),
+    // The policy plugin and the private configuration are read-only to the shell, and so is what
+    // decides what Keiko's own Git runs in this workspace.
+    protectedWriteRoots: [
+      openCodeConfigDirectory(privateStateRoot),
+      ...resolution.protectedWriteRoots,
+    ],
+  };
 }
 
 function runtimeGatewayConfinement(
@@ -1529,8 +1746,6 @@ function idempotentEventSink(
   authorityDigest: string,
   evidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
   run: ProductionRuntimeBackendInput,
-  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
-  activityLog: ServerLogSink,
 ): OpenCodeRuntimeCompositionInput["governedEventSink"] {
   // KEIKO-0707: use the same bounded-correlation primitive the governed-tool call path uses so
   // idempotency identity retention is capped at MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS instead of
@@ -1548,67 +1763,24 @@ function idempotentEventSink(
           state: "running",
           authorityDigest,
         });
-        recordContextTelemetry(run, event, contextGeometry, activityLog);
+        recordContextTelemetry(run, event);
       }
       return Promise.resolve(duplicate ? "duplicate" : "applied");
     },
   };
 }
 
-type ContextUsageActivityMeta =
-  | { readonly level: "info"; readonly correlationId: string }
-  | {
-      readonly level: "warn";
-      readonly correlationId: string;
-      readonly errorKind: "conflict";
-    };
-
-function contextUsageActivityMeta(
-  accepted: boolean,
-  correlationId: string,
-): ContextUsageActivityMeta {
-  if (accepted) return { level: "info", correlationId };
-  return { level: "warn", correlationId, errorKind: "conflict" };
-}
-
 export function recordContextTelemetry(
   run: ProductionRuntimeBackendInput,
   event: OpenCodeReconciliationEvent,
-  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
-  activityLog: ServerLogSink,
 ): void {
-  const registry = run.contextUsage;
-  if (registry === undefined) return;
-  const providerTokenUsage = event.providerTokenUsage;
-  const completedCompaction =
-    event.compaction?.event === "completed" ? event.compaction : undefined;
-  if (providerTokenUsage === undefined && completedCompaction === undefined) return;
-  const updatedAt = new Date().toISOString();
-  if (providerTokenUsage !== undefined) {
-    const accepted = registry.recordProviderSample(run.request.runId, {
-      sampleId: event.digest,
-      capacityTokens: contextGeometry.contextWindowTokens,
-      reservedOutputTokens: contextGeometry.maxOutputTokens,
-      inputTokens: providerTokenUsage.inputTokens,
-      updatedAt,
-    });
-    activityLog.write(
-      activityLogEvent(
-        CODING_RUNTIME_CONTEXT_USAGE_OBSERVED_OPERATION,
-        contextUsageActivityMeta(accepted, run.request.runId),
-        {
-          state: accepted ? "accepted" : "rejected",
-          capacityTokens: contextGeometry.contextWindowTokens,
-          usedInputTokens: providerTokenUsage.inputTokens,
-          reservedOutputTokens: contextGeometry.maxOutputTokens,
-          sampleDigest: event.digest,
-        },
-      ),
-    );
-  }
-  if (completedCompaction !== undefined) {
-    registry.recordCompaction(run.request.runId, completedCompaction.compactionIdSha256, updatedAt);
-  }
+  const completed = event.compaction?.event === "completed" ? event.compaction : undefined;
+  if (completed === undefined) return;
+  run.contextUsage?.recordCompaction(
+    run.request.runId,
+    completed.compactionIdSha256,
+    new Date().toISOString(),
+  );
 }
 
 /**

@@ -35,6 +35,20 @@ describe("useBackendHealth", () => {
     expect(reportClientDiagnostic).toHaveBeenCalledOnce();
   });
 
+  it("reports a credential custody value outside the closed states once, without the value", async () => {
+    fetch.mockResolvedValue({ ...ready, credentialCustodyInvalid: true });
+    const view = renderHook(useBackendHealth);
+    await act(async () => await Promise.resolve());
+    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+    expect(view.result.current.state).toBe("loaded");
+    expect(reportClientDiagnostic).toHaveBeenCalledOnce();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] health credential custody failed validation",
+      expect.objectContaining({ errorKind: "validation-failed" }),
+    );
+  });
+
   it("immediately joins a failed initial read and its report to the actual request and caught failure", async () => {
     const failure = new DOMException("private-provider-url", "TimeoutError");
     fetch.mockRejectedValue(failure);

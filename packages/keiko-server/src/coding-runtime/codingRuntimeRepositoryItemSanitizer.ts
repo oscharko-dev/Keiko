@@ -10,7 +10,7 @@ import {
  * into the run's private discovery directory, or into a closed refusal. Nothing here reads a file
  * or logs; the reader and the evidence are `codingRuntimeRepositoryItems.ts`.
  *
- * The pinned 2.1.4 producer reads these items from a configuration directory as YAML frontmatter
+ * The pinned producer reads these items from a configuration directory as YAML frontmatter
  * plus a Markdown body. Frontmatter is where authority lives (`permissions`, `model`, a tool
  * switch, a provider, an MCP or plugin entry), so nothing of the original frontmatter is ever
  * forwarded: the source is parsed by a deliberately small, closed parser, only the keys of a

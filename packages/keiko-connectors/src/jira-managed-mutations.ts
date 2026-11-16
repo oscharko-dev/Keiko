@@ -1,5 +1,171 @@
 import {
+  executeJiraAnonymizationUnlock,
+  isJiraAnonymizationUnlock,
+} from "./jira-managed-anonymization-unlock.js";
+import { epicLinkTargetRefusal, withJiraEpicLinkTargetCheck } from "./jira-epic-link-target.js";
+import { withJiraTemplateNotices } from "./jira-template-notices.js";
+import {
+  executeJiraAvatarMutation,
+  isJiraAvatarMutation,
+} from "./jira-managed-avatar-mutations.js";
+import {
+  executeJiraIdentityMutation,
+  isJiraIdentityMutation,
+} from "./jira-managed-identity-mutations.js";
+import { jiraIdentityRequests } from "./jira-identity-request.js";
+import {
+  executeJiraIssueLifecycleMutation,
+  isJiraIssueLifecycleMutation,
+  jiraIssueDeletionAdmission,
+} from "./jira-managed-issue-lifecycle.js";
+import {
+  executeJiraProjectLifecycleMutation,
+  isJiraProjectLifecycleMutation,
+} from "./jira-managed-project-lifecycle.js";
+import { jiraProjectLifecycleRequests } from "./jira-project-lifecycle-request.js";
+import { executeJiraReciprocalRemoteLink } from "./jira-managed-reciprocal-link.js";
+import { jiraReciprocalConfigurationRequests } from "./jira-reciprocal-configuration-request.js";
+import { executeJiraBulkCreate, isJiraBulkCreate } from "./jira-managed-bulk-create.js";
+import {
+  executeJiraPrivateAccountMutation,
+  isJiraPrivateAccountMutation,
+} from "./jira-managed-private-account.js";
+import type { JiraCreatePreparation, PreparedJiraCreate } from "./jira-create-preparation.js";
+import {
+  executeJiraDirectoryAccessMutation,
+  isJiraDirectoryAccessMutation,
+} from "./jira-managed-directory-access-mutations.js";
+import {
+  executeJiraMaintenanceMutation,
+  isJiraMaintenanceMutation,
+} from "./jira-managed-maintenance-mutations.js";
+import {
+  executeJiraSchemaMutation,
+  isJiraSchemaMutation,
+} from "./jira-managed-schema-mutations.js";
+import { executeJiraGroupMutation, isJiraGroupMutation } from "./jira-managed-group-mutations.js";
+import {
+  executeJiraIssueActionMutation,
+  isJiraIssueActionMutation,
+} from "./jira-managed-issue-action-mutations.js";
+import { jiraDirectoryAccessRequests } from "./jira-directory-access-request.js";
+import {
+  executeJiraPermissionSchemeMutation,
+  isJiraPermissionSchemeMutation,
+} from "./jira-managed-permission-scheme-mutations.js";
+import { executeJiraRoleMutation, isJiraRoleMutation } from "./jira-managed-role-mutations.js";
+import {
+  executeJiraOptionSchemeMutation,
+  isJiraOptionSchemeMutation,
+} from "./jira-managed-option-scheme-mutations.js";
+import {
+  executeJiraWorkflowSchemeMutation,
+  isJiraWorkflowSchemeMutation,
+} from "./jira-managed-workflow-scheme-mutations.js";
+import {
+  executeJiraInstanceSettingMutation,
+  isJiraInstanceSettingMutation,
+} from "./jira-managed-instance-setting-mutations.js";
+import {
+  executeJiraEmailTemplateMutation,
+  isJiraEmailTemplateMutation,
+} from "./jira-managed-email-templates.js";
+import { jiraManagedEmailTemplatePorts } from "./jira-managed-email-template-ports.js";
+import { jiraPermissionAttributeRequest } from "./jira-permission-attribute-request.js";
+import {
+  executeJiraScreenTabMutation,
+  isJiraScreenTabMutation,
+} from "./jira-managed-screen-tab-mutations.js";
+import {
+  executeJiraScreenConfigurationMutation,
+  isJiraScreenConfigurationMutation,
+} from "./jira-managed-screen-configuration.js";
+import {
+  executeJiraBoardConfigurationMutation,
+  isJiraBoardConfigurationMutation,
+} from "./jira-managed-board-configuration-mutations.js";
+import {
+  executeJiraSprintLifecycleMutation,
+  isJiraSprintLifecycleMutation,
+} from "./jira-managed-sprint-lifecycle.js";
+import {
+  executeJiraAgilePlanningMutation,
+  isJiraAgilePlanningMutation,
+} from "./jira-managed-agile-planning.js";
+import {
+  executeJiraVersionLinkMutation,
+  isJiraVersionLinkMutation,
+} from "./jira-managed-version-link-mutations.js";
+import {
+  executeJiraProjectCategoryMutation,
+  isJiraProjectCategoryMutation,
+} from "./jira-managed-project-category-mutations.js";
+import {
+  executeJiraMonitoringMutation,
+  isJiraMonitoringMutation,
+} from "./jira-managed-monitoring-mutations.js";
+import {
+  executeJiraEntityPropertyMutation,
+  isJiraEntityPropertyMutation,
+} from "./jira-managed-entity-property-mutations.js";
+import {
+  executeJiraFilterMutation,
+  isJiraFilterMutation,
+} from "./jira-managed-filter-mutations.js";
+import {
+  executeJiraFilterPermissionMutation,
+  isJiraFilterPermissionMutation,
+} from "./jira-managed-filter-permission-mutations.js";
+import {
+  executeJiraFilterColumnMutation,
+  isJiraFilterColumnMutation,
+} from "./jira-managed-filter-column-mutations.js";
+import {
+  executeJiraPreferenceMutation,
+  isJiraPreferenceMutation,
+} from "./jira-managed-preference-mutations.js";
+import {
+  executeJiraComponentDelete,
+  isJiraComponentDelete,
+} from "./jira-managed-component-delete.js";
+import {
+  executeJiraVersionLifecycleMutation,
+  isJiraVersionLifecycleMutation,
+} from "./jira-managed-version-lifecycle.js";
+import {
+  executeJiraIssueLinkMutation,
+  isJiraIssueLinkMutation,
+} from "./jira-managed-issue-link-mutations.js";
+import {
+  executeJiraRemoteLinkMutation,
+  isJiraRemoteLinkMutation,
+} from "./jira-managed-remote-link-mutations.js";
+import { jiraFilterBrowseUrl } from "./jira-browse-url.js";
+import {
+  jiraAgileRequest,
+  jiraAgileRequests,
+  jiraExperimentalAgileRequest,
+} from "./jira-agile-request.js";
+import {
+  executeJiraParticipationMutation,
+  isJiraParticipationMutation,
+} from "./jira-managed-participation.js";
+import {
+  executeJiraWorklogMutation,
+  isJiraWorklogMutation,
+} from "./jira-managed-worklog-mutations.js";
+import { executeJiraCommentDelete, isJiraCommentDelete } from "./jira-managed-comment-delete.js";
+import {
+  executeJiraAttachmentMutation,
+  isJiraAttachmentMutation,
+} from "./jira-managed-attachment-mutations.js";
+import { executeJiraWorklogDelete, isJiraWorklogDelete } from "./jira-managed-worklog-delete.js";
+import {
+  JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE,
+  JIRA_EXISTING_LINKS_MISSING_MESSAGE,
   isSafeAtlassianIdentifier,
+  jiraOperationInReleaseScope,
+  sanitizeJiraMutationFailureDetail,
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldValidationFailure,
   type JiraMutationAttempt,
@@ -19,10 +185,15 @@ import {
 } from "./atlassian-sync-classify.js";
 import {
   ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS,
-  executeAtlassianWriteRequest,
   type AtlassianWriteHttpOutcome,
 } from "./atlassian-write-http.js";
-import { validateJiraFieldChanges } from "./jira-field-metadata.js";
+import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
+import {
+  validateJiraFieldChanges,
+  withJiraFieldName,
+  prepareJiraDescriptionFields,
+  type JiraFieldValidationResult,
+} from "./jira-field-metadata.js";
 import { completeJiraLinkedMutation } from "./jira-issue-link-writes.js";
 import {
   dispatchJiraAttachment,
@@ -39,12 +210,22 @@ import {
   type JiraIssueLinkPlan,
   type JiraIssueLinkRequest,
 } from "./jira-issue-links.js";
-import { dispatchFailure } from "./jira-mutation-failure.js";
+import { dispatchFailure, type JiraHttpFailure } from "./jira-mutation-failure.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
+import { executeJiraProjectMutation, isJiraProjectMutation } from "./jira-managed-projects.js";
+import {
+  executeJiraComponentMutation,
+  isJiraComponentMutation,
+} from "./jira-managed-components.js";
+import { executeJiraVersionMutation, isJiraVersionMutation } from "./jira-managed-versions.js";
+import { executeJiraCommentMutation, isJiraCommentMutation } from "./jira-managed-comments.js";
+import { isJiraAgileMutation } from "./jira-agile-inputs.js";
+import { checkJiraAgileMutation, executeJiraAgileMutation } from "./jira-agile-mutations.js";
 import {
   gateJiraMutationByTemplates,
   type JiraIssueTemplateSource,
   type JiraTemplateGateResult,
+  type JiraTemplateGateTransition,
 } from "./jira-managed-template-gate.js";
 import {
   jiraDraftDependencies,
@@ -88,6 +269,8 @@ type MutationValidation = { readonly ok: true } | Extract<JiraMutationAttempt, {
 interface MutationPolicy {
   readonly templates: JiraIssueTemplateSource | undefined;
   readonly check: boolean;
+  readonly descriptionConvertedHeadingCount?: number;
+  readonly descriptionProjection?: "supported-markdown";
 }
 const CHECKED: JiraMutationAttempt = { ok: true, receipt: {} };
 const INVALID = { ok: false, reason: "field-validation" } as const;
@@ -112,22 +295,53 @@ const UNTRACED_REFERENCES: Extract<JiraMutationAttempt, { ok: false }> = {
 const REFERENCES_PLACE = "requirementIds goes beside fields, not inside them.";
 // eslint-disable-next-line no-control-regex -- HTTP reference values must not contain control characters.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
+/**
+ * What a model reads when the metadata check refused a field without a sentence of its own (#4357
+ * AC3): the closed reason says it, the field is named in `fieldId`, and the field list says what to
+ * send. One sentence per reason, within the 200-byte bound of a detail message.
+ */
+const FIELD_VALIDATION_MESSAGES: Readonly<Record<JiraFieldValidationFailure, string>> = {
+  "required-field":
+    "The field named in fieldId is required: send a value for it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+  "unsupported-field":
+    "The field named in fieldId cannot be set through Keiko: leave it out if it is optional. If it is required, tell the user the issue has to be created in Jira. This write was not made.",
+  "invalid-operation":
+    "The operation sent for the field named in fieldId is not offered for it: use one the field list shows. This write was not made.",
+  "invalid-field":
+    "The value sent for the field named in fieldId does not fit its type: send it as jira.create-fields or jira.edit-fields lists it. This write was not made.",
+  "bounds-exceeded":
+    "The fields sent are more or larger than one call takes: send fewer or shorter values. This write was not made.",
+  "invalid-epic-link":
+    "The Epic Link must be the key of an existing Epic of this project that you can see. This write was not made.",
+};
 /** Keiko's own pre-dispatch refusal names the field and the closed reason. */
 function validationFailure(
   result: Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: false }>,
 ): Extract<JiraMutationAttempt, { ok: false }> {
   const message =
-    result.message ?? (result.fieldId === "requirementIds" ? REFERENCES_PLACE : undefined);
-  return {
-    ...INVALID,
-    detail: {
-      validation: result.reason,
-      ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
-      ...(message === undefined ? {} : { messages: [message] }),
-    },
+    result.message ??
+    (result.fieldId === "requirementIds"
+      ? REFERENCES_PLACE
+      : FIELD_VALIDATION_MESSAGES[result.reason]);
+  const detail: JiraMutationFailureDetail = {
+    validation: result.reason,
+    ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
+    // The name Jira shows lets a person read which field is meant; the sentence below stays for the
+    // model (#4357). It comes from the instance's metadata, so it is bounded like every detail text.
+    ...(result.fieldId === undefined || result.fieldName === undefined
+      ? {}
+      : { fieldName: result.fieldName }),
+    messages: [message],
   };
+  return { ...INVALID, detail: sanitizeJiraMutationFailureDetail(detail) ?? detail };
 }
 type Validated = Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: true }>;
+function withDescriptionFormatting(
+  attempt: JiraMutationAttempt,
+  metrics: Pick<CreateRequest, "descriptionConvertedHeadingCount" | "descriptionProjection">,
+): JiraMutationAttempt {
+  return { ...attempt, ...metrics };
+}
 /** Every requested link must read back from the issue; confirmation checks them all (#4176). */
 function withLinks(
   validated: Validated,
@@ -204,35 +418,44 @@ function fieldsInput(value: unknown): Record<string, unknown> | undefined {
     ? fields
     : undefined;
 }
+/**
+ * Jira reads the body of PUT /settings/baseUrl as raw text under a JSON content type and refuses
+ * the JSON-quoted string as "The specified URL is not valid." Every other body, including a JSON
+ * string property value, is a JSON value.
+ */
+export function nativeRequestBody(path: string, body: unknown): string {
+  return typeof body === "string" && path === "settings/baseUrl" ? body : JSON.stringify(body);
+}
 /** One bounded Jira request function over the composed transport; also used by read-only tools. */
 export function requestFor(
   connection: JiraManagedConnection,
   context: ManagedMcpInvocationContext,
 ): JiraMutationRequest {
-  const { http, baseUrl } = connection;
-  const beforeEffect: () => unknown = context.beforeEffect;
+  const { baseUrl } = connection;
   const signal = AbortSignal.any([
     context.signal,
     AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
   ]);
   const endpoints = atlassianApiEndpointsFor(baseUrl, "/rest/api/2/");
   return (path, method, body, expect, upload) =>
-    executeAtlassianWriteRequest(
-      {
-        signal,
-        http: (request) =>
-          signal.aborted || beforeEffect() !== true
-            ? Promise.resolve({ kind: "network-error" })
-            : http(request),
-      },
-      {
-        method: method ?? "GET",
-        url: atlassianApiUrl(endpoints, path),
-        expect: expect ?? "json",
-        ...(body === undefined ? {} : { bodyJson: JSON.stringify(body) }),
-        ...(upload === undefined ? {} : { upload }),
-      },
-    );
+    executeAdmittedJiraRequest(connection, context, signal, {
+      method: method ?? "GET",
+      url: atlassianApiUrl(endpoints, path),
+      expect: expect ?? "json",
+      ...(body === undefined ? {} : { bodyJson: nativeRequestBody(path, body) }),
+      ...(upload === undefined ? {} : { upload }),
+    });
+}
+/**
+ * KEIKO-0814: a transition Jira listed a moment ago and now refuses has moved with the workflow
+ * between the listing and the write. Jira answers 404, or 400 with only a general message (a 400
+ * that names fields is a refused field value and stays one).
+ */
+function transitionMovedAway(response: JiraHttpFailure): boolean {
+  return (
+    response.httpStatus === 404 ||
+    (response.httpStatus === 400 && response.remote?.fieldErrors === undefined)
+  );
 }
 async function statusMutation(
   request: JiraMutationRequest,
@@ -240,9 +463,18 @@ async function statusMutation(
   method: "POST" | "PUT",
   body: Readonly<Record<string, unknown>>,
   metadata: readonly JiraFieldMetadata[] = [],
+  transition = false,
 ): Promise<MutationValidation> {
   const response = await request(path, method, body, "none");
-  if (!response.ok) return dispatchFailure(response, metadata);
+  if (!response.ok) {
+    const failure = dispatchFailure(response, metadata);
+    // Jira's own error document stays on the failure: the Chat journal settles a dispatched 4xx as
+    // "rejected without effect" only when it holds that document, and an uncertain settlement
+    // would tell the model a write may have happened and block the turn's later writes.
+    return transition && transitionMovedAway(response)
+      ? { ...failure, reason: "invalid-transition" }
+      : failure;
+  }
   return response.status === 204 ? { ok: true } : MALFORMED;
 }
 function isCreateRoutingField(id: string): boolean {
@@ -304,7 +536,7 @@ function createArgumentsRefusal(
         numericId(args.issueTypeId),
         "issueTypeId",
         "required-field",
-        "issueTypeId must be the numeric issue-type ID jira.issue_types returns.",
+        "issueTypeId must be the numeric issue-type ID jira.issue-types returns.",
       ],
       [
         fields !== undefined && !Object.keys(fields).some(isCreateRoutingField),
@@ -316,12 +548,43 @@ function createArgumentsRefusal(
     ],
   );
 }
-async function createIssue(
+async function prepareWithAdmittedArguments(
+  request: JiraMutationRequest,
+  create: {
+    readonly projectId: string;
+    readonly issueTypeId: string;
+    readonly fields: NonNullable<ReturnType<typeof fieldsInput>>;
+    readonly links: NonNullable<ReturnType<typeof parseJiraIssueLinks>>;
+  },
+  templates: JiraIssueTemplateSource | undefined,
+  trace: JiraTraceRequest | undefined,
+): Promise<JiraCreatePreparation> {
+  const { projectId, issueTypeId, fields, links } = create;
+  const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
+  if (!metadata.ok) return metadata;
+  const twin = await draftTwin(request, { projectId, issueTypeId, fields, links }, metadata.fields);
+  if (twin.kind === "repeat") return twin.attempt;
+  const prepared = createdFields(fields, metadata.fields, trace, twin);
+  if (!prepared.ok) return validationFailure(prepared);
+  const admitted = await prepareCreateWithMetadata(
+    request,
+    { projectId, issueTypeId, fields: prepared.fields, links, ...descriptionMetric(prepared) },
+    metadata.fields,
+    templates,
+  );
+  return admitted.ok && twin.identity !== undefined
+    ? { ...admitted, draftIdentity: twin.identity }
+    : admitted;
+}
+/** The existing single-create admission owner, also used before the one native bulk effect.
+ * This performs no writes, including no follow-up issue links. */
+export async function prepareJiraCreate(
   request: JiraMutationRequest,
   args: CatalogJsonObject,
-  policy: MutationPolicy,
+  templates: JiraIssueTemplateSource | undefined,
   trace?: JiraTraceRequest,
-): Promise<JiraMutationAttempt> {
+): Promise<JiraCreatePreparation> {
+  if (args.requirementIds !== undefined && trace === undefined) return UNTRACED_REFERENCES;
   const { projectId, issueTypeId } = args;
   const routed = withoutRestatedRouting(args);
   if (!routed.ok) return routed;
@@ -332,16 +595,22 @@ async function createIssue(
   // Narrowing only: the refusal above already named every argument these reject.
   if (!numericId(projectId) || !numericId(issueTypeId) || fields === undefined) return INVALID;
   if (links === undefined) return INVALID;
-  const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
-  if (!metadata.ok) return metadata;
-  const twin = await draftTwin(request, { projectId, issueTypeId, fields, links }, metadata.fields);
-  if (twin.kind === "repeat") return twin.attempt;
-  return createWithMetadata(
+  return prepareWithAdmittedArguments(
     request,
-    { projectId, issueTypeId, fields: createdFields(fields, metadata.fields, trace, twin), links },
-    metadata.fields,
-    policy,
+    { projectId, issueTypeId, fields, links },
+    templates,
+    trace,
   );
+}
+async function createIssue(
+  request: JiraMutationRequest,
+  args: CatalogJsonObject,
+  policy: MutationPolicy,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> {
+  const prepared = await prepareJiraCreate(request, args, policy.templates, trace);
+  if (!prepared.ok) return prepared;
+  return policy.check ? CHECKED : dispatchPreparedCreate(request, prepared);
 }
 /** The fields a create sends: traced to its requirements, and with its draft identity. */
 function createdFields(
@@ -349,11 +618,28 @@ function createdFields(
   metadata: readonly JiraFieldMetadata[],
   trace: JiraTraceRequest | undefined,
   twin: Extract<DraftTwin, { kind: "new" }>,
-): Readonly<Record<string, unknown>> {
-  const traced = trace === undefined ? fields : traceCreateFields(fields, metadata, trace);
-  return twin.identity === undefined
-    ? traced
-    : withJiraDraftIdentity(traced, metadata, twin.identity);
+): JiraFieldValidationResult {
+  const prepared = prepareJiraDescriptionFields(fields, metadata);
+  if (!prepared.ok) return prepared;
+  const traced =
+    trace === undefined ? prepared.fields : traceCreateFields(prepared.fields, metadata, trace);
+  return {
+    ...prepared,
+    fields:
+      twin.identity === undefined ? traced : withJiraDraftIdentity(traced, metadata, twin.identity),
+  };
+}
+function descriptionMetric(
+  prepared: Pick<CreateRequest, "descriptionConvertedHeadingCount" | "descriptionProjection">,
+): Pick<CreateRequest, "descriptionConvertedHeadingCount" | "descriptionProjection"> {
+  return {
+    ...(prepared.descriptionConvertedHeadingCount === undefined
+      ? {}
+      : { descriptionConvertedHeadingCount: prepared.descriptionConvertedHeadingCount }),
+    ...(prepared.descriptionProjection === undefined
+      ? {}
+      : { descriptionProjection: prepared.descriptionProjection }),
+  };
 }
 const ISSUE_KEY_VALUE = /^[A-Z][A-Z0-9_]{0,63}-\d{1,12}$/u;
 /**
@@ -376,6 +662,7 @@ function existingTwinRefusal(
     reason: "conflict",
     receipt,
     detail: {
+      unchanged: true,
       messages: [
         `${issueKey} already exists as this issue: a Keiko draft created it in this project with this type and summary. Nothing was created. Report ${issueKey} as the result; do not create it again.`,
       ],
@@ -456,40 +743,124 @@ interface CreateRequest {
   readonly issueTypeId: string;
   readonly fields: Readonly<Record<string, unknown>>;
   readonly links: readonly JiraIssueLinkRequest[];
+  readonly descriptionConvertedHeadingCount?: number;
+  readonly descriptionProjection?: "supported-markdown";
 }
-async function createWithMetadata(
+function createFieldState(
+  metadata: readonly JiraFieldMetadata[],
+  create: CreateRequest,
+  requireAll: boolean,
+): ReturnType<typeof validateJiraFieldChanges> {
+  const fields = createContextFields(metadata);
+  return withJiraFieldName(
+    fields,
+    validateJiraFieldChanges(
+      fields,
+      {
+        ...create.fields,
+        project: { id: create.projectId },
+        issuetype: { id: create.issueTypeId },
+      },
+      "create",
+      "data-center",
+      [],
+      requireAll,
+    ),
+  );
+}
+function createTemplateGate(
   request: JiraMutationRequest,
   create: CreateRequest,
   metadata: readonly JiraFieldMetadata[],
-  policy: MutationPolicy,
-): Promise<JiraMutationAttempt> {
-  const validated = validateJiraFieldChanges(
-    createContextFields(metadata),
-    { ...create.fields, project: { id: create.projectId }, issuetype: { id: create.issueTypeId } },
-    "create",
-    "data-center",
-  );
-  if (!validated.ok) return validationFailure(validated);
-  const gate = await gateJiraMutationByTemplates({
+  templates: JiraIssueTemplateSource | undefined,
+  validated: Validated,
+): ReturnType<typeof gateJiraMutationByTemplates> {
+  return gateJiraMutationByTemplates({
     request,
-    source: policy.templates,
+    source: templates,
     operation: "create",
     metadata,
     validated,
     links: create.links,
     target: { projectId: create.projectId, issueTypeId: create.issueTypeId },
   });
+}
+/**
+ * A missing required field must not hide the template rules the rest of the create breaks: the
+ * refusal names both, so one correction can satisfy every rule (#4288). The create is refused
+ * either way; only the supplied fields are judged against the templates.
+ */
+async function createRefusal(
+  request: JiraMutationRequest,
+  create: CreateRequest,
+  metadata: readonly JiraFieldMetadata[],
+  templates: JiraIssueTemplateSource | undefined,
+  failure: Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: false }>,
+): Promise<Extract<JiraMutationAttempt, { ok: false }>> {
+  const refusal = validationFailure(failure);
+  if (failure.reason !== "required-field" || templates === undefined) return refusal;
+  const supplied = createFieldState(metadata, create, false);
+  if (!supplied.ok) return refusal;
+  const gate = await createTemplateGate(request, create, metadata, templates, supplied);
+  return gate.ok || gate.violations === undefined
+    ? refusal
+    : { ...refusal, violations: gate.violations };
+}
+async function prepareCreateWithMetadata(
+  request: JiraMutationRequest,
+  create: CreateRequest,
+  metadata: readonly JiraFieldMetadata[],
+  templates: JiraIssueTemplateSource | undefined,
+): Promise<JiraCreatePreparation> {
+  const validated = createFieldState(metadata, create, true);
+  if (!validated.ok) return createRefusal(request, create, metadata, templates, validated);
+  const notAnEpic = await epicLinkTargetRefusal(request, validated.fields);
+  if (notAnEpic !== undefined) return notAnEpic;
+  const gate = await createTemplateGate(request, create, metadata, templates, validated);
   if (!gate.ok) return gate;
-  if (policy.check) return CHECKED;
   // The link a template requires rides on the create itself where the screen offers it.
   const links = gate.links ?? create.links;
   const plan = planJiraIssueLinks(links, undefined, jiraIssueLinksOffered(metadata) === undefined);
-  const response = await request("issue", "POST", {
-    fields: validated.fields,
-    update: linkedUpdate(validated, plan),
-  });
-  if (!response.ok) return dispatchFailure(response, metadata);
-  return confirmCreatedIssue(request, response, metadata, withLinks(validated, links), plan);
+  return {
+    ok: true,
+    projectId: create.projectId,
+    issueTypeId: create.issueTypeId,
+    body: { fields: validated.fields, update: linkedUpdate(validated, plan) },
+    metadata,
+    values: withLinks(validated, links),
+    plan,
+    ...descriptionMetric(validated),
+    ...descriptionMetric(create),
+  };
+}
+async function dispatchPreparedCreate(
+  request: JiraMutationRequest,
+  prepared: PreparedJiraCreate,
+  onAcknowledged?: (issueKey: string) => void,
+): Promise<JiraMutationAttempt> {
+  const response = await request("issue", "POST", prepared.body);
+  const attempt = response.ok
+    ? await confirmCreatedIssue(
+        request,
+        response,
+        prepared.metadata,
+        prepared.values,
+        prepared.plan,
+        onAcknowledged,
+      )
+    : dispatchFailure(response, prepared.metadata);
+  return withDescriptionFormatting(attempt, descriptionMetric(prepared));
+}
+async function createWithMetadata(
+  request: JiraMutationRequest,
+  create: CreateRequest,
+  metadata: readonly JiraFieldMetadata[],
+  policy: MutationPolicy,
+  onAcknowledged?: (issueKey: string) => void,
+): Promise<JiraMutationAttempt> {
+  const prepared = await prepareCreateWithMetadata(request, create, metadata, policy.templates);
+  if (!prepared.ok) return prepared;
+  return policy.check ? CHECKED : dispatchPreparedCreate(request, prepared, onAcknowledged);
 }
 function confirmCreatedIssue(
   request: JiraMutationRequest,
@@ -497,10 +868,12 @@ function confirmCreatedIssue(
   metadata: readonly JiraFieldMetadata[],
   values: JiraValidatedMutationFields,
   plan: JiraIssueLinkPlan,
+  onAcknowledged?: (issueKey: string) => void,
 ): Promise<JiraMutationAttempt> {
   const { key, id } = response.body ?? {};
   if (response.status !== 201 || !isSafeAtlassianIdentifier(key) || !numericId(id))
     return Promise.resolve(MALFORMED);
+  onAcknowledged?.(key);
   return completeJiraLinkedMutation(
     request,
     { issueKey: key, receipt: { issueKey: key, issueId: id }, metadata, values },
@@ -542,12 +915,9 @@ function linkedFieldChanges(
   args: CatalogJsonObject,
   purpose: "edit" | "transition",
 ): LinkedFieldChanges {
-  const validated = validateJiraFieldChanges(
+  const validated = withJiraFieldName(
     fields,
-    args.fields ?? {},
-    purpose,
-    "data-center",
-    args.updates ?? [],
+    validateJiraFieldChanges(fields, args.fields ?? {}, purpose, "data-center", args.updates ?? []),
   );
   if (!validated.ok) return validationFailure(validated);
   return { ok: true, validated, links: parseJiraIssueLinks(args.links) ?? [] };
@@ -556,11 +926,7 @@ interface FieldTarget {
   readonly purpose: "edit" | "transition";
   readonly issueKey: string;
   readonly targetStatusId?: string;
-  readonly transition?: {
-    readonly id: string;
-    readonly name?: string;
-    readonly targetStatusName?: string;
-  };
+  readonly transition?: JiraTemplateGateTransition;
 }
 /** The template gate in front of an edit or transition: the attempt that stops it, or the links to send. */
 type FieldAdmission =
@@ -572,6 +938,15 @@ async function admitFieldMutation(
   { purpose, issueKey, transition }: FieldTarget,
   policy: MutationPolicy,
 ): Promise<FieldAdmission> {
+  const notAnEpic = await epicLinkTargetRefusal(request, linked.validated.fields);
+  if (notAnEpic !== undefined) return { stop: notAnEpic };
+  // The status change itself is free (only explicit transition rules govern it); the fields a
+  // transition carries are an edit of exactly those fields and are judged as one (#4354).
+  const carried =
+    purpose === "transition"
+      ? await carriedFieldsGate(request, metadata, linked, issueKey, policy)
+      : undefined;
+  if (carried !== undefined && !carried.ok) return { stop: carried };
   const gate = await gateJiraMutationByTemplates({
     request,
     source: policy.templates,
@@ -584,6 +959,25 @@ async function admitFieldMutation(
   });
   if (!gate.ok) return { stop: gate };
   return policy.check ? { stop: CHECKED } : { links: gate.links ?? linked.links };
+}
+/** The edit rule over the fields a transition carries, or undefined when it carries none. */
+function carriedFieldsGate(
+  request: JiraMutationRequest,
+  metadata: readonly JiraFieldMetadata[],
+  linked: Extract<LinkedFieldChanges, { ok: true }>,
+  issueKey: string,
+  policy: MutationPolicy,
+): ReturnType<typeof gateJiraMutationByTemplates> | undefined {
+  const { fields, update } = linked.validated;
+  if (Object.keys(fields).length === 0 && update.labels === undefined) return undefined;
+  return gateJiraMutationByTemplates({
+    request,
+    source: policy.templates,
+    operation: "edit",
+    metadata,
+    validated: linked.validated,
+    target: { issueKey },
+  });
 }
 /** Only links that take their own call change nothing on the issue request: none is sent. */
 function changesOnlyThroughLinkCalls(
@@ -609,7 +1003,7 @@ async function readChangingIssue(
   metadata: readonly JiraFieldMetadata[],
   { values, transitionId }: IssueReading,
   { purpose, issueKey }: FieldTarget,
-): Promise<JiraIssueReadback> {
+): Promise<JiraIssueReadback | ReturnType<typeof jiraAlreadyHeldRefusal>> {
   const prior = await readJiraMutationIssue(
     request,
     issueKey,
@@ -619,6 +1013,23 @@ async function readChangingIssue(
   return jiraEditAlreadyHeld(metadata, values, prior.fields)
     ? jiraAlreadyHeldRefusal(issueKey)
     : prior;
+}
+/** The one write of a field change; a transition's refusal is told apart from an edit's (KEIKO-0814). */
+function sendFieldChange(
+  request: JiraMutationRequest,
+  target: ReturnType<typeof fieldMutationTarget>,
+  body: Readonly<Record<string, unknown>>,
+  metadata: readonly JiraFieldMetadata[],
+  purpose: FieldTarget["purpose"],
+): Promise<MutationValidation> {
+  return statusMutation(
+    request,
+    target.path,
+    target.method,
+    body,
+    metadata,
+    purpose === "transition",
+  );
 }
 async function fieldMutation(
   request: JiraMutationRequest,
@@ -648,12 +1059,13 @@ async function fieldMutation(
   );
   const update = linkedUpdate(validated, plan);
   const onlyLinkCalls = changesOnlyThroughLinkCalls(purpose, validated, update, admitted.links);
+  const formatting = { ...descriptionMetric(policy), ...descriptionMetric(validated) };
   if (!onlyLinkCalls) {
     const body = { fields: validated.fields, update, ...target.body };
-    const sent = await statusMutation(request, target.path, target.method, body, metadata.fields);
-    if (!sent.ok) return sent;
+    const sent = await sendFieldChange(request, target, body, metadata.fields, purpose);
+    if (!sent.ok) return withDescriptionFormatting(sent, formatting);
   }
-  return completeJiraLinkedMutation(
+  const attempt = await completeJiraLinkedMutation(
     request,
     {
       issueKey,
@@ -666,8 +1078,29 @@ async function fieldMutation(
     plan,
     onlyLinkCalls,
   );
+  return withDescriptionFormatting(attempt, formatting);
+}
+/**
+ * An existing issue keeps its project and issue type through every edit and transition (#4354, L6):
+ * the template that governs it is chosen by them, so a change would have to be judged by a template
+ * of the target type. Jira moves an issue through its own Move operation; Keiko does not, and says so.
+ */
+function routingChangeRefusal(args: CatalogJsonObject): Refusal | undefined {
+  const fields = asRecord(args.fields);
+  const named = ["project", "issuetype"].find(
+    (id) => fields !== undefined && Object.hasOwn(fields, id),
+  );
+  return named === undefined
+    ? undefined
+    : refusedArgument(
+        named,
+        "unsupported-field",
+        "An edit does not change the project or the issue type of an issue. Change it in Jira (Move), or create the issue again in the right project and issue type.",
+      );
 }
 function editArgumentsRefusal(args: CatalogJsonObject): Refusal | undefined {
+  const routing = routingChangeRefusal(args);
+  if (routing !== undefined) return routing;
   const fields = fieldsInput(args.fields ?? {});
   const updates = asArray(args.updates ?? []);
   const links = parseJiraIssueLinks(args.links);
@@ -701,9 +1134,23 @@ async function editIssue(
   const target = { purpose: "edit", issueKey } as const;
   if (trace === undefined || !metadata.ok)
     return fieldMutation(request, metadata, args, target, policy);
-  const traced = await traceEditArguments(request, issueKey, args, metadata.fields, trace);
+  const prepared = prepareJiraDescriptionFields(
+    fieldsInput(args.fields ?? {}) ?? {},
+    metadata.fields,
+  );
+  if (!prepared.ok) return validationFailure(prepared);
+  const traced = await traceEditArguments(
+    request,
+    issueKey,
+    { ...args, fields: prepared.fields as CatalogJsonObject },
+    metadata.fields,
+    trace,
+  );
   if (!traced.ok) return traced.attempt;
-  return fieldMutation(request, metadata, traced.args, target, policy);
+  return fieldMutation(request, metadata, traced.args, target, {
+    ...policy,
+    ...descriptionMetric(prepared),
+  });
 }
 async function transitionIssue(
   request: JiraMutationRequest,
@@ -712,6 +1159,8 @@ async function transitionIssue(
   policy: MutationPolicy,
 ): Promise<JiraMutationAttempt> {
   const transitionId = args.transitionId;
+  const routing = routingChangeRefusal(args);
+  if (routing !== undefined) return routing;
   const refused = argumentRefusal(
     args,
     ["issueKey", "transitionId", "fields", "updates"],
@@ -744,6 +1193,8 @@ async function transitionIssue(
         ...(metadata.targetStatusName === undefined
           ? {}
           : { targetStatusName: metadata.targetStatusName }),
+        targetStatusId: metadata.targetStatusId,
+        available: metadata.availableTransitions,
       },
     },
     policy,
@@ -788,7 +1239,7 @@ async function checkAssignee(
     : refusedArgument(
         "assigneeName",
         "invalid-field",
-        "assigneeName must be the exact user name of one active user jira.assignable_users returns.",
+        "assigneeName must be the exact user name of one active user jira.assignable-users returns.",
       );
 }
 function uniqueActiveAssignee(users: readonly unknown[], name: string): boolean {
@@ -941,8 +1392,6 @@ async function attachFile(
   });
 }
 
-const EXISTING_LINKS_MISSING =
-  "This issue already exists from this draft, but not every requested link is on it. Nothing was sent again; add only the missing links with jira.edit.";
 /**
  * An item reconciled to an issue it already created is complete only when that issue also carries
  * the relations the item asks for: a create followed by a failed further link leaves an issue the
@@ -963,7 +1412,7 @@ async function existingItemWithLinks(
   return {
     ok: false,
     reason: current.ok ? "conflict" : current.reason,
-    detail: { messages: [EXISTING_LINKS_MISSING] },
+    detail: { messages: [JIRA_EXISTING_LINKS_MISSING_MESSAGE] },
     receipt: existing.receipt,
     links: account,
   };
@@ -1000,7 +1449,18 @@ function draftItemInput(
  * reconciled against the issue its draft identity already names before anything is created.
  * A reconciled item sends no mutation; the server's journal records that nothing was dispatched.
  */
-export async function executeJiraDraftItem(
+export function executeJiraDraftItem(
+  item: JiraDraftItem,
+  keys: ReadonlyMap<string, string>,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> {
+  return withJiraEpicLinkTargetCheck(connection, context, () =>
+    executeJiraDraftItemInner(item, keys, context, connection, trace),
+  );
+}
+async function executeJiraDraftItemInner(
   item: JiraDraftItem,
   keys: ReadonlyMap<string, string>,
   context: ManagedMcpInvocationContext,
@@ -1022,16 +1482,20 @@ export async function executeJiraDraftItem(
   );
   if (found.kind === "existing") return existingItemWithLinks(request, found.attempt, links);
   if (found.kind !== "absent") return found.attempt;
+  const prepared = draftItemCreateFields(item, fields, metadata.fields, trace);
+  if (!prepared.ok) return validationFailure(prepared);
   return createWithMetadata(
     request,
     {
       projectId: item.projectId,
       issueTypeId: item.issueTypeId,
-      fields: draftItemCreateFields(item, fields, metadata.fields, trace),
+      fields: prepared.fields,
       links,
+      ...descriptionMetric(prepared),
     },
     metadata.fields,
     { templates: connection.issueTemplates, check: false },
+    connection.onCreatedIssueAcknowledged,
   );
 }
 /** The fields a draft item's create sends: with its draft identity, and traced when it is. */
@@ -1040,9 +1504,14 @@ function draftItemCreateFields(
   fields: Readonly<Record<string, unknown>>,
   metadata: readonly JiraFieldMetadata[],
   trace: JiraTraceRequest | undefined,
-): Readonly<Record<string, unknown>> {
-  const identified = withJiraDraftIdentity(fields, metadata, jiraDraftIdentity(item));
-  return trace === undefined ? identified : traceCreateFields(identified, metadata, trace);
+): JiraFieldValidationResult {
+  const prepared = prepareJiraDescriptionFields(fields, metadata);
+  if (!prepared.ok) return prepared;
+  const identified = withJiraDraftIdentity(prepared.fields, metadata, jiraDraftIdentity(item));
+  return {
+    ...prepared,
+    fields: trace === undefined ? identified : traceCreateFields(identified, metadata, trace),
+  };
 }
 
 /** One draft item the field validation of its create refuses, in that validation's own words. */
@@ -1073,17 +1542,39 @@ function draftItemFieldFailure(
   const trace = item.requirementIds === undefined ? undefined : STAND_IN_TRACE;
   const input = draftItemInput(item, keys, trace);
   if (!input.ok) return undefined;
-  const validated = validateJiraFieldChanges(
-    createContextFields(metadata),
-    {
-      ...draftItemCreateFields(item, input.fields, metadata, trace),
-      project: { id: item.projectId },
-      issuetype: { id: item.issueTypeId },
-    },
-    "create",
-    "data-center",
+  const prepared = draftItemCreateFields(item, input.fields, metadata, trace);
+  if (!prepared.ok) return validationFailure(prepared).detail;
+  const fields = createContextFields(metadata);
+  const validated = withJiraFieldName(
+    fields,
+    validateJiraFieldChanges(
+      fields,
+      {
+        ...prepared.fields,
+        project: { id: item.projectId },
+        issuetype: { id: item.issueTypeId },
+      },
+      "create",
+      "data-center",
+    ),
   );
   return validated.ok ? undefined : validationFailure(validated).detail;
+}
+/** An Epic Link of a draft item that is not an Epic; a link to another draft item is judged at its run. */
+async function draftItemEpicFailure(
+  request: JiraMutationRequest,
+  item: JiraDraftItem,
+  metadata: readonly JiraFieldMetadata[],
+): Promise<JiraMutationFailureDetail | undefined> {
+  const keys = new Map(jiraDraftDependencies(item).map((ref) => [ref, JIRA_DRAFT_STAND_IN_KEY]));
+  const input = draftItemInput(item, keys, undefined);
+  if (!input.ok) return undefined;
+  const prepared = draftItemCreateFields(item, input.fields, metadata, undefined);
+  // The parent relation of an item that names a ref of this draft holds a stand-in key here.
+  const local = new Set(item.parent?.ref === undefined ? [] : [item.parent.fieldId]);
+  return prepared.ok
+    ? (await epicLinkTargetRefusal(request, prepared.fields, local))?.detail
+    : undefined;
 }
 const draftTypeKey = (item: JiraDraftItem): string => `${item.projectId}/${item.issueTypeId}`;
 /** The create fields of each issue type a draft uses, so its size costs no further read. */
@@ -1141,16 +1632,30 @@ export async function jiraDraftFieldRefusals(
   options: { readonly reconcile: boolean },
 ): Promise<JiraDraftFieldRefusals> {
   if (connection.deployment !== "data-center") return { refusals: [], total: 0 };
-  const request = requestFor(connection, context);
-  const metadata = await draftItemMetadata(request, items);
-  const candidates = items.flatMap((item): readonly DraftFieldCandidate[] => {
-    const fields = metadata.get(draftTypeKey(item));
-    const detail = fields === undefined ? undefined : draftItemFieldFailure(item, fields);
-    return fields === undefined || detail === undefined
-      ? []
-      : [{ ref: item.ref, detail, item, metadata: fields }];
+  return withJiraEpicLinkTargetCheck(connection, context, async () => {
+    const request = requestFor(connection, context);
+    const metadata = await draftItemMetadata(request, items);
+    const candidates = (
+      await Promise.all(
+        items.map(async (item): Promise<readonly DraftFieldCandidate[]> => {
+          const fields = metadata.get(draftTypeKey(item));
+          if (fields === undefined) return [];
+          const detail =
+            draftItemFieldFailure(item, fields) ??
+            (await draftItemEpicFailure(request, item, fields));
+          return detail === undefined ? [] : [{ ref: item.ref, detail, item, metadata: fields }];
+        }),
+      )
+    ).flat();
+    return draftFieldRefusalsOf(request, candidates, options.reconcile);
   });
-  if (!options.reconcile)
+}
+async function draftFieldRefusalsOf(
+  request: JiraMutationRequest,
+  candidates: readonly DraftFieldCandidate[],
+  reconcile: boolean,
+): Promise<JiraDraftFieldRefusals> {
+  if (!reconcile)
     return {
       refusals: candidates
         .slice(0, DRAFT_FIELD_REFUSALS_MAX)
@@ -1227,6 +1732,373 @@ function untracedReferences(
   );
 }
 
+function deletionMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraCommentDelete(operation))
+    return executeJiraCommentDelete(operation, args, request, check, connection.baseUrl);
+  if (isJiraAttachmentMutation(operation))
+    return executeJiraAttachmentMutation(operation, args, request, check);
+  if (isJiraWorklogDelete(operation))
+    return executeJiraWorklogDelete(operation, args, request, check, connection.issueTemplates);
+  return undefined;
+}
+
+function savedConfigurationMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  check: boolean,
+  baseUrl: string,
+): Promise<JiraMutationAttempt> | undefined {
+  let attempt: Promise<JiraMutationAttempt> | undefined;
+  if (isJiraFilterMutation(operation))
+    attempt = executeJiraFilterMutation(operation, args, request, check);
+  else if (isJiraFilterPermissionMutation(operation))
+    attempt = executeJiraFilterPermissionMutation(operation, args, request, check);
+  else if (isJiraFilterColumnMutation(operation))
+    attempt = executeJiraFilterColumnMutation(operation, args, request, check);
+  else if (isJiraPreferenceMutation(operation))
+    attempt = executeJiraPreferenceMutation(operation, args, request, check);
+  return attempt?.then((value) => savedFilterLink(value, baseUrl));
+}
+function savedFilterLink(attempt: JiraMutationAttempt, baseUrl: string): JiraMutationAttempt {
+  const receipt = attempt.receipt;
+  if (receipt?.filterId === undefined) return attempt;
+  const browseUrl = jiraFilterBrowseUrl(baseUrl, receipt.filterId);
+  if (browseUrl === undefined) return attempt;
+  // Replace any supplied destination; native self/view URLs never control a result link.
+  return { ...attempt, receipt: { ...receipt, browseUrl } };
+}
+function agileConfigurationMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraSprintLifecycleMutation(operation))
+    return executeJiraSprintLifecycleMutation(
+      operation,
+      args,
+      {
+        requests: jiraAgileRequests(connection, context),
+        ...(connection.issueTemplates === undefined
+          ? {}
+          : { templates: connection.issueTemplates }),
+        experimentalAgile: jiraExperimentalAgileRequest(connection, context),
+      },
+      check,
+    );
+  if (isJiraAgilePlanningMutation(operation))
+    return executeJiraAgilePlanningMutation(
+      operation,
+      args,
+      {
+        requests: jiraAgileRequests(connection, context),
+        ...(connection.issueTemplates === undefined
+          ? {}
+          : { templates: connection.issueTemplates }),
+      },
+      check,
+    );
+  return undefined;
+}
+function configurationMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraEntityPropertyMutation(operation))
+    return executeJiraEntityPropertyMutation(
+      operation,
+      args,
+      {
+        platform: request,
+        agile: jiraAgileRequest(connection, context),
+        baseUrl: connection.baseUrl,
+      },
+      check,
+    );
+  if (isJiraMonitoringMutation(operation))
+    return executeJiraMonitoringMutation(operation, args, request, check);
+  if (isJiraScreenTabMutation(operation))
+    return executeJiraScreenTabMutation(operation, args, request, check);
+  if (isJiraScreenConfigurationMutation(operation))
+    return executeJiraScreenConfigurationMutation(operation, args, request, check);
+  if (isJiraBoardConfigurationMutation(operation))
+    return executeJiraBoardConfigurationMutation(
+      operation,
+      args,
+      jiraAgileRequests(connection, context),
+      check,
+    );
+  return (
+    agileConfigurationMutation(operation, args, context, connection, check) ??
+    savedConfigurationMutation(operation, args, request, check, connection.baseUrl)
+  );
+}
+function nativeLifecycleMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraVersionLinkMutation(operation))
+    return executeJiraVersionLinkMutation(operation, args, request, check);
+  if (isJiraProjectCategoryMutation(operation))
+    return executeJiraProjectCategoryMutation(operation, args, request, check);
+  if (isJiraIssueLinkMutation(operation))
+    return executeJiraIssueLinkMutation(operation, args, request, check, connection.issueTemplates);
+  if (isJiraRemoteLinkMutation(operation))
+    return executeJiraRemoteLinkMutation(
+      operation,
+      args,
+      request,
+      check,
+      connection.issueTemplates,
+    );
+  if (isJiraComponentDelete(operation))
+    return executeJiraComponentDelete(args, request, check, connection.issueTemplates);
+  if (isJiraVersionLifecycleMutation(operation))
+    return executeJiraVersionLifecycleMutation(
+      operation,
+      args,
+      request,
+      check,
+      connection.issueTemplates,
+      connection.baseUrl,
+    );
+  return undefined;
+}
+function permissionRoleMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraPermissionSchemeMutation(operation))
+    return executeJiraPermissionSchemeMutation(
+      operation,
+      args,
+      {
+        request,
+        setAttribute: jiraPermissionAttributeRequest(connection, context),
+      },
+      check,
+    );
+  if (isJiraRoleMutation(operation))
+    return executeJiraRoleMutation(operation, args, request, check);
+  return undefined;
+}
+function systemAdministrationMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraDirectoryAccessMutation(operation))
+    return executeJiraDirectoryAccessMutation(
+      operation,
+      args,
+      request,
+      jiraDirectoryAccessRequests(connection, context),
+      check,
+    );
+  if (isJiraMaintenanceMutation(operation))
+    return executeJiraMaintenanceMutation(operation, args, request, check);
+  if (isJiraSchemaMutation(operation))
+    return executeJiraSchemaMutation(operation, args, request, check, connection.issueTemplates);
+  if (isJiraGroupMutation(operation))
+    return executeJiraGroupMutation(operation, args, request, check);
+  if (isJiraIssueActionMutation(operation))
+    return executeJiraIssueActionMutation(operation, args, request, check, connection.baseUrl);
+  return undefined;
+}
+function avatarPortsForMutation(
+  connection: JiraManagedConnection,
+  request: JiraMutationRequest,
+  check: boolean,
+): Parameters<typeof executeJiraAvatarMutation>[2] {
+  const { inspectImage, sourceFor, withSession, legacyTemporaryRelease } = connection.avatars ?? {};
+  const source = sourceFor?.(check);
+  return {
+    request,
+    ...(inspectImage === undefined ? {} : { inspectImage }),
+    ...(withSession === undefined ? {} : { withSession }),
+    ...(legacyTemporaryRelease === undefined ? {} : { legacyTemporaryRelease }),
+    ...(source === undefined ? {} : { source }),
+  };
+}
+function lifecycleAndBulkMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+  check: boolean,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraIssueLifecycleMutation(operation))
+    return executeJiraIssueLifecycleMutation(
+      operation,
+      args,
+      request,
+      jiraIssueDeletionAdmission(request, connection.issueTemplates),
+      check,
+    );
+  if (isJiraProjectLifecycleMutation(operation))
+    return executeJiraProjectLifecycleMutation(
+      operation,
+      args,
+      request,
+      jiraProjectLifecycleRequests(connection, context),
+      check,
+      connection.issueTemplates,
+    );
+  if (operation === "jira.create-reciprocal-remote-link")
+    return executeJiraReciprocalRemoteLink(
+      args,
+      request,
+      jiraReciprocalConfigurationRequests(connection, context),
+      check,
+      connection.issueTemplates,
+    );
+  if (isJiraBulkCreate(operation))
+    return executeJiraBulkCreate(
+      operation,
+      args,
+      request,
+      {
+        prepare: (item, selectedTrace) =>
+          prepareJiraCreate(request, item, connection.issueTemplates, selectedTrace),
+        ...(trace === undefined ? {} : { trace }),
+      },
+      check,
+    );
+  return undefined;
+}
+function resourceAndIdentityMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+  check: boolean,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraAnonymizationUnlock(operation))
+    return executeJiraAnonymizationUnlock(args, request, connection.privateIdentity, check);
+  if (isJiraAvatarMutation(operation))
+    return executeJiraAvatarMutation(
+      operation,
+      args,
+      avatarPortsForMutation(connection, request, check),
+      check,
+    );
+  if (isJiraIdentityMutation(operation))
+    return executeJiraIdentityMutation(
+      operation,
+      args,
+      request,
+      jiraIdentityRequests(connection, context),
+      check,
+    );
+  if (isJiraPrivateAccountMutation(operation))
+    return executeJiraPrivateAccountMutation(
+      operation,
+      args,
+      request,
+      connection.privateIdentity,
+      check,
+    );
+  return lifecycleAndBulkMutation(operation, args, request, connection, context, check, trace);
+}
+function entityMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraParticipationMutation(operation))
+    return executeJiraParticipationMutation(operation, args, request, check, connection.baseUrl);
+  if (isJiraWorklogMutation(operation))
+    return executeJiraWorklogMutation(operation, args, request, check, connection.issueTemplates);
+  if (isJiraCommentMutation(operation))
+    return executeJiraCommentMutation(operation, args, request, check, connection.baseUrl);
+  if (isJiraComponentMutation(operation))
+    return executeJiraComponentMutation(operation, args, request, check);
+  if (isJiraVersionMutation(operation))
+    return executeJiraVersionMutation(operation, args, request, check);
+  if (isJiraProjectMutation(operation))
+    return executeJiraProjectMutation(operation, args, request, check);
+  return undefined;
+}
+function dedicatedMutation(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  check: boolean,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> | undefined {
+  const args = structuredClone(source);
+  const request = requestFor(connection, context);
+  return (
+    resourceAndIdentityMutation(operation, args, request, connection, context, check, trace) ??
+    systemAdministrationMutation(operation, args, request, connection, context, check) ??
+    instanceConfigurationMutation(operation, args, request, connection, context, check) ??
+    permissionRoleMutation(operation, args, request, connection, context, check) ??
+    configurationMutation(operation, args, request, context, connection, check) ??
+    deletionMutation(operation, args, request, connection, check) ??
+    nativeLifecycleMutation(operation, args, request, connection, check) ??
+    entityMutation(operation, args, request, connection, check)
+  );
+}
+
+function instanceConfigurationMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraOptionSchemeMutation(operation))
+    return executeJiraOptionSchemeMutation(operation, args, request, check);
+  if (isJiraWorkflowSchemeMutation(operation))
+    return executeJiraWorkflowSchemeMutation(operation, args, request, check);
+  if (isJiraInstanceSettingMutation(operation))
+    return executeJiraInstanceSettingMutation(operation, args, request, check);
+  if (!isJiraEmailTemplateMutation(operation)) return undefined;
+  const ports = jiraManagedEmailTemplatePorts(connection, context, request, check);
+  if (ports === undefined) return Promise.resolve({ ok: false, reason: "unavailable" });
+  if (operation === "jira.upload-email-template-pack" && ports.source === undefined)
+    return Promise.resolve({
+      ok: false,
+      reason: "unavailable",
+      detail: {
+        messages: [
+          "Email-template upload requires a Chat with a connected file or folder and the existing file review. No archive was uploaded.",
+        ],
+      },
+    });
+  return executeJiraEmailTemplateMutation(operation, args, ports, check);
+}
+
 /** Fresh capability metadata and one mutation request. Durability/authority remain server-owned. */
 export function executeJiraManagedMutation(
   operation: JiraMutationOperation,
@@ -1235,8 +2107,27 @@ export function executeJiraManagedMutation(
   connection: JiraManagedConnection,
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
+  return withJiraTemplateNotices(() =>
+    withJiraEpicLinkTargetCheck(connection, context, () =>
+      executeJiraManagedMutationInner(operation, source, context, connection, trace),
+    ),
+  );
+}
+/** The executor proper; the exported entry only adds the notices its gate collected. */
+function executeJiraManagedMutationInner(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> {
+  if (!jiraOperationInReleaseScope(operation)) return Promise.resolve(OUT_OF_RELEASE_SCOPE);
   if (connection.deployment !== "data-center")
     return Promise.resolve({ ok: false, reason: "unavailable" });
+  if (isJiraAgileMutation(operation))
+    return executeJiraAgileMutation(operation, structuredClone(source), context, connection);
+  const dedicated = dedicatedMutation(operation, source, context, connection, false, trace);
+  if (dedicated !== undefined) return dedicated;
   // An attachment changes no field a template describes: it takes no template check.
   if (operation === "jira.attach")
     return attachFile(requestFor(connection, context), structuredClone(source), connection);
@@ -1250,6 +2141,15 @@ export function executeJiraManagedMutation(
   );
 }
 
+/**
+ * An operation outside this release's scope (attachments in Release 1) is the closed `unavailable`
+ * disposition with a readable message; it never reaches a request, in the executor or its dry run.
+ */
+const OUT_OF_RELEASE_SCOPE: JiraMutationAttempt = {
+  ok: false,
+  reason: "unavailable",
+  detail: { messages: [JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE] },
+};
 const TEMPLATE_CHECKED: ReadonlySet<JiraMutationOperation> = new Set([
   "jira.create",
   "jira.edit",
@@ -1259,22 +2159,45 @@ const TEMPLATE_CHECKED: ReadonlySet<JiraMutationOperation> = new Set([
 /**
  * The same admission pipeline without the write: Chat runs it before asking a human to approve, so
  * a draft that violates an active template is refused instead of being put in front of a person.
- * It reads and validates only; it never issues a POST or PUT.
+ * It reads and validates only; it never issues a POST, PUT or DELETE.
  */
-/** The operations a proposal is checked for; comments carry no field state to check. */
+/** Checks native prerequisites without writing; comment updates preserve observed visibility. */
 function checkedAttempt(
   operation: JiraMutationOperation,
   source: CatalogJsonObject,
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
+  return withJiraEpicLinkTargetCheck(connection, context, () =>
+    checkedAttemptInner(operation, source, context, connection, trace),
+  );
+}
+function checkedAttemptInner(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
+): Promise<JiraMutationAttempt> {
+  if (!jiraOperationInReleaseScope(operation)) return Promise.resolve(OUT_OF_RELEASE_SCOPE);
+  if (isJiraAgileMutation(operation))
+    return checkJiraAgileMutation(operation, structuredClone(source), context, connection);
+  if (connection.deployment !== "data-center") return Promise.resolve({ ok: true, receipt: {} });
+  const dedicated = dedicatedMutation(operation, source, context, connection, true);
+  if (dedicated !== undefined) return dedicated;
   // The check mode must never reach any write.
-  if (connection.deployment !== "data-center" || !TEMPLATE_CHECKED.has(operation))
-    return Promise.resolve({ ok: true, receipt: {} });
-  return dispatchMutation(operation, structuredClone(source), requestFor(connection, context), {
-    templates: connection.issueTemplates,
-    check: true,
-  });
+  if (!TEMPLATE_CHECKED.has(operation)) return Promise.resolve({ ok: true, receipt: {} });
+  // The check admits exactly what the write will: references resolved by the owner arrive as the
+  // same trace the write receives, and references without one are refused the same way.
+  if (untracedReferences(operation, source, trace)) return Promise.resolve(UNTRACED_REFERENCES);
+  return dispatchMutation(
+    operation,
+    structuredClone(source),
+    requestFor(connection, context),
+    { templates: connection.issueTemplates, check: true },
+    trace,
+  );
 }
 export async function checkJiraManagedMutationTemplates(
   operation: JiraMutationOperation,
@@ -1282,9 +2205,20 @@ export async function checkJiraManagedMutationTemplates(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
 ): Promise<JiraTemplateGateResult> {
-  const attempt = await checkedAttempt(operation, source, context, connection);
-  if (attempt.ok || attempt.violations === undefined) return { ok: true };
-  return { ok: false, reason: attempt.reason, violations: attempt.violations };
+  // Template rules only: no Epic Link target check runs here (it needs the invocation's agile
+  // request, which this entry does not install). A draft item's Epic Link is judged by
+  // `jiraDraftFieldRefusals`, which knows which relations are only stand-ins for other items.
+  const attempt = await checkedAttemptInner(operation, source, context, connection);
+  if (attempt.ok) return { ok: true };
+  // A Jira that cannot be read is told apart from a pass, so a caller can stop reading it.
+  if (attempt.violations === undefined)
+    return attempt.reason === "unavailable" ? { ok: false, reason: "unavailable" } : { ok: true };
+  return {
+    ok: false,
+    reason: attempt.reason,
+    violations: attempt.violations,
+    ...(attempt.detail === undefined ? {} : { detail: attempt.detail }),
+  };
 }
 export type JiraMutationCheckResult =
   | { readonly ok: true }
@@ -1294,6 +2228,69 @@ export type JiraMutationCheckResult =
       readonly violations?: readonly JiraTemplateViolation[];
       readonly detail?: JiraMutationFailureDetail;
     };
+
+function isSavedConfigurationMutation(operation: JiraMutationOperation): boolean {
+  return [
+    isJiraFilterMutation,
+    isJiraFilterPermissionMutation,
+    isJiraFilterColumnMutation,
+    isJiraPreferenceMutation,
+  ].some((accepts) => accepts(operation));
+}
+function isNativeLifecycleMutation(operation: JiraMutationOperation): boolean {
+  return [
+    isJiraComponentDelete,
+    isJiraVersionLifecycleMutation,
+    isJiraIssueLinkMutation,
+    isJiraRemoteLinkMutation,
+    isJiraVersionLinkMutation,
+    isJiraProjectCategoryMutation,
+  ].some((accepts) => accepts(operation));
+}
+function isReviewedConfigurationMutation(operation: JiraMutationOperation): boolean {
+  return (
+    operation === "jira.create-reciprocal-remote-link" ||
+    [
+      isJiraEntityPropertyMutation,
+      isJiraScreenTabMutation,
+      isJiraScreenConfigurationMutation,
+      isJiraBoardConfigurationMutation,
+      isJiraSprintLifecycleMutation,
+      isJiraAgilePlanningMutation,
+      isJiraMonitoringMutation,
+      isJiraPermissionSchemeMutation,
+      isJiraRoleMutation,
+      isJiraOptionSchemeMutation,
+      isJiraWorkflowSchemeMutation,
+      isJiraInstanceSettingMutation,
+      isJiraAnonymizationUnlock,
+      isJiraAvatarMutation,
+      isJiraIdentityMutation,
+      isJiraPrivateAccountMutation,
+      isJiraIssueLifecycleMutation,
+      isJiraProjectLifecycleMutation,
+      isJiraBulkCreate,
+      isJiraEmailTemplateMutation,
+      isJiraDirectoryAccessMutation,
+      isJiraMaintenanceMutation,
+      isJiraSchemaMutation,
+      isJiraGroupMutation,
+      isJiraIssueActionMutation,
+    ].some((accepts) => accepts(operation))
+  );
+}
+function requiresSuccessfulPreflight(operation: JiraMutationOperation): boolean {
+  return (
+    isNativeLifecycleMutation(operation) ||
+    isSavedConfigurationMutation(operation) ||
+    isReviewedConfigurationMutation(operation) ||
+    isJiraAgileMutation(operation) ||
+    isJiraCommentMutation(operation) ||
+    isJiraCommentDelete(operation) ||
+    isJiraAttachmentMutation(operation) ||
+    isJiraWorklogDelete(operation)
+  );
+}
 /**
  * What a human would otherwise approve in vain: the templates, and Keiko's own validation of the
  * proposed fields (S05 of #4173), which decides the same way when the write runs. Every other
@@ -1304,11 +2301,31 @@ export async function checkJiraManagedMutation(
   source: CatalogJsonObject,
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
 ): Promise<JiraMutationCheckResult> {
-  const attempt = await checkedAttempt(operation, source, context, connection);
+  if (!jiraOperationInReleaseScope(operation))
+    return {
+      ok: false,
+      reason: "unavailable",
+      detail: { messages: [JIRA_ATTACHMENTS_UNAVAILABLE_MESSAGE] },
+    };
+  const attempt = await checkedAttempt(operation, source, context, connection, trace);
   if (attempt.ok) return { ok: true };
   if (attempt.violations !== undefined)
-    return { ok: false, reason: attempt.reason, violations: attempt.violations };
+    return {
+      ok: false,
+      reason: attempt.reason,
+      violations: attempt.violations,
+      ...(attempt.detail === undefined ? {} : { detail: attempt.detail }),
+    };
+  // Dedicated admission already resolved its concrete prerequisites and reviewed state using GETs.
+  // A known refusal must not be turned into an approval for a write that cannot proceed.
+  if (requiresSuccessfulPreflight(operation))
+    return {
+      ok: false,
+      reason: attempt.reason,
+      ...(attempt.detail === undefined ? {} : { detail: attempt.detail }),
+    };
   return attempt.reason === "field-validation" && attempt.detail?.validation !== undefined
     ? { ok: false, reason: attempt.reason, detail: attempt.detail }
     : { ok: true };

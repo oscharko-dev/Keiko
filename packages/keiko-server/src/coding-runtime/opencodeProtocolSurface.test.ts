@@ -6,7 +6,10 @@ import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
-import { OPENCODE_RUNTIME_VERSION_PINS } from "./opencodeRuntimeVersions.js";
+import {
+  OPENCODE_PINNED_VERSION,
+  OPENCODE_RUNTIME_VERSION_PINS,
+} from "./opencodeRuntimeVersions.js";
 
 const PINNED_DIGEST = "e1db492f2ac661f2b44da6ef3d7e58ed34856621a2c58de4610640e1291266f6";
 
@@ -142,10 +145,13 @@ function dig(value: unknown, ...keys: readonly string[]): unknown {
   return current;
 }
 
-describe("OpenCode 2.1.4 admitted V2 protocol surface", () => {
+describe("the pinned OpenCode admitted V2 protocol surface", () => {
   const fixture: unknown = JSON.parse(
     readFileSync(
-      new URL("./opencodeProtocolSurface.opencode-2.1.4.fixture.json", import.meta.url),
+      new URL(
+        `./opencodeProtocolSurface.opencode-${OPENCODE_PINNED_VERSION}.fixture.json`,
+        import.meta.url,
+      ),
       "utf8",
     ),
   );

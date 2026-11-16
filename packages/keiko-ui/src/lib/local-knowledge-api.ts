@@ -9,7 +9,6 @@ import type {
   CapsuleSetId,
   CapsuleContextualRetrievalSettings,
   HtmlManualPodJob,
-  HtmlManualPodCreateRequest,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSourceScope,
@@ -375,6 +374,12 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export interface LocalKnowledgeListOptions {
   readonly includeKnowledgePods?: boolean;
+  /** Aborts the request (a catalog read that outlasts its bound must not wait forever). */
+  readonly signal?: AbortSignal;
+}
+
+function listInit(options: LocalKnowledgeListOptions | undefined): RequestInit | undefined {
+  return options?.signal === undefined ? undefined : { signal: options.signal };
 }
 
 function listPath(path: string, options: LocalKnowledgeListOptions | undefined): string {
@@ -384,13 +389,19 @@ function listPath(path: string, options: LocalKnowledgeListOptions | undefined):
 export async function fetchCapsules(
   options?: LocalKnowledgeListOptions,
 ): Promise<CapsulesResponse> {
-  return fetchJson<CapsulesResponse>(listPath("/api/local-knowledge/capsules", options));
+  return fetchJson<CapsulesResponse>(
+    listPath("/api/local-knowledge/capsules", options),
+    listInit(options),
+  );
 }
 
 export async function fetchCapsuleSets(
   options?: LocalKnowledgeListOptions,
 ): Promise<CapsuleSetsResponse> {
-  return fetchJson<CapsuleSetsResponse>(listPath("/api/local-knowledge/capsule-sets", options));
+  return fetchJson<CapsuleSetsResponse>(
+    listPath("/api/local-knowledge/capsule-sets", options),
+    listInit(options),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -662,19 +673,9 @@ export async function refreshCapsuleChangedFiles(
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/local-knowledge/manual-pods/create  — start a live HTML-manual create (Issue #2063)
 // POST /api/local-knowledge/manual-pods/refresh — start a live HTML-manual refresh (Issue #2063)
-// GET  /api/local-knowledge/manual-pods/jobs/:jobId — poll the live create/refresh job
+// GET  /api/local-knowledge/manual-pods/jobs/:jobId — poll the live refresh job
 // ---------------------------------------------------------------------------
-
-export async function startHtmlManualPodCreate(
-  request: HtmlManualPodCreateRequest,
-): Promise<HtmlManualPodJob> {
-  return fetchJson<HtmlManualPodJob>("/api/local-knowledge/manual-pods/create", {
-    method: "POST",
-    body: JSON.stringify(request),
-  });
-}
 
 export async function startHtmlManualPodRefresh(
   capsuleId: KnowledgeCapsuleId,

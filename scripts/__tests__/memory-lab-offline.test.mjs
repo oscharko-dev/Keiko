@@ -116,13 +116,13 @@ describe("memory lab offline run", () => {
   it(
     "turns the same store red when the learner stores the whole message",
     async () => {
-      const scenarios = scenarioSet(join(root, "broken"), ["hypothetical-en"]);
+      const scenarios = scenarioSet(join(root, "broken"), ["multi-turn-de"]);
       await runLab(
         options(root, "broken-run", scenarios, { "broken-learner": "whole-message" }),
         () => undefined,
       );
       const store = scorecardEntries("broken-run").find(
-        (entry) => entry.name === "hypothetical-en:product:r0:store",
+        (entry) => entry.name === "multi-turn-de:product:r0:store",
       );
       expect(store).toBeDefined();
       expect(store.passed).toBe(false);
@@ -130,6 +130,34 @@ describe("memory lab offline run", () => {
       expect(metric(store, "live")).toBe(1);
       expect(metric(store, "precision")).toBe(0);
       expect(store.evidence).toContain("correct=0");
+    },
+    RUN_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps a hypothetical whole message out of the store even from a broken learner",
+    async () => {
+      const scenarios = scenarioSet(join(root, "broken-hypothetical"), ["hypothetical-en"]);
+      await runLab(
+        options(root, "broken-hypothetical-run", scenarios, { "broken-learner": "whole-message" }),
+        () => undefined,
+      );
+      const store = scorecardEntries("broken-hypothetical-run").find(
+        (entry) => entry.name === "hypothetical-en:product:r0:store",
+      );
+      expect(store).toBeDefined();
+      expect(metric(store, "live")).toBe(0);
+      // The broken reply was served and nothing of it was left queued, so it was admission that
+      // kept the message out, not a learner call that never happened.
+      const out = join(root, "broken-hypothetical-run");
+      const [timing] = JSON.parse(readFileSync(join(out, "timing.json"), "utf8"));
+      expect(timing.learnerCalls).toBeGreaterThanOrEqual(1);
+      const unit = JSON.parse(
+        readFileSync(join(out, "runs", "hypothetical-en.product.r0.json"), "utf8"),
+      );
+      const learned = unit.turns.filter((turn) => turn.memory);
+      expect(learned.length).toBeGreaterThan(0);
+      for (const turn of learned) expect(turn.learnerUnused).toBe(0);
     },
     RUN_TIMEOUT_MS,
   );

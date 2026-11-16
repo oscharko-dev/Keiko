@@ -4,123 +4,20 @@
 // Jaccard or simple BM25-lite without IDF — keep deterministic"; Jaccard is the simplest
 // fully-deterministic choice and the cheapest to reason about for explainability.
 
-import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  personMemoryTags,
+  sameMemoryWord,
+  tokenizeMemoryText,
+  type MemoryRecord,
+} from "@oscharko-dev/keiko-contracts/memory";
 
-// Word boundary uses a Unicode-aware non-word matcher: any character that is not a letter,
-// digit, or underscore (in any script) becomes a separator. This is a fixed-length pattern
-// with no alternation or backreferences — not ReDoS-prone.
-const NON_WORD = /[^\p{L}\p{N}_]+/u;
-const COMBINING_MARKS = /\p{M}+/gu;
-
-const STOPWORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "by",
-  "for",
-  "from",
-  "i",
-  "is",
-  "it",
-  "my",
-  "of",
-  "on",
-  "or",
-  "the",
-  "to",
-  "what",
-  "which",
-  "with",
-  "am",
-  "an",
-  "auf",
-  "aus",
-  "bei",
-  "bin",
-  "das",
-  "dem",
-  "den",
-  "der",
-  "des",
-  "die",
-  "du",
-  "ein",
-  "eine",
-  "einem",
-  "einen",
-  "einer",
-  "er",
-  "es",
-  "fur",
-  "fuer",
-  "ich",
-  "im",
-  "in",
-  "ist",
-  "mit",
-  "oder",
-  "sind",
-  "und",
-  "vom",
-  "von",
-  "was",
-  "welche",
-  "welchem",
-  "welchen",
-  "welcher",
-  "welches",
-  "wie",
-  "wir",
-  "zu",
-  "zum",
-  "zur",
-]);
-
-function normalizeText(text: string): string {
-  return text
-    .normalize("NFKD")
-    .replace(COMBINING_MARKS, "")
-    .replaceAll("ß", "ss")
-    .toLocaleLowerCase("und");
-}
-
-function stemGermanLikeToken(token: string): string {
-  if (token.length <= 5) return token;
-  const suffixes = ["ungen", "ern", "en", "er", "es", "s"];
-  for (const suffix of suffixes) {
-    if (suffix === "s" && token.endsWith("ss")) continue;
-    if (token.length - suffix.length >= 5 && token.endsWith(suffix)) {
-      return token.slice(0, -suffix.length);
-    }
-  }
-  return token;
-}
-
-export function tokenize(text: string): readonly string[] {
-  if (text === "") return [];
-  const split = normalizeText(text).split(NON_WORD);
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const piece of split) {
-    if (piece === "") continue;
-    if (STOPWORDS.has(piece)) continue;
-    const normalized = stemGermanLikeToken(piece);
-    if (normalized === "" || STOPWORDS.has(normalized)) continue;
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
-}
+export const tokenize = tokenizeMemoryText;
 
 function recordTokens(record: MemoryRecord): ReadonlySet<string> {
   const tokens = new Set<string>();
   for (const t of tokenize(record.body)) tokens.add(t);
-  for (const tag of record.tags) {
+  // Keiko's own tags are not the person's words about the fact.
+  for (const tag of personMemoryTags(record.tags)) {
     for (const t of tokenize(tag)) tokens.add(t);
   }
   return tokens;
@@ -144,4 +41,57 @@ export function lexicalRelevance(queryText: string | undefined, record: MemoryRe
   const union = queryTokens.size + docTokens.size - intersection;
   if (union === 0) return 0;
   return intersection / union;
+}
+
+// Words that name no topic: pronouns, auxiliaries, modal verbs, particles and politeness, in the
+// shared tokenizer's folded and stemmed spelling. The shared stopword list keeps them because
+// capture reads them; the strict floor ignores them, so a shared "mir" or "bitte" never makes an
+// unrelated memory fit a question (#4228). Words shorter than three letters are ignored as well.
+const FUNCTION_WORDS: ReadonlySet<string> = new Set(
+  `
+  aber alle alles also auch bist bitte dabei dann danke dass dein deine deinem deinen deiner
+  dich diese dieser dies dir doch dort durfen etwas euch habe haben hast hat hier ihm ihn
+  ihnen ihr ihre immer jetzt kann kannst kein keine konnen konntest mal mein meine meinem
+  meinen meiner mich mir muss musst mussen nicht noch nur schon sehr sein seine sich sie soll
+  sollst sollen uns unser unsere wann war waren warum weil wenn werden wer wird wirst willst
+  uber gibt mehr wieder viel viele machen mache nach ohne dieses diesem seinen seiner gerne
+  gern einfach eigentlich wollen wurde wurdest about all any been being but can could did does
+  had has have her his how into just may might must not our please shall she should some than
+  thanks that their them then these they this those very was were when where who why will
+  would you your yours
+`
+    .trim()
+    .split(/\s+/u),
+);
+const MIN_INFORMATIVE_CHARS = 3;
+
+function informativeWords(text: string): readonly string[] {
+  return tokenize(text).filter(
+    (word) => word.length >= MIN_INFORMATIVE_CHARS && !FUNCTION_WORDS.has(word),
+  );
+}
+
+/**
+ * Number of the question's informative words that the record's body states, counting a short
+ * inflection as the same word ("Tabelle" and "Tabellen"). Tags are not read: they are labels the
+ * system set, not words the person said.
+ */
+export function sharedInformativeWordCount(
+  queryText: string | undefined,
+  record: MemoryRecord,
+): number {
+  return sharedInformativeWordCountInText(queryText, record.body);
+}
+
+/** The same count for any text a memory stands for, such as a fact it superseded. */
+export function sharedInformativeWordCountInText(
+  queryText: string | undefined,
+  text: string,
+): number {
+  if (queryText === undefined || queryText === "") return 0;
+  const recordWords = informativeWords(text);
+  if (recordWords.length === 0) return 0;
+  return informativeWords(queryText).filter((word) =>
+    recordWords.some((recordWord) => sameMemoryWord(word, recordWord)),
+  ).length;
 }

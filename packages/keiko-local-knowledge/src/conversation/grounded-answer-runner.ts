@@ -194,6 +194,8 @@ async function generateGroundedAnswerText(
   if (deps.signal?.aborted === true || !shouldRepairMissingCitations(generated, sent)) {
     return { ...generated, citationRepair: "not-needed" };
   }
+  if (deps.answerGenerator.reportsToolAction?.() === true)
+    return { ...generated, citationRepair: "skipped-tool-action" };
   if (deps.answerGenerator.repairAvailable?.() === false)
     return { ...generated, citationRepair: "skipped-budget" };
   const generatedComplete = lastAnswerComplete(deps);

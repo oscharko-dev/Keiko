@@ -96,6 +96,7 @@ export function admitGatewayPrompt(
   correlationId: string,
   measured: ProviderTokenCount = DISABLED_COUNTER,
   retainedTokens?: number,
+  reasoningField?: "reasoning_content" | "reasoning",
 ): GatewayCallRequest {
   const profile = deriveContextProfileFromCapability(capability);
   const outputBudget = outputAllocation(request.maxOutputTokens, profile.reservedOutputTokens);
@@ -103,7 +104,7 @@ export function admitGatewayPrompt(
     ...profile,
     reservedOutputTokens: outputBudget,
   }).effectiveInputBudget;
-  const evidence = promptTokenEvidence(request, profile, measured, retainedTokens);
+  const evidence = promptTokenEvidence(request, profile, measured, retainedTokens, reasoningField);
   const promptTokens = Math.max(
     evidence.localPromptTokens,
     evidence.providerPromptTokens ?? 0,
@@ -152,12 +153,13 @@ function promptTokenEvidence(
   profile: ContextProfile,
   measured: ProviderTokenCount,
   retainedTokens: number | undefined,
+  reasoningHistoryField: "reasoning_content" | "reasoning" | undefined,
 ): PromptTokenEvidence {
   const imageCount = contentPartCount(request, "image_url");
   const documentCount = contentPartCount(request, "file");
   const mediaCount = imageCount + documentCount;
   const imageAccounting = imageAccountingSource(mediaCount, measured.tokens, retainedTokens);
-  const options = { contextWindow: profile.maxInputTokens };
+  const options = { contextWindow: profile.maxInputTokens, reasoningHistoryField };
   const fallbackPromptTokens = countGatewayPromptTokens(request, profile.tokenAccounting, options);
   const textFloor =
     mediaCount === 0

@@ -1,5 +1,9 @@
 import type { MessageCatalog } from "./i18n-messages.en";
 export const DE_MESSAGES = {
+  "chat.pendingCancellation.unconfirmed":
+    "Der Abbruch konnte nicht bestätigt werden. Versuche erneut, die Antwort zu stoppen.",
+  "chat.pendingObservation.unknown":
+    "Der Status dieser Prüfung ist unbekannt. Lade die Seite neu, um ihn erneut zu prüfen.",
   "grounded.uncertainty.memoryKind": "Gedächtniskontext",
   "grounded.files.capabilityUnattached":
     "Dieses Modell liefert selbst keine verlässlichen Quellenangaben. Dieser Antwort wurden keine Quellenangaben angehängt.",
@@ -86,6 +90,15 @@ export const DE_MESSAGES = {
   "editor.empty.opening": "Wird geöffnet…",
   "supportReport.globalFailure": "Keiko hat einen Fehler festgestellt.",
   "supportReport.readinessUnavailable": "Fehlerberichte können derzeit unvollständig sein.",
+  "memory.readiness.withheld": "Memory nicht verfügbar",
+  "memory.readiness.migrationFailed":
+    "Memory ist bis zur Reparatur des lokalen Tresors nicht verfügbar. Chat bleibt verfügbar. Behebe die Ursache und starte Keiko neu.",
+  "memory.readiness.unreadable":
+    "Der gespeicherte Memory-Tresor konnte nicht geöffnet werden. Prüfe den verfügbaren Schlüssel und starte Keiko neu. Chat bleibt verfügbar.",
+  "credentialCustody.exposed":
+    "Der Schlüssel, der deine gespeicherten Zugangsdaten schützt, war für ein anderes Konto auf diesem Computer lesbar. Keiko hat ihn jetzt geschützt, die Zugangsdaten können aber gelesen worden sein. Ersetze sie: Erstelle ein neues Jira-Token und verbinde den Jira Pod neu, und ersetze den Gateway-Schlüssel unter Einstellungen > Modelle.",
+  "credentialCustody.unattested":
+    "Keiko konnte nicht prüfen, ob deine gespeicherten Zugangsdaten vor anderen Konten auf diesem Computer geschützt sind. Sie funktionieren weiter. Bitte deine Administration, Windows PowerShell für dein Konto zuzulassen, und starte Keiko danach neu.",
   "supportReport.create": "Fehlerbericht erstellen",
   "supportReport.creating": "Bericht wird erstellt…",
   "supportReport.download": "Bericht herunterladen",
@@ -214,6 +227,8 @@ export const DE_MESSAGES = {
   "rail.settings": "Einstellungen",
   "common.optional": "optional",
   "common.loading": "Lädt…",
+  "workspace.restore.failed":
+    "Dein Arbeitsbereich konnte nicht geöffnet werden. Prüfe, ob Keiko läuft, und versuche es erneut. Deine gespeicherten Fenster wurden nicht verändert.",
   "window.chunkStalled": "Dieses Fenster wurde nicht fertig geladen.",
   "common.cancel": "Abbrechen",
   "common.retry": "Erneut versuchen",
@@ -247,7 +262,7 @@ export const DE_MESSAGES = {
   "gatewaySetup.unusable.unverified":
     " Übernommen, aber als Embedding-Modell nicht verifiziert: {models}.",
   "gatewaySetup.unusable.unverifiedChat":
-    " Übernommen, aber als Chat-Modell nicht verifiziert: {models}.",
+    " Übernommen, aber als Chat-Modell nicht verifiziert: {models}. Wähle eines in Chat oder im Coding Workbench, um es zu prüfen, oder verifiziere es unter Einstellungen > Modelle.",
   // Der Undo-Stapel der Shell zeichnet ausschließlich Panel-Umschaltungen auf — kein Verschieben,
   // Skalieren, Maximieren oder Schließen von Fenstern erreicht ihn.
   "shell.command.undo.target": "Rückgängig: {target}",
@@ -515,16 +530,52 @@ export const DE_MESSAGES = {
   // ist kein defektes Gateway, und keiner der Texte macht die Größe der Anfrage verantwortlich.
   "chat.modelSelectionUnavailable":
     "Das ausgewählte Modell ist vorübergehend nicht verfügbar. Wähle ein anderes verfügbares Modell oder warte auf seine Wiederherstellung.",
+  "chat.error.modelNotReady.title": "Modellprüfung erforderlich",
+  "chat.error.modelNotReady.message":
+    "Die Bereitschaftsprüfung für das ausgewählte Modell fehlt, ist nicht mehr gültig oder ist fehlgeschlagen.",
+  "chat.error.modelNotReady.remediation":
+    "Öffne Einstellungen > Modelle, führe die Bereitschaftsprüfung für das ausgewählte Modell aus und sende deine Nachricht anschließend erneut.",
+  "chat.error.modelNotReady.action": "Modellprüfung öffnen",
   "chat.error.capabilityUnavailable.title": "Modellfunktion nicht verfügbar",
   "chat.error.capabilityUnavailable.message":
     "Das ausgewählte Modell kann die benötigten Chat-Funktionen derzeit nicht ausführen.",
   "chat.error.capabilityUnavailable.remediation":
-    "Wähle ein einsatzbereites Chat-Modell. Prüfe für den Jira-Zugriff Tool-Calling unter Einstellungen > Modelle oder trenne den Jira-Pod.",
+    "Wähle ein verfügbares Chat-Modell, das die benötigten Funktionen unterstützt.",
   "chat.error.scopeChanged.title": "Verbundene Quellen wurden geändert",
   "chat.error.scopeChanged.message":
     "Die verbundenen Quellen haben sich zwischenzeitlich geändert. Die Anfrage wurde nicht mit einer veralteten Quellenliste ausgeführt.",
   "chat.error.scopeChanged.remediation":
     "Prüfe die aktuellen Quellen des Chats und sende deine Anfrage anschließend erneut.",
+  "chat.error.jiraAuthentication.title": "Jira-Anmeldung fehlgeschlagen",
+  "chat.error.jiraAuthentication.message":
+    "Jira hat das Token dieser Verbindung abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden.",
+  "chat.error.jiraAuthentication.remediation":
+    "Öffne das Fenster Lokales Wissen, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+  "chat.error.knowledgePodUnavailable.title": "Knowledge Pod nicht verfügbar",
+  "chat.error.knowledgePodUnavailable.message":
+    "Der gewählte Knowledge Pod existiert nicht mehr oder wird gerade gelöscht. Wähle einen anderen Knowledge Pod.",
+  "chat.error.knowledgePodUnavailable.remediation":
+    "Die Liste wurde aktualisiert. Wähle daraus einen Knowledge Pod.",
+  "chat.error.knowledgeStoreUnavailable.title": "Knowledge Pods können nicht geprüft werden",
+  "chat.error.knowledgeStoreUnavailable.message":
+    "Der Knowledge-Pod-Speicher ist nicht verfügbar, die Auswahl konnte daher nicht geprüft werden. Versuche es gleich noch einmal.",
+  "chat.error.knowledgeStoreUnavailable.remediation":
+    "Falls das bestehen bleibt, starte Keiko neu.",
+  "chat.error.jiraPodUnavailable.title": "Jira Pod nicht mehr verfügbar",
+  "chat.error.jiraPodUnavailable.message":
+    "Der an diesen Chat gebundene Jira Pod ist nicht mehr verfügbar. Wähle erneut einen Jira Pod.",
+  "chat.error.jiraPodUnavailable.remediation":
+    "Öffne das Menü Konnektoren über der Unterhaltung, schalte einen Jira Pod ein und sende deine Nachricht erneut.",
+  "chat.error.jiraPodVerification.title": "Jira Pod muss geprüft werden",
+  "chat.error.jiraPodVerification.message":
+    "Der Jira Pod muss erneut geprüft werden, bevor dieser Chat ihn nutzen kann. Prüfe ihn im Fenster Lokales Wissen.",
+  "chat.error.jiraPodVerification.remediation":
+    "Öffne das Fenster Lokales Wissen, prüfe die Jira-Verbindung und sende deine Nachricht dann erneut.",
+  "chat.error.jiraPodConnectionChanged.title": "Jira-Verbindung geändert",
+  "chat.error.jiraPodConnectionChanged.message":
+    "Die Jira-Verbindung hat sich geändert, nachdem dieser Chat seinen Jira Pod gewählt hat. Wähle den Jira Pod erneut.",
+  "chat.error.jiraPodConnectionChanged.remediation":
+    "Öffne das Menü Konnektoren über der Unterhaltung, schalte den Jira Pod erneut ein und sende deine Nachricht dann erneut.",
   "chat.error.gatewayTimeout.title": "Das Modell-Gateway hat nicht rechtzeitig geantwortet",
   "chat.error.gatewayTimeout.message":
     "Das Modell-Gateway hat die Anfrage nicht innerhalb von Keikos Wartezeit abgeschlossen. Keiko wartet bei einem langsamen Gateway minutenlang; das bedeutet in der Regel, dass das Gateway oder das Modell hängt – nicht, dass die Anfrage zu groß war.",
@@ -552,6 +603,95 @@ export const DE_MESSAGES = {
     "Prüfe das Modell-Gateway, bevor du eine neue Anfrage sendest.",
   "chat.error.attachmentOversized.message":
     "Angehängte Inhalte sind zu groß. Kürze oder entferne sie.",
+  "chat.error.group.retry.title": "Bitte versuche es noch einmal",
+  "chat.error.group.retry.message":
+    "Das hat gerade nicht geklappt. Das ist meistens nur vorübergehend.",
+  "chat.error.group.retry.remediation":
+    "Sende deine Nachricht gleich noch einmal. Tritt es wiederholt auf, gib die Support-ID an die Person weiter, die Keiko betreibt.",
+  "chat.error.group.stopped.title": "Angehalten",
+  "chat.error.group.stopped.message": "Diese Antwort wurde angehalten.",
+  "chat.error.group.stopped.remediation":
+    "Sende deine Nachricht noch einmal, wenn du doch eine Antwort möchtest.",
+  "chat.error.group.inProgress.title": "Eine Antwort wird noch geschrieben",
+  "chat.error.group.inProgress.message": "Dieser Chat arbeitet noch an der vorherigen Nachricht.",
+  "chat.error.group.inProgress.remediation":
+    "Warte, bis die Antwort fertig ist, oder halte sie an, und sende deine Nachricht dann.",
+  "chat.error.group.modelDeclined.title": "Das Modell hat diese Anfrage abgelehnt",
+  "chat.error.group.modelDeclined.message":
+    "Das Modell hat sich entschieden, diese Anfrage nicht zu beantworten. Dieselbe Anfrage noch einmal zu senden führt zum selben Ergebnis.",
+  "chat.error.group.modelDeclined.remediation": "Formuliere die Anfrage um oder frage anders.",
+  "chat.error.group.gatewaySignIn.title": "Das Modell-Gateway hat die Anmeldung abgelehnt",
+  "chat.error.group.gatewaySignIn.message":
+    "Der Zugangsschlüssel, mit dem sich Keiko beim Modell-Gateway anmeldet, wurde nicht akzeptiert.",
+  "chat.error.group.gatewaySignIn.remediation":
+    "Das kann nur die Person beheben, die das Modell-Gateway betreibt: Die Anmeldung (API-Schlüssel) muss in den Einstellungen erneuert werden.",
+  "chat.error.group.proxyUnreachable.title": "Der Proxy ist nicht erreichbar",
+  "chat.error.group.proxyUnreachable.message":
+    "Keiko erreicht den Proxy nicht, der zum Modell-Gateway führt.",
+  "chat.error.group.proxyUnreachable.remediation":
+    "Bitte die Person, die das Netzwerk betreibt, die Proxy-Adresse zu prüfen und ob der Proxy läuft.",
+  "chat.error.group.proxySignIn.title": "Der Proxy verlangt eine Anmeldung",
+  "chat.error.group.proxySignIn.message":
+    "Der Proxy vor dem Modell-Gateway hat Keikos Anmeldung abgelehnt oder verlangt eine.",
+  "chat.error.group.proxySignIn.remediation":
+    "Bitte die Person, die das Netzwerk betreibt, um die Proxy-Zugangsdaten und trage sie in den Einstellungen ein.",
+  "chat.error.group.proxyFailed.title": "Die Verbindung über den Proxy ist gescheitert",
+  "chat.error.group.proxyFailed.message":
+    "Der Proxy konnte die Verbindung zum Modell-Gateway nicht aufbauen.",
+  "chat.error.group.proxyFailed.remediation":
+    "Versuche es noch einmal. Tritt es wiederholt auf, bitte die Person, die das Netzwerk betreibt, Proxy und Gateway-Adresse zu prüfen.",
+  "chat.error.group.proxyBlocked.title": "Der Proxy blockiert das Modell-Gateway",
+  "chat.error.group.proxyBlocked.message":
+    "Eine Regel des Proxys blockiert die Verbindung zum Modell-Gateway.",
+  "chat.error.group.proxyBlocked.remediation":
+    "Das Netzwerkteam muss diese Verbindung freigeben; Änderungen in Keiko helfen nicht.",
+  "chat.error.group.gatewayCertificate.title": "Dem Zertifikat des Gateways wird nicht vertraut",
+  "chat.error.group.gatewayCertificate.message":
+    "Die gesicherte Verbindung zum Modell-Gateway ist gescheitert, weil sein Zertifikat nicht akzeptiert wird.",
+  "chat.error.group.gatewayCertificate.remediation":
+    "Bitte die Person, die das Modell-Gateway betreibt, die passende Zertifizierungsstelle in den Gateway-Einstellungen zu hinterlegen.",
+  "chat.error.group.configChanged.title": "Die Modelleinstellungen haben sich geändert",
+  "chat.error.group.configChanged.message":
+    "Die Einstellungen des Modell-Gateways haben sich geändert, während deine Nachricht gesendet wurde.",
+  "chat.error.group.configChanged.remediation": "Sende deine Nachricht noch einmal.",
+  "chat.error.group.configInvalid.title": "Die Konfiguration des Modell-Gateways ist ungültig",
+  "chat.error.group.configInvalid.message":
+    "Keiko kann die eingestellten Gateway-Einstellungen nicht verwenden.",
+  "chat.error.group.configInvalid.remediation":
+    "Bitte die Person, die das Modell-Gateway betreibt, die Konfiguration unter Einstellungen > Modelle zu korrigieren.",
+  "chat.error.group.modelUnavailable.title": "Dieses Modell ist nicht verfügbar",
+  "chat.error.group.modelUnavailable.message":
+    "Das Modell-Gateway kennt das gewählte Modell nicht.",
+  "chat.error.group.modelUnavailable.remediation": "Wähle im Modellwähler ein anderes Modell.",
+  "chat.error.group.noModel.title": "Es ist kein Modell eingerichtet",
+  "chat.error.group.noModel.message": "Keiko hat kein Modell, mit dem es antworten kann.",
+  "chat.error.group.noModel.remediation": "Richte unter Einstellungen > Modelle eines ein.",
+  "chat.error.group.tooLarge.title": "Die Anfrage ist zu groß",
+  "chat.error.group.tooLarge.remediation":
+    "Verkleinere den gewählten Bereich oder entferne große Anhänge und sende sie dann erneut.",
+  "chat.error.group.unsupported.title": "Das lässt sich hier nicht verwenden",
+  "chat.error.group.unsupported.remediation":
+    "Entferne den Anhang oder wähle ein anderes Modell oder eine andere Option.",
+  "chat.error.group.invalidPath.title": "Der Ordner oder die Datei lässt sich nicht verwenden",
+  "chat.error.group.invalidPath.remediation":
+    "Wähle in Dateien einen anderen Ordner oder eine andere Datei.",
+  "chat.error.group.reload.title": "Etwas hat sich geändert – lade neu",
+  "chat.error.group.reload.message":
+    "Der Chat, das Projekt oder eine Auswahl hat sich geändert, während du gearbeitet hast.",
+  "chat.error.group.reload.remediation":
+    "Lade die Chat-Ansicht neu und sende deine Nachricht dann erneut.",
+  "chat.error.group.chatClosed.title": "Dieser Chat liegt im Papierkorb",
+  "chat.error.group.chatClosed.message":
+    "In einen Chat im Papierkorb lassen sich keine Nachrichten senden.",
+  "chat.error.group.chatClosed.remediation": "Stelle den Chat wieder her oder öffne einen anderen.",
+  "chat.error.group.regenerateRefused.title": "Diese Antwort lässt sich nicht neu erzeugen",
+  "chat.error.group.regenerateRefused.message":
+    "Neu erzeugen ist nicht möglich, solange ein Ordner, ein Knowledge Pod, Jira oder Git-Änderungen verbunden sind.",
+  "chat.error.group.regenerateRefused.remediation":
+    "Sende die Frage noch einmal als neue Nachricht.",
+  "chat.error.group.other.title": "Das hat nicht geklappt",
+  "chat.error.group.other.remediation":
+    "Versuche es noch einmal. Tritt es wiederholt auf, gib die Support-ID an die Person weiter, die Keiko betreibt.",
 
   // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
   // workspace shell does not preload editor-only translations. Issue #2120 added the localized
@@ -585,7 +725,7 @@ export const DE_MESSAGES = {
   "chat.model.title": "Modell",
 
   "chat.model.noneConfiguredTitle":
-    "Kein dialogfähiges Modell ist konfiguriert - verbinde ein Gateway in den Einstellungen",
+    "Derzeit ist kein dialogfähiges Modell verfügbar - prüfe den Gateway- und Modellstatus in den Einstellungen",
 
   "chat.voice": "Spracheingabe",
   "chat.voice.interrupt": "Assistenz unterbrechen",
@@ -632,7 +772,7 @@ export const DE_MESSAGES = {
   "memoria.settings.useInChatLabel": "MemoriaViva in Chat-Anfragen verwenden",
 
   "memoria.settings.mode.hydrateError":
-    "Der Erinnerungsautonomiemodus konnte nicht geladen werden. Um Freigabe bitten bleibt aktiv.",
+    "Der Erinnerungsautonomiemodus konnte nicht geladen werden. Wartende Erinnerungen bleiben Vorschläge.",
   "memoria.settings.mode.persistError":
     "Der Erinnerungsautonomiemodus konnte nicht gespeichert werden. Der vorherige Modus bleibt aktiv.",
 
@@ -878,59 +1018,6 @@ export const DE_MESSAGES = {
   // records the required German-copy review.
   // Neue i18n-Schlüssel für das Quality-Widgets-Retrofit: AgentRunWidget, FilePreview,
   // FilesWidget, PdfCitationPreviewWindow, ReviewWidget, FigmaSnapshotWindow.
-  "filePreview.showSource": "Quellenvorschau anzeigen",
-  "filePreview.linesAdded": "{count} Zeilen hinzugefügt.",
-  "filePreview.revealedLine": "Quellenzeile {line}.",
-  "filePreview.revealedPartialRange":
-    "Quellenzeilen {start}–{end} angezeigt. Weitere referenzierte Zeilen liegen außerhalb dieses Ausschnitts.",
-  "filePreview.revealedRange": "Quellenzeilen {start}–{end}.",
-  "filePreview.revealOutsideContent":
-    "Die referenzierte Zeile {line} liegt außerhalb dieser Datei ({count} Zeilen).",
-  "filePreview.deniedMessage":
-    "Diese Datei ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen (entspricht einem Sperrmuster wie .env, *.pem, node_modules, .git, …).",
-  "filePreview.searchableDocument":
-    "{format}-Dateien bis 2 MB sind in der Repository-Suche über eine begrenzte Textextraktion durchsuchbar, wenn sie explizit mit einem Chat verbunden sind. Verschlüsselte, gescannte oder größere Dokumente werden nicht extrahiert – nutzen Sie dafür Local Knowledge. Für dieses Format ist hier keine Inline-Vorschau verfügbar.",
-  "filePreview.error.loadFailed": "Die Datei konnte nicht geladen werden. Versuchen Sie es erneut.",
-  "filePreview.error.unreadable": "Diese Datei kann nicht gelesen werden.",
-  "filePreview.binary.tooLarge": "Vorschau deaktiviert, da diese Datei {maxBytes} überschreitet.",
-  "filePreview.binary.unsupported":
-    "Für diesen Dateityp ist keine sichere Text- oder Bildvorschau verfügbar.",
-  "filePreview.metadata.type": "Typ",
-  "filePreview.metadata.size": "Größe",
-  "filePreview.metadata.modified": "Geändert",
-  "filePreview.metadata.extension": "Erweiterung",
-  "filePreview.metadata.extensionNone": "keine",
-  "filePreview.backToFiles": "Zurück zu den Dateien",
-  "filePreview.copyFileName": "Dateiname kopieren",
-  "filePreview.copyFilePath": "Dateipfad kopieren",
-  "filePreview.copyStatus.nameCopied": "Dateiname kopiert",
-  "filePreview.copyStatus.pathCopied": "Dateipfad kopiert",
-  "filePreview.copyStatus.clipboardFailed": "Zugriff auf die Zwischenablage fehlgeschlagen.",
-  "filePreview.refresh": "Vorschau aktualisieren",
-  "filePreview.refreshing": "Vorschau wird aktualisiert",
-  "filePreview.refreshStatus.refreshing": "Wird aktualisiert …",
-  "filePreview.refreshStatus.reloaded": "Neu geladen",
-  "filePreview.refreshStatus.failed": "Aktualisierung fehlgeschlagen",
-  "filePreview.openInEditor": "Im Editor öffnen",
-  "filePreview.closePreview": "Vorschau schließen",
-  "filePreview.loadingState": "Vorschau wird geladen…",
-  "filePreview.retry": "Erneut versuchen",
-  "filePreview.truncatedBanner":
-    "Vorschau bei {maxBytes} abgeschnitten. Größere Dateien können hier nicht vollständig angezeigt werden.",
-  "filePreview.syntaxHighlightDisabled": "Syntaxhervorhebung für große Vorschauen deaktiviert.",
-  "filePreview.previewRegionLabel": "Dateivorschau: {name}",
-  "filePreview.showMoreLines": "{count} weitere Zeilen anzeigen",
-  "filePreview.showPreviousLines": "{count} vorherige Zeilen anzeigen",
-  "filePreview.readOnlyBanner":
-    "Schreibgeschützte Quellenvorschau. Diese Datei kann hier nicht bearbeitet werden.",
-  "filePreview.hiddenFile": "Verborgene Datei",
-  "filePreview.previewUnavailable": "Vorschau nicht verfügbar",
-  "filePreview.headerLoading": "Vorschau wird geladen",
-  "filePreview.lang.denied": "verweigert",
-  "filePreview.lang.error": "fehler",
-  "filePreview.lang.loading": "lädt",
-  "filePreview.lang.text": "text",
-  "filePreview.lang.binary": "binär",
 
   // Abgeschlossene Fetch-/Pull- und Push-Ergebnisse. Satzfragmente: Sie werden als {status} in
   // "gitClientWindow.sync.operationStatus" eingesetzt. Ein fehlgeschlagenes Ergebnis wird zusätzlich
@@ -951,22 +1038,6 @@ export const DE_MESSAGES = {
   "manualPod.progress.index": "{processed} von {total} Seiten indexiert",
   "manualPod.progress.gaps": "{failed} Seiten fehlgeschlagen, {skipped} Seiten übersprungen",
   "manualPod.progress.gapsTitle": "Was ausgelassen wurde",
-  "manualPodCreate.button": "HTML-Handbuch hinzufügen",
-  "manualPodCreate.form.title": "HTML-Handbuch hinzufügen",
-  "manualPodCreate.form.nameLabel": "Anzeigename",
-  "manualPodCreate.form.namePlaceholder": "Hersteller-Produkthandbuch",
-  "manualPodCreate.form.originLabel": "Ursprung der Handbuch-Website",
-  "manualPodCreate.form.originPlaceholder": "https://docs.example.com",
-  "manualPodCreate.form.prefixLabel": "Pfad-Präfix (optional)",
-  "manualPodCreate.form.prefixPlaceholder": "/guide",
-  "manualPodCreate.form.submit": "Handbuch-Pod erstellen",
-  "manualPodCreate.form.cancel": "Abbrechen",
-  "manualPodCreate.form.validation": "Anzeigename und einen http(s)-Website-Ursprung eingeben.",
-  "manualPodCreate.progress.running": "Handbuch-Pod wird erstellt…",
-  "manualPodCreate.state.succeeded": "Handbuch-Pod erstellt",
-  "manualPodCreate.state.partial": "Handbuch-Pod mit Lücken erstellt; einige Seiten fehlen",
-  "manualPodCreate.state.failed":
-    "Erstellung fehlgeschlagen; es wurde kein Handbuch-Pod hinzugefügt",
   "manualPodRefresh.button": "Handbuch aktualisieren",
   "manualPodRefresh.confirm.body": "Dieses HTML-Handbuch neu crawlen und neu indexieren?",
   "manualPodRefresh.confirm.cancel": "Abbrechen",

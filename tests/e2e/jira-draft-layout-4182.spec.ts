@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { nativeProgressFillRatio } from "./support/jira-progress-geometry.js";
 
 // The proposed Jira draft is what the human approves, so every value of it must stay inspectable in
 // a narrow panel (320 px is 400% zoom of a 1280 px window) and every control must be targetable.
@@ -8,6 +9,39 @@ const HARNESS = `http://127.0.0.1:${process.env.KEIKO_E2E_DRAFT_PORT ?? "32384"}
 // The design system's component minimum: design-system/accessibility.html and
 // docs/design-system/visual-qa-matrix.md.
 const MIN_TARGET_PX = 24;
+
+for (const resumed of [false, true]) {
+  test(`a ${resumed ? "resumed" : "fresh"} batch paints its complete count in the first completed frame`, async ({
+    page,
+  }) => {
+    await page.goto(`${HARNESS}?shape=batch${resumed ? "&resumed" : ""}`);
+    const bar = page.getByRole("progressbar");
+    await expect(bar).toHaveAttribute("value", "185");
+    expect(await nativeProgressFillRatio(page)).toBeCloseTo(0.5, 2);
+    await page.getByRole("button", { name: "Complete the batch", exact: true }).click();
+    expect(await bar.evaluate((element: HTMLProgressElement) => element.position)).toBe(1);
+    expect(await nativeProgressFillRatio(page)).toBe(1);
+  });
+}
+
+test("the fill oracle detects a CSS delay even when the native count is complete", async ({
+  page,
+}) => {
+  await page.goto(`${HARNESS}?shape=batch&resumed`);
+  await expect(page.getByRole("progressbar")).toHaveAttribute("value", "185");
+  expect(await nativeProgressFillRatio(page)).toBeCloseTo(0.5, 2);
+  // Reproduce the old discrepancy with a long transition so this negative control cannot race it.
+  await page.addStyleTag({
+    content: "progress::-webkit-progress-value { transition: inline-size 60s linear !important; }",
+  });
+  await page.getByRole("button", { name: "Complete the batch", exact: true }).click();
+  expect(
+    await page
+      .getByRole("progressbar")
+      .evaluate((element: HTMLProgressElement) => element.position),
+  ).toBe(1);
+  expect(await nativeProgressFillRatio(page)).toBeLessThan(1);
+});
 
 type Locale = "en" | "de";
 type Shape = "shallow" | "nested" | "flattened" | "long";

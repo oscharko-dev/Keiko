@@ -17,6 +17,12 @@ import {
   notifyPortableLaunchFailure,
   type PortableFailureNotifierFn,
 } from "./portable-launch-notifier.js";
+import { writeLaunchFailureNote, type LaunchFailureReason } from "./launch-failure-note.js";
+import {
+  emitPortableLaunchFailed,
+  LaunchFailureRecorder,
+  PortableLaunchRefusal,
+} from "./portable-launch-failure.js";
 import {
   attestedPortableInstallRecord,
   attestedExistingPortableInstall,
@@ -25,6 +31,7 @@ import {
   portableSourceCanReplaceManaged,
   recoverableFailedManagedRoot,
   recoverableFailedWindowsManagedRoot,
+  PortableSetupBusyError,
   sameRealPath,
   setupPortable,
   spawnManagedLauncher,
@@ -58,7 +65,12 @@ type LifecycleFn = (
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
-  deps: { readonly cwd: string; readonly securityLogSink?: SecurityLogSink | undefined },
+  deps: {
+    readonly cwd: string;
+    readonly securityLogSink?: SecurityLogSink | undefined;
+    /** Receives the closed reason a start ends non-zero with (#4358). */
+    readonly recordFailure?: ((reason: LaunchFailureReason) => void) | undefined;
+  },
 ) => Promise<number>;
 
 type PortableNormalStartupRecoveryFn = (input: {
@@ -99,6 +111,8 @@ interface PortableCliOptions {
   readonly noRelaunch: boolean;
   readonly home: string;
   readonly securityLogSink?: SecurityLogSink | undefined;
+  /** Collects the closed reason a start ends non-zero with (#4358). */
+  readonly launchFailure?: LaunchFailureRecorder | undefined;
 }
 
 export interface PortableSetupDeps {
@@ -272,6 +286,7 @@ interface LaunchManagedOptions {
   readonly env: EnvSource;
   readonly stateDir: string;
   readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly launchFailure?: LaunchFailureRecorder | undefined;
   readonly recovered?: {
     readonly descriptor: PortableRecoveredLaunchDescriptor;
     readonly encoded: string;
@@ -292,6 +307,7 @@ function managedLaunchOptions(
     env,
     stateDir: options.stateDir,
     securityLogSink: options.securityLogSink,
+    launchFailure: options.launchFailure,
     ...(recovered === undefined ? {} : { recovered }),
   };
 }
@@ -300,11 +316,12 @@ async function launchManaged(
   options: LaunchManagedOptions,
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
 ): Promise<number> {
-  const { target, layout, io, env, stateDir, securityLogSink, recovered } = options;
+  const { target, layout, io, env, stateDir, securityLogSink, recovered, launchFailure } = options;
   if (target === "macos-arm64" || target === "macos-x64") {
     const activation = await deps.activateMacosRuntimeFn(layout, target);
     if (activation === "unavailable") {
       io.err("keiko portable launch: macOS runtime activation is incomplete\n");
+      recordLaunchFailure(launchFailure, "macos-activation");
       return 1;
     }
     if (activation === "waived-unsigned") {
@@ -326,8 +343,25 @@ async function launchManaged(
   return deps.lifecycleFn("start", args, io, launchEnv, {
     cwd: layout.appRoot,
     securityLogSink,
+    recordFailure: failureRecorderFor(launchFailure),
     ...(nativeUiRuntime === undefined ? {} : { nativeUiRuntime }),
   });
+}
+
+function recordLaunchFailure(
+  recorder: LaunchFailureRecorder | undefined,
+  reason: LaunchFailureReason,
+): void {
+  recorder?.record(reason);
+}
+
+function failureRecorderFor(
+  recorder: LaunchFailureRecorder | undefined,
+): ((reason: LaunchFailureReason) => void) | undefined {
+  if (recorder === undefined) return undefined;
+  return (reason): void => {
+    recorder.record(reason);
+  };
 }
 
 async function stopManaged(
@@ -340,19 +374,6 @@ async function stopManaged(
   return lifecycleFn("stop", ["--state-dir", stateDir], io, env, {
     cwd: layout.appRoot,
   });
-}
-
-async function relaunchPreviousManaged(
-  target: PortableTarget,
-  layout: PortableLayout,
-  io: CliIo,
-  env: EnvSource,
-  stateDir: string,
-  deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
-  securityLogSink?: SecurityLogSink,
-): Promise<number> {
-  await launchManaged({ target, layout, io, env, stateDir, securityLogSink }, deps);
-  return 1;
 }
 
 async function upgradeManagedFromClickedPackage(
@@ -374,6 +395,7 @@ async function upgradeManagedFromClickedPackage(
     io.err(
       `keiko portable launch: ${error instanceof Error ? error.message : "portable upgrade failed"}\n`,
     );
+    options.launchFailure?.record(failureReasonOf(error, "upgrade-failed"));
     return 1;
   }
 }
@@ -388,7 +410,10 @@ async function upgradeManagedWhileLocked(
   upgrade: PortableManagedUpgradeFn,
 ): Promise<number> {
   const stopped = await stopManaged(current.layout, io, env, options.stateDir, deps.lifecycleFn);
-  if (stopped !== 0) return stopped;
+  if (stopped !== 0) {
+    options.launchFailure?.record("stop-failed");
+    return stopped;
+  }
   try {
     const upgraded = upgrade({
       target: options.target,
@@ -408,14 +433,24 @@ async function upgradeManagedWhileLocked(
     io.err(
       `keiko portable launch: ${error instanceof Error ? error.message : "portable upgrade failed"}\n`,
     );
-    return relaunchPreviousManaged(
-      current.manifest.platformTarget,
-      current.layout,
-      io,
-      env,
-      options.stateDir,
+    // The upgrade failed and the previous version is started again: when that start succeeds Keiko
+    // runs and the command ends with 0, not with the failure of the upgrade (#4358). The failed
+    // upgrade still leaves its line now, whatever the exit code, because stderr is all a double-click
+    // would otherwise keep of it. The recorder gets no `upgrade-failed` here on purpose: if the
+    // relaunch then fails too, the reason the person must act on is the relaunch's (Keiko does not
+    // run at all), and the first reason recorded is the one the box and the final line carry.
+    emitPortableLaunchFailed(options.securityLogSink, "upgrade-failed", "not-requested");
+    return launchManaged(
+      {
+        target: current.manifest.platformTarget,
+        layout: current.layout,
+        io,
+        env,
+        stateDir: options.stateDir,
+        securityLogSink: options.securityLogSink,
+        launchFailure: options.launchFailure,
+      },
       deps,
-      options.securityLogSink,
     );
   }
 }
@@ -429,7 +464,12 @@ function attestedKnownManagedInstall(
     securityLogSink: options.securityLogSink,
   });
   if (registrationExists) {
-    if (record === undefined) throw new Error("portable install registration is invalid");
+    if (record === undefined) {
+      throw new PortableLaunchRefusal(
+        "portable install registration is invalid",
+        "registration-invalid",
+      );
+    }
     if (record.registration.status !== "managed") return undefined;
   }
   return (
@@ -448,7 +488,10 @@ async function setupAndLaunchManaged(
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "now" | "lifecycleFn">,
 ): Promise<number> {
   const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
-  if (setup.code !== 0 || setup.layout === undefined) return setup.code;
+  if (setup.code !== 0 || setup.layout === undefined) {
+    options.launchFailure?.record("setup-failed");
+    return setup.code;
+  }
   return await launchManaged(managedLaunchOptions(options, setup.layout, io, env), deps);
 }
 
@@ -459,7 +502,11 @@ function setupDownloadedPortable(
   deps: Pick<PortableRuntimeDeps, "now" | "spawnFn">,
 ): number {
   const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
-  if (setup.code !== 0 || setup.layout === undefined || options.noRelaunch) return setup.code;
+  if (setup.code !== 0 || setup.layout === undefined) {
+    options.launchFailure?.record("setup-failed");
+    return setup.code;
+  }
+  if (options.noRelaunch) return setup.code;
   spawnManagedLauncher(setup.layout, deps.spawnFn);
   return 0;
 }
@@ -476,6 +523,7 @@ async function launchPortable(
     | "lifecycleFn"
     | "recoverNormalStartupFn"
     | "encodeRecoveredLaunchFn"
+    | "platform"
   >,
 ): Promise<number> {
   try {
@@ -509,8 +557,17 @@ async function launchPortable(
     );
   } catch (error) {
     io.err(`keiko portable launch: ${error instanceof Error ? error.message : "unavailable"}\n`);
+    options.launchFailure?.record(failureReasonOf(error, "launch-error"));
     return 1;
   }
+}
+
+// The closed reason of an error that ended the launch: a refusal carries its own, a busy setup lock
+// is a conflict with another setup, anything else is the caller's fallback.
+function failureReasonOf(error: unknown, fallback: LaunchFailureReason): LaunchFailureReason {
+  if (error instanceof PortableLaunchRefusal) return error.reason;
+  if (error instanceof PortableSetupBusyError) return "setup-busy";
+  return fallback;
 }
 
 async function recoverBeforePortableLaunch(
@@ -527,7 +584,10 @@ async function recoverBeforePortableLaunch(
   );
   const { recovery } = attestedRecovery;
   if (recovery.status === "recovery-required") {
-    throw new Error("portable update recovery is required before launch");
+    throw new PortableLaunchRefusal(
+      "portable update recovery is required before launch",
+      "recovery-required",
+    );
   }
   if (recovery.status === "normal") {
     if (attestedRecovery.managed === undefined) return undefined;
@@ -537,7 +597,10 @@ async function recoverBeforePortableLaunch(
     );
   }
   if (attestedRecovery.managed === undefined) {
-    throw new Error("recovered portable install could not be attested");
+    throw new PortableLaunchRefusal(
+      "recovered portable install could not be attested",
+      "recovery-required",
+    );
   }
   return launchManaged(
     managedLaunchOptions(options, attestedRecovery.managed.layout, io, env, {
@@ -693,21 +756,47 @@ function emitPortableManagedRoot(
   io.out(`${managedRoot}\n`);
 }
 
+// The note for the native launcher's box. A note that cannot be written leaves the launcher's
+// generic text, and the command says so on its own stream.
+function reportLaunchNoteFailure(io: CliIo): void {
+  io.err("keiko portable launch: the failure note for the launcher could not be written\n");
+}
+
+function leaveLaunchFailureNote(
+  env: EnvSource,
+  reason: LaunchFailureReason,
+  io: CliIo,
+): "written" | "not-requested" | "failed" {
+  try {
+    return writeLaunchFailureNote(env, reason);
+  } catch {
+    reportLaunchNoteFailure(io);
+    return "failed";
+  }
+}
+
 function notifyPortableFailureIfNeeded(
   code: number,
   message: string,
   env: EnvSource,
   io: CliIo,
   deps: PortableSetupDeps,
-  securityLogSink: SecurityLogSink | undefined,
+  options: PortableCliOptions,
 ): void {
   if (code === 0) return;
+  // One closed line for every non-zero exit, and the reason for the Windows launcher's own box. The
+  // line goes through the invocation's sink and is flushed by the command's runner before the
+  // process can end; the Windows launcher shows the box, so no notifier process is started there.
+  const reason =
+    options.launchFailure?.reason ??
+    (options.command === "setup" ? "setup-failed" : "launch-error");
+  const note = leaveLaunchFailureNote(env, reason, io);
+  emitPortableLaunchFailed(options.securityLogSink, reason, note);
   const notify =
     deps.notifyFailureFn ??
     ((failureMessage: string, notifyEnv: EnvSource): void => {
       notifyPortableLaunchFailure(failureMessage, notifyEnv, {
         reportAlertFailure: io.err,
-        securityLogSink,
       });
     });
   notify(message, env);
@@ -745,6 +834,7 @@ export async function runPortableCli(
   const commandOptions: PortableCliOptions = {
     ...options,
     securityLogSink: createCliSecurityLogSink(options.stateDir, deps.securityLogSinkFactory),
+    launchFailure: new LaunchFailureRecorder(),
   };
   if (commandOptions.command === "resolve-root") {
     return resolvePortableManagedRoot(commandOptions, io, env);
@@ -763,6 +853,6 @@ export async function runPortableCli(
     commandOptions.command === "setup"
       ? setupPortable({ ...commandOptions, env }, trackedIo, r.now()).code
       : await launchPortable(commandOptions, trackedIo, env, r);
-  notifyPortableFailureIfNeeded(code, lastError, env, io, deps, commandOptions.securityLogSink);
+  notifyPortableFailureIfNeeded(code, lastError, env, io, deps, commandOptions);
   return code;
 }

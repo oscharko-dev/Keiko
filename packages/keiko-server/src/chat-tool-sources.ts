@@ -1,3 +1,8 @@
+import { resolveCurrentKnowledgeChatAuthority } from "./knowledge-chat-authority.js";
+import {
+  createKnowledgeChatAdmission,
+  knowledgeChatConsumerPort,
+} from "./knowledge-chat-consumer.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { createKeikoToolCatalog, compileToolProjection } from "@oscharko-dev/keiko-tool-catalog";
 import {
@@ -13,6 +18,7 @@ import type {
   ChatToolWriteApprovalView,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
+import type { JiraChatTurnReviewPorts } from "./atlassian/jiraChatToolTurn.js";
 import type {
   CatalogConsumer,
   CatalogConsumerPort,
@@ -38,9 +44,23 @@ import {
   type McpChatCatalogContext,
 } from "./mcp/mcpChatCatalogConsumer.js";
 import { resolveCurrentMcpChatAuthority } from "./mcp/mcpChatAuthority.js";
+import { chatApprovalContinuationIsLive } from "./chat-approval-continuation-state.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { McpChatCatalog } from "./mcp/mcpChatCatalogRuntime.js";
 
 export interface ChatSourcesContext extends ToolConsumerContext {
+  readonly primaryKind?: "jira" | "knowledge";
+  readonly meterModel?: (model: ModelPort) => ModelPort;
+  readonly knowledgeReviewModelId?: () => string | undefined;
+  readonly confirmModelOperation?: (response: NormalizedResponse) => void;
+  readonly retainDraftProgress?: JiraChatCatalogContext["retainDraftProgress"];
+  readonly selectJiraOperations?: JiraChatCatalogContext["selectJiraOperations"];
+  readonly selectedJiraOperations?: JiraChatCatalogContext["selectedJiraOperations"];
+  readonly jiraDiscoveryResultFits?: JiraChatCatalogContext["jiraDiscoveryResultFits"];
+  readonly reportBatchProgress?: JiraChatCatalogContext["reportBatchProgress"];
+  readonly remainingModelCalls?: JiraChatCatalogContext["remainingModelCalls"];
+  readonly citationSources?: JiraChatCatalogContext["citationSources"];
   readonly jira: JiraChatCatalogContext;
   readonly mcp: McpChatCatalogContext;
 }
@@ -49,7 +69,11 @@ export interface ChatSourcesConsumer extends CatalogConsumer {
   readonly context: ChatSourcesContext;
   readonly action: SourceAction;
   readonly guard: ToolEffectGuard & {
-    readonly write?: { readonly action: SourceAction; readonly beforeMutation: () => boolean };
+    readonly write?: {
+      readonly action: SourceAction;
+      readonly beforeMutation: (itemRef?: string) => boolean;
+      readonly source?: import("./atlassian/jiraChatRequirementBinding.js").PreparedJiraSource;
+    };
   };
 }
 type SourcePorts = Pick<
@@ -58,36 +82,75 @@ type SourcePorts = Pick<
 >;
 const DENIED = { ok: false, reason: "authority-invalid" } as const;
 
-function captureSourceAction(value: CatalogJsonValue): SourceAction | undefined {
-  return (
-    jiraChatCatalogConsumerPort.captureApprovedAction(value) ??
-    mcpChatCatalogConsumerPort.captureApprovedAction(value)
-  );
+export function createChatSourcesConsumerPort(
+  jiraConsumer: CatalogConsumerPort<JiraChatCatalogConsumer> = jiraChatCatalogConsumerPort,
+): CatalogConsumerPort<ChatSourcesConsumer> {
+  const captureSourceAction = (value: CatalogJsonValue): SourceAction | undefined =>
+    jiraConsumer.captureApprovedAction(value) ??
+    mcpChatCatalogConsumerPort.captureApprovedAction(value);
+  return {
+    scope: (context) => ({
+      kind: "chat-tools",
+      jira: (context.primaryKind === "knowledge"
+        ? knowledgeChatConsumerPort
+        : jiraChatCatalogConsumerPort
+      ).scope(context.jira),
+      mcp: mcpChatCatalogConsumerPort.scope(context.mcp),
+    }),
+    staleReason: "consumer-stale",
+    requiredEffects: () => ["connector-access"],
+    captureAction: (handler, value): SourceAction | undefined => {
+      const action = captureSourceAction(value);
+      if (action === undefined) return undefined;
+      const name = "tool" in action ? action.tool : action.name;
+      return handler.binding?.catalogAction === name ? action : undefined;
+    },
+    captureApprovedAction: captureSourceAction,
+  };
 }
-export const chatSourcesConsumerPort: CatalogConsumerPort<ChatSourcesConsumer> = {
-  scope: (context) => ({
-    kind: "chat-tools",
-    jira: jiraChatCatalogConsumerPort.scope(context.jira),
-    mcp: mcpChatCatalogConsumerPort.scope(context.mcp),
-  }),
-  staleReason: "consumer-stale",
-  requiredEffects: () => ["connector-access"],
-  captureAction: (handler, value) => {
-    const action = captureSourceAction(value);
-    if (action === undefined) return undefined;
-    const name = "tool" in action ? action.tool : action.name;
-    return handler.binding?.catalogAction === name ? action : undefined;
-  },
-  captureApprovedAction: captureSourceAction,
-};
+export const chatSourcesConsumerPort = createChatSourcesConsumerPort();
+
+const OPTIONAL_INVOCATION_KEYS = [
+  "meterModel",
+  "retainDraftProgress",
+  "selectJiraOperations",
+  "selectedJiraOperations",
+  "jiraDiscoveryResultFits",
+  "reportBatchProgress",
+  "remainingModelCalls",
+  "knowledgeReviewModelId",
+  "confirmModelOperation",
+  "citationSources",
+] as const;
+type OptionalInvocationKey = (typeof OPTIONAL_INVOCATION_KEYS)[number];
 
 function invocationFields(
   context: CatalogHandlerContext<ChatSourcesConsumer>,
 ): Pick<
   CatalogHandlerContext<ChatSourcesConsumer>,
-  "invocationId" | "signal" | "beforeEffect" | "pageSequence" | "createCursor"
+  | "invocationId"
+  | "signal"
+  | "beforeEffect"
+  | "pageSequence"
+  | "createCursor"
+  | "meterModel"
+  | "knowledgeReviewModelId"
+  | "confirmModelOperation"
+  | "retainDraftProgress"
+  | "selectJiraOperations"
+  | "selectedJiraOperations"
+  | "jiraDiscoveryResultFits"
+  | "reportBatchProgress"
+  | "remainingModelCalls"
+  | "citationSources"
 > {
+  const optional: Partial<Pick<CatalogHandlerContext<ChatSourcesConsumer>, OptionalInvocationKey>> =
+    {};
+  for (const key of OPTIONAL_INVOCATION_KEYS) {
+    if (context[key] !== undefined) Object.assign(optional, { [key]: context[key] });
+  }
   return {
+    ...optional,
     invocationId: context.invocationId,
     signal: context.signal,
     beforeEffect: context.beforeEffect,
@@ -101,7 +164,11 @@ function jiraGuard(guard: ChatSourcesConsumer["guard"]): JiraChatCatalogConsumer
   requireDispatch("tool" in write.action, "denied", "authority-invalid");
   return {
     check: guard.check,
-    write: { action: write.action, beforeMutation: write.beforeMutation },
+    write: {
+      action: write.action,
+      beforeMutation: write.beforeMutation,
+      ...(write.source === undefined ? {} : { source: write.source }),
+    },
   };
 }
 function mcpGuard(guard: ChatSourcesConsumer["guard"]): McpChatCatalogConsumer["guard"] {
@@ -181,7 +248,9 @@ export function currentChatSources(deps: UiHandlerDeps, context: ChatSourcesCont
   const now = new Date().toISOString();
   return (
     !context.signal.aborted &&
-    resolveCurrentJiraChatAuthority(
+    (context.primaryKind === "knowledge"
+      ? resolveCurrentKnowledgeChatAuthority
+      : resolveCurrentJiraChatAuthority)(
       deps,
       context.jira.chatId,
       context.jira.authorityReference,
@@ -194,7 +263,9 @@ export function currentChatSources(deps: UiHandlerDeps, context: ChatSourcesCont
       context.mcp.authorityReference,
       now,
       context.correlationId,
-    ).ok
+    ).ok &&
+    (context.jira.userMessageId === undefined ||
+      chatApprovalContinuationIsLive(deps.store, context.jira.userMessageId))
   );
 }
 interface AdmissionOptions {
@@ -208,6 +279,8 @@ interface AdmissionOptions {
   ) => Promise<void>;
   readonly reviewableWrite: (action: SourceAction) => boolean;
   readonly draftItemRefs?: (action: SourceAction) => readonly string[] | undefined;
+  /** Jira's review preparation stays with its source; external MCP approvals keep their own ports. */
+  readonly jiraReview?: JiraChatTurnReviewPorts;
 }
 function jointGuard(
   guard: ChatSourcesConsumer["guard"],
@@ -221,7 +294,8 @@ function jointGuard(
         check,
         write: {
           action: write.action,
-          beforeMutation: () => check() && write.beforeMutation() && check(),
+          ...(write.source === undefined ? {} : { source: write.source }),
+          beforeMutation: (itemRef) => check() && write.beforeMutation(itemRef) && check(),
         },
       };
 }
@@ -230,11 +304,18 @@ function sourceAdmissions(options: AdmissionOptions): {
   readonly jira: ReturnType<typeof createJiraChatCatalogAdmission>;
   readonly mcp: ReturnType<typeof createMcpChatCatalogAdmission>;
 } {
-  const jira = createJiraChatCatalogAdmission({
+  const primary = {
     ...options,
     now: Date.now,
-    context: () => ({ ...options.context().jira, signal: options.context().signal }),
-  });
+    context: (): JiraChatCatalogContext => ({
+      ...options.context().jira,
+      signal: options.context().signal,
+    }),
+  };
+  const jira =
+    options.context().primaryKind === "knowledge"
+      ? createKnowledgeChatAdmission(primary)
+      : createJiraChatCatalogAdmission({ ...primary, ...options.jiraReview });
   const mcp = createMcpChatCatalogAdmission({
     ...options,
     now: Date.now,
@@ -282,6 +363,11 @@ export function createChatSourcesAdmission(options: AdmissionOptions): SourcePor
         return "tool" in action
           ? jira.approvalPort.request(action, { ...context.jira, signal: context.signal })
           : mcp.approvalPort.request(action, { ...context.mcp, signal: context.signal });
+      },
+      preflight: async (action, context) => {
+        if ("tool" in action)
+          await jira.approvalPort.preflight?.(action, { ...context.jira, signal: context.signal });
+        else await mcp.approvalPort.preflight?.(action, { ...context.mcp, signal: context.signal });
       },
     },
   };

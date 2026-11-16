@@ -3,6 +3,8 @@ import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts";
 import { CodingWorkbenchCommitResult } from "./CodingWorkbenchCommitResult";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import type { ClientDiagnosticCodingWorkbenchInteraction } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 function receipt(overrides: Partial<VerifiedCommitResult> = {}): VerifiedCommitResult {
   return {
@@ -38,12 +40,27 @@ function blocked(): VerifiedCommitResult {
   return value;
 }
 
+// #4271: what the card showed is a closed delivery-step interaction, not a warn sentence.
+const shown: ClientDiagnosticCodingWorkbenchInteraction[] = [];
+const step = (deliveryState: string): Record<string, string> => ({
+  interaction: "delivery-step-shown",
+  deliveryStep: "commit-result",
+  deliveryState,
+});
+
 describe("verified commit outcome in the Code task", () => {
   beforeEach(() => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    shown.length = 0;
+    setClientDiagnosticWriter((message, meta) => {
+      const interaction = meta?.codingWorkbenchInteraction;
+      if (interaction?.interaction === "delivery-step-shown") shown.push(interaction);
+      else console.warn(message);
+    });
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    resetClientDiagnosticWriter();
   });
 
   // #3390: same reason as the sibling status cards — the receipt's status, reason and binding facts
@@ -70,9 +87,7 @@ describe("verified commit outcome in the Code task", () => {
     expect(screen.getByText("5".repeat(40))).toBeInTheDocument();
     expect(screen.getByText("verification-3386")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /approve/iu })).not.toBeInTheDocument();
-    expect(console.warn).toHaveBeenCalledWith(
-      "[keiko] verified commit result displayed: succeeded tree 333333333333",
-    );
+    expect(shown).toEqual([step("succeeded")]);
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
@@ -99,10 +114,10 @@ describe("verified commit outcome in the Code task", () => {
   it("removes an old receipt on a run switch and does not repeat its diagnostic on a reread", () => {
     const { rerender } = render(<CodingWorkbenchCommitResult result={receipt()} runId="run-1" />);
     rerender(<CodingWorkbenchCommitResult result={receipt()} runId="run-1" />);
-    expect(console.warn).toHaveBeenCalledOnce();
+    expect(shown).toHaveLength(1);
     rerender(<CodingWorkbenchCommitResult result={receipt()} runId="run-2" />);
     expect(screen.queryByRole("region", { name: "Commit result" })).not.toBeInTheDocument();
-    expect(console.warn).toHaveBeenCalledOnce();
+    expect(shown).toHaveLength(1);
   });
 
   it("shows preflight severity and remediation without raw kernel prose", () => {
@@ -157,6 +172,7 @@ describe("verified commit outcome in the Code task", () => {
       const { container } = render(<CodingWorkbenchCommitResult result={result} runId="run-1" />);
       expect(container).toBeEmptyDOMElement();
       expect(console.warn).not.toHaveBeenCalled();
+      expect(shown).toEqual([]);
     },
   );
 });

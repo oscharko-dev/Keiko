@@ -142,16 +142,16 @@ export async function redeemCodingAppSessionPairingFragment(
 /**
  * Confirm this browser's existing app-session bearer and refresh its exact scoped cookie
  * projections without minting a session or replacing the token. The endpoint
- * intentionally acknowledges without revealing whether the cookie is valid; subsequent channel
- * reads report the honest paired/unpaired state.
+ * refuses unavailable authority with a closed response; only a successful confirmation repairs
+ * the cookie projections. Subsequent channel reads still establish their own authority.
  */
 type LocalSessionOutcome =
   | { readonly repaired: true }
   | { readonly repaired: false; readonly errorKind: ActivityLogErrorKind };
 
 // The ensure request's outcome with the closed class of a failure, for the repair's evidence. The
-// endpoint acknowledges whether or not the existing cookie is valid, so a thrown error is a real failure
-// (transport, 5xx), recorded rather than swallowed: under the ensure request's own correlation id
+// endpoint refuses unavailable authority, so a thrown error is a failed repair
+// (authority, transport or 5xx), recorded under the ensure request's own correlation id
 // and with its closed failure class, also when `fetch` rejected before any response (#3557 review).
 async function localSessionOutcome(
   seams: CodingAppSessionPairingSeams | undefined,
@@ -274,7 +274,7 @@ function reportStreamSessionRepair(
  * {@link repairLocalCodingAppSessionWithEvidence} for a stream whose reconnects a restarted BFF
  * denies (#3557 review). Every attempt is reported at once: a failed repair with its closed failure
  * class, an acknowledged one as `repair-acknowledged`. An acknowledgement is not yet a recovery (the
- * endpoint acknowledges whether or not it issued a cookie), so only the stream's next successful
+ * cookie confirmation alone does not prove the protected stream recovered), so only the stream's next successful
  * open reports that ({@link reportStreamSessionRecovered}).
  */
 export async function repairLocalCodingAppSessionForStream(

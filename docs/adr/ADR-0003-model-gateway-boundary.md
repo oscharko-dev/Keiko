@@ -167,6 +167,16 @@ name the Workbench's run phase while a provider outage is ridden out.
 
 ### D7 — Secret redaction at the boundary
 
+**Content threshold amendment (owner decision, 2026-11-04).** Keiko runs on the user's own device and
+its stores never leave it, so what a person reads and what the model receives lose only the credential
+floor by default. An absent or empty `KEIKO_CONTENT_REDACTION` now preserves like `off`; `on` lowers the
+threshold back to the strict projection, and an unrecognized value still warns and keeps redaction.
+Chat answer ports, conversation-history compaction summaries and the commit-message draft carry that
+policy. Tool arguments now follow the call's policy as well, because a Jira draft or a question is what
+a person reads, with two exceptions: `keiko_research_fetch` arguments leave for the public internet and
+keep the full heuristic redaction, and exact-content tools keep literal-only removal (#4009). Where the
+paragraph below says otherwise about the default or about tool arguments, this amendment governs.
+
 **Authorized content amendment (owner decision, 2026-10-27, #4098).** Content redaction is a
 per-call policy, distinct from infrastructure-secret and diagnostic protection. The gateway never
 reads the deployment environment: a call preserves authorized response content, reasoning and
@@ -759,8 +769,9 @@ nothing but forwarded reasoning alike: the retry loop is resumed after the exhau
 of the call), the caller then sees a second reasoning passage, and no answer text or tool call is
 ever duplicated. The provider-reported usage of the repaired attempt (and of every other attempt the
 call discarded: a rejected tool call, a stream that failed after its usage arrived) rides on the
-answer as `discardedAttemptUsage`, so the coding run's prompt allowance counts every prompt the
-provider processed (ADR-0137 D2); `usage` keeps describing the answer itself. A delivered answer delta or tool call, and a repair that already ran,
+answer as `discardedAttemptUsage`, so the coding run's usage roll-up counts every prompt the
+provider processed (ADR-0137 D2; no prompt-token allowance bounds it since 2026-11-11); `usage`
+keeps describing the answer itself. A delivered answer delta or tool call, and a repair that already ran,
 close the window for good, so a later exhaustion surfaces at once. It is not a provider retry: neither `maxRetries` nor the coding outage window
 counts it, only what is left of the call's budget can refuse it (the call then ends as a budget stop
 rather than a terminal one), and the breaker never counts either answer. Its scheduled line is
@@ -794,9 +805,26 @@ repair never ran). Gemma 4 31B streamed through LiteLLM (run `742029841583121825
 motivated this: turn 5 reasoned for about 4,500 tokens and ended empty, the coding runtime retried the
 identical turn six more times, and the failed turns' reasoning stayed in the resent history. A coding
 sidecar turn whose repair ended `empty-again` is answered as final to the runtime (ADR-0173), and the
-sidecar drops that reasoning from every later request instead of resending it upstream: reasoning
+default/shared sidecar path drops that reasoning from later requests instead of resending it upstream: reasoning
 fields of prior assistant messages and assistant messages that carry nothing but reasoning never reach
 the gateway request, and `coding-sidecar.gateway.request-validated` records how many it dropped.
+This requires the runtime to preserve reasoning part types; ADR-0137 D8 documents the pinned runtime's
+separate limitation when interrupted reasoning is converted to ordinary assistant text.
+
+
+For the authenticated native Coding path, the separate explicit provider policy
+`reasoningContinuation: "required-with-tools"` uses the existing native session as the sole
+continuation owner (#4059). It is mutually exclusive with `reasoningHistory` and
+`reasoningHistoryField`; its qualified wire field remains `reasoning_content`. The native context
+hook reads canonical session context before runtime serialization and excludes aborted, unfinished
+and foreign-model assistant rounds and orphaned tool results. Existing run and retained-session
+route bindings prevent continuation under changed or unproven routes. This native path retains exact
+completed reasoning independently of live display, checks the current credential floor, and applies
+full byte, context and spend limits. Missing, conflicting, secret-bearing or oversized state fails
+closed. It bypasses the shared transient history cache and preserves native resume/fork ownership;
+no additional reasoning store is introduced. Activity evidence contains counts and closed outcomes
+only.
+
 
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
 (`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry reserves
@@ -873,6 +901,18 @@ Reasoning is a body: `chat.response.streamed` records its events and bytes, and
 `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`, `reasoningTokens`
 and `reasoningDisposition` (`none`, `forwarded`, `discarded`), never the text.
 
+Provider continuation is distinct from live display. An explicit provider `reasoningHistory` of
+`required-with-tools` restores all historical assistant reasoning when tools are offered;
+`current-turn` restores only assistants after the latest human message. The wire field is
+`reasoning_content` unless `reasoningHistoryField: "reasoning"` was qualified for that provider.
+The gateway uses only successful, complete responses from bounded transient state, never runtime
+echoes or failed attempts, and applies the current content policy and credential floor. Display
+opt-out does not disable this transport requirement. Missing or ambiguous required continuation
+fails closed; no reasoning enters evidence or exports. ADR-0137 D8 defines bounds, scope, refinement
+and the fresh native-session fallback for full-history providers. The selected wire projection is
+also used by prompt admission and provider token counting.
+
+
 **Coding sidecar streaming (lab ledger F2, #3873, 2026-10-06).** The coding sidecar profile used
 to be hard-coded as non-streaming, so the sidecar read a streaming provider in full before OpenCode
 saw a byte. It now streams wherever the coding model's capability streams and the configuration's
@@ -915,15 +955,17 @@ States:
   streamed path alike, while the stream has delivered nothing but reasoning: a streamed tool call is
   delivered only with the terminal answer, so a rejected one was never handed to the caller, and the
   next attempt carries the schema correction (`gateway.tool-catalog.repair state=scheduled`). The
-  correction lists each missing or mismatching property path. When the offered tool's schema is one
-  of Keiko's own closed-dialect schemas, it describes each path from that schema: its declared type,
-  bounds or allowed values (at most 8 values of at most 40 characters each), and its description,
-  capped at 240 characters. An external schema, such as a managed MCP server's, is the server's own
-  text and its paths can start inside a `$ref` target, so its paths are listed by name only. The
-  correction never quotes the rejected arguments. The repair line counts the described paths as
-  `describedPathCount` (#4130: a local Reviewer repeated the omission of a required property after a
-  correction that named it only; R4130-045 and R4130-046 on #4330). A
-  streamed rejection that carries no correction is never replayed as it was, and one that follows
+  correction states the rule of each missing or mismatching property path from the schema. When the
+  offered tool's schema is one of Keiko's own closed-dialect schemas, it also adds the description
+  that schema gives the property, capped at 240 characters. An external schema, such as a managed
+  MCP server's, is the server's own text and its paths can start inside a `$ref` target, so its
+  paths get no description. The correction never quotes the rejected arguments. The repair line
+  counts the described paths as `describedPathCount` (#4130: a local Reviewer repeated the omission
+  of a required property after a correction that named it only; R4130-045 and R4130-046 on #4330).
+  A catalog rejection that carries no correction, including an unoffered tool identity, is terminal
+  on the buffered and streamed paths alike: regenerating the identical request supplies no model
+  feedback. Its stable `GATEWAY_MALFORMED_TOOL_CALL` code is classified as `validation-failed`,
+  including retry diagnostics, rather than an internal Keiko fault. A rejection that follows
   answer text the caller already received (a sentence of preface, then a malformed call) surfaces at
   once, because a repair would deliver that text a second time; the coding sidecar then ends the turn
   as `invalid-tool-call` with `runtimeRetry=refused`. OpenCode must not repeat the identical

@@ -12,6 +12,13 @@ function numbered(key: string): Numbered | undefined {
   const number = Number(match?.[2]);
   return project === undefined || !Number.isSafeInteger(number) ? undefined : { project, number };
 }
+/**
+ * Created or found issues whose keys the bounded result could not list: the model states the counts
+ * and only the keys shown, never a guessed one.
+ */
+export const JIRA_DRAFT_UNLISTED_GUIDANCE =
+  "Not every created or found key fits this result: createdRanges and existingRanges list the keys that fit and unlistedKeyCount counts the rest. " +
+  "Tell the user in plain language how many issues were created (createdCount) and name only the keys shown; never guess a key. Do not show this message.";
 /** The most characters one packed entry of a result's key list holds (the result schema's bound). */
 export const KEY_RANGE_ENTRY_CHARS = 600;
 /** One entry of a compact result's key list: comma-separated keys and ranges, and how many keys. */

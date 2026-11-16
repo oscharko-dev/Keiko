@@ -233,6 +233,23 @@ describe("OpenCode V2 live text overlay", () => {
       expect(live.textOf(MESSAGE, "text", 32)).toBeUndefined();
       expect(live.takeCounts()).toEqual({ applied: 32, dropped: 8, diverged: 0 });
     });
+
+    // Audit finding 8: a full table of parts whose stream was interrupted never retired, so every
+    // later part of the run was refused for good.
+    it("evicts the oldest frozen part when the table is full, so a new part is tracked", () => {
+      const live = createOpenCodeV2LiveText();
+      for (let ordinal = 0; ordinal < 32; ordinal += 1) {
+        live.observe(SESSION, started("text", ordinal));
+        live.observe(SESSION, delta("text", ordinal, "x"));
+      }
+      live.freeze();
+      live.observe(SESSION, started("text", 100));
+      live.observe(SESSION, delta("text", 100, "new"));
+
+      expect(live.textOf(MESSAGE, "text", 100)).toBe("new");
+      expect(live.textOf(MESSAGE, "text", 0)).toBeUndefined();
+      expect(live.textOf(MESSAGE, "text", 1)).toBe("x");
+    });
   });
 
   describe("a character split between two deltas", () => {

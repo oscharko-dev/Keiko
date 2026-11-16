@@ -172,6 +172,14 @@ it("routes local and token-backed servers through the shared manager and revokes
   };
   await bound?.target.upstream?.(bound.target.url, request);
   expect(serve).toHaveBeenCalledOnce();
+  expect(serve).toHaveBeenCalledWith(
+    "local",
+    expect.any(Request),
+    expect.objectContaining({
+      correlationId: "shared-run",
+      invocationId: expect.any(String) as unknown,
+    }),
+  );
   generation.abort();
   expect(bound?.signal.aborted).toBe(true);
   expect(relay.authenticate(relayId, endpoint.capability)).toBeUndefined();
@@ -280,4 +288,50 @@ it("publishes recovery before authority revocation and retains revocation when p
   ).rejects.toThrow("synthetic event owner unavailable");
   expect(revoke).toHaveBeenCalledTimes(2);
   expect(mark).toHaveBeenCalledTimes(2);
+});
+
+describe("pre-warming the shared connection at bind (finding 12)", () => {
+  function bindWith(connect: (name: string, correlationId: string) => Promise<never>): {
+    readonly records: ServerLogEvent[];
+    readonly connect: typeof connect;
+  } {
+    const { sink: activityLog, records } = sink();
+    const generation = new AbortController();
+    bindNativeMcpRelays({
+      servers: [credentialed("warm", "KEIKO_MCP_SECRET_WARM")],
+      mode: "autonomous-delivery",
+      runId: "warm-run",
+      activityLog,
+      relay: {
+        relay: createMcpCredentialRelay(),
+        origin: ORIGIN,
+        secrets: {},
+        managed: {
+          generation: () => generation.signal,
+          serve: () => Promise.resolve(new Response("managed")),
+          connect,
+        },
+      },
+    });
+    return { records, connect };
+  }
+
+  it("starts the server's shared connection for the run before the runtime asks for its tools", () => {
+    const connect = vi.fn(() => new Promise<never>(() => undefined));
+    bindWith(connect);
+    expect(connect).toHaveBeenCalledExactlyOnceWith("warm", "warm-run");
+  });
+
+  it("records a failed pre-warm on the log and leaves the binding in place", async () => {
+    const { records } = bindWith(() => Promise.reject(new Error("synthetic spawn failure")));
+    await vi.waitFor(() => {
+      expect(lines(records)).toContainEqual(
+        expect.objectContaining({ action: "bind", outcome: "failed", reason: "upstream-failed" }),
+      );
+    });
+    expect(lines(records)).toContainEqual(
+      expect.objectContaining({ action: "bind", outcome: "bound", relayedServerCount: 1 }),
+    );
+    expect(JSON.stringify(records)).not.toContain("synthetic spawn failure");
+  });
 });

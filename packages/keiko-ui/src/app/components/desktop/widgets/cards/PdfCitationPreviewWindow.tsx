@@ -14,6 +14,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
@@ -27,14 +28,19 @@ import {
   openPdfCitationPreviewSession,
   pdfCitationPreviewDocumentUrl,
 } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { bffRequestErrorKind } from "@/lib/http";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
 
 import { Icons } from "../../Icons";
-import type { WorkspaceApi } from "../../hooks/useWorkspace.types";
+import {
+  PdfCitationHighlight,
+  type CitationHighlightSettled,
+  type HighlightedPage,
+} from "./PdfCitationHighlight";
 import type { AppWindow } from "../../windows/types";
 import {
-  activatePdfCitationPreviewBackToChat,
-  activatePdfCitationPreviewContext,
-  getPdfCitationPreviewBackToChatAvailability,
   getPdfCitationPreviewSession,
   pdfCitationPreviewFailureCopy,
   replacePdfCitationPreviewWindowFailure,
@@ -49,7 +55,6 @@ import {
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const InfoIcon = Icons.info;
 const BackIcon = Icons.back;
-const ChevronIcon = Icons.chevron;
 const FwdIcon = Icons.fwd;
 const ZoomOutIcon = Icons.zoomOut;
 const ZoomInIcon = Icons.zoomIn;
@@ -62,10 +67,14 @@ const PAGE_SCROLL_GAP_PX = 18;
 const PAGE_WINDOW_RADIUS = 3;
 const RENDER_RADIUS = 1;
 const SLOW_LOAD_MS = 900;
+// Room above a framed citation when it is scrolled into view.
+const CITATION_FRAME_MARGIN_PX = 48;
 const ZOOM_STEP = 0.1;
 const PDF_LOAD_DEADLINE_MS = 30_000;
 const PDF_FULL_BUFFER_MAX_BYTES = 4 * 1024 * 1024;
 const PDF_RANGE_CHUNK_SIZE = 1024 * 1024;
+// Input that only a person produces: a programmatic scrollTo fires none of these.
+const USER_SCROLL_EVENTS = ["wheel", "touchmove", "pointerdown", "keydown"] as const;
 
 interface PageSize {
   readonly height: number;
@@ -241,74 +250,6 @@ function rotatedSize(size: PageSize, rotation: number): PageSize {
       };
 }
 
-function anchorQualityLabel(
-  value: PdfCitationPreviewSafeWindowCfg["anchorQuality"],
-  t: I18nTranslate,
-): string {
-  switch (value) {
-    case "approximate":
-      return t("pdfCitationPreviewWindow.anchorQuality.approximate");
-    case "unavailable":
-      return t("pdfCitationPreviewWindow.anchorQuality.unavailable");
-    default:
-      return t("pdfCitationPreviewWindow.anchorQuality.pageOnly");
-  }
-}
-
-function citationContextLabel(args: {
-  readonly label: string;
-  readonly marker: string;
-  readonly source?: string | undefined;
-}): string {
-  return args.source === undefined
-    ? `${args.marker} ${args.label}`
-    : `${args.marker} ${args.source} · ${args.label}`;
-}
-
-// Trailing " · <page>" meta suffix for the header, or "" when neither a page label nor a page
-// number is known.
-function pageMetaSuffix(
-  display: Pick<PdfCitationPreviewSafeWindowCfg, "pageLabel" | "pageNumber">,
-  t: I18nTranslate,
-): string {
-  let suffix: string;
-  if (display.pageLabel !== undefined) {
-    suffix = ` · ${display.pageLabel}`;
-  } else if (display.pageNumber !== undefined) {
-    const pageNumber = display.pageNumber;
-    suffix = ` · ${t("pdfCitationPreviewWindow.page", { pageNumber })}`;
-  } else {
-    suffix = "";
-  }
-  return suffix;
-}
-
-function citationContextPageLabel(
-  display: Pick<PdfCitationPreviewSafeWindowCfg, "anchorQuality" | "pageLabel" | "pageNumber">,
-  t: I18nTranslate,
-): string {
-  if (display.pageLabel !== undefined) return display.pageLabel;
-  if (display.pageNumber !== undefined) {
-    return t("pdfCitationPreviewWindow.page", { pageNumber: display.pageNumber });
-  }
-  return display.anchorQuality === "unavailable"
-    ? t("pdfCitationPreviewWindow.noVerifiedPage")
-    : t("pdfCitationPreviewWindow.verifiedPdf");
-}
-
-function uniqueContextCitations(
-  citations: readonly PdfCitationPreviewContextCitation[] | undefined,
-): readonly PdfCitationPreviewContextCitation[] {
-  if (citations === undefined) return [];
-  const seen = new Set<string>();
-  return citations.filter((citation) => {
-    const stableId = citation.citation.stableId;
-    if (seen.has(stableId)) return false;
-    seen.add(stableId);
-    return true;
-  });
-}
-
 function failureFromOpenReason(reason: PdfCitationPreviewReasonCode): PreviewFailure {
   const copy = pdfCitationPreviewFailureCopy(reason);
   return {
@@ -466,12 +407,29 @@ function restoredShellFailure(
   };
 }
 
+/** The cited page's passage and the receiver of its highlight outcome. */
+interface CitedPage {
+  readonly passage: string | undefined;
+  readonly onSettled: CitationHighlightSettled;
+}
+
+/** A loaded document and the load that produced it. */
+interface LoadedDocument {
+  readonly load: object;
+  readonly pdf: PdfDocumentProxy;
+}
+
+function documentOfLoad(loaded: LoadedDocument | null, load: object): PdfDocumentProxy | null {
+  return loaded?.load === load ? loaded.pdf : null;
+}
+
 function isRenderingCancelled(error: unknown): boolean {
   return error instanceof Error && error.name === "RenderingCancelledException";
 }
 
 function PdfCanvasPage({
   active,
+  citation,
   onError,
   onMeasured,
   pageNumber,
@@ -480,6 +438,8 @@ function PdfCanvasPage({
   scale,
 }: {
   readonly active: boolean;
+  /** Present on the cited page: the passage to frame there and where the outcome goes. */
+  readonly citation: CitedPage | undefined;
   readonly onError: (page: number, error: unknown) => void;
   readonly onMeasured: (page: number, size: PageSize) => void;
   readonly pageNumber: number;
@@ -489,6 +449,7 @@ function PdfCanvasPage({
 }): ReactNode {
   const t = useTranslate();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [rendered, setRendered] = useState<HighlightedPage | null>(null);
 
   useEffect(() => {
     if (!active) return;
@@ -526,25 +487,60 @@ function PdfCanvasPage({
           renderTask.cancel();
         };
         await renderTask.promise;
+        if (!disposed) setRendered({ page, viewport });
       })
       .catch((error) => {
         if (disposed || isRenderingCancelled(error)) return;
         onError(pageNumber, error);
       });
 
-    return () => {
+    return (): void => {
       disposed = true;
       cancelRender?.();
     };
   }, [active, onError, onMeasured, pageNumber, pdf, rotation, scale]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="pdfv-page-canvas"
-      aria-label={t("pdfCitationPreviewWindow.page", { pageNumber })}
-    />
+    <div className={styles.cmpPageLayer}>
+      <canvas
+        ref={canvasRef}
+        className="pdfv-page-canvas"
+        aria-label={t("pdfCitationPreviewWindow.page", { pageNumber })}
+      />
+      {citation !== undefined && rendered !== null ? (
+        <PdfCitationHighlight
+          rendered={rendered}
+          passage={citation.passage}
+          onSettled={citation.onSettled}
+        />
+      ) : null}
+    </div>
   );
+}
+
+// The cited page's highlight: reports its outcome once per document load, and a framed passage
+// re-renders the window so the held page scrolls to the frame.
+function useCitedPage(
+  load: object,
+  sessionEntry: ReturnType<typeof getPdfCitationPreviewSession>,
+): CitedPage {
+  const passage = sessionEntry?.display.passage;
+  const reportedFor = useRef<object | null>(null);
+  const [, notifyFramed] = useReducer((count: number) => count + 1, 0);
+  const onSettled = useCallback<CitationHighlightSettled>(
+    (highlight) => {
+      if (reportedFor.current === load) return;
+      reportedFor.current = load;
+      // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+      reportClientDiagnostic("PDF citation highlight settled", {
+        correlationId: newClientCorrelationId(),
+        citationHighlight: highlight,
+      });
+      if (highlight.outcome === "framed") notifyFramed();
+    },
+    [load],
+  );
+  return useMemo((): CitedPage => ({ passage, onSettled }), [onSettled, passage]);
 }
 
 // The label for the failure panel's single action button, matching the failure's action kind.
@@ -557,14 +553,10 @@ function failureActionLabel(failure: PreviewFailure | null, t: I18nTranslate): s
 
 export function PdfCitationPreviewWindow({
   cfg,
-  focusWindow,
-  restoreWindow,
   updateCfg,
   windowId,
 }: {
   readonly cfg: Record<string, unknown>;
-  readonly focusWindow: WorkspaceApi["focus"];
-  readonly restoreWindow?: WorkspaceApi["restore"] | undefined;
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   readonly windowId: string;
 }): ReactNode {
@@ -578,14 +570,9 @@ export function PdfCitationPreviewWindow({
     () => getPdfCitationPreviewSession(windowId),
     () => getPdfCitationPreviewSession(windowId),
   );
-  const backToChatReason = useSyncExternalStore(
-    subscribeWindowRegistry,
-    () => getPdfCitationPreviewBackToChatAvailability(windowId).reason ?? "",
-    () => getPdfCitationPreviewBackToChatAvailability(windowId).reason ?? "",
-  );
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [defaultPageSize, setDefaultPageSize] = useState<PageSize | null>(null);
-  const [doc, setDoc] = useState<PdfDocumentProxy | null>(null);
+  const [loaded, setLoaded] = useState<LoadedDocument | null>(null);
   const [failure, setFailure] = useState<PreviewFailure | null>(null);
   const [measuredSizes, setMeasuredSizes] = useState<Record<number, PageSize>>({});
   const [numPages, setNumPages] = useState(0);
@@ -596,8 +583,11 @@ export function PdfCitationPreviewWindow({
   const [showSlowLoad, setShowSlowLoad] = useState(false);
   const autoReopenAttemptedKeyRef = useRef<string | null>(null);
   const currentPageRef = useRef(1);
-  const didInitialScrollRef = useRef(false);
-  const backToChatDescriptionId = useId();
+  // The page the viewer holds in view until the person scrolls or navigates. Page heights are
+  // estimated until each page is measured and the fit-width scale settles, so a single pixel jump
+  // lands on the wrong page: a citation for page 53 opened on page 3 (#4173). Every layout change
+  // scrolls back to this page, and scroll positions do not overwrite it while it is held.
+  const anchorPageRef = useRef<number | null>(null);
   const failureDescriptionId = useId();
   const pageRefs = useRef(new Map<number, HTMLElement>());
   const scrollRef = useRef<HTMLElement | null>(null);
@@ -606,20 +596,6 @@ export function PdfCitationPreviewWindow({
     [cfg.previewContextJson],
   );
   const citationContext = sessionEntry?.context ?? persistedCitationContext;
-  const citationContextCitations = useMemo(
-    () => uniqueContextCitations(citationContext?.citations),
-    [citationContext?.citations],
-  );
-  const backToChat =
-    backToChatReason.length === 0
-      ? { enabled: true as const }
-      : { enabled: false as const, reason: backToChatReason };
-  const activeCitation =
-    sessionEntry === undefined
-      ? undefined
-      : (citationContextCitations.find(
-          (citation) => citation.citation.stableId === citationContext?.activeStableId,
-        ) ?? citationContextCitations[0]);
   const reopenAttemptKey = useMemo((): string | undefined => {
     const origin = citationContext?.origin;
     if (origin === undefined || citationContext === undefined) return undefined;
@@ -629,32 +605,18 @@ export function PdfCitationPreviewWindow({
   const fallbackDocumentLabel = t("pdfCitationPreviewWindow.documentLabelFallback");
   const display = useMemo((): Pick<
     PdfCitationPreviewSafeWindowCfg,
-    "anchorQuality" | "documentLabel" | "pageLabel" | "pageNumber" | "sourceLabel"
+    "documentLabel" | "pageNumber"
   > => {
-    const sourceLabel = readOptionalString(cfg.sourceLabel) ?? sessionEntry?.display.sourceLabel;
     const pageNumber =
       typeof cfg.pageNumber === "number" ? cfg.pageNumber : sessionEntry?.display.pageNumber;
-    const pageLabel = readOptionalString(cfg.pageLabel) ?? sessionEntry?.display.pageLabel;
     return {
       documentLabel:
         readOptionalString(cfg.documentLabel) ??
         sessionEntry?.display.documentLabel ??
         fallbackDocumentLabel,
-      anchorQuality:
-        activeCitation?.display.anchorQuality ?? sessionEntry?.display.anchorQuality ?? "page-only",
-      ...(sourceLabel === undefined ? {} : { sourceLabel }),
       ...(pageNumber === undefined ? {} : { pageNumber }),
-      ...(pageLabel === undefined ? {} : { pageLabel }),
     };
-  }, [
-    activeCitation?.display.anchorQuality,
-    cfg.documentLabel,
-    cfg.pageLabel,
-    cfg.pageNumber,
-    cfg.sourceLabel,
-    fallbackDocumentLabel,
-    sessionEntry,
-  ]);
+  }, [cfg.documentLabel, cfg.pageNumber, fallbackDocumentLabel, sessionEntry]);
 
   const zoomMode = readZoomMode(cfg.zoomMode);
   const zoomValue = clampScale(readNumber(cfg.zoomValue, 1));
@@ -673,6 +635,15 @@ export function PdfCitationPreviewWindow({
       retryable: readOptionalBoolean(cfg.failureRetryable) ?? false,
     };
   }, [cfg.failureMessage, cfg.failureRetryable, cfg.failureTitle]);
+  // Every change that reloads the document starts a new load. A document is shown only for the
+  // load that produced it: a second citation click moves to another page and destroys the
+  // outgoing document in the same commit, so no page of that document may start drawing then.
+  const load = useMemo(
+    (): object => ({ failureOverride, reopenAttemptKey, retryToken, sessionEntry, t }),
+    [failureOverride, reopenAttemptKey, retryToken, sessionEntry, t],
+  );
+  const doc = documentOfLoad(loaded, load);
+  const citedPage = useCitedPage(load, sessionEntry);
   const scalarIntentControlsEnabled = doc !== null;
   const currentPageSize = measuredSizes[currentPage] ?? defaultPageSize;
   const effectiveScale = useMemo((): number => {
@@ -730,12 +701,22 @@ export function PdfCitationPreviewWindow({
 
   const scrollToPageNumber = useCallback(
     (pageNumber: number): void => {
+      const scroller = scrollRef.current;
+      if (scroller === null) return;
       const element = pageRefs.current.get(pageNumber);
-      if (element !== undefined) {
-        element.scrollIntoView({ block: "start" });
-        return;
-      }
-      scrollRef.current?.scrollTo({ top: estimatedPageOffset(pageNumber) });
+      // A framed citation is the place to show; otherwise the top of its page.
+      const frame = element?.querySelector("[data-citation-box]");
+      const target = frame ?? element;
+      // Scroll only the page region: scrollIntoView would also move the workspace around it.
+      const margin = frame === null || frame === undefined ? 0 : CITATION_FRAME_MARGIN_PX;
+      const top =
+        target === undefined
+          ? estimatedPageOffset(pageNumber)
+          : target.getBoundingClientRect().top -
+            scroller.getBoundingClientRect().top +
+            scroller.scrollTop -
+            margin;
+      scroller.scrollTo({ top: Math.max(0, top) });
     },
     [estimatedPageOffset],
   );
@@ -813,7 +794,7 @@ export function PdfCitationPreviewWindow({
       height: element.clientHeight,
     });
 
-    return () => {
+    return (): void => {
       observer.disconnect();
     };
   }, []);
@@ -822,9 +803,9 @@ export function PdfCitationPreviewWindow({
     const sessionHandle = sessionEntry?.session.handle;
     const sessionByteLength = sessionEntry?.session.byteLength;
     if (sessionHandle === undefined) {
-      setFailure(restoredShellFailure(failureOverride, reopenAttemptKey !== undefined, t));
+      setFailure(null);
       setDefaultPageSize(null);
-      setDoc(null);
+      setLoaded(null);
       setNumPages(0);
       setPageRenderFailures({});
       return;
@@ -840,9 +821,10 @@ export function PdfCitationPreviewWindow({
     setMeasuredSizes({});
     setPageRenderFailures({});
     setDefaultPageSize(null);
-    setDoc(null);
+    setLoaded(null);
     setNumPages(0);
-    didInitialScrollRef.current = false;
+    // A new citation's page is held from the start: the outgoing pages still scroll once.
+    anchorPageRef.current = currentPageRef.current;
 
     const slowTimer = window.setTimeout(() => setShowSlowLoad(true), SLOW_LOAD_MS);
     const deadlineTimer = window.setTimeout(() => {
@@ -887,7 +869,7 @@ export function PdfCitationPreviewWindow({
         const firstPage = await pdf.getPage(1);
         const viewport = firstPage.getViewport({ scale: 1 });
         setDefaultPageSize({ width: viewport.width, height: viewport.height });
-        setDoc(pdf);
+        setLoaded({ load, pdf });
         setNumPages(pdf.numPages);
         setShowSlowLoad(false);
       })
@@ -917,7 +899,7 @@ export function PdfCitationPreviewWindow({
         window.clearTimeout(deadlineTimer);
       });
 
-    return () => {
+    return (): void => {
       disposed = true;
       controller.abort();
       void loadingTask?.destroy();
@@ -927,28 +909,47 @@ export function PdfCitationPreviewWindow({
     // GEN-PERF-WIDGET-001 — reopenPreview is intentionally read through a ref (above) rather
     // than listed here, so view-only cfg writes that churn its identity no longer re-run this
     // document-load effect. The document reloads only on a genuine session/retry change.
-  }, [failureOverride, reopenAttemptKey, retryToken, sessionEntry, t]);
+  }, [failureOverride, load, reopenAttemptKey, retryToken, sessionEntry, t]);
 
   useEffect(() => {
-    return () => {
-      void doc?.destroy?.();
+    return (): void => {
+      void loaded?.pdf.destroy?.();
     };
-  }, [doc]);
+  }, [loaded]);
 
-  useEffect(() => {
-    if (doc === null || numPages === 0 || didInitialScrollRef.current) return;
-    didInitialScrollRef.current = true;
-    requestAnimationFrame(() => {
-      scrollToPageNumber(currentPage);
-    });
-  }, [currentPage, doc, numPages, scrollToPageNumber]);
-
+  // A loaded document opens on the cited page, and a zoom or rotation keeps the page in view.
   useEffect(() => {
     if (doc === null || numPages === 0) return;
-    requestAnimationFrame(() => {
-      scrollToPageNumber(currentPageRef.current);
+    anchorPageRef.current = currentPageRef.current;
+  }, [doc, effectiveScale, numPages, rotation]);
+
+  // While a page is held, every layout change (a measured page, the settled fit-width scale, a
+  // resized window) scrolls back to it.
+  useEffect(() => {
+    if (doc === null || numPages === 0) return;
+    const frame = requestAnimationFrame(() => {
+      const anchor = anchorPageRef.current;
+      if (anchor !== null) scrollToPageNumber(anchor);
     });
-  }, [doc, effectiveScale, numPages, rotation, scrollToPageNumber]);
+    return (): void => {
+      cancelAnimationFrame(frame);
+    };
+  });
+
+  // The person's own scrolling releases the held page.
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (scroller === null || numPages === 0) return;
+    const release = (): void => {
+      anchorPageRef.current = null;
+    };
+    for (const type of USER_SCROLL_EVENTS) {
+      scroller.addEventListener(type, release, { passive: true });
+    }
+    return (): void => {
+      for (const type of USER_SCROLL_EVENTS) scroller.removeEventListener(type, release);
+    };
+  }, [doc, numPages]);
 
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -957,6 +958,7 @@ export function PdfCitationPreviewWindow({
     let frame = 0;
     const syncPage = (): void => {
       frame = 0;
+      if (anchorPageRef.current !== null) return;
       const bestPage = pageAtScrollOffset(scroller.scrollTop + scroller.clientHeight * 0.2);
 
       if (bestPage !== currentPage) {
@@ -970,7 +972,7 @@ export function PdfCitationPreviewWindow({
     };
 
     scroller.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
+    return (): void => {
       scroller.removeEventListener("scroll", onScroll);
       if (frame !== 0) {
         window.cancelAnimationFrame(frame);
@@ -989,10 +991,21 @@ export function PdfCitationPreviewWindow({
         numPages === 0 ? 0 : estimatedPageOffset(numPages + 1) - estimatedPageOffset(end + 1),
     };
   }, [currentPage, estimatedPageOffset, numPages]);
-  const showToolbar = doc !== null && failure === null;
-  const failureActionButtonLabel = failureActionLabel(failure, t);
+  // A restored window without a session derives its message at render, in the current language.
+  const shownFailure =
+    failure ??
+    (sessionEntry === undefined
+      ? restoredShellFailure(failureOverride, reopenAttemptKey !== undefined, t)
+      : null);
+  const showToolbar = doc !== null && shownFailure === null;
+  const failureActionButtonLabel = failureActionLabel(shownFailure, t);
   const handlePageRenderError = useCallback(
     (page: number, error: unknown): void => {
+      // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+      reportClientDiagnostic("PDF citation preview page render failed", {
+        errorKind: bffRequestErrorKind(error),
+        errorEvidence: clientErrorEvidence(error),
+      });
       setPageRenderFailures((previous) => ({
         ...previous,
         [page]: previewFailure(error, t),
@@ -1010,33 +1023,9 @@ export function PdfCitationPreviewWindow({
 
   const goToPage = (page: number): void => {
     const next = clampPage(page, numPages);
+    anchorPageRef.current = next;
     updateCfg({ currentPage: next });
     requestAnimationFrame(() => scrollToPageNumber(next));
-  };
-
-  const activateContextCitation = (stableId: string): void => {
-    const nextCitation = activatePdfCitationPreviewContext(windowId, stableId);
-    if (nextCitation === undefined) {
-      return;
-    }
-    updateCfg({
-      ...(nextCitation.display.pageLabel === undefined
-        ? { pageLabel: undefined }
-        : { pageLabel: nextCitation.display.pageLabel }),
-      ...(nextCitation.display.pageNumber === undefined
-        ? { pageNumber: undefined }
-        : { pageNumber: nextCitation.display.pageNumber }),
-      ...(nextCitation.display.sourceLabel === undefined
-        ? { sourceLabel: undefined }
-        : { sourceLabel: nextCitation.display.sourceLabel }),
-      currentPage: nextCitation.display.pageNumber ?? currentPageRef.current,
-      documentLabel: nextCitation.display.documentLabel,
-    });
-    if (nextCitation.display.pageNumber !== undefined) {
-      requestAnimationFrame(() => {
-        scrollToPageNumber(nextCitation.display.pageNumber ?? currentPageRef.current);
-      });
-    }
   };
 
   const renderPage = (pageNumber: number, pdf: PdfDocumentProxy): ReactNode => {
@@ -1054,6 +1043,7 @@ export function PdfCitationPreviewWindow({
     const renderedPage = shouldRender ? (
       <PdfCanvasPage
         active
+        citation={pageNumber === display.pageNumber ? citedPage : undefined}
         onError={handlePageRenderError}
         onMeasured={handlePageMeasured}
         pageNumber={pageNumber}
@@ -1113,102 +1103,6 @@ export function PdfCitationPreviewWindow({
             renderedPage
           )}
         </div>
-      </section>
-    );
-  };
-
-  const renderCitationContext = (): ReactNode => {
-    if (activeCitation === undefined) return null;
-    return (
-      <section
-        className="pdfv-context"
-        aria-label={t("pdfCitationPreviewWindow.citationContext.ariaLabel")}
-      >
-        <div className="pdfv-context-head">
-          <div className="pdfv-context-copy">
-            <p className="pdfv-context-eyebrow">
-              {t("pdfCitationPreviewWindow.citationContext.eyebrow")}
-            </p>
-            <h3 className="pdfv-context-title">
-              <span className="pdfv-context-marker">{activeCitation.citation.marker}</span>
-              <span className="pdfv-context-document">{activeCitation.display.documentLabel}</span>
-              <span className="pdfv-context-page">
-                {citationContextPageLabel(activeCitation.display, t)}
-              </span>
-            </h3>
-            {activeCitation.display.sourceLabel === undefined ? null : (
-              <p className="pdfv-context-message">{activeCitation.display.sourceLabel}</p>
-            )}
-          </div>
-          <div className="pdfv-context-actions">
-            <button
-              type="button"
-              className="tm-action pdfv-back-to-chat"
-              aria-describedby={
-                backToChat.reason === undefined ? undefined : backToChatDescriptionId
-              }
-              aria-disabled={backToChat.enabled ? undefined : "true"}
-              data-tip={backToChat.reason ?? t("pdfCitationPreviewWindow.backToChat.defaultTip")}
-              onClick={() => {
-                if (!backToChat.enabled) return;
-                activatePdfCitationPreviewBackToChat(windowId, { focusWindow, restoreWindow });
-              }}
-            >
-              <BackIcon size={14} />
-              <span>{t("pdfCitationPreviewWindow.backToChat.label")}</span>
-            </button>
-            {backToChat.reason === undefined ? null : (
-              <span id={backToChatDescriptionId} className="pdfv-back-to-chat-hint">
-                {backToChat.reason}
-              </span>
-            )}
-          </div>
-        </div>
-        {citationContext !== undefined && citationContextCitations.length > 1 ? (
-          <details className="pdfv-context-details">
-            <summary className="pdfv-context-summary">
-              <span>{t("pdfCitationPreviewWindow.sameAnswerCitations")}</span>
-              <span className="pdfv-context-count">{citationContextCitations.length}</span>
-              <ChevronIcon size={13} />
-            </summary>
-            <ul
-              className="grounded-citations pdfv-context-list"
-              aria-label={t("pdfCitationPreviewWindow.sameAnswerCitations")}
-            >
-              {citationContextCitations.map((citation) => {
-                const active = citation.citation.stableId === citationContext.activeStableId;
-                const fullLabel = citationContextLabel({
-                  label: citation.citation.label,
-                  marker: citation.citation.marker,
-                  source: citation.citation.source,
-                });
-                return (
-                  <li key={citation.citation.stableId} className="grounded-citations-item">
-                    <button
-                      type="button"
-                      className="grounded-citation grounded-citation-action pdfv-context-citation"
-                      aria-label={`${fullLabel} ${citationContextPageLabel(citation.display, t)}`}
-                      aria-pressed={active}
-                      data-active={active ? "true" : "false"}
-                      data-tip={fullLabel}
-                      onClick={() => {
-                        if (active) return;
-                        activateContextCitation(citation.citation.stableId);
-                      }}
-                    >
-                      <span className="grounded-citation-range">{citation.citation.marker}</span>
-                      <span className="grounded-citation-action-label">
-                        {active
-                          ? t("pdfCitationPreviewWindow.citationActive")
-                          : citationContextPageLabel(citation.display, t)}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </details>
-        ) : null}
       </section>
     );
   };
@@ -1277,7 +1171,7 @@ export function PdfCitationPreviewWindow({
   );
 
   const renderDocumentState = (): ReactNode => {
-    if (failure !== null) return renderFailureState(failure);
+    if (shownFailure !== null) return renderFailureState(shownFailure);
     if (doc !== null) return renderLoadedDocument(doc);
     return (
       <div className="lk-loading pdfv-status" role="status" aria-live="polite">
@@ -1288,144 +1182,104 @@ export function PdfCitationPreviewWindow({
     );
   };
 
+  const submitPageInput = (value: string): void => {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isInteger(parsed)) {
+      goToPage(parsed);
+      return;
+    }
+    setPageInput(String(currentPage));
+  };
+
+  const renderPageControls = (): ReactNode => (
+    <div className="pdfv-group">
+      <button
+        type="button"
+        className={`pdfv-btn ${styles.cmpIconButton} tm-action`}
+        aria-label={t("pdfCitationPreviewWindow.toolbar.previous")}
+        data-tip={t("pdfCitationPreviewWindow.toolbar.previous")}
+        disabled={currentPage <= 1}
+        onClick={() => goToPage(currentPage - 1)}
+      >
+        <BackIcon size={14} />
+      </button>
+      <label className="pdfv-page-field">
+        <span className="sr-only">{t("pdfCitationPreviewWindow.toolbar.currentPage")}</span>
+        <input
+          className="pdfv-page-input"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          value={pageInput}
+          onChange={(event) => setPageInput(event.target.value)}
+          onBlur={(event) => submitPageInput(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            submitPageInput(event.currentTarget.value);
+          }}
+        />
+      </label>
+      <span className="pdfv-page-count mono">/ {numPages > 0 ? String(numPages) : "--"}</span>
+      <button
+        type="button"
+        className={`pdfv-btn ${styles.cmpIconButton} tm-action`}
+        aria-label={t("pdfCitationPreviewWindow.toolbar.next")}
+        data-tip={t("pdfCitationPreviewWindow.toolbar.next")}
+        disabled={currentPage >= numPages}
+        onClick={() => goToPage(currentPage + 1)}
+      >
+        <FwdIcon size={14} />
+      </button>
+    </div>
+  );
+
+  const renderZoomControls = (): ReactNode => (
+    <div className="pdfv-group">
+      <button
+        type="button"
+        className={`pdfv-btn ${styles.cmpIconButton} tm-action`}
+        aria-label={t("pdfCitationPreviewWindow.toolbar.zoomOut")}
+        data-tip={t("pdfCitationPreviewWindow.toolbar.zoomOut")}
+        disabled={!scalarIntentControlsEnabled || effectiveScale <= MIN_SCALE}
+        onClick={() =>
+          updateCfg({ zoomMode: "manual", zoomValue: clampScale(effectiveScale - ZOOM_STEP) })
+        }
+      >
+        <ZoomOutIcon size={14} />
+      </button>
+      <button
+        type="button"
+        className="pdfv-btn pdfv-zoom mono tm-action"
+        data-tip={t("pdfCitationPreviewWindow.toolbar.fitWidth")}
+        aria-label={t("pdfCitationPreviewWindow.toolbar.fitWidth")}
+        aria-pressed={zoomMode === "fit-width"}
+        disabled={!scalarIntentControlsEnabled}
+        onClick={() => updateCfg({ zoomMode: "fit-width" })}
+      >
+        {String(Math.round(effectiveScale * 100))}%
+      </button>
+      <button
+        type="button"
+        className={`pdfv-btn ${styles.cmpIconButton} tm-action`}
+        aria-label={t("pdfCitationPreviewWindow.toolbar.zoomIn")}
+        data-tip={t("pdfCitationPreviewWindow.toolbar.zoomIn")}
+        disabled={!scalarIntentControlsEnabled || effectiveScale >= MAX_SCALE}
+        onClick={() =>
+          updateCfg({ zoomMode: "manual", zoomValue: clampScale(effectiveScale + ZOOM_STEP) })
+        }
+      >
+        <ZoomInIcon size={14} />
+      </button>
+    </div>
+  );
+
   const renderPreview = (): ReactNode => (
     <div className={`pdfv-shell ${styles.lazyWidgetScope}`}>
-      <div className="pdfv-header">
-        <div className="pdfv-heading">
-          <p className="pdfv-eyebrow">{t("pdfCitationPreviewWindow.eyebrow")}</p>
-          <h2 className="pdfv-title">{display.documentLabel}</h2>
-          <p className="pdfv-meta">
-            {display.sourceLabel ?? t("pdfCitationPreviewWindow.sourceLabelFallback")}
-            {pageMetaSuffix(display, t)}
-          </p>
-        </div>
-        <span className="pdfv-chip">{anchorQualityLabel(display.anchorQuality, t)}</span>
-      </div>
-
-      {renderCitationContext()}
-
       {showToolbar ? (
         <fieldset className="pdfv-toolbar">
           <legend className="sr-only">{t("pdfCitationPreviewWindow.toolbar.ariaLabel")}</legend>
-          <div className="pdfv-group">
-            <button
-              type="button"
-              className="pdfv-btn tm-action"
-              disabled={currentPage <= 1}
-              onClick={() => goToPage(currentPage - 1)}
-            >
-              <BackIcon size={14} />
-              <span>{t("pdfCitationPreviewWindow.toolbar.previous")}</span>
-            </button>
-            <label className="pdfv-page-field">
-              <span className="sr-only">{t("pdfCitationPreviewWindow.toolbar.currentPage")}</span>
-              <input
-                className="pdfv-page-input"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={pageInput}
-                onChange={(event) => setPageInput(event.target.value)}
-                onBlur={(event) => {
-                  const parsed = Number.parseInt(event.currentTarget.value, 10);
-                  if (Number.isInteger(parsed)) {
-                    goToPage(parsed);
-                    return;
-                  }
-                  setPageInput(String(currentPage));
-                }}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter") return;
-                  event.preventDefault();
-                  const parsed = Number.parseInt(event.currentTarget.value, 10);
-                  if (Number.isInteger(parsed)) {
-                    goToPage(parsed);
-                    return;
-                  }
-                  setPageInput(String(currentPage));
-                }}
-              />
-            </label>
-            <span className="pdfv-page-count mono">/ {numPages > 0 ? String(numPages) : "--"}</span>
-            <button
-              type="button"
-              className="pdfv-btn tm-action"
-              disabled={currentPage >= numPages}
-              onClick={() => goToPage(currentPage + 1)}
-            >
-              <span>{t("pdfCitationPreviewWindow.toolbar.next")}</span>
-              <FwdIcon size={14} />
-            </button>
-          </div>
-
-          <div className="pdfv-group">
-            <button
-              type="button"
-              className="pdfv-btn tm-action"
-              disabled={
-                !scalarIntentControlsEnabled || (zoomMode === "manual" && zoomValue <= MIN_SCALE)
-              }
-              onClick={() =>
-                updateCfg({
-                  zoomMode: "manual",
-                  zoomValue: clampScale(effectiveScale - ZOOM_STEP),
-                })
-              }
-            >
-              <ZoomOutIcon size={14} />
-              <span>{t("pdfCitationPreviewWindow.toolbar.zoomOut")}</span>
-            </button>
-            <button
-              type="button"
-              className="pdfv-btn tm-action"
-              disabled={
-                !scalarIntentControlsEnabled || (zoomMode === "manual" && zoomValue >= MAX_SCALE)
-              }
-              onClick={() =>
-                updateCfg({
-                  zoomMode: "manual",
-                  zoomValue: clampScale(effectiveScale + ZOOM_STEP),
-                })
-              }
-            >
-              <ZoomInIcon size={14} />
-              <span>{t("pdfCitationPreviewWindow.toolbar.zoomIn")}</span>
-            </button>
-            <button
-              type="button"
-              className="pdfv-btn tm-action"
-              disabled={!scalarIntentControlsEnabled}
-              data-selected={zoomMode === "fit-width" ? "true" : "false"}
-              onClick={() => updateCfg({ zoomMode: "fit-width" })}
-            >
-              <span>{t("pdfCitationPreviewWindow.toolbar.fitWidth")}</span>
-            </button>
-            <button
-              type="button"
-              className="pdfv-btn tm-action"
-              disabled={!scalarIntentControlsEnabled}
-              data-selected={zoomMode === "fit-page" ? "true" : "false"}
-              onClick={() => updateCfg({ zoomMode: "fit-page" })}
-            >
-              <span>{t("pdfCitationPreviewWindow.toolbar.fitPage")}</span>
-            </button>
-            <button
-              type="button"
-              className="pdfv-btn tm-action"
-              disabled={!scalarIntentControlsEnabled}
-              onClick={() => updateCfg({ rotation: normalizeRotation(rotation - 90) })}
-            >
-              <span>{t("pdfCitationPreviewWindow.toolbar.rotateLeft")}</span>
-            </button>
-            <button
-              type="button"
-              className="pdfv-btn tm-action"
-              disabled={!scalarIntentControlsEnabled}
-              onClick={() => updateCfg({ rotation: normalizeRotation(rotation + 90) })}
-            >
-              <span>{t("pdfCitationPreviewWindow.toolbar.rotateRight")}</span>
-            </button>
-            <span className="pdfv-zoom mono">{String(Math.round(effectiveScale * 100))}%</span>
-          </div>
+          {renderPageControls()}
+          {renderZoomControls()}
         </fieldset>
       ) : null}
 

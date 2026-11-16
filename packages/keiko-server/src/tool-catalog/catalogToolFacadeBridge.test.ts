@@ -417,6 +417,58 @@ describe("canonical catalog facade bridge", () => {
     expect(log.events.at(-1)?.errorKind).toBeUndefined();
   });
 
+  // #4271 L1.3: steps the runner skipped, was denied or cancelled never went red; the verification
+  // handler ran and reported that. That is an expected outcome the model reads, not a handler fault.
+  it("records a verification whose steps did not run as a completed handler, not an error", async () => {
+    const { bridge, log } = createBridge();
+    const request = COVERED.find((entry) => entry.action === "verification");
+    if (request === undefined) throw new Error("verification fixture missing");
+    const notRun = {
+      status: "failed" as const,
+      evidence: [{ kind: "governed-delegate" as const, code: "VERIFICATION_NOT_RUN" }],
+      reasonCode: "VERIFICATION_NOT_RUN",
+    };
+
+    await expect(
+      bridge.execute(request, facadeInput(), (_signal, mutationGuard) => {
+        expect(mutationGuard.check()).toBe(true);
+        return Promise.resolve(notRun);
+      }),
+    ).resolves.toEqual(notRun);
+    const settled = log.events.at(-1);
+    expect(settled).toMatchObject({
+      op: "tool-catalog.invocation-settled",
+      level: "info",
+      extra: { status: "completed", reason: "none", effectStarted: true },
+    });
+    expect(settled?.errorKind).toBeUndefined();
+    expect(
+      expectActivityLogProof(
+        "tool-catalog.invocation-settled.emitted-line",
+        formatActivityLogProofLine(settled ?? {}),
+      ),
+    ).toMatchObject({ level: "info" });
+  });
+
+  it("keeps a verification refused before the runner a handler fault", async () => {
+    const { bridge, log } = createBridge();
+    const request = COVERED.find((entry) => entry.action === "verification");
+    if (request === undefined) throw new Error("verification fixture missing");
+    const refused = {
+      status: "failed" as const,
+      evidence: [{ kind: "governed-delegate" as const, code: "NO_RUNNABLE_STEPS" }],
+      reasonCode: "NO_RUNNABLE_STEPS",
+    };
+
+    await expect(
+      bridge.execute(request, facadeInput(), (_signal, mutationGuard) => {
+        expect(mutationGuard.check()).toBe(true);
+        return Promise.resolve(refused);
+      }),
+    ).resolves.toEqual(refused);
+    expect(log.events.at(-1)).toMatchObject({ level: "error", errorKind: "internal" });
+  });
+
   // #3615: a refusal the handler gave for the model's own input -- a stale base, a patch that does
   // not apply, a denied or missing path -- settles as that verdict below error level, so it opens no
   // support incident, and the model still receives the handler's own result.

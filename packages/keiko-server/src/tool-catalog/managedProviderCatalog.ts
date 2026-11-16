@@ -36,6 +36,7 @@ const MCP_FAILURES: Readonly<
   Record<ManagedMcpFailure, readonly [Exclude<ToolResultStatus, "completed">, ToolResultReason]>
 > = {
   "not-admitted": ["failed", "handler-unavailable"],
+  "connector-scope-missing": ["failed", "handler-unavailable"],
   closed: ["failed", "handler-unavailable"],
   "invalid-arguments": ["invalid", "invalid-arguments"],
   "descriptor-drift": ["failed", "handler-mismatch"],
@@ -44,7 +45,13 @@ const MCP_FAILURES: Readonly<
   "log-unavailable": ["failed", "handler-failed"],
   "deadline-exceeded": ["timeout", "deadline-exceeded"],
   aborted: ["cancelled", "parent-cancelled"],
+  "result-too-large": ["failed", "handler-failed"],
+  backoff: ["failed", "handler-unavailable"],
 };
+/** Reuses the closed adapter vocabulary when a private callback receives a runtime value. */
+export function isManagedMcpFailure(value: unknown): value is ManagedMcpFailure {
+  return typeof value === "string" && Object.hasOwn(MCP_FAILURES, value);
+}
 function catalogFailure(error: unknown): unknown {
   if (!(error instanceof ManagedMcpError)) return error;
   if (error.reason === "tool-error" && error.structuredResult !== undefined)
@@ -73,6 +80,11 @@ export interface ManagedProviderCatalog<Consumer extends CatalogConsumer> {
   readonly catalog: ToolCatalog;
   readonly projection: CompiledToolProjection;
   readonly handlerBindings: readonly CatalogToolHandlerBinding<Consumer>[];
+  /**
+   * The same admitted catalog without the named tools: its own compiled projection, the same
+   * bindings and host. A turn that cannot use a tool does not pay for it in the model's context.
+   */
+  readonly omitting?: (names: readonly string[]) => ManagedProviderCatalog<Consumer>;
   readonly close: () => Promise<void>;
 }
 export interface ManagedProviderCatalogInput<Consumer extends CatalogConsumer> {
@@ -189,13 +201,21 @@ export function managedCatalogToolDefinitions(
   const entries = managedCatalogEntries(routes, declarations);
   return gatewayToolDefinitions(managedToolCatalog(entries, profile, referenceTimeMs), profile);
 }
-function compileManagedCatalog<Consumer extends CatalogConsumer>(
+/** The same compiler-owned projection for a private captured result; it grants no authority. */
+export function managedCatalogProjection(
+  routes: readonly RouteIdentity[],
+  declarations: readonly DeclarationIdentity[],
+  profile: CatalogVersionRef,
+  referenceTimeMs: number,
+): CompiledToolProjection {
+  const entries = managedCatalogEntries(routes, declarations);
+  return compileToolProjection(managedToolCatalog(entries, profile, referenceTimeMs), profile);
+}
+function compileEntries<Consumer extends CatalogConsumer>(
   host: ManagedMcpHost<CatalogHandlerContext<Consumer>>,
+  entries: readonly ManagedCatalogEntry<ManagedCatalogRoute<Consumer>, ManagedMcpToolDeclaration>[],
   input: ManagedProviderCatalogInput<Consumer>,
 ): ManagedProviderCatalog<Consumer> {
-  const declarations = host.catalog();
-  const routes = input.routes.map((route) => Object.freeze({ ...route }));
-  const entries = managedCatalogEntries(routes, declarations);
   const catalog = managedToolCatalog(entries, input.profile, input.now());
   return Object.freeze({
     catalog,
@@ -203,9 +223,24 @@ function compileManagedCatalog<Consumer extends CatalogConsumer>(
     handlerBindings: Object.freeze(
       entries.map(({ route, declaration }) => bindManagedTool(host, declaration, route)),
     ),
+    omitting: (names: readonly string[]): ManagedProviderCatalog<Consumer> =>
+      compileEntries(
+        host,
+        entries.filter(({ route }) => !names.includes(route.name)),
+        input,
+      ),
     close: (): Promise<void> => host.close(),
   });
 }
+function compileManagedCatalog<Consumer extends CatalogConsumer>(
+  host: ManagedMcpHost<CatalogHandlerContext<Consumer>>,
+  input: ManagedProviderCatalogInput<Consumer>,
+): ManagedProviderCatalog<Consumer> {
+  const declarations = host.catalog();
+  const routes = input.routes.map((route) => Object.freeze({ ...route }));
+  return compileEntries(host, managedCatalogEntries(routes, declarations), input);
+}
+
 /** Compose once per application; bind this admitted catalog to each consumer using the existing binder. */
 export async function createManagedProviderCatalog<Consumer extends CatalogConsumer>(
   input: ManagedProviderCatalogInput<Consumer>,

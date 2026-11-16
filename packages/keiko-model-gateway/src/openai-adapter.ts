@@ -45,6 +45,7 @@ import {
 import {
   gatewayFetch,
   GatewayResponseBodyValidationError,
+  MAX_RESPONSE_BYTES,
   OutboundHttpEgressError,
   readJsonCapped,
   readSseStream,
@@ -60,6 +61,7 @@ import {
   bindNormalizedToolCalls,
   carriedReasoning,
   normalizeChatResponse,
+  normalizedFinishReason,
   reasoningOfChatPayload,
   reasoningText,
   textFromContent,
@@ -74,6 +76,7 @@ import {
   OTHER_OUTPUT_TOKEN_FIELD,
   providerOutputTokenLimit,
   rejectsOutputTokenField,
+  rejectsReasoningEffortParameter,
   requiresNoReasoningWithTools,
   type OutputTokenField,
 } from "./output-token-limit.js";
@@ -182,12 +185,18 @@ const CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
     endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
     // The field the retry left out: the optional stream fields, or the output-token field the
-    // deployment rejected in favour of the other one (#3639).
+    // deployment rejected in favour of the other one (#3639), or the preferred-off reasoning effort.
     omittedField: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["stream_options", "stream", "max_tokens", "max_completion_tokens"],
+      values: [
+        "stream_options",
+        "stream",
+        "max_tokens",
+        "max_completion_tokens",
+        "reasoning_effort",
+      ],
     },
   },
   causal: "correlation",
@@ -211,6 +220,10 @@ let chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibili
 // #3639: the output-token field a deployment turned out to accept when its name led to the other
 // one (a GPT-5 deployment named "prod-chat" gets max_tokens by default and rejects it). Scoped and
 // bounded like the stream memo; an operator's explicit outputTokenParameter always wins.
+// The field one logical call's retry showed not to be the cause of a rejection; keyed by the call's
+// request object, which every compatibility retry of that call shares.
+const callOutputTokenFields = new WeakMap<object, OutputTokenField>();
+
 let outputTokenFieldEndpoints = new WeakMap<object, Map<string, OutputTokenField>>();
 
 function rememberedOutputTokenField(scope: object, url: string): OutputTokenField | undefined {
@@ -282,7 +295,41 @@ function rememberChatCompatibility(
   endpoints.set(url, { mode, expiresAt: now + STRICT_STREAM_OPTIONS_REPROBE_MS });
 }
 
+// Deployments that rejected the `reasoning_effort` a request only preferred (reasoningPreference
+// "off"), keyed by endpoint URL and model id (one gateway URL serves many models); later requests
+// omit it. Scoped and bounded like the memos above, and set only once a retry was accepted.
+let reasoningOmittedEndpoints = new WeakMap<object, Set<string>>();
+
+// Requests whose logical call already dropped the preference after a rejection: the compatibility
+// retries outside the reasoning wrapper (stream options, stream) share the request object, so they
+// keep the omission even when the shared memo was not (or could not be) written.
+const reasoningDroppedRequests = new WeakSet();
+
+function reasoningMemoKey(url: string, modelId: string): string {
+  return `${url}\n${modelId}`;
+}
+
+function reasoningOmitted(scope: object, key: string): boolean {
+  return reasoningOmittedEndpoints.get(scope)?.has(key) === true;
+}
+
+function rememberReasoningOmitted(scope: object, key: string): void {
+  const endpoints = reasoningOmittedEndpoints.get(scope) ?? new Set<string>();
+  endpoints.delete(key);
+  if (endpoints.size >= MAX_STRICT_STREAM_OPTIONS_ENDPOINTS) {
+    const oldest = endpoints.values().next().value;
+    if (oldest !== undefined) endpoints.delete(oldest);
+  }
+  endpoints.add(key);
+  reasoningOmittedEndpoints.set(scope, endpoints);
+}
+
+function forgetReasoningOmitted(scope: object, key: string): void {
+  reasoningOmittedEndpoints.get(scope)?.delete(key);
+}
+
 export function resetChatCompatibilityMemoForTests(): void {
+  reasoningOmittedEndpoints = new WeakMap<object, Set<string>>();
   chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibilityMemo>>();
   outputTokenFieldEndpoints = new WeakMap<object, Map<string, OutputTokenField>>();
 }
@@ -690,14 +737,36 @@ function reasoningEffortField(
   if (request.tools !== undefined && requiresNoReasoningWithTools(config.modelId)) {
     return { reasoning_effort: "none" };
   }
-  return request.reasoningEffort !== undefined ? { reasoning_effort: request.reasoningEffort } : {};
+  if (request.reasoningEffort !== undefined) return { reasoning_effort: request.reasoningEffort };
+  // A server-chosen preference for a mechanical call: lowest precedence, wire-only "none".
+  return request.reasoningPreference === "off" ? { reasoning_effort: "none" } : {};
+}
+
+// Whether the wire "none" comes from the preference alone: an explicit effort or the tool-calling
+// override (reasoningEffortField) decides otherwise and is never answered as a preference.
+function sendsReasoningPreference(
+  request: ProviderGatewayRequest,
+  config: ModelProviderConfig,
+): boolean {
+  return (
+    request.reasoningPreference === "off" &&
+    request.reasoningEffort === undefined &&
+    !(request.tools !== undefined && requiresNoReasoningWithTools(config.modelId))
+  );
 }
 
 function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig): ChatRequestBody {
   assertValidGatewaySamplingParameters(request);
   return {
     model: request.modelId,
-    messages: request.messages.map(openAiCompatiblePromptMessage),
+    messages: request.messages.map((message) =>
+      openAiCompatiblePromptMessage(
+        message,
+        config.reasoningHistoryField,
+        config.reasoningContinuation === "required-with-tools" ||
+          config.reasoningHistory !== undefined,
+      ),
+    ),
     ...toolsField(request.tools),
     ...responseFormatField(request),
     ...samplingFields(request),
@@ -713,6 +782,28 @@ function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig)
 // uses its own silence bound instead (ADR-0003). Exported for tests.
 export const STREAM_IDLE_TIMEOUT_MS = 60_000;
 
+// The wire bytes one generated token may cost in a streamed answer: its own text plus the SSE
+// frame and JSON chunk envelope a gateway wraps around EVERY delta (a LiteLLM chunk is 250-400
+// bytes for a one-token delta). A long reasoning stream of many tiny deltas crossed the fixed
+// 10 MB response cap at about 30k tokens and ended as a final, never-retried invalid response.
+export const STREAM_WIRE_BYTES_PER_TOKEN = 1_024;
+const STREAM_WIRE_MARGIN_BYTES = 1_048_576;
+const STREAM_WIRE_CEILING_BYTES = 536_870_912;
+
+// The cumulative byte cap of one streamed read: the response cap, raised to what the call's output
+// allowance can legitimately put on the wire. A stream that overruns even that is runaway and still
+// ends as a `size-exceeded` invalid response.
+export function streamWireByteCap(maxOutputTokens: number | undefined): number {
+  if (maxOutputTokens === undefined || !Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
+    return MAX_RESPONSE_BYTES;
+  }
+  const allowance = Math.ceil(maxOutputTokens) * STREAM_WIRE_BYTES_PER_TOKEN;
+  return Math.min(
+    Math.max(MAX_RESPONSE_BYTES, allowance + STREAM_WIRE_MARGIN_BYTES),
+    STREAM_WIRE_CEILING_BYTES,
+  );
+}
+
 // `include_usage` requests a final usage-only chunk so token accounting survives.
 function buildStreamBody(
   request: ProviderGatewayRequest,
@@ -725,15 +816,6 @@ function buildStreamBody(
     ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
   };
 }
-
-const FINISH_REASONS: ReadonlySet<FinishReason> = new Set([
-  "stop",
-  "tool_calls",
-  "length",
-  "content_filter",
-  "error",
-  "cancelled",
-]);
 
 function firstStreamChoice(chunk: unknown): Record<string, unknown> | undefined {
   if (!isRecord(chunk) || !Array.isArray(chunk.choices)) {
@@ -765,9 +847,7 @@ function reasoningFromChunk(chunk: unknown): string | undefined {
 function finishReasonFromChunk(chunk: unknown): FinishReason | undefined {
   const choice = firstStreamChoice(chunk);
   const raw = choice?.finish_reason;
-  return typeof raw === "string" && FINISH_REASONS.has(raw as FinishReason)
-    ? (raw as FinishReason)
-    : undefined;
+  return normalizedFinishReason(raw);
 }
 
 function nonNegativeCount(value: unknown): number {
@@ -790,7 +870,14 @@ interface ToolCallDeltaEntry {
   readonly name: string;
   readonly argumentsText: string;
 }
-type ToolCallAccumulator = Map<number, ToolCallDeltaEntry>;
+// Tracks its largest index as entries arrive, so placing a fragment never rescans every key.
+class ToolCallAccumulator extends Map<number, ToolCallDeltaEntry> {
+  maxIndex = Number.NEGATIVE_INFINITY;
+  override set(key: number, value: ToolCallDeltaEntry): this {
+    if (key > this.maxIndex) this.maxIndex = key;
+    return super.set(key, value);
+  }
+}
 
 // Standard OpenAI-compatible streaming shape: `delta.tool_calls` carries one fragment per call,
 // indexed by `index`, with `id`/`function.name` arriving once and `function.arguments` arriving as
@@ -863,7 +950,7 @@ function positionalToolCallIndex(
   ) {
     return position;
   }
-  return Math.max(...accumulator.keys()) + 1;
+  return accumulator.maxIndex + 1;
 }
 
 function applyToolCallDelta(
@@ -984,10 +1071,10 @@ export class ProviderResponseInvalidError extends ProviderError {
 // this constant, let alone that limit).
 const MAX_REDACT_DEPTH = 32;
 
-// How a model value is scrubbed: `redact()` (configured literals plus heuristic secret shapes) for
-// content, structured output and every tool except the changeset edit, or the configured literals
-// alone for changeset-edit arguments, which are workspace file content (#4009). `changed` counts
-// the strings the scrub altered.
+// How a model value is scrubbed: the call's content policy for content, structured output and tool
+// arguments, `redact()` (configured literals plus heuristic shapes) for arguments that leave for the
+// public internet, or the configured literals alone for changeset-edit arguments, which are workspace
+// file content (#4009). `changed` counts the strings the scrub altered.
 interface ValueScrub {
   readonly secrets: readonly string[];
   readonly text: (value: string) => string;
@@ -1041,7 +1128,7 @@ function redactRecord(
 
 // #4098: a call keeps the default content projection unless its caller asked to preserve
 // authorized content (`GatewayCallRequest.contentRedaction`, set by Chat under the deployment
-// opt-out alone). Tool-call arguments never follow it.
+// policy).
 function contentPolicy(request: GatewayCallRequest): ContentRedactionPolicy {
   return request.contentRedaction === "preserve" ? "preserve" : "redact";
 }
@@ -1049,16 +1136,38 @@ function contentPolicy(request: GatewayCallRequest): ContentRedactionPolicy {
 // A tool call's name is matched against the offered catalog. The governed changeset edit executes
 // its arguments exactly as they arrive: an `oldString` must match its file and a `newString` is the
 // content that gets written, so they lose only the configured provider secrets, never text that
-// merely looks like a credential (#4009). Every other tool's arguments are displayed (`question`)
-// or sent outward (`keiko_research_fetch`), so they keep the full heuristic redaction.
+// merely looks like a credential (#4009). `keiko_research_fetch` goes out to the public internet, so
+// its arguments always keep the full heuristic redaction. Every other tool's arguments follow the
+// call's content policy: a Jira draft or a `question` is what a person reads, and under `preserve`
+// keeps its dates, IBANs and standard names (owner decision 2026-11-04), losing the credential floor.
+const OUTWARD_TOOL_NAME = "keiko_research_fetch";
+
+function contentScrub(secrets: readonly string[], policy: ContentRedactionPolicy): ValueScrub {
+  return policy === "preserve"
+    ? { secrets, text: (value) => redactContent(value, "preserve", secrets), changed: 0 }
+    : heuristicScrub(secrets);
+}
+
+function toolArgumentScrub(
+  name: string,
+  secrets: readonly string[],
+  exactContent: ValueScrub,
+  isExactContentTool: (alias: string) => boolean,
+  policy: ContentRedactionPolicy,
+): ValueScrub {
+  if (isExactContentTool(name)) return exactContent;
+  return contentScrub(secrets, name === OUTWARD_TOOL_NAME ? "redact" : policy);
+}
+
 function redactToolCall(
   call: NormalizedToolCall,
   secrets: readonly string[],
   exactContent: ValueScrub,
   isExactContentTool: (alias: string) => boolean,
+  policy: ContentRedactionPolicy,
 ): NormalizedToolCall {
   const name = redact(call.name, secrets);
-  const scrub = isExactContentTool(name) ? exactContent : heuristicScrub(secrets);
+  const scrub = toolArgumentScrub(name, secrets, exactContent, isExactContentTool, policy);
   return {
     ...call,
     name,
@@ -1076,20 +1185,42 @@ function redactResponse(
   secrets: readonly string[],
   isExactContentTool: (alias: string) => boolean,
   policy: ContentRedactionPolicy,
+  requiredReasoning: boolean,
 ): RedactedResponse {
   const exactContent = literalScrub(secrets);
   const redacted: NormalizedResponse = {
     ...response,
     content: redactContent(response.content, policy, secrets),
     toolCalls: response.toolCalls.map((call) =>
-      redactToolCall(call, secrets, exactContent, isExactContentTool),
+      redactToolCall(call, secrets, exactContent, isExactContentTool, policy),
     ),
     structuredOutput: redactRecord(response.structuredOutput, secrets, policy),
     ...(response.reasoning === undefined
       ? {}
-      : { reasoning: redactContent(response.reasoning, policy, secrets) }),
+      : {
+          reasoning: requiredReasoning
+            ? preserveRequiredReasoning(response.reasoning, secrets)
+            : redactContent(response.reasoning, policy, secrets),
+        }),
   };
   return { response: redacted, toolArgumentsRedacted: exactContent.changed };
+}
+
+/** Opaque provider continuation may pass the credential floor only byte for byte. */
+function preserveRequiredReasoning(text: string, secrets: readonly string[]): string {
+  if (redactContent(text, "preserve", secrets) !== text)
+    throw new ResponseRedactionError(
+      "Required model continuation state failed the credential floor.",
+      secrets,
+    );
+  return text;
+}
+
+function requiresReasoningState(request: GatewayCallRequest, config: ModelProviderConfig): boolean {
+  return (
+    request.reasoningDelivery === "forward" &&
+    config.reasoningContinuation === "required-with-tools"
+  );
 }
 
 function providerReportedUsage(payload: unknown): boolean {
@@ -1103,13 +1234,23 @@ function bindCatalogResponse(
   response: NormalizedResponse,
   secrets: readonly string[],
   catalog: GatewayToolCatalogBridge,
-  options: { readonly usageReported: boolean; readonly policy: ContentRedactionPolicy },
+  options: {
+    readonly usageReported: boolean;
+    readonly policy: ContentRedactionPolicy;
+    readonly requiredReasoning: boolean;
+  },
   onToolArgumentsRedacted: (redactedStringCount: number, toolCallCount: number) => void,
 ): NormalizedResponse {
   const { usageReported, policy } = options;
   try {
     catalog.assertNativeTransport(response);
-    const redacted = redactResponse(response, secrets, catalog.isExactContentTool, policy);
+    const redacted = redactResponse(
+      response,
+      secrets,
+      catalog.isExactContentTool,
+      policy,
+      options.requiredReasoning,
+    );
     if (redacted.toolArgumentsRedacted > 0) {
       onToolArgumentsRedacted(redacted.toolArgumentsRedacted, response.toolCalls.length);
     }
@@ -1544,7 +1685,7 @@ function newStreamAccumulator(): StreamAccumulator {
     prompt: 0,
     completion: 0,
     usage: undefined,
-    toolCalls: new Map(),
+    toolCalls: new ToolCallAccumulator(),
   };
 }
 
@@ -1767,6 +1908,28 @@ function* flushedLanes(lanes: StreamTextLanes): Generator<StreamTextChunk> {
   if (content.length > 0) yield { type: "delta", token: content };
 }
 
+function streamTextLanes(read: StreamRead, report: StreamReport): StreamTextLanes {
+  const project = (text: string): string =>
+    redactContent(text, contentPolicy(read.request), read.secrets, {
+      onCodeProjection: (projection): void => {
+        report.redaction.streamCodeRegions += projection.regions;
+        report.redaction.streamCodeDepthRefusals += projection.depthRefusals;
+        report.redaction.streamCodeSizeRefusals += projection.sizeRefusals;
+        report.redaction.streamCodeSyntaxRefusals += projection.syntaxRefusals;
+      },
+    });
+  const lanes: StreamTextLanes = {
+    reasoning: createStreamingRedactor(
+      requiresReasoningState(read.request, read.config)
+        ? (text): string => preserveRequiredReasoning(text, read.secrets)
+        : project,
+      read.secrets,
+    ),
+    content: createStreamingRedactor(project, read.secrets),
+  };
+  return lanes;
+}
+
 export class OpenAiAdapter implements ProviderAdapter {
   readonly attemptAdmissionBoundary = "transport";
   private readonly now: () => number;
@@ -1784,7 +1947,11 @@ export class OpenAiAdapter implements ProviderAdapter {
     request: GatewayCallRequest,
     config: ModelProviderConfig,
   ): Promise<NormalizedResponse> => {
-    const secrets = [config.apiKey, config.baseUrl];
+    const secrets = [
+      config.apiKey,
+      config.baseUrl,
+      ...(requiresReasoningState(request, config) ? (request.reasoningStateSecrets ?? []) : []),
+    ];
     if (request.cancellationSignal?.aborted === true) {
       throw requestAbortError(
         request.cancellationSignal,
@@ -1799,8 +1966,10 @@ export class OpenAiAdapter implements ProviderAdapter {
       ...request,
       tools: catalog.tools.length === 0 ? undefined : catalog.tools,
     };
-    const dispatched = await this.dispatchWithOutputTokenFallback(toolRequest, config, (field) =>
-      this.dispatch(toolRequest, withOutputTokenField(config, field), secrets),
+    const dispatched = await this.dispatchWithReasoningFallback(toolRequest, config, () =>
+      this.dispatchWithOutputTokenFallback(toolRequest, config, (field) =>
+        this.dispatch(toolRequest, withOutputTokenField(config, field), secrets),
+      ),
     );
     try {
       const { response } = dispatched;
@@ -1833,7 +2002,11 @@ export class OpenAiAdapter implements ProviderAdapter {
     config: ModelProviderConfig,
     bounds?: StreamReadBounds,
   ): AsyncGenerator<GatewayStreamChunk> {
-    const secrets = [config.apiKey, config.baseUrl];
+    const secrets = [
+      config.apiKey,
+      config.baseUrl,
+      ...(requiresReasoningState(request, config) ? (request.reasoningStateSecrets ?? []) : []),
+    ];
     if (request.cancellationSignal?.aborted === true) {
       throw requestAbortError(
         request.cancellationSignal,
@@ -1900,23 +2073,12 @@ export class OpenAiAdapter implements ProviderAdapter {
     acc: StreamAccumulator,
     report: StreamReport,
   ): AsyncGenerator<StreamTextChunk> {
-    const project = (text: string): string =>
-      redactContent(text, contentPolicy(read.request), read.secrets, {
-        onCodeProjection: (projection): void => {
-          report.redaction.streamCodeRegions += projection.regions;
-          report.redaction.streamCodeDepthRefusals += projection.depthRefusals;
-          report.redaction.streamCodeSizeRefusals += projection.sizeRefusals;
-          report.redaction.streamCodeSyntaxRefusals += projection.syntaxRefusals;
-        },
-      });
-    const lanes: StreamTextLanes = {
-      reasoning: createStreamingRedactor(project, read.secrets),
-      content: createStreamingRedactor(project, read.secrets),
-    };
+    const lanes = streamTextLanes(read, report);
     const silenceMs = read.bounds?.silenceMs ?? STREAM_IDLE_TIMEOUT_MS;
     const completion = { sawDone: false };
     try {
-      for await (const chunk of readSseStream(response, undefined, silenceMs, read.signal, () => {
+      const wireCap = streamWireByteCap(read.request.maxOutputTokens);
+      for await (const chunk of readSseStream(response, wireCap, silenceMs, read.signal, () => {
         completion.sawDone = true;
       })) {
         recordDataEvent(report);
@@ -2031,7 +2193,11 @@ export class OpenAiAdapter implements ProviderAdapter {
       normalized,
       secrets,
       catalog,
-      { usageReported: providerReportedUsage(payload), policy: contentPolicy(request) },
+      {
+        usageReported: providerReportedUsage(payload),
+        policy: contentPolicy(request),
+        requiredReasoning: requiresReasoningState(request, config),
+      },
       (redactedStringCount, toolCallCount) => {
         this.logToolArgumentsRedacted(config.modelId, redactedStringCount, toolCallCount);
       },
@@ -2148,7 +2314,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     const url = chatCompletionsUrl(config);
     const reservation = this.transportReservation(request, config);
     const { body, deadline } = this.prepareHttpDispatch(
-      request,
+      this.withRememberedReasoningOmission(request, config, url),
       config,
       reservation,
       url,
@@ -2223,7 +2389,9 @@ export class OpenAiAdapter implements ProviderAdapter {
     const admit = request.attemptAdmission;
     if (admit === undefined) return undefined;
     const reservation = admit({
-      promptTokens: countGatewayPromptTokens(request),
+      promptTokens: countGatewayPromptTokens(request, undefined, {
+        reasoningHistoryField: config.reasoningHistoryField,
+      }),
       maxOutputTokens: dispatchedMaxOutputTokens(request, config) ?? 0,
     });
     if (reservation === undefined)
@@ -2253,19 +2421,23 @@ export class OpenAiAdapter implements ProviderAdapter {
     };
     const mode = chatCompatibilityMode(memoScope, url, this.now);
     if (mode === "whole-body") {
-      return this.dispatchWithOutputTokenFallback(request, config, (field) =>
-        this.dispatch(request, withOutputTokenField(config, field), secrets, false, bounds),
+      return this.dispatchWithReasoningFallback(request, config, () =>
+        this.dispatchWithOutputTokenFallback(request, config, (field) =>
+          this.dispatch(request, withOutputTokenField(config, field), secrets, false, bounds),
+        ),
       );
     }
     const includeUsage = mode !== "omit-usage";
-    const first = await this.dispatchWithOutputTokenFallback(request, config, (field) =>
-      this.dispatch(
-        request,
-        withOutputTokenField(config, field),
-        secrets,
-        true,
-        bounds,
-        includeUsage,
+    const first = await this.dispatchWithReasoningFallback(request, config, () =>
+      this.dispatchWithOutputTokenFallback(request, config, (field) =>
+        this.dispatch(
+          request,
+          withOutputTokenField(config, field),
+          secrets,
+          true,
+          bounds,
+          includeUsage,
+        ),
       ),
     );
     if (first.response.ok || !isStrictChatShapeRejection(first.response.status)) return first;
@@ -2365,7 +2537,12 @@ export class OpenAiAdapter implements ProviderAdapter {
       this.deps.compatibilityMemoScope ?? config,
       chatCompletionsUrl(config),
     );
-    return config.outputTokenParameter ?? remembered ?? sentOutputTokenField(request, config);
+    return (
+      config.outputTokenParameter ??
+      remembered ??
+      callOutputTokenFields.get(request) ??
+      sentOutputTokenField(request, config)
+    );
   }
 
   // #3639: a deployment whose name hides its model family gets the wrong output-token field — a
@@ -2391,8 +2568,85 @@ export class OpenAiAdapter implements ProviderAdapter {
     const retry = await send(other);
     if (retry.response.ok) {
       rememberOutputTokenField(this.deps.compatibilityMemoScope ?? config, url, other);
+    } else if (await this.rejectedForAnotherParameter(retry, other, config, secrets)) {
+      // Not remembered for the endpoint (no other rejection may poison later requests), but this
+      // logical call's next compatibility retry starts from the field that was not the cause.
+      callOutputTokenFields.set(request, other);
     }
     return retry;
+  }
+
+  // A failed retry that does not reject the field it sent (a reasoning or stream-shape rejection).
+  private async rejectedForAnotherParameter(
+    retry: DispatchedResponse,
+    field: OutputTokenField,
+    config: ModelProviderConfig,
+    secrets: readonly string[],
+  ): Promise<boolean> {
+    if (!isStrictChatShapeRejection(retry.response.status)) return false;
+    const payload = await this.readErrorBody(retry.response.clone(), config, secrets, retry.signal);
+    return !rejectsOutputTokenField(payload, field);
+  }
+
+  private withRememberedReasoningOmission(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+    url: string,
+  ): ProviderGatewayRequest {
+    if (request.reasoningPreference === undefined) return request;
+    const omitted =
+      reasoningDroppedRequests.has(request) ||
+      reasoningOmitted(
+        this.deps.compatibilityMemoScope ?? config,
+        reasoningMemoKey(url, config.modelId),
+      );
+    return omitted ? { ...request, reasoningPreference: undefined } : request;
+  }
+
+  // A request that only PREFERRED no reasoning (reasoningPreference "off") is answered once without
+  // `reasoning_effort` when the provider names it as unsupported. Whether THIS request sent the
+  // field is decided before the call, so concurrent requests that were all rejected all retry. The
+  // omission holds for the rest of the logical call; the deployment remembers it only once the
+  // retry was accepted, and forgets it again when the retry is rejected for that very field.
+  private async dispatchWithReasoningFallback(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+    run: () => Promise<DispatchedResponse>,
+  ): Promise<DispatchedResponse> {
+    const url = chatCompletionsUrl(config);
+    const scope = this.deps.compatibilityMemoScope ?? config;
+    const key = reasoningMemoKey(url, config.modelId);
+    const sent =
+      sendsReasoningPreference(request, config) &&
+      !reasoningDroppedRequests.has(request) &&
+      !reasoningOmitted(scope, key);
+    const first = await run();
+    if (!sent || first.response.ok || !isStrictChatShapeRejection(first.response.status)) {
+      return first;
+    }
+    const secrets = [config.apiKey, config.baseUrl];
+    const payload = await this.readErrorBody(first.response.clone(), config, secrets, first.signal);
+    if (isContextOverflow(first.response.status, payload)) return first;
+    if (!rejectsReasoningEffortParameter(payload)) return first;
+    first.dispose();
+    this.logChatCompatibilityRetry(url, config, first.response.status, "reasoning_effort");
+    reasoningDroppedRequests.add(request);
+    const retry = await run();
+    if (retry.response.ok) rememberReasoningOmitted(scope, key);
+    else await this.forgetIfRejectedAgain(retry, config, scope, key);
+    return retry;
+  }
+
+  private async forgetIfRejectedAgain(
+    retry: DispatchedResponse,
+    config: ModelProviderConfig,
+    scope: object,
+    key: string,
+  ): Promise<void> {
+    if (!isStrictChatShapeRejection(retry.response.status)) return;
+    const secrets = [config.apiKey, config.baseUrl];
+    const payload = await this.readErrorBody(retry.response.clone(), config, secrets, retry.signal);
+    if (rejectsReasoningEffortParameter(payload)) forgetReasoningOmitted(scope, key);
   }
 
   private mayRetryOutputTokenField(
@@ -2412,7 +2666,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     url: string,
     config: ModelProviderConfig,
     status: number,
-    omittedField: "stream_options" | "stream" | OutputTokenField,
+    omittedField: "stream_options" | "stream" | "reasoning_effort" | OutputTokenField,
   ): void {
     this.log.write(
       activityLogEvent(

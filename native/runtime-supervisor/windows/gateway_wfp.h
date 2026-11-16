@@ -20,11 +20,32 @@ struct keiko_gateway_filters {
   int guard_installed;
 };
 
+/* These keys contain no handles. The broker must durably persist them together with its
+ * authenticated tree/job/SID binding BEFORE open_prepared can change WFP state. */
+struct keiko_gateway_guard_keys {
+  GUID sublayer;
+  GUID deny[2];
+};
+
+/* Generates fresh keys without opening the filtering engine or changing network policy. */
+DWORD keiko_gateway_guard_prepare(struct keiko_gateway_guard_keys *keys);
+int keiko_gateway_guard_keys_valid(const struct keiko_gateway_guard_keys *keys);
+DWORD keiko_gateway_filters_open_prepared(PSID package_sid, UINT16 family, UINT16 port,
+                                         HANDLE job, const struct keiko_gateway_guard_keys *keys,
+                                         struct keiko_gateway_filters *filters);
+
 /* family is AF_INET or AF_INET6; the only accepted destination is that family's loopback.
  * No caller-controlled address, filter action, executable identity or filter layer is accepted. */
 DWORD keiko_gateway_filters_open(PSID package_sid, UINT16 family, UINT16 port,
                                 struct keiko_gateway_filters *filters);
 DWORD keiko_gateway_filters_close(struct keiko_gateway_filters *filters);
+
+/* Releases a tree's filters once its loopback exemption was revoked (revoke_result). A failed
+ * revoke keeps the durable deny guard untouched and returns that failure, so a later broker start
+ * still finds the guard and retries the revoke. After a successful revoke, retries close while the
+ * tree is still reaping (ERROR_BUSY), at most about two seconds. */
+DWORD keiko_gateway_filters_close_after_revoke(struct keiko_gateway_filters *filters,
+                                               DWORD revoke_result);
 
 /* job must have KILL_ON_JOB_CLOSE and neither breakaway flag. The caller must not resume a
  * process until this succeeds. Closing with a live tree revokes the permit but retains both
@@ -38,5 +59,10 @@ DWORD keiko_gateway_filters_open_guarded(PSID package_sid, UINT16 family, UINT16
  * job. The broker is responsible for authenticating its durable recovery record. */
 DWORD keiko_gateway_filters_recover_guard(PSID package_sid, HANDLE job, const GUID *sublayer,
                                          const GUID keys[2], struct keiko_gateway_filters *filters);
+
+/* Lists the distinct AppContainer package SIDs that still have a persistent Keiko durable deny
+ * guard (left by a broker that could not verify termination or did not survive). Writes at most
+ * capacity SIDs; the caller HeapFree()s the first *count entries whatever the result. */
+DWORD keiko_gateway_filters_guarded_packages(PSID *packages, DWORD capacity, DWORD *count);
 
 #endif

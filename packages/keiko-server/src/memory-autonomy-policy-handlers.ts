@@ -1,10 +1,12 @@
 import type { IncomingMessage } from "node:http";
 import type { MemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts";
 import { parseUpdateMemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
+import { readBoundedRequestBody } from "./bounded-request-body.js";
 import type { UiHandlerDeps } from "./deps.js";
 import {
   DEFAULT_MEMORY_AUTONOMY_MODE,
   memoryDeploymentCeiling,
+  memoryOperatorRestrictsAcceptance,
   resolveMemoryCaptureAutonomyMode,
 } from "./memory-capture-policy.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
@@ -26,45 +28,15 @@ function policyProjection(
     effectiveMode: resolveMemoryCaptureAutonomyMode(deps, requestedMode),
     deploymentCeiling,
     revision,
+    routineFactsHeldForReview: memoryOperatorRestrictsAcceptance(deps),
   };
 }
 
-function readRequestBody(req: IncomingMessage): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    let settled = false;
-    const settleReject = (error: Error): void => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    };
-    req.on("data", (chunk: Buffer) => {
-      if (settled) return;
-      size += chunk.length;
-      if (size > MAX_POLICY_BODY_BYTES) {
-        settleReject(new Error("policy request body too large"));
-        req.resume();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (settled) return;
-      settled = true;
-      resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", settleReject);
-    // A client disconnect mid-upload emits neither "end" nor "error" — without this, the promise
-    // (and the awaiting route handler) would hang until the process itself tears down the socket.
-    req.once("aborted", () => {
-      settleReject(new Error("policy request aborted"));
-    });
-  });
-}
-
-async function parseUpdate(req: IncomingMessage): Promise<unknown> {
-  const raw = await readRequestBody(req);
+async function parseUpdate(
+  req: IncomingMessage,
+  correlationId: string | undefined,
+): Promise<unknown> {
+  const raw = await readBoundedRequestBody(req, MAX_POLICY_BODY_BYTES, undefined, correlationId);
   if (raw.length === 0) return undefined;
   const parsed: unknown = JSON.parse(raw);
   return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
@@ -85,7 +57,7 @@ export async function handlePutMemoryAutonomyPolicy(
 ): Promise<RouteResult> {
   let update: unknown;
   try {
-    update = await parseUpdate(ctx.req);
+    update = await parseUpdate(ctx.req, ctx.correlationId);
   } catch {
     return {
       status: 400,

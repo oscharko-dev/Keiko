@@ -6,7 +6,6 @@
 import { readFileSync } from "node:fs";
 import { parseAtlassianNetworkConfig } from "./atlassian-network-config.js";
 import { isIP } from "node:net";
-import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -65,25 +64,16 @@ import type {
   VoiceProviderLocality,
 } from "./types.js";
 
-export function toolCallingConfigurationFingerprint(provider: ModelProviderConfig): string {
-  // Credential header spelling controls authentication transport, not the provider protocol or its
-  // tool-call semantics. Deliberately exclude it: hashing a request-supplied header name creates a
-  // misleading password-hash dataflow and cannot make a capability verdict more authoritative.
-  const binding = [
-    provider.modelId,
-    provider.baseUrl,
-    provider.endpointStyle ?? "openai-compatible",
-    provider.apiVersion ?? "",
-    // The deployment the gateway reports behind the alias (#3905). Appended only once observed, so
-    // a provider whose discovery never saw one keeps the digest its earlier proofs were issued for.
-    ...(provider.deploymentIdentitySha256 === undefined ? [] : [provider.deploymentIdentitySha256]),
-  ];
-  return sha256Hex(canonicalise(binding));
-}
+export { toolCallingConfigurationFingerprint } from "./provider-identity.js";
+import {
+  assertReasoningPolicyOwner,
+  toolCallingConfigurationFingerprint,
+} from "./provider-identity.js";
 
 // #3591: raised from 30s so an unconfigured provider's default already tolerates the field
 // customer's slow LiteLLM/vLLM proxy instead of relying solely on the gateway's own silence/budget
 // floors (resilience.ts) to compensate for a too-short default.
+/** The provider timeout a configuration gets when it names none: the conversational default. */
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
@@ -1829,6 +1819,52 @@ function catalogOriginConfig(
   };
 }
 
+function reasoningHistoryConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "reasoningHistory"> {
+  return value === undefined
+    ? {}
+    : {
+        reasoningHistory: requireEnum<NonNullable<ModelProviderConfig["reasoningHistory"]>>(
+          value,
+          `${path}.reasoningHistory`,
+          ["required-with-tools", "current-turn"],
+        ),
+      };
+}
+
+function reasoningHistoryFieldConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "reasoningHistoryField"> {
+  return value === undefined
+    ? {}
+    : {
+        reasoningHistoryField: requireEnum<"reasoning_content" | "reasoning">(
+          value,
+          `${path}.reasoningHistoryField`,
+          ["reasoning_content", "reasoning"],
+        ),
+      };
+}
+
+function providerReasoningConfig(
+  raw: Record<string, unknown>,
+  path: string,
+): Pick<
+  ModelProviderConfig,
+  "reasoningContinuation" | "reasoningHistory" | "reasoningHistoryField"
+> {
+  const policy = {
+    ...reasoningContinuationConfig(raw.reasoningContinuation, path),
+    ...reasoningHistoryConfig(raw.reasoningHistory, path),
+    ...reasoningHistoryFieldConfig(raw.reasoningHistoryField, path),
+  };
+  assertReasoningPolicyOwner(policy);
+  return policy;
+}
+
 function parseProviderConfig(
   raw: Record<string, unknown>,
   path: string,
@@ -1865,9 +1901,11 @@ function parseProviderConfig(
     ...(realtimeAuthMode === undefined ? {} : { realtimeAuthMode }),
     ...outputTokenParameterConfig(raw.outputTokenParameter, path),
     ...tokenCounterConfig(raw.tokenCounter, path),
+    ...providerReasoningConfig(raw, path),
     ...deploymentIdentityConfig(raw.deploymentIdentitySha256, path),
     ...catalogOriginConfig(raw.catalogOrigin, path),
     timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
+    ...timeoutNamedMarker(raw),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
     retryBaseDelayMs: requirePositiveInt(
       raw.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
@@ -1876,6 +1914,36 @@ function parseProviderConfig(
     ...(voiceProfiles === undefined ? {} : { voiceProfiles }),
     ...(circuitBreaker === undefined ? {} : { circuitBreaker }),
   };
+}
+
+// Who named the request timeout (#4351): the explicit check lifts only a default. A stored `timeoutNamed:
+// true` is a person's value, whatever it is. Without that marker, a value equal to a default Keiko
+// itself ever stored (Setup's 30 s, the resolver's 120 s) is a default, which is every installation
+// written before the marker existed; any other unmarked value was typed by a person.
+const LEGACY_DEFAULT_TIMEOUTS_MS: ReadonlySet<unknown> = new Set([30_000, DEFAULT_TIMEOUT_MS]);
+
+function timeoutNamedMarker(raw: {
+  readonly timeoutMs?: unknown;
+  readonly timeoutNamed?: unknown;
+}): Pick<ModelProviderConfig, "timeoutConfigured"> {
+  if (raw.timeoutMs === undefined) return {};
+  if (raw.timeoutNamed === true) return { timeoutConfigured: true };
+  return LEGACY_DEFAULT_TIMEOUTS_MS.has(raw.timeoutMs) ? {} : { timeoutConfigured: true };
+}
+
+function reasoningContinuationConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "reasoningContinuation"> {
+  return value === undefined
+    ? {}
+    : {
+        reasoningContinuation: requireEnum<"required-with-tools">(
+          value,
+          `${path}.reasoningContinuation`,
+          ["required-with-tools"],
+        ),
+      };
 }
 
 function providerCredentialReference(

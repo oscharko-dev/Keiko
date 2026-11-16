@@ -14,7 +14,12 @@ import {
   type SourceTextProjection,
 } from "./redaction-source-map.js";
 import { privateKeyParserSource } from "./redaction-private-key.js";
-import { projectJavaData, isJavaSource, JavaSyntaxRefusal } from "./redaction-java.js";
+import {
+  isJavaParserUnavailable,
+  isJavaSource,
+  JavaSyntaxRefusal,
+  projectJavaData,
+} from "./redaction-java.js";
 import {
   projectTypeScriptData,
   isJsonDocument,
@@ -29,7 +34,11 @@ import {
 } from "./redaction-typescript.js";
 import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
-import { projectUnifiedDiff, firstUnifiedDiffHeader } from "./redaction-diff.js";
+import {
+  projectUnifiedDiff,
+  firstUnifiedDiffHeader,
+  privateLiteralTexts,
+} from "./redaction-diff.js";
 
 export type SourceRedactionLanguage = "typescript" | "javascript" | "java" | "json" | "yaml";
 type ProjectionLanguage = SourceRedactionLanguage | "unified-diff";
@@ -479,14 +488,29 @@ function boundedProjection(
   return [{ start: 0, end: body.length, replacement: maskedLiteralBody(body) }];
 }
 
-/** A malformed public fragment can remain searchable only when it has no literal, escape,
- * sensitive-name or strict-redaction candidate. All other failed Java parses remain closed. */
+/** A malformed public fragment, or one no parser was available for, can remain searchable only
+ * when it has no literal, escape, sensitive-name or strict-redaction candidate. All other failed
+ * Java parses remain closed. */
 function safeUnparsedJava(error: unknown, body: string, ports: ProjectionPorts): boolean {
+  if (error instanceof JavaSyntaxRefusal) return javaLiteralFree(body, ports, ANY_APOSTROPHE);
+  return isJavaParserUnavailable(error) && javaLiteralFree(body, ports, EDGE_APOSTROPHE);
+}
+
+// A fragment that failed the parser may hold a quoted value in any single quotes, so every
+// apostrophe closes it. Without a parser the text may be prose: an apostrophe between two letters
+// ("it's") opens no literal, while one at a word's edge may ('q', 'value') and closes it.
+const ANY_APOSTROPHE = /'/u;
+const EDGE_APOSTROPHE = /(?<!\p{L})'|'(?!\p{L})/u;
+
+/** Text in which Java projection would mask nothing: no literal, escape, sensitive name,
+ * strict-redaction candidate or value of a private literal seen elsewhere in the same scope. */
+function javaLiteralFree(body: string, ports: ProjectionPorts, apostrophe: RegExp): boolean {
   return (
-    error instanceof JavaSyntaxRefusal &&
-    !/["'\\]/u.test(body) &&
+    !/["\\]/u.test(body) &&
+    !apostrophe.test(body) &&
     !ports.mayContainSensitiveName(body) &&
-    ports.redactPlain(body) === body
+    ports.redactPlain(body) === body &&
+    !privateLiteralTexts(ports).some((value) => body.includes(value))
   );
 }
 
@@ -510,7 +534,7 @@ function nonJsonSourceProjection(
   report: { depthRefusals: number; syntaxRefusals: number },
 ): readonly RedactionSpan[] {
   if (safeUnparsedText(body, ports)) return [];
-  const language = inferredLanguage(body);
+  const language = inferredLanguage(body, ports);
   if (language === "typescript") return projectTypeScriptData(body, ports);
   if (language === "java") return projectJavaData(body, ports);
   return refusedProjection(body, report, "syntax");
@@ -550,11 +574,27 @@ function mayStartTypedSource(body: string): boolean {
   );
 }
 
-function inferredLanguage(text: string): SourceRedactionLanguage | undefined {
+function inferredLanguage(
+  text: string,
+  ports: ProjectionPorts,
+): SourceRedactionLanguage | undefined {
   const document = inferredDocumentLanguage(text);
   if (document !== undefined) return document;
   if (isTypeScriptSource(text)) return "typescript";
-  return isJavaSource(text) ? "java" : undefined;
+  return inferredJava(text, ports) ? "java" : undefined;
+}
+
+// Without a parser nothing can be told about Java. Text that holds nothing Java projection would
+// mask is read on as prose; anything else stays closed, as a refused parse does.
+function inferredJava(text: string, ports: ProjectionPorts): boolean {
+  try {
+    return isJavaSource(text);
+  } catch (error) {
+    if (isJavaParserUnavailable(error) && javaLiteralFree(text, ports, EDGE_APOSTROPHE)) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function standaloneRegions(
@@ -607,7 +647,7 @@ function classifiedSourcePrefix(
   if (marked !== undefined) return marked;
   if (ports.inferUnifiedDiff !== false && mayStartUnifiedDiff(text))
     return { language: "unified-diff", end: text.length };
-  return mayStartYaml(text) ? inferredYamlPrefix(text, ports) : inferredTypedPrefix(text);
+  return mayStartYaml(text) ? inferredYamlPrefix(text, ports) : inferredTypedPrefix(text, ports);
 }
 
 /**
@@ -633,8 +673,11 @@ function markedSourcePrefix(
     : { language: undefined, end };
 }
 
-function inferredTypedPrefix(text: string): InferredSourcePrefix | undefined {
-  const language = inferredLanguage(text);
+function inferredTypedPrefix(
+  text: string,
+  ports: ProjectionPorts,
+): InferredSourcePrefix | undefined {
+  const language = inferredLanguage(text, ports);
   if (language !== undefined) return { language, end: text.length };
   const end = typeScriptPrefixLength(text);
   if (end > 0) return { language: "typescript", end };

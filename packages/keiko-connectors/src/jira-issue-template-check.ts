@@ -2,8 +2,14 @@ import {
   JIRA_TEMPLATE_VIOLATIONS_MAX,
   compileJiraTemplatePattern,
   jiraIssueTemplateLabel,
+  jiraTemplateBoundFieldId,
+  jiraTemplateBoundStatusId,
+  jiraTemplateIssueTypeMatches,
+  jiraTemplateParentEntryMatches,
+  jiraTemplateParentTypeMatches,
   normalizeJiraSectionHeading,
   readJiraDescriptionSections,
+  projectJiraDescriptionInput,
   type JiraIssueTemplate,
   type JiraTemplateActivation,
   type JiraTemplateViolation,
@@ -23,16 +29,24 @@ export interface JiraTemplateSubject {
     readonly id: string;
     readonly name?: string;
     readonly targetStatusName?: string;
+    /** The id of the status the transition leads to, in the same language-independent form as `id`. */
+    readonly targetStatusId?: string;
   };
   /** The state after the write, by Jira field id (wire values). */
   readonly fields: Readonly<Record<string, unknown>>;
   /** Names of the link types the issue carries; only meaningful for edit and transition. */
   readonly linkTypes?: readonly string[] | undefined;
+  /** Independently read parent types, keyed by the resolved parent field ID; never input facts. */
+  readonly parentIssueTypes?: Readonly<
+    Record<string, { readonly id: string; readonly name: string }>
+  >;
 }
 
 export interface JiraFieldCatalogEntry {
   readonly id: string;
   readonly name: string;
+  /** Jira's custom field type (`schema.custom`) when the instance declares one; never an identity. */
+  readonly schemaCustom?: string;
 }
 
 /** A Jira summary and a label are at most 255 characters; a longer text never reaches a pattern. */
@@ -84,24 +98,25 @@ export function jiraTemplateValuePresent(value: unknown): boolean {
 function activationMatches(
   activation: JiraTemplateActivation,
   subject: JiraTemplateSubject,
+  template: Pick<JiraIssueTemplate, "binding" | "activations">,
 ): boolean {
-  if (activation.kind !== subject.operation) return false;
-  if (activation.kind !== "transition" || activation.target === undefined) return true;
+  // A plain activation governs creating and editing; it never governs a transition (#4354).
+  if (activation.kind !== "transition") return subject.operation !== "transition";
+  if (subject.operation !== "transition" || activation.target === undefined)
+    return subject.operation === "transition";
   const { target } = activation;
   const transition = subject.transition;
-  return (
-    transition !== undefined &&
-    (transition.id === target ||
-      same(transition.name, target) ||
-      same(transition.targetStatusName, target))
-  );
+  if (transition === undefined) return false;
+  if (transition.id === target) return true;
+  // A target the template is bound to a status id for matches by that id alone, in every language;
+  // any other target matches the name it was typed in (#4354).
+  const statusId = jiraTemplateBoundStatusId(template, activation);
+  if (statusId !== undefined) return transition.targetStatusId === statusId;
+  return same(transition.name, target) || same(transition.targetStatusName, target);
 }
 
 function issueTypeMatches(template: JiraIssueTemplate, subject: JiraTemplateSubject): boolean {
-  return (
-    same(subject.issueType.name, template.issueType) ||
-    (subject.issueType.id !== undefined && subject.issueType.id === template.issueType)
-  );
+  return jiraTemplateIssueTypeMatches(template, subject.issueType);
 }
 
 /** The templates that govern this write: same project and issue type, activated at this point. */
@@ -113,7 +128,7 @@ export function matchingJiraIssueTemplates(
     (template) =>
       same(subject.projectKey, template.project) &&
       issueTypeMatches(template, subject) &&
-      template.activations.some((activation) => activationMatches(activation, subject)),
+      template.activations.some((activation) => activationMatches(activation, subject, template)),
   );
 }
 
@@ -137,25 +152,35 @@ export function jiraTemplatesNeedingTransitionNames(
         (activation) =>
           activation.kind === "transition" &&
           activation.target !== undefined &&
-          !activationMatches(activation, subject),
+          !activationMatches(activation, subject, template),
       ),
   );
 }
 
-/** Ids a template reference names: an exact field id first, otherwise every same-named field. */
+/**
+ * Ids a template reference names. A field the template is bound to by id resolves to exactly that id
+ * (and to nothing when the instance has no such field); otherwise an exact field id first, otherwise
+ * every same-named field.
+ */
 export function resolveJiraTemplateFieldIds(
   reference: string,
   catalog: readonly JiraFieldCatalogEntry[],
+  template?: Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent">,
 ): readonly string[] {
+  const bound = template === undefined ? undefined : jiraTemplateBoundFieldId(template, reference);
+  if (bound !== undefined) return catalog.some((entry) => entry.id === bound) ? [bound] : [];
   const exact = catalog.filter((entry) => entry.id === reference);
   if (exact.length > 0) return exact.map((entry) => entry.id);
   return catalog.filter((entry) => same(entry.name, reference)).map((entry) => entry.id);
 }
 
-/** Section name to whether it has content; a repeated heading merges into one section. */
+/**
+ * Section content of the projected Jira wire text. A native numbered list is not a heading;
+ * explicitly tagged Markdown has already been serialized to native wiki headings.
+ */
 function sectionContent(description: string): ReadonlyMap<string, boolean> {
   const sections = new Map<string, boolean>();
-  for (const section of readJiraDescriptionSections(description)) {
+  for (const section of readJiraDescriptionSections(description, "jira-wiki")) {
     const key = normalizeJiraSectionHeading(section.title);
     sections.set(key, (sections.get(key) ?? false) || section.hasContent);
   }
@@ -178,7 +203,11 @@ function raise(context: Context, ruleId: JiraTemplateViolation["ruleId"], subjec
 }
 
 function textOf(context: Context, id: string): string {
-  return jiraTemplateValueText(context.subject.fields[id]);
+  return jiraTemplateValueText(fieldValue(context, id));
+}
+function fieldValue(context: Context, id: string): unknown {
+  const value = context.subject.fields[id];
+  return id === "description" ? (projectJiraDescriptionInput(value)?.text ?? value) : value;
 }
 
 function matchesPattern(pattern: string, value: string): boolean {
@@ -209,9 +238,9 @@ function checkSections(context: Context): void {
 }
 
 function fieldPresent(context: Context, reference: string): boolean | undefined {
-  const ids = resolveJiraTemplateFieldIds(reference, context.catalog);
+  const ids = resolveJiraTemplateFieldIds(reference, context.catalog, context.template);
   if (ids.length === 0) return undefined;
-  return ids.some((id) => jiraTemplateValuePresent(context.subject.fields[id]));
+  return ids.some((id) => jiraTemplateValuePresent(fieldValue(context, id)));
 }
 
 function checkFields(context: Context): void {
@@ -231,6 +260,37 @@ function checkFields(context: Context): void {
       raise(context, "parent-missing", parent.link);
     }
   }
+}
+
+function checkParentType(context: Context): void {
+  const { field, issueTypes } = context.template.parent;
+  if (issueTypes === undefined) return;
+  if (field === undefined || issueTypes.length === 0) {
+    raise(context, "template-unreadable", "parentIssueTypes");
+    return;
+  }
+  // Ordinary presence errors remain distinct; a supplied parent requires independent type proof.
+  if (fieldPresent(context, field) !== true) return;
+  const observed = observedParentType(context, field);
+  if (observed === undefined) raise(context, "template-unreadable", field);
+  else if (!jiraTemplateParentTypeMatches(context.template, observed))
+    raise(
+      context,
+      "parent-type-mismatch",
+      `${field}: ${issueTypes.join(", ")} (found: ${observed.name.slice(0, 60)})`,
+    );
+}
+
+function observedParentType(
+  context: Context,
+  field: string,
+): { readonly id: string; readonly name: string } | undefined {
+  const ids = resolveJiraTemplateFieldIds(field, context.catalog, context.template);
+  const id = ids.length === 1 ? ids[0] : undefined;
+  const evidence = context.subject.parentIssueTypes;
+  return id !== undefined && evidence !== undefined && Object.hasOwn(evidence, id)
+    ? evidence[id]
+    : undefined;
 }
 
 function labelsOf(context: Context): readonly string[] {
@@ -264,11 +324,18 @@ export function checkJiraIssueTemplate(
   checkSummary(context);
   checkSections(context);
   checkFields(context);
+  checkParentType(context);
   checkLabels(context);
   return context.out;
 }
 
-/** All violations of every governing template; bounded so a refusal stays small. */
+/**
+ * All violations of every governing template; bounded so a refusal stays small. When more than one
+ * template governs the write AND more than one of them states a violation, every one of them must be
+ * met (#4354, F07a): the violations carry the template's place in the label (`SYN/Task #2`), so a
+ * refusal that results from it can say so. A second template that finds nothing wrong leaves the
+ * label as it is: there is nothing to tell apart.
+ */
 export function checkJiraIssueTemplates(
   templates: readonly JiraIssueTemplate[],
   subject: JiraTemplateSubject,
@@ -276,15 +343,107 @@ export function checkJiraIssueTemplates(
 ): readonly JiraTemplateViolation[] {
   const seen = new Set<string>();
   const violations: JiraTemplateViolation[] = [];
-  for (const template of matchingJiraIssueTemplates(templates, subject)) {
-    for (const violation of checkJiraIssueTemplate(template, subject, catalog)) {
+  const found = matchingJiraIssueTemplates(templates, subject).map((template) =>
+    checkJiraIssueTemplate(template, subject, catalog),
+  );
+  const several = found.filter((own) => own.length > 0).length > 1;
+  for (const [index, own] of found.entries()) {
+    for (const violation of own) {
+      // The same rule met by two templates is one thing to repair: the first template names it.
       const id = `${violation.template}|${violation.ruleId}|${violation.subject}`;
       if (seen.has(id)) continue;
       seen.add(id);
-      violations.push(violation);
+      violations.push(
+        several
+          ? { ...violation, template: `${violation.template} #${String(index + 1)}` }
+          : violation,
+      );
     }
   }
   return violations.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX);
+}
+
+/** The one wire field a rule is about, when the rule id alone names it. */
+const FIXED_RULE_FIELD: Readonly<Partial<Record<JiraTemplateViolation["ruleId"], string>>> = {
+  "summary-too-short": "summary",
+  "summary-too-long": "summary",
+  "summary-pattern": "summary",
+  "section-missing": "description",
+  "section-empty": "description",
+  "label-missing": "labels",
+  "label-pattern": "labels",
+  "label-count": "labels",
+};
+function parentFieldIds(
+  violation: JiraTemplateViolation,
+  catalog: readonly JiraFieldCatalogEntry[],
+  template: JiraIssueTemplate | undefined,
+): ReadonlySet<string> {
+  const field = violation.subject.split(":")[0]?.trim() ?? "";
+  return new Set([
+    "parent",
+    "issuelinks",
+    field,
+    ...resolveJiraTemplateFieldIds(field, catalog, template),
+  ]);
+}
+/** The wire field ids a violation is about; an empty result means it is not about one field. */
+function violationFieldIds(
+  violation: JiraTemplateViolation,
+  catalog: readonly JiraFieldCatalogEntry[],
+  template: JiraIssueTemplate | undefined,
+): ReadonlySet<string> {
+  const fixed = FIXED_RULE_FIELD[violation.ruleId];
+  if (fixed !== undefined) return new Set([fixed]);
+  if (violation.ruleId === "parent-missing" || violation.ruleId === "parent-type-mismatch")
+    return parentFieldIds(violation, catalog, template);
+  return new Set([
+    violation.subject,
+    ...resolveJiraTemplateFieldIds(violation.subject, catalog, template),
+  ]);
+}
+
+const violationId = (violation: JiraTemplateViolation): string =>
+  `${violation.template}|${violation.ruleId}|${violation.subject}`;
+
+/**
+ * What a write may leave behind, judged on one before-state and one after-state (#4354).
+ * Creation and transitions are judged on the after-state alone: everything must conform. An edit must
+ * not make things worse: a violation that is new, or that lies in a field the edit touches, blocks it;
+ * a violation that already existed in an untouched field does not block and is returned as a notice.
+ */
+export function evaluateJiraTemplateChange(input: {
+  readonly templates: readonly JiraIssueTemplate[];
+  readonly after: JiraTemplateSubject;
+  /** The state before an edit; absent for creation and transition, where the after-state decides. */
+  readonly before: JiraTemplateSubject | undefined;
+  /** Wire field ids the write sets; labels and links count as `labels` and `issuelinks`. */
+  readonly touched: ReadonlySet<string>;
+  readonly catalog: readonly JiraFieldCatalogEntry[];
+}): {
+  readonly blocking: readonly JiraTemplateViolation[];
+  readonly notices: readonly JiraTemplateViolation[];
+} {
+  const after = checkJiraIssueTemplates(input.templates, input.after, input.catalog);
+  if (input.before === undefined || after.length === 0) return { blocking: after, notices: [] };
+  const existing = new Set(
+    checkJiraIssueTemplates(input.templates, input.before, input.catalog).map(violationId),
+  );
+  const blocking: JiraTemplateViolation[] = [];
+  const notices: JiraTemplateViolation[] = [];
+  for (const violation of after) {
+    const about = violationFieldIds(
+      violation,
+      input.catalog,
+      input.templates.find((template) =>
+        violation.template.startsWith(jiraIssueTemplateLabel(template)),
+      ),
+    );
+    const touches =
+      violation.ruleId === "template-unreadable" || [...about].some((id) => input.touched.has(id));
+    (existing.has(violationId(violation)) && !touches ? notices : blocking).push(violation);
+  }
+  return { blocking, notices };
 }
 
 export const JIRA_TEMPLATE_FINDING_CODES = [
@@ -294,6 +453,7 @@ export const JIRA_TEMPLATE_FINDING_CODES = [
   "ambiguous-field",
   "unknown-link-type",
   "unknown-transition-target",
+  "wrong-parent-field",
 ] as const;
 export type JiraTemplateFindingCode = (typeof JIRA_TEMPLATE_FINDING_CODES)[number];
 export interface JiraTemplateFinding {
@@ -313,10 +473,19 @@ export interface JiraTemplateInstanceMetadata {
   /** The project as the instance reports it; absent when the project key is unknown. */
   readonly project?: {
     readonly key: string;
-    readonly issueTypes: readonly { readonly id: string; readonly name: string }[];
+    readonly issueTypes: readonly {
+      readonly id: string;
+      readonly name: string;
+      /** Jira's own flag for a sub-task type; absent when the instance did not state it. */
+      readonly subtask?: boolean;
+    }[];
   };
   /** Status names of the project's workflows, for transition targets. */
   readonly statuses?: readonly string[];
+  /** The same statuses with their ids, for binding a transition target to a status id (#4354). */
+  readonly statusRefs?: readonly { readonly id: string; readonly name: string }[];
+  /** Global native type names/IDs, read only when a parent-type clause needs validation. */
+  readonly parentIssueTypes?: readonly { readonly id: string; readonly name: string }[];
 }
 
 function fieldFindings(
@@ -328,7 +497,7 @@ function fieldFindings(
     ...(template.parent.field === undefined ? [] : [template.parent.field]),
   ];
   return references.flatMap((reference): readonly JiraTemplateFinding[] => {
-    const ids = resolveJiraTemplateFieldIds(reference, catalog);
+    const ids = resolveJiraTemplateFieldIds(reference, catalog, template);
     if (ids.length === 0) return [{ code: "unknown-field", subject: reference }];
     const exact = catalog.some((entry) => entry.id === reference);
     return ids.length > 1 && !exact ? [{ code: "ambiguous-field", subject: reference }] : [];
@@ -368,9 +537,7 @@ function projectFindings(
 ): readonly JiraTemplateFinding[] {
   const project = instance.project;
   if (project === undefined) return [{ code: "unknown-project", subject: template.project }];
-  const known = project.issueTypes.some(
-    (type) => same(type.name, template.issueType) || type.id === template.issueType,
-  );
+  const known = project.issueTypes.some((type) => jiraTemplateIssueTypeMatches(template, type));
   return known ? [] : [{ code: "unknown-issue-type", subject: template.issueType }];
 }
 
@@ -388,13 +555,173 @@ export function validateJiraIssueTemplateAgainstInstance(
     ...(instance.fields === undefined ? [] : fieldFindings(template, instance.fields)),
     ...linkFindings(template, instance),
     ...transitionFindings(template, instance),
+    ...parentTypeFindings(template, instance),
+    ...parentRelationFindings(template, instance),
   ];
 }
 
+const EPIC_LINK_TYPE = "com.pyxis.greenhopper.jira:gh-epic-link";
+const PARENT_LINK_TYPE = "com.atlassian.jpo:jpo-custom-field-parent";
+const SYSTEM_PARENT = "parent";
+
+function declaredIssueType(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+): { readonly name: string; readonly subtask: boolean } | undefined {
+  const found = instance.project?.issueTypes.find((type) =>
+    jiraTemplateIssueTypeMatches(template, type),
+  );
+  return found?.subtask === undefined ? undefined : { name: found.name, subtask: found.subtask };
+}
+
+/**
+ * What the instance says about the parent relation of the template's own issue type: a sub-task is
+ * linked to its parent by the system `parent` field, a task or story to its epic by the Epic Link,
+ * and only an Epic is linked to an initiative by the Parent Link. A template whose parent field is
+ * a relation field known to belong to another kind of issue can never be satisfied: it matched
+ * "Jira" while every write it governs would be refused (#4354). Only a field whose kind the
+ * instance states is judged; an unknown project, type or field kind says nothing.
+ */
+function parentRelationFindings(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+): readonly JiraTemplateFinding[] {
+  const reference = template.parent.field;
+  const type = declaredIssueType(template, instance);
+  if (reference === undefined || type === undefined || instance.fields === undefined) return [];
+  const ids = resolveJiraTemplateFieldIds(reference, instance.fields, template);
+  const named = ids.length === 1 ? instance.fields.find((entry) => entry.id === ids[0]) : undefined;
+  if (named === undefined) return [];
+  const actual = actualParentField(type, instance.fields);
+  if (actual === undefined || named.id === actual.id) return [];
+  return isForeignRelationField(type, named)
+    ? [
+        {
+          code: "wrong-parent-field",
+          subject: `${reference} instead of ${actual.name} (${actual.id})`,
+        },
+      ]
+    : [];
+}
+/** A relation field the instance declares to belong to another kind of issue than this type. */
+function isForeignRelationField(
+  type: { readonly subtask: boolean },
+  named: JiraFieldCatalogEntry,
+): boolean {
+  if (named.schemaCustom === PARENT_LINK_TYPE) return true;
+  return named.schemaCustom === EPIC_LINK_TYPE && type.subtask;
+}
+
+function actualParentField(
+  type: { readonly name: string; readonly subtask: boolean },
+  fields: readonly JiraFieldCatalogEntry[],
+): JiraFieldCatalogEntry | undefined {
+  if (type.subtask) return fields.find((entry) => entry.id === SYSTEM_PARENT);
+  if (same(type.name, "epic")) return undefined;
+  return fields.find((entry) => entry.schemaCustom === EPIC_LINK_TYPE);
+}
+
+function parentTypeFindings(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+): readonly JiraTemplateFinding[] {
+  const known = instance.parentIssueTypes ?? [];
+  // The one parent matcher decides, by id for a bound template; the typed names stay the label.
+  return (template.parent.issueTypes ?? []).flatMap(
+    (reference, index): readonly JiraTemplateFinding[] =>
+      known.some((type) => jiraTemplateParentEntryMatches(template, index, type))
+        ? []
+        : [{ code: "unknown-issue-type", subject: `parentIssueTypes: ${reference}` }],
+  );
+}
+
+/**
+ * A write no template governs is not fixed by correcting it: the person needs a template first.
+ * The words name the way out the product already has (propose a template from an existing project)
+ * and forbid a retry that cannot succeed.
+ */
+export function jiraNoGoverningTemplateGuidance(
+  violation: Pick<JiraTemplateViolation, "ruleId">,
+  /** One further fixed sentence, for a case the caller has observed and this owner cannot (for example that stored templates name another project). */
+  observed?: string,
+): string {
+  const only =
+    violation.ruleId === "template-not-activated"
+      ? " Templates exist for it, but only for entering a status, which does not govern creating an issue."
+      : "";
+  const further = observed === undefined ? "" : ` ${observed}`;
+  return (
+    `Nothing was changed: no saved issue template governs this project and issue type; the violation names them.${only}${further} ` +
+    "Keiko creates an issue only when a template for its project and issue type exists. Do not retry or change the request. " +
+    "Tell the person that a template for this project and issue type has to be created first, and where: " +
+    "Skills, Jira template, propose templates from an existing project, review and save. Offer to write the same issue once it exists."
+  );
+}
+
+const PARENT_RULES: ReadonlySet<JiraTemplateViolation["ruleId"]> = new Set([
+  "parent-missing",
+  "parent-type-mismatch",
+]);
 const SECTION_RULES: ReadonlySet<JiraTemplateViolation["ruleId"]> = new Set([
   "section-missing",
   "section-empty",
 ]);
+/**
+ * The two subjects the gate gives a bulk or schema change that touches a field a formal rule refers
+ * to. They are one shared value, written here and used by the gate, so the guidance below is chosen by
+ * the producer's own constant and not by an independent copy of its prose (#4357 AC3). That is not
+ * "evidence we could not read": the rule exists, and the issues it would change cannot be checked one
+ * by one.
+ */
+export const JIRA_TEMPLATE_IMPACT_SUBJECTS = {
+  bulkPrefix: "Bulk issue-field impact: ",
+  schema: "Schema changes require complete governed issue migration",
+} as const;
+function isImpactViolation(violation: JiraTemplateViolation): boolean {
+  return (
+    violation.ruleId === "template-unreadable" &&
+    (violation.subject.startsWith(JIRA_TEMPLATE_IMPACT_SUBJECTS.bulkPrefix) ||
+      violation.subject === JIRA_TEMPLATE_IMPACT_SUBJECTS.schema)
+  );
+}
+/**
+ * A template names an issue type that this Jira does not know as the acting user sees it: its typed
+ * name is in another profile language, or the type it was bound to is gone. The rule may govern this
+ * write, so nothing is written; the way out is the product's own check against Jira, which binds the
+ * template to the type's id (#4354).
+ */
+const UNRESOLVED_BINDING_GUIDANCE =
+  "Nothing was changed: a saved issue template of this project names an issue type or a status that Keiko cannot find in this Jira as the person sees it, so it cannot tell whether that template governs this write; the violation names that template. " +
+  "Do not retry or change the request. Tell the person in plain words which template it is and the two ways out: write the issue type or status in the template as this Jira shows it to them and save the template, " +
+  "or have the template's author check it against Jira (Skills, Jira template, Check against Jira). Offer to write the same issue afterwards.";
+const IMPACT_GUIDANCE =
+  "Nothing was changed: a formal template rule of this project refers to a field this change would alter on issues that Keiko cannot check one by one. Do not retry it. Change the affected issues one at a time with the edit tool, or tell the person it has to be done in Jira.";
+/**
+ * What a rule's subject alone does not say (#4357 AC3), one short fixed sentence for the rules whose
+ * violation the model cannot correct from the subject. A placeholder is exactly what the section
+ * reader treats as no content.
+ */
+const RULE_HINTS: readonly (readonly [JiraTemplateViolation["ruleId"], string])[] = [
+  [
+    "section-empty",
+    " A section that holds only a placeholder (TBD, TODO, ..., -, or <text>) counts as empty: write real content.",
+  ],
+  [
+    "label-pattern",
+    " A label rule has a pattern: the subject is the label that does not match it; use a label the template's labels rule allows.",
+  ],
+  [
+    "field-unavailable",
+    " A field-unavailable subject is a field this project's screen does not offer, so it cannot be set: do not retry with it, tell the person.",
+  ],
+];
+function ruleHints(violations: readonly JiraTemplateViolation[]): string {
+  return RULE_HINTS.filter(([ruleId]) =>
+    violations.some((violation) => violation.ruleId === ruleId),
+  )
+    .map(([, hint]) => hint)
+    .join("");
+}
 /**
  * Fixed words for a refusal that names template rules, never derived from remote text. The rule ids
  * alone do not say how a section is written, so a model would otherwise guess at its heading form.
@@ -403,11 +730,84 @@ export function jiraTemplateViolationGuidance(
   violations: readonly JiraTemplateViolation[],
 ): string | undefined {
   if (violations.length === 0) return undefined;
+  const missing = violations.find(
+    (violation) =>
+      violation.ruleId === "template-missing" || violation.ruleId === "template-not-activated",
+  );
+  if (violations.some((violation) => violation.ruleId === "template-binding-unresolved"))
+    return UNRESOLVED_BINDING_GUIDANCE;
+  if (missing !== undefined) return jiraNoGoverningTemplateGuidance(missing);
+  if (violations.some(isImpactViolation)) return IMPACT_GUIDANCE;
+  if (violations.some((violation) => violation.ruleId === "template-unreadable")) {
+    return (
+      "Nothing was changed: the formal rule or its current Jira evidence could not be read completely and bound to this issue. " +
+      "Refresh the named native fields and project/issue-type metadata, or repair an unreadable formal skill, then check the corrected request again. " +
+      "Missing evidence does not establish a rule violation or permission to write."
+    );
+  }
+  const parents = violations.some((violation) => PARENT_RULES.has(violation.ruleId))
+    ? " A parent rule is about the issue this one hangs under: say in plain words which parent types this" +
+      " kind of issue may have, as allowed in the subject, and what type the named parent actually is," +
+      " or that it needs a parent; then ask for or choose a fitting parent."
+    : "";
   const sections = violations.some((violation) => SECTION_RULES.has(violation.ruleId))
-    ? " A section is a line of its own, h2. Title, with its text below; subject is its title."
+    ? " A section is a line of its own, h2. Title, with its text below; send it so." +
+      " Write the section text yourself from the request, the issue and the Chat's sources;" +
+      " ask the user only for a fact neither provides."
+    : "";
+  const several = violations.some((violation) => / #\d{1,2}$/u.test(violation.template))
+    ? " #1, #2… in a name: several templates govern this type; a rule both require is named once; all must be met."
     : "";
   return (
-    "Nothing was changed: this breaks the issue template of the project. " +
-    `Correct what violations name (ruleId, subject), then send it again.${sections}`
+    "Nothing was changed: Keiko's template check (not Jira) refused this; it breaks the issue template of the project. " +
+    `Correct what violations name (ruleId, subject), then send it again.${parents}${sections}${several}${ruleHints(violations)}` +
+    " When you explain a refusal to the person, say in plain words what is wrong and what to change; never quote the rule id or a field id as the explanation."
   );
+}
+
+/**
+ * Every guidance `jiraTemplateViolationGuidance` can return, by enumerating what its sentences depend
+ * on: whether a parent rule, a section rule and each rule hint is among the violations, plus the
+ * answers for no governing template, an impact refusal and unreadable evidence. The longest of them
+ * is what every result schema that carries guidance must hold.
+ */
+export function jiraTemplateGuidanceVariants(): readonly string[] {
+  const violation = (ruleId: JiraTemplateViolation["ruleId"]): JiraTemplateViolation => ({
+    ruleId,
+    subject: "x",
+    template: "SYN/Task",
+  });
+  const optional: readonly JiraTemplateViolation["ruleId"][] = [
+    "parent-type-mismatch",
+    "section-missing",
+    ...RULE_HINTS.map(([ruleId]) => ruleId),
+  ];
+  const labelled = (item: JiraTemplateViolation, several: boolean): JiraTemplateViolation =>
+    several ? { ...item, template: `${item.template} #2` } : item;
+  const variants = new Set<string>();
+  for (let mask = 0; mask < 2 ** (optional.length + 1); mask += 1) {
+    const several = mask >= 2 ** optional.length;
+    const chosen = optional.filter((_, index) => (mask >> index) % 2 === 1).map(violation);
+    const guidance = jiraTemplateViolationGuidance(
+      [violation("summary-too-short"), ...chosen].map((item) => labelled(item, several)),
+    );
+    if (guidance !== undefined) variants.add(guidance);
+  }
+  for (const ruleId of [
+    "template-missing",
+    "template-not-activated",
+    "template-unreadable",
+    "template-binding-unresolved",
+  ] as const) {
+    const guidance = jiraTemplateViolationGuidance([violation(ruleId)]);
+    if (guidance !== undefined) variants.add(guidance);
+  }
+  const impact: JiraTemplateViolation = {
+    ruleId: "template-unreadable",
+    subject: JIRA_TEMPLATE_IMPACT_SUBJECTS.schema,
+    template: "SYN/Task",
+  };
+  const guidance = jiraTemplateViolationGuidance([impact]);
+  if (guidance !== undefined) variants.add(guidance);
+  return [...variants];
 }

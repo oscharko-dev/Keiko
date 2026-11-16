@@ -595,10 +595,10 @@
     {
       "id": "digest-primitives",
       "path": "packages/keiko-security/src/hashing.ts",
-      "probe": "function canonicalise",
+      "probe": "export function sha256Hex(",
       "disposition": "retain owner",
       "ownerIssue": 3406,
-      "scope": "canonicalise and sha256Hex; validate before canonicalizing"
+      "scope": "Security SHA-256 owner retained; former hashing.ts/function canonicalise/retain owner probe repointed to sha256Hex after canonical JSON moved to Contracts canonical-json. Security canonicalise re-export and the shared Contracts producer remain required retained-source probes; validate before canonicalizing."
     },
     {
       "id": "legacy-schema",

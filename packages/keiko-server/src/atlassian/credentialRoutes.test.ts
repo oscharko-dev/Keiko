@@ -25,6 +25,7 @@ import { chatAuthorityFixture } from "../editor/chatAuthority.test-support.js";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
+import type { EditorAgentGovernedAuthorityReference } from "@oscharko-dev/keiko-contracts";
 import type { Chat } from "../store/index.js";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import { isCurrentJiraChatReadGrant } from "./jiraChatAuthority.js";
@@ -38,8 +39,9 @@ import {
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
+import { request as httpRequest, type Server } from "node:http";
+import { once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AtlassianCredentialCustodyError,
@@ -121,6 +123,8 @@ function fakeHttpBodyPortFactory(): (
   };
 }
 
+// What a 401 that Jira itself authored carries (observed on Data Center 10.3, ADR-0128).
+const JIRA_401_HEADERS = { "X-AREQUESTID": "synthetic-request", "X-AUSERNAME": "anonymous" };
 function baseDeps(atlassian: AtlassianConnectorCredentialDeps | undefined): UiHandlerDeps {
   return {
     serverPrincipal: () => activePrincipal,
@@ -152,6 +156,17 @@ let activePrincipal = "synthetic-operator";
 let fixtureAuthorityRegistry: EditorAgentAuthorityRegistry;
 let fixtureApprovalRegistry: AtlassianActionApprovalRegistry;
 
+// These response-observation cases use a fake transport, not DNS. Arrange the private
+// server-owned binding independently; the real admission/DNS path has its own integration suite.
+function bindSyntheticTarget(metadata: AtlassianCredentialMetadata): void {
+  expect(
+    createAtlassianCredentialMetadataStore({ configPath }).bindTargetAdmission(metadata, {
+      baseUrl: metadata.baseUrl,
+      addressClass: "public",
+    }),
+  ).toBeDefined();
+}
+
 function livePodCreateInput(): Record<string, unknown> {
   return {
     provider: "jira",
@@ -176,6 +191,8 @@ function jiraProbeResponse(
   return {
     kind: "response",
     status,
+    // A 401 that Jira itself authored: the only kind that rejects a token.
+    ...(status === 401 ? { authenticationFailure: "jira" as const } : {}),
     bodyText,
     bodyBytes: Buffer.byteLength(bodyText),
     truncated: false,
@@ -363,8 +380,11 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     const files = await readdir(credentialsDir);
     expect(files).toContain("atlassian-connector-credentials.vault");
     expect(files).toContain("atlassian-connector-credentials.metadata.json");
-    for (const file of files) {
-      const bytes = await readFile(join(credentialsDir, file), "utf8");
+    // Recursive: the vault keeps its write-guard directory beside the sealed files.
+    const entries = await readdir(credentialsDir, { recursive: true, withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const bytes = await readFile(join(entry.parentPath, entry.name), "utf8");
       expectNoSecretBytes(bytes);
     }
   });
@@ -425,6 +445,47 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     expect(noJson.status).toBe(415);
   });
 
+  const privateInputGuardCases: readonly {
+    readonly name: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly status: number;
+  }[] = [
+    { name: "missing CSRF", headers: { "Content-Type": "application/json" }, status: 403 },
+    {
+      name: "non-JSON content",
+      headers: { "Content-Type": "text/plain", "X-Keiko-CSRF": "1" },
+      status: 415,
+    },
+    {
+      name: "cross-origin submission",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Keiko-CSRF": "1",
+        Origin: "https://foreign.example.invalid",
+      },
+      status: 403,
+    },
+  ];
+  it.each(privateInputGuardCases)(
+    "protects private Jira input from $name before accessing a held request",
+    async ({ headers, status }) => {
+      const privateValue = "synthetic-protected-route-value";
+      const response = await fetch(
+        `${baseUrl()}/api/atlassian-connectors/human-inputs/jhi_${"a".repeat(64)}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            expectedRevision: "7765d9e4-fc9a-46d5-aea4-24880fec5e1e",
+            values: { password: privateValue },
+          }),
+        },
+      );
+      expect(response.status).toBe(status);
+      expect(await response.text()).not.toContain(privateValue);
+    },
+  );
+
   // KEIKO-0826: the domain layer caps stored credentials at
   // ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES and throws credential-limit-exceeded once the cap is
   // reached. The BFF must surface that as 429 (Too Many Requests) with a typed error code, not
@@ -437,6 +498,7 @@ describe("POST /api/atlassian-connectors/credentials", () => {
       },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
+      releaseVerification: (): boolean => false,
       observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
@@ -512,6 +574,7 @@ describe("POST /api/atlassian-connectors/credentials", () => {
       },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
+      releaseVerification: (): boolean => false,
       observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError(failure.code);
@@ -581,6 +644,7 @@ describe("Atlassian credential route in-memory failure handling", () => {
       },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
+      releaseVerification: (): boolean => false,
       observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
@@ -794,13 +858,15 @@ describe("end-to-end verify through the gateway transport adapter", () => {
         env: vaultEnv(),
         egress: () => undefined,
         activityLog: sink,
-        fetchImpl: (): Promise<Response> => Promise.resolve(new Response("{}", { status: 401 })),
+        fetchImpl: (): Promise<Response> =>
+          Promise.resolve(new Response("{}", { status: 401, headers: JIRA_401_HEADERS })),
       });
       await rebuild(real);
       const created = real.custody.create(
         livePodCreateInput(),
         jiraChatActorDigest(baseDeps(real)),
       );
+      bindSyntheticTarget(created);
       expect(await (await verifyCredentialRequest(created.authRef)).json()).toMatchObject({
         status: "auth-failed",
       });
@@ -1059,9 +1125,13 @@ describe("end-to-end verify through the gateway transport adapter", () => {
         onLivePodInvalidated: (_podId, generation): void => {
           if (generation !== null) invalidated.push(generation);
         },
-        fetchImpl: (): Promise<Response> => Promise.resolve(new Response("{}", { status })),
+        fetchImpl: (): Promise<Response> =>
+          Promise.resolve(
+            new Response("{}", { status, headers: status === 401 ? JIRA_401_HEADERS : {} }),
+          ),
       });
       const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+      bindSyntheticTarget(created);
       const probe = real.custody.beginVerification(created.authRef);
       if (probe === undefined) throw new Error("Expected verification ticket");
       real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
@@ -1084,76 +1154,89 @@ describe("end-to-end verify through the gateway transport adapter", () => {
     },
   );
 
-  it("records observed authentication invalidation after acknowledgement and before body consumption", async () => {
-    const events: string[] = [];
-    const sink = createFileServerLogSink(configDir, { level: "debug" });
-    try {
-      const real = buildAtlassianConnectorCredentialDeps({
-        configPath,
-        env: vaultEnv(),
-        egress: () => undefined,
-        activityLog: sink,
-        onLivePodInvalidated: (): void => {
-          events.push("invalidated");
-        },
-        fetchImpl: (): Promise<Response> =>
-          Promise.resolve(
-            new Response(
-              new ReadableStream<Uint8Array>(
-                {
-                  pull: (controller): void => {
-                    events.push("body");
-                    controller.enqueue(new TextEncoder().encode("{}"));
-                    controller.close();
+  it.each([
+    ["identity route", "myself", ["acknowledged", "invalidated", "body"]],
+    ["probe-decided route", "project", ["acknowledged", "body", "body", "invalidated"]],
+  ] as const)(
+    "records observed authentication invalidation after acknowledgement on the %s",
+    async (_name, path, order) => {
+      const events: string[] = [];
+      const sink = createFileServerLogSink(configDir, { level: "debug" });
+      try {
+        const real = buildAtlassianConnectorCredentialDeps({
+          configPath,
+          env: vaultEnv(),
+          egress: () => undefined,
+          activityLog: sink,
+          onLivePodInvalidated: (): void => {
+            events.push("invalidated");
+          },
+          fetchImpl: (): Promise<Response> =>
+            Promise.resolve(
+              new Response(
+                new ReadableStream<Uint8Array>(
+                  {
+                    pull: (controller): void => {
+                      events.push("body");
+                      controller.enqueue(new TextEncoder().encode("{}"));
+                      controller.close();
+                    },
                   },
-                },
-                { highWaterMark: 0 },
+                  { highWaterMark: 0 },
+                ),
+                { status: 401, headers: JIRA_401_HEADERS },
               ),
-              { status: 401 },
             ),
-          ),
-      });
-      const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
-      const probe = real.custody.beginVerification(created.authRef);
-      if (probe === undefined) throw new Error("Expected verification ticket");
-      real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
-      const metadata = real.custody.getMetadata(created.authRef);
-      if (metadata === undefined) throw new Error("Expected metadata");
-      const http = real.httpBodyPortFactory(metadata, "observed-authentication-proof", {
-        onResponse: (): boolean => {
-          events.push("acknowledged");
-          return true;
-        },
-      });
-      await http({
-        method: "GET",
-        url: `${metadata.baseUrl}/rest/api/2/project`,
-        timeoutMs: 1000,
-        maxBodyBytes: 4096,
-      });
-      expect(events).toEqual(["acknowledged", "invalidated", "body"]);
-      const lines = persistedActivityLogLines(
-        readPersistedActivityLog(configDir),
-        "atlassian.connection.checked",
-      );
-      const records = lines.map((line) =>
-        expectActivityLogProof("atlassian.connection.checked.observed-authentication", line),
-      );
-      expect(records).toMatchObject([
-        {
-          action: "request",
-          outcome: "auth-failed",
-          verificationState: "applied",
-          correlationId: "observed-authentication-proof",
-        },
-      ]);
-      expectNoSecretBytes(lines.join("\n"));
-      expect(lines.join("\n")).not.toContain(metadata.authRef);
-      expect(lines.join("\n")).not.toContain(metadata.baseUrl);
-    } finally {
-      sink.close?.();
-    }
-  });
+        });
+        const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+        bindSyntheticTarget(created);
+        const probe = real.custody.beginVerification(created.authRef);
+        if (probe === undefined) throw new Error("Expected verification ticket");
+        real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
+        const metadata = real.custody.getMetadata(created.authRef);
+        if (metadata === undefined) throw new Error("Expected metadata");
+        const http = real.httpBodyPortFactory(metadata, "observed-authentication-proof", {
+          onResponse: (): boolean => {
+            events.push("acknowledged");
+            return true;
+          },
+        });
+        // The identity route is the one definitive 401; any other 401 is decided by the identity
+        // probe, which can only start after the original response body was consumed, so body
+        // consumption before the invalidation is inherent to the probe path (#4353). What never
+        // changes, for every route class, is that the acknowledgement comes first and the
+        // invalidation never precedes it.
+        await http({
+          method: "GET",
+          url: `${metadata.baseUrl}/rest/api/2/${path}`,
+          timeoutMs: 1000,
+          maxBodyBytes: 4096,
+        });
+        expect(events).toEqual(order);
+        expect(events.indexOf("acknowledged")).toBeLessThan(events.indexOf("invalidated"));
+        const lines = persistedActivityLogLines(
+          readPersistedActivityLog(configDir),
+          "atlassian.connection.checked",
+        );
+        const records = lines.map((line) =>
+          expectActivityLogProof("atlassian.connection.checked.observed-authentication", line),
+        );
+        expect(records).toMatchObject([
+          {
+            action: "request",
+            outcome: "auth-failed",
+            verificationState: "applied",
+            correlationId: "observed-authentication-proof",
+          },
+        ]);
+        expectNoSecretBytes(lines.join("\n"));
+        expect(lines.join("\n")).not.toContain(metadata.authRef);
+        expect(lines.join("\n")).not.toContain(metadata.baseUrl);
+      } finally {
+        sink.close?.();
+      }
+    },
+  );
 
   it("pins response observation before caller metadata or verification can change", async () => {
     const invalidated: number[] = [];
@@ -1170,10 +1253,11 @@ describe("end-to-end verify through the gateway transport adapter", () => {
         if (newer === undefined) throw new Error("Expected newer verification");
         real.custody.finishVerification(selected.authRef, 1, newer.revision, "ok");
         Object.assign(selected, real.custody.getMetadata(selected.authRef));
-        return Promise.resolve(new Response("{}", { status: 401 }));
+        return Promise.resolve(new Response("{}", { status: 401, headers: JIRA_401_HEADERS }));
       },
     });
     const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+    bindSyntheticTarget(created);
     const probe = real.custody.beginVerification(created.authRef);
     if (probe === undefined) throw new Error("Expected verification ticket");
     real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
@@ -1256,6 +1340,12 @@ describe("end-to-end verify through the gateway transport adapter", () => {
   });
 });
 
+function pendingReadGrantFor(chat: Chat): string {
+  const grantId = randomUUID();
+  retainedChatReadGrant(chat, false, grantId);
+  return grantId;
+}
+
 async function readyJiraPod(): Promise<string> {
   await rebuild({
     ...wiring,
@@ -1318,7 +1408,11 @@ function jiraChatSubject(chat: Chat): JiraChatToolAuthoritySubject {
   };
 }
 
-function retainedChatAuthority(chat: Chat): () => ChatToolAuthorityResolution {
+type RetainedAuthority = ((nowIso?: string) => ChatToolAuthorityResolution) & {
+  readonly reference: EditorAgentGovernedAuthorityReference;
+};
+
+function retainedChatAuthority(chat: Chat): RetainedAuthority {
   const ceiling = baseDeps(wiring).autonomousDeliveryDeploymentCeiling ?? "governed-assist";
   const value = chatAuthorityFixture({
     deploymentCeiling: ceiling,
@@ -1333,13 +1427,11 @@ function retainedChatAuthority(chat: Chat): () => ChatToolAuthorityResolution {
     new Date().toISOString(),
   );
   if (!registered.ok) throw new Error("Expected retained Chat authority");
-  return () =>
-    fixtureAuthorityRegistry.resolveChat(
-      registered.authorityRef,
-      value.subject,
-      ceiling,
-      new Date().toISOString(),
-    );
+  return Object.assign(
+    (nowIso = new Date().toISOString()) =>
+      fixtureAuthorityRegistry.resolveChat(registered.authorityRef, value.subject, ceiling, nowIso),
+    { reference: registered.authorityRef },
+  );
 }
 
 function retainedChatReadGrant(
@@ -1465,6 +1557,36 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
     expect(grants.map((state) => state())).toEqual(["revoked", "revoked", "granted"]);
   });
 
+  it("switching a Chat to another Pod revokes the previous binding's authority and read grant (#4353)", async () => {
+    const podId = await readyJiraPod();
+    const otherPodId = await readyJiraPod();
+    const switched = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const bystander = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const authority = retainedChatAuthority(switched);
+    const pending = retainedChatReadGrant(switched, false);
+    const granted = retainedChatReadGrant(switched);
+    const bystanderAuthority = retainedChatAuthority(bystander);
+    expect([authority().ok, pending(), granted()]).toEqual([true, "pending", "granted"]);
+    const moved = await updatedJiraChat(switched, { jiraPodId: otherPodId });
+    expect(moved.jiraPodBinding?.podId).toBe(otherPodId);
+    expect(authority()).toEqual({ ok: false, reason: "revoked" });
+    expect([pending(), granted()]).toEqual(["revoked", "revoked"]);
+    expect(bystanderAuthority().ok).toBe(true);
+  });
+
+  it("an expired Chat authority no longer admits pending Jira work (#4353)", async () => {
+    const podId = await readyJiraPod();
+    const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const pending = pendingReadGrantFor(bound);
+    expect(isCurrentRetainedReadGrant(pending)).toBe(true);
+    const entry = fixtureApprovalRegistry.getChatReadGrant(pending);
+    if (entry === undefined) throw new Error("Expected pending grant");
+    const afterExpiry = new Date(entry.grant.expiresAt + 1).toISOString();
+    expect(
+      isCurrentJiraChatReadGrant(baseDeps(wiring), entry, afterExpiry, "authority-expired"),
+    ).toBe(false);
+  });
+
   it("direct credential deletion disconnects matching Chats and cancels only their active turns", async () => {
     const podId = await readyJiraPod();
     const otherPodId = await readyJiraPod();
@@ -1556,7 +1678,7 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
       .list()
       .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
     if (credential === undefined) throw new Error("Expected synthetic credential");
-    fakePortResult = { kind: "response", status: 401 };
+    fakePortResult = { kind: "response", status: 401, authenticationFailure: "jira" };
     await rebuild({ ...wiring, httpBodyPortFactory: fakeHttpBodyPortFactory() });
     const grant = retainedChatReadGrant(bound);
     const failed = await verifyCredentialRequest(credential.authRef);
@@ -1709,12 +1831,100 @@ function credentialForPod(podId: string): AtlassianCredentialMetadata {
 }
 
 describe("authenticated Live Pod credential updates", () => {
-  it("a delayed verification cannot restore readiness after the token replacement route", async () => {
+  it("a delayed verification of the older token cannot mark the replacing token verified (#4353)", async () => {
     const credential = credentialForPod(await readyJiraPod());
+    const entered = probeSignal();
+    const release = probeSignal();
+    let probes = 0;
+    await rebuild({
+      ...wiring,
+      httpBodyPortFactory: () => {
+        probes += 1;
+        const older = probes === 1;
+        return async (request): Promise<AtlassianHttpBodyResult> => {
+          if (!older) return jiraProbeResponse(request, 401);
+          entered.resolve();
+          await release.promise;
+          return jiraProbeResponse(request);
+        };
+      },
+    });
+    const pending = verifyCredentialRequest(credential.authRef);
+    await entered.promise;
+    // The replacing token is verified by its own request; Jira rejects it, while the older token's
+    // probe is still in flight and would answer ok if it were allowed to land.
+    const changed = await updateJiraCredential(credential.authRef, {
+      expectedGeneration: 1,
+      apiToken: SYNTHETIC_TOKEN + "rotated",
+    }).finally(release.resolve);
+    const stale = await pending;
+    expect(changed.status).toBe(200);
+    expect(await changed.json()).toMatchObject({ livePod: { verificationStatus: "auth-failed" } });
+    expect(stale.status).toBe(409);
+    expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+      livePod: { verificationStatus: "auth-failed", verificationInProgress: false },
+    });
+  });
+
+  it("verifies a replaced token in the same request, so a closed tab leaves the true state, and records it as its own action (#4353)", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    const requests: AtlassianHttpBodyRequest[] = [];
+    await rebuild({
+      ...wiring,
+      activityLog: sink,
+      httpBodyPortFactory:
+        () =>
+        (request): Promise<AtlassianHttpBodyResult> => {
+          requests.push(request);
+          return Promise.resolve(jiraProbeResponse(request));
+        },
+    });
+    try {
+      // The only call: the browser never makes a second one (its tab may be closed already).
+      const response = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 1,
+        apiToken: `${SYNTHETIC_TOKEN}-replacement`,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        authRef: credential.authRef,
+        generation: 2,
+        livePod: { verificationStatus: "ok", verificationInProgress: false },
+      });
+      expect(requests.length).toBeGreaterThan(0);
+      expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+        generation: 2,
+        livePod: { verificationStatus: "ok" },
+      });
+      const checks = readVerificationEvidence(sink);
+      expect(checks).toHaveLength(1);
+      expect(checks[0]).toMatchObject({
+        action: "verify-after-replace",
+        outcome: "ok",
+        verificationState: "applied",
+      });
+      const updated = persistedActivityLogLines(
+        readPersistedActivityLog(configDir),
+        "atlassian.credential.updated",
+      ).map((line) => expectActivityLogProof("atlassian.credential.updated.line", line));
+      // One logical operation: the replacement and its check share the request's correlation.
+      expect(updated.map((event) => event.correlationId)).toEqual([checks[0]?.correlationId]);
+      expect(JSON.stringify(checks)).not.toContain(SYNTHETIC_TOKEN);
+      expect(JSON.stringify(checks)).not.toContain(credential.authRef);
+    } finally {
+      sink.close?.();
+    }
+  });
+
+  it("a client that disconnects while the probe is in flight does not cancel it: the probe completes, the stored state is its result and one line is written (#4353)", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
     const entered = probeSignal();
     const release = probeSignal();
     await rebuild({
       ...wiring,
+      activityLog: sink,
       httpBodyPortFactory:
         () =>
         async (request): Promise<AtlassianHttpBodyResult> => {
@@ -1723,18 +1933,92 @@ describe("authenticated Live Pod credential updates", () => {
           return jiraProbeResponse(request);
         },
     });
-    const pending = verifyCredentialRequest(credential.authRef);
-    await entered.promise;
-    const changed = await updateJiraCredential(credential.authRef, {
+    try {
+      const serverSockets: Socket[] = [];
+      server.on("connection", (socket) => serverSockets.push(socket));
+      const body = JSON.stringify({
+        expectedGeneration: 1,
+        apiToken: `${SYNTHETIC_TOKEN}-replacement`,
+      });
+      // A fresh connection of its own, so the test can wait for the server to see it close.
+      const client = httpRequest({
+        host: UI_HOST,
+        port,
+        path: `/api/atlassian-connectors/credentials/${credential.authRef}`,
+        method: "PATCH",
+        agent: false,
+        headers: { ...csrfHeaders(), "Content-Length": Buffer.byteLength(body) },
+      });
+      const answered = vi.fn();
+      client.on("response", answered);
+      client.on("error", () => undefined);
+      client.end(body);
+      await entered.promise;
+      const serverSocket = serverSockets.at(-1);
+      if (serverSocket === undefined) throw new Error("Expected the request's server connection");
+      const closed = once(serverSocket, "close");
+      client.destroy();
+      await closed;
+      // The server has seen the client leave; the probe is still waiting and nothing settled it.
+      expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+        livePod: { verificationInProgress: true },
+      });
+      release.resolve();
+      await expect
+        .poll(() => wiring.custody.getMetadata(credential.authRef))
+        .toMatchObject({ generation: 2, livePod: { verificationStatus: "ok" } });
+      expect(answered).not.toHaveBeenCalled();
+      const checks = readVerificationEvidence(sink).filter(
+        (event) => event.action === "verify-after-replace",
+      );
+      expect(checks).toHaveLength(1);
+      expect(checks[0]).toMatchObject({ outcome: "ok", verificationState: "applied" });
+    } finally {
+      release.resolve();
+      sink.close?.();
+    }
+  });
+
+  it.each([
+    [{ kind: "response", status: 401, authenticationFailure: "jira" } as const, "auth-failed"],
+    [{ kind: "timeout" } as const, "timeout"],
+    [{ kind: "network-error" } as const, "unreachable"],
+  ])(
+    "stores the replaced token and answers the state its failed check left: %o -> %s (#4353)",
+    async (probeResult, expected) => {
+      const credential = credentialForPod(await readyJiraPod());
+      await rebuild({
+        ...wiring,
+        httpBodyPortFactory: () => (): Promise<AtlassianHttpBodyResult> =>
+          Promise.resolve(probeResult as AtlassianHttpBodyResult),
+      });
+      const response = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 1,
+        apiToken: `${SYNTHETIC_TOKEN}-replacement`,
+      });
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(JSON.parse(body)).toMatchObject({ livePod: { verificationStatus: expected } });
+      expect(body).not.toContain(SYNTHETIC_TOKEN);
+      // The token stays stored (the replacement generation advanced) and the Pod is not verified.
+      expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+        livePod: { verificationStatus: expected, verificationInProgress: false },
+      });
+      expect((wiring.custody.getMetadata(credential.authRef)?.generation ?? 0) > 1).toBe(true);
+    },
+  );
+
+  it("verifies nothing after a rename (#4353)", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    fakePortRequests.length = 0;
+    const response = await updateJiraCredential(credential.authRef, {
       expectedGeneration: 1,
-      apiToken: SYNTHETIC_TOKEN + "rotated",
-    }).finally(release.resolve);
-    const stale = await pending;
-    expect(changed.status).toBe(200);
-    expect(stale.status).toBe(409);
+      displayName: "Renamed Jira",
+    });
+    expect(response.status).toBe(200);
+    expect(fakePortRequests).toHaveLength(0);
     expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
-      generation: 2,
-      livePod: { verificationStatus: "unverified", verificationInProgress: false },
+      livePod: { verificationStatus: "ok" },
     });
   });
 
@@ -1752,6 +2036,70 @@ describe("authenticated Live Pod credential updates", () => {
     expect(wiring.custody.getMetadata(credential.authRef)).toEqual(credential);
   });
 
+  it("keeps the verified private target binding through a token rotation on the real custody and route path", async () => {
+    const privateBase = "https://10.23.45.67:8443/context";
+    const authorizations: string[] = [];
+    const real = buildAtlassianConnectorCredentialDeps({
+      configPath,
+      env: vaultEnv(),
+      egress: () => undefined,
+      fetchImpl: (input, init): Promise<Response> => {
+        const headers = input instanceof Request ? input.headers : new Headers(init?.headers);
+        authorizations.push(headers.get("authorization") ?? "");
+        const url = new URL(input instanceof Request ? input.url : input.toString());
+        return Promise.resolve(
+          Response.json(
+            url.pathname.endsWith("/serverInfo")
+              ? { version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Data Center" }
+              : { name: "synthetic-user", key: "synthetic-key", active: true },
+          ),
+        );
+      },
+    });
+    await rebuild(real);
+    const created = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({
+        ...livePodCreateInput(),
+        baseUrl: privateBase,
+        livePodCreationRequestId: randomUUID(),
+      }),
+    });
+    expect(created.status).toBe(200);
+    const { authRef } = (await created.json()) as AtlassianCredentialMetadata;
+    expect(authorizations).toEqual([]);
+    expect(await (await verifyCredentialRequest(authRef)).json()).toMatchObject({ status: "ok" });
+    const binding = { baseUrl: privateBase, addressClass: "private" };
+    const store = createAtlassianCredentialMetadataStore({ configPath });
+    const verified = real.custody.getMetadata(authRef);
+    if (verified === undefined) throw new Error("Expected verified credential");
+    expect(store.getTargetAdmission(verified)).toEqual(binding);
+
+    const rotated = await updateJiraCredential(authRef, {
+      expectedGeneration: 1,
+      apiToken: `${SYNTHETIC_TOKEN}-rotated`,
+    });
+    expect(rotated.status).toBe(200);
+    const current = real.custody.getMetadata(authRef);
+    if (current === undefined) throw new Error("Expected rotated credential");
+    // The replacement request verified the new token itself (#4353).
+    expect(current).toMatchObject({ generation: 2, livePod: { verificationStatus: "ok" } });
+    // The binding survives the rotation: no URL, configuration entry or second admission is needed.
+    expect(store.getTargetAdmission(current)).toEqual(binding);
+    expect(
+      await real.httpBodyPortFactory(current)({
+        method: "GET",
+        url: `${privateBase}/rest/api/2/project`,
+        timeoutMs: 1000,
+        maxBodyBytes: 4096,
+      }),
+    ).toMatchObject({ kind: "response", status: 200 });
+    expect(authorizations.at(-1)).toBe(`Bearer ${SYNTHETIC_TOKEN}-rotated`);
+    expect(await (await verifyCredentialRequest(authRef)).json()).toMatchObject({ status: "ok" });
+    expect(store.getTargetAdmission(real.custody.getMetadata(authRef) ?? current)).toEqual(binding);
+  });
+
   it("renames and replaces tokens without losing the Pod association or exposing private state", async () => {
     const podId = await readyJiraPod();
     const credential = credentialForPod(podId);
@@ -1762,7 +2110,14 @@ describe("authenticated Live Pod credential updates", () => {
     const otherStoredBefore = structuredClone(fixtureStore.findChatById(other.id));
     const grants = [first, second, other].map((chat) => retainedChatReadGrant(chat));
     const sink = createFileServerLogSink(configDir, { level: "debug" });
-    await rebuild({ ...wiring, activityLog: sink });
+    await rebuild({
+      ...wiring,
+      activityLog: sink,
+      httpBodyPortFactory:
+        () =>
+        (request): Promise<AtlassianHttpBodyResult> =>
+          Promise.resolve(jiraProbeResponse(request)),
+    });
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const correlations: (string | null)[] = [];
     try {
@@ -1808,7 +2163,7 @@ describe("authenticated Live Pod credential updates", () => {
       expect(grants.map((state) => state())).toEqual(["revoked", "revoked", "granted"]);
       expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
         generation: 3,
-        livePod: { verificationStatus: "unverified" },
+        livePod: { verificationStatus: "ok" },
       });
     } finally {
       sink.close?.();
@@ -2257,5 +2612,303 @@ describe("Jira Live Pod direct Data-surface isolation", () => {
     }
     expect(fakePortRequests).toHaveLength(probeCount);
     expect(deps.localKnowledgeEmbeddingRequest).not.toHaveBeenCalled();
+  });
+});
+
+// #4353 AC4: a Pod switch, a Pod deletion, a token replacement, a token revocation and an authority
+// expiry each invalidate pending work and current grants. One test per case. Each starts from the
+// same state: a retained authority, one pending and one current read grant, a queued write approval
+// and a turn in flight (an open Jira draft is a tool call in the turn's transcript: no invalidation
+// touches it, so it stays as history, but it cannot be executed because its authority and its write
+// approval are gone, which is asserted through the approval).
+describe("invalidation of pending work and current grants (#4353 AC4)", () => {
+  interface Held {
+    readonly chat: Chat;
+    readonly authority: RetainedAuthority;
+    readonly pendingId: string;
+    readonly pendingState: () => ChatToolReadGrant["state"] | undefined;
+    readonly currentState: () => ChatToolReadGrant["state"] | undefined;
+    readonly write: ChatWriteApprovalFixture;
+    readonly turn: AbortController;
+    readonly release: () => void;
+    readonly done: Promise<unknown>;
+  }
+  type ChatWriteApprovalFixture = NonNullable<
+    ReturnType<AtlassianActionApprovalRegistry["getChatWriteApproval"]>
+  >;
+  function queuedWrite(chat: Chat, authority: RetainedAuthority): ChatWriteApprovalFixture {
+    const subject = jiraChatSubject(chat);
+    const now = Date.now();
+    const entry = {
+      subject,
+      authority: authority.reference,
+      approvalProofDigest: null,
+      approval: {
+        kind: "jira-chat-write",
+        approvalId: randomUUID(),
+        chatId: subject.chatId,
+        podId: subject.podId,
+        bindingGeneration: subject.bindingGeneration,
+        authenticationGeneration: subject.authenticationGeneration,
+        invocationId: "invocation-ac4",
+        operation: "jira.comment",
+        actionDigest: "d".repeat(64),
+        requestedAt: now,
+        expiresAt: now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+        state: "pending",
+      },
+    } as const;
+    expect(fixtureApprovalRegistry.createChatWriteApproval(entry).ok).toBe(true);
+    const retained = fixtureApprovalRegistry.getChatWriteApproval(entry.approval.approvalId);
+    if (retained === undefined) throw new Error("Expected the queued write approval");
+    return retained;
+  }
+  async function held(podId: string, withTurn = true): Promise<Held> {
+    const chat = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const authority = retainedChatAuthority(chat);
+    const pendingId = randomUUID();
+    const result: Held = {
+      chat,
+      authority,
+      pendingId,
+      pendingState: retainedChatReadGrant(chat, false, pendingId),
+      currentState: retainedChatReadGrant(chat, true, randomUUID()),
+      write: queuedWrite(chat, authority),
+      ...(withTurn ? startHeldTurn(chat) : idleTurn()),
+    };
+    expect(authority().ok).toBe(true);
+    expect([result.pendingState(), result.currentState()]).toEqual(["pending", "granted"]);
+    expect(result.write.approval.state).toBe("pending");
+    expect(result.turn.signal.aborted).toBe(false);
+    return result;
+  }
+  function idleTurn(): {
+    readonly turn: AbortController;
+    readonly release: () => void;
+    readonly done: Promise<unknown>;
+  } {
+    return { turn: new AbortController(), release: () => undefined, done: Promise.resolve() };
+  }
+  // The turn honors its own cancellation like a real one: it ends when it is released or aborted.
+  function startHeldTurn(chat: Chat): {
+    readonly turn: AbortController;
+    readonly release: () => void;
+    readonly done: Promise<unknown>;
+  } {
+    const turn = new AbortController();
+    let release: () => void = () => undefined;
+    const work = new Promise<void>((resolve) => {
+      release = resolve;
+      turn.signal.addEventListener("abort", () => {
+        resolve();
+      });
+    });
+    const done = runSerializedChatTurn(
+      { store: fixtureStore },
+      chat.id,
+      turn.signal,
+      () => work,
+      turn,
+    );
+    return { turn, release, done };
+  }
+  // Everything pending or current is gone: the authority, both grants and the queued write approval
+  // (which can no longer be accepted or claimed, so the write cannot be executed), and the turn in
+  // flight is cancelled.
+  async function expectInvalidated(
+    h: Held,
+    expectation: { readonly cancelsTurn: boolean },
+  ): Promise<void> {
+    expect(h.authority()).toEqual({ ok: false, reason: "revoked" });
+    expect([h.pendingState(), h.currentState()]).toEqual(["revoked", "revoked"]);
+    const { approval, subject, authority } = h.write;
+    expect(fixtureApprovalRegistry.getChatWriteApproval(approval.approvalId)?.approval.state).toBe(
+      "revoked",
+    );
+    expect(
+      fixtureApprovalRegistry.acceptChatWriteApproval(
+        approval.approvalId,
+        subject,
+        authority,
+        approval,
+        "f".repeat(64),
+      ).ok,
+    ).toBe(false);
+    expect(
+      fixtureApprovalRegistry.claimChatWriteApproval(
+        approval.approvalId,
+        subject,
+        authority,
+        approval,
+      ).ok,
+    ).toBe(false);
+    expect(h.turn.signal.aborted).toBe(expectation.cancelsTurn);
+    h.release();
+    await h.done;
+  }
+
+  it("a Pod switch invalidates the previous binding's pending work and current grants", async () => {
+    const podId = await readyJiraPod();
+    const otherPodId = await readyJiraPod();
+    const h = await held(podId);
+    // The real PATCH route interrupts the turn in flight before the update queues behind it
+    // (`jiraPodId` is part of the grounding scope), then revokes the old binding's access.
+    const moved = await updatedJiraChat(h.chat, { jiraPodId: otherPodId });
+    expect(moved.jiraPodBinding?.podId).toBe(otherPodId);
+    await expectInvalidated(h, { cancelsTurn: true });
+  });
+
+  it("a Pod deletion invalidates pending work and current grants", async () => {
+    const podId = await readyJiraPod();
+    const h = await held(podId);
+    const response = await fetch(
+      `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(credentialForPod(podId).authRef)}`,
+      { method: "DELETE", headers: csrfHeaders() },
+    );
+    expect(response.status).toBe(200);
+    await expectInvalidated(h, { cancelsTurn: true });
+  });
+
+  it("a token replacement invalidates pending work and current grants", async () => {
+    const podId = await readyJiraPod();
+    const h = await held(podId);
+    const response = await updateJiraCredential(credentialForPod(podId).authRef, {
+      expectedGeneration: 1,
+      apiToken: `${SYNTHETIC_TOKEN}-replacement`,
+    });
+    expect(response.status).toBe(200);
+    await expectInvalidated(h, { cancelsTurn: true });
+  });
+
+  it("a token revocation seen as a Jira-authored 401 on a tool call invalidates pending work and current grants", async () => {
+    const privateBase = "https://10.23.45.67:8443/context";
+    let revoked = false;
+    const real = buildAtlassianConnectorCredentialDeps({
+      configPath,
+      env: vaultEnv(),
+      egress: () => undefined,
+      onLivePodInvalidated: (podId, generation, correlationId, reason): void => {
+        invalidateJiraPodChats(
+          fixtureStore,
+          podId,
+          generation,
+          correlationId,
+          {
+            agentAuthorityRegistry: fixtureAuthorityRegistry,
+            atlassianActionApprovalRegistry: fixtureApprovalRegistry,
+          },
+          reason,
+        );
+      },
+      // After the revocation Jira answers every request with the 401 it authored for an unknown token.
+      fetchImpl: (input): Promise<Response> => {
+        const url = new URL(input instanceof Request ? input.url : input.toString());
+        if (revoked)
+          return Promise.resolve(new Response("{}", { status: 401, headers: JIRA_401_HEADERS }));
+        return Promise.resolve(
+          Response.json(
+            url.pathname.endsWith("/serverInfo")
+              ? { version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Data Center" }
+              : { name: "synthetic-user", key: "synthetic-key", active: true },
+          ),
+        );
+      },
+    });
+    await rebuild(real);
+    const created = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({
+        ...livePodCreateInput(),
+        baseUrl: privateBase,
+        livePodCreationRequestId: randomUUID(),
+      }),
+    });
+    const { authRef, livePod } = (await created.json()) as AtlassianCredentialMetadata & {
+      readonly livePod: { readonly podId: string };
+    };
+    expect(await (await verifyCredentialRequest(authRef)).json()).toMatchObject({ status: "ok" });
+    const h = await held(livePod.podId);
+    revoked = true;
+    const metadata = real.custody.getMetadata(authRef);
+    if (metadata === undefined) throw new Error("Expected the Pod credential");
+    // The tool call's own HTTP request meets the 401; the identity read confirms it is Jira's.
+    const result = await real.httpBodyPortFactory(
+      metadata,
+      "revocation-tool-call",
+    )({
+      method: "GET",
+      url: `${privateBase}/rest/api/2/project`,
+      timeoutMs: 1000,
+      maxBodyBytes: 4096,
+    });
+    expect(result).toMatchObject({ status: 401 });
+    expect(result).not.toHaveProperty("authentication");
+    expect(real.custody.getMetadata(authRef)).toMatchObject({
+      livePod: { verificationStatus: "auth-failed" },
+    });
+    await expectInvalidated(h, { cancelsTurn: true });
+  });
+
+  it("an expired authority invalidates pending work and current grants", async () => {
+    // The real expiry path: the clock moves past the authority's and the approvals' lifetime, and
+    // the registries refuse and sweep instead of anyone calling revoke.
+    const podId = await readyJiraPod();
+    const h = await held(podId, false);
+    let now = Date.now();
+    const clocked = new AtlassianActionApprovalRegistry(() => now);
+    const readEntry = fixtureApprovalRegistry.getChatReadGrant(h.pendingId);
+    if (readEntry === undefined || readEntry.grant.subject.kind === "configured-mcp")
+      throw new Error("Expected the pending Jira read grant");
+    const { approval, subject, authority } = h.write;
+    expect(
+      clocked.createChatReadGrant({
+        ...readEntry,
+        grant: {
+          ...readEntry.grant,
+          requestedAt: now,
+          expiresAt: now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      clocked.createChatWriteApproval({
+        ...h.write,
+        approval: {
+          ...approval,
+          requestedAt: now,
+          expiresAt: now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+        },
+      }).ok,
+    ).toBe(true);
+    now += ATLASSIAN_ACTION_APPROVAL_TTL_MS + 1;
+    // A pending read grant cannot be used any more.
+    expect(
+      clocked.acceptChatReadGrant(
+        h.pendingId,
+        readEntry.grant.subject,
+        readEntry.authority,
+        "b".repeat(64),
+      ),
+    ).toEqual({ ok: false, reason: "invalid" });
+    expect(clocked.getChatReadGrant(h.pendingId)).toBeUndefined();
+    // A write waiting for approval is refused, never executed.
+    expect(
+      clocked.acceptChatWriteApproval(
+        approval.approvalId,
+        subject,
+        authority,
+        approval,
+        "f".repeat(64),
+      ).ok,
+    ).toBe(false);
+    expect(
+      clocked.claimChatWriteApproval(approval.approvalId, subject, authority, approval).ok,
+    ).toBe(false);
+    expect(clocked.getChatWriteApproval(approval.approvalId)).toBeUndefined();
+    // The authority itself reports the expiry and drops its record.
+    const afterExpiry = new Date(now).toISOString();
+    expect(h.authority(afterExpiry)).toEqual({ ok: false, reason: "expired" });
+    expect(h.authority(afterExpiry).ok).toBe(false);
   });
 });

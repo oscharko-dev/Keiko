@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Page } from "@playwright/test";
 import type { EditorBuiltinFormattingSource } from "@oscharko-dev/keiko-contracts";
 import { editorBuiltinDocumentFormatting } from "@oscharko-dev/keiko-contracts/runtime/editor-builtin-capabilities";
@@ -157,12 +158,15 @@ async function seedFilesWindow(page: Page, projectPath: string): Promise<void> {
   });
   expect(created.ok(), await created.text()).toBe(true);
   seededRoots.set(page, projectPath);
-  await page.addInitScript((windows) => {
-    // The blank page a fresh load passes through has no storage of its own to seed.
-    if (window.location.protocol === "about:") return;
-    window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(windows));
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, seededWorkspaceWindows(projectPath));
+  await page.addInitScript(
+    ({ argument: windows, storageKeys }) => {
+      // The blank page a fresh load passes through has no storage of its own to seed.
+      if (window.location.protocol === "about:") return;
+      window.localStorage.setItem(storageKeys.workspace, JSON.stringify(windows));
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, seededWorkspaceWindows(projectPath)),
+  );
 }
 
 // The fixture root each page seeded, so every fresh load can seed the server layout to match.
@@ -200,9 +204,14 @@ async function seedServerWorkspaceLayout(page: Page): Promise<void> {
 
 async function writeServerWorkspaceLayout(page: Page, root: string): Promise<number> {
   const current = await page.request.get("/api/workspace/state");
+  const ownership = (await current.json()) as { workspace: { storageId: string } };
   const written = await page.request.put("/api/workspace/state", {
     data: { windows: seededWorkspaceWindows(root), connections: [] },
-    headers: { "If-Match": current.headers().etag ?? "", "x-keiko-csrf": "1" },
+    headers: {
+      "If-Match": current.headers().etag ?? "",
+      "x-keiko-csrf": "1",
+      "X-Keiko-Workspace-Storage": ownership.workspace.storageId,
+    },
   });
   return written.status();
 }

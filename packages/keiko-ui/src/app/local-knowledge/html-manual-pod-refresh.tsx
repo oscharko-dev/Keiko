@@ -6,7 +6,7 @@
 // go through the shared `manualPodRefresh.*` / `manualPod.*` i18n catalog (en+de); only existing
 // global classes are reused (no globals.css edit, #1300). Every API call is an injectable seam so
 // the flow is tested without a real network. Progress rendering + polling live in the shared
-// `manual-pod-job-progress` module (also used by the create control).
+// `manual-pod-job-progress` module.
 
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import type { HtmlManualPodJob, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";

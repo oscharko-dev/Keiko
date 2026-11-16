@@ -1,6 +1,8 @@
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 import {
   recordSessionContinuity,
@@ -11,6 +13,7 @@ import {
   type SessionContinuityRecord,
 } from "./codingSessionContinuity.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
+import { holdSchedulerLease, removeInheritedSchedules } from "./opencodeScheduleLease.js";
 import type {
   CheckoutResult,
   RetainedSessionBinding,
@@ -32,7 +35,10 @@ import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 
 /** What the composition hands in about the run it prepares and the runtime it launches. */
 export interface SessionContinuationContext {
+  readonly continuationRouteDigest?: string | undefined;
   readonly service: CodingSessionContinuity;
+  /** Completed provider reasoning is transient; native history alone cannot restore that contract. */
+  readonly freshReasoningHistory?: boolean | undefined;
   readonly workspaceId: string;
   readonly runtimeVersion: string;
   /** The input window of the run's model, the bound a retained history must fit. */
@@ -69,6 +75,7 @@ export interface RunContinuation {
 }
 
 const BENIGN_REASONS: ReadonlySet<ContinuityReason> = new Set([
+  "reasoning-history-unavailable",
   "disabled",
   "not-native-profile",
   "no-retained-state",
@@ -94,6 +101,9 @@ function bindingOf(
 ): RetainedSessionBinding {
   return {
     taskId,
+    ...(context.continuationRouteDigest === undefined
+      ? {}
+      : { continuationRouteDigest: context.continuationRouteDigest }),
     workspaceKey: continuationWorkspaceKey(context.workspaceId, location.workspaceRoot),
     runtimeVersion: context.runtimeVersion,
     maxInputTokens: context.maxInputTokens,
@@ -132,6 +142,10 @@ export function seedContinuation(
 ): RunContinuation | undefined {
   const intent = context.service.take(location.runId);
   if (intent === undefined) return undefined;
+  if (context.freshReasoningHistory === true) {
+    recordFallBack(context, location, intent, "reasoning-history-unavailable");
+    return undefined;
+  }
   const taskId = intent.kind === "resume" ? intent.taskId : intent.sourceTaskId;
   const store = context.service.store;
   if (store === undefined) {
@@ -150,6 +164,14 @@ export function seedContinuation(
     recordFallBack(context, location, intent, checkout.reason);
     return undefined;
   }
+  try {
+    holdRetainedSchedules(runtimeDatabasePath(location.runRoot), intent);
+  } catch (error) {
+    // A copy whose schedules Keiko cannot hold could fire one at the runtime's boot: it never runs.
+    rmSync(runtimeDatabasePath(location.runRoot), { force: true });
+    recordFallBack(context, location, intent, "copy-failed", error);
+    return undefined;
+  }
   const { sessionId, databaseBytes, messageCount, ageMs, sourceDirectory } = checkout;
   return {
     intent,
@@ -160,6 +182,15 @@ export function seedContinuation(
     ageMs,
     ...(sourceDirectory === undefined ? {} : { sourceDirectory }),
   };
+}
+
+/**
+ * Before the runtime opens a retained copy, which fires a due schedule at its boot: the copy carries
+ * Keiko's scheduler lease (`opencodeScheduleLease.ts`), and a fork drops its source's schedules.
+ */
+function holdRetainedSchedules(database: string, intent: ContinuityIntent): void {
+  holdSchedulerLease(database);
+  if (intent.kind === "fork") removeInheritedSchedules(database);
 }
 
 /** What a run asks the store for: its own binding, and for a fork the provisioning source too. */
@@ -265,24 +296,63 @@ interface RetainedSessionView {
   readonly agent: unknown;
 }
 
-async function soleSession(
+/** The run's one session and where the runtime says it is; anything else is a refusal. */
+async function locatedSession(
   client: ContinuationClient,
   expectedId: string,
-  directory: string,
   signal: AbortSignal | undefined,
-): Promise<RetainedSessionView> {
+): Promise<{ readonly view: RetainedSessionView; readonly directory: unknown }> {
   const sessions = await client.sessions(signal);
   const session = sessions[0];
   if (sessions.length !== 1 || session?.id !== expectedId) {
     throw new ContinuationRefused("session-mismatch");
   }
   const location = session.location;
-  const sessionDirectory =
-    typeof location === "object" && location !== null && "directory" in location
-      ? location.directory
-      : undefined;
-  if (sessionDirectory !== directory) throw new ContinuationRefused("session-mismatch");
-  return { id: expectedId, agent: session.agent };
+  return {
+    view: { id: expectedId, agent: session.agent },
+    directory:
+      typeof location === "object" && location !== null && "directory" in location
+        ? location.directory
+        : undefined,
+  };
+}
+
+async function soleSession(
+  client: ContinuationClient,
+  expectedId: string,
+  directory: string,
+  signal: AbortSignal | undefined,
+): Promise<RetainedSessionView> {
+  const located = await locatedSession(client, expectedId, signal);
+  if (located.directory !== directory) throw new ContinuationRefused("session-mismatch");
+  return located.view;
+}
+
+export const SESSION_MOVE_ARRIVAL_TIMEOUT_MS = 10_000;
+const SESSION_MOVE_ARRIVAL_POLL_MS = 50;
+
+/**
+ * The runtime answers `session.move` before the session has arrived: its first move into a root also
+ * registers that worktree. So only a session still at its source is waited for, and only up to the
+ * bound; one that turns up anywhere else is refused at once (#4068).
+ */
+async function arrivedSession(
+  client: ContinuationClient,
+  expectedId: string,
+  source: string,
+  directory: string,
+  signal: AbortSignal | undefined,
+): Promise<RetainedSessionView> {
+  const deadline = Date.now() + SESSION_MOVE_ARRIVAL_TIMEOUT_MS;
+  for (;;) {
+    signal?.throwIfAborted();
+    const located = await locatedSession(client, expectedId, signal); // NOSONAR typescript:S9382 -- a readiness poll: each read decides whether another is needed
+    if (located.directory === directory) return located.view;
+    if (located.directory !== source || Date.now() >= deadline) {
+      throw new ContinuationRefused("session-mismatch");
+    }
+    await new Promise((resolve) => setTimeout(resolve, SESSION_MOVE_ARRIVAL_POLL_MS)); // NOSONAR typescript:S9382 -- the poll interval between dependent reads
+  }
 }
 
 /**
@@ -304,7 +374,7 @@ async function relocatedSession(
   } catch (error) {
     throw new ContinuationRefused("move-failed", { cause: error });
   }
-  return soleSession(client, continuation.sessionId, directory, signal);
+  return arrivedSession(client, continuation.sessionId, source, directory, signal);
 }
 
 async function messageIds(
@@ -421,6 +491,8 @@ export interface SettledContinuedRun {
   readonly runRoot: string;
   readonly workspaceRoot: string;
   readonly sessionId: string | undefined;
+  /** The run's effective mode when it settled: the consent its new schedules are recorded with. */
+  readonly mode?: string | undefined;
 }
 
 /**
@@ -510,6 +582,7 @@ function attemptRetain(
       sessionId: run.sessionId ?? "",
       directory: run.workspaceRoot,
       sourceDatabase: runtimeDatabasePath(run.runRoot),
+      ...(isCodingWorkbenchMode(run.mode) ? { scheduleConsentMode: run.mode } : {}),
     });
     if (result.ok) {
       recordSessionContinuity(context.activityLog, {
@@ -519,6 +592,7 @@ function attemptRetain(
         messageCount: result.messageCount,
         entryCount: result.entryCount,
         prunedCount: result.prunedCount,
+        blockedCount: result.blockedCount,
       });
       return;
     }

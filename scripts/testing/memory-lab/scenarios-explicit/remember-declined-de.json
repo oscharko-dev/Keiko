@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "remember-declined-de",
+  "language": "de",
+  "class": "forget",
+  "difficulty": "plain",
+  "description": "\"Merke dir nicht, ...\" asks for the opposite, so nothing is stored, by the explicit path or by the learner.",
+  "truth": [],
+  "forgotten": [
+    {
+      "terms": [["Tabellen"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Merke dir nicht, dass ich Tabellen mag.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ]
+}

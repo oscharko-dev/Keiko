@@ -58,6 +58,7 @@ function childEnv(stateDir, projectDir) {
   }
   return {
     ...env,
+    KEIKO_OS_KEYCHAIN: "off",
     KEIKO_STATE_DIR: stateDir,
     KEIKO_DEV_BFF_PORT: "0",
     KEIKO_INITIAL_PROJECT_PATH: projectDir,

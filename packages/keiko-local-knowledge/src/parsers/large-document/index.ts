@@ -6,6 +6,7 @@ export type {
   ProgressiveExtractionSource,
   ProgressiveExtractionWindow,
   ProgressiveExtractionOptions,
+  ProgressiveExtractionLog,
   ProgressiveExtractor,
   ProgressiveExtractionSink,
   ProgressiveExtractionSummary,

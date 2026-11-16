@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-workspace",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: Keiko repository context and workspace access — detection, safe reads, path containment, deny/ignore rules, context packs, retrieval, and summaries. Not published independently.",
@@ -70,11 +70,11 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=24.18.0 <25 || >=26.3.0 <27"
+    "node": ">=26.13.1 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "1.4.0",
-    "@oscharko-dev/keiko-security": "1.4.0",
+    "@oscharko-dev/keiko-contracts": "1.5.0",
+    "@oscharko-dev/keiko-security": "1.5.0",
     "entities": "8.1.0",
     "typescript": "~6.0.3"
   },

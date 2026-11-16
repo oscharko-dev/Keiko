@@ -51,8 +51,8 @@ function ownCode() {
 function runtime() {
   return {
     architecture: "x64",
-    nodeVersion: "24.18.0",
-    npmVersion: "11.16.0",
+    nodeVersion: "26.13.1",
+    npmVersion: "11.20.0",
     osRelease: "6.8.0-test",
     platform: "linux",
     zlibVersion: "1.3.1",

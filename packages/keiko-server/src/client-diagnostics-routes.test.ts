@@ -299,6 +299,7 @@ describe("POST /api/diagnostics/client", () => {
   });
 
   it.each([
+    "workspace-ownership-started",
     "workspace-viewport-fitted",
     "workspace-window-sizing-retired",
     "scope-refusal-restored",
@@ -315,6 +316,7 @@ describe("POST /api/diagnostics/client", () => {
     "send-failure-skipped-draft",
     "send-failure-skipped-unproven",
     "send-cancel-requested",
+    "send-refused-while-running",
   ])("records %s as correlated body-free composer evidence", async (composerActivity) => {
     const sink = captureServerLog();
     await handleClientDiagnosticIngest(
@@ -788,6 +790,39 @@ describe("POST /api/diagnostics/client", () => {
         messageId: "msg_1",
       }),
     );
+  });
+
+  it("persists body-free escaped table counts without claiming source list numbering", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private source quote must stay out of the log",
+          clientTs: CLIENT_TS,
+          kind: "markdown-layout",
+          correlationId: "message-1",
+          markdownLayout: { messageId: "msg_1", escapedPipeCount: 3 },
+        }),
+      ),
+    );
+    const lines: unknown[] = sink.lines().map((line): unknown => JSON.parse(line));
+    const events = lines.filter(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "op" in event &&
+        event.op === "client.markdown.layout",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "client.markdown.layout",
+      correlationId: "message-1",
+      messageId: "msg_1",
+      escapedPipeCount: 3,
+    });
+    expect(events[0]).not.toHaveProperty("listNumbering");
+    expect(events[0]).not.toHaveProperty("listStart");
+    expect(sink.lines().join("\n")).not.toContain("private source quote");
   });
 
   it("persists a closed module load failure without leaking the failing URL", async () => {
@@ -1430,6 +1465,56 @@ describe("POST /api/diagnostics/client", () => {
 
   // PR #3678 review: the catalog's availability counts used to ride only the message, which ingest
   // reduces to a digest. They are now their own counted line, at warn, joined to the report.
+  it("persists counted Jira presentation joined to the parent transcript without content", async () => {
+    const sink = captureServerLog();
+    const jiraResultPresentation = {
+      messageDigest: "a".repeat(64),
+      exchangeCount: 2,
+      itemCount: 7,
+      shownCount: 5,
+      returnedCount: 8,
+      unreadableCount: 1,
+      problemCount: 2,
+      ruleCount: 1,
+      failure: "fields",
+      restored: true,
+    };
+    const request = {
+      message: "Jira results presented.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui-jira-presentation-0001",
+      jiraResultPresentation,
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(request)))).status).toBe(204);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const events = sink.events.filter((event) => event.op === "client.jira-result.presented");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.level).toBe("info");
+    const proof = expectActivityLogProof(
+      "client.jira-result.presented.line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(proof).toMatchObject({
+      ...jiraResultPresentation,
+      correlationId: request.correlationId,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(
+            JSON.stringify({
+              ...request,
+              jiraResultPresentation: { ...jiraResultPresentation, content: "PRIVATE_CONTENT" },
+            }),
+          ),
+        )
+      ).status,
+    ).toBe(400);
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_CONTENT");
+  });
+
   it("persists the knowledge catalog counts as client.knowledge-catalog.unavailable", async () => {
     const sink = captureServerLog();
     const knowledgeCatalog = {
@@ -1579,6 +1664,9 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "history-repository-switched" },
     { interaction: "event-stream-reconnecting" },
     { interaction: "history-workspace-switched" },
+    // #4271: the starting repository of a window without a stored one, decided once.
+    { interaction: "repository-seeded" },
+    { interaction: "repository-seed-skipped" },
     { interaction: "bridge-registration-refused", refusal: "root-boundary" },
     { interaction: "bridge-registration-refused", refusal: "lease" },
     {
@@ -1609,6 +1697,40 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "notice-held", notice: "activity" },
     { interaction: "notice-held", notice: "questions" },
     { interaction: "notice-held", notice: "editor-bridge" },
+    // #4068 W12: a window first showed a live run's identity.
+    {
+      interaction: "run-identity-observed",
+      modelReported: true,
+      agentReported: true,
+      toolProfile: "mapped",
+    },
+    {
+      interaction: "run-identity-observed",
+      modelReported: false,
+      agentReported: false,
+      toolProfile: "unreported",
+    },
+    // #4271: what a delivery card showed was a warn/unknown sentence; it is a closed step and state.
+    { interaction: "delivery-step-shown", deliveryStep: "delivery-review", deliveryState: "ready" },
+    { interaction: "delivery-step-shown", deliveryStep: "stage-review", deliveryState: "loading" },
+    { interaction: "delivery-step-shown", deliveryStep: "unstage-review", deliveryState: "idle" },
+    { interaction: "delivery-step-shown", deliveryStep: "commit-review", deliveryState: "ready" },
+    { interaction: "delivery-step-shown", deliveryStep: "commit-result", deliveryState: "drift" },
+    {
+      interaction: "delivery-step-shown",
+      deliveryStep: "draft-delivery",
+      deliveryState: "draft-created",
+    },
+    {
+      interaction: "delivery-step-shown",
+      deliveryStep: "ci-readiness",
+      deliveryState: "unobserved",
+    },
+    { interaction: "delivery-step-shown", deliveryStep: "journey", deliveryState: "stale" },
+    // #4068: where a mounted Workbench window took its repository from, never the path.
+    { interaction: "repository-resolved", repositorySource: "window" },
+    { interaction: "repository-resolved", repositorySource: "shell" },
+    { interaction: "repository-resolved", repositorySource: "none" },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1653,6 +1775,34 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "notice-held" },
     { interaction: "notice-held", notice: "Activity not connected." },
     { interaction: "notice-held", notice: "skills", fileCount: 1 },
+    { interaction: "run-identity-observed", modelReported: true, agentReported: true },
+    {
+      interaction: "run-identity-observed",
+      modelReported: "private-model-name",
+      agentReported: true,
+      toolProfile: "mapped",
+    },
+    {
+      interaction: "run-identity-observed",
+      modelReported: true,
+      agentReported: true,
+      toolProfile: "direct",
+    },
+    { interaction: "repository-resolved" },
+    { interaction: "repository-resolved", repositorySource: "/repos/synthetic-repository" },
+    { interaction: "repository-resolved", repositorySource: "window", repositoryPath: "/repos/a" },
+    { interaction: "delivery-step-shown" },
+    { interaction: "delivery-step-shown", deliveryStep: "journey" },
+    { interaction: "delivery-step-shown", deliveryStep: "journey", deliveryState: "ready" },
+    { interaction: "delivery-step-shown", deliveryStep: "commit-review", deliveryState: "loading" },
+    { interaction: "delivery-step-shown", deliveryStep: "push", deliveryState: "ready" },
+    { interaction: "delivery-step-shown", deliveryStep: "ci-readiness", deliveryState: "head abc" },
+    {
+      interaction: "delivery-step-shown",
+      deliveryStep: "draft-delivery",
+      deliveryState: "pushed",
+      headSha: "333333333333",
+    },
     { interaction: "diff-windowed" },
     { interaction: "diff-windowed", surface: "changeset-review", fileCount: 1, totalLineCount: 5 },
     {
@@ -1957,6 +2107,53 @@ describe("POST /api/diagnostics/client", () => {
     });
     expect(record).not.toHaveProperty("errorKind");
     expect(line).not.toContain("private hostile");
+  });
+
+  it("persists a Knowledge Pod catalog refresh as routine closed evidence (#4371)", async () => {
+    const sink = captureServerLog();
+    const knowledgeCatalogRefresh = { outcome: "superseded", duration: "5s-10s" };
+    const body = {
+      message: "private hostile browser prose",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_catalog-refresh-0001",
+      knowledgeCatalogRefresh,
+    };
+    expect(await handleClientDiagnosticIngest(context(JSON.stringify(body)))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.knowledge-catalog.refreshed",
+    );
+    if (event === undefined) throw new TypeError("Missing catalog refresh evidence");
+    const line = formatActivityLogProofLine(event);
+    const record = expectActivityLogProof("client.knowledge-catalog.refreshed.line", line);
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_catalog-refresh-0001",
+      ...knowledgeCatalogRefresh,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("errorKind");
+    expect(line).not.toContain("private hostile");
+  });
+
+  it.each([
+    { outcome: "slow", duration: "5s-10s" },
+    { outcome: "ok", duration: "12s" },
+    { outcome: "ok", duration: "1s-5s", podName: "Customer contracts" },
+  ])("refuses a catalog refresh report outside its closed shape (#4371)", async (report) => {
+    const sink = captureServerLog();
+    const body = {
+      message: "catalog refresh",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_catalog-refresh-0002",
+      knowledgeCatalogRefresh: report,
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(400);
+    expect(sink.events.some((e) => e.op === "client.knowledge-catalog.refreshed")).toBe(false);
   });
 
   it.each([
@@ -3112,6 +3309,8 @@ describe("POST /api/diagnostics/client", () => {
   it.each([
     ["chat bind", "chat-bind"],
     ["command palette", "command-palette"],
+    ["window palette", "window-palette"],
+    ["jira human input", "jira-human-input"],
   ])("logs both phases of %s under the stage's own correlation id", async (stageId, logStage) => {
     const sink = captureServerLog();
     for (const body of [
@@ -3178,6 +3377,46 @@ describe("POST /api/diagnostics/client", () => {
     expect(events.at(-1)?.durationMs).toBe(12);
     expect(clientDiagnosticEvents(sink)).toHaveLength(0);
     expectCompleteGitTimeline(events);
+  });
+
+  it("records the move action on the deletion lifecycle as a closed value", async () => {
+    const sink = captureServerLog();
+    for (const report of [
+      {
+        phase: "started",
+        deletion: { action: "move", requestedCount: 2, deletedCount: 0, failedCount: 0 },
+      },
+      {
+        phase: "settled",
+        durationMs: 7,
+        deletion: { action: "move", requestedCount: 2, deletedCount: 2, failedCount: 0 },
+      },
+    ]) {
+      const body = {
+        kind: "stage",
+        stage: "chat history deletion",
+        ordinal: 2,
+        correlationId: "ui_history-move-0001",
+        ...report,
+      };
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    }
+    const events = sink.events.filter((event) => event.op.startsWith("client.stage."));
+    expect(events.map((event) => [event.op, event.correlationId])).toEqual([
+      ["client.stage.started", "ui_history-move-0001"],
+      ["client.stage.settled", "ui_history-move-0001"],
+    ]);
+    expect(events.at(-1)?.extra).toEqual({
+      stage: "chat-history-deletion",
+      ordinal: 2,
+      deletionAction: "move",
+      requestedCount: 2,
+      deletedCount: 2,
+      failedCount: 0,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
   });
 
   // #3557 review: the stale-session repair outcome joins the denied request's timeline.
@@ -3250,6 +3489,90 @@ describe("POST /api/diagnostics/client", () => {
       expect(
         sink.events.some((event) => event.op.startsWith("client.session-repair.recovered")),
       ).toBe(false);
+    });
+
+    // #4068: tabs of one origin share the session cookie, so a refused stream's reports from two
+    // documents could not be told apart. Each line keeps its page load's own reference.
+    it("keeps each document's reference on its stream failure, repair and interaction lines", async () => {
+      const sink = captureServerLog();
+      const documents = ["ui_document-first-0001", "ui_document-second-0002"];
+      for (const [index, documentRef] of documents.entries()) {
+        const streak = `ui_stream-streak-01${String(index)}0`;
+        const reports = [
+          {
+            message: "[keiko] shared-event-source sse stream error",
+            clientTs: CLIENT_TS,
+            correlationId: streak,
+            kind: "sse-error",
+            readyState: 2,
+            documentRef,
+          },
+          {
+            kind: "session-repair",
+            outcome: "repair-acknowledged",
+            stream: "shared-event-source",
+            correlationId: streak,
+            repairCorrelationId: `ui_session-repair-01${String(index)}0`,
+            documentRef,
+          },
+          {
+            message: "[keiko] coding workbench interaction",
+            clientTs: CLIENT_TS,
+            correlationId: streak,
+            codingWorkbenchInteraction: { interaction: "event-stream-reconnecting" },
+            documentRef,
+          },
+        ];
+        for (const report of reports) {
+          expect((await handleClientDiagnosticIngest(context(JSON.stringify(report)))).status).toBe(
+            204,
+          );
+        }
+      }
+
+      const lines = (op: string): string[] =>
+        sink.events.filter((event) => event.op === op).map(formatActivityLogProofLine);
+      expect(
+        lines("client.diagnostic").map(
+          (line) => expectActivityLogProof("client.diagnostic.line", line).documentRef,
+        ),
+      ).toEqual(documents);
+      expect(
+        lines("client.session-repair.acknowledged").map(
+          (line) =>
+            expectActivityLogProof("client.session-repair.acknowledged.line", line).documentRef,
+        ),
+      ).toEqual(documents);
+      expect(
+        lines("client.coding-workbench.interaction").map(
+          (line) =>
+            expectActivityLogProof("client.coding-workbench.interaction.line", line).documentRef,
+        ),
+      ).toEqual(documents);
+    });
+
+    it.each([
+      ["a diagnostic", { message: "x", clientTs: CLIENT_TS, kind: "sse-error" }],
+      [
+        "a repair report",
+        {
+          kind: "session-repair",
+          outcome: "repair-acknowledged",
+          stream: "shared-event-source",
+          correlationId: "ui_stream-streak-0200",
+          repairCorrelationId: "ui_session-repair-0200",
+        },
+      ],
+    ])("refuses %s whose document reference is not an opaque id", async (_label, report) => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({ ...report, documentRef: "tab one" });
+
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+      expect(sink.events.filter((event) => event.op === "client.diagnostic.rejected")).toEqual([
+        expect.objectContaining({
+          extra: expect.objectContaining({ rejection: "invalid-shape" }) as unknown,
+        }),
+      ]);
     });
 
     // #3557 review: a repair report the Activity Log cannot link to its repair request is refused
@@ -3765,6 +4088,55 @@ describe("citation activation ingestion", () => {
   );
 });
 
+describe("citation highlight evidence", () => {
+  beforeEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+  });
+
+  it.each([
+    { outcome: "framed", boxCount: 2 },
+    { outcome: "not-found", boxCount: 0 },
+    { outcome: "no-passage", boxCount: 0 },
+    { outcome: "no-text", boxCount: 0 },
+  ])("persists %j as routine evidence without the passage or the note", async (highlight) => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "PDF citation highlight settled",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_citation-highlight-0001",
+      citationHighlight: highlight,
+    });
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find((candidate) => candidate.op === "client.citation.highlighted");
+    const record = expectActivityLogProof(
+      "client.citation.highlighted.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      ...highlight,
+      correlationId: "ui_citation-highlight-0001",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(event?.level).toBe("info");
+    expect(JSON.stringify(event)).not.toContain("highlight settled");
+  });
+
+  it("refuses a report that would carry passage text", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "PDF citation highlight settled",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_citation-highlight-0002",
+      citationHighlight: { outcome: "framed", boxCount: 1, passage: "Altlasten im Bestand" },
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    expect(sink.events.some((event) => event.op === "client.citation.highlighted")).toBe(false);
+    expect(JSON.stringify(sink.events)).not.toContain("Altlasten");
+  });
+});
+
 describe("actual source reveal lifecycle", () => {
   beforeEach(() => {
     resetClientDiagnosticsIngestStateForTests();
@@ -3811,6 +4183,14 @@ it.each([
   ["markdown copy feedback", "settled", "markdown-copy-feedback"],
   ["transcript navigation", "started", "transcript-navigation"],
   ["transcript navigation", "settled", "transcript-navigation"],
+  ["modal focus restoration", "started", "modal-focus-restoration"],
+  ["modal focus restoration", "settled", "modal-focus-restoration"],
+  ["knowledge pod selection", "started", "knowledge-pod-selection"],
+  ["knowledge pod selection", "settled", "knowledge-pod-selection"],
+  ["chat connector selection", "started", "chat-connector-selection"],
+  ["chat connector selection", "settled", "chat-connector-selection"],
+  ["chat connector refresh", "started", "chat-connector-refresh"],
+  ["chat connector refresh", "settled", "chat-connector-refresh"],
 ] as const)(
   "persists %s %s through the existing activity log",
   async (stage, phase, activityStage) => {
@@ -3822,6 +4202,12 @@ it.each([
       ordinal: 1,
       correlationId: "copy-feedback-123",
       ...(phase === "settled" ? { durationMs: 1500 } : {}),
+      ...(phase === "settled" && stage.startsWith("chat connector")
+        ? { navigationOutcome: "stale" }
+        : {}),
+      ...(phase === "settled" && stage === "modal focus restoration"
+        ? { navigationOutcome: "applied" }
+        : {}),
     };
     expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
     const events = clientStageEvents(sink, `client.stage.${phase}`);
@@ -3833,6 +4219,9 @@ it.each([
       level: "info",
       correlationId: body.correlationId,
       stage: activityStage,
+      ...(body.navigationOutcome === undefined
+        ? {}
+        : { navigationOutcome: body.navigationOutcome }),
       completeness: "complete",
       loss: "none",
     });
@@ -3977,3 +4366,82 @@ it.each([
     expect(clientDiagnosticEvents(sink)).toEqual([]);
   },
 );
+
+it("persists localized Jira field labels as routine counted evidence without content", async () => {
+  const sink = captureServerLog();
+  const jiraFieldPresentation = { fieldCount: 5, localizedCount: 3 };
+  const request = {
+    message: "Jira built-in field labels presented.",
+    clientTs: CLIENT_TS,
+    correlationId: "ui-jira-fields-0001",
+    jiraFieldPresentation,
+  };
+  expect((await handleClientDiagnosticIngest(context(JSON.stringify(request)))).status).toBe(204);
+  expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+  const events = sink.events.filter((event) => event.op === "client.jira-fields.presented");
+  expect(events).toHaveLength(1);
+  expect(events[0]?.level).toBe("info");
+  expect(events[0]?.errorKind).toBeUndefined();
+  const line = formatActivityLogProofLine(events[0] ?? {});
+  const proof = expectActivityLogProof("client.jira-fields.presented.line", line);
+  expect(proof).toMatchObject({
+    ...jiraFieldPresentation,
+    correlationId: request.correlationId,
+    completeness: "complete",
+    loss: "none",
+  });
+  for (const invalid of [
+    { ...jiraFieldPresentation, content: "PRIVATE_JIRA_FIELD_CONTENT" },
+    { fieldCount: -1, localizedCount: 0 },
+    { fieldCount: 1, localizedCount: 2 },
+    { fieldCount: 1001, localizedCount: 1 },
+    { fieldCount: 1.5, localizedCount: 1 },
+    { fieldCount: 1, localizedCount: "1" },
+    { fieldCount: 1, localizedCount: -1 },
+    { fieldCount: 1, localizedCount: Number.MAX_SAFE_INTEGER },
+  ])
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(JSON.stringify({ ...request, jiraFieldPresentation: invalid })),
+        )
+      ).status,
+    ).toBe(400);
+  for (const valid of [
+    { fieldCount: 0, localizedCount: 0 },
+    { fieldCount: 1000, localizedCount: 1000 },
+  ])
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(JSON.stringify({ ...request, jiraFieldPresentation: valid })),
+        )
+      ).status,
+    ).toBe(204);
+  expect(
+    (
+      await handleClientDiagnosticIngest(
+        context(JSON.stringify({ ...request, errorKind: "internal" })),
+      )
+    ).status,
+  ).toBe(400);
+  expect(line).not.toContain("PRIVATE_JIRA_FIELD_CONTENT");
+  expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_JIRA_FIELD_CONTENT");
+});
+
+it("preserves the server failure budget after localized Jira field presentation bursts", async () => {
+  const sink = captureServerLog();
+  const routine = JSON.stringify({
+    message: "Jira built-in field labels presented.",
+    clientTs: CLIENT_TS,
+    jiraFieldPresentation: { fieldCount: 5, localizedCount: 3 },
+  });
+  for (let index = 0; index < 61; index += 1) await handleClientDiagnosticIngest(context(routine));
+  const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
+  expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+  expect(clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary")).toBe(
+    true,
+  );
+  const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+  expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+});

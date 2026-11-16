@@ -239,7 +239,9 @@ function captureResWithEvents(): CapturedResWithEvents {
 // A request double: a Readable that streams the JSON body (so readBody resolves) and also serves as
 // the EventEmitter abortOnDisconnect listens on for "aborted"/"close".
 function makeReq(body: Record<string, unknown>): IncomingMessage {
-  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
+  const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body), "utf8")]), {
+    headers: {},
+  });
   return req as unknown as IncomingMessage;
 }
 
@@ -569,7 +571,9 @@ function insertAcceptedMemory(
     id: makeMemoryId(`mem-${String(now)}`),
     schemaVersion: "1",
     scope,
-    type: "preference",
+    // A fact, not a preference: preferences reach every answer through the standing profile
+    // (#4228), and this fixture proves retrieval by the question.
+    type: "semantic-fact",
     body,
     provenance: {
       sourceKind: "explicit-user-instruction",
@@ -759,7 +763,11 @@ afterEach(() => {
 });
 
 describe("desktop chat SSE streaming handler", () => {
-  it.each(["revoked", "rotated"] as const)(
+  // The `rotated` pin keeps its invariant (a replaced secret must be revalidated at a physical
+  // retry) but rotates through the registry directly: the channel's own rotation now defers while
+  // the request holds its operation (ADR-0141 D5, #4321), so it can no longer replace the secret
+  // mid-call. The deferred case is pinned separately below.
+  it.each(["revoked", "rotated", "rotation-deferred"] as const)(
     "revalidates %s paired skill authority at a physical retry",
     async (change) => {
       const chatId = seedChat();
@@ -768,22 +776,28 @@ describe("desktop chat SSE streaming handler", () => {
         contentBase64: Buffer.from("# Private method\nCheck boundaries.").toString("base64"),
       });
       store.markdownSkills.select(chatId, skill, 0);
+      const registry = createSessionRegistry();
       const channel = createCodingAppSessionChannel({
-        registry: createSessionRegistry(),
+        registry,
         pairingPort: createFakeSessionPairingPort(),
       });
       const pair = channel.pair(fakePairingRequestBody());
       if (!pair.paired) throw new Error("Expected paired fixture");
       let observed = false;
+      let deferred: ReturnType<typeof channel.rotate> | undefined;
       const model: ModelPort = {
         call: async (request) => {
           const grant = { promptTokens: 1, maxOutputTokens: 1 };
           expect(request.attemptAdmission?.(grant)).toBeDefined();
           if (change === "revoked") channel.signOut(pair.cookieToken);
-          else channel.rotate(pair.cookieToken);
+          else if (change === "rotated") {
+            const session = registry.verify(pair.cookieToken);
+            if (session === undefined) throw new Error("Expected live session");
+            expect(registry.rotate(session.sessionId)).toBeDefined();
+          } else deferred = channel.rotate(pair.cookieToken);
           observed = true;
           request.attemptAdmission?.(grant);
-          return Promise.resolve(normalizedResponse("Must not complete"));
+          return Promise.resolve(normalizedResponse("Completes"));
         },
       };
       const req = makeReq({
@@ -798,10 +812,19 @@ describe("desktop chat SSE streaming handler", () => {
         deps(model, { codingAppSessionChannel: channel }),
       );
       expect(observed).toBe(true);
+      const assistants = (): number =>
+        store.listMessages(chatId).filter((message) => message.role === "assistant").length;
+      if (change === "rotation-deferred") {
+        // A rotation requested while the request is active is deferred without replacing the
+        // secret, so the original authority stays valid and the turn completes.
+        expect(deferred).toEqual({ rotated: false, status: "deferred" });
+        expect(result).toMatchObject({ status: 200 });
+        expect(assistants()).toBe(1);
+        expect(channel.verifySession(pair.cookieToken)).toBeDefined();
+        return;
+      }
       expect(result).toMatchObject({ status: 404 });
-      expect(
-        store.listMessages(chatId).filter((message) => message.role === "assistant"),
-      ).toHaveLength(0);
+      expect(assistants()).toBe(0);
     },
   );
 
@@ -2213,17 +2236,21 @@ describe("desktop chat SSE streaming handler", () => {
         content: "Remember that streamed deployment also waits for green CI.",
       },
     ]);
-    expect(
-      store.inspectChatTurn(
-        chatId,
-        "stream-memory-disconnect",
-        canonicalPlainTurnIdentity(
+    // The handler returns once the reader is gone; the turn settles when capture finishes.
+    await vi.waitFor(() => {
+      expect(
+        store.inspectChatTurn(
           chatId,
-          "Remember that streamed deployment also waits for green CI.",
-          { memory: { enabled: true, budgetTokens: 900 } },
-        ),
-      ).kind,
-    ).toBe("retryable");
+          "stream-memory-disconnect",
+          canonicalPlainTurnIdentity(
+            chatId,
+            "Remember that streamed deployment also waits for green CI.",
+            { memory: { enabled: true, budgetTokens: 900 } },
+          ),
+        ).kind,
+      ).toBe("retryable");
+    });
+    expect(store.listMessages(chatId)).toHaveLength(1);
     memoryVault.close();
   });
 
@@ -2322,7 +2349,10 @@ describe("desktop chat SSE streaming handler", () => {
       deps(streaming.model, { gatewayConfig: holder }),
     );
 
-    expect(outcome).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(outcome).toMatchObject({
+      status: 400,
+      body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
+    });
     expect(streaming.calls.count).toBe(0);
     expect(sink.events).toContainEqual(
       expect.objectContaining({
@@ -2360,7 +2390,10 @@ describe("desktop chat SSE streaming handler", () => {
       deps(streamingModel("must not run").model, { gatewayConfig: holder }),
     );
 
-    expect(outcome).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(outcome).toMatchObject({
+      status: 400,
+      body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
+    });
     expect(sink.events).toContainEqual(
       expect.objectContaining({
         op: "chat.regeneration.rejected",

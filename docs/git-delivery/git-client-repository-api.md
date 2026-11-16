@@ -235,7 +235,9 @@ a run no earlier cause explains.
     option, a denied `-c` config key, or a `git` resolved in an untrusted location). "Undeclared"
     is the call site's own statement, never the observer's guess: `git diff --no-index` exits 1 to
     say "the files differ", so that route declares `expectedExitCodes: [1]` and a healthy untracked
-    diff stays OFF the log instead of writing a `warn` under the 200 the route returns. Every line
+    diff stays OFF the log instead of writing a `warn` under the 200 the route returns. The
+    membership question (`rev-parse`) answered "not a repository" is recorded at `info`: a folder
+    without Git is a supported workspace, while any other command that met no repository warns. Every line
     carries the subcommand, how the child ended and the request's own correlation id; the refusal
     class is carried by `git.process.refused` alone, because only a spawn-boundary refusal has one.
   - **Through the keiko-tools `runCommand` boundary** (the governed publish/push path,

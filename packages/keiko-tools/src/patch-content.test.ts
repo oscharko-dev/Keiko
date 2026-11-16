@@ -47,6 +47,43 @@ describe("computeFileContent — modify", () => {
   });
 });
 
+// #4068: Git for Windows checks files out with CRLF (`core.autocrlf=true` by default), while a model
+// or agent writes its diff with LF. Every context and removed line then carried a `\r` the diff did
+// not, so a correct fix was refused as a conflict on most Windows working trees.
+describe("computeFileContent — an LF diff against a CRLF file (#4068)", () => {
+  it("applies the hunk and keeps the file's CRLF line breaks", () => {
+    const out = computeFileContent(modify(["-one", "+ONE", "+inserted", " two"]), "one\r\ntwo\r\n");
+    expect(out.conflicts).toEqual([]);
+    expect(out.content).toBe("ONE\r\ninserted\r\ntwo\r\n");
+  });
+
+  it("keeps a CRLF file's missing final line break that the diff marks", () => {
+    const marker = "\\ No newline at end of file";
+    const out = computeFileContent(modify([" one", "-two", marker, "+TWO", marker]), "one\r\ntwo");
+    expect(out.conflicts).toEqual([]);
+    expect(out.content).toBe("one\r\nTWO");
+  });
+
+  it("still applies a diff whose lines carry the file's CR exactly", () => {
+    const out = computeFileContent(modify(["-one\r", "+ONE\r", " two\r"]), "one\r\ntwo\r\n");
+    expect(out.content).toBe("ONE\r\ntwo\r\n");
+  });
+
+  it.each([
+    ["a file with mixed line breaks", "one\r\ntwo\nthree\r\n"],
+    ["a file with a bare CR inside a line", "one\r\nt\rwo\r\n"],
+  ])("keeps exact matching for %s", (_label, current) => {
+    const out = computeFileContent(modify(["-one", "+ONE", " two"]), current);
+    expect(out.content).toBeNull();
+    expect(out.conflicts).toHaveLength(1);
+  });
+
+  it("keeps exact matching when the diff mixes CR and LF lines", () => {
+    const out = computeFileContent(modify(["-one\r", "+ONE", " two"]), "one\r\ntwo\r\n");
+    expect(out.content).toBeNull();
+  });
+});
+
 describe("computeFileContent — create / delete", () => {
   it("creates content from added lines when absent", () => {
     const change: PatchFileChange = {

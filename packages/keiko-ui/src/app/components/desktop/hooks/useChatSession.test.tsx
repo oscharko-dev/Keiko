@@ -3,9 +3,12 @@ import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatDraft, ChatDraftUpdate } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { EN_MESSAGES } from "@/lib/i18n-messages.en";
 import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
 import type { updateChatConnectedScopes } from "@/lib/api";
 import { ConnectedScopePill } from "../ConnectedScopePill";
+import { ChatWindow } from "../ChatWindow";
+import { ChatSessionProvider } from "../context/ChatSessionContext";
 import { toUserErrorNotice } from "../format-error";
 import type {
   Chat,
@@ -18,6 +21,7 @@ import {
   ApiError,
   askGrounded,
   createDesktopChat,
+  cancelDesktopChatTurn,
   createProject,
   deleteConversationAttachment,
   fetchChatMessages,
@@ -89,10 +93,12 @@ beforeAll(async () => {
 vi.mock("@/lib/api", async (original) => {
   const api = await original<typeof import("@/lib/api")>();
   return {
+    ...api,
     ApiError: api.ApiError,
     StreamingUnavailableError: api.StreamingUnavailableError,
     askGrounded: vi.fn(),
     createDesktopChat: vi.fn(),
+    cancelDesktopChatTurn: vi.fn().mockResolvedValue({ cancelled: true }),
     createProject: vi.fn(),
     projectResponseWarningMessage: (response: {
       readonly warning?: { readonly message: string; readonly correlationId: string };
@@ -147,6 +153,7 @@ afterEach(() => {
   vi.useRealTimers();
   clearCanonicalVoicePageOutboxForTests();
   vi.clearAllMocks();
+  vi.mocked(cancelDesktopChatTurn).mockReset().mockResolvedValue({ cancelled: true });
   clearChatSessionBootstrapCacheForTests();
   resetConversationMemorySettingsForTests();
 });
@@ -311,6 +318,38 @@ function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): Rea
 }
 
 describe("useChatSession bootstrap", () => {
+  it("shares event-driven model reads and stays quiet across time, focus and visibility", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "startup-model" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+    const { result, unmount } = renderHook(() => ({
+      first: useChatSession({ autoCreate: false }),
+      second: useChatSession({ autoCreate: false }),
+      settled: useGatewayModelCatalogSettled(),
+    }));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(300_000));
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await act(() => vi.advanceTimersByTimeAsync(300_000));
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "changed-model" })] });
+    act(() => notifyGatewayConfigUpdated());
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+    expect(result.current.first.models.map((entry) => entry.id)).toEqual(["changed-model"]);
+    expect(result.current.second.models.map((entry) => entry.id)).toEqual(["changed-model"]);
+    expect(result.current.settled).toBe(true);
+    act(() => notifyGatewayModelReadinessUpdated());
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetchModels).toHaveBeenCalledTimes(3);
+    unmount();
+    vi.useRealTimers();
+  });
+
   it("reloads a bootstrap snapshot invalidated by an acknowledged scope mutation", async () => {
     const initial = chat({ id: "chat-scope-bootstrap", updatedAt: 1 });
     const changed = chat({
@@ -361,7 +400,7 @@ describe("useChatSession bootstrap", () => {
     expect(fetchModels).toHaveBeenCalledWith(expect.any(String), true);
   });
 
-  it("continues quick projection reads during reload discovery even for already-ready models", async () => {
+  it("does not reread ready models as time advances", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-live", conversationReady: true, toolCalling: true })],
@@ -372,7 +411,7 @@ describe("useChatSession bootstrap", () => {
       await act(() => vi.advanceTimersByTimeAsync(10_001));
       const calls = vi.mocked(fetchModels).mock.calls.length;
       await act(() => vi.advanceTimersByTimeAsync(5_000));
-      expect(fetchModels).toHaveBeenCalledTimes(calls + 1);
+      expect(fetchModels).toHaveBeenCalledTimes(calls);
     } finally {
       unmount();
       vi.useRealTimers();
@@ -417,9 +456,40 @@ describe("useChatSession bootstrap", () => {
 
     expect(result.current.models).toEqual([]);
     expect(result.current.configuredModelsAvailable).toBe(true);
+    // A pending read is unknown, not a successful empty catalog.
+    expect(result.current.loading).toBe(false);
+    expect(result.current.noEligibleModels).toBe(false);
     // Pinned invalidation: no stale id is sendable mid-refresh — restoration is the success
     // path's job (see the restore pin below).
     expect(result.current.selectedModel).toBeUndefined();
+  });
+
+  it("distinguishes a failed catalog from a successful empty catalog and then recovers", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    vi.mocked(fetchModels).mockRejectedValueOnce(new TypeError("Synthetic catalog failure"));
+    act(() => requestGatewayModelCatalogRefresh());
+    expect(result.current.modelCatalogStatus).toBe("loading");
+    expect(result.current.noEligibleModels).toBe(false);
+    expect(result.current.modelCatalogRead).toBeUndefined();
+    await waitFor(() => expect(result.current.modelCatalogStatus).toBe("failed"));
+    expect(result.current.error).toContain("Synthetic catalog failure");
+    expect(result.current.noEligibleModels).toBe(false);
+    expect(result.current.selectedModel).toBeUndefined();
+    expect(result.current.models).toEqual([]);
+    vi.mocked(fetchModels).mockResolvedValueOnce({ models: [] });
+    act(() => requestGatewayModelCatalogRefresh());
+    await waitFor(() => expect(result.current.modelCatalogStatus).toBe("ready"));
+    expect(result.current.noEligibleModels).toBe(true);
+    expect(result.current.error).toBeUndefined();
+    vi.mocked(fetchModels).mockResolvedValueOnce({ models: [model({ id: "chat-live" })] });
+    act(() => requestGatewayModelCatalogRefresh());
+    await waitFor(() => expect(result.current.selectedModel).toBe("chat-live"));
+    expect(result.current.modelCatalogStatus).toBe("ready");
+    expect(result.current.noEligibleModels).toBe(false);
   });
 
   // PR #3625 review: a consumer must tell a refresh in flight (empty catalog) from a settled one.
@@ -472,6 +542,84 @@ describe("useChatSession bootstrap", () => {
     await waitFor(() => expect(vi.mocked(fetchModels).mock.calls.at(-1)?.[1]).toBe(true));
   });
 
+  // Lab request storm: a Workbench open fires several catalog refresh requests within a few
+  // milliseconds (window effect, runtime refresh, source refresh). Every subscriber receives the
+  // result of the read in flight, so each extra request only re-cleared the picker and repeated the
+  // catalog GET and the shared bootstrap.
+  describe("catalog refresh requests that arrive while a read is in flight", () => {
+    function holdCatalogReads(): { readonly settle: () => void } {
+      let settleRead: () => void = () => undefined;
+      vi.mocked(fetchModels).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            settleRead = (): void => {
+              resolve({ models: [] });
+            };
+          }),
+      );
+      return {
+        settle: (): void => {
+          settleRead();
+        },
+      };
+    }
+
+    it("joins an equal request instead of reading the catalog again", async () => {
+      const held = holdCatalogReads();
+      const { result } = renderHook(() => useGatewayModelCatalogSettled());
+      const before = vi.mocked(fetchModels).mock.calls.length;
+      act(() => {
+        requestGatewayModelCatalogRefresh({ check: true });
+        requestGatewayModelCatalogRefresh({ check: true });
+        requestGatewayModelCatalogRefresh();
+      });
+      expect(vi.mocked(fetchModels).mock.calls.length - before).toBe(1);
+      await act(async () => {
+        held.settle();
+      });
+      expect(result.current).toBe(true);
+    });
+
+    it("still reads again when a person's check follows a plain reread", () => {
+      holdCatalogReads();
+      renderHook(() => useGatewayModelCatalogSettled());
+      const before = vi.mocked(fetchModels).mock.calls.length;
+      act(() => {
+        requestGatewayModelCatalogRefresh();
+        requestGatewayModelCatalogRefresh({ check: true });
+      });
+      const calls = vi.mocked(fetchModels).mock.calls.slice(before);
+      expect(calls.map((call) => call[1])).toEqual([false, true]);
+    });
+
+    it("always restarts on a configuration change, because the read in flight predates it", () => {
+      holdCatalogReads();
+      renderHook(() => useGatewayModelCatalogSettled());
+      const before = vi.mocked(fetchModels).mock.calls.length;
+      act(() => {
+        requestGatewayModelCatalogRefresh();
+        notifyGatewayConfigUpdated();
+      });
+      expect(vi.mocked(fetchModels).mock.calls.length - before).toBe(2);
+    });
+
+    it("accepts a new request once the read has settled", async () => {
+      const held = holdCatalogReads();
+      renderHook(() => useGatewayModelCatalogSettled());
+      const before = vi.mocked(fetchModels).mock.calls.length;
+      act(() => {
+        requestGatewayModelCatalogRefresh();
+      });
+      await act(async () => {
+        held.settle();
+      });
+      act(() => {
+        requestGatewayModelCatalogRefresh();
+      });
+      expect(vi.mocked(fetchModels).mock.calls.length - before).toBe(2);
+    });
+  });
+
   it("restores a non-default model selection once the refreshed catalog confirms it", async () => {
     const catalog = [model({ id: "chat-live" }), model({ id: "chat-alt" })];
     vi.mocked(fetchModels).mockResolvedValue({ models: catalog });
@@ -497,7 +645,7 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.selectedModel).toBe("chat-alt");
   });
 
-  it("adopts startup readiness in the background without Settings or losing selection", async () => {
+  it("adopts announced startup readiness without Settings or losing selection", async () => {
     vi.useFakeTimers();
     const catalogUpdated = vi.fn();
     window.addEventListener("keiko:gateway-model-catalog-updated", catalogUpdated);
@@ -520,9 +668,8 @@ describe("useChatSession bootstrap", () => {
         model({ id: "chat-waking", conversationReady: true }),
       ],
     });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
-    });
+    act(() => notifyGatewayModelReadinessUpdated());
+    await act(() => vi.advanceTimersByTimeAsync(1));
     expect(result.current.models).toHaveLength(2);
     expect(result.current.selectedModel).toBe("chat-live");
     expect(catalogUpdated).toHaveBeenCalledOnce();
@@ -538,7 +685,7 @@ describe("useChatSession bootstrap", () => {
     vi.useRealTimers();
   });
 
-  it("keeps a deliberate choice through a background readiness outage and restores it", async () => {
+  it("keeps a deliberate choice through announced readiness changes and restores it", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-live" }), model({ id: "chat-alt" })],
@@ -551,20 +698,21 @@ describe("useChatSession bootstrap", () => {
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-live" }), model({ id: "chat-alt", conversationReady: false })],
     });
-    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    act(() => notifyGatewayModelReadinessUpdated());
+    await act(() => vi.advanceTimersByTimeAsync(1));
     expect(result.current.selectedModel).toBeUndefined();
     expect(result.current.noEligibleModels).toBe(false);
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-live" }), model({ id: "chat-alt" })],
     });
-    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => notifyGatewayModelReadinessUpdated());
     await act(() => vi.advanceTimersByTimeAsync(1));
     expect(result.current.selectedModel).toBe("chat-alt");
     unmount();
     vi.useRealTimers();
   });
 
-  it("clears only the recovered catalog error after a background read succeeds", async () => {
+  it("clears the recovered catalog error after an explicit retry succeeds", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
@@ -575,14 +723,15 @@ describe("useChatSession bootstrap", () => {
     act(() => requestGatewayModelCatalogRefresh());
     await act(() => vi.advanceTimersByTimeAsync(1));
     expect(result.current.error).toContain("Synthetic catalog failure.");
-    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    act(() => requestGatewayModelCatalogRefresh());
+    await act(() => vi.advanceTimersByTimeAsync(1));
     expect(result.current.error).toBeUndefined();
     expect(result.current.selectedModel).toBe("chat-live");
     unmount();
     vi.useRealTimers();
   });
 
-  it("pauses background model reads while hidden and catches up when visible", async () => {
+  it("does not reread models on visibility changes", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
@@ -596,41 +745,35 @@ describe("useChatSession bootstrap", () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     act(() => document.dispatchEvent(new Event("visibilitychange")));
     await act(() => vi.advanceTimersByTimeAsync(1));
-    expect(fetchModels).toHaveBeenCalledTimes(calls + 1);
+    expect(fetchModels).toHaveBeenCalledTimes(calls);
     unmount();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
-  it("backs off failed background reads and reports one correlated failure per streak", async () => {
+  it("keeps a failed model catalog quiet until an explicit retry", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
-    const diagnostic = vi.fn();
-    setClientDiagnosticWriter(diagnostic);
-    const { unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+    const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
     await act(() => vi.advanceTimersByTimeAsync(1));
-    const calls = vi.mocked(fetchModels).mock.calls.length;
-    vi.mocked(fetchModels).mockRejectedValue(new TypeError("Synthetic transport outage."));
-    await act(() => vi.advanceTimersByTimeAsync(30_000));
-    expect(fetchModels).toHaveBeenCalledTimes(calls + 3);
-    expect(diagnostic.mock.calls.filter(([, meta]) => meta?.kind === "other")).toHaveLength(1);
-    expect(diagnostic).toHaveBeenCalledWith(
-      expect.stringContaining("Background model catalog refresh failed (TypeError)"),
-      expect.objectContaining({ kind: "other", correlationId: expect.any(String) }),
-    );
-    expect(
-      diagnostic.mock.calls.find(([, meta]) => meta?.kind === "other")?.[1].correlationId,
-    ).toBe(vi.mocked(fetchModels).mock.calls[calls]?.[0]);
+    const initialCalls = vi.mocked(fetchModels).mock.calls.length;
+    vi.mocked(fetchModels).mockRejectedValue(new TypeError("Synthetic catalog outage."));
+    act(() => requestGatewayModelCatalogRefresh());
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(result.current.modelCatalogStatus).toBe("failed");
+    expect(result.current.selectedModel).toBeUndefined();
+    await act(() => vi.advanceTimersByTimeAsync(300_000));
+    act(() => window.dispatchEvent(new Event("focus")));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetchModels).toHaveBeenCalledTimes(initialCalls + 1);
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
-    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => requestGatewayModelCatalogRefresh());
     await act(() => vi.advanceTimersByTimeAsync(1));
-    vi.mocked(fetchModels).mockRejectedValue(new TypeError("Synthetic second outage."));
-    act(() => window.dispatchEvent(new Event("focus")));
-    await act(() => vi.advanceTimersByTimeAsync(1));
-    expect(diagnostic.mock.calls.filter(([, meta]) => meta?.kind === "other")).toHaveLength(2);
+    expect(fetchModels).toHaveBeenCalledTimes(initialCalls + 2);
+    expect(result.current.modelCatalogStatus).toBe("ready");
+    expect(result.current.selectedModel).toBe("chat-live");
     unmount();
-    resetClientDiagnosticWriter();
     vi.useRealTimers();
   });
 
@@ -684,6 +827,8 @@ describe("useChatSession bootstrap", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toContain("project catalog unavailable");
+    expect(result.current.modelCatalogStatus).toBe("unknown");
+    expect(result.current.noEligibleModels).toBe(false);
     expect(fetchChats).not.toHaveBeenCalled();
   });
 
@@ -696,6 +841,8 @@ describe("useChatSession bootstrap", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toContain("chat catalog unavailable");
+    expect(result.current.modelCatalogStatus).toBe("unknown");
+    expect(result.current.noEligibleModels).toBe(false);
     // A failed load decides nothing, so no evidence may name it.
     expect(chatListCorrelationId("/repo")).toBeUndefined();
     expect(result.current.activeProject).toBeUndefined();
@@ -1475,6 +1622,716 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.chats.map((item) => item.id)).toEqual(["other-trashed", "other-open"]);
   });
 
+  function restoredWriteApproval(): NonNullable<
+    NonNullable<ChatMessage["toolTranscript"]>["exchanges"][number]["approval"]
+  > {
+    return {
+      kind: "jira-chat-write",
+      chatId: "chat-boot",
+      approvalId: "approval-1",
+      state: "pending",
+      podId: "11111111-1111-4111-8111-111111111111",
+      bindingGeneration: 1,
+      authenticationGeneration: 1,
+      invocationId: "invocation-1",
+      operation: "jira.create",
+      actionDigest: "a".repeat(64),
+      requestedAt: 1,
+      expiresAt: 4102444800000,
+    };
+  }
+  function restoredPendingApproval(): ChatMessage {
+    return message({
+      id: "restored-pending",
+      chatId: "chat-boot",
+      turnState: "pending",
+      canonicalTurnRef: "a".repeat(64),
+      toolTranscript: {
+        schemaVersion: 1,
+        exchanges: [
+          {
+            call: { id: "create-1", name: "jira_create", arguments: {} },
+            approval: restoredWriteApproval(),
+          },
+        ],
+      },
+    });
+  }
+  function bootRestoredPendingApproval(): void {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [chat({ id: "chat-boot", selectedModel: "chat-live" })],
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [restoredPendingApproval()] });
+  }
+  /** Serves a pending review for the sent turn once the test supplies that turn's reference. */
+  function observeReviewOf(): { reference?: string } {
+    const observed: { reference?: string } = {};
+    vi.mocked(fetchChatMessages).mockImplementation(() =>
+      Promise.resolve({
+        messages:
+          observed.reference === undefined
+            ? []
+            : [{ ...restoredPendingApproval(), canonicalTurnRef: observed.reference }],
+      }),
+    );
+    return observed;
+  }
+  it("observes a restored pending approval through its completed persisted receipt without resending", async () => {
+    bootRestoredPendingApproval();
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.sendStatus).toBe("awaiting-decision"));
+    const completed: ChatMessage = {
+      ...restoredPendingApproval(),
+      turnState: "completed" as const,
+      toolTranscript: {
+        schemaVersion: 1 as const,
+        exchanges: [
+          {
+            call: {
+              id: "create-1",
+              name: "jira_create",
+              arguments: {},
+            },
+            result: {
+              schemaVersion: 1,
+              invocationId: "invocation-1",
+              toolRef: null,
+              projectionDigest: null,
+              effectStarted: true,
+              metrics: { inputBytes: 1, outputBytes: 1, resultCount: 1, durationMs: 1 },
+              status: "completed",
+              reason: "none",
+              page: { truncated: false, reason: "none", cursor: null },
+              data: { outcome: "created" },
+            },
+          },
+        ],
+      },
+    };
+    const assistant = message({
+      id: "persisted-assistant",
+      chatId: "chat-boot",
+      role: "assistant",
+      canonicalTurnRef: "a".repeat(64),
+      content: "One issue created.",
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [completed, assistant] });
+    await waitFor(() => expect(result.current.messages).toEqual([completed, assistant]), {
+      timeout: 3000,
+    });
+    expect(sendDesktopChat).not.toHaveBeenCalled();
+    expect(sendDesktopChatStream).not.toHaveBeenCalled();
+    expect(result.current.sendStatus).toBe("completed");
+  });
+  it("discards a restored observer response after a Chat switch starts before effect cleanup", async () => {
+    bootRestoredPendingApproval();
+    const observed = deferred<{ messages: ChatMessage[] }>();
+    const switched = deferred<{ messages: ChatMessage[] }>();
+    let pollSignal: AbortSignal | undefined;
+    vi.mocked(fetchChatMessages).mockImplementation((id, _project, signal) => {
+      if (id === "chat-other") return switched.promise;
+      if (signal === undefined) return Promise.resolve({ messages: [restoredPendingApproval()] });
+      pollSignal = signal;
+      return observed.promise;
+    });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(pollSignal).toBeDefined());
+    let opening: Promise<void> | undefined;
+    act(() => {
+      opening = result.current.openChat(chat({ id: "chat-other" }));
+    });
+    expect(pollSignal?.aborted).toBe(false);
+    const before = result.current.messages;
+    const approved = {
+      ...restoredPendingApproval(),
+      toolTranscript: {
+        schemaVersion: 1 as const,
+        exchanges: [
+          {
+            call: { id: "create-1", name: "jira_create", arguments: {} },
+            approval: { ...restoredWriteApproval(), state: "approved" as const },
+          },
+        ],
+      },
+    };
+    await act(async () => {
+      observed.resolve({ messages: [approved] });
+    });
+    expect(result.current.messages).toEqual(before);
+    await act(async () => {
+      switched.resolve({ messages: [] });
+      await opening;
+    });
+    expect(result.current.activeChat?.id).toBe("chat-other");
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.sendStatus).toBe("idle");
+  });
+  it("cancels the exact persisted pending turn when Stop follows reload", async () => {
+    bootRestoredPendingApproval();
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.cancelSend());
+    await waitFor(() =>
+      expect(cancelDesktopChatTurn).toHaveBeenCalledWith({
+        chatId: "chat-boot",
+        canonicalTurnRef: "a".repeat(64),
+      }),
+    );
+  });
+
+  it("counts a server answer that no worker is running as a successful Stop", async () => {
+    bootRestoredPendingApproval();
+    vi.mocked(cancelDesktopChatTurn).mockResolvedValueOnce({ cancelled: false });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.cancelSend());
+    await waitFor(() => expect(result.current.sendStatus).toBe("cancelled"));
+    expect(result.current.error).toBeUndefined();
+    expect(cancelDesktopChatTurn).toHaveBeenCalledOnce();
+  });
+
+  it("shows the settled state when Stop finds the review already decided elsewhere", async () => {
+    bootRestoredPendingApproval();
+    const settled: ChatMessage = {
+      ...restoredPendingApproval(),
+      turnState: "completed" as const,
+      toolTranscript: undefined,
+    };
+    const answer = message({
+      id: "decided-elsewhere",
+      chatId: "chat-boot",
+      role: "assistant",
+      content: "Created once.",
+      canonicalTurnRef: "a".repeat(64),
+    });
+    vi.mocked(cancelDesktopChatTurn).mockImplementationOnce(() => {
+      vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [settled, answer] });
+      return Promise.resolve({ cancelled: false });
+    });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.cancelSend());
+    await waitFor(() => expect(cancelDesktopChatTurn).toHaveBeenCalledOnce());
+    // Well inside the first observation poll, so only the Stop's own re-read can explain this.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(result.current.sendStatus).toBe("completed");
+    expect(result.current.messages.map((entry) => entry.id)).toContain("decided-elsewhere");
+    expect(result.current.error).toBeUndefined();
+  });
+
+  it("explains an unknown review status when the bounded observation gives up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      bootRestoredPendingApproval();
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+      expect(result.current.error).toBeUndefined();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      });
+      expect(result.current.error).toBe(EN_MESSAGES["chat.pendingObservation.unknown"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed when Stop cannot reach the server to confirm a worker cancellation", async () => {
+    bootRestoredPendingApproval();
+    vi.mocked(cancelDesktopChatTurn).mockRejectedValueOnce(
+      new ApiError("INTERNAL", "Stop unavailable", 500),
+    );
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.cancelSend());
+    await waitFor(() => expect(result.current.error).toBeDefined());
+    expect(result.current.sendStatus).toBe("awaiting-decision");
+    expect(result.current.sendStatus).not.toBe("cancelled");
+  });
+  it("allows an explicit Stop retry after an unconfirmed cancellation without claiming success", async () => {
+    bootRestoredPendingApproval();
+    vi.mocked(cancelDesktopChatTurn).mockRejectedValueOnce(
+      new ApiError("INTERNAL", "Stop unavailable", 500),
+    );
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.cancelSend());
+    await waitFor(() => expect(result.current.error).toBeDefined());
+    expect(result.current.sendStatus).not.toBe("cancelled");
+    act(() => result.current.cancelSend());
+    await waitFor(() => expect(cancelDesktopChatTurn).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.sendStatus).toBe("cancelled"));
+  });
+  it("targets the replacement turn after an uncertain old Stop and observed old completion", async () => {
+    bootRestoredPendingApproval();
+    const cancellationB = deferred<{ cancelled: boolean }>();
+    vi.mocked(cancelDesktopChatTurn)
+      .mockRejectedValueOnce(new ApiError("INTERNAL", "Stop unavailable", 500))
+      .mockImplementationOnce(() => cancellationB.promise);
+    vi.mocked(sendDesktopChatStream).mockImplementation((_input, signal, handlers) => {
+      // The replacement turn shows its own pending review, so its Stop asks the server.
+      handlers.onWriteApproval?.({
+        messageId: "canonical-user",
+        call: { id: "create-1", name: "jira_create", arguments: {} },
+        approval: restoredWriteApproval(),
+      });
+      return new Promise((resolve) =>
+        signal.addEventListener(
+          "abort",
+          () => {
+            handlers.onCancelled();
+            resolve();
+          },
+          { once: true },
+        ),
+      );
+    });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.cancelSend());
+    await waitFor(() => expect(result.current.error).toBeDefined());
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [
+        { ...restoredPendingApproval(), turnState: "completed", toolTranscript: undefined },
+        message({
+          id: "completed-old",
+          chatId: "chat-boot",
+          role: "assistant",
+          canonicalTurnRef: "a".repeat(64),
+        }),
+      ],
+    });
+    await waitFor(() => expect(result.current.sendStatus).toBe("completed"));
+    act(() => {
+      void result.current.sendMessage({ text: "A separately accepted new turn." });
+    });
+    await waitFor(() => expect(sendDesktopChatStream).toHaveBeenCalled());
+    const clientTurnId = vi.mocked(sendDesktopChatStream).mock.lastCall?.[0].clientTurnId;
+    if (clientTurnId === undefined) throw new TypeError("Missing replacement canonical identity");
+    const referenceB = await canonicalTurnReferenceForClient("chat-boot", clientTurnId);
+    expect(referenceB).not.toBe("a".repeat(64));
+    await waitFor(() => expect(result.current.sendStatus).toBe("awaiting-decision"));
+    act(() => result.current.cancelSend());
+    await waitFor(() =>
+      expect(cancelDesktopChatTurn).toHaveBeenNthCalledWith(2, {
+        chatId: "chat-boot",
+        canonicalTurnRef: referenceB,
+      }),
+    );
+    await act(async () => {
+      cancellationB.resolve({ cancelled: true });
+    });
+    expect(result.current.sendStatus).toBe("cancelled");
+  });
+  it.each(["failed", "confirmed"] as const)(
+    "keeps replacement send errors when an old Stop is %s",
+    async (outcome) => {
+      bootRestoredPendingApproval();
+      const cancellation = deferred<{ cancelled: boolean }>();
+      vi.mocked(cancelDesktopChatTurn).mockImplementationOnce(() => cancellation.promise);
+      const diagnostics = vi.fn();
+      setClientDiagnosticWriter(diagnostics);
+      vi.mocked(sendDesktopChatStream).mockImplementation(
+        (_input, signal, handlers) =>
+          new Promise((resolve) =>
+            signal.addEventListener(
+              "abort",
+              () => {
+                handlers.onCancelled();
+                resolve();
+              },
+              { once: true },
+            ),
+          ),
+      );
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      act(() => result.current.cancelSend());
+      await waitFor(() => expect(cancelDesktopChatTurn).toHaveBeenCalledOnce());
+      const canonicalTurnRef = "a".repeat(64);
+      vi.mocked(fetchChatMessages).mockResolvedValue({
+        messages: [
+          { ...restoredPendingApproval(), turnState: "completed", toolTranscript: undefined },
+          message({
+            id: "completed-old",
+            chatId: "chat-boot",
+            role: "assistant",
+            canonicalTurnRef,
+          }),
+        ],
+      });
+      await waitFor(() => expect(result.current.sendStatus).toBe("completed"));
+      act(() => {
+        void result.current.sendMessage({ text: "An independent replacement turn." });
+      });
+      await waitFor(() => expect(sendDesktopChatStream).toHaveBeenCalled());
+      if (outcome === "confirmed") {
+        vi.mocked(createProject).mockRejectedValueOnce(
+          new ApiError("INTERNAL", "New project failed", 500),
+        );
+        await act(async () => {
+          await result.current.addProject("/new-project");
+        });
+      }
+      const expectedError = result.current.error;
+      await act(async () => {
+        if (outcome === "failed") cancellation.reject(new TypeError("old Stop failed"));
+        else cancellation.resolve({ cancelled: true });
+      });
+      expect(result.current.error).toBe(expectedError);
+      expect(result.current.sendStatus).toBe("contacting");
+      resetClientDiagnosticWriter();
+    },
+  );
+  it.each(["failed", "confirmed"] as const)(
+    "preserves a settled replacement when a restored Stop resolves %s after the controller returns to null",
+    async (outcome) => {
+      bootRestoredPendingApproval();
+      vi.mocked(fetchModels).mockResolvedValue({
+        models: [model({ id: "chat-live", streaming: false })],
+      });
+      const cancellation = deferred<{ cancelled: boolean }>();
+      vi.mocked(cancelDesktopChatTurn).mockImplementationOnce(() => cancellation.promise);
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      act(() => result.current.cancelSend());
+      await waitFor(() => expect(cancelDesktopChatTurn).toHaveBeenCalledOnce());
+      vi.mocked(fetchChatMessages).mockResolvedValue({
+        messages: [
+          { ...restoredPendingApproval(), turnState: "completed", toolTranscript: undefined },
+          message({
+            id: "completed-old",
+            chatId: "chat-boot",
+            role: "assistant",
+            canonicalTurnRef: "a".repeat(64),
+          }),
+        ],
+      });
+      await waitFor(() => expect(result.current.sendStatus).toBe("completed"));
+      vi.mocked(sendDesktopChat).mockImplementationOnce(async (input) => {
+        const canonicalTurnRef = await canonicalTurnReferenceForClient(
+          "chat-boot",
+          input.clientTurnId ?? "",
+        );
+        return {
+          chat: chat({ id: "chat-boot", selectedModel: "chat-live" }),
+          messages: [
+            message({ id: "user-b", chatId: "chat-boot", canonicalTurnRef }),
+            message({
+              id: "assistant-b",
+              chatId: "chat-boot",
+              role: "assistant",
+              canonicalTurnRef,
+            }),
+          ],
+        };
+      });
+      await act(async () => {
+        await result.current.sendMessage({ text: "A new turn completes independently." });
+      });
+      expect(sendDesktopChat).toHaveBeenCalledOnce();
+      expect(result.current.sendStatus).toBe("completed");
+      if (outcome === "confirmed") {
+        vi.mocked(createProject).mockRejectedValueOnce(new ApiError("INTERNAL", "New error", 500));
+        await act(async () => {
+          await result.current.addProject("/new-project");
+        });
+      }
+      const expectedError = result.current.error;
+      const expectedMessages = result.current.messages;
+      await act(async () => {
+        if (outcome === "failed") cancellation.reject(new TypeError("Old Stop failed"));
+        else cancellation.resolve({ cancelled: true });
+      });
+      expect(result.current.error).toBe(expectedError);
+      expect(result.current.sendStatus).toBe("completed");
+      expect(result.current.messages).toEqual(expectedMessages);
+    },
+  );
+
+  it("coalesces simultaneous restored Stop attempts before an acknowledgement", async () => {
+    bootRestoredPendingApproval();
+    const cancellation = deferred<{ cancelled: boolean }>();
+    vi.mocked(cancelDesktopChatTurn)
+      .mockImplementationOnce(() => cancellation.promise)
+      .mockResolvedValueOnce({ cancelled: false });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => {
+      result.current.cancelSend();
+      result.current.cancelSend();
+    });
+    expect(cancelDesktopChatTurn).toHaveBeenCalledOnce();
+    expect(cancelDesktopChatTurn).toHaveBeenCalledWith({
+      chatId: "chat-boot",
+      canonicalTurnRef: "a".repeat(64),
+    });
+    await act(async () => {
+      cancellation.resolve({ cancelled: true });
+    });
+    expect(result.current.sendStatus).toBe("cancelled");
+    expect(result.current.error).toBeUndefined();
+    expect(cancelDesktopChatTurn).toHaveBeenCalledOnce();
+  });
+
+  it("reports an unconfirmed restored Stop as failure instead of silent cancellation", async () => {
+    bootRestoredPendingApproval();
+    vi.mocked(cancelDesktopChatTurn).mockRejectedValueOnce(new TypeError("network unavailable"));
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.cancelSend());
+    await waitFor(() => expect(result.current.error).toBeDefined());
+    expect(result.current.sendStatus).toBe("awaiting-decision");
+    expect(result.current.sendStatus).not.toBe("cancelled");
+    expect(diagnostic).toHaveBeenCalledWith(
+      "Chat pending turn cancellation failed.",
+      expect.objectContaining({ kind: "other", errorKind: expect.any(String) }),
+    );
+    resetClientDiagnosticWriter();
+  });
+  it("aborts a stream at once and tells the server about a review the browser has not seen yet", async () => {
+    bootRestoredPendingApproval();
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    // The notice never answers: the UI must not wait for it.
+    vi.mocked(cancelDesktopChatTurn).mockImplementationOnce(() => new Promise(() => undefined));
+    let activeSignal: AbortSignal | undefined;
+    vi.mocked(sendDesktopChatStream).mockImplementation((_input, signal, handlers) => {
+      activeSignal = signal;
+      return new Promise((resolve) =>
+        signal.addEventListener(
+          "abort",
+          () => {
+            handlers.onCancelled();
+            resolve();
+          },
+          { once: true },
+        ),
+      );
+    });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      void result.current.sendMessage({ text: "Say hello." });
+    });
+    await waitFor(() => expect(result.current.sendStatus).toBe("contacting"));
+    act(() => result.current.cancelSend());
+    expect(activeSignal?.aborted).toBe(true);
+    await waitFor(() => expect(result.current.sendStatus).toBe("cancelled"));
+    expect(result.current.sending).toBe(false);
+    expect(result.current.error).toBeUndefined();
+    const turnId = vi.mocked(sendDesktopChatStream).mock.lastCall?.[0].clientTurnId ?? "";
+    await waitFor(() =>
+      expect(cancelDesktopChatTurn).toHaveBeenCalledExactlyOnceWith({
+        chatId: "chat-boot",
+        canonicalTurnRef: expect.any(String),
+      }),
+    );
+    expect(vi.mocked(cancelDesktopChatTurn).mock.calls[0]?.[0].canonicalTurnRef).toBe(
+      await canonicalTurnReferenceForClient("chat-boot", turnId),
+    );
+  });
+
+  it.each(["awaiting-decision"] as const)(
+    "acknowledges exact live Stop before disconnecting an opted-in stream (%s)",
+    async (status) => {
+      bootRestoredPendingApproval();
+      vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+      const cancellation = deferred<{ cancelled: boolean }>();
+      vi.mocked(cancelDesktopChatTurn).mockImplementationOnce(() => cancellation.promise);
+      let activeSignal: AbortSignal | undefined;
+      vi.mocked(sendDesktopChatStream).mockImplementation((_input, signal, handlers) => {
+        activeSignal = signal;
+        if (status === "awaiting-decision")
+          handlers.onWriteApproval?.({
+            messageId: "canonical-user",
+            call: {
+              id: "create-1",
+              name: "jira_create",
+              arguments: {},
+            },
+            approval: restoredWriteApproval(),
+          });
+        return new Promise((resolve) =>
+          signal.addEventListener(
+            "abort",
+            () => {
+              handlers.onCancelled();
+              resolve();
+            },
+            { once: true },
+          ),
+        );
+      });
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      act(() => {
+        void result.current.sendMessage({ text: "Create one issue." });
+      });
+      await waitFor(() => expect(result.current.sendStatus).toBe(status));
+      act(() => result.current.cancelSend());
+      const turnId = vi.mocked(sendDesktopChatStream).mock.lastCall?.[0].clientTurnId ?? "";
+      const reference = await canonicalTurnReferenceForClient("chat-boot", turnId);
+      await waitFor(() =>
+        expect(cancelDesktopChatTurn).toHaveBeenCalledWith({
+          chatId: "chat-boot",
+          canonicalTurnRef: reference,
+        }),
+      );
+      expect(activeSignal?.aborted).toBe(false);
+      await act(async () => {
+        cancellation.resolve({ cancelled: true });
+      });
+      await waitFor(() => expect(activeSignal?.aborted).toBe(true));
+    },
+  );
+
+  it("acknowledges exact grounded Stop before disconnecting a canonical Knowledge turn", async () => {
+    bootRestoredPendingApproval();
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [
+        chat({
+          id: "chat-boot",
+          selectedModel: "chat-live",
+          connectedScopes: [
+            { kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 },
+          ],
+        }),
+      ],
+    });
+    const observed = observeReviewOf();
+    const cancellation = deferred<{ cancelled: boolean }>();
+    vi.mocked(cancelDesktopChatTurn).mockImplementationOnce(() => cancellation.promise);
+    let activeSignal: AbortSignal | undefined;
+    vi.mocked(askGrounded).mockImplementation((_input, signal) => {
+      if (signal === undefined) throw new TypeError("Grounded turn has no request signal");
+      activeSignal = signal;
+      return new Promise((_resolve, reject) =>
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("cancelled", "AbortError"));
+          },
+          { once: true },
+        ),
+      );
+    });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      void result.current.sendMessage({ text: "Create the Knowledge backlog." });
+    });
+    await waitFor(() => expect(askGrounded).toHaveBeenCalled());
+    const turnId = vi.mocked(askGrounded).mock.lastCall?.[0].clientTurnId;
+    if (turnId === undefined) throw new TypeError("Missing accepted canonical grounded identity");
+    const reference = await canonicalTurnReferenceForClient("chat-boot", turnId);
+    observed.reference = reference;
+    await waitFor(() => expect(result.current.sendStatus).toBe("awaiting-decision"), {
+      timeout: 4000,
+    });
+    act(() => result.current.cancelSend());
+    await waitFor(() =>
+      expect(cancelDesktopChatTurn).toHaveBeenCalledWith({
+        chatId: "chat-boot",
+        canonicalTurnRef: reference,
+      }),
+    );
+    expect(activeSignal?.aborted).toBe(false);
+    await act(async () => {
+      cancellation.resolve({ cancelled: true });
+    });
+    await waitFor(() => expect(activeSignal?.aborted).toBe(true));
+  });
+
+  it("acknowledges exact buffered Stop before disconnecting a canonical fallback turn", async () => {
+    bootRestoredPendingApproval();
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-live", streaming: false })],
+    });
+    const observed = observeReviewOf();
+    const cancellation = deferred<{ cancelled: boolean }>();
+    vi.mocked(cancelDesktopChatTurn).mockImplementationOnce(() => cancellation.promise);
+    let activeSignal: AbortSignal | undefined;
+    vi.mocked(sendDesktopChat).mockImplementation((_input, signal) => {
+      if (signal === undefined) throw new TypeError("Buffered turn has no request signal");
+      activeSignal = signal;
+      return new Promise((_resolve, reject) =>
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("cancelled", "AbortError"));
+          },
+          { once: true },
+        ),
+      );
+    });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      void result.current.sendMessage({ text: "Create the buffered backlog." });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalled());
+    const turnId = vi.mocked(sendDesktopChat).mock.lastCall?.[0].clientTurnId;
+    if (turnId === undefined) throw new TypeError("Missing accepted canonical buffered identity");
+    const reference = await canonicalTurnReferenceForClient("chat-boot", turnId);
+    observed.reference = reference;
+    await waitFor(() => expect(result.current.sendStatus).toBe("awaiting-decision"), {
+      timeout: 4000,
+    });
+    act(() => result.current.cancelSend());
+    await waitFor(() =>
+      expect(cancelDesktopChatTurn).toHaveBeenCalledWith({
+        chatId: "chat-boot",
+        canonicalTurnRef: reference,
+      }),
+    );
+    expect(activeSignal?.aborted).toBe(false);
+    await act(async () => {
+      cancellation.resolve({ cancelled: true });
+    });
+    await waitFor(() => expect(activeSignal?.aborted).toBe(true));
+  });
+
+  it("aborts a buffered turn at once and still notifies the server", async () => {
+    bootRestoredPendingApproval();
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-live", streaming: false })],
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    let activeSignal: AbortSignal | undefined;
+    vi.mocked(sendDesktopChat).mockImplementation((_input, signal) => {
+      if (signal === undefined) throw new TypeError("Buffered turn has no request signal");
+      activeSignal = signal;
+      return new Promise((_resolve, reject) =>
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("cancelled", "AbortError"));
+          },
+          { once: true },
+        ),
+      );
+    });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      void result.current.sendMessage({ text: "Say hello." });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalled());
+    act(() => result.current.cancelSend());
+    expect(activeSignal?.aborted).toBe(true);
+    await waitFor(() => expect(result.current.sendStatus).toBe("cancelled"));
+    await waitFor(() => expect(cancelDesktopChatTurn).toHaveBeenCalledOnce());
+    expect(result.current.error).toBeUndefined();
+  });
+
   it("says when a grounded turn waits for the human's decision", async () => {
     const groundedChat = chat({
       id: "chat-boot",
@@ -1888,6 +2745,9 @@ describe("useChatSession stale async landing guards", () => {
     act(() => {
       rendered.result.current.cancelSend();
     });
+    // Stop aborts at once and only notifies the server; the old provider remains pending.
+    await waitFor(() => expect(rendered.result.current.sendStatus).toBe("cancelled"));
+    await waitFor(() => expect(cancelDesktopChatTurn).toHaveBeenCalledOnce());
     let replacement!: Promise<SendMessageOutcome>;
     act(() => {
       replacement = rendered.result.current.sendMessage({
@@ -1948,6 +2808,8 @@ describe("useChatSession stale async landing guards", () => {
     act(() => {
       rendered.result.current.cancelSend();
     });
+    await waitFor(() => expect(rendered.result.current.sendStatus).toBe("cancelled"));
+    await waitFor(() => expect(cancelDesktopChatTurn).toHaveBeenCalledOnce());
     firstResponse.resolve(replacementResponse);
     await waitFor(() => expect(fetchChatMessages).toHaveBeenCalledTimes(2));
 
@@ -3429,6 +4291,33 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     expect(sendDesktopChat).toHaveBeenCalledTimes(1);
   });
 
+  // #4355: the code decides, never the words in the message. A provider error that names a token
+  // parameter keeps its own code's notice; only the gateway's overflow code reads as an overflow.
+  it.each([
+    ["GATEWAY_PROVIDER_ERROR", "the provider rejected max_tokens for this deployment"],
+    ["GATEWAY_RATE_LIMIT", "too many tokens per minute for this key"],
+    ["GATEWAY_TRANSPORT", "context length of the connection pool exceeded"],
+  ])("does not read the text of a %s error as a context overflow", async (code, text) => {
+    vi.mocked(sendDesktopChat).mockRejectedValueOnce(new ApiError(code, text, 502));
+    const { result } = await setupUngroundedSession();
+    await act(async () => {
+      await result.current.sendMessage({ text: "summarise the retained conversation" });
+    });
+    const notice = toUserErrorNotice(result.current.error, "fallback");
+    expect(notice.code).toBe(code);
+    expect(notice.title).not.toBe("Request larger than the context window");
+    expect(result.current.error).not.toContain(CONTEXT_OVERSIZED_USER_MESSAGE);
+  });
+
+  it("does not read the words of an error without a code either", async () => {
+    vi.mocked(sendDesktopChat).mockRejectedValueOnce(new Error("maximum context length exceeded"));
+    const { result } = await setupUngroundedSession();
+    await act(async () => {
+      await result.current.sendMessage({ text: "summarise the retained conversation" });
+    });
+    expect(result.current.error).toBe("maximum context length exceeded");
+  });
+
   // PR #3678 review: an oversized attachment is not a context-window overflow. The overflow notice
   // told the user to resend a request that fails the same way.
   it("keeps an oversized-attachment error apart from the context-window notice", async () => {
@@ -3601,6 +4490,50 @@ describe("useChatSession canonical Voice FIFO", () => {
     } as unknown as Awaited<ReturnType<typeof sendDesktopChat>>;
   }
 
+  it.each([false, true])(
+    "preserves immediate canonical Voice interruption without a pending lease (grounded=%s)",
+    async (grounded) => {
+      const target = chat({
+        connectedScopes: grounded
+          ? [{ kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 }]
+          : [],
+      });
+      const rendered = await setupVoiceQueueSession([target]);
+      let activeSignal: AbortSignal | undefined;
+      const capture = (_input: unknown, signal?: AbortSignal): Promise<never> => {
+        if (signal === undefined) throw new TypeError("Voice delivery has no request signal");
+        activeSignal = signal;
+        return new Promise((_resolve, reject) =>
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(new DOMException("Voice interrupted", "AbortError"));
+            },
+            { once: true },
+          ),
+        );
+      };
+      vi.mocked(sendDesktopChat).mockImplementation(capture);
+      vi.mocked(askGrounded).mockImplementation(capture);
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("A synthetic spoken request.", "voice-lease-excluded", target),
+        );
+      });
+      const call = grounded ? vi.mocked(askGrounded) : vi.mocked(sendDesktopChat);
+      await waitFor(() => expect(call).toHaveBeenCalled());
+      expect(call.mock.lastCall?.[3]).toBe(false);
+      expect(activeSignal?.aborted).toBe(false);
+      act(() => rendered.result.current.interruptCanonicalVoiceDelivery?.());
+      expect(activeSignal?.aborted).toBe(true);
+      expect(cancelDesktopChatTurn).not.toHaveBeenCalled();
+      await act(async () => {
+        await delivery;
+      });
+    },
+  );
+
   it("fails closed without retaining a transcript when hashing was not prepared", async () => {
     const rendered = await setupVoiceQueueSession();
     const sentinel = "unprepared private spoken sentinel";
@@ -3632,6 +4565,9 @@ describe("useChatSession canonical Voice FIFO", () => {
   // capture is filed as desktop.
   it("declares the voice capture surface on a canonical voice final", async () => {
     const rendered = await setupVoiceQueueSession();
+    vi.mocked(sendDesktopChat).mockImplementation(async (request) =>
+      completedTurn(request.content, "voice-surface-answer"),
+    );
 
     await act(async () => {
       await rendered.result.current.enqueueCanonicalVoiceTurn?.(
@@ -3646,6 +4582,9 @@ describe("useChatSession canonical Voice FIFO", () => {
 
   it("leaves a typed send free of a Voice capture surface marker", async (): Promise<void> => {
     const rendered = await setupVoiceQueueSession();
+    vi.mocked(sendDesktopChat).mockImplementation(async (request) =>
+      completedTurn(request.content, "typed-surface-answer"),
+    );
 
     await act(async () => {
       await rendered.result.current.sendMessage({ text: "A typed turn." });
@@ -5408,7 +6347,9 @@ describe("useChatSession canonical Voice FIFO", () => {
         const intent = beginChatScopeTransition("chat-a", "audit-first-source");
         intent.settle(true);
       });
+      // The un-reviewed send aborts synchronously; only the server notice is awaited.
       expect(signalA?.aborted).toBe(true);
+      await waitFor(() => expect(cancelDesktopChatTurn).toHaveBeenCalledOnce());
       await act(async () => rendered.result.current.openChat(chatB));
       act(() => {
         deliveryB = rendered.result.current.sendMessage({
@@ -5428,6 +6369,7 @@ describe("useChatSession canonical Voice FIFO", () => {
       expect(signalB?.aborted).toBe(false);
       act(() => beginChatScopeTransition("chat-b", "audit-current-source"));
       expect(signalB?.aborted).toBe(true);
+      await waitFor(() => expect(cancelDesktopChatTurn).toHaveBeenCalledTimes(2));
     } finally {
       await act(async () => {
         clearChatScopeTransitions("chat-a");
@@ -6455,6 +7397,22 @@ describe("ungrounded streaming refusal recovery", () => {
     }
   });
 
+  it("keeps the Chat and its typed draft after a Jira authentication failure so the person can reconnect", async () => {
+    const { result } = await streamingSession();
+    const refusal = new ApiError("JIRA_AUTHENTICATION_FAILED", "Private provider detail", 409);
+    refusal.correlationId = "jira-auth-draft";
+    vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(refusal);
+    act(() => result.current.setDraft("Private draft canary"));
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(result.current.draft).toBe("Private draft canary");
+    expect(result.current.activeChat?.id).toBe("chat-1");
+    expect(result.current.error).toContain("JIRA_AUTHENTICATION_FAILED");
+    expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+    expect(sendDesktopChat).not.toHaveBeenCalled();
+  });
+
   it("keeps an admitted streaming turn in progress without an error banner or replay", async () => {
     const { result } = await streamingSession();
     vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(
@@ -6605,7 +7563,7 @@ async function mountSelectionReview(
 
 async function adoptReviewCatalog(models: readonly ModelCapability[]): Promise<void> {
   vi.mocked(fetchModels).mockResolvedValue({ models: [...models] });
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => notifyGatewayModelReadinessUpdated());
   await act(() => vi.advanceTimersByTimeAsync(1));
 }
 
@@ -6765,7 +7723,7 @@ describe("actual model selection lifecycle evidence", () => {
         durationMs: 0,
         modelCatalog: {
           surface: "chat",
-          source: "background",
+          source: "foreground",
           configuredModelCount: 2,
           usableModelCount: 1,
           selectionProvenance: "human",
@@ -6789,7 +7747,7 @@ describe("actual model selection lifecycle evidence", () => {
           setTimeout(() => resolve({ models: [model(), model({ id: "chat-b" })] }), 250);
         }),
     );
-    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => notifyGatewayModelReadinessUpdated());
     await act(() => vi.advanceTimersByTimeAsync(250));
     const adoptions = diagnostic.mock.calls
       .map(([, meta]) => meta)
@@ -6833,7 +7791,7 @@ describe("actual model selection lifecycle evidence", () => {
     act(() => requestGatewayModelCatalogRefresh());
     await act(() => vi.advanceTimersByTimeAsync(1));
     await act(() => vi.advanceTimersByTimeAsync(5_000));
-    expect(updated).not.toHaveBeenCalled();
+    expect(updated).toHaveBeenCalledOnce();
     unmount();
     window.removeEventListener("keiko:gateway-model-catalog-updated", updated);
   });
@@ -6846,3 +7804,285 @@ vi.mock("@/lib/markdown-skills-api", () => ({
     .mockResolvedValue({ availability: "none", selection: { revision: 0, skill: null } }),
   changeMarkdownSkillSelection: vi.fn(),
 }));
+
+function BufferedCancelWindow({
+  capture,
+}: {
+  readonly capture: (session: ChatSessionApi) => void;
+}): ReactNode {
+  const session = useChatSession({ autoCreate: false });
+  capture(session);
+  return (
+    <ChatSessionProvider value={session}>
+      <ChatWindow />
+    </ChatSessionProvider>
+  );
+}
+
+it.each(["terminal", "read-failure"] as const)(
+  "reconciles cancellation after an observed tool transcript: %s",
+  async (settlement) => {
+    const diagnostics = vi.fn();
+    setClientDiagnosticWriter(diagnostics);
+    try {
+      const selectedChat = chat({
+        connectedScopes: [
+          {
+            kind: "workspace-root",
+            root: "/repo",
+            relativePaths: [],
+            connectedAtMs: 1,
+          },
+        ],
+      });
+      vi.mocked(fetchModels).mockResolvedValue({
+        models: [model({ streaming: false })],
+      });
+      vi.mocked(fetchProjects).mockResolvedValue({ projects: [project()] });
+      vi.mocked(fetchChats).mockResolvedValue({ chats: [selectedChat] });
+      let pending: ChatMessage | undefined;
+      let aborted = false;
+      let reconciliationReads = 0;
+      const terminal = deferred<Awaited<ReturnType<typeof fetchChatMessages>>>();
+      vi.mocked(fetchChatMessages).mockImplementation(() => {
+        if (pending === undefined) return Promise.resolve({ messages: [] });
+        if (!aborted) return Promise.resolve({ messages: [pending] });
+        reconciliationReads++;
+        return reconciliationReads === 1
+          ? Promise.resolve({ messages: [pending] })
+          : terminal.promise;
+      });
+      vi.mocked(askGrounded).mockImplementation(
+        (request, signal) =>
+          new Promise((_resolve, reject) => {
+            void canonicalTurnReferenceForClient(selectedChat.id, request.clientTurnId ?? "").then(
+              (canonicalTurnRef) => {
+                pending = message({
+                  id: "canonical-cancelled-user",
+                  canonicalTurnRef,
+                  turnState: "pending",
+                  toolTranscript: {
+                    schemaVersion: 1,
+                    exchanges: [
+                      {
+                        call: {
+                          id: "runtime-inventory",
+                          name: "knowledge_documents",
+                          arguments: { view: "inventory" },
+                          origin: "runtime",
+                        },
+                        result: {
+                          schemaVersion: 1,
+                          invocationId: "inventory",
+                          toolRef: null,
+                          projectionDigest: null,
+                          effectStarted: true,
+                          metrics: {
+                            inputBytes: 20,
+                            outputBytes: 100,
+                            resultCount: 9,
+                            durationMs: 20,
+                          },
+                          status: "completed",
+                          reason: "none",
+                          page: {
+                            truncated: false,
+                            reason: "none",
+                            cursor: null,
+                          },
+                          data: {},
+                        },
+                      },
+                    ],
+                  },
+                });
+              },
+            );
+            signal?.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                reject(new DOMException("cancelled", "AbortError"));
+              },
+              { once: true },
+            );
+          }),
+      );
+      let current: ChatSessionApi | undefined;
+      render(
+        <BufferedCancelWindow
+          capture={(session) => {
+            current = session;
+          }}
+        />,
+      );
+      await waitFor(() => expect(current?.loading).toBe(false));
+      await waitFor(() => expect(current?.activeChat?.id).toBe(selectedChat.id));
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = current?.sendMessage({
+          text: "Review this source",
+          reportOutcome: true,
+        });
+      });
+      await waitFor(() => expect(askGrounded).toHaveBeenCalledTimes(1));
+      await waitFor(
+        () =>
+          expect(current?.messages.some((entry) => entry.toolTranscript !== undefined)).toBe(true),
+        { timeout: 4000 },
+      );
+      expect(screen.getAllByRole("region", { name: "Progress" })).toHaveLength(1);
+      fireEvent.click(screen.getByRole("button", { name: "Cancel response" }));
+      await waitFor(() => expect(reconciliationReads).toBe(1));
+      expect(current?.sendStatus).toBe("cancelled");
+      expect(current?.messages.find((entry) => entry.id === pending?.id)?.turnState).toBe(
+        "pending",
+      );
+      expect(screen.getByRole("listitem", { current: "step" })).toBeInTheDocument();
+      await waitFor(() => expect(reconciliationReads).toBe(2), {
+        timeout: 4000,
+      });
+      await act(async () => {
+        if (settlement === "terminal")
+          terminal.resolve({
+            messages: [{ ...pending!, turnState: "cancelled" }],
+          });
+        else {
+          const failure = new ApiError("UNAVAILABLE", "Private reconciliation canary", 503);
+          failure.correlationId = "canonical-retry-correlation";
+          terminal.reject(failure);
+        }
+        await delivery;
+      });
+      expect(current?.messages.find((entry) => entry.id === pending?.id)?.turnState).toBe(
+        settlement === "terminal" ? "cancelled" : "pending",
+      );
+      if (settlement === "terminal") {
+        expect(screen.queryByRole("listitem", { current: "step" })).toBeNull();
+        expect(screen.queryByText("Preparing next step")).toBeNull();
+        expect(
+          diagnostics.mock.calls.some(([text]) => text === "Canonical chat reconciliation failed."),
+        ).toBe(false);
+      } else {
+        expect(diagnostics).toHaveBeenCalledWith(
+          "Canonical chat reconciliation failed.",
+          expect.objectContaining({
+            correlationId: "canonical-retry-correlation",
+            kind: "other",
+            errorKind: "unavailable",
+            errorEvidence: expect.objectContaining({ errorClass: "ApiError" }),
+          }),
+        );
+        expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("Private");
+      }
+      expect(screen.getByRole("button", { name: "Send message" })).toBeInTheDocument();
+      expect(askGrounded).toHaveBeenCalledTimes(1);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  },
+);
+
+it("adopts the startup verdict once across mounted chats without later polling", async () => {
+  vi.useFakeTimers();
+  let resolve: ((value: Awaited<ReturnType<typeof fetchModels>>) => void) | undefined;
+  const pending = new Promise<Awaited<ReturnType<typeof fetchModels>>>((finish) => {
+    resolve = finish;
+  });
+  vi.mocked(fetchModels)
+    .mockResolvedValueOnce({ models: [model({ id: "startup-a" })], startupReadinessPending: true })
+    .mockReturnValueOnce(pending);
+  vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+  const { result, unmount } = renderHook(() => ({
+    first: useChatSession({ autoCreate: false }),
+    second: useChatSession({ autoCreate: false }),
+  }));
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(result.current.first.loading).toBe(false);
+  expect(result.current.first.selectedModel).toBe("startup-a");
+  expect(fetchModels).toHaveBeenCalledTimes(2);
+  expect(fetchModels).toHaveBeenLastCalledWith(expect.any(String), false, {
+    waitForStartup: true,
+    signal: expect.any(AbortSignal),
+  });
+  await act(async () => {
+    resolve?.({ models: [model({ id: "startup-a", conversationReady: false })] });
+  });
+  expect(result.current.first.models).toEqual([]);
+  expect(result.current.second.models).toEqual([]);
+  expect(result.current.first.selectedModel).toBeUndefined();
+  await act(() => vi.advanceTimersByTimeAsync(600_000));
+  act(() => {
+    window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  expect(fetchModels).toHaveBeenCalledTimes(2);
+  unmount();
+});
+
+it("discards and aborts a startup settlement superseded by a gateway configuration refresh", async () => {
+  let resolve: ((value: Awaited<ReturnType<typeof fetchModels>>) => void) | undefined;
+  const pending = new Promise<Awaited<ReturnType<typeof fetchModels>>>((finish) => {
+    resolve = finish;
+  });
+  vi.mocked(fetchModels)
+    .mockResolvedValueOnce({ models: [model({ id: "startup-a" })], startupReadinessPending: true })
+    .mockReturnValueOnce(pending)
+    .mockResolvedValue({ models: [model({ id: "replacement-b" })] });
+  vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+  const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+  await waitFor(() => expect(fetchModels).toHaveBeenCalledTimes(2));
+  const signal = vi.mocked(fetchModels).mock.calls[1]?.[2]?.signal;
+  act(() => notifyGatewayConfigUpdated());
+  await waitFor(() => expect(result.current.selectedModel).toBe("replacement-b"));
+  expect(signal?.aborted).toBe(true);
+  await act(async () => {
+    resolve?.({ models: [model({ id: "startup-a", conversationReady: false })] });
+  });
+  expect(result.current.selectedModel).toBe("replacement-b");
+  unmount();
+});
+
+it("preserves the held usable catalog when the passive startup observation fails", async () => {
+  vi.useFakeTimers();
+  const diagnostic = vi.fn();
+  setClientDiagnosticWriter(diagnostic);
+  vi.mocked(fetchModels)
+    .mockResolvedValueOnce({ models: [model()], startupReadinessPending: true })
+    .mockRejectedValueOnce(new Error("PRIVATE startup observation unavailable."));
+  vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+  const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+  try {
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(result.current.error).toBeUndefined();
+    expect(result.current.modelCatalogStatus).toBe("ready");
+    expect(result.current.models).toEqual([model()]);
+    expect(result.current.selectedModel).toBe(model().id);
+    expect(diagnostic).toHaveBeenCalledWith(
+      "Startup model readiness observation failed.",
+      expect.objectContaining({
+        correlationId: expect.any(String),
+        errorEvidence: expect.any(Object),
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("PRIVATE startup observation");
+    await act(() => vi.advanceTimersByTimeAsync(600_000));
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  } finally {
+    unmount();
+    resetClientDiagnosticWriter();
+  }
+});
+
+it("aborts the shared startup metadata read when its final chat leaves", async () => {
+  vi.mocked(fetchModels)
+    .mockResolvedValueOnce({ models: [model()], startupReadinessPending: true })
+    .mockReturnValueOnce(new Promise(() => undefined));
+  vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+  const { unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+  await waitFor(() => expect(fetchModels).toHaveBeenCalledTimes(2));
+  const signal = vi.mocked(fetchModels).mock.calls[1]?.[2]?.signal;
+  unmount();
+  expect(signal?.aborted).toBe(true);
+});

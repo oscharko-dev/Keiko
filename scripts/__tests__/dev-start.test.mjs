@@ -20,6 +20,7 @@ const {
   ensureDevCodingRuntime,
   healthyDevServer,
   maybeOpenPairedBrowser,
+  reopenDevBrowser,
   npmCommand,
   pairedDevBrowserUrl,
   prepareRunnerCriticalSection,
@@ -182,6 +183,54 @@ describe("dev-start runtime health gate", () => {
 
     expect(health).toBe("runtime: unavailable (runtime-unqualified)");
   });
+
+  // #4068: the rest of the dev UI works on a Windows checkout, whose lane cannot start a coding run.
+  // Failing the gate here would time out every Windows dev:start against a healthy server.
+  it("passes a Windows lane that states it cannot start coding runs, and says so", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        runtimeAvailable: false,
+        runtimeUnavailableReason: "gateway-service-unqualified",
+      }),
+    });
+
+    const health = await requiredRuntimeHealth("http://127.0.0.1:1", true);
+
+    expect(health).toBe("ok · coding runs unavailable (gateway-service-unqualified)");
+    expect(healthyDevServer(health)).toBe(true);
+  });
+
+  // #4068 (ADR-0043 D19): a checkout without its broker yet must still start, and must say how to
+  // install or repair it.
+  it.each([
+    [
+      "gateway-service-absent",
+      "install it: node dist/cli/index.js gateway-service install --dev-lane",
+    ],
+    [
+      "gateway-service-stopped",
+      "repair it: node dist/cli/index.js gateway-service repair --dev-lane",
+    ],
+    [
+      "gateway-service-stale",
+      "repair it: node dist/cli/index.js gateway-service repair --dev-lane",
+    ],
+    ["gateway-service-unknown", "coding runs unavailable (gateway-service-unknown)"],
+  ])(
+    "passes a Windows checkout whose broker is %s, and names the next step",
+    async (reason, text) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue({
+        ok: true,
+        json: async () => ({ runtimeAvailable: false, runtimeUnavailableReason: reason }),
+      });
+
+      const health = await requiredRuntimeHealth("http://127.0.0.1:1", true);
+
+      expect(healthyDevServer(health)).toBe(true);
+      expect(health).toContain(text);
+    },
+  );
 });
 
 describe("dev-start coding runtime lifecycle", () => {
@@ -705,5 +754,25 @@ describe("prepareRunnerCriticalSection (KEIKO-0719 race close)", () => {
     expect(existsSync(join(stateDirectory, "dev-ui.pid.json"))).toBe(false);
     await expect(prepareRunnerCriticalSection({})).resolves.toBeUndefined();
     await expect(prepareRunnerCriticalSection()).resolves.toBeUndefined();
+  });
+});
+
+describe("reopening the running dev browser", () => {
+  it("requests only the fixed native handoff without retrieving proof", async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ state: "opened" }) });
+    expect(await reopenDevBrowser(1983, fetch)).toBe(true);
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:1983/api/coding-workbench/app-session/open-browser",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ origin: "http://localhost:1983" }),
+        headers: expect.objectContaining({ Origin: "http://localhost:1983", "X-Keiko-CSRF": "1" }),
+      }),
+    );
+  });
+  it.each(["busy", "unavailable", "failed"])("keeps a %s outcome unsuccessful", async (state) => {
+    expect(
+      await reopenDevBrowser(1983, async () => ({ ok: true, json: async () => ({ state }) })),
+    ).toBe(false);
   });
 });

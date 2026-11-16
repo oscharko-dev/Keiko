@@ -257,6 +257,26 @@ describe("buildConversationRetrievalSignals", () => {
     expect(JSON.stringify(skipped)).not.toContain(IDENTITY.modelId);
   });
 
+  it.each(["no-embeddings", "blocked-by-policy"] as const)(
+    "records expected %s as a routine observation (#4247)",
+    async (reason) => {
+      const alpha = memoryId("alpha");
+      const vault = vaultFor(() => [metadata(alpha, 100)], new Map());
+      const { deps, calls } = depsWithDiagnostics();
+      await buildConversationRetrievalSignals(deps, vault, "memory query", [SCOPE], NOW_MS, {
+        allowed: reason === "no-embeddings",
+        reason,
+      });
+      expect(calls).toContainEqual(
+        expect.objectContaining({
+          operation: "memory.retrieval.semantic-disabled",
+          code: reason,
+          diagnosticOutcome: "routine",
+        }),
+      );
+    },
+  );
+
   it("reports the vector-index failure reason without misclassifying it as an identity mismatch", async () => {
     const alpha = memoryId("alpha");
     const embeddings = new Map<MemoryId, MemoryEmbeddingRow>([
@@ -280,6 +300,7 @@ describe("buildConversationRetrievalSignals", () => {
       (record) => record.operation === "memory.retrieval.semantic-disabled",
     );
     expect(disabled).toMatchObject({
+      diagnosticOutcome: undefined,
       code: "vector-index-failed:runtime-integrity-failed",
       semanticCandidateCount: 1,
     });

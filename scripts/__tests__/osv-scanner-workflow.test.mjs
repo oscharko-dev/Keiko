@@ -110,6 +110,15 @@ describe("OSV Scanner workflow", () => {
     expect(source).not.toContain("continue-on-error: true");
   });
 
+  it.each([
+    { lane: "scheduled and push", source: workflow },
+    { lane: "pull request", source: hygiene },
+  ])("excludes only the lab fixture repositories on the $lane lane (#4271)", ({ source }) => {
+    const excludes = source.match(/--(?:x|experimental)-exclude\S*/gu) ?? [];
+    expect(excludes).toEqual(["--x-exclude=g:**/tests/fixtures/coding-workbench-lab"]);
+    expect(source).not.toMatch(/--no-resolve|--x-no-default-plugins|--x-disable-plugins/u);
+  });
+
   it("uses read-only repository permissions and disables checkout credentials", () => {
     expect(workflow).toMatch(/permissions:\s*\{\}/u);
     expect(workflow).toMatch(/permissions:\s*\n\s+contents: read/u);

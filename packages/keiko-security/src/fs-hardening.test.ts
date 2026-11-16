@@ -50,8 +50,23 @@ import {
   safeArtifactPublicationSlot,
   safeArtifactPermissionAssurance,
 } from "./fs-hardening.js";
+import {
+  WINDOWS_HOST,
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "../../../tests/support/symlink-fixture.js";
 
 const cleanups: string[] = [];
+
+// Windows refuses to rename a directory while a handle is open beneath it (EPERM), so a parent swap
+// staged while the artifact descriptor is held cannot happen there — the platform itself rejects the
+// race these tests inject.
+const WINDOWS_OPEN_PARENT_RENAME_SKIP =
+  "Windows refuses to rename a directory with an open handle beneath it; the swap cannot be staged";
+// On win32 directory guards carry lstat identity only and no descriptor, and publication performs no
+// directory fsync (durability assurance `directory-sync-unavailable`).
+const WINDOWS_NO_DIRECTORY_DESCRIPTOR_SKIP =
+  "win32 directory guards hold no descriptor: there is no guard close or directory fsync to fail";
 const originalPlatform = process.platform;
 
 async function initializeProcessScope(): Promise<void> {
@@ -85,7 +100,7 @@ describe("absent artifact ancestor preflight", () => {
       assertSafeArtifactAncestors(join(existing, "missing", "policy.json"), "activity-log");
     }).not.toThrow();
     const alias = join(root, "alias");
-    symlinkSync(existing, alias);
+    plantDirectoryRedirect(existing, alias);
     expect(() => {
       assertSafeArtifactAncestors(join(alias, "nested", "missing", "policy.json"), "activity-log");
     }).toThrow(SafeArtifactFileError);
@@ -504,7 +519,7 @@ describe("openSafeArtifactFile", () => {
     const realParent = join(base, "real-parent");
     const linkedParent = join(base, "linked-parent");
     mkdirSync(realParent);
-    symlinkSync(realParent, linkedParent);
+    plantDirectoryRedirect(realParent, linkedParent);
     expect(() =>
       openSafeArtifactFile(join(linkedParent, "artifact"), {
         artifactClass: "activity-log",
@@ -628,7 +643,8 @@ describe("openSafeArtifactFile", () => {
     vi.resetModules();
   });
 
-  it("rejects a parent directory replaced after the target is opened", async () => {
+  it("rejects a parent directory replaced after the target is opened", async (context) => {
+    if (WINDOWS_HOST) context.skip(WINDOWS_OPEN_PARENT_RENAME_SKIP);
     const base = freshDir();
     const parent = join(base, "parent");
     const displaced = join(base, "displaced-parent");
@@ -659,12 +675,33 @@ describe("openSafeArtifactFile", () => {
     ).toThrow(expect.objectContaining({ kind: "target-mutated" }));
   });
 
-  it("uses the explicit symlink fallback for mocked Windows reparse points", async () => {
+  // A directory redirect at the target itself: a junction on a real Windows host, a directory
+  // symlink elsewhere. Either way the win32 symlink fallback must refuse it before any open.
+  it("uses the explicit symlink fallback for a directory redirect at the target", async () => {
+    const base = realpathSync(freshDir());
+    const victimDirectory = join(base, "victim-directory");
+    const target = join(base, "reparse");
+    mkdirSync(victimDirectory);
+    plantDirectoryRedirect(victimDirectory, target);
+    vi.resetModules();
+    const isolated = await import("./fs-hardening.js");
+    setPlatform("win32");
+    expect(() =>
+      isolated.openSafeArtifactFile(target, {
+        artifactClass: "activity-log",
+        mode: "append-existing-or-create",
+        trustedRoot: base,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "unsafe-target" }));
+    expect(readdirSync(victimDirectory)).toEqual([]);
+  });
+
+  it("uses the explicit symlink fallback for mocked Windows reparse points", async (context) => {
     const base = realpathSync(freshDir());
     const victim = join(base, "victim");
     const target = join(base, "reparse");
     writeFileSync(victim, "keep", { mode: FILE_MODE });
-    symlinkSync(victim, target);
+    plantSymlinkOrSkip(context, victim, target);
     vi.resetModules();
     const isolated = await import("./fs-hardening.js");
     setPlatform("win32");
@@ -678,7 +715,8 @@ describe("openSafeArtifactFile", () => {
     expect(readFileSync(victim, "utf8")).toBe("keep");
   });
 
-  it("maps descriptor close failures without echoing paths", async () => {
+  it("maps descriptor close failures without echoing paths", async (context) => {
+    if (WINDOWS_HOST) context.skip(WINDOWS_NO_DIRECTORY_DESCRIPTOR_SKIP);
     const base = freshDir();
     const path = join(base, "artifact");
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
@@ -705,7 +743,7 @@ describe("openSafeArtifactFile", () => {
     expect(String(thrown)).not.toContain(base);
   });
 
-  it("does not chmod or write an outside append victim during a parent redirect", async () => {
+  async function redirectParentUnderAppendVictim(): Promise<string> {
     const base = freshDir();
     const parent = join(base, "reports");
     const displaced = join(base, "reports-displaced");
@@ -723,7 +761,7 @@ describe("openSafeArtifactFile", () => {
       openSync: (...args: Parameters<typeof actual.openSync>): number => {
         if (String(args[0]) !== path) return Reflect.apply(actual.openSync, actual, args);
         renameSync(parent, displaced);
-        symlinkSync(escape, parent);
+        plantDirectoryRedirect(escape, parent);
         redirected = true;
         return Reflect.apply(actual.openSync, actual, args);
       },
@@ -752,9 +790,22 @@ describe("openSafeArtifactFile", () => {
       renameSync(displaced, parent);
     }
     expect(readFileSync(outside, "utf8")).toBe("keep");
-    expect(statSync(outside).mode & 0o777).toBe(0o640);
     expect(existsSync(path)).toBe(false);
+    return outside;
+  }
+
+  it("does not write an outside append victim during a parent redirect", async () => {
+    await redirectParentUnderAppendVictim();
   });
+
+  // POSIX permission bits only: Windows synthesizes st_mode (0o666 / 0o444) from the read-only
+  // attribute and cannot hold the victim's 0o640 in the first place.
+  it.skipIf(WINDOWS_HOST)(
+    "does not chmod or write an outside append victim during a parent redirect",
+    async () => {
+      expect(statSync(await redirectParentUnderAppendVictim()).mode & 0o777).toBe(0o640);
+    },
+  );
 
   it("fails containment before content can escape when a missing target parent redirects", async () => {
     const base = freshDir();
@@ -772,7 +823,7 @@ describe("openSafeArtifactFile", () => {
       openSync: (...args: Parameters<typeof actual.openSync>): number => {
         if (String(args[0]) !== path) return Reflect.apply(actual.openSync, actual, args);
         renameSync(parent, displaced);
-        symlinkSync(escape, parent);
+        plantDirectoryRedirect(escape, parent);
         redirected = true;
         return Reflect.apply(actual.openSync, actual, args);
       },
@@ -800,7 +851,10 @@ describe("openSafeArtifactFile", () => {
       rmSync(parent);
       renameSync(displaced, parent);
     }
-    expect(safeArtifactContainmentAssurance()).toBe("private-root-guarded");
+    // win32 documents its containment as `platform-inherited`; every POSIX host claims the guard.
+    expect(safeArtifactContainmentAssurance()).toBe(
+      WINDOWS_HOST ? "platform-inherited" : "private-root-guarded",
+    );
     expect(readFileSync(outside)).toHaveLength(0);
     expect(existsSync(path)).toBe(false);
   });
@@ -1945,7 +1999,8 @@ describe("publishSafeArtifactFileSet", () => {
     expect(statSync(path).nlink).toBe(1);
   });
 
-  it("rejects parent replacement across the atomic publication link", async () => {
+  it("rejects parent replacement across the atomic publication link", async (context) => {
+    if (WINDOWS_HOST) context.skip(WINDOWS_OPEN_PARENT_RENAME_SKIP);
     const base = freshDir();
     const parent = join(base, "reports");
     const displaced = join(base, "displaced-reports");
@@ -2183,7 +2238,8 @@ describe("publishSafeArtifactFileSet", () => {
     });
   });
 
-  it("retries after the post-link directory fsync fails with markers intact", async () => {
+  it("retries after the post-link directory fsync fails with markers intact", async (context) => {
+    if (WINDOWS_HOST) context.skip(WINDOWS_NO_DIRECTORY_DESCRIPTOR_SKIP);
     const base = freshDir();
     const path = join(base, "report.json");
     await failPublicationFsyncAt(base, path, 4);
@@ -2237,7 +2293,8 @@ describe("publishSafeArtifactFileSet", () => {
     });
   });
 
-  it("retries after final cleanup fsync by durably restoring the commit marker", async () => {
+  it("retries after final cleanup fsync by durably restoring the commit marker", async (context) => {
+    if (WINDOWS_HOST) context.skip(WINDOWS_NO_DIRECTORY_DESCRIPTOR_SKIP);
     const base = freshDir();
     const path = join(base, "report.json");
     await failPublicationFsyncAt(base, path, 7);
@@ -2510,7 +2567,7 @@ describe("publishSafeArtifactFileSet", () => {
 });
 
 describe("bounded Activity Log mutations", () => {
-  it("publishes one hard-link archive and leaves it as a private single-link file", () => {
+  function publishHardLinkArchive(): string {
     const base = freshDir();
     const source = join(base, "server.log");
     const archive = join(base, "server-2026-09-17.log");
@@ -2525,8 +2582,21 @@ describe("bounded Activity Log mutations", () => {
     expect(existsSync(source)).toBe(false);
     expect(readFileSync(archive, "utf8")).toBe("finished-day\n");
     expect(statSync(archive).nlink).toBe(1);
-    expect(statSync(archive).mode & 0o777).toBe(FILE_MODE);
+    return archive;
+  }
+
+  it("publishes one hard-link archive and leaves it as a single-link file", () => {
+    publishHardLinkArchive();
   });
+
+  // POSIX permission bits only: Windows synthesizes st_mode (0o666 / 0o444) from the read-only
+  // attribute, and win32 reports this permission assurance as `platform-inherited`.
+  it.skipIf(WINDOWS_HOST)(
+    "publishes one hard-link archive and leaves it as a private single-link file",
+    () => {
+      expect(statSync(publishHardLinkArchive()).mode & 0o777).toBe(FILE_MODE);
+    },
+  );
 
   it("never replaces an archive that already won the closed destination name", () => {
     const base = freshDir();
@@ -2807,7 +2877,7 @@ describe("bounded Activity Log mutations", () => {
 });
 
 describe("replaceSafeArtifactFile", () => {
-  it("fails closed before touching an existing target on every platform", () => {
+  function refuseReplacingExistingTarget(): string {
     const base = freshDir();
     const path = join(base, "manifest.json");
     writeFileSync(path, "old", { mode: FILE_MODE });
@@ -2819,8 +2889,18 @@ describe("replaceSafeArtifactFile", () => {
       });
     }).toThrow(expect.objectContaining({ kind: "publish-unsupported" }));
     expect(readFileSync(path, "utf8")).toBe("old");
-    expect(statSync(path).mode & 0o777).toBe(FILE_MODE);
     expect(readdirSync(base)).toEqual(["manifest.json"]);
+    return path;
+  }
+
+  it("fails closed before touching an existing target on every platform", () => {
+    refuseReplacingExistingTarget();
+  });
+
+  // POSIX permission bits only: Windows synthesizes st_mode (0o666 / 0o444) from the read-only
+  // attribute, so an unchanged 0o600 is observable on POSIX hosts alone.
+  it.skipIf(WINDOWS_HOST)("leaves the refused existing target's private mode untouched", () => {
+    expect(statSync(refuseReplacingExistingTarget()).mode & 0o777).toBe(FILE_MODE);
   });
 
   it("creates no partial stage when the replacement target is absent", () => {

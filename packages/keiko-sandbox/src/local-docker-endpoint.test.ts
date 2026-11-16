@@ -15,6 +15,9 @@ let directory: string;
 let socket: string;
 let server: Server;
 
+// The pipe the Windows cases name is served, as by a running engine.
+const servedPipe = (): boolean => true;
+
 async function writeContext(name: string, host: string): Promise<void> {
   const key = createHash("sha256").update(name).digest("hex");
   const meta = join(directory, "contexts", "meta", key);
@@ -105,10 +108,9 @@ describe.skipIf(process.platform === "win32")("resolveLocalDockerEndpoint Unix s
       join(directory, "config.json"),
       JSON.stringify({ currentContext: "desktop-linux" }),
     );
-    expect(resolveLocalDockerEndpoint({ DOCKER_CONFIG: directory }, root, "win32")).toEqual({
-      kind: "available",
-      host,
-    });
+    expect(
+      resolveLocalDockerEndpoint({ DOCKER_CONFIG: directory }, root, "win32", servedPipe),
+    ).toEqual({ kind: "available", host });
   });
 
   it("rejects configuration rooted in the untrusted workspace, including symlinks", async () => {
@@ -159,7 +161,7 @@ it.each(["tcp://remote:2375", "ssh://private-host"])(
 );
 
 it("preserves only Docker's exact Windows local named-pipe fallback", () => {
-  expect(resolveLocalDockerEndpoint({}, process.cwd(), "win32")).toEqual({
+  expect(resolveLocalDockerEndpoint({}, process.cwd(), "win32", servedPipe)).toEqual({
     kind: "available",
     host: "npipe:////./pipe/docker_engine",
   });
@@ -181,8 +183,55 @@ it.each([
   "npipe:////./pipe/dockerDesktopLinuxEngine/child",
   "npipe:////./pipe/dockerDesktopLinuxEngine?remote=host",
 ])("rejects nonlocal or malformed Windows pipe %s", (host) => {
-  expect(resolveLocalDockerEndpoint({ DOCKER_HOST: host }, process.cwd(), "win32")).toEqual({
-    kind: "unavailable",
-    reason: "docker-context-unsupported",
+  expect(
+    resolveLocalDockerEndpoint({ DOCKER_HOST: host }, process.cwd(), "win32", servedPipe),
+  ).toEqual({ kind: "unavailable", reason: "docker-context-unsupported" });
+  // Malformed hosts are refused before any pipe is looked up.
+  expect(
+    resolveLocalDockerEndpoint({ DOCKER_HOST: host }, process.cwd(), "win32", () => {
+      throw new Error("must not look up a malformed pipe");
+    }),
+  ).toEqual({ kind: "unavailable", reason: "docker-context-unsupported" });
+});
+
+// #4068: Docker Desktop installed but stopped leaves its context naming a pipe nobody serves. That
+// is no enforcing backend: the endpoint is unavailable exactly like a missing Unix socket.
+it("refuses a well-formed local pipe that no engine serves", () => {
+  const looked: string[] = [];
+  expect(() =>
+    resolveLocalDockerEndpoint(
+      { DOCKER_HOST: "npipe:////./pipe/dockerDesktopLinuxEngine" },
+      process.cwd(),
+      "win32",
+      (name) => {
+        looked.push(name);
+        return false;
+      },
+    ),
+  ).toThrow(LocalDockerEndpointUnavailableError);
+  expect(looked).toEqual(["dockerDesktopLinuxEngine"]);
+});
+
+describe.runIf(process.platform === "win32")("resolveLocalDockerEndpoint Windows pipes", () => {
+  it("is available while a local pipe is served and unavailable once it stops", async () => {
+    const name = `keiko-docker-endpoint-${String(process.pid)}-${String(Date.now())}`;
+    const host = `npipe:////./pipe/${name}`;
+    const pipe = createServer();
+    await new Promise<void>((resolve) => pipe.listen(`\\\\.\\pipe\\${name}`, resolve));
+    try {
+      expect(resolveLocalDockerEndpoint({ DOCKER_HOST: host }, process.cwd())).toEqual({
+        kind: "available",
+        host,
+      });
+    } finally {
+      await new Promise<void>((resolve) => {
+        pipe.close(() => {
+          resolve();
+        });
+      });
+    }
+    expect(() => resolveLocalDockerEndpoint({ DOCKER_HOST: host }, process.cwd())).toThrow(
+      LocalDockerEndpointUnavailableError,
+    );
   });
 });

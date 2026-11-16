@@ -1,14 +1,15 @@
+import { raceAbortDeadline, type AbortDeadlineOptions } from "./abort-race.js";
 import type { IncomingMessage } from "node:http";
 import { TimeoutError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   isConversationEligibleModel,
   listConfiguredCapabilities,
   requestGatewayReadinessChatCompletion,
-  requestOpenAIEmbedding,
+  verifyEmbeddingCapability,
   selectConfiguredModel,
   toolCallingConfigurationFingerprint,
-  vectorL2Norm,
   type GatewayConfig,
+  type EmbeddingCapabilityCheck,
   type ModelCapability,
   type ModelProviderConfig,
   type UsageMetadata,
@@ -24,6 +25,7 @@ import type {
   GatewayReadinessProbeResult,
   GatewayReadinessReport,
   GatewayReadinessRequest,
+  GatewayToolCallingOutcome,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   activityLogEvent,
@@ -34,6 +36,7 @@ import { gatewayVerificationFromProbeOutcome } from "@oscharko-dev/keiko-contrac
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   codingWorkbenchModelEligibility,
+  electConversationDefault,
   isCodingWorkbenchReadinessCandidate,
   preferredConversationModelOrder,
   selectCodingWorkbenchReadinessCandidate,
@@ -46,11 +49,17 @@ import type {
 } from "./deps.js";
 import {
   conversationReadinessAgeMs,
+  currentConversationReadinessObservation,
   currentConversationReady,
   currentGatewayConfig,
+  recordExplicitModelUse,
 } from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticRecord,
+} from "./diagnostics-log.js";
 import type { RerankSelection } from "./grounded-rerank-facade.js";
 import { requestRerankerProbe, rerankerProbePassed } from "./gateway-reranker-probe.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -58,19 +67,23 @@ import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-requ
 import {
   admittedGatewayProbeOutputLimit,
   gatewayProbeErrorEvidence,
-  probeGatewayToolCalling,
+  probeGatewayToolCallingVerdict,
   probeUsage,
   reserveGatewayProbeSpend,
   settleGatewayProbeSpend,
   transientGatewayStatus,
   type GatewayProbeSpendContext,
-  type GatewayToolCallingProbeStatus,
+  type ToolCallingProbeVerdict,
 } from "./gateway-tool-calling-probe.js";
 import {
   reconcileGatewayContextWindowReadiness,
   reconcileGatewayToolCallingReadiness,
 } from "./gateway-setup.js";
+import { createRequestCancellation } from "./request-cancellation.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import { createEmbeddingAdapter } from "./local-knowledge-grounded-qa.js";
+import { normalizedEndpointFingerprint } from "./embedding-provider-identity.js";
+import { currentRedactionSecrets } from "./redaction-secrets.js";
 // #3557 review finding A: the one owning projection from a candidate model id to Activity Log
 // evidence — reused here so a readiness line never carries a value that would fail
 // `activityLogEvent`'s own opaque-id validation and silently drop the whole line.
@@ -121,6 +134,23 @@ const GATEWAY_READINESS_MODEL_ID_FIELDS = {
   modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
 } as const;
 
+// #4351: how the two-step tool-calling check ended; present only when that probe ran.
+const GATEWAY_READINESS_TOOL_OUTCOME_FIELDS = {
+  toolCallingOutcome: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [
+      "called-unforced",
+      "called-only-forced",
+      "forced-refused",
+      "no-call",
+      "tools-refused",
+      "inconclusive",
+    ],
+  },
+} as const;
+
 // #3591 (1.1.7): the bound each probe of a run actually ran under, so an operator can tell from
 // the start line which deadline governed a probe that timed out or took minutes. The probes
 // against the selected chat provider share one bound, which a floor may raise above the
@@ -150,6 +180,12 @@ export interface ProbeTimeoutEvidence {
 // `review-launch` is a review asking for its role model before a session (#4130).
 const WORKBENCH_PROBE_BASES = ["never-proven", "proof-renewal", "context-window"] as const;
 const WORKBENCH_PROBE_TRIGGERS = ["profile-read", "startup", "review-launch"] as const;
+// #4351: why a basic-chat check of one model started. Keiko sends an inference request only to a
+// model a person uses: `startup` is the elected default, `fallback` the next model of the election
+// order after the default failed definitively, `selection` a person's first explicit pick of a
+// model without a current observation. Settings verification is its own operation.
+const CONVERSATION_CHECK_REASONS = ["startup", "fallback", "selection"] as const;
+type ConversationCheckReason = (typeof CONVERSATION_CHECK_REASONS)[number];
 type WorkbenchProbeBasis = (typeof WORKBENCH_PROBE_BASES)[number];
 type WorkbenchProbeTrigger = (typeof WORKBENCH_PROBE_TRIGGERS)[number];
 
@@ -157,6 +193,8 @@ type WorkbenchProbeTrigger = (typeof WORKBENCH_PROBE_TRIGGERS)[number];
 interface WorkbenchRunEvidence {
   readonly basis: WorkbenchProbeBasis;
   readonly trigger: WorkbenchProbeTrigger;
+  /** Why this proof started, for the scope line that is written when its request is sent. */
+  readonly scopeReason: ConversationCheckReason;
 }
 
 const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation({
@@ -183,12 +221,55 @@ const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation
       required: false,
       values: WORKBENCH_PROBE_TRIGGERS,
     },
+    checkReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CONVERSATION_CHECK_REASONS,
+    },
   },
   causal: "correlation",
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-readiness"],
   proofIds: ["gateway.readiness.automatic.started.line"],
+  releaseImpact: "patch",
+});
+
+// #4351: Keiko lists every model a gateway offers through metadata requests, which is free, and
+// loads only the models a person uses. One line per decision records how many models of the kind
+// were listed, how many of them the decision checks, and why: the log alone then shows that an
+// unselected model received no inference request.
+const GATEWAY_READINESS_SCOPE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.scope",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logReadinessScope",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CONVERSATION_CHECK_REASONS,
+    },
+    modelKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["chat", "embedding", "tool-calling"],
+    },
+    listedModelCount: { type: "integer", dataClass: "count", required: true },
+    checkedModelCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.scope.line"],
   releaseImpact: "patch",
 });
 
@@ -214,6 +295,7 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
     // #3591: probes that ended without a verdict (timed out, unreachable, or a transient gateway
     // status). They decide the short re-probe cooldown, so the decision is reconstructable.
     inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
+    ...GATEWAY_READINESS_TOOL_OUTCOME_FIELDS,
   },
   diagnosticWhen: [{ field: "overallStatus", values: ["partial", "failed"] }],
   causal: "correlation",
@@ -252,10 +334,9 @@ const GATEWAY_READINESS_BUSY_RETAINED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-// Every readiness check a person starts in the settings dialog. The Coding Workbench's automatic
-// run and the on-demand probe a conversation entry point runs keep the automatic operations
-// (`gateway.readiness.automatic.*`). Only the automatic run used to leave a line, so a check run
-// from the settings dialog left no evidence at all (#3557).
+// Readiness checks explicitly started in Settings use these operations. Configuration-owned
+// startup chat checks and the Workbench's separate capability checks retain the automatic
+// operations (`gateway.readiness.automatic.*`); conversation entry points start no probes.
 const GATEWAY_READINESS_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -305,6 +386,7 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
     },
     probeCount: { type: "integer", dataClass: "count", required: true },
     inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
+    ...GATEWAY_READINESS_TOOL_OUTCOME_FIELDS,
     embeddingModelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     embeddingDimensions: { type: "integer", dataClass: "count", required: false },
   },
@@ -317,9 +399,9 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-// A conversation request that finds an on-demand probe already running for its model awaits that
-// probe instead of starting its own. Its own timeline still links to the evidence that decided its
-// outcome: this line, under its own correlation id, with the probe's as its parent (#3557, #3559).
+// A conversation request may join a configuration-owned startup check already running for its
+// model, without starting or retrying a probe. Its timeline links to that check's evidence through
+// the existing parent correlation (#3557, #3559).
 const GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -338,6 +420,25 @@ const GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION = defineActivityLogOperation(
   analyzerProjection: "timeline",
   failureClasses: ["gateway-readiness"],
   proofIds: ["gateway.readiness.automatic.joined.line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_READINESS_AUTOMATIC_WITHHELD_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.automatic.withheld",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logAutomaticReadinessWithheld",
+  fields: {
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
+    reason: { type: "string", dataClass: "closed-enum", required: true, values: ["live-run"] },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.automatic.withheld.line"],
   releaseImpact: "patch",
 });
 
@@ -519,6 +620,7 @@ function logAutomaticReadinessStarted(
   origin: {
     readonly backgroundAttempt?: number | undefined;
     readonly workbench?: WorkbenchRunEvidence | undefined;
+    readonly checkReason?: ConversationCheckReason | undefined;
   } = {},
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
@@ -535,7 +637,78 @@ function logAutomaticReadinessStarted(
         ...(origin.workbench === undefined
           ? {}
           : { probeBasis: origin.workbench.basis, probeTrigger: origin.workbench.trigger }),
+        ...(origin.checkReason === undefined ? {} : { checkReason: origin.checkReason }),
       },
+    ),
+  );
+}
+
+// #4351: what a person's explicit pick of a model did, under the pick's own correlation id.
+const SELECTION_CHECK_OUTCOMES = [
+  "started",
+  "joined",
+  "already-answered",
+  "cooldown",
+  "unknown-model",
+  "bad-request",
+  "failed",
+] as const;
+type SelectionCheckOutcome = (typeof SELECTION_CHECK_OUTCOMES)[number];
+
+const GATEWAY_READINESS_SELECTION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.selection",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logSelectionOutcome",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: SELECTION_CHECK_OUTCOMES,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.selection.line"],
+  releaseImpact: "patch",
+});
+
+function logSelectionOutcome(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  outcome: SelectionCheckOutcome,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_SELECTION_OPERATION,
+      { correlationId },
+      { outcome, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
+function logReadinessScope(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  scope: {
+    readonly reason: ConversationCheckReason;
+    readonly modelKind: "chat" | "embedding" | "tool-calling";
+    readonly listedModelCount: number;
+    readonly checkedModelCount: number;
+  },
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_SCOPE_OPERATION,
+      { correlationId },
+      { ...scope, completeness: "complete", loss: "none" },
     ),
   );
 }
@@ -576,19 +749,37 @@ function logAutomaticReadinessCompleted(
   correlationId: string,
   report: GatewayReadinessReport,
 ): void {
-  logAutomaticReadinessOutcome(
-    deps,
-    correlationId,
-    report.modelId,
-    report.overallStatus,
-    report.probes.length,
-    inconclusiveProbeCount(report),
-    report.verifiedCapabilities.testedContextTokens,
-  );
+  logAutomaticReadinessOutcome(deps, correlationId, report.modelId, {
+    overallStatus: report.overallStatus,
+    probeCount: report.probes.length,
+    inconclusiveProbes: inconclusiveProbeCount(report),
+    verifiedContextTokens: report.verifiedCapabilities.testedContextTokens,
+    toolCallingOutcome: toolCallingOutcomeOf(report),
+  });
+}
+
+function toolCallingOutcomeOf(
+  report: GatewayReadinessReport,
+): GatewayToolCallingOutcome | undefined {
+  return report.probes.find((probe) => probe.name === "tool_calling")?.toolCallingOutcome;
 }
 
 function inconclusiveProbeCount(report: GatewayReadinessReport): number {
   return report.probes.filter(probeInconclusive).length;
+}
+
+function logAutomaticReadinessWithheld(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_AUTOMATIC_WITHHELD_OPERATION,
+      { correlationId },
+      { ...modelIdEvidence(modelId), reason: "live-run" },
+    ),
+  );
 }
 
 function logAutomaticReadinessJoined(
@@ -617,15 +808,27 @@ function logAutomaticReadinessJoined(
   );
 }
 
+interface AutomaticReadinessOutcome {
+  readonly overallStatus: GatewayReadinessReport["overallStatus"];
+  readonly probeCount: number;
+  readonly inconclusiveProbes: number;
+  readonly verifiedContextTokens?: number | undefined;
+  readonly toolCallingOutcome?: GatewayToolCallingOutcome | undefined;
+}
+
 function logAutomaticReadinessOutcome(
   deps: UiHandlerDeps,
   correlationId: string,
   modelId: string,
-  overallStatus: GatewayReadinessReport["overallStatus"],
-  probeCount: number,
-  inconclusiveProbes: number,
-  verifiedContextTokens?: number,
+  outcome: AutomaticReadinessOutcome,
 ): void {
+  const {
+    overallStatus,
+    probeCount,
+    inconclusiveProbes,
+    verifiedContextTokens,
+    toolCallingOutcome,
+  } = outcome;
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION,
@@ -636,6 +839,7 @@ function logAutomaticReadinessOutcome(
         probeCount,
         inconclusiveProbeCount: inconclusiveProbes,
         ...(verifiedContextTokens === undefined ? {} : { verifiedContextTokens }),
+        ...(toolCallingOutcome === undefined ? {} : { toolCallingOutcome }),
       },
     ),
   );
@@ -675,10 +879,18 @@ function logReadinessCompleted(
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
         inconclusiveProbeCount: inconclusiveProbeCount(report),
+        ...toolCallingOutcomeEvidence(report),
         ...retrievalProbeEvidence(report),
       },
     ),
   );
+}
+
+function toolCallingOutcomeEvidence(report: GatewayReadinessReport): {
+  readonly toolCallingOutcome?: GatewayToolCallingOutcome;
+} {
+  const toolCallingOutcome = toolCallingOutcomeOf(report);
+  return toolCallingOutcome === undefined ? {} : { toolCallingOutcome };
 }
 
 function retrievalProbeEvidence(report: GatewayReadinessReport): {
@@ -696,8 +908,8 @@ function retrievalProbeEvidence(report: GatewayReadinessReport): {
 }
 
 // One run's start line: the Coding Workbench's automatic run keeps its own operation, and a run
-// without a trigger is recorded by its caller (the on-demand probe logs the automatic operations
-// around it, so nothing here may log it twice).
+// without a trigger is recorded by its configuration-owned initialization caller through the
+// automatic operations, so nothing here may log it twice.
 function logReadinessRunStarted(
   deps: UiHandlerDeps,
   run: ReadinessRunEvidence,
@@ -711,19 +923,29 @@ function logReadinessRunStarted(
     logAutomaticReadinessStarted(deps, run.correlationId, modelId, names.length, timeouts, {
       workbench: run.workbench,
     });
+    // The provider is about to be called: only now is a tool-calling proof's scope line written.
+    if (run.workbench !== undefined)
+      logReadinessScope(deps, run.correlationId, {
+        reason: run.workbench.scopeReason,
+        modelKind: "tool-calling",
+        listedModelCount: configuredChatModels(selection.config).length,
+        checkedModelCount: 1,
+      });
     return;
   }
   if (run.trigger === undefined) return;
   logReadinessStarted(deps, run.correlationId, run.trigger, modelId, names.length, timeouts);
 }
 
-// The on-demand probe (one chat probe on the configured timeout) records its own start line.
+// The legacy-named initialization helper records one configuration-owned startup chat check.
+// Interactive requests never invoke it to start another check.
 function logOnDemandProbeStarted(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
   correlationId: string,
   backgroundAttempt?: number,
+  checkReason?: ConversationCheckReason,
 ): void {
   const selection = chooseProvider(holder.current(), modelId, ON_DEMAND_PROBE_OPTIONS);
   logAutomaticReadinessStarted(
@@ -739,8 +961,16 @@ function logOnDemandProbeStarted(
           ["chat"],
           ON_DEMAND_PROBE_OPTIONS,
         ),
-    { backgroundAttempt },
+    { backgroundAttempt, checkReason },
   );
+  const config = holder.current();
+  if (checkReason !== undefined && config !== undefined)
+    logReadinessScope(deps, correlationId, {
+      reason: checkReason,
+      modelKind: "chat",
+      listedModelCount: configuredChatModels(config).length,
+      checkedModelCount: 1,
+    });
 }
 
 function logReadinessRunCompleted(
@@ -810,7 +1040,12 @@ function probeSpendContext(
   provider: ModelProviderConfig,
   correlationId: string,
 ): GatewayProbeSpendContext {
-  return { env: deps.env, capability: providerCapability(config, provider), correlationId };
+  return {
+    env: deps.env,
+    capability: providerCapability(config, provider),
+    correlationId,
+    redactionSecrets: currentRedactionSecrets(deps),
+  };
 }
 
 async function observedProbeUsage(
@@ -845,20 +1080,6 @@ function chooseEmbeddingProvider(config: GatewayConfig): ModelProviderConfig | u
   return config.providers.find((provider) => provider.modelId === modelId);
 }
 
-// Surfaces the HTTP status when the gateway answered: "(http-error 400)" points at the request
-// shape, "(transport)" at connectivity — collapsing the two once misdirected a whole
-// connectivity investigation.
-function embeddingFailureDetail(outcome: {
-  readonly kind: string;
-  readonly status?: number;
-}): string {
-  return outcome.status !== undefined ? `${outcome.kind} ${String(outcome.status)}` : outcome.kind;
-}
-
-function roundedNorm(value: number): number {
-  return Math.round(value * 10_000) / 10_000;
-}
-
 async function probeEmbedding(
   deps: UiHandlerDeps,
   config: GatewayConfig,
@@ -874,18 +1095,81 @@ async function probeEmbedding(
   };
 }
 
-function embeddingVectorResult(vector: Float32Array, start: number): GatewayReadinessProbeResult {
-  const dimensions = vector.length;
-  const norm = roundedNorm(vectorL2Norm(vector));
-  const passed = dimensions > 0 && norm > 0;
+function embeddingCapabilityResult(
+  outcome: EmbeddingCapabilityCheck,
+  start: number,
+): GatewayReadinessProbeResult {
+  if (!outcome.ok)
+    return result(
+      "embedding",
+      outcome.reason === "unsupported-model" ? "unsupported" : "failed",
+      start,
+      `Embedding endpoint could not be verified (${outcome.safeMessage}).`,
+    );
   return result(
     "embedding",
-    passed ? "passed" : "failed",
+    "passed",
     start,
-    passed
-      ? `Configured retrieval embedding endpoint returned ${dimensions.toString()} dimensions with L2 norm ${norm.toFixed(4)} after Keiko normalization.`
-      : "Configured retrieval embedding endpoint returned an empty or zero-norm vector.",
+    `Configured retrieval embedding endpoint returned ${outcome.identity.vectorDimensions.toString()} dimensions with L2 norm 1.0000 after Keiko normalization.`,
   );
+}
+
+function logEmbeddingScope(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  correlationId: string,
+): void {
+  logReadinessScope(deps, correlationId, {
+    reason: "startup",
+    modelKind: "embedding",
+    listedModelCount: listConfiguredCapabilities(config).filter(
+      (model) => model.kind === "embedding",
+    ).length,
+    checkedModelCount: 1,
+  });
+}
+
+function reserveEmbeddingProbe(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  correlationId: string,
+  automatic: boolean,
+): (checked?: EmbeddingCapabilityCheck) => void {
+  const reservation = reserveGatewayProbeSpend(
+    provider,
+    probeSpendContext(deps, config, provider, correlationId),
+  );
+  if (automatic) {
+    logAutomaticReadinessStarted(
+      deps,
+      correlationId,
+      provider.modelId,
+      1,
+      {
+        embeddingProbeTimeoutMs: Math.max(provider.timeoutMs, GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS),
+      },
+      { backgroundAttempt: 1 },
+    );
+    // The line exists only because a request is about to be sent: a reused proof logs nothing.
+    logEmbeddingScope(deps, config, correlationId);
+  }
+  return (checked) => {
+    const inconclusive =
+      checked === undefined || probeInconclusive(embeddingCapabilityResult(checked, Date.now()));
+    let passed = false;
+    try {
+      settleGatewayProbeSpend(reservation, undefined);
+      passed = checked?.ok === true;
+    } finally {
+      if (automatic)
+        logAutomaticReadinessOutcome(deps, correlationId, provider.modelId, {
+          overallStatus: passed ? "ready" : "failed",
+          probeCount: 1,
+          inconclusiveProbes: inconclusive ? 1 : 0,
+        });
+    }
+  };
 }
 
 async function probeConfiguredEmbedding(
@@ -893,42 +1177,31 @@ async function probeConfiguredEmbedding(
   config: GatewayConfig,
   provider: ModelProviderConfig,
   correlationId: string,
+  reuse: "connection" | "refresh" = "refresh",
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
-  const spend = probeSpendContext(deps, config, provider, correlationId);
-  let reservation: ReturnType<typeof reserveGatewayProbeSpend>;
   try {
-    reservation = reserveGatewayProbeSpend(provider, spend);
-    const outcome = await requestOpenAIEmbedding({
-      endpoint: provider.baseUrl,
-      apiKey: provider.apiKey,
-      ...(provider.apiKeyHeaderName !== undefined
-        ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-        : {}),
-      modelId: provider.modelId,
-      input: "Keiko embedding readiness probe",
-      ...(deps.gatewayReadinessFetch !== undefined
-        ? { fetchImpl: deps.gatewayReadinessFetch }
-        : {}),
-      ...(deps.gatewayReadinessSignal === undefined ? {} : { signal: deps.gatewayReadinessSignal }),
-      timeoutMs: provider.timeoutMs,
-      egress: config.egress,
-      // Every retry and failure line of this probe is recorded under its correlation.
-      log: deps.activityLog ?? processServerLogSink(),
-      logContext: { correlationId },
-    });
-    settleGatewayProbeSpend(reservation, undefined);
-    if (!outcome.ok) {
-      return result(
-        "embedding",
-        outcome.kind === "unsupported-model" ? "unsupported" : "failed",
-        start,
-        `Embedding endpoint could not be verified (${embeddingFailureDetail(outcome)}).`,
-      );
-    }
-    return embeddingVectorResult(outcome.value.vector, start);
+    const adapter = createEmbeddingAdapter(deps);
+    if ("status" in adapter)
+      return result("embedding", "failed", start, "Embedding is not configured.");
+    const outcome = await verifyEmbeddingCapability(
+      adapter,
+      {
+        modelId: provider.modelId,
+        provider: `openai-compatible:${normalizedEndpointFingerprint(provider.baseUrl)}`,
+        vectorMetric: "cosine",
+        includeSpaceFingerprint: true,
+        ...(deps.gatewayReadinessSignal === undefined
+          ? {}
+          : { signal: deps.gatewayReadinessSignal }),
+        timeoutMs: provider.timeoutMs,
+        logContext: { correlationId },
+      },
+      reuse,
+      () => reserveEmbeddingProbe(deps, config, provider, correlationId, reuse === "connection"),
+    );
+    return embeddingCapabilityResult(outcome, start);
   } catch (probeError) {
-    settleGatewayProbeSpend(reservation, undefined);
     return reportProbeFailure(
       deps,
       correlationId,
@@ -938,6 +1211,23 @@ async function probeConfiguredEmbedding(
       probeError,
     );
   }
+}
+
+/**
+ * Warm the embedding connection in use once; passive browser reads only consume its proof. Every
+ * other embedding alias stays listed and unchecked: the lazy first-use proof covers it when a
+ * person's knowledge actually selects it (#4351).
+ */
+export async function initializeConfiguredEmbeddingReadiness(
+  deps: UiHandlerDeps,
+  parentCorrelationId?: string,
+): Promise<void> {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return;
+  const provider = chooseEmbeddingProvider(config);
+  if (provider === undefined) return;
+  const observed = withReadinessParentCorrelation(deps, parentCorrelationId);
+  await probeConfiguredEmbedding(observed, config, provider, newCorrelationId(), "connection");
 }
 
 // Maps one reranker selection onto its probe result. Extracted so `probeReranker` stays inside the
@@ -1144,11 +1434,24 @@ function reportProbeFailure(
     redact: (message): string => String(deps.redactor(message)),
   });
   // #4115: a probe that outwaited a busy provider is a warning, not a gateway error.
-  emitServerDiagnostic(
-    deps.diagnostics,
-    busySignal(warning) === undefined ? record : { ...record, diagnosticOutcome: "provider-busy" },
-  );
+  emitServerDiagnostic(deps.diagnostics, probeFailureRecord(deps, record, warning));
   return result(name, "failed", start, evidence, warning);
+}
+
+// A probe the server itself cancelled (shutdown, a replaced configuration) ended because Keiko
+// stopped it, not because the gateway failed: the readiness signal is already aborted and the
+// failure is an abort. That is a closed warning outcome, never an error that opens an incident.
+function probeFailureRecord(
+  deps: UiHandlerDeps,
+  record: ServerDiagnosticRecord,
+  warning: string,
+): ServerDiagnosticRecord {
+  if (deps.gatewayReadinessSignal?.aborted === true && record.errorClass === "AbortError") {
+    return { ...record, diagnosticOutcome: "request-cancelled" };
+  }
+  return busySignal(warning) === undefined
+    ? record
+    : { ...record, diagnosticOutcome: "provider-busy" };
 }
 
 // #4115: an overload status turns the probe away like a timeout outwaits it, so it carries the same
@@ -1366,44 +1669,60 @@ async function probeToolCalling(
       probeError,
     );
   };
-  const status = await probeGatewayToolCalling(
+  const verdict = await probeGatewayToolCallingVerdict(
     config,
     provider,
     deps.gatewayReadinessFetch,
     reportFailure,
     probeSpendContext(deps, config, provider, correlationId),
     deps.gatewayReadinessSignal,
-  ).catch((probeError: unknown): GatewayToolCallingProbeStatus => {
+  ).catch((probeError: unknown): ToolCallingProbeVerdict => {
     reportFailure(probeError);
-    return "unverified";
+    return { status: "unverified", outcome: "inconclusive" };
   });
   if (failure !== undefined) return failure;
-  return observedToolCallingResult(status, start, provider);
+  return observedToolCallingResult(verdict, start, provider);
 }
 
+// What each closed outcome says to the person, and what they can do about it (#4351).
+const TOOL_CALLING_EVIDENCE: Readonly<Record<GatewayToolCallingOutcome, string>> = {
+  "called-unforced":
+    "The model called the tool on its own, the way Keiko offers tools, with schema-valid arguments.",
+  "called-only-forced":
+    "The model called the tool only when the call was forced. Keiko offers tools without forcing one, so the model may not use them in Chat or the Coding Workbench.",
+  "forced-refused":
+    "The model did not call the tool on its own, and the provider refused the forced call (a thinking mode often does). This is not a verdict that the model cannot call tools, but Keiko cannot confirm it either, and tool turns need a confirmed check: turn the thinking mode off and verify again.",
+  "no-call":
+    "The model answered without calling the tool, also when the call was forced. It does not call tools through this endpoint; choose a model that supports tool calling.",
+  "tools-refused":
+    "The endpoint refused the request that offers a tool. Tool calling is not accepted by this endpoint or model.",
+  inconclusive:
+    "Tool calling could not be confirmed: the gateway timed out, was rate-limited or answered with an error, or the model did not complete the test steps. Verify again later.",
+};
+
 function observedToolCallingResult(
-  status: GatewayToolCallingProbeStatus,
+  verdict: ToolCallingProbeVerdict,
   start: number,
   provider: ModelProviderConfig,
 ): GatewayReadinessProbeResult {
+  const { status, outcome } = verdict;
+  const evidence = TOOL_CALLING_EVIDENCE[outcome];
   if (status === "verified") {
-    return result(
-      "tool_calling",
-      "passed",
-      start,
-      "Native tool call returned the expected function and schema-valid arguments on the configured response path.",
-    );
+    // Admitted either way: a model that called a tool only when forced is told its limit by the
+    // closed outcome, which Settings words for the person.
+    return { ...result("tool_calling", "passed", start, evidence), toolCallingOutcome: outcome };
   }
   if (status === "transient") {
-    return result(
-      "tool_calling",
-      "failed",
-      start,
-      "Tool calling could not be verified: the gateway answered with a transient status.",
-      PROBE_GATEWAY_BUSY_WARNING,
-    );
+    return {
+      ...result("tool_calling", "failed", start, evidence, PROBE_GATEWAY_BUSY_WARNING),
+      toolCallingOutcome: outcome,
+    };
   }
-  return toolCallingResult(status === "unsupported" ? "unsupported" : "failed", start, provider);
+  return {
+    ...toolCallingResult(status === "unsupported" ? "unsupported" : "failed", start, provider),
+    evidence,
+    toolCallingOutcome: outcome,
+  };
 }
 
 function toolCallingResult(
@@ -1795,16 +2114,26 @@ async function probeLongContext(
 export const LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS = 300_000;
 // Automatic readiness must tolerate the same initial silence as the interactive answer it gates.
 export const WORKBENCH_PROBE_TIMEOUT_FLOOR_MS = GATEWAY_SILENCE_FLOOR_MS;
+// A check a person started in Settings waits for the answer of a model that may still be loading
+// (#4351): the conversational default of 120 s cut it off before a cold model had loaded, and a
+// probe that abandons a slow gateway proves nothing. Only that DEFAULT is lifted, to the interactive
+// silence floor: a timeout an operator set deliberately stays exactly as configured. The check is
+// bounded, cancelled when the person leaves, recorded on the run's start line (`chatProbeTimeoutMs`)
+// and announced as still running; it never applies to a conversation turn.
+export const EXPLICIT_CHECK_TIMEOUT_FLOOR_MS = GATEWAY_SILENCE_FLOOR_MS;
 
 function probeTimeoutFloorMs(
   name: GatewayReadinessProbeName,
   options: GatewayReadinessOptions | undefined,
+  provider: ModelProviderConfig,
 ): number {
   if (name === "long_context") return LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS;
   if (options?.purpose === "coding-workbench-auto" || options?.purpose === "on-demand") {
     return WORKBENCH_PROBE_TIMEOUT_FLOOR_MS;
   }
-  return 0;
+  // No purpose: the explicit check a person started. Only the conversational default is lifted; a
+  // timeout the configuration names is an operator's choice whatever its value.
+  return provider.timeoutConfigured === true ? 0 : EXPLICIT_CHECK_TIMEOUT_FLOOR_MS;
 }
 
 export function probeProvider(
@@ -1812,7 +2141,7 @@ export function probeProvider(
   name: GatewayReadinessProbeName,
   options: GatewayReadinessOptions | undefined,
 ): ModelProviderConfig {
-  const floor = probeTimeoutFloorMs(name, options);
+  const floor = probeTimeoutFloorMs(name, options, provider);
   return provider.timeoutMs >= floor ? provider : { ...provider, timeoutMs: floor };
 }
 
@@ -2054,11 +2383,10 @@ function retainBusyConversationReadiness(
 }
 
 /**
- * #3907 AC3: a model answer a coding run accepted renews the model's same-generation basic-chat
- * success, as an answered busy probe does (#4115): the answer is stronger evidence than the probe
- * the run would otherwise need, and a probe queued between the run's turns would only compete with
- * them. It never establishes readiness, never repairs a failed observation and never crosses a
- * configuration change: the answer must come from the configuration the holder still serves.
+ * #3907 AC3: an accepted coding answer updates the serving timestamp of an already-positive,
+ * same-generation observation. It preserves checkedAt and never establishes readiness, repairs a
+ * failed observation or crosses a configuration change. Elapsed age alone does not expire basic
+ * readiness; this is serving evidence, not a TTL extension or permission to start another probe.
  */
 export function renewConversationReadinessFromAnswer(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
@@ -2187,6 +2515,28 @@ function readinessRunEvidence(
   };
 }
 
+// Keiko ended a run itself (a live run outranks it, shutdown, a replaced configuration): the gateway
+// did not fail, so no verdict about it is recorded and nothing is reconciled.
+function recordReadinessVerdict(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+  correlationId: string,
+): void {
+  if (deps.gatewayReadinessSignal?.aborted === true) return;
+  // F-01: this run is the product's only live evidence about the gateway. Record its outcome on the
+  // config holder so the surfaces that used to infer readiness from configuration alone (the editor
+  // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
+  // Content-free: one state word, no probe bodies, no endpoints, no credentials.
+  recordReadinessObservation(deps, report, observedGeneration, correlationId);
+  // Read BEFORE the tool-calling reconcile: persisting that conclusion bumps the generation, and
+  // the context-window reconcile must tell "we just wrote it" from "the config was replaced".
+  const probedCurrentConfig =
+    observedGeneration === undefined || deps.gatewayConfig?.generation() === observedGeneration;
+  reconcileToolCallingReadiness(deps, report, observedGeneration, correlationId);
+  if (probedCurrentConfig) reconcileContextWindowReadiness(deps, report, correlationId);
+}
+
 export async function runGatewayReadiness(
   request: GatewayReadinessRequest,
   deps: UiHandlerDeps,
@@ -2231,19 +2581,35 @@ export async function runGatewayReadiness(
     probes,
     verifiedCapabilities: verifiedCapabilities(probes),
   };
-  // F-01: this run is the product's only live evidence about the gateway. Record its outcome on the
-  // config holder so the surfaces that used to infer readiness from configuration alone (the editor
-  // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
-  // Content-free: one state word, no probe bodies, no endpoints, no credentials.
-  recordReadinessObservation(deps, report, observedGeneration, correlationId);
-  // Read BEFORE the tool-calling reconcile: persisting that conclusion bumps the generation, and
-  // the context-window reconcile must tell "we just wrote it" from "the config was replaced".
-  const probedCurrentConfig =
-    observedGeneration === undefined || deps.gatewayConfig?.generation() === observedGeneration;
-  reconcileToolCallingReadiness(deps, report, observedGeneration, correlationId);
-  if (probedCurrentConfig) reconcileContextWindowReadiness(deps, report, correlationId);
+  // A person's own verification of the model, answered: it counts as use (#4351).
+  if (trigger === "settings" && request.options?.purpose === undefined && chat.status === "passed")
+    recordExplicitModelUse(deps, selection.provider.modelId, observedGeneration);
+  recordReadinessVerdict(
+    deps,
+    report,
+    providerConclusionGeneration(deps, selection.provider, report, observedGeneration),
+    correlationId,
+  );
   logReadinessRunCompleted(deps, run, report);
   return report;
+}
+
+// The connection a run probed is the provider it selected when it started. Only a basic-chat check
+// describes that connection alone; a feature proof also rests on the configured capability, which a
+// replacement may have changed, so it keeps the generation it started in.
+function providerConclusionGeneration(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+): number | undefined {
+  if (report.probes.some((probe) => probe.name !== "chat")) return observedGeneration;
+  return conclusionGeneration(
+    deps.gatewayConfig,
+    provider.modelId,
+    observedGeneration,
+    JSON.stringify(provider),
+  );
 }
 
 function reconcileContextWindowReadiness(
@@ -2303,6 +2669,11 @@ interface WorkbenchProbeEntry {
   readonly perform: () => Promise<void>;
   readonly holder: UiHandlerDeps["gatewayConfig"];
   readonly cancelQueued: () => void;
+  readonly withhold: () => boolean;
+  /** Ends the probe a live run outranks while it is in flight; false when it is not eligible. */
+  readonly abortForLiveRun: () => boolean;
+  /** Set once a live run ended this probe in flight; its conclusion is then discarded. */
+  withheldInFlight: boolean;
   prioritized: boolean;
   running: boolean;
   at: number;
@@ -2387,7 +2758,10 @@ export async function initializeLiteLlmCodingReadiness(
 ): Promise<void> {
   const config = deps.gatewayConfig?.current();
   if (config === undefined) return;
-  const targets = liteLlmWorkbenchProbeTargets(config);
+  // Only the chat model in use: the tool-calling proof of every other listed model is renewed when a
+  // person picks it (#4351), never in the background for the whole catalog.
+  const inUse = conversationModelForStartupProof(deps);
+  const targets = liteLlmWorkbenchProbeTargets(config).filter((target) => target.modelId === inUse);
   await Promise.all(
     targets.map((target) =>
       enqueueWorkbenchProbe(deps, config, target, correlationId, "startup", {
@@ -2395,6 +2769,31 @@ export async function initializeLiteLlmCodingReadiness(
       }),
     ),
   );
+}
+
+// The chat model the product uses now: the election the Chat default makes, with the same
+// observations. At startup, after the walk concluded, it is the model that proved ready.
+function inUseConversationModelId(deps: UiHandlerDeps, config: GatewayConfig): string | undefined {
+  return electConversationDefault(configuredChatModels(config), (model) =>
+    currentConversationReadinessObservation(deps, model.id),
+  )?.id;
+}
+
+/**
+ * The chat model whose tool-calling proof startup may renew (#4351): the model in use, but never a
+ * model nobody checked once the walk has refused, or got no verdict from, another one. Such a model
+ * waits for a person's pick; startup sends it nothing.
+ */
+export function conversationModelForStartupProof(deps: UiHandlerDeps): string | undefined {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return undefined;
+  const inUse = inUseConversationModelId(deps, config);
+  if (inUse === undefined || currentConversationReadinessObservation(deps, inUse) !== undefined)
+    return inUse;
+  const moved = configuredChatModels(config).some(
+    (model) => currentConversationReadinessObservation(deps, model.id) === false,
+  );
+  return moved ? undefined : inUse;
 }
 
 function liteLlmWorkbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTarget[] {
@@ -2407,6 +2806,8 @@ function liteLlmWorkbenchProbeTargets(config: GatewayConfig): readonly Workbench
 
 interface WorkbenchProbeTarget extends WorkbenchProbeNeed {
   readonly modelId: string;
+  /** Startup proof of the model in use, or a person's pick; absent means the trigger decides. */
+  readonly scopeReason?: ConversationCheckReason;
 }
 
 function workbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTarget[] {
@@ -2505,6 +2906,28 @@ function workbenchProbeOutcome(
   return results.includes(undefined) ? "inconclusive" : "refuted";
 }
 
+function workbenchScopeReason(
+  target: WorkbenchProbeTarget,
+  trigger: WorkbenchProbeTrigger,
+): ConversationCheckReason {
+  return target.scopeReason ?? (trigger === "startup" ? "startup" : "selection");
+}
+
+// Proven, yet not stored: the configuration changed under the run and the conclusion was discarded
+// as stale. Lift the cooldown so the next read proves it again instead of leaving the model unusable
+// for hours.
+function staleAfterProof(
+  deps: UiHandlerDeps,
+  target: WorkbenchProbeTarget,
+  generation: number | undefined,
+): boolean {
+  const config = deps.gatewayConfig?.current();
+  const stillNeeded =
+    config !== undefined &&
+    workbenchProbeTargets(config).some((pending) => pending.modelId === target.modelId);
+  return stillNeeded && deps.gatewayConfig?.generation() !== generation;
+}
+
 async function runWorkbenchProbe(
   deps: UiHandlerDeps,
   target: WorkbenchProbeTarget,
@@ -2513,6 +2936,8 @@ async function runWorkbenchProbe(
 ): Promise<WorkbenchProbeOutcome> {
   const generation = deps.gatewayConfig?.generation();
   try {
+    // A proof that runs is a proof that sends: the scope line is written here, never for a queued,
+    // joined, settled or withheld one.
     const report = await runGatewayReadiness(
       {
         modelId: target.modelId,
@@ -2521,19 +2946,14 @@ async function runWorkbenchProbe(
       deps,
       correlationId,
       undefined,
-      { basis: target.basis, trigger },
+      {
+        basis: target.basis,
+        trigger,
+        scopeReason: workbenchScopeReason(target, trigger),
+      },
     );
     const outcome = workbenchProbeOutcome(report, target);
-    const config = deps.gatewayConfig?.current();
-    const stillNeeded =
-      config !== undefined &&
-      workbenchProbeTargets(config).some((pending) => pending.modelId === target.modelId);
-    // Proven, yet not stored: the configuration changed under the run and the conclusion was
-    // discarded as stale. Lift the cooldown so the next read proves it again instead of leaving
-    // the model unusable for hours.
-    if (outcome === "proven" && stillNeeded && deps.gatewayConfig?.generation() !== generation)
-      return "stale";
-    return outcome;
+    return outcome === "proven" && staleAfterProof(deps, target, generation) ? "stale" : outcome;
   } catch (error) {
     emitServerDiagnostic(
       deps.diagnostics,
@@ -2580,10 +3000,80 @@ function enqueueWorkbenchProbe(
     known.prioritized ||= prioritized;
     return known.promise;
   }
-  const entry = createWorkbenchProbeEntry(deps, target, correlationId, trigger, prioritized);
+  const entry = createWorkbenchProbeEntry(deps, target, correlationId, trigger, prioritized, key);
   workbenchProbes.set(key, entry);
   startWorkbenchProbeQueue();
   return entry.promise;
+}
+
+// A live run needs the gateway, which may serve one model at a time. A proof of a model nobody chose
+// gives way and leaves no verdict, so the next read after the run proves it.
+function withholdForLiveRun(
+  deps: UiHandlerDeps,
+  entry: WorkbenchProbeEntry,
+  key: string,
+  modelId: string,
+  correlationId: string,
+): boolean {
+  if (entry.prioritized || deps.codingRuntimeOrchestrator?.hasLiveRun() !== true) return false;
+  workbenchProbes.delete(key);
+  entry.cancelQueued();
+  logAutomaticReadinessWithheld(deps, modelId, correlationId);
+  return true;
+}
+
+// A run starting while a probe of a model nobody chose is already in flight: the probe may hold the
+// gateway's single slot for minutes (a cold load), so it ends now instead of after its own bound.
+// Its conclusion is discarded (the run is the reason, not the gateway), the entry is dropped so the
+// next read proves the model again, and the same closed withheld line records why.
+export function withholdRunningWorkbenchProbesForLiveRun(deps: UiHandlerDeps): number {
+  // A snapshot, taken before any abort: an abort runs its listeners at once, and a listener that
+  // settles a probe or starts another one changes the map that is being walked.
+  const held = [...workbenchProbes.values()].filter((entry) => entry.holder === deps.gatewayConfig);
+  let aborted = 0;
+  for (const entry of held) {
+    if (entry.abortForLiveRun()) aborted += 1;
+  }
+  return aborted;
+}
+
+// The probe's dependencies with its own in-flight signal joined to the conversation queue's.
+function workbenchProbeDeps(deps: UiHandlerDeps, inFlight: AbortSignal): UiHandlerDeps {
+  const queueSignal =
+    deps.gatewayConfig === undefined
+      ? undefined
+      : conversationQueue(deps.gatewayConfig).controller.signal;
+  return cancellableConversationProbeDeps(
+    deps,
+    queueSignal === undefined ? inFlight : AbortSignal.any([queueSignal, inFlight]),
+  );
+}
+
+// The settled end of a probe a live run ended in flight: no outcome, no cooldown, entry dropped.
+function dropWithheldProbe(
+  deps: UiHandlerDeps,
+  entry: WorkbenchProbeEntry,
+  key: string,
+  modelId: string,
+  correlationId: string,
+): void {
+  if (workbenchProbes.get(key) === entry) workbenchProbes.delete(key);
+  entry.settled = true;
+  logAutomaticReadinessWithheld(deps, modelId, correlationId);
+}
+
+function abortProbeForLiveRun(entry: WorkbenchProbeEntry, inFlight: AbortController): boolean {
+  if (!entry.running || entry.settled || entry.prioritized || entry.withheldInFlight) return false;
+  entry.withheldInFlight = true;
+  inFlight.abort();
+  return true;
+}
+
+function settleWorkbenchProbe(entry: WorkbenchProbeEntry, outcome: WorkbenchProbeOutcome): void {
+  entry.settled = true;
+  entry.outcome = outcome;
+  entry.at = Date.now();
+  entry.cooldownMs = workbenchProbeCooldownMs(outcome);
 }
 
 function createWorkbenchProbeEntry(
@@ -2592,7 +3082,9 @@ function createWorkbenchProbeEntry(
   correlationId: string,
   trigger: WorkbenchProbeTrigger,
   prioritized: boolean,
+  key: string,
 ): WorkbenchProbeEntry {
+  const inFlight = new AbortController();
   let finish: () => void = (): void => undefined;
   const promise = new Promise<void>((resolve) => {
     finish = resolve;
@@ -2605,23 +3097,23 @@ function createWorkbenchProbeEntry(
       entry.settled = true;
       finish();
     },
+    withhold: (): boolean => withholdForLiveRun(deps, entry, key, target.modelId, correlationId),
+    abortForLiveRun: (): boolean => abortProbeForLiveRun(entry, inFlight),
     perform: async (): Promise<void> => {
-      const controlled =
-        deps.gatewayConfig === undefined
-          ? deps
-          : cancellableConversationProbeDeps(
-              deps,
-              conversationQueue(deps.gatewayConfig).controller.signal,
-            );
-      const outcome = await runWorkbenchProbe(controlled, target, correlationId, trigger);
-      entry.settled = true;
-      entry.outcome = outcome;
-      entry.at = Date.now();
-      entry.cooldownMs = workbenchProbeCooldownMs(outcome);
+      const outcome = await runWorkbenchProbe(
+        workbenchProbeDeps(deps, inFlight.signal),
+        target,
+        correlationId,
+        trigger,
+      );
+      if (entry.withheldInFlight)
+        dropWithheldProbe(deps, entry, key, target.modelId, correlationId);
+      else settleWorkbenchProbe(entry, outcome);
       finish();
-      if (outcome === "stale")
+      if (!entry.withheldInFlight && outcome === "stale")
         requeueStaleWorkbenchProbe(deps, target.modelId, correlationId, trigger);
     },
+    withheldInFlight: false,
     prioritized,
     running: false,
     at: Date.now(),
@@ -2681,6 +3173,10 @@ function performNextWorkbenchProbe(resolve: () => void, reject: (error: unknown)
     resolve();
     return;
   }
+  if (entry.withhold()) {
+    performNextWorkbenchProbe(resolve, reject);
+    return;
+  }
   entry.running = true;
   void entry
     .perform()
@@ -2688,6 +3184,21 @@ function performNextWorkbenchProbe(resolve: () => void, reject: (error: unknown)
       performNextWorkbenchProbe(resolve, reject);
     })
     .catch(reject);
+}
+
+/**
+ * A passive read of the Workbench profile joins the tool-calling proof of this model when one is
+ * running and starts nothing: a window opening or a restored selection never initiates provider
+ * work (#4351). The answer it then reports is the model's current state.
+ */
+export function joinRunningWorkbenchProof(
+  deps: UiHandlerDeps,
+  modelId: string | undefined,
+): Promise<void> {
+  const config = deps.gatewayConfig?.current();
+  if (config === undefined || modelId === undefined) return Promise.resolve();
+  const known = workbenchProbes.get(deploymentProbeKey(config, modelId));
+  return known !== undefined && !known.settled ? known.promise : Promise.resolve();
 }
 
 export async function ensureCodingWorkbenchContextWindows(
@@ -2698,26 +3209,24 @@ export async function ensureCodingWorkbenchContextWindows(
 ): Promise<void> {
   const config = deps.gatewayConfig?.current();
   if (config === undefined) return;
-  const targets = workbenchProbeTargets(config);
-  if (targets.length === 0) return;
+  // Only the model the Workbench would elect, or a person just picked, is proven (#4351): the other
+  // listed models receive no request until someone picks them. Without a name the model startup
+  // would prove is the only one a read may ask for.
+  const subject = electedModelId ?? conversationModelForStartupProof(deps);
+  const target = workbenchProbeTargets(config).find((candidate) => candidate.modelId === subject);
+  if (target === undefined) return;
   const id = correlationId ?? newCorrelationId();
-  // The model the Workbench would elect goes first and is the only one awaited.
-  const ordered = [
-    ...targets.filter((target) => target.modelId === electedModelId),
-    ...targets.filter((target) => target.modelId !== electedModelId),
-  ];
-  const queued = new Map(
-    ordered.map((target) => [
-      target.modelId,
-      enqueueWorkbenchProbe(deps, config, target, id, "profile-read", {
-        prioritized: target.modelId === electedModelId,
-        retryUnanswered,
-      }),
-    ]),
+  await enqueueWorkbenchProbe(
+    deps,
+    config,
+    { ...target, scopeReason: "selection" },
+    id,
+    "profile-read",
+    {
+      prioritized: true,
+      retryUnanswered,
+    },
   );
-  // A named model waits for ITS proof only — never for another model's. Without a name (the
-  // Workbench could elect none yet) the first queued model is the one it would elect next.
-  await (electedModelId === undefined ? queued.values().next().value : queued.get(electedModelId));
 }
 
 /**
@@ -2772,6 +3281,25 @@ interface OnDemandReadinessProbe {
   readonly correlationId: string;
 }
 
+// The connection each running basic-chat check answers for, keyed like its in-flight entry, from
+// the moment it starts to run until it ends. A queued check a replacement skipped never runs, so it
+// never appears here.
+const runningConnectionsByConfig = new WeakMap<
+  NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  Map<string, string>
+>();
+
+function runningConnectionsFor(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+): Map<string, string> {
+  let running = runningConnectionsByConfig.get(holder);
+  if (running === undefined) {
+    running = new Map();
+    runningConnectionsByConfig.set(holder, running);
+  }
+  return running;
+}
+
 const readinessProbesByConfig = new WeakMap<
   NonNullable<UiHandlerDeps["gatewayConfig"]>,
   Map<string, OnDemandReadinessProbe>
@@ -2792,16 +3320,17 @@ interface ConversationInitializationQueue {
   active: number;
   disposed: boolean;
   readonly controller: AbortController;
-  initializedGeneration: number;
   readonly pending: (() => Promise<void>)[];
-  // When each model's latest probe of the current generation settled. A failed report may keep an
-  // older feature-observation timestamp (`preserveUnexecutedCapabilityObservation`), so the
-  // cooldown a conversation request honours is dated by the probe, never by that timestamp.
-  readonly probeSettledAt: Map<string, number>;
   // The deployment each model's latest check ran against, recorded when it starts to run (a probe
   // a replacement skipped never ran). It survives a generation change, because a proof another
   // model's check persisted bumps the generation without changing this model.
   readonly startupChecked: Map<string, string>;
+  // The latest startup walk owns the election order; a newer one retires it (#4351).
+  startupWalk: number;
+  startupWalkPromise: Promise<void> | undefined;
+  // Models whose latest check ended without a verdict (a timeout, a busy or unreachable gateway).
+  // That is no refusal of the model, so the startup walk never moves on to another model for it.
+  readonly inconclusive: Set<string>;
 }
 const conversationQueues = new WeakMap<
   NonNullable<UiHandlerDeps["gatewayConfig"]>,
@@ -2817,10 +3346,11 @@ function conversationQueue(
       active: 0,
       disposed: false,
       controller: new AbortController(),
-      initializedGeneration: -1,
       pending: [],
-      probeSettledAt: new Map(),
       startupChecked: new Map(),
+      startupWalk: 0,
+      startupWalkPromise: undefined,
+      inconclusive: new Set(),
     };
     conversationQueues.set(holder, queue);
   }
@@ -2845,6 +3375,7 @@ function enqueueConversationProbe(
   modelId: string,
   correlationId: string,
   backgroundAttempt?: number,
+  checkReason?: ConversationCheckReason,
 ): Promise<void> {
   const generation = holder.generation();
   const queue = conversationQueue(holder);
@@ -2862,6 +3393,7 @@ function enqueueConversationProbe(
             modelId,
             correlationId,
             backgroundAttempt,
+            checkReason,
           );
         resolve();
       } catch (error) {
@@ -2927,44 +3459,40 @@ export function withReadinessParentCorrelation(
   };
 }
 
-// The one startup check of a model: its result stands until a request or a selection needs a fresh
-// answer. Nothing re-probes in the background (owner decision 2026-11-01, customer 1.3.4).
+// Startup checks each configured connection once. Requests consume this process-local result;
+// only configuration replacement or explicit Settings verification can initiate another check.
 function checkConversationModelOnce(
   deps: UiHandlerDeps,
   modelId: string,
   generation: number,
   parentCorrelationId: string | undefined,
-): void {
+  checkReason: ConversationCheckReason,
+): Promise<void> | undefined {
   const holder = deps.gatewayConfig;
-  if (holder?.generation() !== generation || conversationQueue(holder).disposed) return;
+  if (holder?.generation() !== generation || conversationQueue(holder).disposed) return undefined;
   const causalParent = parentCorrelationId ?? holder.initializationCorrelationId;
   const probeCorrelationId = newCorrelationId();
   const observedDeps = withReadinessParentCorrelation(deps, causalParent);
-  void ensureOnDemandConversationReadiness(observedDeps, modelId, probeCorrelationId, 1).catch(
-    (error: unknown) => {
-      emitServerDiagnostic(
-        deps.diagnostics,
-        serverDiagnosticFromError({
-          correlationId: probeCorrelationId,
-          parentCorrelationId: causalParent,
-          operation: "gateway.readiness",
-          source: "gateway-readiness.initialization",
-          error,
-          summary: "A gateway readiness probe could not be completed.",
-          redact: (message): string => String(deps.redactor(message)),
-        }),
-      );
-    },
-  );
-}
-
-function resetConversationGeneration(
-  queue: ConversationInitializationQueue,
-  generation: number,
-): void {
-  if (queue.initializedGeneration === generation) return;
-  queue.probeSettledAt.clear();
-  queue.initializedGeneration = generation;
+  return ensureOnDemandConversationReadiness(
+    observedDeps,
+    modelId,
+    probeCorrelationId,
+    1,
+    checkReason,
+  ).catch((error: unknown) => {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: probeCorrelationId,
+        parentCorrelationId: causalParent,
+        operation: "gateway.readiness",
+        source: "gateway-readiness.initialization",
+        error,
+        summary: "A gateway readiness probe could not be completed.",
+        redact: (message): string => String(deps.redactor(message)),
+      }),
+    );
+  });
 }
 
 /** Whether a basic-chat check of this model is running now, in the current generation. */
@@ -2976,11 +3504,36 @@ export function isConversationReadinessCheckRunning(deps: UiHandlerDeps, modelId
   );
 }
 
-// Startup checks a model this configuration generation has not answered for yet (ready or not),
-// once per deployment: a generation that only persisted another model's proof repeats no check.
-// A user-driven refresh (a page load) checks again every model that did not answer ready, within
-// the not-ready cooldown. A success that only expired stays usable, as in Chat, and is checked by
-// the request that uses it; nothing re-checks a model on a timer (customer 1.3.4).
+/** Observe only checks that initialization already owns; this never starts a provider call. */
+export function pendingConversationReadiness(deps: UiHandlerDeps): readonly Promise<void>[] {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return [];
+  const prefix = `${String(holder.generation())}:`;
+  return [...readinessProbesFor(holder)]
+    .filter(([key]) => key.startsWith(prefix))
+    .map(([, probe]) => probe.promise);
+}
+
+/** A passive metadata reader joins the existing checks, including a replacement generation. */
+export async function awaitPendingConversationReadiness(
+  deps: UiHandlerDeps,
+  bounds: AbortDeadlineOptions,
+): Promise<void> {
+  let generation: number | undefined;
+  do {
+    generation = deps.gatewayConfig?.generation();
+    await /* NOSONAR typescript:S9382 -- rejoin after current readiness settles. */ raceAbortDeadline(
+      () => Promise.allSettled(pendingConversationReadiness(deps)),
+      bounds,
+    );
+  } while (generation !== deps.gatewayConfig?.generation());
+}
+
+// A model this configuration generation has not answered for yet (ready or not) is checked once
+// per deployment: a generation that only persisted another model's proof repeats no check.
+// Explicit verification can retry a failed model; passive page loads and model reads do not.
+// Returns the check that is running for the model after this call (a started or a joined one), or
+// `undefined` when nothing runs because the model was already answered or checked.
 function initializeConversationModel(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
@@ -2988,14 +3541,113 @@ function initializeConversationModel(
   modelId: string,
   correlationId: string | undefined,
   recheck: boolean,
-): void {
+  checkReason: ConversationCheckReason,
+): Promise<void> | undefined {
   const generation = holder.generation();
-  if (readinessProbesFor(holder).has(`${String(generation)}:${modelId}`)) return;
+  const key = `${String(generation)}:${modelId}`;
+  const running = readinessProbesFor(holder).get(key);
+  if (running !== undefined) return running.promise;
   const answer = answerThisGeneration(holder, modelId);
-  if (recheck ? answer === true : answer !== undefined) return;
-  const checked = conversationQueue(holder).startupChecked.get(modelId);
-  if (!recheck && checked === conversationConnectionKey(config, modelId)) return;
-  checkConversationModelOnce(deps, modelId, generation, correlationId);
+  if (recheck ? answer === true : answer !== undefined) return undefined;
+  if (!recheck) {
+    const settled = unchangedConnectionOutcome(deps, holder, config, modelId, correlationId);
+    if (settled !== "none") return settled;
+  }
+  const check = checkConversationModelOnce(deps, modelId, generation, correlationId, checkReason);
+  return check === undefined ? undefined : (readinessProbesFor(holder).get(key)?.promise ?? check);
+}
+
+// A check that already answers for this exact connection is joined, or leaves nothing to start:
+// `undefined` means the connection was checked before, `"none"` that no earlier check applies.
+function unchangedConnectionOutcome(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  config: GatewayConfig,
+  modelId: string,
+  correlationId: string | undefined,
+): Promise<void> | undefined | "none" {
+  if (joinUnchangedConnectionCheck(deps, holder, config, modelId, correlationId))
+    return readinessProbesFor(holder).get(`${String(holder.generation())}:${modelId}`)?.promise;
+  return conversationQueue(holder).startupChecked.get(modelId) ===
+    conversationConnectionKey(config, modelId)
+    ? undefined
+    : "none";
+}
+
+// The one place a decision to check a chat model is made and recorded (#4351): it starts or joins the
+// model's check and, only when it starts a new one, records how many models were listed, how many
+// the decision checks and why.
+function startConversationCheck(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  config: GatewayConfig,
+  modelId: string,
+  correlationId: string | undefined,
+  recheck: boolean,
+  reason: ConversationCheckReason,
+): Promise<void> | undefined {
+  return initializeConversationModel(deps, holder, config, modelId, correlationId, recheck, reason);
+}
+
+/**
+ * A replacement that kept this model's connection (startup discovery adding another model) leaves
+ * its running check valid: it answers for this exact connection, and its conclusion lands in the
+ * current generation (`conclusionGeneration`). The current generation joins that check instead of
+ * seeing none, so a first turn waits for it rather than being refused, and no second probe starts.
+ */
+function joinUnchangedConnectionCheck(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  config: GatewayConfig,
+  modelId: string,
+  correlationId: string | undefined,
+): boolean {
+  const generation = holder.generation();
+  const probes = readinessProbesFor(holder);
+  const connection = conversationConnectionKey(config, modelId);
+  const connections = runningConnectionsFor(holder);
+  const running = [...probes].find(
+    ([key]) =>
+      key.slice(key.indexOf(":") + 1) === modelId &&
+      key !== `${String(generation)}:${modelId}` &&
+      connections.get(key) === connection,
+  )?.[1];
+  if (running === undefined) return false;
+  const key = `${String(generation)}:${modelId}`;
+  const joined: OnDemandReadinessProbe = { ...running };
+  probes.set(key, joined);
+  // The owner of the check reports its failure; this only ends the join either way.
+  const release = (): void => {
+    if (probes.get(key) === joined) probes.delete(key);
+  };
+  void running.promise.then(release, release);
+  const joining = correlationId ?? newCorrelationId();
+  logAutomaticReadinessJoined(deps, modelId, joining, running.correlationId, generation);
+  return true;
+}
+
+/**
+ * The generation a check's conclusion belongs to: the current one when the check started in it, or
+ * when the connection it checked is still the current connection and the current generation holds
+ * no basic-chat answer yet (a carried-over feature proof alone is none); that is the rule a replacement applies to an observation already recorded
+ * (deps.ts `replaceRuntimeCatalog`). Otherwise the generation it started in, whose conclusion the
+ * holder discards, so a late answer never overwrites a newer one (an explicit verification).
+ */
+function conclusionGeneration(
+  holder: UiHandlerDeps["gatewayConfig"],
+  modelId: string,
+  observedGeneration: number | undefined,
+  checkedConnection: string,
+): number | undefined {
+  if (holder === undefined || observedGeneration === undefined) return observedGeneration;
+  const current = holder.generation();
+  if (current === observedGeneration) return observedGeneration;
+  const config = holder.current();
+  const unchanged =
+    config !== undefined && conversationConnectionKey(config, modelId) === checkedConnection;
+  return unchanged && answerThisGeneration(holder, modelId) === undefined
+    ? current
+    : observedGeneration;
 }
 
 // Everything a chat check depends on: the provider's connection, credential included. Measured
@@ -3017,9 +3669,20 @@ function answerThisGeneration(
     : undefined;
 }
 
+function configuredChatModels(config: GatewayConfig): readonly ModelCapability[] {
+  return preferredConversationModelOrder(
+    listConfiguredCapabilities(config).filter((model) => model.kind === "chat"),
+  );
+}
+
 /**
- * Each configured chat model is checked once per connection, at startup; `recheck`
- * (a user-driven refresh) checks again the models that are not ready now.
+ * Startup checks the chat model in use, never the catalog (#4351). Listing a gateway's models costs
+ * nothing, but a check sends a real request and makes the gateway load the model, which on a shared
+ * gateway evicts a model somebody else is using. The elected default is checked; only when that
+ * check ends with a definitive refusal does the walk take the next model of the election order, one
+ * at a time, and it stops at the first model that is ready. A check that ended without a verdict
+ * (a timeout, a busy or unreachable gateway) is no refusal and moves nothing on. `recheck` is
+ * reserved for explicit verification of models that are not ready; a browser reload never sets it.
  */
 export function initializeConfiguredConversationReadiness(
   deps: UiHandlerDeps,
@@ -3030,20 +3693,236 @@ export function initializeConfiguredConversationReadiness(
   if (holder === undefined) return;
   const queue = conversationQueue(holder);
   if (queue.disposed) return;
-  resetConversationGeneration(queue, holder.generation());
-  const config = currentGatewayConfig(deps);
-  if (config === undefined) return;
-  for (const model of listConfiguredCapabilities(config)) {
-    if (model.kind === "chat")
-      initializeConversationModel(deps, holder, config, model.id, correlationId, recheck);
-  }
+  queue.startupWalk += 1;
+  const walk = runStartupConversationWalk(deps, holder, correlationId, recheck, queue.startupWalk);
+  queue.startupWalkPromise = walk;
+  void walk.finally(() => {
+    if (queue.startupWalkPromise === walk) queue.startupWalkPromise = undefined;
+  });
+}
+
+/** Settles when the startup walk of the current configuration has concluded. Starts no check. */
+export async function settleStartupConversationReadiness(deps: UiHandlerDeps): Promise<void> {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return;
+  let walk: Promise<void> | undefined;
+  do {
+    walk = conversationQueue(holder).startupWalkPromise;
+    await /* NOSONAR typescript:S9382 -- rejoin a walk a newer start replaced. */ walk;
+  } while (walk !== conversationQueue(holder).startupWalkPromise);
 }
 
 /**
- * Fresh chat success adds no interactive readiness request. A running probe is joined; an expired
- * success or a failed observation outside its cooldown can share one fresh check through the
- * existing two-slot queue. The startup check uses the same in-flight owner, so simultaneous
- * requests cannot create a probe storm.
+ * A person's first explicit pick of a chat model that has no current observation starts exactly one
+ * check of that one model (#4351). Selection is a deliberate human action: it is the only request
+ * path besides startup and Settings that may start provider work, and it runs through the same
+ * single-model queue, cooldown and generation binding as every other check. A model this
+ * deployment already answered for, ready or refused, starts nothing: a refused model stays refused
+ * until an explicit verification, and a check already running is joined, not repeated.
+ */
+export async function checkSelectedConversationModel(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId?: string,
+): Promise<void> {
+  await startSelectedConversationCheck(deps, modelId, correlationId).settled;
+}
+
+interface SelectionCheck {
+  readonly outcome: Exclude<SelectionCheckOutcome, "bad-request" | "failed">;
+  /** Settles when the check ended; never rejects, a failure is reported with the correlation id. */
+  readonly settled: Promise<void>;
+}
+
+/**
+ * The start of a person's pick, with its outcome (`started`, `joined`, `already-answered`,
+ * `unknown-model`) recorded under the pick's correlation id. A model whose latest check ended
+ * without a verdict is checked again, bounded by the existing not-ready cooldown; a definitive
+ * refusal stays refused until explicit verification.
+ */
+export function startSelectedConversationCheck(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId?: string,
+): SelectionCheck {
+  const id = correlationId ?? newCorrelationId();
+  const holder = deps.gatewayConfig;
+  const config = currentGatewayConfig(deps);
+  const settled = (outcome: SelectionCheck["outcome"], work?: Promise<void>): SelectionCheck => {
+    logSelectionOutcome(deps, id, outcome);
+    return { outcome, settled: settleSelectionCheck(deps, id, work) };
+  };
+  if (holder === undefined || config === undefined || conversationQueue(holder).disposed)
+    return settled("unknown-model");
+  if (!configuredChatModels(config).some((model) => model.id === modelId))
+    return settled("unknown-model");
+  const key = `${String(holder.generation())}:${modelId}`;
+  const joined = readinessProbesFor(holder).has(key);
+  const recheck = conversationQueue(holder).inconclusive.has(modelId);
+  const check = startConversationCheck(deps, holder, config, modelId, id, recheck, "selection");
+  if (check === undefined) return settled("already-answered");
+  // A check was due but the existing not-ready cooldown withheld it: nothing was sent.
+  if (!joined && !readinessProbesFor(holder).has(key)) return settled("cooldown");
+  return settled(joined ? "joined" : "started", check);
+}
+
+function settleSelectionCheck(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  work: Promise<void> | undefined,
+): Promise<void> {
+  if (work === undefined) return Promise.resolve();
+  return work.catch((error: unknown): void => {
+    logSelectionOutcome(deps, correlationId, "failed");
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "gateway.readiness",
+        source: "gateway-readiness.selection",
+        error,
+        summary: "A gateway readiness probe could not be completed.",
+        redact: (message): string => String(deps.redactor(message)),
+      }),
+    );
+  });
+}
+
+async function runStartupConversationWalk(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  correlationId: string | undefined,
+  recheck: boolean,
+  walk: number,
+): Promise<void> {
+  const visited = new Set<string>();
+  try {
+    // One model at a time is the point of the walk: the next check starts only after a definitive refusal.
+    while (
+      await /* NOSONAR typescript:S9382 -- sequential by design (#4351). */ advanceStartupWalk(
+        deps,
+        holder,
+        correlationId,
+        recheck,
+        walk,
+        visited,
+      )
+    ) {
+      // One election step per iteration; the step decides whether the walk goes on.
+    }
+  } catch (error) {
+    reportStartupWalkFailure(deps, correlationId, error);
+  }
+}
+
+// One step of the walk: returns whether it may continue with the next model of the election order.
+async function advanceStartupWalk(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  correlationId: string | undefined,
+  recheck: boolean,
+  walk: number,
+  visited: Set<string>,
+): Promise<boolean> {
+  const config = currentGatewayConfig(deps);
+  const queue = conversationQueue(holder);
+  if (queue.disposed || queue.startupWalk !== walk || config === undefined) return false;
+  const step = nextStartupWalkStep(holder, config, visited, recheck);
+  if (step.kind === "stop") return false;
+  if (step.kind === "skip") {
+    visited.add(step.modelId);
+    return true;
+  }
+  const check = startConversationCheck(
+    deps,
+    holder,
+    config,
+    step.modelId,
+    correlationId,
+    recheck,
+    visited.size === 0 ? "startup" : "fallback",
+  );
+  if (check === undefined) return false;
+  await check;
+  if (!refusedDefinitively(holder, step.modelId)) return false;
+  visited.add(step.modelId);
+  return true;
+}
+
+type StartupWalkStep =
+  | { readonly kind: "check"; readonly modelId: string }
+  | { readonly kind: "skip"; readonly modelId: string }
+  | { readonly kind: "stop" };
+
+// The election order decides; a model this generation already proved ready ends the walk, a model
+// it already refused definitively is passed over without a request, and a model whose latest check
+// ended without a verdict ends the walk too, because that says nothing against it.
+function nextStartupWalkStep(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  config: GatewayConfig,
+  visited: ReadonlySet<string>,
+  recheck: boolean,
+): StartupWalkStep {
+  // A model whose latest check gave no verdict (or whose credential was refused) holds the walk:
+  // the election would otherwise step past it to a model nobody has checked.
+  if (
+    configuredChatModels(config).some(
+      (model) =>
+        !visited.has(model.id) &&
+        answerThisGeneration(holder, model.id) === false &&
+        conversationQueue(holder).inconclusive.has(model.id),
+    ) &&
+    !recheck
+  )
+    return { kind: "stop" };
+  // The election Chat makes for its default (`electConversationDefault`), over the models the walk
+  // has not passed yet, with this generation's tri-state answers.
+  const candidate = electConversationDefault(
+    configuredChatModels(config).filter((model) => !visited.has(model.id)),
+    (model) => answerThisGeneration(holder, model.id),
+  );
+  if (candidate === undefined) return { kind: "stop" };
+  const answer = answerThisGeneration(holder, candidate.id);
+  if (answer === true && !recheck) return { kind: "stop" };
+  if (answer === false && !recheck) return { kind: "skip", modelId: candidate.id };
+  return { kind: "check", modelId: candidate.id };
+}
+
+// The walk moves on only after a definitive refusal of the model it just checked: never after a
+// ready model, an unanswered check or a check that ended without a verdict.
+function refusedDefinitively(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+): boolean {
+  return (
+    answerThisGeneration(holder, modelId) === false &&
+    !conversationQueue(holder).inconclusive.has(modelId)
+  );
+}
+
+function reportStartupWalkFailure(
+  deps: UiHandlerDeps,
+  parentCorrelationId: string | undefined,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: newCorrelationId(),
+      ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
+      operation: "gateway.readiness",
+      source: "gateway-readiness.startup-walk",
+      error,
+      summary: "A gateway readiness probe could not be completed.",
+      redact: (message): string => String(deps.redactor(message)),
+    }),
+  );
+}
+
+/**
+ * Requests may join configuration-owned initialization, but never start a readiness check.
+ * The same current-generation result applies to every turn until explicit verification or
+ * a changed connection replaces it. Actual provider failures surface from the user's call.
  */
 export async function awaitInitializedConversationReadiness(
   deps: UiHandlerDeps,
@@ -3063,10 +3942,7 @@ async function awaitConversationRequestReadiness(
 ): Promise<void> {
   if (currentConversationReady(deps, modelId)) return;
   const probe = readinessProbesFor(holder).get(`${String(holder.generation())}:${modelId}`);
-  if (probe === undefined) {
-    await reprobeExpiredNotReadyModel(deps, holder, modelId, correlationId);
-    return;
-  }
+  if (probe === undefined) return;
   logAutomaticReadinessJoined(
     deps,
     modelId,
@@ -3077,46 +3953,8 @@ async function awaitConversationRequestReadiness(
   await settledWithinBudget(probe.promise, CHAT_MODEL_WALK_BUDGET_MS);
 }
 
-async function reprobeExpiredNotReadyModel(
-  deps: UiHandlerDeps,
-  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
-  modelId: string,
-  correlationId: string | undefined,
-): Promise<void> {
-  if (modelId.length === 0 || conversationQueue(holder).disposed) return;
-  // Only an observed failure waits out its cooldown. An expired success and a model that holds no
-  // answer (its startup check never settled) are checked now: the request would otherwise wait for
-  // a check nobody runs (customer 1.3.4).
-  const observedFailure = notReadyObservationAgeMs(holder, modelId) !== undefined;
-  if (observedFailure && !notReadyCooldownElapsed(holder, modelId)) return;
-  const requestCorrelationId = correlationId ?? newCorrelationId();
-  // The probe's own lines carry the request's correlation id; a probe failure is reported once by
-  // the queue and once here, against the request that was waiting for it.
-  const reprobe = ensureOnDemandConversationReadiness(deps, modelId, requestCorrelationId).catch(
-    (error: unknown) => {
-      emitServerDiagnostic(
-        deps.diagnostics,
-        serverDiagnosticFromError({
-          correlationId: requestCorrelationId,
-          operation: "gateway.readiness",
-          source: "gateway-readiness.conversation-request",
-          error,
-          summary: "A gateway readiness probe could not be completed.",
-          redact: (message): string => String(deps.redactor(message)),
-        }),
-      );
-    },
-  );
-  await settledWithinBudget(reprobe, CHAT_MODEL_WALK_BUDGET_MS);
-}
-
-// A failed probe must not pin the model for the whole configuration generation: a transient
-// gateway outage would brick every chat surface until a manual re-probe or restart (the
-// readiness twin of the 0.3.11 endless-indexing incident). It must not be re-probed on every
-// request either — each probe can burn the full provider timeout against a dead gateway. So a
-// current-generation non-ready observation answers the guard only within this window; after it,
-// the first conversation request, Workbench read or page load that needs the model re-probes and
-// either heals or refreshes the pin. Nothing re-probes on a timer (customer 1.3.4).
+// Bound repeated explicit/initialization checks after a failed observation. Conversation
+// requests and passive reads only consume the recorded result, regardless of this interval.
 export const NOT_READY_REPROBE_COOLDOWN_MS = 30_000;
 
 // Age of the current-generation EXPLICIT failed chat observation of a model, `NaN` when its
@@ -3144,23 +3982,6 @@ function withinNotReadyCooldown(
   return ageMs !== undefined && ageMs >= 0 && ageMs < NOT_READY_REPROBE_COOLDOWN_MS;
 }
 
-// The conversation-request twin of `withinNotReadyCooldown`: a request may start a probe only for a
-// failed observation whose LATEST evidence — the observation or the probe that settled it,
-// whichever is younger — has outlived the cooldown. A malformed or future timestamp fails CLOSED
-// here (it yields no usable age): interactive Chat never adds a readiness request on a value it
-// cannot date; a page load still checks such a model again.
-function notReadyCooldownElapsed(
-  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
-  modelId: string,
-): boolean {
-  const observedAgeMs = notReadyObservationAgeMs(holder, modelId);
-  if (observedAgeMs === undefined) return false;
-  const settledAt = conversationQueue(holder).probeSettledAt.get(modelId);
-  const ages = [observedAgeMs, settledAt === undefined ? Number.NaN : Date.now() - settledAt];
-  const usableAges = ages.filter((ageMs) => Number.isFinite(ageMs) && ageMs >= 0);
-  return usableAges.length > 0 && Math.min(...usableAges) >= NOT_READY_REPROBE_COOLDOWN_MS;
-}
-
 function conversationProbeDue(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
@@ -3171,13 +3992,14 @@ function conversationProbeDue(
   return !currentConversationReady(deps, modelId);
 }
 
-// `correlationId` is the conversation request that needed the answer: the probe's lines carry it,
-// so that request's timeline shows the check it waited for.
+// The initialization or explicit verification owner supplies the correlation; joining consumers
+// link their own request timeline to this probe instead of creating provider traffic.
 export async function ensureOnDemandConversationReadiness(
   deps: UiHandlerDeps,
   modelId: string,
   correlationId?: string,
   backgroundAttempt?: number,
+  checkReason?: ConversationCheckReason,
 ): Promise<void> {
   const holder = deps.gatewayConfig;
   if (holder === undefined || modelId.length === 0) return;
@@ -3206,6 +4028,7 @@ export async function ensureOnDemandConversationReadiness(
     modelId,
     probeCorrelationId,
     backgroundAttempt,
+    checkReason,
   ).finally(() => {
     onDemandReadinessProbes.delete(key);
   });
@@ -3216,6 +4039,21 @@ export async function ensureOnDemandConversationReadiness(
 interface OnDemandProbeOutcome {
   readonly overallStatus: GatewayReadinessReport["overallStatus"];
   readonly inconclusiveProbes: number;
+  /** The gateway refused the credential (HTTP 401/403): a verdict on the connection, not the model. */
+  readonly credentialRefused?: boolean;
+}
+
+// The basic-chat probe words an unsuccessful status as `unsuccessfulEvidence` does. A refused
+// credential is the gateway's answer to every model behind it, so a walk over the catalog stops
+// at the first one instead of sweeping it.
+const CREDENTIAL_REFUSED_EVIDENCE = /endpoint returned HTTP (?:401|403)\./u;
+export function chatCredentialRefused(report: GatewayReadinessReport): boolean {
+  return report.probes.some(
+    (probe) =>
+      probe.name === "chat" &&
+      probe.status === "failed" &&
+      CREDENTIAL_REFUSED_EVIDENCE.test(probe.evidence),
+  );
 }
 
 // Runs the one chat probe and records its completed line whatever happens: a failure lands as a
@@ -3237,6 +4075,7 @@ async function observeOnDemandProbe(
       outcome = {
         overallStatus: report.overallStatus,
         inconclusiveProbes: inconclusiveProbeCount(report),
+        credentialRefused: chatCredentialRefused(report),
       };
     }
   } catch (error) {
@@ -3253,15 +4092,28 @@ async function observeOnDemandProbe(
       }),
     );
   } finally {
-    logAutomaticReadinessOutcome(
-      deps,
-      probeCorrelationId,
-      modelId,
-      outcome.overallStatus,
-      1,
-      outcome.inconclusiveProbes,
-    );
+    recordConversationCheckVerdict(deps, modelId, outcome);
+    logAutomaticReadinessOutcome(deps, probeCorrelationId, modelId, {
+      overallStatus: outcome.overallStatus,
+      probeCount: 1,
+      inconclusiveProbes: outcome.inconclusiveProbes,
+    });
   }
+}
+
+// Models whose latest check gave the walk no reason to move on: no verdict (a timeout, a busy or
+// unreachable gateway) or a refused credential. A later explicit pick or Send may check them again,
+// and an explicit Settings verification that answers definitively clears the entry.
+function recordConversationCheckVerdict(
+  deps: UiHandlerDeps,
+  modelId: string,
+  outcome: OnDemandProbeOutcome,
+): void {
+  if (deps.gatewayConfig === undefined) return;
+  const { inconclusive } = conversationQueue(deps.gatewayConfig);
+  const noVerdict = outcome.overallStatus !== "ready" && outcome.inconclusiveProbes > 0;
+  if (noVerdict || outcome.credentialRefused === true) inconclusive.add(modelId);
+  else inconclusive.delete(modelId);
 }
 
 async function runOnDemandReadinessProbe(
@@ -3270,33 +4122,46 @@ async function runOnDemandReadinessProbe(
   modelId: string,
   correlationId?: string,
   backgroundAttempt?: number,
+  checkReason?: ConversationCheckReason,
 ): Promise<void> {
   const generation = holder.generation();
   const probeCorrelationId = correlationId ?? newCorrelationId();
   const config = holder.current();
-  if (config !== undefined)
-    conversationQueue(holder).startupChecked.set(
-      modelId,
-      conversationConnectionKey(config, modelId),
-    );
-  logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId, backgroundAttempt);
-  await observeOnDemandProbe(deps, modelId, probeCorrelationId);
-  if (holder.generation() === generation) {
-    const queue = conversationQueue(holder);
-    queue.probeSettledAt.set(modelId, Date.now());
+  const connection = config === undefined ? undefined : conversationConnectionKey(config, modelId);
+  const runningKey = `${String(generation)}:${modelId}`;
+  if (connection !== undefined) {
+    conversationQueue(holder).startupChecked.set(modelId, connection);
+    runningConnectionsFor(holder).set(runningKey, connection);
   }
-  // A failed report CLEARS the capability entry; without a current-generation observation
-  // every subsequent chat attempt would probe the provider again. Persist an explicit
-  // not-ready so retries hit the guard instead of the wire (the settings probe replaces it).
+  logOnDemandProbeStarted(
+    deps,
+    holder,
+    modelId,
+    probeCorrelationId,
+    backgroundAttempt,
+    checkReason,
+  );
+  try {
+    await observeOnDemandProbe(deps, modelId, probeCorrelationId);
+  } finally {
+    runningConnectionsFor(holder).delete(runningKey);
+  }
+  // A failed startup report may clear the capability entry. Persist an explicit not-ready
+  // observation in the generation the conclusion belongs to, so later admission remains an honest
+  // refusal without a request-time retry; explicit Settings verification can replace it.
+  const concluded =
+    connection === undefined
+      ? generation
+      : conclusionGeneration(holder, modelId, generation, connection);
   if (
-    holder.generation() === generation &&
-    holder.verifiedCapability(modelId)?.generation !== generation
+    holder.generation() === concluded &&
+    holder.verifiedCapability(modelId)?.generation !== concluded
   ) {
     holder.recordVerifiedCapability(
       modelId,
       { conversationReady: false },
       new Date().toISOString(),
-      generation,
+      concluded,
     );
   }
 }
@@ -3345,19 +4210,6 @@ function conversationWalkCandidates(
   );
 }
 
-export async function ensureAnyConversationReadyChatModel(
-  deps: UiHandlerDeps,
-  requestedModelId: string,
-  correlationId?: string,
-): Promise<void> {
-  await awaitConversationReadyCandidate(
-    deps,
-    requestedModelId,
-    ensureOnDemandConversationReadiness,
-    correlationId,
-  );
-}
-
 export async function awaitAnyInitializedConversationReadyChatModel(
   deps: UiHandlerDeps,
   requestedModelId: string,
@@ -3393,13 +4245,82 @@ async function awaitConversationReadyCandidate(
   }
 }
 
+/**
+ * A person's explicit pick of a chat model (`POST /api/gateway/readiness/selection`, #4351): starts
+ * the one check of that model when it has no current observation and answers at once with what the
+ * server knows, so the picker can show that the model is being checked. The result arrives through
+ * the models read, which already joins a running check. A pick of a model the deployment already
+ * answered for starts nothing.
+ */
+export async function handleGatewaySelectionCheck(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const correlationId = ctx.correlationId ?? newCorrelationId();
+  const body = await readJsonBody(ctx.req, correlationId);
+  if ("status" in body) {
+    logSelectionOutcome(deps, correlationId, "bad-request");
+    return body;
+  }
+  const modelId = body.parsed.modelId;
+  if (modelId === undefined) {
+    logSelectionOutcome(deps, correlationId, "bad-request");
+    return error("BAD_REQUEST", "A model id is required.");
+  }
+  // The returned check settles on its own and reports a failure under this correlation id. The
+  // outcome says why nothing may be running: already answered, or withheld by the cooldown.
+  const { outcome } = startSelectedConversationCheck(deps, modelId, correlationId);
+  return { status: 200, body: { modelId, state: selectionCheckState(deps, modelId), outcome } };
+}
+
+function selectionCheckState(
+  deps: UiHandlerDeps,
+  modelId: string,
+): "checking" | "ready" | "not-ready" | "unchecked" {
+  if (isConversationReadinessCheckRunning(deps, modelId)) return "checking";
+  const observation = currentConversationReadinessObservation(deps, modelId);
+  if (observation === undefined) return "unchecked";
+  return observation ? "ready" : "not-ready";
+}
+
 export async function handleGatewayReadiness(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   const body = await readJsonBody(ctx.req, ctx.correlationId);
   if ("status" in body) return body;
-  const report = await runGatewayReadiness(body.parsed, deps, ctx.correlationId, "settings");
+  // A check a person started may run for minutes while a slow model loads (#4351), so it ends when
+  // the person leaves: closing the request cancels it. An in-process caller without a live response
+  // has nothing to cancel it and keeps the signal it brought.
+  const cancellation =
+    typeof ctx.res.once === "function" && deps.gatewayReadinessSignal === undefined
+      ? createRequestCancellation(ctx, "gateway readiness check cancelled")
+      : undefined;
+  try {
+    return await settleExplicitReadiness(
+      body.parsed,
+      cancellation === undefined ? deps : { ...deps, gatewayReadinessSignal: cancellation.signal },
+      ctx.correlationId,
+    );
+  } finally {
+    cancellation?.dispose();
+  }
+}
+
+async function settleExplicitReadiness(
+  parsed: GatewayReadinessRequest,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): Promise<RouteResult> {
+  const report = await runGatewayReadiness(parsed, deps, correlationId, "settings");
   if ("status" in report) return report;
+  // An explicit verification that answered definitively ends the walk's pause on that model.
+  recordConversationCheckVerdict(deps, report.modelId, {
+    overallStatus: report.overallStatus,
+    inconclusiveProbes: report.probes.filter(
+      (probe) => probe.name === "chat" && probeInconclusive(probe),
+    ).length,
+    credentialRefused: chatCredentialRefused(report),
+  });
   return { status: 200, body: report };
 }

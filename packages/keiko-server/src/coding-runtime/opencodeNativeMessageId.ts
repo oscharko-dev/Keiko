@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 /**
  * The producer's ascending message ids, minted by Keiko (#3897, PR #4064 review, ADR-0137 D10).
  *
- * A prompt body may carry the producer's supported `Session.Message.ID` (`id`, the pinned 2.1.4 schema
+ * A prompt body may carry the producer's supported `Session.Message.ID` (`id`, the pinned schema
  * declares the pattern `^msg_`). The producer stores one input per id and answers a second post of the
  * same id with the receipt it already holds, so binding the operator's request identity to such an id
  * turns a retry after a lost acknowledgement into the same input instead of a second one.

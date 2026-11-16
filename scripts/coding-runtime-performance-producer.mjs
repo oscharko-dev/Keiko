@@ -80,13 +80,17 @@ export function codingPerformanceEnvironment(root = ROOT) {
 export async function collectCodingPerformanceSamples(measure, progress = () => undefined) {
   const samples = [];
   const count = CODING_PERFORMANCE_PROCEDURE.batches * CODING_PERFORMANCE_PROCEDURE.samplesPerBatch;
-  for (let index = 0; index < count + CODING_PERFORMANCE_PROCEDURE.warmups; index += 1) {
+  const total = count + CODING_PERFORMANCE_PROCEDURE.warmups;
+  // A sample owns the runtime until it completes; concurrent samples would corrupt the ruler.
+  async function collectNext(index) {
+    if (index === total) return samples;
     const sample = await measure();
     validateCodingPerformanceSample(sample);
     if (index >= CODING_PERFORMANCE_PROCEDURE.warmups) samples.push(sample);
-    progress({ completed: index + 1, total: count + CODING_PERFORMANCE_PROCEDURE.warmups });
+    progress({ completed: index + 1, total });
+    return collectNext(index + 1);
   }
-  return samples;
+  return collectNext(0);
 }
 
 function readDocument(root, path) {
@@ -146,6 +150,15 @@ export function assertCodingPerformanceReference(previous, current, mode) {
       payloadSha256: current.payloadSha256,
     };
   }
+  if (mode === "recalibrate-toolchain") {
+    if (
+      current.nodeVersion !== EXPECTED_NODE_BASELINE ||
+      current.npmVersion !== EXPECTED_NPM_ENGINE ||
+      (current.nodeVersion === previous.nodeVersion && current.npmVersion === previous.npmVersion)
+    )
+      throw new Error("approved-toolchain-transition-required");
+    expected = { ...previous, nodeVersion: current.nodeVersion, npmVersion: current.npmVersion };
+  }
   if (!isDeepStrictEqual(current, expected))
     throw new Error("recalibration-reference-environment-differs");
 }
@@ -161,7 +174,7 @@ function readRecalibrationState(root, environment, mode) {
 
 function writeCalibration(root, document, mode, previous) {
   const budget =
-    mode === "recalibrate" || mode === "recalibrate-runtime"
+    mode === "recalibrate" || mode === "recalibrate-runtime" || mode === "recalibrate-toolchain"
       ? ratchetCodingPerformanceBudgets(document, previous.budget)
       : calibrationBudgets(document);
   writeDocument(root, CODING_PERFORMANCE_FILES.calibration, document);
@@ -208,12 +221,20 @@ export async function produceCodingPerformanceEvidence({ mode = "measurement" } 
   const root = ROOT;
   let stage = "inputs";
   try {
-    if (!new Set(["measurement", "calibrate", "recalibrate", "recalibrate-runtime"]).has(mode))
+    if (
+      !new Set([
+        "measurement",
+        "calibrate",
+        "recalibrate",
+        "recalibrate-runtime",
+        "recalibrate-toolchain",
+      ]).has(mode)
+    )
       throw new Error("invalid-performance-evidence-mode");
     assertOutputOwnership(root, mode);
     const inputs = measurementInputs(root);
     const previous =
-      mode === "recalibrate" || mode === "recalibrate-runtime"
+      mode === "recalibrate" || mode === "recalibrate-runtime" || mode === "recalibrate-toolchain"
         ? readRecalibrationState(root, inputs.environment, mode)
         : {};
     stage = "compilation";
@@ -251,10 +272,15 @@ if (isMainModule(import.meta.url)) {
   if (
     args.length > 1 ||
     (args.length === 1 &&
-      !new Set(["--calibrate", "--recalibrate", "--recalibrate-runtime"]).has(flag))
+      !new Set([
+        "--calibrate",
+        "--recalibrate",
+        "--recalibrate-runtime",
+        "--recalibrate-toolchain",
+      ]).has(flag))
   ) {
     process.stderr.write(
-      "usage: coding-runtime-performance-producer.mjs [--calibrate | --recalibrate | --recalibrate-runtime]\n",
+      "usage: coding-runtime-performance-producer.mjs [--calibrate | --recalibrate | --recalibrate-runtime | --recalibrate-toolchain]\n",
     );
     process.exitCode = 2;
   } else {
@@ -263,6 +289,7 @@ if (isMainModule(import.meta.url)) {
       if (flag === "--calibrate") mode = "calibrate";
       if (flag === "--recalibrate") mode = "recalibrate";
       if (flag === "--recalibrate-runtime") mode = "recalibrate-runtime";
+      if (flag === "--recalibrate-toolchain") mode = "recalibrate-toolchain";
       await produceCodingPerformanceEvidence({ mode });
       process.stdout.write("coding-runtime performance evidence: WRITTEN\n");
     } catch (error) {

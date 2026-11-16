@@ -64,6 +64,14 @@ vi.mock("@oscharko-dev/keiko-security/secret-vault", async (importOriginal) => {
       calls.push(options);
       return actual.resolveLocalVaultKey(options);
     },
+    // The composed callers resolve once per process through this entry point; it carries the same
+    // options, so the same sink assertions apply to it.
+    resolveLocalVaultKeyOnce: (
+      options: ResolveLocalVaultKeyOptions,
+    ): ReturnType<typeof actual.resolveLocalVaultKeyOnce> => {
+      calls.push(options);
+      return actual.resolveLocalVaultKeyOnce(options);
+    },
   };
 });
 

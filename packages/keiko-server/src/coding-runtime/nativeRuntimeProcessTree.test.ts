@@ -230,3 +230,88 @@ describe("NativeRuntimeTree packet reassembly", () => {
     expect(exits).toEqual([null]);
   });
 });
+
+// #4068: the supervisor names the step that refused a confined tree. The host recorded every such
+// refusal as exit code `signal`, so a broker or grant failure on Windows left no reason in the log.
+describe("NativeRuntimeTree supervisor refusals", () => {
+  function refusalPacket(code: number): Buffer {
+    const header = Buffer.alloc(RESPONSE_HEADER_BYTES);
+    header.write("KRS1", 0, "ascii");
+    header.writeUInt16LE(1, 4);
+    header.writeUInt16LE(3, 6);
+    header.writeUInt32LE(2, 8);
+    const body = Buffer.alloc(2);
+    body.writeUInt16LE(code, 0);
+    return Buffer.concat([header, body]);
+  }
+
+  it.each([
+    [1, "supervisor-protocol"],
+    [3, "supervisor-process-create"],
+    [7, "supervisor-grants-directory"],
+    [10, "supervisor-gateway-connect"],
+    [11, "supervisor-gateway-admit"],
+    [12, "supervisor-environment-guard"],
+    [99, "supervisor-unknown"],
+  ])("names refusal code %i as %s and ends the tree", (code, reason) => {
+    const h = harness();
+    const exits: (number | null)[] = [];
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    tree.onTreeExit((exit) => exits.push(exit));
+    expect(tree.failureReason()).toBeUndefined();
+    h.controlOutput.emit("data", refusalPacket(code));
+    expect(tree.failureReason()).toBe(reason);
+    expect(exits).toEqual([null]);
+  });
+});
+
+// #4068 B1 crash rule: a confined Windows launch response states what its stale-grant sweep
+// removed and could not remove; every other launch response stays empty.
+describe("NativeRuntimeTree launch responses", () => {
+  function launchedPacket(payload: Buffer): Buffer {
+    const header = Buffer.alloc(RESPONSE_HEADER_BYTES);
+    header.write("KRS1", 0, "ascii");
+    header.writeUInt16LE(1, 4);
+    header.writeUInt16LE(1, 6);
+    header.writeUInt32LE(payload.length, 8);
+    return Buffer.concat([header, payload]);
+  }
+
+  function sweepPayload(removed: number, failed: number): Buffer {
+    const payload = Buffer.alloc(8);
+    payload.writeUInt32LE(removed, 0);
+    payload.writeUInt32LE(failed, 4);
+    return payload;
+  }
+
+  it("hands a confined launch's sweep counts to the backend and keeps the tree running", () => {
+    const h = harness();
+    const sweeps: unknown[] = [];
+    const exits: (number | null)[] = [];
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, (sweep) => sweeps.push(sweep));
+    tree.onTreeExit((exit) => exits.push(exit));
+    h.controlOutput.emit("data", launchedPacket(sweepPayload(3, 1)));
+    expect(sweeps).toEqual([{ removed: 3, failed: 1 }]);
+    expect(exits).toEqual([]);
+  });
+
+  it("accepts an empty launch response without a sweep", () => {
+    const h = harness();
+    const sweeps: unknown[] = [];
+    const exits: (number | null)[] = [];
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, (sweep) => sweeps.push(sweep));
+    tree.onTreeExit((exit) => exits.push(exit));
+    h.controlOutput.emit("data", launchedPacket(Buffer.alloc(0)));
+    expect(sweeps).toEqual([]);
+    expect(exits).toEqual([]);
+  });
+
+  it("ends the tree on a launch response of any other length", () => {
+    const h = harness();
+    const exits: (number | null)[] = [];
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, () => undefined);
+    tree.onTreeExit((exit) => exits.push(exit));
+    h.controlOutput.emit("data", launchedPacket(Buffer.alloc(4)));
+    expect(exits).toEqual([null]);
+  });
+});

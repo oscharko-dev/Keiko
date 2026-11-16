@@ -145,6 +145,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "A failed metadata or containment probe returns unavailable and admits no fingerprint read. The existing semantic freshness observer records the resulting unavailableFileCount on the connected-context source/selection evidence.",
     "packages/keiko-server/src/grounded-worktree-recency.ts:admittedPath":
       "A failed fresh containment or safe-file metadata probe is the fail-closed false result of this path eligibility predicate; it cannot admit a recency path or source read.",
+    "packages/keiko-server/src/atlassian/jiraDraftBatchPrompt.ts:parsedObject":
+      "Pure parsing of one JSON candidate inside a model answer: a candidate that is not JSON is skipped. An answer without a usable object is a refused page; the batch owner retries it with a correction and records the page outcome and failure on atlassian.jira-draft-batch.",
+    "packages/keiko-ui/src/app/components/desktop/jira-tool-outcome.ts:webLink":
+      "Pure parsing of a stored browse link: a malformed or non-web link maps to no link, and the issue key is still shown unlinked. It performs no navigation or request.",
     "packages/keiko-workflows/src/bug-investigation/failure-parse.ts:sourceFile":
       "Pure pasted file-URL parsing maps malformed, unsupported or hostile locations to no frame; it performs no filesystem operation or source admission.",
     "packages/keiko-workspace/src/structuralAdapterRequestContext.ts:currentCandidateContentSnapshot":
@@ -169,6 +173,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "The contract boundary converts hostile proxy access into a registration mismatch rejection.",
     "packages/keiko-sandbox/src/seatbelt-execution-root.ts:copyRuntimeGatewayFilesystem":
       "Pure filesystem capability validation returns absent data. The owning planner returns gateway-filesystem-isolation-unsupported or the confinement producer throws runtime-gateway-policy-invalid before execution.",
+    "packages/keiko-server/src/coding-runtime/opencodeScheduledWakeTurn.ts:fireVerdict":
+      "The catch returns the failed verdict with its error; settleWatch persists it on the registered coding-runtime.schedule.lease line (outcome failed, frames, causeChain), holds the lease again and cancels the wake turn (#4271).",
     "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:decodeSnapshotHelperResponse":
       "Malformed rich helper frames become the closed protocol-invalid result and transient bytes are wiped. The governed read owner persists the failed coding-runtime.workspace-read line with its purpose and path hash, never response content.",
     "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:SecureWorkspaceTextReadPortImpl.nativeRun":

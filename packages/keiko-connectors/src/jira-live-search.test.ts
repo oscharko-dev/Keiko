@@ -370,6 +370,23 @@ describe("executeJiraLiveSearch — degradation matrix (Issue #2248 AC6)", () =>
     }
   });
 
+  // #4353: the live search is a read entry point; the server's identity decision on a 401 reaches
+  // the person as the closed reason, never as a blanket "token rejected".
+  it.each([
+    ["unconfirmed", "auth-unverified"],
+    ["confirmed", "permission-denied"],
+    [undefined, "auth-failed"],
+  ] as const)("maps a 401 with identity decision %s to %s", async (authentication, reason) => {
+    const { port } = failingPort({
+      ...response(401, '{"detail":"x"}'),
+      ...(authentication === undefined ? {} : { authentication }),
+    });
+    expect(await executeJiraLiveSearch({ http: port }, { baseUrl: BASE_URL, jql: JQL })).toEqual({
+      ok: false,
+      reason,
+    });
+  });
+
   it("retries 429 with the D3 backoff (Retry-After honored and capped) before rate-limited", async () => {
     const delays: number[] = [];
     const rateLimited: AtlassianHttpBodyResult = {

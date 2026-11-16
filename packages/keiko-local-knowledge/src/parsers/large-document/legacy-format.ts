@@ -16,12 +16,16 @@ const LEGACY_FORMAT_GUIDANCE: Readonly<Record<string, string>> = Object.freeze({
   xls: "Legacy Microsoft Excel (.xls) is not supported; re-save the file as .xlsx or CSV and reindex.",
 });
 
-export function isLegacyBinaryOfficeFormat(extension: string): boolean {
-  return extension.toLowerCase() in LEGACY_FORMAT_GUIDANCE;
+// Own keys only: the extension comes from a file name, and `in` / bracket access also reach
+// Object.prototype (`constructor`, `__proto__`), which would classify such a file as legacy
+// Office and hand back a function as its guidance.
+export function legacyFormatGuidance(extension: string): string | undefined {
+  const key = extension.toLowerCase();
+  return Object.hasOwn(LEGACY_FORMAT_GUIDANCE, key) ? LEGACY_FORMAT_GUIDANCE[key] : undefined;
 }
 
-export function legacyFormatGuidance(extension: string): string | undefined {
-  return LEGACY_FORMAT_GUIDANCE[extension.toLowerCase()];
+export function isLegacyBinaryOfficeFormat(extension: string): boolean {
+  return legacyFormatGuidance(extension) !== undefined;
 }
 
 export function legacyFormatDiagnostic(

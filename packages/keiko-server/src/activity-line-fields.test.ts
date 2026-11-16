@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  activityActionFields,
   activityErrorFields,
   activityStateLevel,
   definedActivityFields,
@@ -19,6 +20,32 @@ describe("activity line fields", () => {
       tool: "jira.issue",
       durationMs: 0,
     });
+  });
+
+  it("keeps action fields scoped to the producer allowlist, including zero counts and safe failure evidence", () => {
+    const line = {
+      action: "call",
+      outcome: "completed",
+      toolCount: 0,
+      durationMs: 0,
+      reason: undefined,
+      unlistedBody: "content outside the producer allowlist",
+    };
+    expect(activityActionFields(line, ["toolCount", "durationMs", "reason"])).toEqual({
+      action: "call",
+      outcome: "completed",
+      toolCount: 0,
+      durationMs: 0,
+    });
+    const error = new Error("outer", { cause: new TypeError("inner") });
+    const failed = activityActionFields({ action: "request", outcome: "failed", error }, []);
+    expect(failed).toMatchObject({
+      action: "request",
+      outcome: "failed",
+      causeChain: ["TypeError"],
+    });
+    expect(Array.isArray(failed.frames)).toBe(true);
+    expect(failed).not.toHaveProperty("error");
   });
 
   it("adds frames and a cause chain only for a line with an error", () => {

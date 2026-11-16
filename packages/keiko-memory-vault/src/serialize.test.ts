@@ -153,6 +153,26 @@ describe("memoryRecordToRow + rowToMemoryRecord", () => {
 });
 
 describe("rowToMemoryRecord — defensive parsing", () => {
+  it.each([
+    ["invalid JSON", "{not json"],
+    ["a non-array", JSON.stringify({ not: "an array" })],
+    ["non-string entries", JSON.stringify(["m1", 7])],
+  ])("throws schema-mismatch when source message ids are %s", (_, json) => {
+    const row: MemoryRow = {
+      ...memoryRecordToRow(baseRecord(), cipher),
+      source_message_ids_json: json,
+    };
+    expect(() => rowToMemoryRecord(row, cipher)).toThrow(MemoryStorageError);
+  });
+
+  it("reads stored source message ids back", () => {
+    const row: MemoryRow = {
+      ...memoryRecordToRow(baseRecord(), cipher),
+      source_message_ids_json: JSON.stringify(["m1", "m2"]),
+    };
+    expect(rowToMemoryRecord(row, cipher).provenance.sourceMessageIds).toEqual(["m1", "m2"]);
+  });
+
   it("throws schema-mismatch when tags JSON parses to something non-array", () => {
     const row: MemoryRow = {
       ...memoryRecordToRow(baseRecord(), cipher),

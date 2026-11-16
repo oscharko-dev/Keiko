@@ -1,13 +1,65 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { checkGovernedToolContract } from "../check-governed-tool-contract.mjs";
 import { GOVERNED_TOOL_CONTRACT_PINS as PINS } from "../lib/governed-tool-contract-pins.mjs";
+import { checkInventoryProbes } from "../lib/governed-tool-contract.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
 const contract = JSON.parse(
   readFileSync(resolve(root, "docs/architecture/governed-tool-contract.v1.json"), "utf8"),
 );
+const digestProbes = [
+  ["packages/keiko-security/src/hashing.ts", "export function sha256Hex("],
+  [
+    "packages/keiko-security/src/hashing.ts",
+    'export { canonicalise } from "@oscharko-dev/keiko-contracts/runtime/canonical-json";',
+  ],
+  ["packages/keiko-contracts/src/canonical-json.ts", "export function canonicalise("],
+];
+const directories = [];
+afterEach(() => {
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
+});
+
+function digestInventoryFixture() {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-digest-inventory-"));
+  directories.push(directory);
+  const paths = new Set([
+    ...PINS.inventory.flatMap((row) =>
+      (PINS.inventoryMigrations[row.id]?.replacements ?? [row]).map((source) => source.path),
+    ),
+    ...digestProbes.map(([path]) => path),
+  ]);
+  for (const path of paths) {
+    const target = join(directory, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, readFileSync(resolve(root, path), "utf8"));
+  }
+  return directory;
+}
+
+describe("governed-tool-contract-pins: retained digest owner and shared canonical producer", () => {
+  it("keeps Security ownership and the complete audited inventory with its shared producer", () => {
+    const fixture = digestInventoryFixture();
+    expect(PINS.owners.digestPrimitives).toBe("keiko-security");
+    expect(checkInventoryProbes(contract, fixture)).toEqual([]);
+  });
+
+  it.each(digestProbes)("refuses a missing active digest probe in %s: %s", (path, probe) => {
+    const fixture = digestInventoryFixture();
+    expect(checkInventoryProbes(contract, fixture)).toEqual([]);
+    const target = join(fixture, path);
+    const source = readFileSync(target, "utf8");
+    expect(source).toContain(probe);
+    writeFileSync(target, source.replace(probe, "retired-digest-probe"));
+    expect(checkInventoryProbes(contract, fixture)).toContain(
+      `inventory digest-primitives${probe.includes("sha256Hex") ? "" : ` (${path})`}: source probe missing`,
+    );
+  });
+});
 
 // #3413 F8 review, finding b1-9: the live "coding-delivery-policy" inventory row shares its `id`
 // with an `inventoryMigrations` entry for the same key. `checkActiveInventoryProbe`

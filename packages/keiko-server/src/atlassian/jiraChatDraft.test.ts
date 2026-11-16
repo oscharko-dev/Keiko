@@ -22,20 +22,26 @@ import {
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
-import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
+import { jiraMutationDeclarations } from "./jiraManagedMutationDescriptors.js";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { chatToolTurnPartialAnswer } from "../chat-tool-turn-ending.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
 import {
   JIRA_ALREADY_REFUSED_GUIDANCE,
+  JIRA_LOCAL_REFUSAL_GUIDANCE,
   JIRA_REJECTED_GUIDANCE,
   JIRA_UNCERTAIN_GUIDANCE,
 } from "./jiraMutationResult.js";
-import { jiraChatDraftConnection } from "./jiraChatCatalogRuntime.js";
-import type { TraceSession } from "../requirement-trace.js";
+import { jiraChatDraftConnection, untracedAdvisory } from "./jiraChatCatalogRuntime.js";
+import { openTraceSession, type TraceSession } from "../requirement-trace.js";
+import { podFixture, specification } from "../_requirementSupport.js";
 import {
   executeJiraChatDraft,
   jiraDraftChildIntent,
+  jiraDraftGuidance,
+  JIRA_DRAFT_MIXED_REFUSAL_GUIDANCE,
+  JIRA_DRAFT_PARTLY_LOCAL_REFUSAL_GUIDANCE,
+  JIRA_DRAFT_UNKNOWN_SOURCE_REFUSAL_GUIDANCE,
   JIRA_DRAFT_UNTRACED_GUIDANCE,
   JIRA_DRAFT_EXISTING_GUIDANCE,
   JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE,
@@ -45,6 +51,9 @@ import {
   observedJiraDraftOutcome,
   type JiraChatDraftExecution,
 } from "./jiraChatDraft.js";
+import { permissiveJiraTemplates } from "../../../../tests/support/jira-test-templates.js";
+
+const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 
 const BASE_URL = SYNTHETIC_JIRA_BASE_URL;
 const cleanup: (() => void)[] = [];
@@ -128,7 +137,11 @@ function execution(
       signal: new AbortController().signal,
       beforeEffect: () => true,
     },
-    connection: { baseUrl: BASE_URL, deployment: "data-center" },
+    connection: {
+      baseUrl: BASE_URL,
+      deployment: "data-center",
+      issueTemplates: () => permissiveJiraTemplates(["SYN"], ["Story"]),
+    },
     httpPortFactory: (lifecycle) =>
       createGatewayAtlassianHttpBodyPort({
         ...lifecycle,
@@ -149,6 +162,21 @@ function itemsOf(result: Awaited<ReturnType<typeof executeJiraChatDraft>>): unkn
 }
 
 describe("executeJiraChatDraft (#4178)", () => {
+  it("passes each dispatched item ref to the source guard, including link continuations", async () => {
+    const jira = syntheticJira();
+    const beforeMutation = vi.fn<(itemRef?: string) => boolean>(() => true);
+    const input = { ...execution(jira, HUB), beforeMutation };
+    const result = await executeJiraChatDraft(input);
+    expect(result.data.outcome).toBe("succeeded");
+    expect(beforeMutation.mock.calls).toEqual([
+      ["one"],
+      ["two"],
+      ["three"],
+      ["hub"],
+      ["hub"],
+      ["hub"],
+    ]);
+  });
   it("creates every item once, in dependency order, behind one journal record each", async () => {
     const jira = syntheticJira();
     const input = execution(jira);
@@ -499,6 +527,9 @@ describe("executeJiraChatDraft (#4178)", () => {
       existingCount: 4,
       guidance: JIRA_DRAFT_EXISTING_GUIDANCE,
     });
+    // Customer test 2026-11-10: a later request for other issues resumed this finished draft.
+    expect(JIRA_DRAFT_EXISTING_GUIDANCE).toContain("without draftId");
+    expect(JIRA_DRAFT_EXISTING_GUIDANCE).toContain("Do not create these issues again");
     const none = await executeJiraChatDraft(execution(syntheticJira(), BACKLOG, ["epic", "loose"]));
     expect(none.isError).toBeUndefined();
     expect(none.data).toMatchObject({ outcome: "not-dispatched", excludedCount: 4 });
@@ -529,6 +560,50 @@ describe("executeJiraChatDraft (#4178)", () => {
     expect(jira.issues).toHaveLength(70);
     expect(jira.posts().length).toBeGreaterThanOrEqual(70);
     expect(observedJiraDraftOutcome(input.journal, input.intent, args)).toBe("succeeded");
+  });
+
+  describe("create metadata is read once per invocation", () => {
+    const getUrls = (jira: SyntheticJira): string[] =>
+      jira.fetch.mock.calls
+        .filter(([, init]) => (init?.method ?? "GET") === "GET")
+        .map(([url]) => (typeof url === "string" ? url : url instanceof URL ? url.href : url.url));
+    const countOf = (urls: readonly string[], part: string): number =>
+      urls.filter((url) => url.includes(part)).length;
+    const looseDraft = (count: number): CatalogJsonObject =>
+      ({
+        items: Array.from({ length: count }, (_, index) => item(`loose${String(index)}`)),
+      }) as unknown as CatalogJsonObject;
+
+    it("reads metadata once for N items but searches and reads back every item live", async () => {
+      const jira = syntheticJira();
+      const activity: JiraDraftActivity[] = [];
+      const result = await executeJiraChatDraft({
+        ...execution(jira, looseDraft(6)),
+        activity: (entry) => activity.push(entry),
+      });
+      expect(result.data).toMatchObject({ createdCount: 6 });
+      const urls = getUrls(jira);
+      expect(countOf(urls, "/issue/createmeta/")).toBe(1);
+      expect(countOf(urls, "/search?")).toBeGreaterThanOrEqual(6);
+      expect(urls.filter((url) => /\/issue\/[A-Z]+-\d+/u.test(url)).length).toBeGreaterThanOrEqual(
+        6,
+      );
+      const last = activity.at(-1);
+      expect(last?.phase).toBe("executed");
+      // The project and issue-type reads that name a creation's template are served once too (#4354):
+      // five more items each reuse the create metadata, the project and the issue type.
+      expect(countOf(urls, "/project/10000")).toBe(1);
+      expect(countOf(urls, "/issuetype/10001")).toBe(1);
+      expect(last?.readReusedCount).toBe(15);
+      expect(last?.readCount).toBe(urls.length);
+    });
+
+    it("starts the next invocation empty", async () => {
+      const jira = syntheticJira();
+      await executeJiraChatDraft(execution(jira, looseDraft(2)));
+      await executeJiraChatDraft(execution(jira, looseDraft(2)));
+      expect(countOf(getUrls(jira), "/issue/createmeta/")).toBe(2);
+    });
   });
 
   it("creates no new issue when an executed 70-item draft is run again", async () => {
@@ -765,6 +840,8 @@ describe("executeJiraChatDraft (#4178)", () => {
         reason: "field-validation",
         guidance:
           "Item 1 names itself as its parent or link target. Nothing was changed. Correct the draft and send it once.",
+        draftProblem: "ref-self",
+        draftItem: 1,
         items: [],
       },
       isError: true,
@@ -827,6 +904,54 @@ describe("executeJiraChatDraft (#4178)", () => {
 });
 
 describe("source traceability of a draft (#4179)", () => {
+  it.each([false, true])(
+    "checks immutable source criteria before final execution (complete=%s)",
+    async (complete) => {
+      const source = await podFixture([{ capsuleId: "draft-source", text: specification(1).text }]);
+      cleanup.push(source.cleanup);
+      const jira = syntheticJira();
+      const description = complete
+        ? "h2. Acceptance criteria\n* Thema 1 ist verfügbar.\n* Fehler zu Thema 1 werden gemeldet."
+        : "h2. Acceptance criteria\n* Thema 1 ist verfügbar.";
+      const args: CatalogJsonObject = {
+        items: [
+          {
+            ref: "traced",
+            projectId: "10000",
+            issueTypeId: "10001",
+            fields: { summary: "Source requirement", description },
+            requirementIds: ["LH-001"],
+          },
+        ],
+      };
+      const result = await executeJiraChatDraft({
+        ...execution(jira, args),
+        openTrace: () =>
+          openTraceSession(source.deps, {
+            chatId: source.chatId,
+            userMessageId: "draft-source-turn",
+            correlationId: "draft-source-proof",
+          }),
+      });
+      // Keiko completes what the model left out: the missing source criterion goes into Keiko's own
+      // trace block, so the item is created either way (customer test 2026-11-10).
+      expect(result.data).toMatchObject({ outcome: "succeeded", createdCount: 1 });
+      expect(jira.posts()).toHaveLength(1);
+      const written = String(jira.issues[0]?.fields.description);
+      expect(written).toContain(description);
+      expect(written).toContain("Keiko traceability");
+      if (complete) expect(written).not.toContain("verbatim from the source");
+      else {
+        expect(written).toContain("Acceptance criteria (verbatim from the source):");
+        expect(written).toContain("Fehler zu Thema 1 werden gemeldet.");
+      }
+      const declaration = JIRA_MUTATION_DECLARATIONS.find((entry) => entry.name === "jira.draft");
+      expect(
+        describeCatalogSchemaMismatch(declaration?.descriptor.resultSchema ?? {}, result.data),
+      ).toBeUndefined();
+    },
+  );
+
   const FOOTER =
     "----\nKeiko traceability\nRequirement: LH-001 · Anmeldung\nEnd of Keiko traceability";
   const TRACE = {
@@ -853,7 +978,7 @@ describe("source traceability of a draft (#4179)", () => {
       unitCount: () => units,
       resolve: (references) =>
         references.includes("aaaaaaaa:LH-001")
-          ? { ok: true, trace: TRACE }
+          ? { ok: true, trace: TRACE, sourceDigest: "a".repeat(64) }
           : {
               ok: false,
               reason: "references",
@@ -979,14 +1104,15 @@ describe("source traceability of a draft (#4179)", () => {
     );
   });
 
-  it("returns a draft that names no requirement once with guidance when the Pods hold some (S14)", async () => {
+  it("keeps an untraced draft refused on resubmission without any native write (S16)", async () => {
     const jira = syntheticJira();
-    let advised = false;
-    const adviseUntraced = vi.fn((): boolean => {
-      if (advised) return false;
-      advised = true;
-      return true;
-    });
+    const adviseUntraced = vi.fn(
+      untracedAdvisory({}, new Set(), {
+        chatId: "untraced-chat",
+        userMessageId: "untraced-turn",
+        correlationId: "untraced-correlation",
+      }),
+    );
     const input = {
       ...execution(jira),
       openTrace: (): TraceSession => session(vi.fn()),
@@ -1009,16 +1135,74 @@ describe("source traceability of a draft (#4179)", () => {
     ).toBeUndefined();
     expect(jira.posts()).toHaveLength(0);
 
-    // Sending the same draft again is the person's choice to create it as it is.
+    // Model repetition carries no human confirmation of the missing source trace.
     const second = await executeJiraChatDraft(input);
 
-    expect(second.data).toMatchObject({ outcome: "succeeded", createdCount: 4 });
-    expect(jira.posts()).toHaveLength(4);
+    expect(second.isError).toBe(true);
+    expect(second.data).toMatchObject({ outcome: "rejected", requirementRefusal: "untraced" });
+    expect(jira.fetch).not.toHaveBeenCalled();
     expect(adviseUntraced).toHaveBeenCalledTimes(2);
   });
 
+  it("does not evade a criteria refusal by removing references and repeating the draft (S16)", async () => {
+    // A criterion Keiko cannot copy verbatim (a macro) stays refused; completion never guesses.
+    const source = await podFixture([
+      {
+        capsuleId: "trace-retry",
+        text: [
+          "# Lastenheft",
+          "",
+          "### LH-001 Thema",
+          "",
+          "Das Portal unterstützt das Thema; die Bearbeitung ist innerhalb von 10 Minuten abgeschlossen.",
+          "",
+          "Abnahmekriterien:",
+          "- {code} Return an error if authentication fails.",
+          "",
+          "Priorität: Muss.",
+          "",
+        ].join("\n"),
+      },
+    ]);
+    cleanup.push(source.cleanup);
+    const jira = syntheticJira();
+    const untracedItem = {
+      ref: "traced",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Source requirement", description: "Thema 1 ist verfügbar." },
+    };
+    const context = {
+      chatId: source.chatId,
+      userMessageId: "trace-retry-turn",
+      correlationId: "trace-retry",
+    };
+    const input = {
+      ...execution(jira, { items: [{ ...untracedItem, requirementIds: ["LH-001"] }] }),
+      openTrace: (): TraceSession => openTraceSession(source.deps, context),
+      adviseUntraced: untracedAdvisory(source.deps, new Set(), context),
+    };
+    const invalid = await executeJiraChatDraft(input);
+    expect(invalid.data).toMatchObject({
+      outcome: "rejected",
+      requirementProblems: [{ ref: "traced", reason: "acceptance-criteria-missing" }],
+    });
+    const stripped = { ...input, arguments: { items: [untracedItem] } };
+    const first = await executeJiraChatDraft(stripped);
+    const repeated = await executeJiraChatDraft(stripped);
+    expect(first.data).toMatchObject({ outcome: "rejected", requirementRefusal: "untraced" });
+    expect(repeated.data).toMatchObject({ outcome: "rejected", requirementRefusal: "untraced" });
+    expect(jira.fetch).not.toHaveBeenCalled();
+  });
+
+  it("never instructs the model to bypass trace review by silently repeating an untraced draft (S16)", () => {
+    expect(JIRA_DRAFT_UNTRACED_GUIDANCE).not.toContain("send the same draft again unchanged");
+    expect(JIRA_DRAFT_UNTRACED_GUIDANCE).not.toContain("Do not show this message");
+    expect(JIRA_DRAFT_UNTRACED_GUIDANCE).toContain("explicit human approval");
+  });
+
   it("advises before a human is asked only when the Pods hold requirements (S05 of #4173)", () => {
-    const advise = vi.fn(() => true);
+    const advise = vi.fn<(refs: readonly string[]) => void>();
     const open = (units: number) => (): TraceSession => session(vi.fn(), units);
     const refused = jiraDraftUntracedAdvice(BACKLOG, open(1), advise);
     expect(refused).toMatchObject({
@@ -1029,14 +1213,17 @@ describe("source traceability of a draft (#4179)", () => {
     expect(advise).toHaveBeenCalledWith(["epic", "story", "task", "loose"]);
     expect(jiraDraftUntracedAdvice(BACKLOG, open(0), advise)).toBeUndefined();
     expect(jiraDraftUntracedAdvice(TRACED, open(1), advise)).toBeUndefined();
-    // Sending it again is the choice to have it reviewed as it is.
-    expect(jiraDraftUntracedAdvice(BACKLOG, open(1), () => false)).toBeUndefined();
+    // Repetition alone cannot acknowledge that the source trace is missing.
+    expect(jiraDraftUntracedAdvice(BACKLOG, open(1), advise)).toMatchObject({
+      outcome: "rejected",
+      requirementRefusal: "untraced",
+    });
     expect(jiraDraftUntracedAdvice({}, open(1), advise)).toBeUndefined();
-    expect(advise).toHaveBeenCalledTimes(1);
+    expect(advise).toHaveBeenCalledTimes(2);
   });
 
   it("does not advise when the Pods hold no requirement or an item names one", async () => {
-    const adviseUntraced = vi.fn(() => true);
+    const adviseUntraced = vi.fn<(refs: readonly string[]) => void>();
     const empty = syntheticJira();
     await executeJiraChatDraft({
       ...execution(empty),
@@ -1123,5 +1310,52 @@ describe("the draft connection carries the customer's issue templates (#4177)", 
     const result = await executeJiraChatDraft({ ...execution(jira), connection });
     expect(jira.posts()).toHaveLength(4);
     expect(result.isError).toBeUndefined();
+  });
+});
+
+// #4357 AC3: a draft run says who refused each failed item, from the closed fact its own result
+// carries; Keiko's own checks must never read as "Jira refused", and the reverse.
+describe("what a draft run tells the model about items it could not create (#4357 AC3)", () => {
+  const failed = (
+    ref: string,
+    refusedBy: "jira" | "keiko" | undefined,
+    issueKey?: string,
+  ): Parameters<typeof jiraDraftGuidance>[0][number] => ({
+    ref,
+    state: "failed",
+    ...(issueKey === undefined ? {} : { issueKey }),
+    detail: { messages: ["m"] },
+    ...(refusedBy === undefined ? {} : { refusedBy }),
+  });
+  const created = (ref: string): Parameters<typeof jiraDraftGuidance>[0][number] => ({
+    ref,
+    state: "created",
+    issueKey: `SYN-${ref}`,
+  });
+  it("says Keiko refused an item that only Keiko's checks refused", () => {
+    expect(jiraDraftGuidance([failed("a", "keiko")])).toBe(JIRA_LOCAL_REFUSAL_GUIDANCE);
+    expect(jiraDraftGuidance([created("1"), failed("a", "keiko")])).toBe(
+      JIRA_DRAFT_PARTLY_LOCAL_REFUSAL_GUIDANCE,
+    );
+    expect(JIRA_DRAFT_PARTLY_LOCAL_REFUSAL_GUIDANCE).not.toMatch(/Jira refused/u);
+  });
+  it("keeps the words for items only Jira refused", () => {
+    expect(jiraDraftGuidance([failed("a", "jira")])).toBe(JIRA_REJECTED_GUIDANCE);
+    expect(jiraDraftGuidance([created("1"), failed("a", "jira")])).toBe(
+      JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE,
+    );
+  });
+  it("names neither source for an item whose source is not known, and never calls it Keiko's", () => {
+    for (const items of [[failed("a", undefined)], [failed("a", "jira"), failed("b", undefined)]])
+      expect(jiraDraftGuidance(items)).toBe(JIRA_DRAFT_UNKNOWN_SOURCE_REFUSAL_GUIDANCE);
+    expect(JIRA_DRAFT_UNKNOWN_SOURCE_REFUSAL_GUIDANCE).not.toMatch(/Jira refused|Keiko refused/u);
+  });
+  it("names both when Keiko refused one item and Jira another, created or not", () => {
+    for (const items of [
+      [failed("a", "keiko"), failed("b", "jira")],
+      [created("1"), failed("a", "keiko"), failed("b", "jira")],
+    ])
+      expect(jiraDraftGuidance(items)).toBe(JIRA_DRAFT_MIXED_REFUSAL_GUIDANCE);
+    expect(JIRA_DRAFT_MIXED_REFUSAL_GUIDANCE).toMatch(/refused by Keiko .* and some by Jira/u);
   });
 });

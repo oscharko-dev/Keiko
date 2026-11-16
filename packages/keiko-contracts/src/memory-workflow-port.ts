@@ -42,17 +42,6 @@ export interface MemoryOmittedEvent {
   readonly reason: string;
 }
 
-// Emitted after a workflow reaches a terminal SUCCESS state (workflow-success) or after a
-// human-confirmed correction (workflow-correction). The caller decides whether to convert
-// the candidate into a proposal through the #207 capture pipeline. The `proposalSummary` is
-// a one-line redacted lesson; payloads larger than a summary must be assembled by the
-// capture pipeline itself, not by the workflow.
-export interface MemoryWriteCandidateEvent {
-  readonly proposalSummary: string;
-  readonly scope: MemoryScope;
-  readonly source: "workflow-success" | "workflow-correction";
-}
-
 export interface MemoryWorkflowPort {
   // Fetch a scoped memory context for the workflow run. Returns an empty block (text === ""
   // and includedMemoryIds === []) when no memory matches; the workflow MUST treat the empty
@@ -71,7 +60,6 @@ export interface MemoryWorkflowPort {
   // getContextForWorkflow; workflow packages MUST NOT fabricate omission events from the
   // reduced MemoryWorkflowContext.
   readonly onMemoryOmitted?: (event: MemoryOmittedEvent) => void;
-  // Notify the host that a memory write candidate exists for review. Optional. Emitted at
-  // most once per run, and ONLY when the run reached a terminal success or correction.
-  readonly onMemoryWriteCandidate?: (event: MemoryWriteCandidateEvent) => void;
+  // A workflow writes no memory: memory is learned from the person's own words (ADR-0146 D4c,
+  // #4213). Historical `memory:workflow-write-candidate` audit events stay readable.
 }

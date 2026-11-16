@@ -472,8 +472,8 @@ function promptParts(
   readonly text: string;
   readonly synthetic?: true;
 }[] {
-  // OpenCode v1.17.17 TextPartInput accepts synthetic while retaining text for the model; the
-  // approved pin is now v1.18.30 and this shape has not been re-observed against it (#3452).
+  // Historical V1 observation: OpenCode v1.17.17 TextPartInput accepted synthetic while retaining
+  // text for the model; the v1.18.30 upgrade did not re-observe this shape (#3452).
   return initialContext === undefined
     ? [{ type: "text", text }]
     : [

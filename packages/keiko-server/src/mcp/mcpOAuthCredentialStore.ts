@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   createLocalSecretVault,
-  resolveLocalVaultKey,
+  resolveLocalVaultKeyOnce,
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
@@ -44,6 +44,20 @@ export interface McpOAuthCredentialStore {
   readonly save: (binding: McpOAuthCredentialBinding, credential: StoredMcpOAuthCredential) => void;
 }
 
+/**
+ * Whether `current` was issued after `candidate`, by the runtime's own `expires` stamp. Two runs
+ * (or a run and a refresh) that harvest the same server must not let the older credential replace
+ * the newer one; an absent or non-numeric stamp proves nothing, so the candidate wins as before.
+ */
+export function isNewerCredential(
+  current: Readonly<Record<string, unknown>>,
+  candidate: Readonly<Record<string, unknown>>,
+): boolean {
+  const left = current.expires;
+  const right = candidate.expires;
+  return typeof left === "number" && typeof right === "number" && left > right;
+}
+
 /** The vault reference: a digest of the binding, never a URL or an issuer in the clear. */
 export function mcpOAuthCredentialReference(binding: McpOAuthCredentialBinding): string {
   const digest = createHash("sha256")
@@ -77,7 +91,10 @@ export function createMcpOAuthCredentialStore(
   return {
     load: (binding) => storedCredential(opened().get(mcpOAuthCredentialReference(binding))),
     save: (binding, credential): void => {
-      opened().set(mcpOAuthCredentialReference(binding), JSON.stringify(credential));
+      const reference = mcpOAuthCredentialReference(binding);
+      const current = storedCredential(opened().get(reference));
+      if (current !== undefined && isNewerCredential(current.value, credential.value)) return;
+      opened().set(reference, JSON.stringify(credential));
     },
   };
 }
@@ -142,7 +159,7 @@ function centralMcpReferences(servers: readonly McpServerDefinition[]): readonly
 
 function openVault(input: McpOAuthCredentialStoreInput): LocalSecretVault {
   const vaultDir = join(input.stateDir, VAULT_DIRECTORY);
-  const { key } = resolveLocalVaultKey({
+  const { key } = resolveLocalVaultKeyOnce({
     env: input.env,
     vaultDir,
     envVarName: VAULT_KEY_ENV,

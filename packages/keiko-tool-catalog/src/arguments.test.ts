@@ -8,6 +8,8 @@ import { lookupCatalogTool } from "./catalog.js";
 import { createInitialToolCatalog } from "./legacy.js";
 import { opencodeRegistrationSet } from "./opencode.js";
 import { createToolRef } from "./identity.js";
+import { compileExternalCatalogSchema } from "./external-schema.js";
+import { catalogObject } from "./json.js";
 import {
   CHANGESET_EDIT_ARGUMENT_LIMITS,
   TOOL_CATALOG_LIMITS,
@@ -16,6 +18,35 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 describe("catalog invocation argument qualification", () => {
+  const tabs = Array.from({ length: 20 }, (_, index) => ({
+    id: String(10000 + index),
+    name: `Screen ${String(index + 1)}`,
+  }));
+  const uniqueObjects = createToolDescriptor({
+    ...declaration(),
+    inputSchema: compileExternalCatalogSchema({
+      type: "object",
+      properties: {
+        expectedTabs: {
+          type: "array",
+          minItems: 1,
+          maxItems: 20,
+          uniqueItems: true,
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", minLength: 1, maxLength: 20 },
+              name: { type: "string", minLength: 1, maxLength: 64 },
+            },
+            required: ["id", "name"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["expectedTabs"],
+      additionalProperties: false,
+    }),
+  });
   it("returns a detached frozen value under the actual descriptor schema", () => {
     const { descriptor } = fixture();
     const input = { path: "file.ts" };
@@ -23,8 +54,54 @@ describe("catalog invocation argument qualification", () => {
     expect(result).toEqual(input);
     expect(result).not.toBe(input);
     expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.getPrototypeOf(result)).toBeNull();
     input.path = "later.ts";
     expect(result).toEqual({ path: "file.ts" });
+  });
+  it("admits distinct captured objects with uniqueItems and preserves frozen null prototypes", () => {
+    const input = { expectedTabs: tabs.map((tab) => ({ ...tab })) };
+    const result = validateToolArguments(input, uniqueObjects);
+    expect(result).toEqual(input);
+    expect(result).not.toBe(input);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.getPrototypeOf(result)).toBeNull();
+    const rows = catalogObject(result).expectedTabs;
+    if (!Array.isArray(rows)) throw new TypeError("Expected captured tab objects");
+    expect(rows).toHaveLength(20);
+    expect(rows).not.toBe(input.expectedTabs);
+    expect(Object.isFrozen(rows)).toBe(true);
+    for (const [index, row] of rows.entries()) {
+      expect(row).not.toBe(input.expectedTabs[index]);
+      expect(Object.getPrototypeOf(row)).toBeNull();
+      expect(Object.isFrozen(row)).toBe(true);
+    }
+    input.expectedTabs.splice(0, 1);
+    expect(rows).toHaveLength(20);
+  });
+  it("reports duplicate captured objects under uniqueItems as an invalid-shape mismatch", () => {
+    const first = tabs[0];
+    if (first === undefined) throw new TypeError("Expected twenty distinct tab objects");
+    const input = {
+      expectedTabs: tabs.map((tab, index) => (index === tabs.length - 1 ? { ...first } : tab)),
+    };
+    expect(input.expectedTabs).toHaveLength(20);
+    let failure: unknown;
+    try {
+      validateToolArguments(input, uniqueObjects);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(ToolCatalogError);
+    expect(failure).toMatchObject({
+      reason: "invalid-shape",
+      shape: {
+        missingRequired: [],
+        invalidPaths: ["expectedTabs"],
+        unexpectedPropertyCount: 0,
+        droppedPathCount: 0,
+      },
+    });
+    expect(JSON.stringify(failure)).not.toMatch(/10000|Screen 1/u);
   });
   it.each([null, {}, { path: "" }, { path: 1 }, { path: "file.ts", root: "/private" }])(
     "rejects values outside the descriptor schema",
@@ -160,6 +237,28 @@ describe("catalog invocation argument qualification", () => {
     expect(() =>
       validateToolArguments({ path: "file.ts", hidden: undefined }, fixture().descriptor),
     ).toThrow();
+    const nested = Object.defineProperty({ id: "10000" }, "name", {
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return "Screen 1";
+      },
+    });
+    const callable = (): string => {
+      reads += 1;
+      return "Screen 1";
+    };
+    const inherited: unknown = Object.create({ id: "10000", name: "Screen 1" });
+    for (const row of [
+      nested,
+      { id: "10000", name: callable },
+      { id: "10000", name: "Screen 1", constructor: "denied" },
+      inherited,
+    ])
+      expect(() => validateToolArguments({ expectedTabs: [row] }, uniqueObjects)).toThrow(
+        "invalid-shape",
+      );
+    expect(reads).toBe(0);
   });
 });
 

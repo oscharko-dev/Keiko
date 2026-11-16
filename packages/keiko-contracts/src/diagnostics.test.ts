@@ -26,6 +26,7 @@ import {
   CLIENT_CODING_RUNTIME_CALLS,
   CLIENT_CODING_RUN_RESTORE_SIZE_MAX,
   CLIENT_CODING_RUN_RESTORE_COUNT_MAX,
+  CLIENT_CITATION_HIGHLIGHT_BOX_MAX,
   CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX,
   CLIENT_SELECT_DISMISSAL_REASONS,
   CLIENT_DIAGNOSTIC_KINDS,
@@ -40,7 +41,9 @@ import {
   CLIENT_VOICE_CAPTURE_REASONS,
   CLIENT_VOICE_CAPTURE_ERRORS,
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
+  CREDENTIAL_CUSTODY_STATES,
   isActivityLogReadinessSnapshot,
+  isCredentialCustodyState,
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
   isClientGitRetryAttemptIngestRequest,
@@ -49,6 +52,7 @@ import {
   isClientDiagnosticLossCount,
   isClientStageIngestRequest,
   isLinuxGatewayDiagnosticKind,
+  isServerInstanceId,
   CLIENT_ERROR_CLASSES,
   clientErrorClass,
   type ClientGitRetryOperation,
@@ -459,6 +463,47 @@ describe("isClientDiagnosticIngestRequest", () => {
 
   // PR #3678 review: the Knowledge Pod catalog's availability picture is six bounded counts, never
   // a name, path or id, and never a field beyond them.
+  it("accepts only closed Jira result presentation counts and the parent digest", () => {
+    const presentation = {
+      messageDigest: "a".repeat(64),
+      exchangeCount: 1,
+      itemCount: 7,
+      shownCount: 5,
+      returnedCount: 8,
+      unreadableCount: 1,
+      problemCount: 2,
+      ruleCount: 1,
+      failure: "fields",
+      restored: true,
+    };
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), jiraResultPresentation: presentation }),
+    ).toBe(true);
+    const { ruleCount: _omitted, ...missing } = presentation;
+    for (const invalid of [
+      missing,
+      { ...presentation, issueKey: "PRIVATE-1" },
+      { ...presentation, itemCount: -1 },
+      { ...presentation, shownCount: 8 },
+      { ...presentation, itemCount: 1.5 },
+      { ...presentation, itemCount: 1_000_000_001 },
+      { ...presentation, failure: "Private error" },
+      { ...presentation, restored: "true" },
+      { ...presentation, messageDigest: "private-message-id" },
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), jiraResultPresentation: invalid }),
+      ).toBe(false);
+    }
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        jiraResultPresentation: presentation,
+        errorKind: "unknown",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts only the six bounded knowledge catalog counts", () => {
     const counts = {
       podCount: 2,
@@ -484,6 +529,42 @@ describe("isClientDiagnosticIngestRequest", () => {
         isClientDiagnosticIngestRequest({ ...validRequest(), knowledgeCatalog: invalid }),
       ).toBe(false);
     }
+  });
+});
+
+// #4371: a catalog refresh the picker did not wait for is a closed outcome and a closed duration
+// bucket, under a correlation id; nothing else rides along.
+describe("knowledgeCatalogRefresh report", () => {
+  const withCorrelation = { ...validRequest(), correlationId: "ui_catalog-refresh-0001" };
+  it("accepts exactly the closed outcome and duration bucket", () => {
+    for (const outcome of ["ok", "failed", "superseded"]) {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...withCorrelation,
+          knowledgeCatalogRefresh: { outcome, duration: "1s-5s" },
+        }),
+      ).toBe(true);
+    }
+    for (const invalid of [
+      { outcome: "slow", duration: "1s-5s" },
+      { outcome: "ok", duration: "3s" },
+      { outcome: "ok" },
+      { outcome: "ok", duration: "1s-5s", podName: "Customer contracts" },
+      "ok",
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...withCorrelation, knowledgeCatalogRefresh: invalid }),
+      ).toBe(false);
+    }
+  });
+
+  it("requires a correlation id", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        knowledgeCatalogRefresh: { outcome: "ok", duration: "1s-5s" },
+      }),
+    ).toBe(false);
   });
 });
 
@@ -659,6 +740,20 @@ describe("isClientStageIngestRequest", () => {
     }
   });
 
+  it("admits the human-input stage without accepting private entry or request metadata", () => {
+    const report = { ...startedRequest(), stage: "jira human input" };
+    expect(isClientStageIngestRequest(report)).toBe(true);
+    for (const extra of [
+      { password: "synthetic-private-entry" },
+      { values: { license: "synthetic-license" } },
+      { requestId: `jhi_${"a".repeat(64)}` },
+      { username: "Private User" },
+      { host: "private.example.invalid" },
+      { error: "reflected private response body" },
+    ])
+      expect(isClientStageIngestRequest({ ...report, ...extra })).toBe(false);
+  });
+
   it("accepts body-free deletion counts and rejects content, missing counts and impossible settlements", () => {
     const request = { ...settledRequest(), stage: "chat history deletion" };
     const deletion = { requestedCount: 3, deletedCount: 2, failedCount: 1 };
@@ -677,6 +772,16 @@ describe("isClientStageIngestRequest", () => {
       isClientStageIngestRequest({ ...startedRequest(), stage: "chat history deletion", deletion }),
     ).toBe(false);
     expect(isClientStageIngestRequest({ ...settledRequest(), deletion })).toBe(false);
+    for (const action of ["move", "purge"]) {
+      expect(isClientStageIngestRequest({ ...request, deletion: { ...deletion, action } })).toBe(
+        true,
+      );
+    }
+    for (const action of ["delete", "", 1, null]) {
+      expect(isClientStageIngestRequest({ ...request, deletion: { ...deletion, action } })).toBe(
+        false,
+      );
+    }
   });
 
   it("accepts a well-formed settled report, including a genuinely instant 0ms settle", () => {
@@ -778,6 +883,21 @@ describe("client diagnostic loss counts", () => {
 });
 
 // #3532: the readiness `/api/health` reports and `keiko status` prints.
+describe("isCredentialCustodyState", () => {
+  it("admits exactly the four closed states", () => {
+    expect(CREDENTIAL_CUSTODY_STATES).toEqual(["attested", "protected", "exposed", "unattested"]);
+    for (const state of CREDENTIAL_CUSTODY_STATES)
+      expect(isCredentialCustodyState(state)).toBe(true);
+  });
+
+  it.each([undefined, null, "", "ATTESTED", "attested ", "refused", "ok", true, 0, ["attested"]])(
+    "refuses %j",
+    (value) => {
+      expect(isCredentialCustodyState(value)).toBe(false);
+    },
+  );
+});
+
 describe("isActivityLogReadinessSnapshot", () => {
   const ready = { readiness: "ready", reasons: [], writer: "production-file", lostEvents: 0 };
   it("preserves truthful retained stock above a newly governing admission capacity", () => {
@@ -1518,6 +1638,36 @@ describe("client module and markdown identity boundaries", () => {
       ).toBe(false);
     },
   );
+  it("accepts a table-only count without inventing list coordinates", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...base,
+        kind: "markdown-layout",
+        markdownLayout: { messageId: "msg_1", escapedPipeCount: 3 },
+      }),
+    ).toBe(true);
+  });
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 1_000_000_000, "private text"])(
+    "rejects an invalid table escape count %s",
+    (escapedPipeCount) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...base,
+          kind: "markdown-layout",
+          markdownLayout: { escapedPipeCount },
+        }),
+      ).toBe(false);
+    },
+  );
+  it("still rejects incomplete list coordinates, even alongside a table count", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...base,
+        markdownLayout: { listStart: 1, escapedPipeCount: 3 },
+      }),
+    ).toBe(false);
+    expect(isClientDiagnosticIngestRequest({ ...base, markdownLayout: {} })).toBe(false);
+  });
   it("rejects an unregistered module name", () => {
     expect(
       isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure: "private module URL" }),
@@ -1714,6 +1864,9 @@ describe("closed diagnostic navigation and render context", () => {
         true,
       );
       expect(isClientStageIngestRequest({ ...base, stage: "files project selection" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "chat connector selection" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "chat connector refresh" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "modal focus restoration" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "chat bind" })).toBe(false);
       expect(
         isClientStageIngestRequest({
@@ -2099,6 +2252,45 @@ describe("Files scope ownership decision evidence", () => {
   });
 });
 
+describe("citation highlight diagnostic contract", () => {
+  const request = (citationHighlight: unknown, correlationId = "highlight-123"): boolean =>
+    isClientDiagnosticIngestRequest({ ...validRequest(), correlationId, citationHighlight });
+
+  it("accepts a framed passage with boxes and the other outcomes with none", () => {
+    expect(request({ outcome: "framed", boxCount: 1 })).toBe(true);
+    expect(request({ outcome: "framed", boxCount: CLIENT_CITATION_HIGHLIGHT_BOX_MAX })).toBe(true);
+    for (const outcome of ["not-found", "no-passage", "no-text"]) {
+      expect(request({ outcome, boxCount: 0 })).toBe(true);
+    }
+  });
+
+  it.each([
+    { outcome: "framed", boxCount: 0 },
+    { outcome: "not-found", boxCount: 1 },
+    { outcome: "framed", boxCount: CLIENT_CITATION_HIGHLIGHT_BOX_MAX + 1 },
+    { outcome: "framed", boxCount: 1.5 },
+    { outcome: "located", boxCount: 1 },
+    { outcome: "framed", boxCount: 1, passage: "Altlasten" },
+    { outcome: "framed" },
+    "framed",
+  ])("rejects the incoherent or extended report %j", (citationHighlight) => {
+    expect(request(citationHighlight)).toBe(false);
+  });
+
+  it("requires the report's correlation id", () => {
+    const { correlationId: _omitted, ...withoutCorrelation } = {
+      ...validRequest(),
+      correlationId: "highlight-123",
+    };
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...withoutCorrelation,
+        citationHighlight: { outcome: "framed", boxCount: 1 },
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("citation activation diagnostic contract", () => {
   const activation = { reason: "matched", outcome: "opened", rootCount: 2, matchCount: 1 };
   it("accepts only declared decisions, outcomes and safe coherent counts", () => {
@@ -2256,6 +2448,24 @@ it.each([MAX_RECURSIVE_TEXT_FILE_BYTES, MAX_RECURSIVE_TEXT_FILE_BYTES + 1])(
         preview: { previewKind: "text", sourceTextBytesRead, canEdit: false },
       }),
     ).toBe(sourceTextBytesRead === MAX_RECURSIVE_TEXT_FILE_BYTES);
+  },
+);
+
+it.each(["workspace-sync-idle", "workspace-sync-active", "workspace-sync-pull-pending"])(
+  "accepts only the closed workspace polling activity %s (#4321)",
+  (composerActivity) => {
+    const report = {
+      message: "Workspace polling state changed.",
+      clientTs: "2026-11-08T00:00:00.000Z",
+      composerActivity,
+    };
+    expect(isClientDiagnosticIngestRequest(report)).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...report,
+        composerActivity: `${composerActivity}-private`,
+      }),
+    ).toBe(false);
   },
 );
 
@@ -2495,5 +2705,26 @@ describe("coding request timeout evidence (#4109)", () => {
     ).toBe(false);
     expect(isClientDiagnosticIngestRequest(report(timeout, { kind: "other" }))).toBe(false);
     expect(isClientDiagnosticIngestRequest(report(timeout, { errorKind: "timeout" }))).toBe(false);
+  });
+});
+
+describe("server instance identity (#4370)", () => {
+  it.each(["a".repeat(32), "0123456789abcdef".repeat(2)])("accepts %s", (value) => {
+    expect(isServerInstanceId(value)).toBe(true);
+  });
+
+  it.each([
+    undefined,
+    null,
+    42,
+    "",
+    "A".repeat(32),
+    "a".repeat(31),
+    "a".repeat(33),
+    `${"a".repeat(32)}\n`,
+    `${"a".repeat(31)}g`,
+    ["a".repeat(32)],
+  ])("refuses a value outside the closed shape: %s", (value) => {
+    expect(isServerInstanceId(value)).toBe(false);
   });
 });

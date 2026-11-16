@@ -16,6 +16,8 @@ import {
   resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { API_ROUTES, isApiPath, matchRoute, STREAMING, type RouteContext } from "./routes.js";
+import { isServerInstanceId } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { SERVER_INSTANCE_ID } from "./server-instance.js";
 import {
   checkActivityLogReadiness,
   currentActivityLogReadiness,
@@ -187,13 +189,13 @@ describe("API route contract", () => {
     const localKnowledgeRoutes = API_ROUTES.filter((r) =>
       r.pattern.startsWith("/api/local-knowledge"),
     );
-    expect(localKnowledgeRoutes).toHaveLength(22);
-    // Issue #2063 — the live HTML manual-pod create/refresh/status trigger routes.
+    expect(localKnowledgeRoutes).toHaveLength(21);
+    // HTML manual creation is retired; existing-pod refresh and polling remain mounted.
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "POST" && r.pattern === "/api/local-knowledge/manual-pods/create",
       ),
-    ).toBeDefined();
+    ).toBeUndefined();
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "POST" && r.pattern === "/api/local-knowledge/manual-pods/refresh",
@@ -682,8 +684,14 @@ describe("health handler", () => {
     const result = await route?.handler(emptyCtx, stubDeps);
     expect(result).toEqual({
       status: 200,
-      body: { status: "ok", version: SDK_VERSION, diagnostics: currentActivityLogReadiness() },
+      body: {
+        status: "ok",
+        version: SDK_VERSION,
+        diagnostics: currentActivityLogReadiness(),
+        instanceId: SERVER_INSTANCE_ID,
+      },
     });
+    expect(isServerInstanceId(SERVER_INSTANCE_ID)).toBe(true);
     if (result === undefined || result === STREAMING) throw new Error("expected a RouteResult");
     expect(isActivityLogReadinessSnapshot(Reflect.get(result.body as object, "diagnostics"))).toBe(
       true,

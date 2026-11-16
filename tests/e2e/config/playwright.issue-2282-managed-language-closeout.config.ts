@@ -54,6 +54,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 120_000,
     env: {
+      KEIKO_OS_KEYCHAIN: "off",
       NODE_ENV: "test",
       PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
       KEIKO_DEV_UI_PORT: String(publicPort),

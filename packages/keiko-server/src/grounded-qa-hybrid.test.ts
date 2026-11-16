@@ -2584,10 +2584,23 @@ describe("hybrid bounded citation repair", () => {
     },
   );
 
-  it.each([
-    { promptTokens: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax - 100 },
-    { completionTokens: DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax },
-  ])("does not dispatch numeric repair beyond the original shared budget: %j", async (controls) => {
+  it("keeps the numeric repair input window after observing an almost full-window prompt", async () => {
+    const { calls, answer } = await repairAsk("The implementation works [1].", false, {
+      promptTokens: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax - 100,
+    });
+    expect(calls).toHaveLength(2);
+    expect(
+      calls.every(
+        (call) => countGatewayPromptTokens(call) <= DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
+      ),
+    ).toBe(true);
+    expect(answer.content).toBe("The implementation works [1].");
+    expect(answer.citationBehaviour).toBe("cites-after-repair");
+    expect(answer.knowledgeCitations).toHaveLength(1);
+  });
+
+  it("does not dispatch numeric repair beyond the original output budget", async () => {
+    const controls = { completionTokens: DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax };
     const { calls, answer } = await repairAsk("The implementation works [1].", false, controls);
     expect(calls).toHaveLength(1);
     expect(answer.content).toBe("The implementation works.");

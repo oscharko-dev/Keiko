@@ -281,5 +281,23 @@ export function computeFileContent(
   if (current === undefined) {
     return { content: null, conflicts: [{ hunkIndex: 0, reason: "modify target does not exist" }] };
   }
+  if (isLfDiffAgainstCrlfContent(current, change.hunks)) {
+    const outcome = applyModify(toOriginal(current.replaceAll("\r\n", "\n")), change.hunks);
+    return outcome.content === null
+      ? outcome
+      : { ...outcome, content: outcome.content.replaceAll("\n", "\r\n") };
+  }
   return applyModify(toOriginal(current), change.hunks);
+}
+
+// #4068: Git for Windows checks files out with CRLF (`core.autocrlf=true` by default), while a
+// model or agent writes its diff with LF, so every context and removed line differed by its `\r`.
+// Only the unambiguous case is bridged: every line break of the current content is CRLF, no other
+// `\r` occurs in it, and no hunk line carries a `\r` of its own. The hunk is then matched on the
+// LF form and the result keeps CRLF. Mixed line breaks, a stray `\r`, or a diff that spells some
+// `\r` keep exact matching and still fail closed on a mismatch.
+function isLfDiffAgainstCrlfContent(current: string, hunks: readonly PatchHunk[]): boolean {
+  if (!current.includes("\r\n") || current.replaceAll("\r\n", "\n").includes("\r")) return false;
+  if (current.replaceAll("\r\n", "").includes("\n")) return false;
+  return hunks.every((hunk) => hunk.lines.every((line) => !line.includes("\r")));
 }

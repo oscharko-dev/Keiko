@@ -32,6 +32,9 @@ interface ProposalBuildInput {
   readonly capturedAt?: number;
   readonly validFrom?: number;
   readonly sourceWorkflowRunId?: WorkflowRunId;
+  readonly evidenceSpan?: string;
+  readonly sourceMessageIds?: readonly string[];
+  readonly validUntil?: number;
 }
 
 // Builds a MemoryProposal in the canonical "proposed, no expiry, no payload, no tags" shape.
@@ -64,8 +67,13 @@ export function buildProposal(input: ProposalBuildInput, confidence: number): Me
       ...(input.sourceWorkflowRunId !== undefined && {
         sourceWorkflowRunId: input.sourceWorkflowRunId,
       }),
+      ...(input.evidenceSpan !== undefined && { evidenceSpan: input.evidenceSpan }),
+      ...(input.sourceMessageIds !== undefined && { sourceMessageIds: input.sourceMessageIds }),
     },
-    validity: { validFrom },
+    validity: {
+      validFrom,
+      ...(input.validUntil !== undefined && { validUntil: input.validUntil }),
+    },
     initialStatus: "proposed",
   };
   return proposal;

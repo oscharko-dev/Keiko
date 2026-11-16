@@ -118,6 +118,13 @@ run's correlation id; the model is told the workspace is a plain folder and not 
 repository or run Git another way. Containment, deny lists, sensitive-path denials and budgets are
 unchanged, and `worktree_create` answers `unavailable` because there is no branch to cut from.
 
+**Owner amendment, 2026-11-06 (scheduled continuations, #4271):** a schedule a native run's model
+created continues its task at its due time as a scheduled wake run that the server starts (ADR-0137,
+"Scheduled continuations"). Its requested mode is the narrower of the narrowest mode any run that held
+the schedule was in and the requested mode of the task's latest run; the deployment ceiling then
+applies as for every start. A person's acceptance of the task and its mode is therefore the only
+source of a wake's authority, and a wake can never exceed what that person selected.
+
 No caller may widen authority by passing a higher requested mode than the environment allows. Explicit composition options and environment ceilings are intersected: neither can widen or conceal an invalid value in the other. The retained legacy delivery-ceiling option can only narrow this same Coding/connector result (#4083). The
 effective mode, not the requested mode, is the authority-bearing value for validation, runtime
 policy, and evidence.
@@ -182,7 +189,15 @@ the diagnosed cause, and retest. A refused continuation or exhausted continuatio
 `verification-not-evidenced`; ordinary read-only tasks need no invented verification work.
 A human-denied verification command or an actually unavailable selected verifier stops automatic
 repair continuation without claiming verification. An unavailable unrelated verifier does not
-introduce a new proof obligation or block repair of the selected test. The existing ledger records
+introduce a new proof obligation or block repair of the selected test. A target-scoped refusal
+(no project, no runnable step, script trust, an unavailable runner, a check that did not run)
+blocks repair only for a selected target that has not passed: while no target is selected, the
+refused target is unrelated to any proof, so the continuation still runs, and the repository's own
+check in the model's shell can evidence the edit (#4271). Only a line whose exit status is the
+check's own counts there (the check alone, or `&&` with `cd` and other checks; never a pipe, `;`,
+`||` or `&`), and the continuation intent and the verifier and commit guidance say so. The
+`not-evidenced` continuation line names the blocker that stopped repair as a closed
+`blockedReason`. The existing ledger records
 these producer-owned facts. A later actually executed, still-authorized verifier may clear its
 applicable blocker through an invocation-local admission callback; a verifier admitted before a
 subsequent human denial cannot clear that denial by completing later. Edits do not clear denials.

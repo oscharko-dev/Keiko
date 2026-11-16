@@ -1,6 +1,8 @@
 import {
   JIRA_FIELD_ID_PATTERN,
   readJiraDescriptionSections,
+  projectJiraDescriptionInput,
+  readJiraMarkdownDescription,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 // Capability validation only: HTTP, authority, custody and audit remain with their existing owners.
 import type {
@@ -95,6 +97,10 @@ const ARRAY_ITEM: Readonly<Record<string, string>> = {
 };
 // eslint-disable-next-line no-control-regex -- metadata and references must not contain control characters.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
+// Rich text keeps its line breaks and tabs; every other control character is refused, as the
+// document composer refuses it for Cloud.
+// eslint-disable-next-line no-control-regex -- the pattern exists to refuse control characters.
+const RICH_TEXT_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
 
 function boundedText(value: unknown, max = 255): value is string {
   return (
@@ -301,6 +307,9 @@ export type JiraFieldValidationResult =
       readonly ok: true;
       readonly fields: Readonly<Record<string, unknown>>;
       readonly update: Readonly<Record<string, readonly Record<string, string>[]>>;
+      /** Internal serialization evidence, never field content or a remote receipt. */
+      readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
     }
   | {
       readonly ok: false;
@@ -311,13 +320,20 @@ export type JiraFieldValidationResult =
         | "invalid-operation"
         | "bounds-exceeded";
       readonly fieldId?: string;
+      /** The name Jira shows for the field, when the request's metadata knows it (#4357). */
+      readonly fieldName?: string;
       /** One fixed sentence for the model; never a value from the request or from Jira. */
       readonly message?: string;
     };
 
 /** A refusal may carry one fixed sentence that tells the model how to correct the value. */
 type ValueResult =
-  | { readonly ok: true; readonly value: unknown }
+  | {
+      readonly ok: true;
+      readonly value: unknown;
+      readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
+    }
   | { readonly ok: false; readonly message?: string };
 const INVALID: ValueResult = { ok: false };
 function invalidWith(message: string): ValueResult {
@@ -420,11 +436,34 @@ function encodedDocumentStructure(value: string): boolean {
   const decoded = value.replaceAll(String.raw`\n`, "\n");
   return readJiraDescriptionSections(decoded).length > 0 || LIST_LINE.test(decoded);
 }
+/** The same projection the template check and the human approval read (#4173 AC2). */
+function markdownDescriptionValue(field: JiraFieldMetadata, value: unknown): ValueResult {
+  const source = typeof value === "string" ? value : readJiraMarkdownDescription(value);
+  if (source === undefined || !validFieldText(field, source)) return INVALID;
+  const serialized = projectJiraDescriptionInput(value);
+  if (serialized === undefined)
+    return invalidWith(
+      "The Markdown description contains unsupported structure or exceeds the Jira field limit. Use supported Markdown or submit native Jira wiki text.",
+    );
+  if (!validFieldText(field, serialized.text)) return INVALID;
+  return {
+    ok: true,
+    value: serialized.text,
+    ...(typeof value !== "string" || serialized.text !== source
+      ? { descriptionProjection: "supported-markdown" as const }
+      : {}),
+    ...(serialized.convertedHeadingCount === 0
+      ? {}
+      : { descriptionConvertedHeadingCount: serialized.convertedHeadingCount }),
+  };
+}
 function textValue(
   field: JiraFieldMetadata,
   value: unknown,
   deployment: AtlassianConnectorDeployment,
 ): ValueResult {
+  if (deployment === "data-center" && field.id === "description")
+    return markdownDescriptionValue(field, value);
   if (typeof value !== "string" || !validFieldText(field, value)) return INVALID;
   if (deployment !== "cloud" || !field.richText) return { ok: true, value };
   const result = composePlainTextToAdf(value);
@@ -433,7 +472,7 @@ function textValue(
 function validFieldText(field: JiraFieldMetadata, value: string): boolean {
   if (value.length > (field.richText ? 32768 : 255)) return false;
   if (field.required && value.trim() === "") return false;
-  return field.richText || !CONTROL.test(value);
+  return !(field.richText ? RICH_TEXT_CONTROL : CONTROL).test(value);
 }
 function numberValue(value: unknown): ValueResult {
   return typeof value === "number" &&
@@ -483,17 +522,22 @@ function scalar(
   }
 }
 const ISSUE_KEY = /^[A-Za-z]\w{0,254}-[1-9]\d{0,17}$/u;
+/** What a model that sent something else is told: the accepted forms, nothing is widened. */
+const ISSUE_REFERENCE_FORMS =
+  'An issue reference is the issue KEY as a string (for example "PROJ-12") or an object with only "key" or only "id" (the numeric id as a string); a bare number or any other text is not accepted.';
 /** `{ key }`, `{ id }` or a bare issue key; the result is always one canonical reference. */
 function issueValue(value: unknown): ValueResult {
   if (typeof value === "string")
-    return ISSUE_KEY.test(value) ? { ok: true, value: { key: value } } : INVALID;
+    return ISSUE_KEY.test(value)
+      ? { ok: true, value: { key: value } }
+      : invalidWith(ISSUE_REFERENCE_FORMS);
   const raw = asRecord(value);
-  if (raw === undefined || Object.keys(raw).length !== 1) return INVALID;
+  if (raw === undefined || Object.keys(raw).length !== 1) return invalidWith(ISSUE_REFERENCE_FORMS);
   if (typeof raw.key === "string" && ISSUE_KEY.test(raw.key))
     return { ok: true, value: { key: raw.key } };
   return typeof raw.id === "string" && /^\d{1,32}$/u.test(raw.id)
     ? { ok: true, value: { id: raw.id } }
-    : INVALID;
+    : invalidWith(ISSUE_REFERENCE_FORMS);
 }
 function opaqueScalar(value: unknown): boolean | undefined {
   if (value === null || typeof value === "boolean") return true;
@@ -565,7 +609,13 @@ export function validateJiraFieldValue(
 
 type FieldFailure = Extract<JiraFieldValidationResult, { readonly ok: false }>;
 type SetResult =
-  { readonly ok: true; readonly fields: Readonly<Record<string, unknown>> } | FieldFailure;
+  | {
+      readonly ok: true;
+      readonly fields: Readonly<Record<string, unknown>>;
+      readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
+    }
+  | FieldFailure;
 type UpdateResult =
   | {
       readonly ok: true;
@@ -576,12 +626,17 @@ function requiredEmpty(field: JiraFieldMetadata, value: unknown): boolean {
   if (!field.required) return false;
   return value === null || value === "" || (Array.isArray(value) && value.length === 0);
 }
-function isEncodedRichText(field: JiraFieldMetadata, value: unknown): boolean {
+function isEncodedRichText(
+  field: JiraFieldMetadata,
+  value: unknown,
+  deployment: AtlassianConnectorDeployment,
+): boolean {
+  let text: string | undefined;
+  if (typeof value === "string") text = value;
+  else if (deployment === "data-center" && field.id === "description")
+    text = readJiraMarkdownDescription(value);
   return (
-    field.kind === "text" &&
-    field.richText &&
-    typeof value === "string" &&
-    encodedDocumentStructure(value)
+    field.kind === "text" && field.richText && text !== undefined && encodedDocumentStructure(text)
   );
 }
 function setValue(
@@ -593,8 +648,36 @@ function setValue(
   if (field.kind === "unsupported") return { ok: false, reason: "unsupported-field" };
   if (!field.operations.includes("set")) return { ok: false, reason: "invalid-operation" };
   if (requiredEmpty(field, value)) return { ok: false, reason: "required-field" };
-  if (isEncodedRichText(field, value)) return invalidWith(ESCAPED_LINE_BREAKS);
+  if (isEncodedRichText(field, value, deployment)) return invalidWith(ESCAPED_LINE_BREAKS);
   return validateJiraFieldValue(field, value, deployment);
+}
+/**
+ * A key that is not a field id of this screen. A model reliably writes the display name ("Epic
+ * Name") where Jira wants the id; naming the id lets it correct the call in the same turn. The key
+ * is echoed only when it is a safe field id, never an arbitrary string.
+ */
+/** A display name that names exactly one field is answered with that field's id. */
+function unknownFieldMessage(named: readonly JiraFieldMetadata[], key: string): string | undefined {
+  const [only] = named;
+  if (only !== undefined && named.length === 1) {
+    return `Fields are keyed by field id, not display name: send "${key}" as ${only.id}.`;
+  }
+  if (isJiraFieldId(key)) return undefined;
+  return "A key in fields is not a field id. Use the field ids jira.create-fields returns for a create, or jira.edit-fields for an edit.";
+}
+function unknownFieldFailure(
+  byId: ReadonlyMap<string, JiraFieldMetadata>,
+  key: string,
+): FieldFailure | undefined {
+  if (isJiraFieldId(key) && byId.has(key)) return undefined;
+  const named = [...byId.values()].filter((field) => field.name === key);
+  const message = unknownFieldMessage(named, key);
+  return {
+    ok: false,
+    reason: "invalid-field",
+    ...(isJiraFieldId(key) ? { fieldId: key } : {}),
+    ...(message === undefined ? {} : { message }),
+  };
 }
 function validateSets(
   byId: ReadonlyMap<string, JiraFieldMetadata>,
@@ -602,8 +685,11 @@ function validateSets(
   deployment: AtlassianConnectorDeployment,
 ): SetResult {
   const fields: Record<string, unknown> = {};
+  let descriptionConvertedHeadingCount = 0;
+  let descriptionProjection: "supported-markdown" | undefined;
   for (const [id, value] of Object.entries(input)) {
-    if (!isJiraFieldId(id)) return { ok: false, reason: "invalid-field" };
+    const unknown = unknownFieldFailure(byId, id);
+    if (unknown !== undefined) return unknown;
     const result = setValue(byId.get(id), value, deployment);
     if (!result.ok)
       return {
@@ -613,23 +699,33 @@ function validateSets(
         ...(result.message === undefined ? {} : { message: result.message }),
       };
     fields[id] = result.value;
+    descriptionConvertedHeadingCount += result.descriptionConvertedHeadingCount ?? 0;
+    descriptionProjection ??= result.descriptionProjection;
   }
-  return { ok: true, fields };
+  return {
+    ok: true,
+    fields,
+    ...(descriptionConvertedHeadingCount === 0 ? {} : { descriptionConvertedHeadingCount }),
+    ...(descriptionProjection === undefined ? {} : { descriptionProjection }),
+  };
 }
+/** Fields Jira itself fills when a create omits them: the reporter becomes the calling user. */
+export const JIRA_CREATE_ASSIGNED_FIELDS: ReadonlySet<string> = new Set(["reporter"]);
 /**
  * Jira sets the reporter of a new issue to the authenticated caller when the field is absent, even
  * though create metadata lists it as required without a default. This is the one field Keiko does
  * not insist on; a supplied reporter is still validated like any other user.
  */
 function jiraAssignsOnCreate(field: JiraFieldMetadata): boolean {
-  return field.id === "reporter";
+  return JIRA_CREATE_ASSIGNED_FIELDS.has(field.id);
 }
 function missingRequired(
   metadata: readonly JiraFieldMetadata[],
   fields: Readonly<Record<string, unknown>>,
   purpose: "create" | "edit" | "transition",
+  requireAll: boolean,
 ): FieldFailure | undefined {
-  if (purpose === "edit") return undefined;
+  if (purpose === "edit" || !requireAll) return undefined;
   for (const field of metadata) {
     if (
       !field.required ||
@@ -677,13 +773,31 @@ function validateUpdates(
   return { ok: true, update };
 }
 
-/** No caller-supplied Jira update object is forwarded. Only implemented field/verb pairs survive. */
+/**
+ * A refusal names its field by the name Jira shows, so a person reads "Resolution", not an id. Kept
+ * apart from the judgement itself: the closed result stays the pin it always was (#4357).
+ */
+export function withJiraFieldName(
+  metadata: readonly JiraFieldMetadata[],
+  result: JiraFieldValidationResult,
+): JiraFieldValidationResult {
+  if (result.ok || result.fieldId === undefined) return result;
+  const name = metadata.find((field) => field.id === result.fieldId)?.name;
+  return name === undefined || name.length === 0 ? result : { ...result, fieldName: name };
+}
+
+/**
+ * No caller-supplied Jira update object is forwarded. Only implemented field/verb pairs survive.
+ * `requireAll: false` judges only the supplied fields, so a refusal for a missing required field
+ * can still name the template rules the rest of the write breaks; it never admits a write.
+ */
 export function validateJiraFieldChanges(
   metadata: readonly JiraFieldMetadata[],
   changes: unknown,
   purpose: "create" | "edit" | "transition",
   deployment: AtlassianConnectorDeployment,
   updates: unknown = [],
+  requireAll = true,
 ): JiraFieldValidationResult {
   const input = asRecord(changes);
   const requestedUpdates = asArray(updates);
@@ -697,9 +811,31 @@ export function validateJiraFieldChanges(
   const byId = new Map(metadata.map((field) => [field.id, field]));
   const sets = validateSets(byId, input, deployment);
   if (!sets.ok) return sets;
-  const missing = missingRequired(metadata, sets.fields, purpose);
+  const missing = missingRequired(metadata, sets.fields, purpose, requireAll);
   if (missing !== undefined) return missing;
   const changesResult = validateUpdates(byId, sets.fields, requestedUpdates);
   if (!changesResult.ok) return changesResult;
-  return { ok: true, fields: sets.fields, update: changesResult.update };
+  return {
+    ...sets,
+    update: changesResult.update,
+  };
+}
+
+/** Validate a submitted description before trace projection; final validation still judges all fields. */
+export function prepareJiraDescriptionFields(
+  fields: Readonly<Record<string, unknown>>,
+  metadata: readonly JiraFieldMetadata[],
+): JiraFieldValidationResult {
+  if (
+    fields.description === null ||
+    (typeof fields.description !== "object" && typeof fields.description !== "string")
+  )
+    return { ok: true, fields, update: {} };
+  const validated = validateJiraFieldChanges(
+    metadata,
+    { description: fields.description },
+    "edit",
+    "data-center",
+  );
+  return validated.ok ? { ...validated, fields: { ...fields, ...validated.fields } } : validated;
 }

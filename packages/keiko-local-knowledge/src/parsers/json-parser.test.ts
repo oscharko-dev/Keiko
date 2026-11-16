@@ -49,7 +49,7 @@ describe("jsonParser", () => {
     expect(pointers(result.units)).toEqual([""]);
     expect(result.diagnostics).toEqual([]);
     expect((result as { readonly normalizedText?: string }).normalizedText).toContain(
-      '/: name="alpha" | count=3 | active=true',
+      "/: name=alpha | count=3 | active=true",
     );
   });
 
@@ -98,7 +98,7 @@ describe("jsonParser", () => {
       buildParserOptions({ now: () => 0 }),
     );
     const normalizedText = (result as { readonly normalizedText?: string }).normalizedText;
-    expect(normalizedText).toBe('/: a="first" | b="second"\n');
+    expect(normalizedText).toBe("/: a=first | b=second\n");
     expect(result.units).toHaveLength(1);
     const first = result.units[0];
     if (first === undefined) throw new Error("expected JSON record");
@@ -201,8 +201,8 @@ describe("jsonParser — JSON Lines / NDJSON (GRD-011)", () => {
     expect(pointers).toContain("/0");
     expect(pointers).toContain("/1");
     const text = ("normalizedText" in result ? result.normalizedText : undefined) ?? "";
-    expect(text).toContain("/0: a=1");
-    expect(text).toContain("/1: b=2");
+    expect(text).toContain("/!1: a=1");
+    expect(text).toContain("/!2: b=2");
   });
 
   it("preserves already-collected units when a later JSONL line exceeds maxNestingDepth (KEIKO-0484)", () => {

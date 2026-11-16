@@ -2,3 +2,7 @@
 native/portable-launcher/fixtures/*.hex text eol=lf
 packages/keiko-server/src/coding-runtime/windows-portable-authenticode-verifier.cs text eol=lf
 packages/keiko-server/src/coding-runtime/windowsPortableAuthenticodeVerifier.generated.ts text eol=lf
+# The npm lane pins a digest of the helper's source tree, which must not depend on core.autocrlf (#4068).
+native/secure-workspace-read/** text eol=lf
+# The Windows npm runtime approval pins the supervisor's source tree the same way (#4068).
+native/runtime-supervisor/** text eol=lf

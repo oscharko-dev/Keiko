@@ -4,6 +4,7 @@
 //   - tags[]
 //   - structured payload (string-list items / key-value entries)
 //   - provenance.captureRationale
+//   - provenance.evidenceSpan
 //   - staleReason
 //   - retentionHint.notes
 //   - edge.provenanceSummary
@@ -55,6 +56,7 @@ export function redactMemoryRecord(record: MemoryRecord, redact: Redactor): Memo
     ...(prov.captureRationale !== undefined
       ? { captureRationale: redact(prov.captureRationale) }
       : {}),
+    ...(prov.evidenceSpan !== undefined ? { evidenceSpan: redact(prov.evidenceSpan) } : {}),
   };
   const out: MemoryRecord = {
     ...record,

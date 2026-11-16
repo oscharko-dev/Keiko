@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 /**
  * Issue #1375 — Editor tabs, split panes, and resize regression hardening.
  *
@@ -41,12 +42,12 @@ async function seedEditorWindow(page: Page, root: string): Promise<void> {
   // absent so a reload reads the layout the app persisted, not the original fixture (AC1 relies on
   // this to prove persistence rather than re-seeding).
   await page.addInitScript(
-    ({ projectRoot, files, active }) => {
+    ({ argument: { projectRoot, files, active }, storageKeys }) => {
       window.localStorage.setItem("keiko.theme", "dark");
-      window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
-      if (window.localStorage.getItem("keiko.workspace.v4") === null) {
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      if (window.localStorage.getItem(storageKeys.workspace) === null) {
         window.localStorage.setItem(
-          "keiko.workspace.v4",
+          storageKeys.workspace,
           JSON.stringify([
             {
               id: "issue-1375-editor-layout",
@@ -62,9 +63,13 @@ async function seedEditorWindow(page: Page, root: string): Promise<void> {
           ]),
         );
       }
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { projectRoot: root, files: [...OPEN_FILES], active: ACTIVE_FILE },
+    await workspaceStorageArgs(page, {
+      projectRoot: root,
+      files: [...OPEN_FILES],
+      active: ACTIVE_FILE,
+    }),
   );
 }
 
@@ -154,16 +159,19 @@ async function insertionHighlightStyles(workspace: Locator): Promise<
 }
 
 async function persistedFirstPaneTabOrder(page: Page): Promise<readonly string[] | null> {
-  return page.evaluate(() => {
-    const raw = window.localStorage.getItem("keiko.workspace.v4");
-    if (raw === null) return null;
-    const wins = JSON.parse(raw) as readonly { type?: string; cfg?: { layoutJson?: string } }[];
-    const layoutJson = wins.find((w) => w.type === "editor")?.cfg?.layoutJson;
-    if (layoutJson === undefined) return null;
-    const layout = JSON.parse(layoutJson) as { panes?: Record<string, { tabOrder?: string[] }> };
-    const firstPane = Object.values(layout.panes ?? {})[0];
-    return firstPane?.tabOrder ?? null;
-  });
+  return page.evaluate(
+    ({ storageKeys }) => {
+      const raw = window.localStorage.getItem(storageKeys.workspace);
+      if (raw === null) return null;
+      const wins = JSON.parse(raw) as readonly { type?: string; cfg?: { layoutJson?: string } }[];
+      const layoutJson = wins.find((w) => w.type === "editor")?.cfg?.layoutJson;
+      if (layoutJson === undefined) return null;
+      const layout = JSON.parse(layoutJson) as { panes?: Record<string, { tabOrder?: string[] }> };
+      const firstPane = Object.values(layout.panes ?? {})[0];
+      return firstPane?.tabOrder ?? null;
+    },
+    await workspaceStorageArgs(page, undefined),
+  );
 }
 
 test.afterAll(() => {

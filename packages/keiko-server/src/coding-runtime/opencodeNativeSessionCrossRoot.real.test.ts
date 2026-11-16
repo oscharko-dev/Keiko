@@ -2,15 +2,19 @@ import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   buildRuntimeGatewaySeatbeltCommand,
   createRuntimeGatewayConfinement,
-  resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
+import {
+  fixtureGitEnvironment,
+  fixtureGitExecutable,
+  fixtureHostEnvironment,
+} from "./opencodeRealRuntimeFixture/_support.js";
 import { createCodingSessionContinuity } from "./codingSessionContinuity.js";
 import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
@@ -42,9 +46,11 @@ import {
  * session at the new root before the fork. The source entry stays resumable in its own workspace;
  * an unrelated workspace or a mismatched source is refused with nothing changed. Run with
  * KEIKO_OPENCODE_REAL_BINARY and KEIKO_OPENCODE_REAL_RESOURCE_ROOT set; otherwise it is skipped.
+ * Windows runs the mapped profile, its only one, and starts the runtime without a wrapper.
  */
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
+const TOOL_PROFILE = process.platform === "win32" ? "direct" : "native";
 const TASK_ID = "task-native-cross-root";
 const SOURCE_WORKSPACE_ID = "workspace-source";
 const TARGET_WORKSPACE_ID = "workspace-target";
@@ -159,13 +165,8 @@ interface Fixture {
 }
 
 function git(root: string, args: readonly string[]): void {
-  const executable = resolveDarwinGitExecutable().path;
-  const env = {
-    HOME: root,
-    PATH: dirname(executable),
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-  };
+  const executable = fixtureGitExecutable();
+  const env = fixtureGitEnvironment(root, executable);
   const identity = ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid"];
   if (spawnSync(executable, [...identity, ...args], { env }).status !== 0)
     throw new Error("fixture-git-failed");
@@ -207,7 +208,7 @@ function launch(
   const profile = buildOpenCodeLaunchProfile({
     executable: world.binary,
     stateRoot,
-    toolProfile: "native",
+    toolProfile: TOOL_PROFILE,
     contextGeometry: {
       contextWindowTokens: 32_768,
       maxInputTokens: 24_000,
@@ -224,32 +225,34 @@ function launch(
   ])
     mkdirSync(path, { recursive: true, mode: 0o700 });
   writeFileSync(join(configRoot, "opencode.json"), profile.config, { mode: 0o600 });
-  for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins("native")))
+  for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins(TOOL_PROFILE)))
     writeFileSync(join(configRoot, "plugins", `${name}.ts`), source, { mode: 0o600 });
-  const gitExecutable = resolveDarwinGitExecutable();
+  const gitExecutable = fixtureGitExecutable();
   const gatewayUrl = `http://127.0.0.1:${String(world.gateway.port)}/v1`;
-  const policy = createRuntimeGatewayConfinement({
-    gatewayUrl,
-    runId: "run-native-cross-root",
-    treeBindingId: "a".repeat(64),
-    envelopeDigest: "b".repeat(64),
-    runtimeArtifactDigest: "c".repeat(64),
-    modelProfileDigest: "d".repeat(64),
-    profile: "keiko-native",
-    filesystem: {
-      workspaceRoot: workspace,
-      workspaceAccess: "read-write",
-      privateStateRoot: stateRoot,
-      runtimeReadRoot: world.runtimeRoot,
-      protectedWriteRoots: [configRoot],
-    },
-  });
-  const command = buildRuntimeGatewaySeatbeltCommand(
-    policy,
-    world.binary,
-    profile.args,
-    gitExecutable.path,
-  );
+  const command =
+    process.platform === "win32"
+      ? { command: world.binary, args: profile.args }
+      : buildRuntimeGatewaySeatbeltCommand(
+          createRuntimeGatewayConfinement({
+            gatewayUrl,
+            runId: "run-native-cross-root",
+            treeBindingId: "a".repeat(64),
+            envelopeDigest: "b".repeat(64),
+            runtimeArtifactDigest: "c".repeat(64),
+            modelProfileDigest: "d".repeat(64),
+            profile: "keiko-native",
+            filesystem: {
+              workspaceRoot: workspace,
+              workspaceAccess: "read-write",
+              privateStateRoot: stateRoot,
+              runtimeReadRoot: world.runtimeRoot,
+              protectedWriteRoots: [configRoot],
+            },
+          }),
+          world.binary,
+          profile.args,
+          gitExecutable,
+        );
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("fixture-password-missing");
   return {
@@ -258,7 +261,7 @@ function launch(
       cwd: workspace,
       env: {
         ...profile.env,
-        PATH: `${dirname(gitExecutable.path)}:/usr/bin:/bin`,
+        ...fixtureHostEnvironment(gitExecutable),
         KEIKO_MODEL_GATEWAY_URL: gatewayUrl,
         KEIKO_MODEL_GATEWAY_CAPABILITY: "fixture-gateway-capability",
         KEIKO_TOOL_FACADE_URL: `http://127.0.0.1:${String(world.facade.port)}/native-policy`,

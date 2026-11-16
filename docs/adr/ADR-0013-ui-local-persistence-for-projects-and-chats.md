@@ -4,7 +4,7 @@
 
 Accepted
 
-Superseded (in part) by ADR-0019 — module boundary and file paths (`src/ui/store/**`, `src/cli/ui.ts`, single-package layout) relocated to `packages/keiko-server/src/store/**` and `packages/keiko-cli/src/ui.ts` under the monorepo restructuring. The storage engine, DB path precedence, and `PRAGMA user_version` migration pattern (D1, D4, D5, D9) remain the live precedent, actively cited by ADR-0022, ADR-0035, ADR-0090, and ADR-0091. D2's Node 22.0–22.11 flag-enablement / re-exec branch is vestigial under the current `package.json` `engines.node` `>=24.18.0 <25 || >=26.3.0 <27` range: both supported lines load `node:sqlite` without the experimental flag, so the trigger condition no longer occurs. The guard is retained in `packages/keiko-cli/src/ui.ts` as a harmless defensive fallback (its own comment already records why) and is not a live precedent.
+Superseded (in part) by ADR-0019 — module boundary and file paths (`src/ui/store/**`, `src/cli/ui.ts`, single-package layout) relocated to `packages/keiko-server/src/store/**` and `packages/keiko-cli/src/ui.ts` under the monorepo restructuring. The storage engine, DB path precedence, and `PRAGMA user_version` migration pattern (D1, D4, D5, D9) remain the live precedent, actively cited by ADR-0022, ADR-0035, ADR-0090, and ADR-0091. D2's Node 22.0–22.11 flag-enablement / re-exec branch is vestigial under the current `package.json` `engines.node` `>=26.13.1 <27` range: the supported line loads `node:sqlite` without the experimental flag, so the trigger condition no longer occurs. The guard is retained in `packages/keiko-cli/src/ui.ts` as a harmless defensive fallback (its own comment already records why) and is not a live precedent.
 
 Decided before implementation begins (issue #62 requires the ADR before implementation).
 This ADR defines the storage engine, flag-enablement strategy, module boundary, schema,
@@ -69,7 +69,7 @@ inside a target repository and must use restrictive file permissions.
 > **Reading these sections as a historical record.** D1–D9 are written at Node 22, `src/ui/**` /
 > `ui/lib/**` layout. The storage-engine choice (`node:sqlite`, D1) and the DB-path precedence and
 > migration-discipline decisions (D4/D5/D9) remain the live precedent; the D2 flag-enablement /
-> re-exec branch is vestigial under `engines.node` `>=24.18.0 <25 || >=26.3.0 <27` per the
+> re-exec branch is vestigial under `engines.node` `>=26.13.1 <27` per the
 > Status header. Implementation paths have moved to `packages/keiko-server/src/store/**` and
 > `packages/keiko-cli/src/ui.ts` per ADR-0019. The original section text is preserved so the
 > reasoning at the time is legible; treat any `src/ui/**` / `ui/lib/**` path and the Node 22
@@ -328,6 +328,16 @@ would be warranted only if workflow metadata were queried independently of messa
 listed without message context) or if the columns grew beyond five. Three usages of the current
 inline pattern must be observed before extracting it. This is recorded as a documented extension
 point.
+
+**User document context (#4157).** A user message may retain its validated extracted attachment
+text in the additive `document_context_json` column. The visible `content` remains the human draft.
+Only user rows accept this metadata; it uses the existing content redactor before persistence,
+per-document and aggregate byte bounds, and the chat's existing deletion/retention lifecycle. No
+original file or new attachment store is created. Gateway history composes the untrusted document
+block before token accounting and compaction. The existing private FTS indexes include this text,
+and archive recall applies the current content policy and credential floor within its existing
+budgets. Activity Log evidence contains candidate counts and prompt-token counts, never document
+names, IDs or text. The forward-only migration rebuilds the existing indexes transactionally.
 
 **WAL mode.** `PRAGMA journal_mode = WAL` is set once at DB open. WAL allows concurrent reads
 during a write and is the correct mode for a local single-writer, potentially multi-reader
@@ -592,22 +602,26 @@ open" pattern expected by the issue without trusting the browser clock.
 parameters — no `:param` path segments on mutable resources. The route matcher in
 `src/ui/routes.ts` can match them exactly, just as it matches the existing twelve routes.
 
-### Chat History deletion refinement (owner decision, 2026-09-29)
+### Chat History deletion refinement (owner decision, 2026-09-29; amended by owner decision, 2026-11-10, #4335)
 
-Chat History deletes a conversation permanently with one explicit Delete action. Active chats no
-longer need to be archived first or pass through repeated inline confirmations. The Deleted tab
-remains available to restore or purge legacy archived chats.
+Chat History keeps deletion in two steps, because one click on a shifting list destroyed a chat the
+person still needed. **Delete** on an active chat, and **Delete selected** in the Active tab, move
+the conversations to the Deleted tab (the existing reversible `status: "closed"` PATCH); the
+Deleted tab restores them. A permanent purge is offered only in the Deleted tab, per row or as
+**Delete selected**, and always opens an explicit confirmation dialog that names the chat (or the
+count) and states that it cannot be undone. Cancel, Escape and a backdrop click purge nothing.
 
 Native checkboxes support selecting individual conversations or all conversations in the current
 filtered tab. A shared Delete selected action snapshots only those visible selections. Changing
-project, tab or search clears selection; hidden conversations cannot enter the operation. The UI
+project, tab or search clears selection; hidden conversations cannot enter the operation. The purge
 reuses the existing project-scoped DELETE request and its matching irreversible-confirmation
 contract, with at most four requests in flight. Attachment custody cleanup, serialized chat turns,
-and server access validation remain enforced. Each successful response publishes the existing
-chat-deleted mutation. Failed deletions remain visible and selected for explicit retry; successful
-deletions are not retried. Keyboard selection supports Escape to clear and restores focus after
-rows disappear. The existing Activity Log records correlated start/settlement counts and durations,
-with no titles, paths, chat content or response bodies.
+and server access validation remain enforced. Each successful purge publishes the existing
+chat-deleted mutation. Failed moves or purges remain visible and selected for explicit retry;
+successful ones are not retried. Keyboard selection supports Escape to clear and restores focus
+after rows disappear. The existing Activity Log records correlated start/settlement counts and
+durations for purges, and a body-free client diagnostic for a failed move, with no titles, paths,
+chat content or response bodies.
 
 ### D8 — Security posture
 
@@ -644,9 +658,11 @@ metadata while removing the credential floor and configured infrastructure-secre
 unconditional redactor still serves `short_result` and audit data. The store never reads the
 environment: composed without a content redactor, it projects content with its unconditional
 redactor (fail closed). Default content redaction remains unchanged; no database migration or
-historical unmasking is performed. Text saved during the opt-out is not rewritten when the
-deployment returns to the default: history rehydration and compaction redact it again, while the
-recent verbatim turns of that conversation are resent as stored. No reasoning traces, no evidence
+historical unmasking is performed. Text saved under the preserving policy is not rewritten when the
+deployment lowers the threshold: history rehydration and compaction redact it again, while the
+recent verbatim turns of that conversation are resent as stored. Owner decision 2026-11-04: the
+preserving policy is the default, `KEIKO_CONTENT_REDACTION=on` is the lowered threshold, and the tool
+transcript follows the content redactor as well. No reasoning traces, no evidence
 payloads, no SSE event data are stored in the DB.
 
 **DB location never inside a target repository.** The default path is

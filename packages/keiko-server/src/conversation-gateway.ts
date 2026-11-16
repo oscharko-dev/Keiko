@@ -1,5 +1,6 @@
-import { conversationSystemPrompt } from "./conversation-prompt.js";
+import { chatMessagePromptContent, conversationSystemPrompt } from "./conversation-prompt.js";
 import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
+import { jiraDraftModelData, jiraDraftRowsForModel } from "./atlassian/jiraDraftModelData.js";
 import type { ChatMessage } from "./store/index.js";
 import type { ChatMessageContentPart, ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -21,37 +22,70 @@ export function gatewayMessagesForTurn(
     : [...turn.verbatim];
 }
 
+/**
+ * What the model reads of a settled call: its outcome, page and data. The envelope's invocation id,
+ * tool reference, projection digest and metrics are Keiko's own bookkeeping; they differ on every
+ * call, so sending them costs tokens and breaks the provider's reuse of an unchanged prompt prefix.
+ */
+function modelToolResult(
+  result: NonNullable<ChatToolExchange["result"]>,
+): Pick<
+  NonNullable<ChatToolExchange["result"]>,
+  "status" | "reason" | "effectStarted" | "page" | "data"
+> {
+  return {
+    status: result.status,
+    reason: result.reason,
+    effectStarted: result.effectStarted,
+    page: result.page,
+    data: jiraDraftModelData(result.toolRef?.canonicalId, result.data),
+  };
+}
+
 /** Historical observations never redispatch a call. Keep its remote outcome separate from the
  * catalog settlement, since cancellation cannot roll back an already acknowledged mutation. */
 export function gatewayMessagesForToolExchange(
   exchange: ChatToolExchange,
 ): GatewayConversationMessage[] {
-  const result = exchange.result ?? {
-    status: "unavailable",
-    reason: "observation-unavailable",
-    effect: "unknown",
-  };
+  const result =
+    exchange.result === undefined
+      ? { status: "unavailable", reason: "observation-unavailable", effect: "unknown" }
+      : modelToolResult(exchange.result);
   return [
-    { role: "assistant", content: "", toolCalls: [exchange.call] },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        { id: exchange.call.id, name: exchange.call.name, arguments: exchange.call.arguments },
+      ],
+    },
     {
       role: "tool",
       toolCallId: exchange.call.id,
       content: JSON.stringify(
         exchange.mutationOutcome === undefined
           ? result
-          : { result, mutationOutcome: exchange.mutationOutcome },
+          : {
+              result,
+              mutationOutcome: exchange.mutationOutcome,
+              ...(exchange.draftProgress === undefined
+                ? {}
+                : { draftProgress: jiraDraftRowsForModel(exchange.draftProgress) }),
+            },
       ),
     },
   ];
 }
 
-function transcriptMessages(message: ChatMessage): GatewayConversationMessage[] | undefined {
+function transcriptMessages(
+  message: ChatMessage,
+  content: string,
+): GatewayConversationMessage[] | undefined {
   const exchanges = message.toolTranscript?.exchanges;
   if (exchanges === undefined || exchanges.length === 0) return undefined;
-  return [
-    { role: message.role, content: message.content },
-    ...exchanges.flatMap(gatewayMessagesForToolExchange),
-  ];
+  const turn: GatewayConversationMessage = { role: message.role, content };
+  const tools = exchanges.flatMap(gatewayMessagesForToolExchange);
+  return message.role === "assistant" ? [...tools, turn] : [turn, ...tools];
 }
 
 export const MAX_CONTEXT_MESSAGES = 24;
@@ -97,14 +131,15 @@ function messageForGateway(message: ChatMessage): GatewayConversationTurn | null
   if (message.role !== "user" && message.role !== "assistant") {
     return null;
   }
-  const verbatim = transcriptMessages(message);
+  const content = chatMessagePromptContent(message);
+  const verbatim = transcriptMessages(message, content);
   return {
     role: message.role,
     stableId: message.id,
     content:
       verbatim === undefined
-        ? message.content
-        : `${message.content}\n\n[Untrusted tool observations]\n${JSON.stringify(verbatim.slice(1))}`,
+        ? content
+        : `${content}\n\n[Untrusted tool observations]\n${JSON.stringify(message.toolTranscript?.exchanges.flatMap(gatewayMessagesForToolExchange))}`,
     ...(verbatim === undefined ? {} : { verbatim }),
   };
 }

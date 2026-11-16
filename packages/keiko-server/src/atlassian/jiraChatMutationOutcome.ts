@@ -1,3 +1,4 @@
+import { jiraMutationToolId } from "./jiraMutationToolId.js";
 import type { JiraMutationOutcome } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
@@ -23,7 +24,7 @@ export function jiraChatMutationOutcome({
   record,
   expected,
 }: JiraChatMutationOutcomeInput): JiraMutationOutcome | undefined {
-  if (result.toolRef?.canonicalId !== `keiko.${expected.operation}`) return undefined;
+  if (result.toolRef?.canonicalId !== jiraMutationToolId(expected.operation)) return undefined;
   // Consent can expire before a handler creates its journal. The catalog's effect boundary then
   // proves non-dispatch; an existing durable action always remains authoritative across replay.
   if (record === undefined) return !result.effectStarted ? "not-dispatched" : undefined;

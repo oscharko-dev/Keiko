@@ -535,9 +535,28 @@ function probePassed(report: GatewayReadinessReport, name: string): boolean {
   return report.probes.some((probe) => probe.name === name && probe.status === "passed");
 }
 
+// The tool-calling check ends in one closed outcome (#4351); each has one plain sentence in the
+// person's language that says what it was and what to do next. The key is derived from the closed
+// value, so an outcome without a sentence does not compile and fails the catalog test.
+function toolCallingOutcomeOf(
+  report: GatewayReadinessReport,
+): GatewayReadinessProbeResult["toolCallingOutcome"] {
+  return report.probes.find((probe) => probe.name === "tool_calling")?.toolCallingOutcome;
+}
+
+function toolCallingNote(report: GatewayReadinessReport, t: I18nTranslate): string | undefined {
+  const outcome = toolCallingOutcomeOf(report);
+  return outcome === undefined ? undefined : t(`settings.models.toolOutcome.${outcome}`);
+}
+
 function firstActionableProbeMessage(report: GatewayReadinessReport): string | undefined {
+  // The tool-calling probe with a closed outcome is worded by `toolCallingNote`, in the person's
+  // language, not by the server's English evidence.
   const issue = report.probes.find(
-    (probe) => probe.status !== "passed" && probe.status !== "skipped",
+    (probe) =>
+      probe.status !== "passed" &&
+      probe.status !== "skipped" &&
+      !(probe.name === "tool_calling" && probe.toolCallingOutcome !== undefined),
   );
   return issue?.warning ?? issue?.evidence;
 }
@@ -605,8 +624,10 @@ function capabilityFieldLabel(field: ObservableCapabilityField, t: I18nTranslate
   return t("settings.models.capabilityStreaming");
 }
 
-function displayCapabilityValue(value: boolean | number, t: I18nTranslate): string {
-  if (typeof value === "number") return value.toLocaleString();
+// Numbers follow the UI language, never the host's default locale (#4068: a de-DE Windows host
+// rendered "4.096" inside English copy).
+function displayCapabilityValue(value: boolean | number, t: I18nTranslate, locale: string): string {
+  if (typeof value === "number") return new Intl.NumberFormat(locale).format(value);
   return value ? t("settings.models.yes") : t("settings.models.no");
 }
 
@@ -675,6 +696,7 @@ function CapabilityDisagreementActions({
   readonly onApplied: (model: ModelCapability, observedGeneration: number) => void;
 }): ReactNode {
   const t = useTranslate();
+  const locale = useLocale();
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | undefined>();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -702,8 +724,8 @@ function CapabilityDisagreementActions({
         <div className="mono" key={field}>
           {t("settings.models.capabilityDifference", {
             field: capabilityFieldLabel(field, t),
-            configured: displayCapabilityValue(configured, t),
-            observed: displayCapabilityValue(observed, t),
+            configured: displayCapabilityValue(configured, t, locale),
+            observed: displayCapabilityValue(observed, t, locale),
           })}
         </div>
       ))}
@@ -784,6 +806,29 @@ function ReadinessReportCopyButton({
   );
 }
 
+// What Keiko learned about this deployment (#4351), shown so an operator can see it.
+function ReasoningOnToolTurnsNote({ model }: { readonly model: ModelCapability }): ReactNode {
+  const t = useTranslate();
+  if (model.reasoningOnToolTurns !== "detected") return null;
+  return <div className="ml-url mono">{t("settings.models.reasoningOnToolTurnsDetected")}</div>;
+}
+
+// The first probe issue and, for a model admitted with a limit, the closed tool-calling note.
+function ReadinessNotes({ report }: { readonly report: GatewayReadinessReport }): ReactNode {
+  const t = useTranslate();
+  const warning = firstActionableProbeMessage(report);
+  const toolNote = toolCallingNote(report, t);
+  const outcome = toolCallingOutcomeOf(report);
+  return (
+    <>
+      {warning === undefined ? null : <div className="ml-rwarn">{warning}</div>}
+      {toolNote === undefined ? null : (
+        <div className={outcome === "called-unforced" ? "ml-url mono" : "ml-rwarn"}>{toolNote}</div>
+      )}
+    </>
+  );
+}
+
 function ReadinessSummary({
   model,
   state,
@@ -796,6 +841,7 @@ function ReadinessSummary({
   readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
 }): ReactNode {
   const t = useTranslate();
+  const locale = useLocale();
   if (state === undefined || state.status === "idle") return null;
   if (state.status === "running") {
     return (
@@ -817,7 +863,6 @@ function ReadinessSummary({
   }
   const report = state.report;
   const workingToday = probePassed(report, "chat");
-  const warning = firstActionableProbeMessage(report);
   return (
     <div className="ml-readiness">
       <div className="ml-rrow">
@@ -857,12 +902,14 @@ function ReadinessSummary({
             {report.verifiedCapabilities.testedContextTokens !== undefined ? (
               <span>
                 {t("settings.models.contextTokensShort", {
-                  count: report.verifiedCapabilities.testedContextTokens.toLocaleString(),
+                  count: new Intl.NumberFormat(locale).format(
+                    report.verifiedCapabilities.testedContextTokens,
+                  ),
                 })}
               </span>
             ) : null}
           </div>
-          {warning !== undefined ? <div className="ml-rwarn">{warning}</div> : null}
+          <ReadinessNotes report={report} />
           <CapabilityDisagreementActions
             model={model}
             report={report}
@@ -968,6 +1015,7 @@ function ModelCapabilityRow({
             latencyClass: model.latencyClass,
           })}
         </div>
+        <ReasoningOnToolTurnsNote model={model} />
         <ReadinessSummary
           model={model}
           state={readiness}
@@ -1835,7 +1883,7 @@ export function SettingsPanel({
 }: {
   readonly openUpdatesWindow?: (() => void) | undefined;
   readonly openWorkspaceTrust?: (() => void) | undefined;
-  readonly initialTab?: "mcp" | undefined;
+  readonly initialTab?: "mcp" | "models" | undefined;
   readonly onInitialTabHandled?: (() => void) | undefined;
   readonly root?: string | undefined;
 } = {}): ReactNode {
@@ -1843,8 +1891,8 @@ export function SettingsPanel({
   const workspaceT = useGlobalTranslate();
   const [tab, setTab] = useState<Tab>("models");
   useEffect(() => {
-    if (initialTab === "mcp") {
-      setTab("mcp");
+    if (initialTab !== undefined) {
+      setTab(initialTab);
       onInitialTabHandled?.();
     }
   }, [initialTab, onInitialTabHandled]);

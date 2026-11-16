@@ -1,4 +1,4 @@
-import { basename, dirname, join, resolve, win32 } from "node:path";
+import { posix, win32 } from "node:path";
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -46,9 +46,7 @@ export interface PortablePackageLayout {
 type PathApi = Pick<typeof win32, "basename" | "dirname" | "join" | "resolve">;
 
 function pathApiFor(value: string): PathApi {
-  return value.includes("\\") || /^[a-z]:[\\/]/iu.test(value)
-    ? win32
-    : { basename, dirname, join, resolve };
+  return value.includes("\\") || /^[a-z]:[\\/]/iu.test(value) ? win32 : posix;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

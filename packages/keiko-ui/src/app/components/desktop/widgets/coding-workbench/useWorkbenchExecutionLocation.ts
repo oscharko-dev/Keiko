@@ -29,11 +29,33 @@ export function activeExecutionLocation(
   instance: WorkspaceInstance | null,
   root: string | null,
   selected: WorkbenchExecutionLocation | undefined,
+  offered?: readonly WorkbenchExecutionLocation[],
+): WorkbenchExecutionLocation {
+  return offeredExecutionLocation(preferredExecutionLocation(instance, root, selected), offered);
+}
+
+function preferredExecutionLocation(
+  instance: WorkspaceInstance | null,
+  root: string | null,
+  selected: WorkbenchExecutionLocation | undefined,
 ): WorkbenchExecutionLocation {
   if (selected !== undefined) return selected;
   if (instance?.repositoryRoot === root)
     return instance.executionLocation === "local" ? "local" : "worktree";
   return "local";
+}
+
+/**
+ * #4068: the location a runtime can confine wins over any preference. Behind the Windows broker the
+ * runtime confines only a Keiko-managed worktree, so a saved or default `local` becomes `worktree`
+ * rather than binding a checkout the server would refuse. Absent, every location is offered.
+ */
+function offeredExecutionLocation(
+  location: WorkbenchExecutionLocation,
+  offered: readonly WorkbenchExecutionLocation[] | undefined,
+): WorkbenchExecutionLocation {
+  if (offered === undefined || offered.includes(location)) return location;
+  return offered[0] ?? location;
 }
 
 function bindingReady(
@@ -95,6 +117,12 @@ export interface WorkbenchExecutionLocationState {
   readonly ready: boolean;
   readonly pending: boolean;
   readonly error: boolean;
+  /**
+   * The checkout failed because the server refused the folder as an access decision (the closed
+   * `DENIED` reason), not because of a branch or a failed bind. The cause is known, so the notice
+   * does not guess another one (#4371).
+   */
+  readonly denied: boolean;
   readonly retry: () => void;
 }
 
@@ -107,9 +135,16 @@ interface LocationInput {
   readonly activeInstance: WorkspaceInstance | null;
   readonly branchLoading: boolean;
   readonly branchError: boolean;
+  /** The branch read was refused as an access decision. */
+  readonly branchDenied: boolean;
   readonly workspaceLoading: boolean;
   readonly workspaceError: boolean;
   readonly runIsActive: boolean;
+  /**
+   * The runtime has not yet said which work locations it can confine (#4068). Until it does, no
+   * location is known to be safe: nothing is bound and the selection stays pending.
+   */
+  readonly locationsPending?: boolean | undefined;
   readonly refresh: () => Promise<boolean>;
 }
 
@@ -122,9 +157,11 @@ function useStableLocationInput(input: LocationInput): LocationInput {
     activeInstance,
     branchLoading,
     branchError,
+    branchDenied,
     workspaceLoading,
     workspaceError,
     runIsActive,
+    locationsPending,
     refresh,
   } = input;
   return useMemo(
@@ -136,9 +173,11 @@ function useStableLocationInput(input: LocationInput): LocationInput {
       activeInstance,
       branchLoading,
       branchError,
+      branchDenied,
       workspaceLoading,
       workspaceError,
       runIsActive,
+      locationsPending,
       refresh,
     }),
     [
@@ -149,9 +188,11 @@ function useStableLocationInput(input: LocationInput): LocationInput {
       activeInstance,
       branchLoading,
       branchError,
+      branchDenied,
       workspaceLoading,
       workspaceError,
       runIsActive,
+      locationsPending,
       refresh,
     ],
   );
@@ -174,6 +215,7 @@ function shouldBind(
 ): boolean {
   return (
     !ready &&
+    input.locationsPending !== true &&
     !input.branchLoading &&
     !input.branchError &&
     !input.workspaceLoading &&
@@ -187,6 +229,7 @@ function shouldBind(
 function selectionNeedsBinding(previous: LocationInput, current: LocationInput): boolean {
   return (
     !selectionChanged(previous, current) &&
+    current.locationsPending !== true &&
     !current.branchLoading &&
     !current.branchError &&
     !current.workspaceLoading &&
@@ -328,20 +371,26 @@ function bindingError(
   );
 }
 
+/** A failure is a refusal only when the server named the folder's branch read as one. */
+function bindingDenied(error: boolean, input: LocationInput): boolean {
+  return error && input.branchDenied;
+}
+
 export function useWorkbenchExecutionLocation(
   input: LocationInput,
 ): WorkbenchExecutionLocationState {
   const key = `${input.root ?? ""}\0${input.branch ?? ""}\0${input.location}\0${String(input.folderMode)}`;
   const ready =
+    input.locationsPending !== true &&
     !input.workspaceLoading &&
     !input.workspaceError &&
     bindingReady(input.activeInstance, input.root, input.branch, input.location, input.folderMode);
   const attempt = useBindingAttempt(input, ready, key);
-  const pending = attempt.pending || input.workspaceLoading || (!ready && input.branchLoading);
-  return {
-    ready,
-    pending,
-    error: bindingError(input, ready, pending, key, attempt),
-    retry: attempt.retry,
-  };
+  const pending =
+    attempt.pending ||
+    input.locationsPending === true ||
+    input.workspaceLoading ||
+    (!ready && input.branchLoading);
+  const error = bindingError(input, ready, pending, key, attempt);
+  return { ready, pending, error, denied: bindingDenied(error, input), retry: attempt.retry };
 }

@@ -1,11 +1,12 @@
 // Issue #198 — state management hook for the capsule detail view.
 // Split from capsule-detail.tsx to keep both files under the 400-LOC budget.
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { fetchCapsuleDetail } from "@/lib/local-knowledge-api";
 import type { CapsuleDetail } from "@/lib/local-knowledge-api";
 import { formatError } from "../format-error";
+import { beginPodSelectionEvidence } from "../pod-selection-evidence";
 
 type DetailLoadStatus = "loading" | "ready" | "error";
 
@@ -13,8 +14,20 @@ export interface CapsuleDetailState {
   readonly data: CapsuleDetail | null;
   readonly loadStatus: DetailLoadStatus;
   readonly loadError: string | null;
+  /** A failed keep-view re-read: the page stays on its last data and shows this inline. */
+  readonly refreshError: string | null;
   readonly reload: () => void;
+  /** Re-reads the pod without swapping the page for its loading state; a failure stays visible. */
+  readonly refresh: () => void;
   readonly replaceData: (nextData: CapsuleDetail) => void;
+}
+
+// A foreground load swaps the page for its loading state; polling and a keep-view re-read do not.
+function isForegroundLoad(opts: {
+  readonly quiet?: boolean;
+  readonly keepView?: boolean;
+}): boolean {
+  return opts.quiet !== true && opts.keepView !== true;
 }
 
 export function useCapsuleDetail(
@@ -24,35 +37,78 @@ export function useCapsuleDetail(
   const [data, setData] = useState<CapsuleDetail | null>(null);
   const [loadStatus, setLoadStatus] = useState<DetailLoadStatus>("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const activeScope = useRef<{
+    readonly capsuleId: KnowledgeCapsuleId;
+    readonly settled: ReturnType<typeof beginPodSelectionEvidence>;
+  } | null>(null);
+
+  // A keep-view re-read keeps the pod on screen (a connect just succeeded, say) and says so inline;
+  // a quiet poll stays silent; any other load replaces the page with its error.
+  const settleFailure = useCallback(
+    (
+      error: unknown,
+      opts: { readonly quiet?: boolean; readonly keepView?: boolean },
+      scope: NonNullable<typeof activeScope.current>,
+    ): void => {
+      if (opts.quiet === true) return;
+      if (opts.keepView === true) {
+        setRefreshError(formatError(error));
+      } else {
+        setLoadError(formatError(error));
+        setLoadStatus("error");
+      }
+      scope.settled("failed");
+    },
+    [],
+  );
 
   const load = useCallback(
-    async (opts: { readonly quiet?: boolean } = {}): Promise<void> => {
+    async (opts: { readonly quiet?: boolean; readonly keepView?: boolean } = {}): Promise<void> => {
+      const scope = activeScope.current;
+      if (scope?.capsuleId !== capsuleId) return;
       if (capsuleId === "") {
         setData(null);
         setLoadError("No Knowledge Pod selected.");
         setLoadStatus("error");
+        scope.settled("unavailable");
         return;
       }
-      if (opts.quiet !== true) {
+      if (isForegroundLoad(opts)) {
         setLoadStatus("loading");
         setLoadError(null);
+        setRefreshError(null);
       }
       try {
         const result = await fetchImpl(capsuleId);
+        if (activeScope.current !== scope) {
+          scope.settled("stale");
+          return;
+        }
         setData(result);
+        setRefreshError(null);
         setLoadStatus("ready");
+        scope.settled("applied");
       } catch (error) {
-        if (opts.quiet === true) return;
-        setLoadError(formatError(error));
-        setLoadStatus("error");
+        if (activeScope.current !== scope) {
+          scope.settled("stale");
+          return;
+        }
+        settleFailure(error, opts, scope);
       }
     },
-    [capsuleId, fetchImpl],
+    [capsuleId, fetchImpl, settleFailure],
   );
 
   useEffect(() => {
+    const scope = { capsuleId, settled: beginPodSelectionEvidence() };
+    activeScope.current = scope;
     void load();
-  }, [load]);
+    return (): void => {
+      if (activeScope.current === scope) activeScope.current = null;
+      scope.settled("cancelled");
+    };
+  }, [capsuleId, load]);
 
   useEffect(() => {
     const latestJob = data?.indexingJobs[0];
@@ -89,7 +145,7 @@ export function useCapsuleDetail(
     };
     if (!isHidden()) startPolling();
     document.addEventListener("visibilitychange", sync);
-    return () => {
+    return (): void => {
       stopPolling();
       document.removeEventListener("visibilitychange", sync);
     };
@@ -99,11 +155,27 @@ export function useCapsuleDetail(
     void load();
   }
 
+  function refresh(): void {
+    void load({ keepView: true });
+  }
+
+  const replacementScope = activeScope.current;
   function replaceData(nextData: CapsuleDetail): void {
+    const settled = beginPodSelectionEvidence();
+    if (
+      replacementScope === null ||
+      activeScope.current !== replacementScope ||
+      replacementScope.capsuleId !== capsuleId ||
+      nextData.capsule.id !== capsuleId
+    ) {
+      settled("stale");
+      return;
+    }
     setData(nextData);
     setLoadError(null);
     setLoadStatus("ready");
+    settled("applied");
   }
 
-  return { data, loadStatus, loadError, reload, replaceData };
+  return { data, loadStatus, loadError, refreshError, reload, refresh, replaceData };
 }

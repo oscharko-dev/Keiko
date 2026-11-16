@@ -119,8 +119,9 @@ missing mode values still fall back to `governed-assist`, and the effective mode
 the deployment ceiling. ADR-0124 D2's owner amendment (2026-09-27) makes all three Coding
 modes available by default without additional configuration. This is a surface availability
 ceiling, not a selected run mode: the human still chooses the mode, the default selection remains
-Ask for approval, and explicit narrower configuration still applies. Memory keeps its previous
-approval baseline when no ceiling is configured.
+Ask for approval, and explicit narrower configuration still applies. Memory keeps its
+`governed-assist` baseline for its modes and standing maintenance when no ceiling is configured;
+routine facts need no approval unless an operator configured that ceiling (ADR-0146 D2, #4206).
 
 ### D2 - Dock onto the existing editor-agent control plane
 
@@ -295,6 +296,26 @@ and the registry's entry, eviction and expiry counts), so that refusal reads as 
 registration and not as an engine defect. The `escaped-line-break` refusal class and the
 pre-checks that raised it are removed.
 
+**A UTF-8 byte order mark is the file's encoding, not its text (2026-11-06).** Every governed
+reader of a workspace file decodes a leading U+FEFF away, as WHATWG UTF-8 decoding does: the secure
+read whose whole-file digest `keiko_workspace_read` reports and whose text the materializer edits,
+and the editor's document read whose version hash a document precondition carries. The patch
+inspection of `keiko-tools` read the raw text and hashed the mark with it, so every edit of a file
+that starts with one (a BOM + CRLF file as Windows PowerShell 5 writes it) was refused
+`CONTENT_HASH_MISMATCH` on the review path and the server path alike. The inspection now binds a
+file to the same decoded text: `sourceContentHash` and the source version's `contentHash` are the
+SHA-256 of the text without the mark, and an empty or mark-only file hashes as the empty text.
+A diff that does not spell the mark (every diff the server renders, and a model's own diff of the
+text it read) is matched against that text, and the write puts the mark back in front of what the
+diff produced, so an edit keeps the file's encoding; a rollback restores the raw original. A diff
+whose first old-side line starts with the mark (a full-file rewrite of the raw text, such as the
+workspace replace preflight, or Git's own diff of the file) addresses the raw text it spells, as it
+always did, and so can also remove the mark. The inspected file reports which reading applied
+(`byteOrderMark`: `none`, `signature`, `diff-text`), and the route writes one body-free
+`editor.agent.changeset-byte-order-mark` line (stage, file count and the two counts) for each
+admission or result inspection that met a mark. The secure read's own BOM handling is unchanged:
+its text read strips the mark and its snapshot read keeps the physical bytes.
+
 The server routes this through the existing `keiko-tools` patch validation and
 atomic apply/rollback path. Closed files may be changed by that governed server workspace
 transaction after the mode and Authority Envelope permit it. Dirty targets include retained,
@@ -425,8 +446,8 @@ tool call and its patch body or inserted text-edit bytes when applicable. Reserv
 cumulative per server-owned authority record; exceeding `maxToolCalls`, `maxPatchBytes`, or elapsed
 `maxRuntimeMs` fails as
 `authority-budget-exceeded`. Idempotent replay returns the retained result before reservation and
-therefore does not double-charge. Editor actions carry no prompt body, so this route consumes zero
-of `maxPromptTokens`.
+therefore does not double-charge. The envelope carries no prompt-token allowance (owner decision
+2026-11-11, ADR-0137 D2); a legacy `maxPromptTokens` key validates and is ignored.
 
 Audit and evidence remain redacted and body-free: ids, digests, modes, effects, reason codes, the
 bounded `agent | chat` action origin, contained file labels, counts, byte counts, statuses, and

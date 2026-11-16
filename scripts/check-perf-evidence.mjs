@@ -795,10 +795,10 @@ function evaluateD12Toolchain(provenance, label) {
   ];
   if (provenance.platform !== "linux") failures.push(`${label}: platform must be linux`);
   if (provenance.nodeVersion !== EXPECTED_NODE_BASELINE) {
-    failures.push(`${label}: Node.js version must be 24.18.0`);
+    failures.push(`${label}: Node.js version must be ${EXPECTED_NODE_BASELINE}`);
   }
   if (provenance.npmVersion !== EXPECTED_NPM_ENGINE) {
-    failures.push(`${label}: npm version must be 11.16.0`);
+    failures.push(`${label}: npm version must be ${EXPECTED_NPM_ENGINE}`);
   }
   for (const field of requiredStrings) {
     if (typeof provenance[field] !== "string" || provenance[field].length === 0) {
@@ -2400,10 +2400,10 @@ function evaluateD12BundleRuntime(value, label) {
     );
   }
   if (runtime.nodeVersion !== EXPECTED_NODE_BASELINE) {
-    failures.push(`${label} runtime Node.js version must be 24.18.0`);
+    failures.push(`${label} runtime Node.js version must be ${EXPECTED_NODE_BASELINE}`);
   }
   if (runtime.npmVersion !== EXPECTED_NPM_ENGINE) {
-    failures.push(`${label} runtime npm version must be 11.16.0`);
+    failures.push(`${label} runtime npm version must be ${EXPECTED_NPM_ENGINE}`);
   }
   for (const field of ["architecture", "osRelease", "zlibVersion"]) {
     if (typeof runtime[field] !== "string" || runtime[field].length === 0) {

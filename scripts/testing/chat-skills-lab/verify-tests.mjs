@@ -8,7 +8,8 @@ import { URL } from "node:url";
 import { APP } from "./cases.mjs";
 import { qualifiedBaseline, qualifiedPair, resultCounts } from "./verification-result.mjs";
 
-const IMAGE = "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059";
+const IMAGE =
+  "node:26.13.1-bookworm@sha256:b7087bc4d973034b30854b378ba107f9fab622b47514cb7e2592e41b8bab8d49";
 const COMMAND = `set -eu
 mkdir /tmp/qualified
 cp /input/* /tmp/qualified/

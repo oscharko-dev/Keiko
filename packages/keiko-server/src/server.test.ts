@@ -18,7 +18,11 @@ import type {
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
-import { isActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  isActivityLogReadinessSnapshot,
+  isServerInstanceId,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { SERVER_INSTANCE_ID } from "./server-instance.js";
 import {
   currentActivityLogReadiness,
   createServerLogger,
@@ -69,7 +73,14 @@ async function fetchRaw(path: string): Promise<RawResponse> {
 }
 
 async function fetchRawWithInit(path: string, init: RequestInit): Promise<RawResponse> {
-  const response = await fetch(`${baseUrl()}${path}`, init);
+  const headers = new Headers(init.headers);
+  if (path === "/api/workspace/state" && init.method === "PUT") {
+    const ownership = JSON.parse((await fetchRaw(path)).text) as {
+      workspace: { storageId: string };
+    };
+    headers.set("X-Keiko-Workspace-Storage", ownership.workspace.storageId);
+  }
+  const response = await fetch(`${baseUrl()}${path}`, { ...init, headers });
   return { status: response.status, headers: response.headers, text: await response.text() };
 }
 
@@ -155,12 +166,17 @@ describe("GET /api/health", () => {
     const res = await fetchRaw("/api/health");
     expect(res.status).toBe(200);
     const body: unknown = JSON.parse(res.text);
-    // The in-process server answers from the same readiness module the test reads.
-    expect(body).toEqual({
+    // The in-process server answers from the same readiness module the test reads. The instance
+    // identity is regenerated at every process start, so it is checked against its owner and shape
+    // instead of being restated here (#4370).
+    const { instanceId, ...rest } = body as Record<string, unknown>;
+    expect(rest).toEqual({
       status: "ok",
       version: SDK_VERSION,
       diagnostics: currentActivityLogReadiness(),
     });
+    expect(isServerInstanceId(instanceId)).toBe(true);
+    expect(instanceId).toBe(SERVER_INSTANCE_ID);
     expect(isActivityLogReadinessSnapshot(Reflect.get(body as object, "diagnostics"))).toBe(true);
     expect(res.headers.get("cache-control")).toBe("no-store");
   });
@@ -885,7 +901,7 @@ describe("unknown API routes", () => {
           capability === "runtime-gateway-capability" && audience === "model-gateway"
             ? { ok: true, binding: { runId: "run-server-test" } }
             : { ok: false },
-        reservePromptTokens: () => ({ ok: true, runId: "run-server-test" }),
+        admitModelCall: () => ({ ok: true, runId: "run-server-test" }),
       },
       store,
     };
@@ -992,7 +1008,7 @@ describe("unknown API routes", () => {
           capability === "runtime-gateway-capability" && audience === "model-gateway"
             ? { ok: true, binding: { runId: "run-server-test" } }
             : { ok: false },
-        reservePromptTokens: () => ({ ok: true, runId: "run-server-test" }),
+        admitModelCall: () => ({ ok: true, runId: "run-server-test" }),
       },
       store,
     };

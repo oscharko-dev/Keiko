@@ -20,7 +20,7 @@ import type {
   UserId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { captureSalientFromTurn, scheduleMemorySalienceCapture } from "./memory-salience.js";
+import { captureSalientFromTurn, learnStoredTurn } from "./memory-salience.js";
 import {
   conversationMemoryScopes,
   type ConversationMemoryRuntimeContext,
@@ -31,28 +31,22 @@ import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const ATLAS_FACTS = JSON.stringify([
   {
-    source: "user",
+    about: "self",
     body: "I'm building a fintech app called Atlas.",
+    evidence: "I'm building a fintech app called Atlas.",
     type: "fact",
-    confidence: 0.7,
-    scope: "project",
-    tags: ["atlas"],
   },
   {
-    source: "user",
-    body: "Atlas is written in Rust.",
+    about: "self",
+    body: "I write Atlas in Rust.",
+    evidence: "I write Atlas in Rust.",
     type: "fact",
-    confidence: 0.8,
-    scope: "project",
-    tags: ["rust"],
   },
   {
-    source: "user",
-    body: "My team is in Berlin.",
+    about: "self",
+    body: "I live in Berlin.",
+    evidence: "I live in Berlin.",
     type: "fact",
-    confidence: 0.6,
-    scope: "user",
-    tags: ["berlin"],
   },
 ]);
 
@@ -76,52 +70,6 @@ function fakeModel(content: string | (() => never)): ModelPort {
       });
     },
   };
-}
-
-interface DeferredModel {
-  readonly port: ModelPort;
-  readonly callCount: () => number;
-  readonly resolveAll: () => void;
-}
-
-function deferredModel(): DeferredModel {
-  const resolvers: (() => void)[] = [];
-  let callCount = 0;
-  return {
-    port: {
-      call(request): Promise<NormalizedResponse> {
-        callCount += 1;
-        return new Promise<NormalizedResponse>((resolve) => {
-          resolvers.push(() => {
-            resolve({
-              modelId: request.modelId,
-              content: "[]",
-              finishReason: "stop",
-              toolCalls: [],
-              structuredOutput: null,
-              usage: {
-                requestId: "salience-scheduler-test",
-                promptTokens: 7,
-                completionTokens: 3,
-                latencyMs: 11,
-                costClass: "high",
-              },
-            });
-          });
-        });
-      },
-    },
-    callCount: () => callCount,
-    resolveAll: (): void => {
-      for (const resolve of resolvers.splice(0)) resolve();
-    },
-  };
-}
-
-function yieldToImmediate(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 }
 
 let activeVaults: MemoryVaultStore[] = [];
@@ -179,7 +127,7 @@ function context(): ConversationMemoryRuntimeContext {
 }
 
 const USER_TEXT =
-  "I'm building a fintech app called Atlas. Atlas is written in Rust. My team is in Berlin.";
+  "I'm building a fintech app called Atlas. I write Atlas in Rust. I live in Berlin.";
 
 function salienceConfig(
   modelId: string,
@@ -284,71 +232,183 @@ function readMemories(
 }
 
 describe("captureSalientFromTurn", () => {
-  it("keeps the shared desktop and voice scheduler off-path, bounded, and reusable", async () => {
+  // #4212 review: the person can forget the turn while its embedding is computed. A forget that
+  // arrives during that wait, with the embedding failing, must still keep the fact out.
+  it("does not learn a fact the person forgot while its embedding was computed", async () => {
     const vault = makeVault();
-    const model = deferredModel();
-    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
-    const deps = makeDeps({ memoryVault: vault, modelPortFactory: () => model.port, diagnostics });
     const ctx = context();
-    const request = { content: USER_TEXT, memory: { enabled: true } };
-    try {
-      for (let index = 0; index < 32; index += 1) {
-        scheduleMemorySalienceCapture(
-          deps,
-          request,
-          ctx,
-          "gpt-test",
-          "ok",
-          "desktop",
-          `assistant-${String(index)}`,
+    const statement = "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.";
+    const config = salienceConfig("gpt-test", false);
+    let embeddingCalls = 0;
+    const deps = makeDeps({
+      memoryVault: vault,
+      configPresent: true,
+      config: {
+        ...config,
+        providers: [
+          ...config.providers,
+          { ...config.providers[0], modelId: "text-embedding-3-large" } as never,
+        ],
+      },
+      modelPortFactory: () =>
+        fakeModel(
+          JSON.stringify([
+            {
+              about: "self",
+              body: "Ich bevorzuge Tabellen",
+              evidence: "Ich bevorzuge Tabellen",
+              type: "fact",
+            },
+          ]),
+        ),
+      localKnowledgeEmbeddingRequest: () => {
+        embeddingCalls += 1;
+        vault.recordForgottenStatements(
+          conversationMemoryScopes(ctx).map((scope) => ({
+            scope,
+            body: statement,
+            forgetterSurface: "chat-statement",
+            reviewerId: "local-operator",
+            reason: "explicit-user-request",
+            nowMs: Date.now(),
+          })) as never,
         );
-      }
-      scheduleMemorySalienceCapture(
-        deps,
-        request,
-        ctx,
-        "gpt-test",
-        "ok",
-        "voice",
-        "assistant-dropped",
-      );
+        return Promise.resolve({ ok: false as const, kind: "rate-limited" as const });
+      },
+    });
+    await captureSalientFromTurn(
+      deps,
+      { content: statement, memory: { enabled: true, mode: "autonomous-delivery" } },
+      ctx,
+      "gpt-test",
+      "Gern.",
+    );
+    expect(embeddingCalls).toBeGreaterThan(0);
+    expect(readMemories(vault, ctx).filter((record) => record.status !== "rejected")).toEqual([]);
+  });
 
-      expect(model.callCount()).toBe(0);
-      await vi.waitFor(() => {
-        expect(model.callCount()).toBe(32);
-      });
-      expect(diagnostics.record).toHaveBeenCalledWith(
-        expect.objectContaining({
-          errorClass: "SalienceCaptureDropped",
-          // Issue #3245: `message` is now the fixed closed-vocabulary condition label; the
-          // surface/pending-count detail (previously composed into free text here) moved to `code`.
-          message: "salience-capture-dropped-queue-full",
-          code: "surface=voice pending=32/32",
-          // ADR-0173 D5 / g12: this informational diagnostic used to mint its own disconnected
-          // `randomUUID()` instead of reusing the turn-scoped id the caller already resolved
-          // (`"assistant-dropped"`, the correlationId argument below). Fails before the fix.
-          correlationId: "assistant-dropped",
+  // #4212 review: a paraphrased repeat that names an end date reached only the semantic gate, which
+  // confirmed the fact and dropped the date.
+  it("ends a known fact when a paraphrased repeat names an end date", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const config = salienceConfig("gpt-test", false);
+    const vector = Float32Array.from({ length: 3072 }, (_, i) => ((i + 1) % 7) / 7);
+    let answer = "";
+    const deps = makeDeps({
+      memoryVault: vault,
+      configPresent: true,
+      codingRuntimeDeploymentCeiling: "autonomous-delivery",
+      config: {
+        ...config,
+        providers: [
+          ...config.providers,
+          { ...config.providers[0], modelId: "text-embedding-3-large" } as never,
+        ],
+      },
+      modelPortFactory: () => fakeModel(answer),
+      localKnowledgeEmbeddingRequest: () =>
+        Promise.resolve({
+          ok: true as const,
+          value: { vector, modelId: "text-embedding-3-large" },
         }),
-      );
-
-      model.resolveAll();
-      await yieldToImmediate();
-      scheduleMemorySalienceCapture(
+    });
+    const say = async (content: string, item: Record<string, unknown>): Promise<void> => {
+      answer = JSON.stringify([{ about: "self", type: "fact", ...item }]);
+      await captureSalientFromTurn(
         deps,
-        request,
+        { content, memory: { enabled: true, mode: "autonomous-delivery" } },
         ctx,
         "gpt-test",
-        "ok",
-        "voice",
-        "assistant-retry",
+        "Gern.",
       );
-      await vi.waitFor(() => {
-        expect(model.callCount()).toBe(33);
-      });
-    } finally {
-      model.resolveAll();
-      await yieldToImmediate();
-    }
+    };
+    await say("Ich arbeite bei Acme.", {
+      body: "Ich arbeite bei Acme",
+      evidence: "Ich arbeite bei Acme",
+    });
+    const paraphrase = "Ich arbeite in der Firma Acme";
+    await say(`${paraphrase} bis Dezember 2027.`, {
+      body: paraphrase,
+      evidence: paraphrase,
+      relation: "same",
+      related: 1,
+    });
+
+    const live = readMemories(vault, ctx).filter((record) => record.status === "accepted");
+    expect(live.map((record) => record.body)).toEqual([paraphrase]);
+    expect(new Date(live[0]?.validity.validUntil ?? 0).getUTCFullYear()).toBe(2027);
+  });
+
+  // #4213: a learning pass owns the signal of its model call; a new message aborts the pass, and the
+  // abort reaches the provider request instead of a signal nobody can abort.
+  it("hands a stored turn's model call the pass's signal and reports the cancellation", async () => {
+    let seenSignal: AbortSignal | undefined;
+    const model: ModelPort = {
+      call(_request, signal): Promise<NormalizedResponse> {
+        seenSignal = signal;
+        return new Promise<NormalizedResponse>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new Error("aborted by the pass"));
+          });
+        });
+      },
+    };
+    const deps = makeDeps({ memoryVault: makeVault(), modelPortFactory: () => model });
+    const pass = new AbortController();
+    const learning = learnStoredTurn(
+      deps,
+      {
+        request: { content: USER_TEXT, sourceMessageId: "message-1", memory: { enabled: true } },
+        context: context(),
+        modelId: "gpt-test",
+        assistantText: "ok",
+        surface: "desktop",
+        correlationId: "assistant-1",
+        parentCorrelationId: "pass-1",
+      },
+      pass.signal,
+    );
+    await vi.waitFor(() => {
+      expect(seenSignal).toBeDefined();
+    });
+    expect(seenSignal?.aborted).toBe(false);
+    pass.abort("foreground-chat-work");
+    expect(seenSignal?.aborted).toBe(true);
+    await expect(learning).resolves.toEqual({ outcome: "cancelled", actionCount: 0 });
+  });
+
+  it("leaves a stored turn pending when the model is unavailable", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const turn = {
+      request: { content: USER_TEXT, sourceMessageId: "message-1", memory: { enabled: true } },
+      context: ctx,
+      modelId: "gpt-test",
+      assistantText: "ok",
+      surface: "desktop" as const,
+      correlationId: "assistant-1",
+      parentCorrelationId: "pass-1",
+    };
+    const missing = makeDeps({ memoryVault: vault, modelPortFactory: () => undefined });
+    await expect(learnStoredTurn(missing, turn, new AbortController().signal)).resolves.toEqual({
+      outcome: "unavailable",
+      actionCount: 0,
+    });
+    const failing = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () =>
+        fakeModel(() => {
+          throw Object.assign(new Error("provider down"), { code: "GATEWAY_PROVIDER_ERROR" });
+        }),
+    });
+    await expect(
+      learnStoredTurn(failing, turn, new AbortController().signal),
+    ).resolves.toMatchObject({ outcome: "unavailable", actionCount: 0 });
+    expect(countMemories(vault, ctx)).toBe(0);
+    await expect(
+      learnStoredTurn(makeDeps({ memoryVault: vault }), turn, new AbortController().signal),
+    ).resolves.toEqual({ outcome: "learned", actionCount: 3 });
   });
 
   // #4098: the Chat content opt-out preserves an answer for its reader; memory proposals keep the
@@ -372,14 +432,18 @@ describe("captureSalientFromTurn", () => {
         ...(contentRedaction === undefined ? {} : { contentRedaction }),
       });
       const answer = "The customer hotline is +49 30 12345678.";
-      scheduleMemorySalienceCapture(
+      await learnStoredTurn(
         deps,
-        { content: USER_TEXT, memory: { enabled: true } },
-        context(),
-        "gpt-test",
-        answer,
-        "desktop",
-        "assistant-policy",
+        {
+          request: { content: USER_TEXT, memory: { enabled: true } },
+          context: context(),
+          modelId: "gpt-test",
+          assistantText: answer,
+          surface: "desktop",
+          correlationId: "assistant-policy",
+          parentCorrelationId: "pass-policy",
+        },
+        new AbortController().signal,
       );
       await vi.waitFor(() => {
         expect(seen).toHaveLength(1);
@@ -427,6 +491,7 @@ describe("captureSalientFromTurn", () => {
     expect(diagnostics.record).toHaveBeenCalledWith(
       expect.objectContaining({
         errorClass: "SalienceCaptureSummary",
+        diagnosticOutcome: "routine",
         correlationId: "assistant-summary-turn",
       }),
     );
@@ -516,12 +581,10 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
-              body: "Hallo Keiko, ich bin Oliver.",
+              about: "self",
+              body: "Ich bin Oliver.",
+              evidence: "ich bin Oliver",
               type: "identity",
-              confidence: 0.9,
-              scope: "user",
-              tags: ["identity"],
             },
           ]),
         ),
@@ -536,7 +599,7 @@ describe("captureSalientFromTurn", () => {
     );
     expect(actions).toHaveLength(1);
     const records = readMemories(vault, ctx);
-    expect(records[0]?.body).toBe("Hallo Keiko, ich bin Oliver.");
+    expect(records[0]?.body).toBe("Ich bin Oliver");
   });
 
   it("uses json_schema responseFormat only when the configured model supports it", async () => {
@@ -759,7 +822,7 @@ describe("captureSalientFromTurn", () => {
     expect(assistantMessage?.content).toContain("assistant-context-marker");
   });
 
-  it("persists records that carry tags and the salience captureRationale through validation", async () => {
+  it("persists learned records with the salience captureRationale through validation", async () => {
     // The vault runs gateMemoryRecord on insert, so reading the records back proves the full
     // round-trip (tags + provenance.captureRationale) survives contract validation.
     const vault = makeVault();
@@ -779,10 +842,9 @@ describe("captureSalientFromTurn", () => {
         "Automatically inferred from conversation (salience capture)",
       );
       expect(record.provenance.sourceKind).toBe("system-default");
-      expect(record.status).toBe("proposed");
+      // #4206: a routine private fact is accepted at once under default deps.
+      expect(record.status).toBe("accepted");
     }
-    const atlasRecord = records.find((r) => r.body.includes("Atlas"));
-    expect(atlasRecord?.tags).toContain("atlas");
   });
 
   it("captures nothing when memory is disabled", async () => {
@@ -895,6 +957,7 @@ describe("captureSalientFromTurn", () => {
     expect(diagnosticCall).toBeDefined();
     const entry = diagnosticCall?.[0];
     expect(entry?.code).toBe("responseFormat=false:kind=parse-or-empty-output:rawItemCount=0");
+    expect(entry?.diagnosticOutcome).toBe("routine");
     expect(JSON.stringify(entry)).not.toContain("gpt-4o");
     expect(entry?.code).not.toMatch(/ /);
   });
@@ -966,7 +1029,8 @@ describe("captureSalientFromTurn", () => {
     expect(actions).toHaveLength(3);
   });
 
-  it("persists confidential salience candidates as masked reviewable proposals", async () => {
+  // #4206: nobody reviews a memory any more, so confidential content is refused and stored nowhere.
+  it("refuses confidential salience candidates and stores nothing", async () => {
     const vault = makeVault();
     const deps = makeDeps({
       memoryVault: vault,
@@ -974,12 +1038,10 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "My private support email is developer@example.com.",
+              evidence: "My private support email is developer@example.com.",
               type: "fact",
-              confidence: 0.8,
-              scope: "user",
-              tags: ["support"],
             },
           ]),
         ),
@@ -992,23 +1054,14 @@ describe("captureSalientFromTurn", () => {
       "gpt-test",
       "ok",
     );
-    expect(actions).toHaveLength(1);
-    expect(actions[0]).toMatchObject({
-      kind: "candidate",
-      body: "Sensitive memory pending review.",
-      requiresApproval: true,
-    });
-    const records = readMemories(vault, ctx);
-    expect(records).toHaveLength(1);
-    expect(records[0]?.status).toBe("proposed");
-    expect(records[0]?.provenance.sensitivity).toBe("confidential");
-    expect(records[0]?.body).toBe("My private support email is developer@example.com.");
+    expect(actions).toEqual([{ kind: "rejected", reason: "sensitive-memory-requires-approval" }]);
+    expect(readMemories(vault, ctx)).toEqual([]);
   });
 
-  it("isPersistableMemoryCandidate guard persists non-restricted sensitive and public candidates", async () => {
-    // Model returns two items: one with an email address (confidential → reviewable masked
-    // candidate) and one plain public fact. Credential/restricted shapes are still rejected by
-    // memory-capture before this persistence layer.
+  it("isPersistableMemoryCandidate guard refuses confidential candidates and persists public ones", async () => {
+    // Model returns two items: one with an email address (confidential → refused, #4206) and one
+    // plain public fact. Credential/restricted shapes are still rejected by memory-capture before
+    // this persistence layer.
     const vault = makeVault();
     const deps = makeDeps({
       memoryVault: vault,
@@ -1016,20 +1069,16 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "My contact email is private@example.com.",
+              evidence: "My contact email is private@example.com.",
               type: "fact",
-              confidence: 0.7,
-              scope: "user",
-              tags: ["contact"],
             },
             {
-              source: "user",
+              about: "self",
               body: "I work in the payments domain.",
+              evidence: "I work in the payments domain.",
               type: "fact",
-              confidence: 0.7,
-              scope: "user",
-              tags: ["payments"],
             },
           ]),
         ),
@@ -1046,19 +1095,14 @@ describe("captureSalientFromTurn", () => {
       "ok",
     );
     expect(actions).toHaveLength(2);
-    const candidates = actions.filter((a) => a.kind === "candidate");
-    expect(candidates).toHaveLength(2);
-    expect(candidates[0]).toMatchObject({
-      kind: "candidate",
-      body: "Sensitive memory pending review.",
-      requiresApproval: true,
-    });
-    expect(candidates[1]).toMatchObject({
+    expect(actions[0]).toEqual({ kind: "rejected", reason: "sensitive-memory-requires-approval" });
+    expect(actions[1]).toMatchObject({
       kind: "candidate",
       body: "I work in the payments domain.",
       requiresApproval: false,
+      status: "accepted",
     });
-    expect(countMemories(vault, ctx)).toBe(2);
+    expect(countMemories(vault, ctx)).toBe(1);
   });
 
   it("does not skip salience when the user text contains PII alongside a public fact", async () => {
@@ -1069,20 +1113,16 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
-              body: "Meine Telefonnummer ist +49 30 1234567.",
+              about: "self",
+              body: "Meine E-Mail ist paul@example.com.",
+              evidence: "Meine E-Mail ist paul@example.com.",
               type: "fact",
-              confidence: 0.7,
-              scope: "user",
-              tags: ["contact"],
             },
             {
-              source: "user",
+              about: "self",
               body: "Ich bevorzuge Vitest.",
+              evidence: "Ich bevorzuge Vitest.",
               type: "preference",
-              confidence: 0.8,
-              scope: "user",
-              tags: ["testing"],
             },
           ]),
         ),
@@ -1091,7 +1131,7 @@ describe("captureSalientFromTurn", () => {
     const actions = await captureSalientFromTurn(
       deps,
       {
-        content: "Meine Telefonnummer ist +49 30 1234567. Ich bevorzuge Vitest.",
+        content: "Meine E-Mail ist paul@example.com. Ich bevorzuge Vitest.",
         memory: { enabled: true },
       },
       ctx,
@@ -1099,17 +1139,14 @@ describe("captureSalientFromTurn", () => {
       "ok",
     );
     expect(actions).toHaveLength(2);
-    expect(actions[0]).toMatchObject({
-      kind: "candidate",
-      body: "Sensitive memory pending review.",
-      requiresApproval: true,
-    });
+    expect(actions[0]).toEqual({ kind: "rejected", reason: "sensitive-memory-requires-approval" });
     expect(actions[1]).toMatchObject({
       kind: "candidate",
       body: "Ich bevorzuge Vitest.",
       requiresApproval: false,
+      status: "accepted",
     });
-    expect(countMemories(vault, ctx)).toBe(2);
+    expect(countMemories(vault, ctx)).toBe(1);
   });
 
   it("skips the salience model call when the user text contains a credential", async () => {
@@ -1159,12 +1196,10 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "CustomerOmega requires SSO for releases.",
+              evidence: "CustomerOmega requires SSO for releases.",
               type: "fact",
-              confidence: 0.8,
-              scope: "project",
-              tags: ["customer"],
             },
           ]),
         ),

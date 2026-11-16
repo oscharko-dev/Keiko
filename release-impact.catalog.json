@@ -4287,6 +4287,112 @@
         "Project reports count deviations straight from Jira, show them on a card that the model's wording cannot change, and export as Markdown or CSV.",
         "Long Jira turns follow the accepted authority budget instead of fixed limits, and a turn that ends early lists exactly what it already did."
       ]
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "breakingException": {
+        "rationale": "Node 24 is no longer supported. An installed 1.4.0 npm updater cannot upgrade the host runtime, so this release requires manual review rather than an automatic update. No universal one-click carry-forward path is claimed.",
+        "warningText": "For npm installations, upgrade the host to Node.js >=26.13.1 <27 and npm >=11.20.0 <12 before installing 1.5.0. Desktop packages include Node 26. Back up local state and retain its private keys; UI, Memory Vault and Knowledge databases migrate automatically, and a downgrade requires the matching pre-update backup. Installations at 1.2.6 or earlier still require the verified managed-install updater bootstrap before later automatic updates.",
+        "verifiedCarryForward": false
+      },
+      "packageVersion": "1.5.0",
+      "releaseTag": "v1.5.0",
+      "supportedFrom": [
+        "0.2.0",
+        "1.2.6",
+        "1.2.7",
+        "1.3.0",
+        "1.3.1",
+        "1.3.2",
+        "1.3.3",
+        "1.3.4",
+        "1.3.5",
+        "1.4.0"
+      ],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "userActionRequired": true,
+      "remediation": "manual-review-required",
+      "oneClickEligible": false,
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-15",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4390#6896177290",
+        "rationale": "The owner authorized stable release 1.5.0 after confirmed findings are repaired and independently audited, and explicitly authorized publication of the referenced exact decision record. It covers all integrated work since 1.4.0, the manual Node 26 update path and final-head confirmations for #4390 points 1 and 3. Publication still requires final verification, protected signed integration, successful exact-head checks, settled reviews and the owner-authorized release workflow."
+      },
+      "id": "2026-11-15-keiko-1.5.0-jira-memory-node26",
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "More complete Jira workflows, memory that follows the person’s decisions, improved document and coding work, and the move to Node 26 LTS.",
+      "affectedStateStores": [
+        "ui-store-schema",
+        "memory-vault-store",
+        "knowledge-pod-store",
+        "secret-vault"
+      ],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "UI schema 58 to 78 carries forward existing Chats, adds persisted document context, history search and Coding Workbench drafts, extends the existing Jira mutation journal, and adds memory-learning markers and processing positions. Existing messages are not enrolled for retrospective memory learning. A downgrade requires a pre-update backup and its private keys.",
+          "remediation": "manual-review-required",
+          "userActionRequired": true
+        },
+        {
+          "store": "memory-vault-store",
+          "description": "Memory Vault schema 11 to 13 adds source-message evidence spans, last-used metadata and per-Chat conversation touches, and removes two legacy fields after their data is carried forward. Existing facts remain local. Older binaries must use the matching pre-update backup.",
+          "remediation": "manual-review-required",
+          "userActionRequired": true
+        },
+        {
+          "store": "knowledge-pod-store",
+          "description": "Knowledge schema 33 to 34 adds persisted extraction checkpoint data for learned page furniture, defaulting to an empty list for existing checkpoints. Existing pod content and policies carry forward. Restore the matching pre-update backup before downgrading.",
+          "remediation": "manual-review-required",
+          "userActionRequired": true
+        },
+        {
+          "store": "secret-vault",
+          "description": "The vault format remains unchanged. Windows now checks and protects per-user directory and key access. If an existing key was reachable by an unauthorized account, Keiko reports it as exposed and asks the operator to replace the stored secrets; the update does not rotate that key silently.",
+          "remediation": "manual-review-required",
+          "userActionRequired": true
+        }
+      ],
+      "releaseNoteBullets": [
+        "Jira Pods support governed project planning and collaboration, readable structure templates, batch drafts and reports, with stronger checks on localized fields and repeated writes. (#4385, #4288, #4292)",
+        "Sub-task templates resolve Jira’s localized parent field, and delayed Chat responses no longer replace a newer access-mode selection. (#4390)",
+        "Fixed premature failures during source-backed Chat retries and citation repairs when each request fits the model context. (#4390)",
+        "Clear requests to remember or forget act immediately. Keiko learns routine private facts from new conversations, replaces corrected facts and maintains a standing profile; older messages are not retrospectively enrolled. (#4349, #4285, #4273)",
+        "Document parsing preserves requirement inventories more reliably, and managed MCP retrieval can ground Jira drafts in connected knowledge. (#4238, #4276)",
+        "Chat keeps context more reliably across longer conversations and restarts, including qualified reasoning-model tool continuations. (#4267, #4270)",
+        "The Coding Workbench uses OpenCode 2.2.5 with fixes for build tools, corporate certificates and reopening tasks from Coding History. A verified native runtime and gateway remain prerequisites on each platform. (#4275, #4279, #4322, #4242)",
+        "Windows credential storage now inspects per-user vault access and reports exposed or unattested custody. If Keiko reports that an existing key was exposed, replace the stored tokens; updating does not silently rotate the key. (#4242)",
+        "Global npm installations now include the required runtime dependencies; project and global installations use the same product. (#4267)",
+        "More interface text follows the selected language, and Knowledge Pods, Chat History and local workspace workflows have reliability fixes. (#4198, #4260, #4339)",
+        "Node 26 LTS is the sole supported runtime. npm installations need Node.js >=26.13.1 <27 and npm >=11.20.0 <12; desktop packages include their own runtime. This transition requires manual update review. (#4390)",
+        "Back up local state and retain its private keys before updating. UI, Memory Vault and Knowledge databases migrate automatically; downgrading requires the matching pre-update backup."
+      ]
     }
   ]
 }

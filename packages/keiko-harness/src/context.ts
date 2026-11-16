@@ -20,6 +20,7 @@ import type {
 } from "./types.js";
 
 export interface RunContext {
+  readonly reasoningScope?: string | undefined;
   readonly model: ModelPort;
   readonly tools: ToolPort;
   catalog?: HarnessCatalogRuntime | undefined;

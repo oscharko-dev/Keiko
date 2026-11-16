@@ -14,6 +14,7 @@ import { CONTEXT, NOW, idOf, record, reportOf } from "./jira-report.harness.js";
 import {
   ACCEPTANCE,
   DECOY_BLOB,
+  POINTS,
   fixtureJira,
   response,
   syntheticProject,
@@ -25,7 +26,11 @@ import type { JiraReportHttp } from "./jira-report-http.js";
 import { loadRequiredFields } from "./jira-report-metadata.js";
 import { JIRA_REPORT_SESSION_MAX_BYTES } from "./jira-report-session.js";
 import { createJiraReportStore } from "./jira-report-store.js";
-import { executeJiraReportTool, type JiraReportToolDeps } from "./jira-report-tool.js";
+import {
+  executeJiraReportTool,
+  type JiraReportActivity,
+  type JiraReportToolDeps,
+} from "./jira-report-tool.js";
 import type { JiraIssueTemplateSet } from "./jira-managed-template-gate.js";
 import type { JiraReport } from "./jira-report-types.js";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -138,6 +143,215 @@ describe("an omitted requested field is unreadable evidence, never an empty valu
     const { result } = await run(options, { rewrite: strip });
     expect(completenessOf(result)).toMatchObject({ complete: false, failure: "permission" });
   });
+
+  it.each(["timeoriginalestimate", POINTS])(
+    "refuses to report a complete zero estimate when requested field %s is absent",
+    async (estimateFieldId) => {
+      const { result } = await run(options, {
+        args: { estimateFieldId },
+        rewrite: (path, body) => {
+          if (path === "search")
+            for (const issue of issuesOf(body))
+              Reflect.deleteProperty(fieldsOf(issue), estimateFieldId);
+          return body;
+        },
+      });
+      expect(result.data.status).toBe("incomplete");
+      expect(completenessOf(result)).toMatchObject({
+        complete: false,
+        reason: "read-failed",
+        failure: "permission",
+        issuesRead: 0,
+      });
+    },
+  );
+
+  it("retains only the measured prefix when a later page omits an estimate, with body-free failure facts", async () => {
+    const activity: JiraReportActivity[] = [];
+    const { result } = await run(
+      { ...options, pageClamp: 7 },
+      {
+        deps: { activity: (item) => activity.push(item) },
+        rewrite: (path, body) => {
+          if (path === "search")
+            for (const issue of issuesOf(body))
+              if (issue.key === "REP-15")
+                Reflect.deleteProperty(fieldsOf(issue), "timeoriginalestimate");
+          return body;
+        },
+      },
+    );
+    expect(result.data.status).toBe("incomplete");
+    expect(completenessOf(result)).toMatchObject({
+      complete: false,
+      failure: "permission",
+      issuesRead: 14,
+      issuesTotal: 40,
+    });
+    const expected = issues.slice(0, 14).reduce((sum, issue) => sum + (issue.seconds ?? 0), 0);
+    expect(record(record(record(reportOf(result).progress).project).estimate).total).toBe(expected);
+    expect(activity).toHaveLength(1);
+    expect(activity[0]).toMatchObject({
+      phase: "read",
+      status: "incomplete",
+      reason: "read-failed",
+      failure: "permission",
+      issuesRead: 14,
+      issuesTotal: 40,
+    });
+    expect(activity[0]?.pageCount).toBeGreaterThan(2);
+    expect(JSON.stringify(activity)).not.toMatch(/REP-|timeoriginalestimate|jira\.example/u);
+  });
+
+  it.each([
+    ["timeoriginalestimate", "private-estimate"],
+    ["timeoriginalestimate", { value: 3600 }],
+    ["timeoriginalestimate", -1],
+    [POINTS, "private-estimate"],
+    [POINTS, { value: 3 }],
+    [POINTS, -1],
+  ] as const)("refuses a non-null unusable estimate in %s: %j", async (estimateFieldId, value) => {
+    const activity: JiraReportActivity[] = [];
+    const { result } = await run(
+      { ...options, pageClamp: 7 },
+      {
+        args: { estimateFieldId },
+        deps: { activity: (item) => activity.push(item) },
+        rewrite: (path, body) => {
+          if (path === "search")
+            for (const issue of issuesOf(body))
+              if (issue.key === "REP-15") fieldsOf(issue)[estimateFieldId] = value;
+          return body;
+        },
+      },
+    );
+    expect(result.data.status).toBe("incomplete");
+    expect(completenessOf(result)).toMatchObject({
+      complete: false,
+      reason: "read-failed",
+      failure: "malformed-payload",
+      issuesRead: 14,
+      issuesTotal: 40,
+    });
+    expect(activity).toHaveLength(1);
+    expect(activity[0]).toMatchObject({
+      status: "incomplete",
+      reason: "read-failed",
+      failure: "malformed-payload",
+      issuesRead: 14,
+    });
+    expect(JSON.stringify(activity)).not.toMatch(
+      /private-estimate|REP-|customfield_|timeoriginalestimate/u,
+    );
+  });
+
+  it.each([null, 0])(
+    "keeps an explicit %s estimate distinct from an unreadable field",
+    async (estimate) => {
+      const { result } = await run(options, {
+        rewrite: (path, body) => {
+          if (path === "search")
+            for (const issue of issuesOf(body)) fieldsOf(issue).timeoriginalestimate = estimate;
+          return body;
+        },
+      });
+      expect(result.data.status).toBe("complete");
+      expect(record(record(record(reportOf(result).progress).project).estimate)).toEqual({
+        total: 0,
+        done: 0,
+        remaining: 0,
+        unestimated: estimate === null ? 40 : 0,
+      });
+    },
+  );
+});
+
+describe("requirement coverage needs every requested trace source", () => {
+  it.each([
+    ["labels", undefined],
+    ["description", undefined],
+    ["summary", undefined],
+    ["labels", null],
+    ["labels", "REQ-999"],
+    ["labels", ["REQ-999", 42]],
+    ["labels", [null]],
+    ["description", 17],
+    ["summary", null],
+  ] as const)(
+    "keeps the measured prefix incomplete with unreadable %s evidence (%j) on a later page",
+    async (fieldId, value) => {
+      const activity: JiraReportActivity[] = [];
+      const { result } = await run(
+        { issues: syntheticProject(40), pageClamp: 7 },
+        {
+          args: { requirementIds: ["REQ-999"] },
+          deps: { activity: (item) => activity.push(item) },
+          rewrite: (path, body) => {
+            if (path === "search")
+              for (const issue of issuesOf(body)) {
+                if (issue.key !== "REP-15") continue;
+                if (value === undefined) Reflect.deleteProperty(fieldsOf(issue), fieldId);
+                else fieldsOf(issue)[fieldId] = value;
+              }
+            return body;
+          },
+        },
+      );
+      expect(result.data.status).toBe("incomplete");
+      expect(completenessOf(result)).toMatchObject({
+        complete: false,
+        reason: "read-failed",
+        failure: "permission",
+        issuesRead: 14,
+        issuesTotal: 40,
+      });
+      expect(activity.at(-1)).toMatchObject({
+        phase: "read",
+        status: "incomplete",
+        failure: "permission",
+        issuesRead: 14,
+      });
+      expect(activity.at(-1)?.pageCount).toBeGreaterThan(2);
+      expect(JSON.stringify(activity)).not.toMatch(/REP-|REQ-|description|labels|summary/u);
+    },
+  );
+
+  it.each([
+    [[], null],
+    [[""], null],
+    [[], ""],
+    [[""], ""],
+  ] as const)(
+    "keeps observed labels %j and description %j readable across native pages",
+    async (labels, description) => {
+      const { result } = await run(
+        { issues: syntheticProject(23), pageClamp: 5 },
+        {
+          args: { requirementIds: ["REQ-999"] },
+          rewrite: (path, body) => {
+            if (path === "search")
+              for (const issue of issuesOf(body)) {
+                fieldsOf(issue).labels = labels;
+                fieldsOf(issue).description = description;
+              }
+            return body;
+          },
+        },
+      );
+      expect(result.data.status).toBe("complete");
+      expect(completenessOf(result)).toMatchObject({
+        complete: true,
+        issuesRead: 23,
+        issuesTotal: 23,
+      });
+      expect(completenessOf(result).pageCount).toBeGreaterThan(2);
+      expect(record(reportOf(result).coverage).requirements).toMatchObject({
+        declared: 1,
+        covered: 0,
+        uncovered: { total: 1, items: ["REQ-999"] },
+      });
+    },
+  );
 });
 
 describe("create metadata is trusted only with Jira's completion evidence (D2)", () => {
@@ -190,6 +404,8 @@ describe("create metadata is trusted only with Jira's completion evidence (D2)",
     function pages(...bodies: Body[]): JiraReportHttp {
       const queue = [...bodies];
       return {
+        request: () => Promise.resolve({ ok: false, reason: "not-found" }),
+        getAgileRecord: () => Promise.resolve({ ok: false, reason: "not-found" }),
         getArray: () => Promise.resolve({ ok: false, reason: "not-found" }),
         getRecord: (): ReturnType<JiraReportHttp["getRecord"]> => {
           const body = queue.shift();

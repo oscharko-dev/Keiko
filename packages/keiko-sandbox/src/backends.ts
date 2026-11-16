@@ -38,7 +38,7 @@ export const SEATBELT_DENY_EGRESS_PROFILE: string =
 // Default OCI image for the container fallback. node is needed to run the unit-test toolchain; a
 // pinned, widely cached slim image keeps the fallback deterministic. Egress is removed by
 // --network=none regardless of image contents.
-export const DEFAULT_CONTAINER_IMAGE = "node:24.18.0-slim";
+export const DEFAULT_CONTAINER_IMAGE = "node:26.13.1-slim";
 export const EXECUTION_ROOT_MOUNT = "/keiko-execution-root";
 export const EXECUTION_ROOT_TMP = `${EXECUTION_ROOT_MOUNT}/.keiko-sandbox-tmp`;
 const EXECUTION_ROOT_READONLY_BINDS: readonly string[] = Object.freeze([
@@ -283,6 +283,38 @@ const NATIVE_LOOPBACK_ONLY_NETWORK_RULES =
   '(allow network-inbound (local ip "localhost:*"))' +
   '(allow network-bind (local ip "localhost:*"))';
 
+// The host services that answer with the person's data whatever the file rules say: the clipboard,
+// its legacy name, and the keychain, whose daemons read the files the rules deny and answer a tool an
+// entry trusts, such as Git's credential helper (#4271). Everything else a toolchain looks up stays
+// reachable, preferences included: Foundation tools need them, and they hold no credentials;
+// TLS verification goes through trustd, not these. Proved against curl, Git, Node, Python and Xcode
+// tools.
+const NATIVE_HOST_SECRET_SERVICE_RULE =
+  "(deny mach-lookup" +
+  ' (global-name "com.apple.pasteboard.1")' +
+  ' (global-name "com.apple.pboard")' +
+  ' (global-name "com.apple.SecurityServer")' +
+  ' (global-name "com.apple.secd")' +
+  ' (global-name "com.apple.securityd.xpc")' +
+  ' (global-name "com.apple.security.agent")' +
+  ' (global-name "com.apple.SecurityAgent"))';
+
+/**
+ * Full access keeps the internet, not the host's local services. A unix socket needs no file rule,
+ * so without this a shell reaches ssh-agent, whose keys the file rules deny, and a container daemon,
+ * which starts a container mounting anything and so escapes the workspace boundary (#4271). The
+ * resolver stays reachable, and so do the sockets the run itself creates in its own roots.
+ */
+function nativeFullAccessUnixSocketRules(filesystem: RuntimeGatewayFilesystem): string {
+  const own = [filesystem.workspaceRoot, filesystem.privateStateRoot]
+    .map((root) => `(subpath ${JSON.stringify(root)})`)
+    .join(" ");
+  return (
+    "(deny network-outbound (remote unix-socket))" +
+    `(allow network-outbound (literal "/private/var/run/mDNSResponder") ${own})`
+  );
+}
+
 /**
  * The native profile (#3897): the agent runs its own shell and toolchains like standalone
  * OpenCode. What the kernel enforces for the whole process tree is the filesystem boundary (a read
@@ -290,9 +322,10 @@ const NATIVE_LOOPBACK_ONLY_NETWORK_RULES =
  * the workspace and the private state, whose `tmp` is the runtime's TMPDIR; credential stores,
  * credential files and Keiko's state unreadable), the service escape surfaces and the process
  * boundary (signals and process information reach the tree's own sandbox only, never another
- * process of the same OS user). Network follows the run's mode: loopback only below Full access;
- * inherited at Full access, where the per-action permission policy and the accepted Authority
- * Envelope bound it.
+ * process of the same OS user; one exception no profile can close is `sysctl(KERN_PROCARGS2)`, which
+ * shows the exec environment of any process of that user, see ADR-0137 D10). Network follows the run's mode: loopback only below Full access;
+ * inherited at Full access apart from local unix sockets, where the per-action permission policy
+ * and the accepted Authority Envelope bound it.
  */
 function buildNativeSeatbeltCommand(
   command: string,
@@ -305,9 +338,12 @@ function buildNativeSeatbeltCommand(
   if (filesystem === undefined) throw new TypeError("native-seatbelt-filesystem-invalid");
   const profile =
     "(version 1)(allow default)(deny appleevent-send)(deny lsopen)" +
+    NATIVE_HOST_SECRET_SERVICE_RULE +
     OWN_PROCESS_TARGETS_SEATBELT_RULE +
     nativeWorkspaceSeatbeltRules(filesystem) +
-    (egress === "inherited" ? "" : NATIVE_LOOPBACK_ONLY_NETWORK_RULES);
+    (egress === "inherited"
+      ? nativeFullAccessUnixSocketRules(filesystem)
+      : NATIVE_LOOPBACK_ONLY_NETWORK_RULES);
   return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
 }
 
@@ -333,11 +369,21 @@ function buildSeatbeltCommand(plan: IsolatedRunPlan): WrappedCommand {
   return { command: "sandbox-exec", args: seatbeltArgs(plan) };
 }
 
+// The container's path for the execution root. A POSIX host path is mirrored, so the wrapped
+// toolchain sees the same paths it would natively. A Windows host path (drive-letter, `\\?\` or UNC)
+// cannot name a path in the Linux engine a Windows host runs (Docker Desktop, podman machine), and
+// mirroring it yields a volume spec the engine refuses before the step starts; it is mounted at the
+// sandbox's own execution-root path instead (#4068).
+function containerExecutionRoot(hostCwd: string): string {
+  return hostCwd.startsWith("/") ? hostCwd : EXECUTION_ROOT_MOUNT;
+}
+
 function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] {
   // --network=none removes all networking. The execution root is bind-mounted read-write and used as
-  // the working directory so the wrapped toolchain sees the same paths it would natively. Unlike the
-  // native backends (which share the host filesystem and so take an absolute executable path), the
-  // container resolves the command from the IMAGE's PATH, so only the bare name is used.
+  // the working directory. Unlike the native backends (which share the host filesystem and so take
+  // an absolute executable path), the container resolves the command from the IMAGE's PATH, so only
+  // the bare name is used.
+  const containerCwd = containerExecutionRoot(plan.cwd);
   return [
     "run",
     "--rm",
@@ -346,9 +392,9 @@ function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] 
       ? ["--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m"]
       : []),
     "--volume",
-    `${plan.cwd}:${plan.cwd}:rw`,
+    `${plan.cwd}:${containerCwd}:rw`,
     "--workdir",
-    plan.cwd,
+    containerCwd,
     image,
     basename(plan.command),
     ...plan.args,

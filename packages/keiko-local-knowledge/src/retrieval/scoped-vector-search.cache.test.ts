@@ -22,6 +22,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import {
+  verifyEmbeddingCapability,
+  type OpenAIEmbeddingAdapter,
+} from "@oscharko-dev/keiko-model-gateway";
+import { getCapsule } from "../capsule-lifecycle.js";
 
 import {
   openKnowledgeStore,
@@ -29,6 +34,7 @@ import {
   type KnowledgeStoreKeyProvider,
 } from "../store.js";
 import { searchVectorsForScope } from "./scoped-vector-search.js";
+import { DEFAULT_EMBEDDING } from "../_support.js";
 import { scriptedAdapter, seedCapsuleWithVectors } from "./_support.js";
 
 const FIXED_KEY = new Uint8Array(32).fill(7);
@@ -209,7 +215,7 @@ describe("scoped-vector-search query-embedding cache (GEN-PERF-LK-002)", () => {
     const secondCount = await runCountedSearch(second.store, seeded.capsuleId, counted.adapter);
 
     expect(secondCount).toBe(firstCount);
-    // Load-bearing: zero additional adapter calls — preflight comes from the TTL cache and the
+    // Load-bearing: zero additional adapter calls — preflight comes from the connection proof and the
     // query embedding from the per-adapter LRU. Pre-fix both caches were request-local, so the
     // second ask repeated every call.
     expect(counted.calls()).toBe(callsAfterFirst);
@@ -232,5 +238,163 @@ describe("scoped-vector-search query-embedding cache (GEN-PERF-LK-002)", () => {
     const count = await runCountedSearch(opened.store, seeded.capsuleId, second.adapter);
     expect(count).toBeGreaterThan(0);
     expect(second.calls()).toBe(firstCalls);
+  });
+});
+
+describe("failed query invalidates its connection proof", () => {
+  it.each(["dimension", "nonfinite"] as const)(
+    "invalidates an actual %s mismatch without a hidden re-probe",
+    async (kind) => {
+      const opened = openEncryptedStore(freshDbPath());
+      const seeded = await seedCapsuleWithVectors(opened.store, {
+        capsuleId: `cap-failed-query-${kind}`,
+      });
+      const capsule = getCapsule(opened.store, seeded.capsuleId);
+      if (capsule === undefined) throw new TypeError("Missing seeded capsule");
+      const identity = capsule.embeddingModelIdentity;
+      const inner = scriptedAdapter({ identity });
+      let calls = 0;
+      const adapter: OpenAIEmbeddingAdapter = {
+        ...inner,
+        request: async (request) => {
+          calls += 1;
+          if (request.input.includes("bad-query-vector"))
+            return {
+              ok: true,
+              value: {
+                modelId: identity.modelId,
+                vector:
+                  kind === "dimension"
+                    ? new Float32Array(identity.vectorDimensions + 1).fill(0.5)
+                    : new Float32Array(identity.vectorDimensions).fill(Number.NaN),
+              },
+            };
+          return inner.request(request);
+        },
+      };
+      const options = {
+        ...identity,
+        expectedDimensions: identity.vectorDimensions,
+        includeSpaceFingerprint: true,
+      };
+      expect((await verifyEmbeddingCapability(adapter, options, "connection")).ok).toBe(true);
+      await searchVectorsForScope(
+        opened.store,
+        adapter,
+        { capsuleIds: [seeded.capsuleId] },
+        "bad-query-vector",
+        { topK: 10 },
+      );
+      const before = calls;
+      expect((await verifyEmbeddingCapability(adapter, options, "connection")).ok).toBe(false);
+      expect(calls).toBe(before);
+    },
+  );
+});
+
+describe("per-Pod identity refusal preserves connection proof", () => {
+  it("refuses stale stored dimensions before querying and keeps a compatible Pod usable", async () => {
+    const opened = openEncryptedStore(freshDbPath());
+    const healthy = await seedCapsuleWithVectors(opened.store, { capsuleId: "cap-proof-healthy" });
+    const capsule = getCapsule(opened.store, healthy.capsuleId);
+    if (capsule === undefined) throw new TypeError("Missing seeded capsule");
+    const identity = capsule.embeddingModelIdentity;
+    const stale = await seedCapsuleWithVectors(opened.store, {
+      capsuleId: "cap-proof-stale",
+      sourceId: "source-proof-stale",
+      documentId: "document-proof-stale",
+      unitId: "unit-proof-stale",
+      identity: { ...identity, vectorDimensions: identity.vectorDimensions + 1 },
+    });
+    const inner = scriptedAdapter({ identity });
+    const request = vi.fn(inner.request);
+    const adapter: OpenAIEmbeddingAdapter = { ...inner, request };
+    const options = {
+      ...identity,
+      expectedDimensions: identity.vectorDimensions,
+      includeSpaceFingerprint: true,
+    };
+    const checked = await verifyEmbeddingCapability(adapter, options, "connection");
+    expect(checked.ok).toBe(true);
+    const probeCalls = request.mock.calls.length;
+    const refused = await searchVectorsForScope(
+      opened.store,
+      adapter,
+      { capsuleIds: [stale.capsuleId] },
+      "stale-pod",
+      { topK: 10 },
+    );
+    expect(refused.references).toHaveLength(0);
+    expect(request).toHaveBeenCalledTimes(probeCalls);
+    expect(await verifyEmbeddingCapability(adapter, options, "connection")).toEqual(checked);
+    const accepted = await searchVectorsForScope(
+      opened.store,
+      adapter,
+      { capsuleIds: [healthy.capsuleId] },
+      "healthy-pod",
+      { topK: 10 },
+    );
+    expect(accepted.references.length).toBeGreaterThan(0);
+    expect(request).toHaveBeenCalledTimes(probeCalls + 1);
+  });
+});
+
+// #4351: Keiko no longer probes every listed embedding alias at startup, so a Pod bound to an alias
+// that is not the one in use is proven where it is used: its first query embedding is preceded by
+// the identity proof of the alias the Pod itself stores, never of another alias.
+describe("a Pod's stored embedding alias is proven before its first query embedding (#4351)", () => {
+  it("sends the identity probe first and embeds the query only after it", async () => {
+    const opened = openEncryptedStore(freshDbPath());
+    const identity = { ...DEFAULT_EMBEDDING, modelId: "stored-alias-not-in-use" };
+    const seeded = await seedCapsuleWithVectors(opened.store, {
+      capsuleId: "cap-stored-alias",
+      identity,
+    });
+    const inner = scriptedAdapter({ identity });
+    const inputs: string[] = [];
+    const adapter: OpenAIEmbeddingAdapter = {
+      ...inner,
+      request: async (request) => {
+        inputs.push(request.input);
+        return inner.request(request);
+      },
+    };
+    const outcome = await searchVectorsForScope(
+      opened.store,
+      adapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "stored alias question",
+      { topK: 10 },
+    );
+    expect(outcome.references.length).toBeGreaterThan(0);
+    const firstQuery = inputs.findIndex((input) => input.includes("stored alias question"));
+    expect(firstQuery).toBeGreaterThan(0);
+    expect(inputs.slice(0, firstQuery).length).toBeGreaterThan(0);
+  });
+
+  it("embeds no query when the stored alias does not prove itself", async () => {
+    const opened = openEncryptedStore(freshDbPath());
+    const identity = { ...DEFAULT_EMBEDDING, modelId: "stored-alias-gone" };
+    const seeded = await seedCapsuleWithVectors(opened.store, {
+      capsuleId: "cap-stored-alias-gone",
+      identity,
+    });
+    const inputs: string[] = [];
+    const adapter: OpenAIEmbeddingAdapter = {
+      ...scriptedAdapter({ identity }),
+      request: (request) => {
+        inputs.push(request.input);
+        return Promise.resolve({ ok: false, kind: "wrong-header" } as const);
+      },
+    };
+    const outcome = await searchVectorsForScope(
+      opened.store,
+      adapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "stored alias question",
+      { topK: 10 },
+    );
+    expect(outcome.references).toHaveLength(0);
+    expect(inputs.some((input) => input.includes("stored alias question"))).toBe(false);
   });
 });

@@ -6,11 +6,12 @@
 // review of Ask for approval and the package-script trust pause for you. The driver acts as the
 // operator, so it is fail-closed: the approval policy and the lab repository are always named, and
 // the repository must be a lab copy.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "@playwright/test";
 import { isMainModule } from "../../lib/is-main-module.mjs";
+import { workspaceStorageArgs } from "../../lib/workspace-storage-fixture.mjs";
 import {
   CSRF_HEADERS,
   TERMINAL_STATES,
@@ -32,6 +33,8 @@ import {
   runMain,
   selectLabCheckout,
   stopUnfinishedRun,
+  watchOrStop,
+  UsageError,
 } from "./lab-common.mjs";
 
 const USAGE = [
@@ -39,6 +42,7 @@ const USAGE = [
   "                      (--repo <path> | KEIKO_LAB_REPO) [--mode <label|id>] [--model <id>]",
   "                      [--timeout-min 40] [--branch main] [--base-url <origin>] [--shots <dir>]",
   "                      [--text-out <file>] [--jira-pod <name>] [--headed] [--list-tasks]",
+  "                      [--await-wake <minutes>] [--schedule-control pause-delete]",
   "",
   "  --approve    required, no default: all approves every permission ask once, applies the change",
   "               reviews of Ask for approval and allows package scripts; none denies the asks and",
@@ -50,6 +54,10 @@ const USAGE = [
   "  --shots      directory for one screenshot per run state change",
   "  --text-out   file for the final Workbench text (the answer, so it stays outside the repo)",
   "  --jira-pod   the name of a ready Jira Pod the run may use; default: Jira: none",
+  "  --await-wake after the run, wait up to this many minutes for Keiko to start the task's",
+  "               scheduled continuation run, follow it to its end and report its schedules",
+  "  --schedule-control pause-delete: after the run, pause the task's first schedule in the",
+  "               Workbench, check that no wake starts for two minutes, then delete it",
   "",
   "Environment: KEIKO_LAB_REPO (the repository, unless --repo), KEIKO_LAB_BASE_URL (default",
   "http://127.0.0.1:1983), KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET (required). A Chromium build",
@@ -72,6 +80,8 @@ const OPTIONS = {
   "jira-pod": { type: "string" },
   headed: { type: "boolean" },
   "list-tasks": { type: "boolean" },
+  "await-wake": { type: "string" },
+  "schedule-control": { type: "string" },
 };
 const WORKBENCH = 'section[aria-label="Coding Workbench"][data-state]';
 const VIEWPORT = { width: 1600, height: 1300 };
@@ -79,26 +89,33 @@ const SETTLE_MS = 1500;
 const POLL_MS = 3000;
 const UI_TIMEOUT_MS = 60_000;
 
-/** Opens the Workbench window bound to the lab repository, as the desktop would restore it. */
-async function seedWorkbenchWindow(page, repo) {
-  await page.addInitScript((root) => {
-    const windowState = {
-      id: "lab-workbench",
-      type: "coding",
-      x: 20,
-      y: 20,
-      w: 1400,
-      h: 1000,
-      z: 10,
-      zoom: 1,
-      cfg: { repositoryPath: root },
-      max: false,
-    };
-    globalThis.localStorage.setItem("keiko.workspace.v4", JSON.stringify([windowState]));
-  }, repo);
+/**
+ * Opens the Workbench window bound to the lab repository, as the desktop would restore it. The
+ * window keeps the canonical path, as Keiko registers a project: an alias such as macOS's `/var`
+ * for `/private/var` never matches the canonical root of the task workspace bound to it (#4271).
+ */
+export async function seedWorkbenchWindow(page, repo) {
+  await page.addInitScript(
+    ({ argument: root, storageKeys }) => {
+      const windowState = {
+        id: "lab-workbench",
+        type: "coding",
+        x: 20,
+        y: 20,
+        w: 1400,
+        h: 1000,
+        z: 10,
+        zoom: 1,
+        cfg: { repositoryPath: root },
+        max: false,
+      };
+      globalThis.localStorage.setItem(storageKeys.workspace, JSON.stringify([windowState]));
+    },
+    await workspaceStorageArgs(page, realpathSync(repo)),
+  );
 }
 
-async function waitForWorkbench(page) {
+export async function waitForWorkbench(page) {
   const workbench = page.locator(WORKBENCH);
   await workbench.waitFor({ state: "visible", timeout: UI_TIMEOUT_MS });
   await sleep(SETTLE_MS);
@@ -118,7 +135,7 @@ export function selectCheckout(page, repo, branch) {
 }
 
 /** Reloads the page so the Workbench opens on the repository the dev server just selected. */
-async function reopenWorkbench(page) {
+export async function reopenWorkbench(page) {
   await page.reload();
   return waitForWorkbench(page);
 }
@@ -179,7 +196,28 @@ async function chooseOptionOnce(page, comboName, optionLabel, settle) {
   await options.nth(index).click();
 }
 
-async function startRun(page, workbench, { model, mode, text, jiraPod }) {
+// The Connectors menu replaced the "Jira Pod for this run" select (owner decision 2026-11-02): one
+// switch per Pod. The run is bound to the Pod whose switch is on, so a Pod that is not listed, or a
+// switch that does not turn on, stops the lab before the run starts instead of running without Jira.
+export async function switchJiraPodOn(page, podName) {
+  await page.locator('button[aria-label^="Connectors"]').last().click();
+  const panel = page.locator("section[aria-label=Connectors]");
+  const toggle = panel
+    .locator(
+      `xpath=.//*[normalize-space(text())=${JSON.stringify(podName)}]/ancestor::*[.//*[@role="switch"]][1]//*[@role="switch"]`,
+    )
+    .first();
+  if ((await toggle.count()) === 0) {
+    throw new Error(`Connectors: no Jira Pod is named "${podName}"`);
+  }
+  if ((await toggle.getAttribute("aria-checked")) !== "true") await toggle.click();
+  if ((await toggle.getAttribute("aria-checked")) !== "true") {
+    throw new Error(`Connectors: the Jira Pod "${podName}" did not switch on`);
+  }
+  await page.keyboard.press("Escape");
+}
+
+export async function startRun(page, workbench, { model, mode, text, jiraPod }) {
   const newTask = page.getByRole("button", { name: "New task", exact: true });
   if (await newTask.isVisible().catch(() => false)) {
     await newTask.click();
@@ -187,7 +225,7 @@ async function startRun(page, workbench, { model, mode, text, jiraPod }) {
   }
   await chooseOption(page, "Coding model", model, { waitMs: MODEL_READINESS_WAIT_MS });
   await chooseOption(page, "Run authority", mode.label);
-  if (jiraPod !== undefined) await chooseOption(page, "Jira Pod for this run", `Jira: ${jiraPod}`);
+  if (jiraPod !== undefined) await switchJiraPodOn(page, jiraPod);
   const composer = workbench.locator("textarea").first();
   await composer.fill(text);
   if ((await composer.inputValue()) !== text) {
@@ -296,7 +334,7 @@ async function declineQuestion(page) {
   await reject.click();
 }
 
-async function watchRun(page, runId, { approve, deadline, shots }) {
+export async function watchRun(page, runId, { approve, deadline, shots }) {
   let last = "";
   let shotCount = 0;
   let snapshot = {};
@@ -347,25 +385,130 @@ async function reportRun(page, workbench, runId, snapshot, { shots, textOut, app
  * ends and report it. A refused checkout throws before the Workbench is touched, so no run starts.
  */
 export async function operateRun(page, options) {
-  const { repo, branch, shots, textOut, approve, timeoutMs, task } = options;
+  const { repo, branch, shots, textOut, approve, timeoutMs, task, schedules } = options;
   log(approvalPolicyLine("wb-ui", approve));
   await selectCheckout(page, repo, branch);
   const workbench = await reopenWorkbench(page);
   const runId = await startRun(page, workbench, task);
-  const snapshot = await watchRun(page, runId, {
-    approve,
-    deadline: Date.now() + timeoutMs,
-    shots,
+  const post = async (path, data) => ({
+    status: (await page.request.post(path, { headers: CSRF_HEADERS, data })).status(),
   });
-  await stopUnfinishedRun(
-    async (path, data) => ({
-      status: (await page.request.post(path, { headers: CSRF_HEADERS, data })).status(),
-    }),
+  const snapshot = await watchOrStop(
+    () => watchRun(page, runId, { approve, deadline: Date.now() + timeoutMs, shots }),
+    post,
     runId,
-    snapshot,
   );
+  await stopUnfinishedRun(post, runId, snapshot);
   await reportRun(page, workbench, runId, snapshot, { shots, textOut, approve });
-  return exitCodeForState(snapshot.state);
+  const code = exitCodeForState(snapshot.state);
+  if (code !== 0 || schedules === undefined) return code;
+  return followSchedules(page, workbench, snapshot, { ...schedules, approve, shots });
+}
+
+/** The task's schedules as the Workbench's own route lists them (never their prompt). */
+export async function readSchedules(page, taskId) {
+  const response = await page.request.get(
+    `/api/coding-workbench/runtime/schedules?taskId=${encodeURIComponent(taskId)}`,
+  );
+  const body = (await response.json().catch(() => ({}))) ?? {};
+  if (response.status() !== 200) throw new Error(`schedules: HTTP ${String(response.status())}`);
+  return Array.isArray(body.schedules) ? body.schedules : [];
+}
+
+/** One line per schedule: status, cadence, run count and wait, the way the lab report reads it. */
+export function describeSchedules(schedules) {
+  if (schedules.length === 0) return "schedules: none";
+  return `schedules: ${schedules
+    .map((s) =>
+      [s.status, s.cadence, `runs=${String(s.runCount)}`, s.wait].filter(Boolean).join(" "),
+    )
+    .join("; ")}`;
+}
+
+const WAKE_POLL_MS = 5000;
+const PAUSED_WATCH_MS = 150_000;
+
+/** Waits for the run Keiko starts for the task, other than `previousRunId`; null at the deadline. */
+async function nextRunOfTask(page, taskId, previousRunId, deadline) {
+  while (Date.now() < deadline) {
+    const response = await page.request.get("/api/coding-workbench/runtime/status");
+    const status = (await response.json().catch(() => ({}))) ?? {};
+    if (status.runId && status.runId !== previousRunId && status.conversationId === taskId)
+      return status.runId;
+    await sleep(WAKE_POLL_MS);
+  }
+  return null;
+}
+
+/**
+ * After a run that scheduled a continuation (T33 to T36): reads the task's schedules, and either
+ * waits for Keiko's scheduled wake run and follows it, or pauses the schedule in the Workbench,
+ * checks that nothing wakes, and deletes it.
+ */
+async function followSchedules(page, workbench, snapshot, options) {
+  const taskId = snapshot.conversationId;
+  if (!taskId) throw new Error("the run carries no task id; its schedules cannot be read");
+  const schedules = await readSchedules(page, taskId);
+  log(describeSchedules(schedules));
+  if (schedules.length === 0) return 1;
+  if (options.control === "pause-delete") return pauseAndDelete(page, workbench, snapshot, taskId);
+  const wakeRunId = await nextRunOfTask(
+    page,
+    taskId,
+    snapshot.runId,
+    Date.now() + options.awaitWakeMs,
+  );
+  if (wakeRunId === null) {
+    log(
+      "no scheduled continuation run started in time;",
+      describeSchedules(await readSchedules(page, taskId)),
+    );
+    return 3;
+  }
+  log("scheduled continuation run", wakeRunId);
+  const wake = await watchRun(page, wakeRunId, {
+    approve: options.approve,
+    deadline: Date.now() + options.awaitWakeMs,
+    shots: options.shots,
+  });
+  log("wake", describeSnapshot(wake), "mode", wake.effectiveMode ?? wake.requestedMode);
+  log(describeSchedules(await readSchedules(page, taskId)));
+  const text = await workbench.innerText({ timeout: TEXT_TIMEOUT_MS }).catch(() => "");
+  log("history marks the scheduled continuation:", text.includes("Scheduled continuation"));
+  return exitCodeForState(wake.state);
+}
+
+async function scheduleButton(workbench, name) {
+  const region = workbench.getByRole("region", { name: "Scheduled continuations" });
+  const button = region.getByRole("button", { name, exact: true }).first();
+  await button.waitFor({ state: "visible", timeout: UI_TIMEOUT_MS });
+  return button;
+}
+
+async function pauseAndDelete(page, workbench, snapshot, taskId) {
+  await (await scheduleButton(workbench, "Pause")).click();
+  await sleep(SETTLE_MS);
+  log("after Pause:", describeSchedules(await readSchedules(page, taskId)));
+  const woke = await nextRunOfTask(page, taskId, snapshot.runId, Date.now() + PAUSED_WATCH_MS);
+  log("a paused schedule woke the task:", woke !== null);
+  await (await scheduleButton(workbench, "Delete")).click();
+  await sleep(SETTLE_MS);
+  const left = await readSchedules(page, taskId);
+  log("after Delete:", describeSchedules(left));
+  return woke === null && left.length === 0 ? 0 : 1;
+}
+
+/** `--await-wake` and `--schedule-control` as the run options take them; absent when neither. */
+export function scheduleOptions(values) {
+  const control = values["schedule-control"];
+  if (control !== undefined && control !== "pause-delete")
+    throw new UsageError("--schedule-control takes pause-delete");
+  const awaitWake = values["await-wake"];
+  if (awaitWake === undefined && control === undefined) return undefined;
+  return {
+    awaitWakeMs: minutesToMs(awaitWake ?? "10"),
+    ...(control === undefined ? {} : { control }),
+  };
 }
 
 async function driveRun(browser, options) {
@@ -397,6 +540,7 @@ async function main() {
     approve,
     timeoutMs: minutesToMs(cli.values["timeout-min"]),
     task: { text, mode, model: cli.values.model, jiraPod: cli.values["jira-pod"] },
+    schedules: scheduleOptions(cli.values),
   };
   if (options.shots) mkdirSync(options.shots, { recursive: true });
   const browser = await chromium.launch({ headless: cli.values.headed !== true });

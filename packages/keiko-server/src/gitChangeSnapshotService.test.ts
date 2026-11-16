@@ -11,6 +11,7 @@ import {
   validateGitChangeSnapshotResult,
 } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import { gitLazyFetchGuardSupportedForVersion } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { createGitChangeSnapshotService } from "./gitChangeSnapshotService.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { formatServerLogLine } from "@oscharko-dev/keiko-activity-log";
@@ -304,7 +305,15 @@ describe("immutable Git change snapshot production", () => {
     // A second, healthy capture on the SAME service instance must re-probe and succeed instead of
     // replaying the first probe's spawn failure as a permanent "guard unsupported" verdict.
     const recovered = await service.capture(inputFor(workspace));
-    expect(isGitChangeSnapshot(recovered.snapshot)).toBe(true);
+    // The fixture is a promisor repository, which the guard reads only with a git that enforces
+    // `--no-lazy-fetch` (2.45+). A re-probe that succeeds is therefore a valid snapshot on such a
+    // git and, by design, the fail-closed refusal on an older one (the gates image shipped 2.39
+    // before its git was pinned): the eviction itself is what this test proves, and it must not
+    // read as a regression on a git that can never produce the snapshot.
+    const guardEnforceable = gitLazyFetchGuardSupportedForVersion(
+      execFileSync("git", ["--version"], { encoding: "utf8" }),
+    );
+    expect(isGitChangeSnapshot(recovered.snapshot)).toBe(guardEnforceable);
     service.close();
   });
 

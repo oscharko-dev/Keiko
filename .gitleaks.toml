@@ -103,6 +103,14 @@ regexTarget = "line"
 regexes = ['''^\n?[ \t]*"browser-approval-key-store\.ts": "139d0f8d1da0fb501ef15abf96f63922df368bcf1fac891a61c226d47ad38a31",?[ \t]*$''']
 
 [[allowlists]]
+description = "PR #4398: two verified Jira issue-key array digests in the body-free AC1 release evidence. Independently recomputed SHA-256 over JSON.stringify of each sorted three-issue-key array from the completed Ask/Full draft transcripts; these are issue identities, not authentication keys. Only the two exact digests, complete keysSha256 field line, evidence path and generic rule are excepted in history and squash-equivalent scans. Other values, fields, paths and rules remain scanned; no commit or whole-file exemption."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^docs/qa/4390-release-evidence\.json$''']
+regexTarget = "line"
+regexes = ['''^\n?[ \t]*"keysSha256": "(?:94cb04e945cc8f89fdd8b2f680b0ee19ca0a675892ad9da719a846099b3b847f|0c917f8c0fdc85342c349e682b3a5f4cf24d9e9f4459445cbe8035d02544f9f2)",?[ \t]*$''']
+
+[[allowlists]]
 description = "PR #3452: the synthetic key fixture the stream-read test copied from openai-adapter.test.ts (#855, on dev before every scanned range) in one immutable history commit. The generic-api-key rule reads `token-\", \"1234567890abcd` as a key whose value has entropy 3.81, above the rule's 3.5. No real credential was involved; the file uses a literal the rule cannot read as a key afterwards, and `dev` branch protection forbids rewriting the commit. Scoped to that one line of that file in that commit; every other commit is scanned unchanged."
 condition = "AND"
 commits = [
@@ -260,3 +268,29 @@ condition = "AND"
 commits = ["1b5b2525320e00b9db16b66063999837c9264013"]
 paths = ['''^packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy\.test\.ts$''']
 targetRules = ["jwt", "private-key", "generic-api-key"]
+
+[[allowlists]]
+description = "PR #4238: the synthetic credential-shaped value that proves a JSON parse diagnostic never echoes the document, in two immutable checkpoints of the JSON parser test. It is test data, later commits assemble it at runtime, and `dev` branch protection forbids rewriting the two commits."
+condition = "AND"
+commits = ["f767219db257ac104306611f2c31475736b38405", "7b181a051c4ab9ac95c526d354ed76cb6491cf49"]
+paths = ['''^packages/keiko-local-knowledge/src/parsers/json-parser\.fidelity\.test\.ts$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\s*const secret = "AKIA-LIVE-SECRET-[0-9A-F]{8}";$''']
+
+[[allowlists]]
+description = "PR #4288: the synthetic Jira entity-property name keiko-ac7-synthetic-run in one immutable checkpoint of the AC7 property qualification test. It is test metadata (the name of a synthetic issue property), not a credential; the generic-api-key rule matches the key-named variable and the value's entropy. Later commits assemble the name at runtime. Only this exact historical fixture line in this one commit is exempt."
+condition = "AND"
+commits = ["c17e32f8152715a304a59da0e2b62b1d7c2df1c0"]
+paths = ['''^scripts/__tests__/jira-api-qualification-property\.test\.mjs$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\s*const propertyKey = "keiko-ac7-synthetic-run";$''']
+
+[[allowlists]]
+description = "PR #4288: the synthetic AC7 permission-scheme attribute name `ac7.synthetic.attribute` in the history of the Jira API qualification operator fixtures (commit d481038df). The generic-api-key rule reads the `..._ATTRIBUTE_KEY = ...` constant as a key; the value is a public attribute name, not a credential. The constant was renamed afterwards, so the squash-merged tree carries no key-shaped line. Scoped by content, not by commit, so it holds for any history shape: only that exact historical line in that one file and rule is exempt, and every other finding in the file remains enforced."
+condition = "AND"
+paths = ['''^scripts/testing/jira-chat-lab/api-qualification-operator-fixtures\.mjs$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\n?export const DEFAULT_PERMISSION_ATTRIBUTE_KEY = "ac7\.synthetic\.attribute";$''']

@@ -2,5 +2,11 @@
 // consumer needs the names without loading the tool, which reads the Knowledge store.
 
 export const KNOWLEDGE_REQUIREMENTS_TOOL = "knowledge.requirements" as const;
-export type KnowledgeChatToolName = typeof KNOWLEDGE_REQUIREMENTS_TOOL;
-export const KNOWLEDGE_CHAT_TOOLS: readonly KnowledgeChatToolName[] = [KNOWLEDGE_REQUIREMENTS_TOOL];
+export const KNOWLEDGE_DOCUMENTS_TOOL = "knowledge.documents" as const;
+export const KNOWLEDGE_REVIEW_TOOL = "knowledge.review" as const;
+export const KNOWLEDGE_CHAT_TOOLS = [
+  KNOWLEDGE_REQUIREMENTS_TOOL,
+  KNOWLEDGE_DOCUMENTS_TOOL,
+  KNOWLEDGE_REVIEW_TOOL,
+] as const;
+export type KnowledgeChatToolName = (typeof KNOWLEDGE_CHAT_TOOLS)[number];

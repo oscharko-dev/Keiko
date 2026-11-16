@@ -8,12 +8,27 @@
 // packages/keiko-server/src/credentialVault.test.ts uses: no real OS keychain, no real login
 // session, no cross-test state leaks.
 
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { NO_LOCAL_VAULT_KEYCHAIN } from "@oscharko-dev/keiko-security/secret-vault";
+import {
+  createKeychainCommandRunner,
+  createKeychainVaultKeyAccess,
+  NO_LOCAL_VAULT_KEYCHAIN,
+} from "@oscharko-dev/keiko-security/secret-vault";
+import { createAtlassianCredentialCustody } from "@oscharko-dev/keiko-connectors";
+import { createAtlassianCredentialMetadataStore } from "./credentialMetadataStore.js";
 import {
   atlassianCredentialStorePath,
   atlassianCredentialVaultDir,
@@ -64,6 +79,74 @@ describe("atlassianCredentialVaultDir / atlassianCredentialStorePath", () => {
 });
 
 describe("openAtlassianCredentialVault", () => {
+  it("stores a Jira PAT only as vault ciphertext with an executable-backed fake keychain key", () => {
+    const configPath = tempConfigPath();
+    const directory = join(configPath, "..");
+    const executable = join(directory, "security");
+    const keyItem = join(directory, "fake-keychain-item");
+    writeFileSync(
+      executable,
+      `#!/bin/sh\nprintf '%s\\n' "$1" >> '${directory}/keychain-calls'\ncase "$1" in\nfind-generic-password) test -f '${keyItem}' || exit 44; cat '${keyItem}' ;;\nadd-generic-password) head -n 1 > '${keyItem}' ;;\n*) exit 1 ;;\nesac\n`,
+    );
+    chmodSync(executable, 0o700);
+    writeFileSync(configPath, '{"version":1}\n');
+    const pat = ["synthetic", "jira", "pat", "4288"].join("-");
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (platform === undefined) throw new TypeError("Missing platform descriptor");
+    try {
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+      const keychainAccess = createKeychainVaultKeyAccess(
+        "keiko-atlassian-connector-credentials-vault",
+        createKeychainCommandRunner(executable),
+      );
+      const vault = openAtlassianCredentialVault({ configPath, env: {}, keychainAccess });
+      const metadataStore = createAtlassianCredentialMetadataStore({ configPath });
+      const { custody } = createAtlassianCredentialCustody({ vault, metadataStore });
+      const metadata = custody.create({
+        provider: "jira",
+        deployment: "data-center",
+        authScheme: "bearer-pat",
+        displayName: "Synthetic Jira",
+        baseUrl: "https://jira.example.invalid",
+        apiToken: pat,
+      });
+      const reopened = openAtlassianCredentialVault({
+        configPath,
+        env: {},
+        keychainAccess: createKeychainVaultKeyAccess(
+          "keiko-atlassian-connector-credentials-vault",
+          createKeychainCommandRunner(executable),
+        ),
+      });
+      const resolver = createAtlassianCredentialCustody({
+        vault: reopened,
+        metadataStore,
+      }).executionResolver;
+      expect(resolver.resolveForExecution(metadata.authRef)).toEqual({
+        scheme: "bearer-pat",
+        apiToken: pat,
+      });
+      expect(readFileSync(join(directory, "keychain-calls"), "utf8").trim().split("\n")).toEqual([
+        "find-generic-password",
+        "add-generic-password",
+        "find-generic-password",
+      ]);
+      expect(readFileSync(keyItem, "utf8").trim()).toMatch(/^[A-Za-z0-9+/]{43}=$/u);
+      expect(readdirSync(atlassianCredentialVaultDir(configPath))).not.toContain(
+        "atlassian-connector-credentials-vault.key",
+      );
+      for (const file of readdirSync(atlassianCredentialVaultDir(configPath), {
+        recursive: true,
+        withFileTypes: true,
+      }))
+        if (file.isFile())
+          expect(readFileSync(join(file.parentPath, file.name), "utf8")).not.toContain(pat);
+      expect(readFileSync(configPath, "utf8")).toBe('{"version":1}\n');
+      expect(existsSync(join(directory, ".env"))).toBe(false);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
   it("materialises its store file at the path atlassianCredentialStorePath returns", () => {
     const configPath = tempConfigPath();
     const vault = openAtlassianCredentialVault({

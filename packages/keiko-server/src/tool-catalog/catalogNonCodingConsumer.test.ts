@@ -5,7 +5,11 @@ import {
 import type { JiraManagedReadToolName } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
-import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
+import {
+  createJiraProviderForCatalog,
+  jiraOperationBindingForTool,
+} from "../atlassian/jiraManagedProvider.js";
+import { jiraReadFailureGuidance } from "../atlassian/jiraReadFailureGuidance.js";
 import type {
   ManagedMcpTool,
   ManagedMcpToolResult,
@@ -420,6 +424,12 @@ it("executes the real Jira project provider through gateway, binder and SDK with
 // Owner decision 2026-10-31 (#4176, ADR-0128 bounded field validation): a refused read hands the
 // model Jira's own bounded errorMessages so it can correct the call. They stay in the model-facing
 // result only; the Activity Log and the managed host's log never carry them.
+const LITERAL_GUIDANCE: Readonly<Record<string, string>> = {
+  "permission-denied":
+    "This read was not permitted for this Jira account or connection. Do not retry it. Tell the user in plain language that this account may not read this.",
+  "malformed-payload":
+    "Jira answered, but Keiko could not read or fit the answer. Narrow the request, for example a smaller maxResults or fewer fields, then call this tool once more. If it fails again, tell the user in plain language.",
+};
 it.each([
   {
     status: 403,
@@ -440,18 +450,32 @@ it.each([
     const m = await jiraFixture(body, status, raw);
     const f = fixture(undefined, m.managed);
     try {
+      const operationBinding = jiraOperationBindingForTool("jira.projects");
+      if (operationBinding === undefined) throw new TypeError("Missing canonical project binding");
+      // The model also receives what to change (#4357); the sentence comes from its producer.
+      const guidance = jiraReadFailureGuidance({
+        tool: "jira.projects",
+        reason: data.reason,
+        argumentNames: [],
+        administration: false,
+        explained: "messages" in data,
+      });
+      if (guidance === undefined) throw new TypeError("Missing read failure guidance");
+      // One literal sentence per case, so the pin still fails when the text changes by accident.
+      expect(guidance.text).toBe(LITERAL_GUIDANCE[data.reason]);
+      const expected = { ...data, guidance: guidance.text, operationBinding };
       const result = await f.binder.dispatch({ ...f.invocation, arguments: {} }, identity);
       expect(result).toMatchObject({
         kind: "settled",
         result: {
           status: "failed",
           reason: "provider-reported-error",
-          data,
+          data: expected,
           page: null,
-          metrics: { outputBytes: JSON.stringify(data).length, resultCount: 0 },
+          metrics: { outputBytes: Buffer.byteLength(JSON.stringify(expected)), resultCount: 0 },
         },
       });
-      expect(result.kind === "settled" ? result.result.data : undefined).toEqual(data);
+      expect(result.kind === "settled" ? result.result.data : undefined).toEqual(expected);
       expect(m.requests).toHaveLength(1);
       const settlement = f.logs.events.find(
         (event) =>
@@ -742,6 +766,7 @@ it.each([
 it.each([
   {
     tool: "jira.issue",
+    reason: "malformed-payload",
     body: {
       ...readIssue,
       fields: { ...readIssue.fields, description: { type: "doc", content: [] } },
@@ -749,35 +774,78 @@ it.each([
   },
   {
     tool: "jira.comments",
+    reason: "bounds-exceeded",
     body: {
       startAt: 0,
       maxResults: 25,
       total: 1,
-      comments: [{ id: "1", body: "x".repeat(32769), created: "2026-10-27" }],
+      comments: [{ id: "1", body: "x".repeat(65537), created: "2026-10-27" }],
     },
   },
-] as const)("refuses unsupported or oversized content for $tool", async ({ tool, body }) => {
-  const m = await jiraFixture(body, 200, undefined, tool);
-  const f = fixture(undefined, m.managed);
-  try {
-    const result = await f.binder.dispatch(
-      { ...f.invocation, arguments: { issueKey: "KEIKO-1" } },
-      identity,
-    );
-    expect(result).toMatchObject({
-      kind: "settled",
-      result: {
-        status: "failed",
-        reason: "provider-reported-error",
-        data: { outcome: "failed", reason: "malformed-payload" },
-      },
-    });
-    expect(m.requests).toHaveLength(1);
-  } finally {
-    f.dispose();
-    await m.managed.close();
-  }
-});
+] as const)(
+  "refuses unsupported or oversized content for $tool",
+  async ({ tool, reason, body }) => {
+    const m = await jiraFixture(body, 200, undefined, tool);
+    const f = fixture(undefined, m.managed);
+    try {
+      const result = await f.binder.dispatch(
+        { ...f.invocation, arguments: { issueKey: "KEIKO-1" } },
+        identity,
+      );
+      expect(result).toMatchObject({
+        kind: "settled",
+        result: {
+          status: "failed",
+          reason: "provider-reported-error",
+          data: { outcome: "failed", reason },
+        },
+      });
+      expect(m.requests).toHaveLength(1);
+    } finally {
+      f.dispose();
+      await m.managed.close();
+    }
+  },
+);
+
+// The tool's result schema has to agree with the limit the connector judges by: a text between
+// Jira's default field length and the catalog limit once passed the connector and failed the tool.
+it.each([
+  {
+    tool: "jira.comments",
+    body: {
+      startAt: 0,
+      maxResults: 25,
+      total: 1,
+      comments: [{ id: "1", body: "x".repeat(40000), created: "2026-10-27" }],
+    },
+    field: { body: "x".repeat(40000) },
+  },
+  {
+    tool: "jira.issue",
+    body: { ...readIssue, fields: { ...readIssue.fields, description: "x".repeat(40000) } },
+    field: { description: "x".repeat(40000) },
+  },
+] as const)(
+  "reads a text beyond the default field length for $tool",
+  async ({ tool, body, field }) => {
+    const m = await jiraFixture(body, 200, undefined, tool);
+    const f = fixture(undefined, m.managed);
+    try {
+      const result = await f.binder.dispatch(
+        { ...f.invocation, arguments: { issueKey: "KEIKO-1" } },
+        identity,
+      );
+      expect(result).toMatchObject({
+        kind: "settled",
+        result: { status: "completed", data: { outcome: "succeeded", items: [field] } },
+      });
+    } finally {
+      f.dispose();
+      await m.managed.close();
+    }
+  },
+);
 
 it.each([
   {
@@ -1098,7 +1166,6 @@ it.each([
     values: [...Array<string>(6).fill("y".repeat(32768)), ...Array<string>(13).fill("small")],
     kept: 6,
   },
-  { description: "\u0000".repeat(32768), values: ["y".repeat(32768)], kept: 0 },
   { description: "ordinary description", values: ["漢".repeat(32768), "small"], kept: 1 },
 ])(
   "keeps the complete Jira result bounded with explicit unavailable fields ($kept retained)",
@@ -1137,6 +1204,53 @@ it.each([
         f.logs.events.filter((event) => event.op === "tool-catalog.invocation-settled"),
       ).toHaveLength(1);
       expect(m.logs.lines().join()).not.toContain("Synthetic customfield");
+    } finally {
+      f.dispose();
+      await m.managed.close();
+    }
+  },
+);
+
+// A rich-text value with control characters or beyond its field length is named unavailable by
+// itself. Its escaped size still counts: JSON doubles a line break, so the third field no longer fits.
+it.each([
+  {
+    description: "\u0000".repeat(32768),
+    values: ["y".repeat(32768)],
+    states: ["unavailable", "value"],
+  },
+  {
+    description: "\n".repeat(65536),
+    values: ["\n".repeat(32768), "\n".repeat(32768)],
+    states: ["unavailable", "value", "unavailable"],
+  },
+])(
+  "keeps the selected fields that fit beside an unreadable one: $states",
+  async ({ description, values, states }) => {
+    const { body, selected } = largeSelectedIssue(description, values);
+    const m = await jiraFixture(body, 200, undefined, "jira.issue");
+    const f = fixture(undefined, m.managed);
+    try {
+      const outcome = await f.binder.dispatch(
+        { ...f.invocation, arguments: { issueKey: "KEIKO-1", fields: selected } },
+        identity,
+      );
+      expect(outcome).toMatchObject({
+        kind: "settled",
+        result: {
+          status: "completed",
+          data: {
+            items: [
+              {
+                description,
+                fieldValues: selected.map((id, index) => ({ id, state: states[index] })),
+              },
+            ],
+          },
+        },
+      });
+      if (outcome.kind !== "settled") throw new Error("Expected settlement");
+      expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(262144);
     } finally {
       f.dispose();
       await m.managed.close();

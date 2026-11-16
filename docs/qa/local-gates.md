@@ -48,13 +48,73 @@ other.
 
 ## Pinned toolchain for a local `npm test`
 
-Run `npm test` under the governed pair that `scripts/check-runtime-toolchain.mjs` approves for exact
-runs: **Node.js 24.18.0 with npm 11.16.0** (the compatibility baseline Node.js 26.8.1 with npm 11.19.0
-is also approved). Required CI provisions exactly that pair. A host inside the supported engine
-range but on another patch, such as Node.js 24.22.0 with npm 11.19.1, is supported for development,
-yet `debug-launch-policy.test.ts` asserts the exact pair: outside CI it skips its npm-policy proof
-and names the reason, and with `CI=true` it never skips, so run `node scripts/check-runtime-toolchain.mjs --exact`
-to see whether your host qualifies (#4111).
+Run `npm test` under **Node.js 26.13.1 with npm 11.20.0**, the sole approved exact pair.
+Development accepts Node `>=26.13.1 <27` and npm `>=11.20.0 <12`; CI, portable artifacts and
+measurements use the exact pair. Run `node scripts/check-runtime-toolchain.mjs --exact` before
+qualification. Node 24 is no longer supported (owner decision, 2026-11-15).
+
+The default `gates` service now uses Node 26. The former `gates-node26` compatibility service is
+retired. Compose reuses an existing image and dependency volume until explicitly refreshed. After
+the Node 26 migration, and after later toolchain or lockfile changes, refresh both:
+
+```bash
+docker compose -f docker/gates/docker-compose.yml build gates
+docker compose -f docker/gates/docker-compose.yml run --rm gates npm ci --ignore-scripts
+```
+
+Both gate runners check the exact Node/npm pair before installation or verification and fail on a
+stale image. A narrow Linux test selection installs and builds first when its volumes are empty:
+
+```bash
+docker compose -f docker/gates/docker-compose.yml run --rm gates \
+  ./docker/gates/run-vitest.sh packages/keiko-activity-log/src/log-level.test.ts
+```
+
+Any Vitest file or filter may follow `run-vitest.sh`. Native macOS and Windows checks still run on
+those operating systems. Their CI smoke lane also runs the path, timezone, certificate and runtime
+regressions that a Linux-only complete suite cannot qualify. Test fixtures resolve temporary-root
+aliases and state their group assumptions explicitly; no global `TMPDIR` override is required.
+
+## Test worker count
+
+Vitest is capped (GEN-TEST-FLAKE-001/002): the integration tests start servers, parse PDFs and build
+large temporary trees, and fanning out over every core starves them into false-red failures. The cap
+is decided in one place, `scripts/lib/vitest-workers.mjs`, and every capped config imports it: two
+workers when `CI` is set (the small shared runner, exactly as before), four on a development machine,
+and `KEIKO_VITEST_MAX_WORKERS` (an integer from 1 to 16; anything else is ignored) chooses. Set it to
+`2` to reproduce CI when a full local run shows a starvation flake. This container sets `CI=true`
+itself, which alone would pin it to two, so local gate jobs run with four workers by default (the
+compose file passes the host's `KEIKO_VITEST_MAX_WORKERS` through and defaults it to 4), and
+`KEIKO_VITEST_MAX_WORKERS=2 npm run gates:local` reproduces CI's count exactly when a starvation flake
+is suspected. Real CI on GitHub does not use this compose file and is unchanged.
+
+## The sandbox inside this container
+
+The product's verification sandbox wraps a command in bubblewrap's strict profile, which mounts a
+fresh procfs in its new root. Docker masks parts of the container's `/proc` by default and refuses
+that mount (`bwrap: Can't mount proc on /newroot/proc: Operation not permitted`), so every command the
+sandbox ran exited 1 in a few milliseconds and the six `runVerifyCli` tests in `keiko-cli` failed here
+while they pass on a GitHub runner, which is not a container. The compose file therefore starts the
+local gate container with `systempaths=unconfined`, which unmasks `/proc` so the sandbox runs as it
+does on a runner; like the seccomp and apparmor settings beside it, it applies to this local container
+only. GitHub CI does not use this compose file and is untouched.
+
+## What the image carries that the distribution does not
+
+Git is built from the upstream release (2.56.1, kernel.org, pinned by SHA-256 in
+`docker/gates/Dockerfile`) because the product's lazy-fetch guard needs git 2.45 or newer and
+Debian bookworm ships 2.39; CI's runners carry a current git. `iproute2` is installed because the
+sandbox's unshare fallback needs the `ip` tool to bring loopback up in its namespace. A host without
+either keeps the product's closed refusal for the case; the image simply matches what CI has.
+
+## Measured option, not built: externalising the server package under vitest
+
+A test that lazily imports `@oscharko-dev/keiko-server` makes vitest transform about 2,590 built
+workspace files one by one (26 to 29 s in this container against 3.5 s for a plain Node import)
+because workspace packages resolve outside `node_modules` and are inlined. Externalising only that
+package for the test projects that do not mock its internals should bring the load to roughly 4 s.
+It is not done: it needs a run of the keiko-cli and keiko-server suites to prove no test relies on
+mocking modules inside the server graph.
 
 ## Git worktrees
 
@@ -80,7 +140,7 @@ each ruler answers is in [`coverage-truth-model.md`](coverage-truth-model.md).
 
 - **D12 wall-clock performance evidence — not because it cannot be produced here, but because it is
   produced somewhere else.** The declared reference environment for those budgets is the pinned
-  `node:24.18.0-bookworm` container on a developer machine: linux/arm64, >=14 logical cores. Every
+  `node:26.13.1-bookworm` container on a developer machine: linux/arm64, >=14 logical cores. Every
   committed evidence document was measured there, and no hosted runner matches it. Use
   `npm run perf:evidence:regen` (which refuses to run outside that container and prints the exact
   `docker run` line), not this suite, and not a `workflow_dispatch` of the scheduled lane — that lane
@@ -154,7 +214,7 @@ Run them where they run, in about two seconds once the image is warm:
 
 ```bash
 git clone --no-local --no-hardlinks . /tmp/keiko-dap
-docker run --rm -v /tmp/keiko-dap:/repo -w /repo node:24.18.0-bookworm bash -lc '
+docker run --rm -v /tmp/keiko-dap:/repo -w /repo node:26.13.1-bookworm bash -lc '
   git config --global --add safe.directory "*"
   apt-get update -qq && apt-get install -y -qq bubblewrap
   npm ci --no-audit --no-fund && npm run build:packages

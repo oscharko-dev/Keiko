@@ -140,9 +140,11 @@ describe("gateway readiness while a single-slot model is busy (#4115)", () => {
     ]);
   });
 
-  it("renews a proof that would otherwise go stale while the model stays busy", async () => {
-    const run = harness(timeout(), provenReady(7, 6 * 60_000));
-    expect(currentConversationReadinessObservation(run.deps, MODEL)).toBeUndefined();
+  it("keeps an older same-connection proof admitted before an explicit busy check", async () => {
+    const fetchImpl = timeout();
+    const run = harness(fetchImpl, provenReady(7, 6 * 60_000));
+    expect(currentConversationReadinessObservation(run.deps, MODEL)).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
 
     await runGatewayReadiness({ modelId: MODEL, options: { probes: ["chat"] } }, run.deps);
 

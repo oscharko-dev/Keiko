@@ -12,6 +12,7 @@ import {
 // unowned / non-leaf target (SC1). No generic git runner; the single governed spawn boundary throughout.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rewriteGitPointerInPlace } from "../test-support/git-pointer-fixture.js";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -594,7 +595,10 @@ describe("cleanup safety refusals (SC4 — refusal is a successful outcome, neve
     writeFileSync(join(instance.managedWorktreePath, "wip.txt"), "uncommitted work\n");
     // Corrupt the worktree's `.git` pointer so `git status` exits non-zero (inconclusive probe). The
     // directory + the WIP file remain on disk; the destructive path must NOT treat this as clean.
-    writeFileSync(join(instance.managedWorktreePath, ".git"), "not a valid gitdir pointer\n");
+    rewriteGitPointerInPlace(
+      join(instance.managedWorktreePath, ".git"),
+      "not a valid gitdir pointer\n",
+    );
     setState(instance, "cleanup-pending");
     const result = await cleanup().cleanup({
       workspaceId: instance.workspaceId,
@@ -931,7 +935,10 @@ describe("removal re-checks cleanliness through git, never --force", () => {
     expect(store.getById(instance.workspaceId)).toMatchObject({
       lifecycleState: "cleanup-pending",
     });
-    expect(git(["worktree", "list", "--porcelain"])).toContain(instance.managedWorktreePath);
+    // Git prints a Windows worktree path with forward slashes (`C:/…`).
+    expect(git(["worktree", "list", "--porcelain"])).toContain(
+      instance.managedWorktreePath.replaceAll("\\", "/"),
+    );
     expect(evidence.some((entry) => parseEvent(entry.json).outcome === "cleanup-completed")).toBe(
       false,
     );

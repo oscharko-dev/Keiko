@@ -13,6 +13,7 @@ import {
   logTaskWorkspaceManifestReconnected,
   logTaskWorkspaceRepositoryRegistration,
 } from "./deps-activity.js";
+import { stopRuntimeThenMcp } from "./deps.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -160,7 +161,95 @@ describe("logTaskWorkspaceManifestReconnected — Activity Log proof", () => {
   });
 });
 
+// #4279 (lifecycle audit): MCP connections closed first, and a close that threw left the coding
+// runtime's process running with nothing left to stop it.
+describe("stopRuntimeThenMcp", () => {
+  it("stops the runtime first, and still stops it when closing MCP fails", async () => {
+    const order: string[] = [];
+    const stopped = await stopRuntimeThenMcp(
+      () => {
+        order.push("runtime");
+        return Promise.resolve("ended");
+      },
+      () => {
+        order.push("mcp");
+        return Promise.reject(new Error("close fault"));
+      },
+    );
+
+    expect(order).toEqual(["runtime", "mcp"]);
+    expect(stopped.outcome).toBe("ended");
+    expect(stopped.failure?.message).toBe("close fault");
+  });
+
+  it("still closes MCP when the runtime stop throws, and reports the runtime as faulted", async () => {
+    let closed = false;
+    const stopped = await stopRuntimeThenMcp(
+      () => Promise.reject(new Error("stop fault")),
+      () => {
+        closed = true;
+        return Promise.resolve();
+      },
+    );
+
+    expect(closed).toBe(true);
+    expect(stopped).toMatchObject({ outcome: "faulted", failure: { message: "stop fault" } });
+  });
+
+  it("wraps a non-error rejection with its cause", async () => {
+    const stopped = await stopRuntimeThenMcp(
+      () => Promise.resolve("not-applicable"),
+      // A rejection that is not an Error, as a third-party close may produce.
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- the case under test
+      () => Promise.reject("plain"),
+    );
+
+    expect(stopped.outcome).toBe("not-applicable");
+    expect(stopped.failure?.cause).toBe("plain");
+  });
+});
+
 describe("logRuntimeShutdown — Activity Log proof", () => {
+  it.each([0, 2])(
+    "records a normal shutdown start at info with %i active runs",
+    (activeRunCount) => {
+      const sink = createBufferedServerLogSink();
+      logRuntimeShutdown(sink, "req-runtime-shutdown-start", {
+        state: "started",
+        openSseStreamCount: 0,
+        activeRunCount,
+      });
+      expect(sink.events[0]).toMatchObject({ level: "info", op: "server.runtime.shutdown" });
+      expect(sink.events[0]).not.toHaveProperty("errorKind");
+    },
+  );
+
+  it("keeps a faulted runtime at warn even when cleanup succeeds", () => {
+    const sink = createBufferedServerLogSink();
+    logRuntimeShutdown(sink, "req-runtime-shutdown-runtime-fault", {
+      state: "completed",
+      openSseStreamCount: 0,
+      activeRunCount: 0,
+      durationMs: 12,
+      runtimeShutdown: "faulted",
+      cleanup: "completed",
+    });
+    expect(sink.events[0]).toMatchObject({ level: "warn", errorKind: "internal" });
+  });
+
+  it("keeps a faulted cleanup at warn with its failure classification", () => {
+    const sink = createBufferedServerLogSink();
+    logRuntimeShutdown(sink, "req-runtime-shutdown-failed", {
+      state: "completed",
+      openSseStreamCount: 0,
+      activeRunCount: 0,
+      durationMs: 12,
+      runtimeShutdown: "faulted",
+      cleanup: "faulted",
+    });
+    expect(sink.events[0]).toMatchObject({ level: "warn", errorKind: "internal" });
+  });
+
   it("writes a body-free server.runtime.shutdown line for a clean completed shutdown", () => {
     const sink = createBufferedServerLogSink();
 

@@ -236,6 +236,21 @@ describe("parseGatewayConfig", () => {
     expect(fromEnv.providers[0]?.realtimeAuthMode).toBe("ephemeral-session");
   });
 
+  it("requires explicit continuation policy and invalidates earlier readiness proofs", () => {
+    const ordinary = parseGatewayConfig(validRaw()).providers[0];
+    const configured = parseGatewayConfig(
+      rawWithProvider((p) => ({ ...p, reasoningContinuation: "required-with-tools" })),
+    ).providers[0];
+    expect(configured?.reasoningContinuation).toBe("required-with-tools");
+    if (ordinary === undefined || configured === undefined) throw new TypeError("Missing provider");
+    expect(toolCallingConfigurationFingerprint(configured)).not.toBe(
+      toolCallingConfigurationFingerprint(ordinary),
+    );
+    expect(() =>
+      parseGatewayConfig(rawWithProvider((p) => ({ ...p, reasoningContinuation: "guess" }))),
+    ).toThrow(/reasoningContinuation/u);
+  });
+
   it("rejects an unknown realtime auth mode", () => {
     expect(() =>
       parseGatewayConfig(rawWithProvider((p) => ({ ...p, realtimeAuthMode: "magic-token" }))),
@@ -286,6 +301,45 @@ describe("parseGatewayConfig", () => {
       parseGatewayConfig(rawWithProvider((provider) => ({ ...provider, tokenCounter: "azure" }))),
     ).toThrow(/tokenCounter must be one of/u);
   });
+
+  it.each(["required-with-tools", "current-turn"] as const)(
+    "qualifies the explicit %s reasoning protocol without alias inference",
+    (reasoningHistory) => {
+      const config = parseGatewayConfig(
+        rawWithProvider((provider) => ({
+          ...provider,
+          reasoningHistory,
+          reasoningHistoryField: "reasoning",
+        })),
+      );
+      expect(config.providers[0]).toMatchObject({
+        reasoningHistory,
+        reasoningHistoryField: "reasoning",
+      });
+      const provider = config.providers[0];
+      if (provider === undefined) throw new TypeError("Missing provider fixture");
+      expect(toolCallingConfigurationFingerprint(provider)).not.toBe(
+        toolCallingConfigurationFingerprint({ ...provider, reasoningHistory: undefined }),
+      );
+      expect(toolCallingConfigurationFingerprint(provider)).not.toBe(
+        toolCallingConfigurationFingerprint({
+          ...provider,
+          reasoningHistoryField: "reasoning_content",
+        }),
+      );
+    },
+  );
+
+  it.each(["reasoningHistory", "reasoningHistoryField"])(
+    "rejects an unknown %s protocol value",
+    (field) => {
+      expect(() =>
+        parseGatewayConfig(
+          rawWithProvider((provider) => ({ ...provider, [field]: "guess-from-name" })),
+        ),
+      ).toThrow(/must be one of/u);
+    },
+  );
 
   it("rejects endpoint API version without the Azure deployment endpoint style", () => {
     expect(() =>
@@ -1702,6 +1756,41 @@ describe("parseGatewayConfig", () => {
   // and the top-level GatewayConfig.circuitBreaker continues to apply to every provider without
   // one. The parser reuses parseCircuitBreaker so per-provider validation stays consistent with
   // the top-level surface.
+  describe("operator-named provider timeout (#4351)", () => {
+    it("marks a timeout the configuration names, and none the configuration omits", () => {
+      const named = parseGatewayConfig(
+        rawWithProvider((provider) => ({ ...provider, timeoutMs: 45_000 })),
+      );
+      expect(named.providers[0]?.timeoutConfigured).toBe(true);
+      const { timeoutMs: _omitted, ...withoutTimeout } = validProvider();
+      const defaulted = parseGatewayConfig(rawWithProvider(() => withoutTimeout));
+      expect(defaulted.providers[0]?.timeoutMs).toBe(120_000);
+      expect(defaulted.providers[0]?.timeoutConfigured).toBeUndefined();
+    });
+
+    // Installations written before the marker existed: a value equal to a default Keiko itself stored
+    // (Setup's 30 s, the resolver's 120 s) is a default; any other unmarked value was a person's.
+    it.each([
+      [30_000, undefined, undefined],
+      [120_000, undefined, undefined],
+      [45_000, undefined, true],
+      [30_000, true, true],
+      [120_000, true, true],
+    ] as const)(
+      "reads a stored timeout of %i with marker %s as named=%s",
+      (timeoutMs, timeoutNamed, expected) => {
+        const config = parseGatewayConfig(
+          rawWithProvider((provider) => ({
+            ...provider,
+            timeoutMs,
+            ...(timeoutNamed === undefined ? {} : { timeoutNamed }),
+          })),
+        );
+        expect(config.providers[0]?.timeoutConfigured).toBe(expected);
+      },
+    );
+  });
+
   describe("per-provider circuitBreaker override (KEIKO-0167)", () => {
     it("round-trips a provider-level override alongside a sibling that omits it", () => {
       const raw = {
@@ -3571,4 +3660,23 @@ describe("automatic catalog origin", () => {
       ).toThrow(ConfigInvalidError);
     },
   );
+});
+
+describe("exclusive native and shared reasoning owners", () => {
+  it.each([
+    { reasoningHistory: "required-with-tools" },
+    { reasoningHistory: "current-turn" },
+    { reasoningHistoryField: "reasoning" },
+    { reasoningHistoryField: "reasoning_content" },
+  ])("refuses mixed native policy %j", (shared) => {
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((value) => ({
+          ...value,
+          reasoningContinuation: "required-with-tools",
+          ...shared,
+        })),
+      ),
+    ).toThrow(/cannot be combined/u);
+  });
 });

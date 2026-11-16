@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
@@ -13,10 +13,12 @@ import {
 } from "./codingSessionContinuity.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
 import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
   bindContinuedSession,
   retainSettledRun,
   seedContinuation,
+  SESSION_MOVE_ARRIVAL_TIMEOUT_MS,
   withoutBaseline,
   type ContinuationClient,
   type RunContinuation,
@@ -84,6 +86,7 @@ function fakeStore(
         messageCount: 9,
         entryCount: 2,
         prunedCount: 1,
+        blockedCount: 0,
       };
       if (result instanceof Error) throw result;
       return result;
@@ -92,7 +95,10 @@ function fakeStore(
       calls.removed.push(taskId);
       if (results.remove !== undefined) throw results.remove;
     },
-    prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, entryCount: 0 }),
+    prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, blocked: 0, entryCount: 0 }),
+    readEntry: () => undefined,
+    editEntry: () => ({ ok: false, reason: "no-retained-state" }),
+    listTaskIds: () => [],
   };
   return { store, calls };
 }
@@ -136,7 +142,7 @@ function harness(
     context: {
       service,
       workspaceId: options.workspaceId ?? "workspace-1",
-      runtimeVersion: "2.1.4",
+      runtimeVersion: OPENCODE_PINNED_VERSION,
       maxInputTokens: 24_000,
       activityLog: log,
       ...(options.forkSource === undefined ? {} : { forkSource: options.forkSource }),
@@ -190,7 +196,7 @@ describe("seeding a run's database from a task's retained entry", () => {
         binding: {
           taskId: TASK,
           workspaceKey: expect.stringMatching(/^[a-f0-9]{64}$/u) as string,
-          runtimeVersion: "2.1.4",
+          runtimeVersion: OPENCODE_PINNED_VERSION,
           maxInputTokens: 24_000,
         },
         directory: WORKSPACE,
@@ -359,11 +365,12 @@ describe("seeding a run's database from a task's retained entry", () => {
       sessionId: SESSION,
       messageCount: 1,
     });
-    expect(
-      new DatabaseSync(join(resumed, "state", "opencode.db"), { readOnly: true })
-        .prepare("SELECT COUNT(*) AS n FROM session_message")
-        .get(),
-    ).toEqual({ n: 1 });
+    const database = new DatabaseSync(join(resumed, "state", "opencode.db"), { readOnly: true });
+    try {
+      expect(database.prepare("SELECT COUNT(*) AS n FROM session_message").get()).toEqual({ n: 1 });
+    } finally {
+      database.close();
+    }
 
     const elsewhere = harness({ store: real, workspaceId: "another-workspace" });
     elsewhere.service.declare(RUN, RESUME);
@@ -425,12 +432,18 @@ it.each(["workspace-changed", "version-changed"] as const)(
 function realisticDatabase(path: string): void {
   const database = new DatabaseSync(path);
   try {
-    for (const [table, columns] of Object.entries(OPENCODE_PERSISTENCE_SCHEMAS["2.1.4"] ?? {})) {
+    for (const [table, columns] of Object.entries(
+      OPENCODE_PERSISTENCE_SCHEMAS[OPENCODE_PINNED_VERSION] ?? {},
+    )) {
       database.exec(`CREATE TABLE "${table}" (${columns.map((name) => `"${name}"`).join(", ")})`);
     }
+    // The runtime's own kv table is keyed: Keiko's scheduler lease upserts into it (2.2.5 schedules).
+    database.exec(
+      'DROP TABLE kv; CREATE TABLE kv ("key" TEXT PRIMARY KEY, "value", "time_created", "time_updated")',
+    );
     database
       .prepare("INSERT INTO session_v2 (id, directory, version) VALUES (?, ?, ?)")
-      .run(SESSION, WORKSPACE, "2.1.4");
+      .run(SESSION, WORKSPACE, OPENCODE_PINNED_VERSION);
     database
       .prepare("INSERT INTO session_message (id, session_id, data) VALUES ('msg_1', ?, 'x')")
       .run(SESSION);
@@ -703,14 +716,19 @@ describe("binding a run to a fork of the retained session", () => {
       ),
     ).toMatchObject({ ok: false, reason: "move-failed" });
     const stayed = fakeClient({ sessions: atSource });
-    expect(
-      await bindContinuedSession(
+    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+    try {
+      const pending = bindContinuedSession(
         stayed.client,
         { ...FORK(END), sourceDirectory: SOURCE_DIR },
         WORKSPACE,
         undefined,
-      ),
-    ).toMatchObject({ ok: false, reason: "session-mismatch" });
+      );
+      await vi.advanceTimersByTimeAsync(SESSION_MOVE_ARRIVAL_TIMEOUT_MS + 1_000);
+      expect(await pending).toMatchObject({ ok: false, reason: "session-mismatch" });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(stayed.calls.some((call) => call.startsWith("fork:"))).toBe(false);
     // A session that is already where the run is, but was declared at its source, is refused too.
     const elsewhere = fakeClient();
@@ -723,6 +741,114 @@ describe("binding a run to a fork of the retained session", () => {
       ),
     ).toMatchObject({ ok: false, reason: "session-mismatch" });
     expect(elsewhere.calls).toEqual(["sessions"]);
+  });
+
+  // #4068: the pinned runtime answers session.move before the session has arrived. On a Windows host
+  // a first move into a new root reached it about 230 ms after the answer, so an immediate read lost
+  // the race and refused a move that was about to succeed.
+  describe("a move the runtime answered before the session arrived", () => {
+    const SOURCE_DIR = "/work/source";
+    const at = (directory: string): readonly SessionRecord[] => [
+      session(SESSION, { location: { directory } }),
+    ];
+    const moved = (calls: readonly string[]): boolean =>
+      calls.includes(`move:${SESSION}:${WORKSPACE}`);
+    /** Still at its source for the first reads after the move, then wherever `arrival` says. */
+    const arriving = (
+      readsAtSource: number,
+      arrival: () => readonly SessionRecord[],
+    ): { sessions: (calls: string[]) => readonly SessionRecord[] } => {
+      let reads = 0;
+      return {
+        sessions: (calls): readonly SessionRecord[] => {
+          if (calls.includes(`remove:${SESSION}`)) return [session("ses_fork_1")];
+          if (!moved(calls)) return at(SOURCE_DIR);
+          reads += 1;
+          return reads > readsAtSource ? arrival() : at(SOURCE_DIR);
+        },
+      };
+    };
+
+    it("waits for it, and forks only once it has arrived", async () => {
+      const fake = fakeClient({
+        ...arriving(2, () => at(WORKSPACE)),
+        messages: { ses_fork_1: [message("msg_f1", "user")] },
+      });
+
+      const bound = await bindContinuedSession(
+        fake.client,
+        { ...FORK(END), sourceDirectory: SOURCE_DIR },
+        WORKSPACE,
+        undefined,
+      );
+
+      expect(bound).toMatchObject({ ok: true, sessionId: "ses_fork_1" });
+      expect(fake.calls).toEqual([
+        "sessions",
+        `move:${SESSION}:${WORKSPACE}`,
+        "sessions",
+        "sessions",
+        "sessions",
+        `fork:${SESSION}:end`,
+        `remove:${SESSION}`,
+        "sessions",
+        "messages:ses_fork_1",
+      ]);
+    });
+
+    it("refuses at once a session that turns up anywhere else", async () => {
+      const fake = fakeClient(arriving(1, () => at("/work/third")));
+
+      expect(
+        await bindContinuedSession(
+          fake.client,
+          { ...FORK(END), sourceDirectory: SOURCE_DIR },
+          WORKSPACE,
+          undefined,
+        ),
+      ).toMatchObject({ ok: false, reason: "session-mismatch" });
+      expect(fake.calls).toEqual([
+        "sessions",
+        `move:${SESSION}:${WORKSPACE}`,
+        "sessions",
+        "sessions",
+      ]);
+    });
+
+    it("refuses at once when another session appears while it waits", async () => {
+      const fake = fakeClient(arriving(1, () => [session(SESSION), session("ses_other")]));
+
+      expect(
+        await bindContinuedSession(
+          fake.client,
+          { ...FORK(END), sourceDirectory: SOURCE_DIR },
+          WORKSPACE,
+          undefined,
+        ),
+      ).toMatchObject({ ok: false, reason: "session-mismatch" });
+      expect(fake.calls.filter((call) => call === "sessions")).toHaveLength(3);
+    });
+
+    it("stops waiting when the run is cancelled, which is no refusal", async () => {
+      const cancel = new AbortController();
+      const fake = fakeClient({
+        sessions: (calls) => {
+          if (!moved(calls)) return at(SOURCE_DIR);
+          cancel.abort(new Error("run-cancelled"));
+          return at(SOURCE_DIR);
+        },
+      });
+
+      await expect(
+        bindContinuedSession(
+          fake.client,
+          { ...FORK(END), sourceDirectory: SOURCE_DIR },
+          WORKSPACE,
+          cancel.signal,
+        ),
+      ).rejects.toThrow("run-cancelled");
+      expect(fake.calls.filter((call) => call === "sessions")).toHaveLength(2);
+    });
   });
 
   it("forks just before the user turn the boundary names, the runtime's handshake not counting", async () => {
@@ -863,7 +989,7 @@ describe("retaining a settled run", () => {
           binding: {
             taskId: TASK,
             workspaceKey: expect.stringMatching(/^[a-f0-9]{64}$/u) as string,
-            runtimeVersion: "2.1.4",
+            runtimeVersion: OPENCODE_PINNED_VERSION,
             maxInputTokens: 24_000,
           },
           sessionId: SESSION,
@@ -1020,4 +1146,29 @@ describe("retaining a settled run", () => {
     expect(JSON.stringify(lines(h))).not.toContain(WORKSPACE);
     expect(JSON.stringify(lines(h))).not.toContain(TASK);
   });
+});
+
+describe("provider continuation and native history", () => {
+  it.each([
+    { kind: "resume", taskId: TASK },
+    { kind: "fork", sourceTaskId: TASK, boundary: { kind: "end" } },
+  ] as const)(
+    "uses existing history replay instead of copying incomplete $kind protocol state",
+    (intent) => {
+      const h = harness();
+      h.service.declare(RUN, intent);
+      expect(
+        seedContinuation({ ...h.context, freshReasoningHistory: true }, location()),
+      ).toBeUndefined();
+      expect(h.calls.checkouts).toHaveLength(0);
+      expect(h.service.outcome(RUN)).toEqual({
+        kind: "fresh",
+        reason: "reasoning-history-unavailable",
+      });
+      expect(lines(h).at(-1)).toMatchObject({
+        outcome: "fresh",
+        reason: "reasoning-history-unavailable",
+      });
+    },
+  );
 });

@@ -1,19 +1,35 @@
 import {
   createJiraReadRequest,
+  boundJiraTemplateWithoutProposal,
+  jiraInstanceIdentity,
   proposeJiraIssueTemplates,
   readJiraTemplateInstanceMetadata,
+  resolveJiraTemplateBinding,
   validateJiraIssueTemplateAgainstInstance,
 } from "@oscharko-dev/keiko-connectors";
-import { MARKDOWN_SKILL_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  MARKDOWN_SKILL_LIMITS,
+  type MarkdownSkillDocument,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  bindJiraIssueTemplateText,
+  jiraIssueTemplateLabel,
+  jiraTemplateForInstance,
+  jiraTemplateGovernsWrites,
+  jiraTemplatesShareIssueType,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
   type JiraTemplateActivation,
+  type JiraTemplateBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { findOwnedJiraPod, isReadyJiraPod } from "./atlassian/jiraPodAccess.js";
+import { findOwnedJiraPod, isReadyJiraPod, listOwnedJiraPods } from "./atlassian/jiraPodAccess.js";
 import { readMutation, withSkillAccess } from "./markdown-skill-routes.js";
+import type {
+  MarkdownSkillProposalAccounting,
+  MarkdownSkillTemplateAccounting,
+} from "./markdown-skill-log.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { invalidRequest, notFound, UiStoreError } from "./store/errors.js";
 
@@ -49,22 +65,60 @@ function templateSummary(template: JiraIssueTemplate): {
   };
 }
 
+/**
+ * How many other saved templates govern the same project and issue type as this one (#4354, F07a):
+ * the gate checks every governing template, so a write must meet all of them. The same type means the
+ * same bound issue type id, or else the same typed name; a template that only governs a status change
+ * does not share a type with one that governs writes.
+ */
+function sharedTypeCount(
+  template: JiraIssueTemplate,
+  all: readonly JiraIssueTemplate[],
+  instances: readonly (string | undefined)[],
+): number {
+  if (!jiraTemplateGovernsWrites(template)) return 0;
+  // Each template as it governs one of the caller's Jiras (a binding made for another Jira is dropped
+  // there, as in the gate), by the one rule; the most any one Jira shows is the count.
+  const counts = instances.map((instance) => {
+    const view = jiraTemplateForInstance(template, instance);
+    return all.filter(
+      (other) =>
+        other !== template &&
+        jiraTemplateGovernsWrites(other) &&
+        jiraTemplatesShareIssueType(view, jiraTemplateForInstance(other, instance)),
+    ).length;
+  });
+  return Math.max(0, ...counts);
+}
+
 export function handleListJiraTemplates(
   ctx: RouteContext,
   deps: TemplateRouteDeps,
 ): Promise<RouteResult> {
-  return withSkillAccess(ctx, deps, "jira-template-list", () => ({
-    status: 200,
-    body: {
-      templates: deps.store.markdownSkills.jiraTemplates().map(({ skill, template }) => ({
-        id: skill.id,
-        revision: skill.revision,
-        name: skill.name,
-        valid: template !== undefined,
-        ...(template === undefined ? {} : templateSummary(template)),
-      })),
-    },
-  }));
+  return withSkillAccess(ctx, deps, "jira-template-list", () => {
+    const entries = deps.store.markdownSkills.jiraTemplates();
+    const parsed = entries.flatMap(({ template }) => (template === undefined ? [] : [template]));
+    const pods = listOwnedJiraPods(deps).filter((pod) => isReadyJiraPod(pod));
+    const instances =
+      pods.length === 0 ? [undefined] : pods.map((pod) => jiraInstanceIdentity(pod.baseUrl));
+    return {
+      status: 200,
+      body: {
+        templates: entries.map(({ skill, template }) => ({
+          id: skill.id,
+          revision: skill.revision,
+          name: skill.name,
+          valid: template !== undefined,
+          ...(template === undefined
+            ? {}
+            : {
+                ...templateSummary(template),
+                sharedWith: sharedTypeCount(template, parsed, instances),
+              }),
+        })),
+      },
+    };
+  });
 }
 
 function readyPod(
@@ -115,53 +169,218 @@ export function handleValidateJiraTemplate(
   ctx: RouteContext,
   deps: TemplateRouteDeps,
 ): Promise<RouteResult> {
-  return withSkillAccess(ctx, deps, "jira-template-validate", async () => {
-    const body = await readMutation(ctx, deps, BODY_BYTES);
-    if (body.kind === "rejected") return body.response;
-    const { markdown, podId } = body.value;
-    if (typeof markdown !== "string") throw invalidRequest("Provide the template Markdown.");
-    const parsed = parseJiraIssueTemplate(markdown);
-    if (!parsed.ok) return { status: 200, body: { valid: false, errors: parsed.errors } };
-    const pod = readyPod(deps, podId);
-    const read = await readJiraTemplateInstanceMetadata(
-      podRequest(deps, ctx, pod),
-      parsed.template,
-    );
-    if (!read.ok) throw jiraReadFailure(read.reason);
-    return {
-      status: 200,
-      body: {
-        valid: true,
-        template: templateSummary(parsed.template),
-        findings: validateJiraIssueTemplateAgainstInstance(parsed.template, read.instance),
-        checked: {
-          project: read.instance.project !== undefined,
-          fields: read.instance.fields !== undefined,
-          linkTypes: read.instance.linkTypes !== undefined,
-          transitions: read.instance.statuses !== undefined,
+  let accounting: MarkdownSkillTemplateAccounting | undefined;
+  return withSkillAccess(
+    ctx,
+    deps,
+    "jira-template-validate",
+    async () => {
+      const body = await readMutation(ctx, deps, BODY_BYTES);
+      if (body.kind === "rejected") return body.response;
+      const { markdown, podId } = body.value;
+      if (typeof markdown !== "string") throw invalidRequest("Provide the template Markdown.");
+      const parsed = parseJiraIssueTemplate(markdown);
+      if (!parsed.ok) return { status: 200, body: { valid: false, errors: parsed.errors } };
+      const pod = readyPod(deps, podId);
+      const instanceId = jiraInstanceIdentity(pod.baseUrl);
+      // A binding made for another Jira means nothing here: the typed names are what this Jira sees.
+      const template = jiraTemplateForInstance(parsed.template, instanceId);
+      const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
+      if (!read.ok) throw jiraReadFailure(read.reason);
+      const findings = validateJiraIssueTemplateAgainstInstance(template, read.instance);
+      accounting = {
+        ...(read.instance.fields === undefined
+          ? {}
+          : { checkedFieldCount: read.instance.fields.length }),
+        validationFindingCount: findings.length,
+      };
+      return {
+        status: 200,
+        body: {
+          valid: true,
+          template: templateSummary(template),
+          binding: resolveJiraTemplateBinding(template, read.instance, instanceId),
+          findings,
+          checked: {
+            project: read.instance.project !== undefined,
+            fields: read.instance.fields !== undefined,
+            linkTypes: read.instance.linkTypes !== undefined,
+            transitions: read.instance.statuses !== undefined,
+          },
         },
-      },
-    };
-  });
+      };
+    },
+    () => accounting,
+  );
+}
+
+/** Counts per closed reason of a proposal run: what the closing log line carries, never a type name. */
+function proposalAccounting(result: {
+  readonly proposals: readonly { readonly partial?: string }[];
+  readonly withoutProposal: readonly { readonly reason: string }[];
+  readonly typeCount: number;
+}): MarkdownSkillProposalAccounting {
+  const count = (reason: string): number =>
+    result.withoutProposal.filter((entry) => entry.reason === reason).length;
+  return {
+    typeCount: result.typeCount,
+    proposalCount: result.proposals.length,
+    nothingToLearnCount: count("nothing-to-learn"),
+    templateInvalidCount: count("template-invalid"),
+    jiraUnavailableCount: count("jira-unavailable"),
+    beyondLimitCount: count("beyond-limit"),
+    partialProposalCount: result.proposals.filter((proposal) => proposal.partial !== undefined)
+      .length,
+  };
 }
 
 export function handleProposeJiraTemplates(
   ctx: RouteContext,
   deps: TemplateRouteDeps,
 ): Promise<RouteResult> {
-  return withSkillAccess(ctx, deps, "jira-template-propose", async () => {
-    const body = await readMutation(ctx, deps, 4096);
-    if (body.kind === "rejected") return body.response;
-    const { projectKey, podId } = body.value;
-    if (typeof projectKey !== "string" || !/^[A-Za-z]\w{0,127}$/u.test(projectKey)) {
-      throw invalidRequest("Provide a Jira project key.");
-    }
-    const pod = readyPod(deps, podId);
-    const result = await proposeJiraIssueTemplates(podRequest(deps, ctx, pod), projectKey);
-    if (!result.ok) {
-      if (result.reason === "not-found") throw notFound("Jira project");
-      throw jiraReadFailure(result.reason);
-    }
-    return { status: 200, body: { proposals: result.proposals } };
+  let accounted: MarkdownSkillProposalAccounting | undefined;
+  return withSkillAccess(
+    ctx,
+    deps,
+    "jira-template-propose",
+    async () => {
+      const body = await readMutation(ctx, deps, 4096);
+      if (body.kind === "rejected") return body.response;
+      const { projectKey, podId } = body.value;
+      if (typeof projectKey !== "string" || !/^[A-Za-z]\w{0,127}$/u.test(projectKey)) {
+        throw invalidRequest("Provide a Jira project key.");
+      }
+      const pod = readyPod(deps, podId);
+      const result = await proposeJiraIssueTemplates(podRequest(deps, ctx, pod), projectKey);
+      if (!result.ok) {
+        if (result.reason === "not-found") throw notFound("Jira project");
+        throw jiraReadFailure(result.reason);
+      }
+      accounted = proposalAccounting(result);
+      const { listed, moreCount } = boundJiraTemplateWithoutProposal(result.withoutProposal);
+      return {
+        status: 200,
+        body: {
+          proposals: result.proposals,
+          withoutProposal: listed,
+          withoutProposalMoreCount: moreCount,
+          typeCount: result.typeCount,
+        },
+      };
+    },
+    () => accounted,
+  );
+}
+
+const BIND_BODY_BYTES = 4096;
+/** A file name the skill store accepts, derived from the skill's own display name. */
+function skillFileName(name: string): string {
+  const stem = name
+    .replace(/[\\/:\p{Cc}]/gu, "-")
+    .replace(/^\.+/u, "")
+    .trim();
+  return `${stem.length === 0 ? "template" : stem}.md`.slice(-MARKDOWN_SKILL_LIMITS.fileNameChars);
+}
+function refusedBinding(
+  template: JiraIssueTemplate,
+  resolution: Extract<
+    ReturnType<typeof resolveJiraTemplateBinding>,
+    { state: "unresolved" | "ambiguous" }
+  >,
+): UiStoreError {
+  const what =
+    resolution.state === "ambiguous"
+      ? `More than one issue type in this Jira is called "${resolution.subject}"`
+      : `This Jira shows no issue type called "${resolution.subject}" to you`;
+  return new UiStoreError(
+    "INVALID_REQUEST",
+    `${what}, so the template "${jiraIssueTemplateLabel(template)}" cannot be bound. Write the type as this Jira shows it to you and save the template again, or ask its author to check it against Jira.`,
+    422,
+  );
+}
+
+/** The stored template the caller named, at the revision it named; a stale revision changes nothing. */
+function bindTarget(
+  deps: TemplateRouteDeps,
+  skillId: unknown,
+  revision: unknown,
+): { readonly skill: MarkdownSkillDocument; readonly template: JiraIssueTemplate } {
+  if (typeof skillId !== "string" || typeof revision !== "number")
+    throw invalidRequest("Provide the template and its revision.");
+  const skill = deps.store.markdownSkills.get(skillId);
+  if (skill === undefined) throw notFound("Skill");
+  if (skill.revision !== revision)
+    throw new UiStoreError(
+      "INVALID_REQUEST",
+      "Skill revision is stale. Reload before changing it.",
+      409,
+    );
+  const parsed = parseJiraIssueTemplate(skill.body);
+  if (!parsed.ok) throw invalidRequest("This skill is not a valid Jira issue template.");
+  return { skill, template: parsed.template };
+}
+
+/** The new skill revision that carries the binding, written through the skill store's own replace. */
+function saveBinding(
+  deps: TemplateRouteDeps,
+  skill: MarkdownSkillDocument,
+  binding: JiraTemplateBinding,
+): MarkdownSkillDocument {
+  const bound = bindJiraIssueTemplateText(skill.body, binding);
+  if (bound === undefined) throw invalidRequest("This template cannot be bound.");
+  return deps.store.markdownSkills.replace(skill.id, skill.revision, {
+    fileName: skillFileName(skill.name),
+    contentBase64: Buffer.from(bound, "utf8").toString("base64"),
   });
+}
+
+/**
+ * Binds a stored template to the issue types of the Jira the caller chose (#4354): the typed names are
+ * resolved in the caller's own view and the ids are written into the template's front matter as a new
+ * skill revision, so the binding travels with an exported copy. It writes nothing to Jira.
+ */
+export function handleBindJiraTemplate(
+  ctx: RouteContext,
+  deps: TemplateRouteDeps,
+): Promise<RouteResult> {
+  let accounting: MarkdownSkillTemplateAccounting | undefined;
+  return withSkillAccess(
+    ctx,
+    deps,
+    "jira-template-bind",
+    async () => {
+      const body = await readMutation(ctx, deps, BIND_BODY_BYTES);
+      if (body.kind === "rejected") return body.response;
+      const { skill, template: stored } = bindTarget(deps, body.value.skillId, body.value.revision);
+      const pod = readyPod(deps, body.value.podId);
+      const instanceId = jiraInstanceIdentity(pod.baseUrl);
+      const template = jiraTemplateForInstance(stored, instanceId);
+      const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
+      if (!read.ok) throw jiraReadFailure(read.reason);
+      const resolution = resolveJiraTemplateBinding(template, read.instance, instanceId);
+      accounting = {
+        ...(read.instance.fields === undefined
+          ? {}
+          : { checkedFieldCount: read.instance.fields.length }),
+        bindingUpdateCount: 0,
+      };
+      if (resolution.state === "bound")
+        return { status: 200, body: { changed: false, issueType: resolution.issueType } };
+      if (resolution.state === "dead")
+        return { status: 200, body: { changed: false, dead: true, issueType: resolution.subject } };
+      if (resolution.state !== "bindable") throw refusedBinding(template, resolution);
+      const saved = saveBinding(deps, skill, resolution.binding);
+      accounting = { ...accounting, bindingUpdateCount: 1 };
+      return {
+        status: 200,
+        body: {
+          changed: true,
+          issueType: resolution.issueType,
+          parentTypeCount: resolution.binding.parentIssueTypeIds?.length ?? 0,
+          skill: { id: saved.id, revision: saved.revision },
+        },
+      };
+    },
+    () => accounting,
+  );
 }

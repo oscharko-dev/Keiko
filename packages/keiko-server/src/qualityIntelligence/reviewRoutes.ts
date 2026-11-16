@@ -27,6 +27,7 @@ import {
   type QiReviewAction,
 } from "./reviewStore.js";
 import { resolveQualityIntelligenceReviewPrincipal } from "./reviewPrincipal.js";
+import { strictRedactor } from "../content-redactor.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_REASON_LEN = 512;
@@ -144,7 +145,7 @@ export function buildApplyReviewDecisionInput(
     scope: decision.scope,
     actor: principal,
     now: new Date().toISOString(),
-    redact: deps.redactor,
+    redact: strictRedactor(deps),
     candidateIds: candidateIds ?? [],
     ...(decision.candidateId !== undefined ? { candidateId: decision.candidateId } : {}),
     reviewerLabel: decision.reviewerLabel ?? "",

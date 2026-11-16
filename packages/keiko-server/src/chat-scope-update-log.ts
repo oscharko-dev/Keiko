@@ -11,6 +11,15 @@ import {
   deriveChatGroundingScopeIdentity,
 } from "./store/chat-grounding-scope-identity.js";
 
+// Why a scope update that named a Knowledge Pod was refused before it changed anything (#4371).
+export const KNOWLEDGE_SCOPE_REFUSAL_REASONS = [
+  "knowledge-pod-missing",
+  "knowledge-pod-set-missing",
+  "knowledge-pod-deleting",
+  "knowledge-store-unavailable",
+] as const;
+export type KnowledgeScopeRefusalReason = (typeof KNOWLEDGE_SCOPE_REFUSAL_REASONS)[number];
+
 const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -25,6 +34,12 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
       required: true,
       values: ["applied", "conflict", "cancellation-requested", "denied"],
     },
+    refusalReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: KNOWLEDGE_SCOPE_REFUSAL_REASONS,
+    },
     expectedScopeDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     actualScopeDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     resultScopeDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
@@ -33,6 +48,7 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
     gitChangeSourceCount: { type: "integer", dataClass: "count", required: true },
     jiraSourceCount: { type: "integer", dataClass: "count", required: false },
     jiraBindingGeneration: { type: "integer", dataClass: "count", required: false },
+    jiraAdministrationEnabled: { type: "boolean", dataClass: "closed-enum", required: false },
     toolMode: {
       type: "string",
       dataClass: "closed-enum",
@@ -59,11 +75,12 @@ export function logChatScopeUpdate(
   patch: UpdateChatPatch,
   correlationId: string | undefined,
   cancelledGenerationCount?: number,
+  refusalReason?: KnowledgeScopeRefusalReason,
 ): void {
   const expected = patch.expectedGroundingScopeIdentity;
   let status = 200;
   if (outcome === "conflict") status = 409;
-  else if (outcome === "denied") status = 400;
+  else if (outcome === "denied") status = refusalStatus(refusalReason);
   processServerLogSink().write(
     activityLogEvent(
       CHAT_SCOPE_UPDATE,
@@ -74,6 +91,7 @@ export function logChatScopeUpdate(
       {
         outcome,
         ...(cancelledGenerationCount === undefined ? {} : { cancelledGenerationCount }),
+        ...(refusalReason === undefined ? {} : { refusalReason }),
         ...(expected === undefined
           ? {}
           : { expectedScopeDigest: expected.slice("gsi-v1:".length) }),
@@ -91,15 +109,22 @@ export function logChatScopeUpdate(
   );
 }
 
+function refusalStatus(reason: KnowledgeScopeRefusalReason | undefined): number {
+  if (reason === undefined) return 400;
+  return reason === "knowledge-store-unavailable" ? 503 : 409;
+}
+
 function jiraStateEvidence(chat: Chat): {
   readonly jiraSourceCount?: number;
   readonly jiraBindingGeneration?: number;
+  readonly jiraAdministrationEnabled?: boolean;
   readonly toolMode?: NonNullable<Chat["toolMode"]>;
 } {
   if ((chat.jiraBindingGeneration ?? 0) === 0) return {};
   return {
     jiraSourceCount: Number(chat.jiraPodBinding !== undefined),
     jiraBindingGeneration: chat.jiraBindingGeneration ?? 0,
+    jiraAdministrationEnabled: chat.jiraAdministrationEnabled === true,
     toolMode: chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE,
   };
 }

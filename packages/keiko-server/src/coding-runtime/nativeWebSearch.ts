@@ -18,7 +18,7 @@ import { redactSecretLiterals } from "@oscharko-dev/keiko-security";
  * The search integration the original `websearch` (T15) reaches in a native run (#3903 AC3, #3907
  * AC10, PR #4064 review 4372361272).
  *
- * The pinned 2.1.4 calls the selected provider of its websearch service. Keiko's generated plugin
+ * The pinned runtime calls the selected provider of its websearch service. Keiko's generated plugin
  * registers its own provider, `keiko`, as that default, so the original tool, its permission ask
  * and its result formatting stay OpenCode's while the search itself runs here, in the server:
  * - only when the operator admitted an integration (`KEIKO_CODING_WEBSEARCH_ENDPOINT`, an Exa-style

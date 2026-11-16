@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MemoryId, MemoryRecord, UserId } from "@oscharko-dev/keiko-contracts/memory";
-import { createMemoryVault, MEMORY_VAULT_SCHEMA_VERSION } from "./index.js";
+import { createMemoryVault, MEMORY_VAULT_SCHEMA_VERSION, MemoryStorageError } from "./index.js";
 import type { MemoryVaultStore } from "./types.js";
 
 const KEY_A = Buffer.alloc(32, 7);
@@ -113,6 +113,29 @@ describe("on-disk secrecy", () => {
     vault.close();
   });
 
+  it("seals a learned fact's evidence and keeps its source message ids (#4212)", () => {
+    const evidence = "TOP-SECRET-EVIDENCE-4212";
+    const dir = freshDir();
+    const vault = openVault(dir, KEY_A);
+    const base = secretMemory("m-evidence");
+    vault.insertMemory({
+      ...base,
+      provenance: { ...base.provenance, evidenceSpan: evidence, sourceMessageIds: ["msg-1"] },
+    });
+
+    const stored = vault.getMemory("m-evidence" as MemoryId);
+    expect(stored?.provenance.evidenceSpan).toBe(evidence);
+    expect(stored?.provenance.sourceMessageIds).toEqual(["msg-1"]);
+    vault.close();
+    const db = new DatabaseSync(join(dir, "keiko-memory.db"));
+    const row = db.prepare("SELECT evidence_span FROM memories").get() as {
+      readonly evidence_span: string;
+    };
+    db.close();
+    expect(row.evidence_span.startsWith("kv1.")).toBe(true);
+    expect(row.evidence_span).not.toContain(evidence);
+  });
+
   it("keeps scope metadata cleartext on disk (for the UI scope display)", () => {
     const dir = freshDir();
     const vault = openVault(dir, KEY_A);
@@ -132,6 +155,28 @@ describe("wrong key fails loudly", () => {
 
     expect(() => openVault(dir, KEY_B)).toThrow();
   });
+
+  it("classifies the mismatch as an unreadable vault and leaves it intact for the right key", () => {
+    const dir = freshDir();
+    const first = openVault(dir, KEY_A);
+    first.insertMemory(secretMemory("m1"));
+    first.close();
+    const before = readFileSync(join(dir, "keiko-memory.db"));
+
+    let thrown: unknown;
+    try {
+      openVault(dir, KEY_B);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(MemoryStorageError);
+    expect((thrown as MemoryStorageError).code).toBe("vault-unreadable");
+    expect(readFileSync(join(dir, "keiko-memory.db")).equals(before)).toBe(true);
+
+    const reopened = openVault(dir, KEY_A);
+    expect(reopened.getMemory("m1" as MemoryId)?.body).toBe(BODY_MARKER);
+    reopened.close();
+  });
 });
 
 // Simulate a pre-encryption (v1) DB by writing plaintext content directly into the columns and
@@ -148,6 +193,9 @@ function downgradeToLegacyPlaintext(dir: string): void {
   );
   // A genuine v1 (pre-encryption) DB predates the v3 access table; drop it so the reopen applies
   // the later DDL cleanly instead of colliding with already-present tables/columns.
+  db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
+  db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
+  db.exec("DROP TABLE IF EXISTS memory_conversation_touches");
   db.exec("DROP TABLE IF EXISTS memory_access");
   db.exec("DROP INDEX IF EXISTS idx_tombstones_scope");
   db.exec("DROP INDEX IF EXISTS idx_tombstones_memory_id");

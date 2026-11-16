@@ -18,6 +18,7 @@ import {
   folderWorkspaceHead,
   validateWorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { createInMemoryUiStore } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
@@ -122,6 +123,25 @@ describe("folder workspace selection (owner decision 2026-10-30)", () => {
     expect(service.getActive()?.instance.workspaceId).toBe(instance.workspaceId);
   });
 
+  it("names the folder in a Workbench trust-binding report the diagnostics intake admits (#4271)", () => {
+    const { service } = fixture();
+    const { instance } = service.selectFolder({ root, requestedBy: "test" });
+    const report = {
+      message: "[keiko] coding workbench interaction: repository-trust-bound",
+      clientTs: "2026-11-06T11:42:17.185Z",
+      codingWorkbenchInteraction: {
+        interaction: "repository-trust-bound",
+        repositoryId: instance.repositoryId,
+        workspaceId: instance.workspaceId,
+      },
+    };
+    expect(isClientDiagnosticIngestRequest(report)).toBe(true);
+    const forged = { ...report.codingWorkbenchInteraction, workspaceId: "folder:../x" };
+    expect(isClientDiagnosticIngestRequest({ ...report, codingWorkbenchInteraction: forged })).toBe(
+      false,
+    );
+  });
+
   it("keeps the folder out of the managed worktree inventory", () => {
     const { service } = fixture();
     service.selectFolder({ root, requestedBy: "test" });
@@ -198,6 +218,33 @@ describe("folder workspace selection (owner decision 2026-10-30)", () => {
     renameSync(root, `${root}-original`);
     mkdirSync(root);
     expect(service.getActive()).toBeUndefined();
+  });
+
+  it("refuses to reselect a persisted folder ID once the folder was replaced (#4271)", () => {
+    const { service, instances, pointer, log } = fixture();
+    const first = service.selectFolder({ root, requestedBy: "test" });
+    service.clearActive();
+    renameSync(root, `${root}-original`);
+    mkdirSync(root);
+    expect(service.selectable?.(first.instance.workspaceId)).toBe(true);
+    expect(() =>
+      service.setActive({
+        workspaceId: first.instance.workspaceId,
+        requestedBy: "history",
+        acquireLock: false,
+        correlationId: "corr-stale-folder",
+      }),
+    ).toThrow(expect.objectContaining({ code: "WORKSPACE_NOT_FOUND" }));
+    expect(pointer.get()).toBeUndefined();
+    expect(log.events.at(-1)).toMatchObject({
+      op: "task-workspace.lifecycle",
+      correlationId: "corr-stale-folder",
+      errorKind: "unavailable",
+      extra: { operation: "activate", workspaceKind: "folder" },
+    });
+    expect(instances.listAll().map((instance) => instance.workspaceId)).toEqual([
+      first.instance.workspaceId,
+    ]);
   });
 
   it("admits a run on the folder with the folder's own head and no Git read", () => {

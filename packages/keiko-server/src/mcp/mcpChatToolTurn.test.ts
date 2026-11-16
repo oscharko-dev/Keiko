@@ -497,3 +497,27 @@ it("revokes a pending write approval when its actual connection closes without a
     f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state,
   ).toBe("revoked");
 });
+
+it("re-binds a read grant of the previous turn to the running turn's authority", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const f = fixture();
+    const registry = f.deps.atlassianActionApprovalRegistry;
+    expect((await send(f)).status).toBe(200);
+    const [grantId] = f.acceptedReadGrants;
+    const first = grantId === undefined ? undefined : registry?.getChatReadGrant(grantId)?.grant;
+    if (first === undefined) throw new Error("Missing the automatic read grant");
+    const firstAuthority = registry?.getChatReadGrant(first.grantId)?.authority;
+    f.calls.length = 0;
+    vi.setSystemTime(Date.now() + Math.floor(ATLASSIAN_ACTION_APPROVAL_TTL_MS * 0.7));
+    expect((await send(f, "mcp-second-turn")).status).toBe(200);
+    // The second turn reuses the grant, keeps it alive and holds it under its own authority.
+    expect(f.acceptedReadGrants).toEqual([first.grantId]);
+    const renewed = registry?.getChatReadGrant(first.grantId);
+    expect(renewed?.grant.expiresAt).toBe(Date.now() + ATLASSIAN_ACTION_APPROVAL_TTL_MS);
+    expect(renewed?.authority).not.toEqual(firstAuthority);
+    expect(f.effects).toEqual(["get_status", "get_status"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});

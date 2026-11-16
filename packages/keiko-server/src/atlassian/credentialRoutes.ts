@@ -98,6 +98,13 @@ export interface AtlassianCredentialHttpOptions extends AtlassianHttpLifecycleOp
 }
 
 export interface AtlassianConnectorCredentialDeps {
+  /** Fixed private Identity/Avatar ports; cookie and human secret resolvers stay inside wiring. */
+  readonly jiraPrivatePortFactory?: (
+    metadata: AtlassianCredentialMetadata,
+    context: import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").ManagedMcpInvocationContext,
+    options: import("./httpPrivateIdentity.js").JiraPrivatePortOptions,
+    lifecycle?: AtlassianCredentialHttpOptions,
+  ) => import("./httpPrivateIdentity.js").JiraPrivatePortFactoryResult;
   /** Listener lifecycle owned by the BFF, never exposed through an HTTP request. */
   readonly registerListener?: (port: number) => () => void;
   readonly custody: AtlassianCredentialCustody;
@@ -423,6 +430,28 @@ export function handleVerifyAtlassianConnectorCredential(
   });
 }
 
+// A replaced token is verified by the same request that stored it, through the same probe, bounds
+// and credential-epoch check as an explicit verification, so no client has to remember a second
+// call and a closed tab cannot leave the Pod silently unverified (#4353). The answer carries the
+// state the probe left: verified, a closed failure status, or unverified when a newer change
+// superseded this token before the probe ended (its own check owns the Pod then). The token stays
+// stored whatever the probe finds; any other fault propagates to the opaque, correlated 500.
+// The request's abort is deliberately not passed to the probe: a client that left (a closed tab) must
+// still find the Pod verified or truthfully failed, never half-checked, and the probe is bounded anyway.
+async function verifyReplacedToken(
+  deps: AtlassianConnectorCredentialDeps,
+  updated: AtlassianCredentialMetadata,
+  correlationId: string,
+): Promise<void> {
+  try {
+    await verifyStoredCredential(deps, updated, correlationId, "verify-after-replace");
+  } catch (error) {
+    if (error instanceof AtlassianCredentialCustodyError && error.code === "credential-changed")
+      return;
+    throw error;
+  }
+}
+
 /** PATCH updates the owned Live-Pod resource; secret-bearing input never enters the response. */
 export function handleUpdateAtlassianConnectorCredential(
   ctx: RouteContext,
@@ -440,12 +469,12 @@ export function handleUpdateAtlassianConnectorCredential(
     let updateKind: "rename" | "replace-token" | "rename-and-replace-token" = "rename";
     if (body.apiToken !== undefined)
       updateKind = body.displayName === undefined ? "replace-token" : "rename-and-replace-token";
-    recordCredentialUpdated(
-      guard,
-      ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-      updated.generation ?? 1,
-      updateKind,
-    );
-    return { status: 200, body: publicAtlassianCredential(updated) };
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    recordCredentialUpdated(guard, correlationId, updated.generation ?? 1, updateKind);
+    if (body.apiToken !== undefined) await verifyReplacedToken(guard, updated, correlationId);
+    return {
+      status: 200,
+      body: publicAtlassianCredential(guard.custody.getMetadata(updated.authRef) ?? updated),
+    };
   });
 }

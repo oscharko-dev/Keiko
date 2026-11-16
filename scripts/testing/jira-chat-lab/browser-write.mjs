@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { URL } from "node:url";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import { mintLauncherPairingAttestation } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { qualifyBrowserLifecycle } from "./browser-lifecycle.mjs";
+import { enterComposerText, isChatSendRequest } from "./browser-workflow-turn.mjs";
 import {
   connectPodFromPanel,
   requestWorkspaceJiraConnection,
@@ -35,18 +35,16 @@ async function connectChat(page, mode, connection = "dropdown") {
 }
 
 async function sendPrompt(page, chat, prompt, onIntent) {
-  await chat.getByRole("textbox", { name: "Chat message", exact: true }).fill(prompt);
-  const sent = page.waitForRequest((request) => {
-    const path = new URL(request.url()).pathname;
-    return (
-      request.method() === "POST" &&
-      (path === "/api/desktop/chat" || path === "/api/desktop/chat/stream")
-    );
-  });
+  const typed = await enterComposerText(
+    page,
+    chat.getByRole("textbox", { name: "Chat message", exact: true }),
+    prompt,
+  );
+  const sent = page.waitForRequest(isChatSendRequest);
   await chat.getByRole("button", { name: "Send message", exact: true }).click();
   const request = await sent;
   const body = request.postDataJSON();
-  assert.equal(body.content, prompt);
+  assert.equal(body.content, typed);
   assert.match(body.clientTurnId, /^[0-9a-f-]{36}$/u);
   onIntent(body.clientTurnId, body);
   stage("sent");
@@ -59,7 +57,10 @@ async function decideWrite(chat, intent, beforeDecision) {
   const preview = await review
     .getByRole("group", { name: "Proposed action details", exact: true })
     .innerText();
-  assert.ok(preview.includes(intent.key) && preview.includes(intent.marker));
+  // A creation has no issue key yet: the person reads the summary it is about to write.
+  assert.ok(
+    (intent.key === undefined || preview.includes(intent.key)) && preview.includes(intent.marker),
+  );
   assert.doesNotMatch(preview, /[{}]/u);
   await beforeDecision();
   await review.getByRole("button", { name: "Approve this action", exact: true }).click();
@@ -128,7 +129,7 @@ export async function runBrowserWrite({
 }) {
   const outcomeLabel = OUTCOME_LABELS.get(expectedMutationOutcome);
   assert.ok(outcomeLabel, "Unsupported browser qualification outcome");
-  const { browser, page } = await openBrowser(chat);
+  const { browser, page } = await openBrowser(chat, context.origin);
   try {
     const fragment = encodeCodingAppSessionPairingFragment(
       mintLauncherPairingAttestation({

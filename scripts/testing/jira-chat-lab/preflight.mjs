@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { verifyJiraDataCenterConnection } from "@oscharko-dev/keiko-connectors";
 import { loadSession, requireLicense } from "./lab-client.mjs";
 import { withProductPort, productRequest } from "./product-port.mjs";
 
@@ -99,9 +98,10 @@ async function main() {
     join(session.directory, "secrets", "api-token"),
     join(session.directory, "secrets", "tls"),
     async (connection) => {
-      assert.equal(await verifyJiraDataCenterConnection(connection.port, connection.baseUrl), "ok");
+      assert.equal(await connection.verify(), "ok");
       await qualifyWrites(connection, key, marker);
     },
+    session,
   );
   await requireLicense(session);
   rmSync(pending);

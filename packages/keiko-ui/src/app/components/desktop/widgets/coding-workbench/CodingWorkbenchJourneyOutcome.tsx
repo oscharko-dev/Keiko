@@ -7,6 +7,7 @@ import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repo
 import { ApiError, proposePrMarkReady, type GitDeliveryPrMarkReadyInput } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
@@ -190,11 +191,9 @@ function JourneyCard(
   const now = useJourneyClock(outcome);
   const state = journeyDisplayState(outcome, now);
   useEffect(() => {
-    reportClientDiagnostic(
-      `[keiko] journey displayed: ${state} head ${outcome.binding.headSha.slice(0, 12)}`,
-      {
-        correlationId: outcome.binding.runId,
-      },
+    reportCodingWorkbenchInteraction(
+      { interaction: "delivery-step-shown", deliveryStep: "journey", deliveryState: state },
+      outcome.binding.runId,
     );
   }, [state, outcome.binding.runId, outcome.binding.headSha]);
   return (

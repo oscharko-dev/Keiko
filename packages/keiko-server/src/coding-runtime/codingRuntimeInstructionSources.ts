@@ -2,6 +2,7 @@ import { lstatSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import { OwnerPrivateFileRefused, readOwnerPrivateFile } from "../ownerPrivateStateFile.js";
+import { isWindowsLocalDriveFilePath } from "../windowsHostPath.js";
 import {
   readGlobalConfigDocuments,
   readProjectConfigDocuments,
@@ -139,6 +140,11 @@ class Tally {
 // file is no source; an ancestor with a second link may alias a file outside every root. A closed
 // refusal is counted; any other failure propagates to the owner, which records it.
 function hostText(path: string, tally: Tally, requireSingleLink: boolean): string | undefined {
+  // A device or UNC entry is refused before its first lstat could reach a pipe or an SMB host.
+  if (process.platform === "win32" && !isWindowsLocalDriveFilePath(path)) {
+    tally.refuse("not-regular-file");
+    return undefined;
+  }
   const probe = lstatSync(path, { throwIfNoEntry: false });
   if (probe === undefined) return undefined;
   if (requireSingleLink && probe.isFile() && probe.nlink > 1) {

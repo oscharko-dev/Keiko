@@ -5,6 +5,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { validateChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import type {
+  JiraApprovalNamedId,
+  JiraApprovalProject,
+  JiraApprovalTransition,
   JiraAttachmentPreview,
   JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -21,6 +24,12 @@ export interface JiraChatWriteActionIdentity extends ChatToolWriteActionIdentity
   readonly operation: JiraMutationOperation;
   /** The reviewed file of a `jira.attach` approval; never part of the action's identity (#4176). */
   readonly attachment?: JiraAttachmentPreview;
+  /** The projects the action targets, read when the approval was requested; never identity (F09). */
+  readonly projects?: readonly JiraApprovalProject[];
+  /** The status change a `jira.transition` covers, by name; read when requested, never identity. */
+  readonly transition?: JiraApprovalTransition;
+  /** The names of the fields the call carries, read when requested; never identity. */
+  readonly fields?: readonly JiraApprovalNamedId[];
 }
 export interface ChatWriteApprovalEntry {
   readonly approval: ChatToolWriteApprovalView;
@@ -67,6 +76,10 @@ function matchesApprovalSubject(entry: ChatWriteApprovalEntry): boolean {
       approval.chatId === subject.chatId &&
       approval.configurationDigest === subject.configurationDigest
     );
+  return subject.kind === undefined && matchesJiraApprovalSubject(entry);
+}
+function matchesJiraApprovalSubject(entry: ChatWriteApprovalEntry): boolean {
+  const { approval, subject } = entry;
   return (
     approval.kind === "jira-chat-write" &&
     sameReadGrantSubject(entry, subject) &&

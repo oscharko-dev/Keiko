@@ -9,7 +9,7 @@ import {
 } from "./connectedEvidenceInspection.test-fixtures";
 import { useState, type ComponentProps, type Dispatch, type SetStateAction } from "react";
 import { flushSync } from "react-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CapsuleSetId,
   KnowledgeCapsuleId,
@@ -26,15 +26,21 @@ import {
   ChatWindow,
   clearKnowledgeCatalogCacheForTests,
   copyableMessageText,
+  claimNoticeOfAnswer,
+  turnEndOfAnswer,
   speakableAnswerText,
   speechPreparationEvidence,
+  speechTextWithNote,
   messageForSelectedResponseVersion,
   MemoryActionForgetButtons,
   normalizeMemoryBudgetInput,
   rootDisplayName,
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
-import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
+import { OPTIONAL_WIDGET_DE_MESSAGES } from "@/lib/i18n-messages.optional.de";
+import { OPTIONAL_WIDGET_EN_MESSAGES } from "@/lib/i18n-messages.optional.en";
 import {
   translateOptionalWidget as translate,
   type OptionalWidgetTranslate as I18nTranslate,
@@ -46,7 +52,11 @@ import {
 } from "@/lib/client-diagnostics";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
-import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  buildGroundedAnswerContextPackSummary,
+  chatTurnEndAnswerFingerprint,
+  type ChatToolTurnEnd,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
@@ -637,6 +647,82 @@ describe("ChatWindow cancel button", () => {
     expect(messageForSelectedResponseVersion(message, 2).groundedAnswer).toBe(currentGrounding);
   });
 
+  it("starts the progress pipeline only after the server acknowledges the human turn", async () => {
+    const optimistic = makeMessage({
+      id: "local-voice-submitted",
+      content: "Read the selected Pod",
+    });
+    const session = makeSession({
+      activeChat: makeChat(),
+      sending: true,
+      sendStatus: "queued",
+      messages: [optimistic],
+    });
+    const { rerender } = render(
+      <ChatSessionProvider value={session}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(optimistic.turnState).toBeUndefined();
+    expect(screen.queryByRole("region", { name: "Progress" })).toBeNull();
+
+    rerender(
+      <ChatSessionProvider value={{ ...session, sendStatus: "contacting" }}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.queryByRole("region", { name: "Progress" })).toBeNull();
+    expect(screen.getByLabelText("Keiko is responding")).toBeInTheDocument();
+    expect(screen.queryByText("Read requirements")).toBeNull();
+
+    rerender(
+      <ChatSessionProvider value={{ ...session, sendStatus: "awaiting-decision" }}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.queryByRole("region", { name: "Progress" })).toBeNull();
+    expect(screen.queryByLabelText("Keiko is responding")).toBeNull();
+
+    const canonical = { ...optimistic, id: "canonical-submitted", turnState: "pending" as const };
+    rerender(
+      <ChatSessionProvider value={{ ...session, sendStatus: "contacting", messages: [canonical] }}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.getAllByRole("region", { name: "Progress" })).toHaveLength(1);
+    const userBubble = screen.getByText(optimistic.content).closest("article");
+    expect(userBubble).not.toBeNull();
+    expect(screen.getByRole("region", { name: "Progress" }).closest("article")).toBe(userBubble);
+
+    rerender(
+      <ChatSessionProvider
+        value={{ ...session, sendStatus: "awaiting-decision", messages: [canonical] }}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.getByRole("region", { name: "Progress" })).toHaveTextContent(
+      "Waiting for approval",
+    );
+    expect(document.querySelector('[data-state="active"]')).toBeNull();
+    expect(screen.queryByLabelText("Keiko is responding")).toBeNull();
+
+    rerender(
+      <ChatSessionProvider
+        value={{
+          ...session,
+          sending: false,
+          sendStatus: "completed",
+          messages: [{ ...canonical, turnState: "completed" }],
+        }}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.queryByRole("region", { name: "Progress" })).toBeNull();
+    await act(async () => {});
+  });
+
   it("keeps cancel reachable while regeneration is in flight", async () => {
     const cancelSend = vi.fn();
     const user = userEvent.setup();
@@ -1221,7 +1307,7 @@ describe("ChatWindow memory disclosure", () => {
     expect(disclosureId).toBeTruthy();
     expect(document.getElementById(disclosureId ?? "")).toBeInTheDocument();
     expect(screen.getByText("Use pnpm")).toBeInTheDocument();
-    expect(screen.getByText("explicit-user-instruction")).toBeInTheDocument();
+    expect(screen.getByText("You asked Keiko to remember it")).toBeInTheDocument();
     expect(screen.getByText("user asked Keiko to remember this")).toBeInTheDocument();
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
   });
@@ -1840,6 +1926,79 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.getByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeVisible();
   });
 
+  it("keeps the known Knowledge Pods listed and selectable while a reopen refresh is pending", async () => {
+    const user = userEvent.setup();
+    const podId = makeCapsuleId("cap-known");
+    const knownPod = {
+      id: podId,
+      displayName: "Known requirements",
+      lifecycleState: "ready" as const,
+      sourceCount: 1,
+      updatedAt: 1,
+    };
+    let settleRefresh: (response: { capsules: (typeof knownPod)[] }) => void = () => undefined;
+    fetchCapsulesMock.mockResolvedValueOnce({ capsules: [knownPod] }).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settleRefresh = resolve;
+      }),
+    );
+    fetchCapsuleSetsMock.mockResolvedValue({ capsuleSets: [] });
+
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+    await openCombobox(user, "Grounding mode");
+    await user.keyboard("{Escape}");
+    await openCombobox(user, "Grounding mode");
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(2));
+
+    // The refresh has not answered: the last good snapshot is still on offer.
+    expect(screen.getByRole("option", { name: "Knowledge Pod: Known requirements" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Grounding mode" })).toBeEnabled();
+
+    await act(async () => {
+      settleRefresh({ capsules: [knownPod] });
+    });
+    expect(screen.getByRole("option", { name: "Knowledge Pod: Known requirements" })).toBeEnabled();
+  });
+
+  it("keeps the scope, shows the server's reason and re-reads the list when the selected Knowledge Pod vanished (#4371)", async () => {
+    const user = userEvent.setup();
+    const stays = {
+      id: makeCapsuleId("cap-stays"),
+      displayName: "Stays",
+      lifecycleState: "ready" as const,
+      sourceCount: 1,
+      updatedAt: 1,
+    };
+    const vanishing = { ...stays, id: makeCapsuleId("cap-vanishing"), displayName: "Vanishing" };
+    fetchCapsulesMock
+      .mockResolvedValueOnce({ capsules: [stays, vanishing] })
+      .mockResolvedValue({ capsules: [stays] });
+    fetchCapsuleSetsMock.mockResolvedValue({ capsuleSets: [] });
+    updateChatMock.mockRejectedValueOnce(
+      new ApiError(
+        "KNOWLEDGE_POD_UNAVAILABLE",
+        "The selected Knowledge Pod no longer exists.",
+        409,
+      ),
+    );
+    renderWindow(makeSession({ activeChat: makeChat() }));
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge Pod: Vanishing");
+
+    expect(await screen.findByText(/The selected Knowledge Pod no longer exists/)).toBeVisible();
+    // The scope is exactly what it was, and the list was read again.
+    expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+      "Model only",
+    );
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(2));
+    await openCombobox(user, "Grounding mode");
+    expect(await screen.findByRole("option", { name: "Knowledge Pod: Stays" })).toBeVisible();
+    expect(screen.queryByRole("option", { name: "Knowledge Pod: Vanishing" })).toBeNull();
+  });
+
   it("clears stale options on a reopen failure and recovers on the next reopen", async () => {
     const user = userEvent.setup();
     const staleCapsuleId = makeCapsuleId("cap-failed-refresh");
@@ -2027,20 +2186,20 @@ describe("ChatWindow local knowledge scope disclosure", () => {
   it.each([
     {
       locale: "en",
-      label: "Data sources",
-      none: "No Data sources",
+      label: "Sources",
+      none: "Jira Pod only",
       mode: "Grounding mode",
-      empty: "No ready Data Pods or Pod Sets are available.",
+      empty: "No ready Knowledge Pods or Pod Sets are available.",
     },
     {
       locale: "de",
-      label: "Datenquellen",
-      none: "Keine Datenquellen",
+      label: "Wissensquellen",
+      none: "Nur Jira Pod",
       mode: "Grounding-Modus",
-      empty: "Keine einsatzbereiten Daten-Pods oder Pod-Sets verfügbar.",
+      empty: "Keine bereiten Knowledge Pods oder Pod Sets sind verfügbar.",
     },
   ])(
-    "distinguishes bound Jira tools from empty and mixed grounding in $locale",
+    "with a Jira Pod on: ordinary source terms and no empty-catalog sentence, and clearing a mixed selection removes only the data sources, in $locale",
     async ({ locale, label, none, mode, empty }) => {
       window.localStorage.setItem(I18N_STORAGE_KEY, locale);
       const user = userEvent.setup();
@@ -2060,9 +2219,13 @@ describe("ChatWindow local knowledge scope disclosure", () => {
           </ChatSessionProvider>
         </I18nProvider>,
       );
-      expect(await screen.findByText(empty)).toBeVisible();
-      expect(screen.getByText(label)).toBeVisible();
+      // A Jira Pod is on: the picker says so and shows no empty-catalog sentence that contradicts it.
+      expect(await screen.findByText(label)).toBeVisible();
       expect(screen.getByRole("combobox", { name: mode })).toHaveTextContent(none);
+      expect(screen.queryByText(empty)).toBeNull();
+      expect(document.body).not.toHaveTextContent(
+        /Data Pods|Daten-Pods|Data sources|Datenquellen/u,
+      );
       const mixed = {
         ...live,
         localKnowledgeScopes: [
@@ -2162,9 +2325,15 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     );
 
     await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
-    expect(fetchCapsulesMock).toHaveBeenCalledWith({ includeKnowledgePods: true });
+    expect(fetchCapsulesMock).toHaveBeenCalledWith({
+      includeKnowledgePods: true,
+      signal: expect.any(AbortSignal),
+    });
     expect(fetchCapsuleSetsMock).toHaveBeenCalledTimes(1);
-    expect(fetchCapsuleSetsMock).toHaveBeenCalledWith({ includeKnowledgePods: true });
+    expect(fetchCapsuleSetsMock).toHaveBeenCalledWith({
+      includeKnowledgePods: true,
+      signal: expect.any(AbortSignal),
+    });
     expect(screen.getAllByRole("combobox", { name: "Grounding mode" })).toHaveLength(2);
   });
 
@@ -2200,7 +2369,10 @@ describe("ChatWindow local knowledge scope disclosure", () => {
 
     await openCombobox(user, "Grounding mode");
 
-    expect(fetchCapsulesMock).toHaveBeenCalledWith({ includeKnowledgePods: true });
+    expect(fetchCapsulesMock).toHaveBeenCalledWith({
+      includeKnowledgePods: true,
+      signal: expect.any(AbortSignal),
+    });
     expect(screen.getByRole("option", { name: /Knowledge Pod: Knowledge Pod/u })).toBeVisible();
     expect(screen.getByText("Policy denied")).toBeVisible();
     expect(screen.getByText(/blocks grounded answer synthesis/u)).toBeVisible();
@@ -2887,6 +3059,51 @@ function chatModelCapability(id: string): ModelCapability {
 }
 
 describe("ChatWindow conversation model dropdown (Issue #144)", () => {
+  it.each([
+    {
+      locale: "en",
+      notice:
+        "No conversation model is currently available. Check gateway and model status in Settings.",
+      sendLabel: "Send message",
+    },
+    {
+      locale: "de",
+      notice:
+        "Derzeit ist kein dialogfähiges Modell verfügbar. Prüfe den Gateway- und Modellstatus in den Einstellungen.",
+      sendLabel: "Nachricht senden",
+    },
+  ])(
+    "reports configured but unready models truthfully in $locale",
+    async ({ locale, notice, sendLabel }) => {
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      const session = makeSession({
+        activeChat: makeChat(),
+        configuredModelsAvailable: true,
+        modelCatalogStatus: "ready",
+        noEligibleModels: true,
+        selectedModel: undefined,
+        draft: "Keep this draft until the configured model is available.",
+      });
+      try {
+        render(
+          <I18nProvider>
+            <ChatSessionProvider value={session}>
+              <ChatWindow />
+            </ChatSessionProvider>
+          </I18nProvider>,
+        );
+
+        expect(await screen.findByText(notice)).toHaveAttribute("role", "alert");
+        const send = screen.getByRole("button", { name: sendLabel });
+        expect(send).toHaveAttribute("aria-disabled", "true");
+        expect(send).toHaveAttribute("aria-describedby", "cmp-no-model-alert");
+        expect(session.sendMessage).not.toHaveBeenCalled();
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+      }
+    },
+  );
+
   it("renders every chat-eligible model id in the Model dropdown options", async () => {
     const user = userEvent.setup();
     // activeChat is required so the composer bar (containing the model select)
@@ -3331,7 +3548,7 @@ describe("ChatWindow memory controls", () => {
     await user.click(screen.getByRole("button", { name: /1 memories included/i }));
     expect(screen.getByText("Use TypeScript strict mode.")).toBeInTheDocument();
     expect(screen.getByText("top signal: lexical match")).toBeInTheDocument();
-    expect(screen.getByText("system-default")).toBeInTheDocument();
+    expect(screen.getByText("Learned from your chat")).toBeInTheDocument();
     expect(screen.getByText("82%")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Accept" }));
     await waitFor(() => expect(acceptMemoryCandidate).toHaveBeenCalledWith("prop-1"));
@@ -5258,7 +5475,7 @@ describe("ChatWindow multi-scope grounding display (#28)", () => {
 // ─── #28 — MemoryActionCard rejected kind ────────────────────────────────────
 
 describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
-  it("renders 'Memory proposal declined' title and the reason for a rejected action", async () => {
+  it("renders one plain sentence instead of the closed reason for a rejected action", async () => {
     const user = userEvent.setup();
     renderWindow(
       makeSession({
@@ -5273,7 +5490,7 @@ describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
           actions: [
             {
               kind: "rejected",
-              reason: "Below salience threshold.",
+              reason: "credential-shape",
             },
           ],
         },
@@ -5281,11 +5498,89 @@ describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /no memories included/i }));
-    expect(screen.getByText("Memory proposal declined")).toBeInTheDocument();
-    expect(screen.getByText("Below salience threshold.")).toBeInTheDocument();
+    expect(
+      screen.getByText("I do not save passwords, keys or other credentials."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("credential-shape")).not.toBeInTheDocument();
   });
 
-  it("renders the fallback reason when the rejected reason is empty", async () => {
+  it.each([
+    [
+      { kind: "forget", memoryId: "m1", requiresConfirmation: false, forgotten: true },
+      "Forgotten.",
+    ],
+    [
+      { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+      "Which memory do you mean?",
+    ],
+    [
+      {
+        kind: "candidate",
+        proposalId: "p1",
+        body: "Tables",
+        scopeLabel: "user",
+        requiresApproval: false,
+        status: "accepted",
+        explicitStatement: true,
+      },
+      "Saved.",
+    ],
+  ] as const)(
+    "answers a clear statement in the chat with one sentence",
+    async (action, sentence) => {
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          latestMemory: {
+            context: {
+              enabled: true,
+              text: "",
+              memories: [],
+              budget: { tokens: 1200, used: 0 },
+            },
+            actions: [action],
+          },
+        }),
+      );
+
+      expect(await screen.findByText(sentence)).toBeInTheDocument();
+      expect(screen.queryByRole("textbox", { name: /forget/i })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    [
+      {
+        kind: "candidate",
+        proposalId: "p1",
+        body: "Tables",
+        scopeLabel: "user",
+        requiresApproval: false,
+        status: "accepted",
+      },
+      "Saved.",
+    ],
+    [{ kind: "rejected", reason: "exceeds-length-limit" }, "I did not save this."],
+  ] as const)("keeps what the person did not state out of the chat", (action, sentence) => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1200, used: 0 },
+          },
+          actions: [action],
+        },
+      }),
+    );
+
+    expect(screen.queryByText(sentence)).not.toBeInTheDocument();
+  });
+
+  it("renders the general sentence for a reason without its own", async () => {
     const user = userEvent.setup();
     renderWindow(
       makeSession({
@@ -5308,8 +5603,7 @@ describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /no memories included/i }));
-    expect(screen.getByText("Memory proposal declined")).toBeInTheDocument();
-    expect(screen.getByText("No reason provided")).toBeInTheDocument();
+    expect(screen.getByText("I did not save this.")).toBeInTheDocument();
   });
 });
 
@@ -5634,7 +5928,7 @@ describe("ChatWindow private draft and skill recovery", () => {
   });
 
   it.each(["", "Saved private draft"])(
-    "shows saved-draft status only for retained text: %s",
+    "keeps successful draft autosave quiet, including retained text: %s",
     (draft) => {
       renderWindow(
         makeSession({
@@ -5642,6 +5936,7 @@ describe("ChatWindow private draft and skill recovery", () => {
           draft,
           draftPersistence: {
             phase: "saved",
+            hasUnsavedChanges: false,
             pending: false,
             retry: vi.fn(),
             prepareClose: vi.fn(),
@@ -5651,7 +5946,7 @@ describe("ChatWindow private draft and skill recovery", () => {
           },
         }),
       );
-      expect(screen.queryByText("Draft saved privately.") !== null).toBe(draft.length > 0);
+      expect(screen.queryByText("Draft saved privately.")).toBeNull();
     },
   );
 
@@ -5666,6 +5961,7 @@ describe("ChatWindow private draft and skill recovery", () => {
           prepareClose: vi.fn(),
           isCloseReady: vi.fn(),
           phase: "conflict",
+          hasUnsavedChanges: true,
           pending: false,
           retry: vi.fn(),
           keepLocal,
@@ -5700,4 +5996,291 @@ it("keeps connected Files sources visible without explanatory paragraphs", async
   expect(screen.queryByTestId("grounding-help")).toBeNull();
   expect(screen.queryByText("No ready Knowledge Pods or Pod Sets are available.")).toBeNull();
   expect(screen.queryByText(/Keiko may inspect only/)).toBeNull();
+});
+
+// #4355 AC4: the server states a closed marker with the stored turn; the Chat words it from its
+// catalog under the answer, whatever language the person writes, and the answer stays untouched.
+describe("Keiko's note under an answer that claimed an effect its turn did not bear out", () => {
+  const CATALOGS = {
+    en: OPTIONAL_WIDGET_EN_MESSAGES as Readonly<Record<string, string>>,
+    de: OPTIONAL_WIDGET_DE_MESSAGES as Readonly<Record<string, string>>,
+  } as const;
+  const SENTENCE_KEYS = {
+    "no-jira-create": "chat.claimNotice.noJiraCreate",
+    "tool-call-not-executed": "chat.claimNotice.toolCallNotExecuted",
+  } as const;
+  const CLAIM = "I created the Epic REQ-1 for you.";
+  function turn(
+    notice: keyof typeof SENTENCE_KEYS | undefined,
+    answer: Partial<ChatMessage> = {},
+  ): ChatMessage[] {
+    return [
+      makeMessage({
+        id: "u-claim",
+        content: "Create the epic",
+        toolTranscript: {
+          schemaVersion: 1,
+          exchanges: [],
+          ...(notice === undefined ? {} : { claimNotice: notice }),
+        },
+      }),
+      makeMessage({ id: "a-claim", role: "assistant", content: CLAIM, timestamp: 2, ...answer }),
+    ];
+  }
+  async function renderIn(locale: "en" | "de", messages: ChatMessage[]): Promise<void> {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    render(
+      <I18nProvider>
+        <ChatSessionProvider value={makeSession({ activeChat: makeChat(), messages })}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      </I18nProvider>,
+    );
+  }
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  it.each([
+    ["en", "no-jira-create"],
+    ["de", "no-jira-create"],
+    ["en", "tool-call-not-executed"],
+    ["de", "tool-call-not-executed"],
+  ] as const)(
+    "shows the %s sentence for %s from the catalog, after the unchanged answer",
+    async (locale, notice) => {
+      await renderIn(locale, turn(notice));
+      const catalog = CATALOGS[locale];
+      const expected = `${catalog["chat.claimNotice.label"] ?? ""}: ${catalog[SENTENCE_KEYS[notice]] ?? ""}`;
+      const line = await screen.findByText(expected);
+      expect(line).toHaveAttribute("data-claim-notice");
+      const answer = screen.getByText(CLAIM);
+      expect(answer.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(answer.textContent).toBe(CLAIM);
+    },
+  );
+
+  it("shows nothing when the turn carries no marker", async () => {
+    await renderIn("en", turn(undefined));
+    expect(screen.getByText(CLAIM)).toBeInTheDocument();
+    expect(document.querySelector("[data-claim-notice]")).toBeNull();
+  });
+
+  it("does not put the note under a regenerated answer", async () => {
+    await renderIn(
+      "en",
+      turn("no-jira-create", {
+        content: "Nothing was created.",
+        responseVersion: 2,
+        responseVersions: [
+          { version: 1, content: CLAIM, timestamp: 2 },
+          { version: 2, content: "Nothing was created.", timestamp: 3, supersedesVersion: 1 },
+        ],
+      }),
+    );
+    expect(screen.getByText("Nothing was created.")).toBeInTheDocument();
+    expect(document.querySelector("[data-claim-notice]")).toBeNull();
+  });
+
+  it("finds the marker of the turn an answer closes, and only for its first answer", () => {
+    const [user, answer] = turn("tool-call-not-executed");
+    const [other] = turn(undefined);
+    if (user === undefined || answer === undefined || other === undefined)
+      throw new Error("Missing fixture messages");
+    const earlier = { ...other, id: "u-earlier" };
+    expect(claimNoticeOfAnswer([earlier, user, answer], answer)).toBe("tool-call-not-executed");
+    // The nearest earlier user message decides; another turn's marker is never borrowed.
+    expect(
+      claimNoticeOfAnswer([user, answer, { ...other, id: "u-later" }, { ...answer, id: "a2" }], {
+        ...answer,
+        id: "a2",
+      }),
+    ).toBeUndefined();
+    expect(claimNoticeOfAnswer([user, answer], { ...answer, responseVersion: 2 })).toBeUndefined();
+    expect(claimNoticeOfAnswer([answer], answer)).toBeUndefined();
+    expect(claimNoticeOfAnswer([user, answer], undefined)).toBeUndefined();
+  });
+
+  it("reads the note after the answer, as a copy does", () => {
+    expect(speechTextWithNote("Answer", undefined)).toBe("Answer");
+    expect(speechTextWithNote("Answer", "Note")).toBe("Answer\n\nNote");
+  });
+
+  it("carries the note into a copy of the answer", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    try {
+      await renderIn("en", turn("no-jira-create"));
+      const catalog = CATALOGS.en;
+      const expected = `${catalog["chat.claimNotice.label"] ?? ""}: ${catalog["chat.claimNotice.noJiraCreate"] ?? ""}`;
+      await screen.findByText(expected);
+      fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+      await waitFor(() => {
+        expect(writeText.mock.calls).toEqual([[`${CLAIM}\n\n${expected}`]]);
+      });
+    } finally {
+      if (clipboardDescriptor === undefined) Reflect.deleteProperty(navigator, "clipboard");
+      else Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+});
+
+// #4355: a turn that ended early states WHY and WHAT as closed facts with the stored turn; the Chat
+// words the ending from its catalog in the person's language. The stored English answer stays the
+// fallback for exports, history and a turn stored without the facts.
+describe("The answer of a turn that ended early, worded in the person's language", () => {
+  const STORED = "This request was not finished: this turn reached its time limit.";
+  const END: ChatToolTurnEnd = {
+    reason: "deadline",
+    answer: chatTurnEndAnswerFingerprint(STORED),
+    completed: [{ tool: "jira_create", key: "REQ-1" }],
+    unconfirmed: [{ tool: "jira_draft", item: 2, state: "uncertain" }],
+    unsettled: [{ tool: "jira_transition" }],
+    notDone: [{ tool: "jira_draft", item: 3, state: "skipped" }],
+    moreCount: 0,
+    readCount: 3,
+    refusedCount: 1,
+  };
+  function turn(
+    end: ChatToolTurnEnd | undefined,
+    answer: Partial<ChatMessage> = {},
+  ): ChatMessage[] {
+    return [
+      makeMessage({
+        id: "u-end",
+        content: "Create the backlog",
+        toolTranscript: {
+          schemaVersion: 1,
+          exchanges: [],
+          ...(end === undefined ? {} : { turnEnd: end }),
+        },
+      }),
+      makeMessage({ id: "a-end", role: "assistant", content: STORED, timestamp: 2, ...answer }),
+    ];
+  }
+  async function renderIn(locale: "en" | "de", messages: ChatMessage[]): Promise<void> {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    render(
+      <I18nProvider>
+        <ChatSessionProvider value={makeSession({ activeChat: makeChat(), messages })}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      </I18nProvider>,
+    );
+  }
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  it("shows a deadline with an unconfirmed write in German, with every receipt and no English", async () => {
+    await renderIn("de", turn(END));
+    const text = (await screen.findByText(/Diese Anfrage wurde nicht abgeschlossen/u)).closest(
+      ".chat-msg-bubble",
+    )?.textContent;
+    expect(text).toContain(
+      "Diese Anfrage wurde nicht abgeschlossen. Die Zeit für diesen Durchgang ist abgelaufen.",
+    );
+    expect(text).toContain("In diesem Durchgang erledigt:");
+    expect(text).toContain("Jira-Vorgang erstellen REQ-1");
+    expect(text).toContain(
+      "Gesendet, aber nicht bestätigt — prüfe das in Jira, bevor du es erneut versuchst:",
+    );
+    expect(text).toContain("Jira-Vorgänge anlegen (Eintrag 2, ohne Schlüssel) (unsicher)");
+    expect(text).toContain("Gestartet, aber nicht abgeschlossen");
+    expect(text).toContain("Jira-Vorgänge anlegen (Eintrag 3, ohne Schlüssel) (übersprungen)");
+    expect(text).toContain(
+      "Lesezugriffe abgeschlossen: 3. Abgelehnte oder fehlgeschlagene Aktionen: 1.",
+    );
+    // A person never reads an internal tool id where a human label exists.
+    expect(text).not.toMatch(/jira_[a-z_]+/u);
+    expect(text).not.toContain("Tool");
+    expect(text).toContain("Schick eine weitere Nachricht");
+    expect(text).not.toContain("This request was not finished");
+    expect(text).not.toContain("Sent but not confirmed");
+  });
+
+  it("shows the authentication failure in German with what to do", async () => {
+    await renderIn("de", turn({ ...END, reason: "authentication-failed" }));
+    const text = (await screen.findByText(/Die Anmeldung bei Jira ist fehlgeschlagen/u)).closest(
+      ".chat-msg-bubble",
+    )?.textContent;
+    // The lead is its own sentence and the reason follows as sentences: no capital after a colon.
+    expect(text).toContain(
+      "Diese Anfrage wurde nicht abgeschlossen. Die Anmeldung bei Jira ist fehlgeschlagen.",
+    );
+    expect(text).toContain("Das Zugangs-Token ist möglicherweise abgelaufen");
+    expect(text).toContain("Öffne das Fenster Lokales Wissen");
+    expect(text).not.toContain("Knowledge-Pods-Hub");
+    expect(text).not.toContain(": Die");
+  });
+
+  it("words the same facts in English from the catalog, with the same receipts", async () => {
+    await renderIn("en", turn(END));
+    const text = (await screen.findByText(/This request was not finished/u)).closest(
+      ".chat-msg-bubble",
+    )?.textContent;
+    expect(text).toContain("This request was not finished. This turn reached its time limit.");
+    expect(text).toContain("Create Jira issues (item 2, no key) (uncertain)");
+    expect(text).toContain("Reads completed: 3. Refused or failed actions: 1.");
+    expect(text).not.toMatch(/jira_[a-z_]+/u);
+  });
+
+  it("renders the stored answer as before when the turn carries no ending", async () => {
+    await renderIn("de", turn(undefined));
+    expect(await screen.findByText(STORED)).toBeInTheDocument();
+    expect(screen.queryByText(/Diese Anfrage wurde nicht abgeschlossen/u)).toBeNull();
+  });
+
+  // The clearing write may fail; a record that outlived its ending must never hide the real answer.
+  it("shows the model's real answer when a stale ending record outlived its ending", async () => {
+    await renderIn("de", turn(END, { content: "Hier ist die echte Antwort des Modells." }));
+    expect(await screen.findByText("Hier ist die echte Antwort des Modells.")).toBeInTheDocument();
+    expect(screen.queryByText(/Diese Anfrage wurde nicht abgeschlossen/u)).toBeNull();
+  });
+
+  it("never words a regenerated answer as the ending", async () => {
+    await renderIn(
+      "de",
+      turn(END, {
+        content: "Hier ist die neue Antwort.",
+        responseVersion: 2,
+        responseVersions: [
+          { version: 1, content: STORED, timestamp: 2 },
+          { version: 2, content: "Hier ist die neue Antwort.", timestamp: 3, supersedesVersion: 1 },
+        ],
+      }),
+    );
+    expect(await screen.findByText("Hier ist die neue Antwort.")).toBeInTheDocument();
+    expect(screen.queryByText(/Diese Anfrage wurde nicht abgeschlossen/u)).toBeNull();
+  });
+
+  it("finds the ending of the turn an answer closes, and only for its first answer", () => {
+    const [user, answer] = turn(END);
+    if (user === undefined || answer === undefined) throw new Error("Missing fixture messages");
+    expect(turnEndOfAnswer([user, answer], answer)).toEqual(END);
+    expect(turnEndOfAnswer([user, answer], { ...answer, responseVersion: 2 })).toBeUndefined();
+    expect(turnEndOfAnswer([answer], answer)).toBeUndefined();
+    expect(turnEndOfAnswer([user, answer], undefined)).toBeUndefined();
+  });
+
+  it("carries the worded ending into a copy of the answer", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    try {
+      await renderIn("de", turn(END));
+      await screen.findByText(/Diese Anfrage wurde nicht abgeschlossen/u);
+      fireEvent.click(screen.getByRole("button", { name: /kopieren/iu }));
+      await waitFor(() => {
+        expect(writeText.mock.calls[0]?.[0]).toContain("Diese Anfrage wurde nicht abgeschlossen");
+      });
+      expect(writeText.mock.calls[0]?.[0]).not.toContain("This request was not finished");
+    } finally {
+      if (clipboardDescriptor === undefined) Reflect.deleteProperty(navigator, "clipboard");
+      else Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
 });

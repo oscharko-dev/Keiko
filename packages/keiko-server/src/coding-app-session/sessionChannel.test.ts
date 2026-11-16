@@ -7,6 +7,7 @@ import {
 import { createFakeSessionPairingPort, fakePairingRequestBody } from "./_support.js";
 import {
   CODING_APP_SESSION_MAX_LIVE_STREAMS,
+  classifyReconnect,
   createCodingAppSessionChannel,
   type CodingAppSessionContentSource,
 } from "./sessionChannel.js";
@@ -72,7 +73,10 @@ describe("createCodingAppSessionChannel", () => {
   it("cannot pair without a pairing authority (fail closed)", () => {
     const channel = createCodingAppSessionChannel({ registry: createSessionRegistry() });
     expect(channel.pair(fakePairingRequestBody())).toEqual({ paired: false });
-    expect(channel.ensureLocalSession(undefined)).toEqual({ status: "unavailable" });
+    expect(channel.ensureLocalSession(undefined)).toEqual({
+      status: "unavailable",
+      reason: "proof-missing",
+    });
     expect(channel.sessionCount()).toBe(0);
   });
 
@@ -81,9 +85,13 @@ describe("createCodingAppSessionChannel", () => {
       registry: createSessionRegistry(),
       pairingPort: createFakeSessionPairingPort(),
     });
-    expect(channel.ensureLocalSession(undefined)).toEqual({ status: "unavailable" });
+    expect(channel.ensureLocalSession(undefined)).toEqual({
+      status: "unavailable",
+      reason: "proof-missing",
+    });
     expect(channel.ensureLocalSession("sess_000000000000000000000000.forged")).toEqual({
       status: "unavailable",
+      reason: "session-unregistered",
     });
     expect(channel.sessionCount()).toBe(0);
     const paired = channel.pair(fakePairingRequestBody());
@@ -91,7 +99,10 @@ describe("createCodingAppSessionChannel", () => {
     expect(channel.ensureLocalSession(paired.cookieToken)).toMatchObject({ status: "active" });
     expect(channel.sessionCount()).toBe(1);
     channel.signOut(paired.cookieToken);
-    expect(channel.ensureLocalSession(paired.cookieToken)).toEqual({ status: "unavailable" });
+    expect(channel.ensureLocalSession(paired.cookieToken)).toEqual({
+      status: "unavailable",
+      reason: "session-unregistered",
+    });
     expect(channel.sessionCount()).toBe(0);
   });
 
@@ -483,4 +494,53 @@ it("revokes a replacement that loses its last full second during rotation", () =
   });
   expect(fixture.channel.rotate(fixture.token)).toEqual({ rotated: false });
   expect(fixture.channel.snapshot(replacement).content).toBeNull();
+});
+
+describe("classifyReconnect (#4370)", () => {
+  it("labels what happened to the credential the browser presented", () => {
+    expect(classifyReconnect({ presented: "absent" })).toBe("no-credential");
+    expect(classifyReconnect({ presented: "malformed" })).toBe("no-credential");
+    expect(classifyReconnect({ presented: "valid" })).toBe("live-credential");
+    expect(classifyReconnect({ presented: "ended" })).toBe("ended-credential");
+    expect(classifyReconnect({ presented: "unknown" })).toBe("after-restart");
+  });
+
+  it("labels a second tab after a restart as after-restart, not as a replaced credential", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const foreign = `sess_${"d".repeat(24)}.secret`;
+    const first = channel.pair(fakePairingRequestBody(), foreign);
+    const second = channel.pair(fakePairingRequestBody(), `sess_${"e".repeat(24)}.secret`);
+    expect(first.paired && first.reconnect).toBe("after-restart");
+    // The process has issued a session by now; the second tab's credential is still from before.
+    expect(second.paired && second.reconnect).toBe("after-restart");
+  });
+
+  it("labels an idle-expired credential as ended, the case of the 2026-11-08 incident", () => {
+    let now = 0;
+    const registry = createSessionRegistry({ now: () => now, idleTtlMs: 100 });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const own = registry.mint("own");
+    now = 101;
+    const paired = channel.pair(fakePairingRequestBody(), own.cookieToken);
+    expect(paired.paired && paired.reconnect).toBe("ended-credential");
+  });
+
+  it("labels a held valid session, and no credential at all", () => {
+    const registry = createSessionRegistry();
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const own = registry.mint("own");
+    const live = channel.pair(fakePairingRequestBody(), own.cookieToken);
+    const none = channel.pair(fakePairingRequestBody());
+    expect(live.paired && live.reconnect).toBe("live-credential");
+    expect(none.paired && none.reconnect).toBe("no-credential");
+  });
 });

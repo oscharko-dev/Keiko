@@ -8,11 +8,13 @@ import { describe, expect, it } from "vitest";
 import {
   LARGE_PROJECT,
   LARGE_SHAPE,
+  displayNames,
   gradeReportFigures,
   largeJiraFigures,
   largePlan,
   largeProjectPart,
   largeTruth,
+  localizeFigures,
   matchesSeededTruth,
 } from "../testing/jira-chat-lab/requirements/large-project.mjs";
 import { JOURNEYS } from "../testing/jira-chat-lab/requirements/journey-checks.mjs";
@@ -41,25 +43,83 @@ describe("the large project plan", () => {
     );
   });
 
-  it("links every task and bug to an epic and gives epics different figures", () => {
+  it("accounts for every linked member and orphan and gives epics different figures", () => {
     const truth = largeTruth(
       plan,
       plan.map((_, index) => `${LARGE_PROJECT}-${index + 1}`),
       {},
     );
     expect(truth.epics).toHaveLength(LARGE_SHAPE.epics);
-    expect(truth.epics.reduce((sum, epic) => sum + epic.members, 0)).toBe(
+    const orphans = plan.filter((item) => item.type === "Task" && item.epic === undefined);
+    expect(orphans).toHaveLength(181);
+    expect(truth.epics.reduce((sum, epic) => sum + epic.members, 0) + orphans.length).toBe(
       plan.filter((item) => item.type !== "Epic").length,
     );
     expect(new Set(truth.epics.map((epic) => `${epic.members}/${epic.done}`)).size).toBeGreaterThan(
       LARGE_SHAPE.epics / 2,
     );
     expect(truth.counts.reduce((sum, entry) => sum + entry.count, 0)).toBe(truth.issueCount);
-    expect(plan.filter((item) => item.type !== "Epic").every((item) => item.epic >= 0)).toBe(true);
+    expect(plan.filter((item) => item.type === "Bug").every((item) => item.epic >= 0)).toBe(true);
+    expect(
+      plan
+        .filter((item) => item.type === "Task" && !item.deviations.includes("parent"))
+        .every((item) => item.epic >= 0),
+    ).toBe(true);
   });
 
   it("refuses a key list that does not match the plan", () => {
     expect(() => largeTruth(plan, ["LRG-1"], {})).toThrow(TypeError);
+  });
+
+  it("W7 seeds exactly every seventh label and every eleventh task parent as deviations", () => {
+    let taskOrdinal = 0;
+    plan.forEach((item, index) => {
+      if (item.type === "Task") taskOrdinal += 1;
+      const missingLabel = (index + 1) % 7 === 0;
+      const missingParent = item.type === "Task" && taskOrdinal % 11 === 0;
+      expect(item.labels).toEqual(missingLabel ? [] : ["anforderung"]);
+      expect(item.deviations).toEqual([
+        ...(missingLabel ? ["label:anforderung"] : []),
+        ...(missingParent ? ["parent"] : []),
+      ]);
+      if (item.type !== "Epic") expect(item.epic === undefined).toBe(missingParent);
+    });
+    expect(taskOrdinal).toBe(1995);
+    expect(plan.filter((item) => item.deviations.includes("label:anforderung"))).toHaveLength(355);
+    expect(plan.filter((item) => item.deviations.includes("parent"))).toHaveLength(181);
+    expect(plan.filter((item) => item.deviations.length === 2)).toHaveLength(26);
+    expect(plan.filter((item) => item.deviations.length > 0)).toHaveLength(510);
+  });
+
+  it("W7 records all version-two issue facts without inventing epic parents for orphans", () => {
+    const keys = plan.map((_, index) => `${LARGE_PROJECT}-${index + 1}`);
+    const truth = largeTruth(plan, keys, { epicLink: "customfield_10001" });
+    expect(truth.seedVersion).toBe(2);
+    expect(truth.templateScope).toEqual({ issueTypes: ["Epic", "Task", "Bug"] });
+    expect(truth.issues).toHaveLength(2490);
+    expect(truth.issues).toEqual(
+      plan.map((item, index) => ({
+        key: keys[index],
+        type: item.type,
+        status: item.status,
+        labels: item.labels,
+        ...(item.epic === undefined ? {} : { epic: keys[item.epic] }),
+        deviations: item.deviations,
+      })),
+    );
+    expect(truth.issues[55]).toEqual({
+      key: "LRG-56",
+      type: "Task",
+      status: "In Progress",
+      labels: [],
+      deviations: ["label:anforderung", "parent"],
+    });
+    const orphanKeys = new Set(
+      truth.issues.filter((item) => item.deviations.includes("parent")).map((item) => item.key),
+    );
+    expect(orphanKeys.size).toBe(181);
+    expect(truth.epics.reduce((sum, epic) => sum + epic.members, 0) + orphanKeys.size).toBe(2445);
+    expect(truth.counts.reduce((sum, entry) => sum + entry.count, 0)).toBe(2490);
   });
 
   it("is a separate obligation of S10 that the existing ones do not replace", () => {
@@ -69,6 +129,13 @@ describe("the large project plan", () => {
       "per-epic-progress",
       "estimate-totals",
       "large-project-report",
+      "unavailable-metrics-labelled",
+      // Strengthened by #4369: the product's estimate rule adds three graded statements (#4356).
+      "estimate-source-labelled",
+      "configured-unused-stated",
+      "other-estimate-field-named",
+      // Strengthened by #4369: no raw result keys and no unsupported-claim flag (#4355).
+      "answer-clean",
     ]);
   });
 });
@@ -114,14 +181,26 @@ const countOf = (issues) => async (jql) =>
   issues.filter((issue) => jql.split(" AND ").every((clause) => clauseMatches(issue, clause)))
     .length;
 
-function productReport(issues) {
+/** The names a German-language account sees, by the English names the seed and the JQL use. */
+const GERMAN = {
+  types: new Map([["Task", "Aufgabe"]]),
+  statuses: new Map([
+    ["To Do", "Zu erledigen"],
+    ["In Progress", "In Arbeit"],
+    ["Done", "Fertig"],
+  ]),
+};
+const NO_NAMES = { types: new Map(), statuses: new Map() };
+const shown = (names, kind, name) => names[kind].get(name) ?? name;
+
+function productReport(issues, names = NO_NAMES) {
   return buildJiraReport({
     issues: issues.map((issue) => ({
       key: issue.key,
-      typeName: issue.type,
+      typeName: shown(names, "types", issue.type),
       subtask: false,
       summary: issue.summary,
-      statusName: issue.status,
+      statusName: shown(names, "statuses", issue.status),
       category: CATEGORY_KEY[issue.status],
       parentKey: issue.epicKey,
       linkedKeys: [],
@@ -216,6 +295,30 @@ describe("the independent Jira read of the large project", () => {
     const jira = await largeJiraFigures(countOf(drifted), world.large);
     expect(matchesSeededTruth(jira, world.large)).toBe(false);
   });
+
+  it("W7 keeps orphan tasks in project progress and detects an invented epic membership", async () => {
+    const orphans = world.issues.filter(
+      (issue) => issue.type === "Task" && issue.epicKey === undefined,
+    );
+    expect(orphans).toHaveLength(2);
+    const jira = await largeJiraFigures(countOf(world.issues), world.large);
+    expect(jira.total).toBe(40);
+    expect([...jira.epics.values()].reduce((sum, epic) => sum + epic.total, 0)).toBe(34);
+    expect(matchesSeededTruth(jira, world.large)).toBe(true);
+    expect(
+      gradeReportFigures([summaryExchange(productReport(world.issues))], jira).problems,
+    ).toEqual([]);
+    const drifted = world.issues.map((issue) =>
+      issue.key === orphans[0].key ? { ...issue, epicKey: world.keys[0] } : issue,
+    );
+    const changed = await largeJiraFigures(countOf(drifted), world.large);
+    expect(changed.total).toBe(jira.total);
+    expect(changed.byStatus).toEqual(jira.byStatus);
+    expect(matchesSeededTruth(changed, world.large)).toBe(false);
+    expect(
+      gradeReportFigures([summaryExchange(productReport(drifted))], jira).problems.length,
+    ).toBeGreaterThan(0);
+  });
 });
 
 describe("the figures of the completed report", () => {
@@ -299,6 +402,23 @@ describe("the figures of the completed report", () => {
     const graded = gradeReportFigures([summaryExchange(report, mutate)], await jiraOf());
     expect(graded.problems.length).toBeGreaterThan(0);
     expect(graded.problems.join(" ")).toContain(expected);
+  });
+
+  it("read the type and status rows of the figures when the summary lists no table beside them", async () => {
+    const jira = await jiraOf();
+    const pointer = (summary) => ({
+      ...summary,
+      progress: {
+        ...summary.progress,
+        byStatus: { total: summary.progress.byStatus.total, section: "statuses", nextStartAt: 0 },
+      },
+      epics: { total: summary.epics.total, section: "epics", nextStartAt: 0 },
+    });
+    expect(gradeReportFigures([summaryExchange(report, pointer)], jira).problems).toEqual([]);
+    const bare = (summary) => ({ ...pointer(summary), figures: "" });
+    expect(
+      gradeReportFigures([summaryExchange(report, bare)], jira).problems.length,
+    ).toBeGreaterThan(0);
   });
 
   it("do not count an epic the report leaves out of every list", async () => {
@@ -405,6 +525,73 @@ describe("the large-project step", () => {
     expect(ctx.turns[0].prompt).toContain(`Jira-Projekts ${LARGE_PROJECT}`);
     expect(ctx.turns[0].prompt).not.toContain("SCHÄTZUNG");
     expect(turn.durationMs).toBe(1);
+  });
+
+  const germanAnswer = (lines) =>
+    lines
+      .split("\n")
+      .map((line) => {
+        if (!line.startsWith("ANZAHL;")) return line;
+        const [token, type, status, count] = line.split(";");
+        return [token, shown(GERMAN, "types", type), shown(GERMAN, "statuses", status), count].join(
+          ";",
+        );
+      })
+      .join("\n");
+  const germanContext = (answer) => {
+    const ctx = stepContext(world, {
+      answer,
+      exchanges: [summaryExchange(productReport(world.issues, GERMAN))],
+    });
+    ctx.displayNames = async () => GERMAN;
+    return ctx;
+  };
+
+  it("grades the report and the answer by the names the reading account sees (German session)", async () => {
+    const { part } = await largeProjectPart(germanContext(germanAnswer(answerLines(world))));
+    expect(part).toMatchObject({ status: "green", covers: ["large-project-report"] });
+  });
+
+  it("is red on a German session when the answer uses names the account does not see", async () => {
+    const { part } = await largeProjectPart(germanContext(answerLines(world)));
+    expect(part.status).toBe("red");
+    expect(part.detail).toContain("answer type/status");
+  });
+
+  it("maps the English names to the reading account's by issue type and status id", async () => {
+    const lists = {
+      english: async (path) =>
+        path.endsWith("issuetype")
+          ? [{ id: "1", name: "Task" }]
+          : [
+              { id: "9", name: "To Do" },
+              { id: "10", name: "Done" },
+            ],
+      local: async (path) =>
+        path.endsWith("issuetype")
+          ? [{ id: "1", name: "Aufgabe" }]
+          : [
+              { id: "9", name: "Zu erledigen" },
+              { id: "10", name: "Fertig" },
+            ],
+    };
+    const names = await displayNames(lists);
+    expect(names.types.get("Task")).toBe("Aufgabe");
+    expect(names.statuses.get("Done")).toBe("Fertig");
+    const jira = {
+      total: 3,
+      category: {},
+      epics: new Map(),
+      byType: new Map([["Task", { total: 3, done: 1 }]]),
+      byStatus: new Map([["Task;Done", 1]]),
+    };
+    const localized = localizeFigures(jira, names);
+    expect([...localized.byType.keys()]).toEqual(["Aufgabe"]);
+    expect([...localized.byStatus.keys()]).toEqual(["Aufgabe;Fertig"]);
+    // A name Jira does not translate stays as it is.
+    expect([
+      ...localizeFigures(jira, { types: new Map(), statuses: new Map() }).byType.keys(),
+    ]).toEqual(["Task"]);
   });
 
   it.each([

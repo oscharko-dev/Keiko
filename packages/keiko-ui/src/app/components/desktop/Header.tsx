@@ -35,7 +35,7 @@ function LayoutButton({ disabled, onClick, label, icon: Icon }: LayoutButtonProp
   return (
     <button
       type="button"
-      className="hd-tool ui-tip"
+      className={`hd-tool ui-tip ${styles.cmpHeaderTip}`}
       disabled={disabled}
       onClick={onClick}
       data-tip={label}
@@ -60,7 +60,7 @@ function HeaderTools({
     <div className={`hd-tools ${styles.cmpWindowTools}`}>
       <button
         type="button"
-        className={`hd-tool ui-tip ${styles.cmpLayoutLock}`}
+        className={`hd-tool ui-tip ${styles.cmpHeaderTip} ${styles.cmpLayoutLock}`}
         onClick={onToggleLayoutLock}
         aria-pressed={layoutLocked}
         aria-label={t("header.lockLayout")}

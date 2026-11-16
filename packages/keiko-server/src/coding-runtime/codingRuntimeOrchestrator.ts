@@ -12,11 +12,14 @@ import type {
   CodingWorkbenchMcpAuthorizationState,
   CodingWorkbenchMcpServer,
   CodingWorkbenchMode,
+  CodingWorkbenchRuntimeOrigin,
+  CodingWorkbenchRuntimeVersion,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeStartFailureCode,
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimePendingResearch,
@@ -28,9 +31,17 @@ import type {
   SkillDiscoveryResultV1,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  CODING_WORKBENCH_TASK_INTENT_MAX_CHARS,
+  isLegalCodingWorkbenchRuntimeTransition,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
-import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  CODING_WORKBENCH_RUNTIME_ORIGINS,
+  DEFAULT_CODING_WORKBENCH_AGENT,
+  isCodingWorkbenchBuiltInAgent,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   isDeliveredDraftDeliveryPhase,
@@ -88,7 +99,15 @@ import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { isIdentityProofFailure } from "../task-workspace/errors.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
 import type { CodingRuntimeInboxItems } from "./codingRuntimeInbox.js";
-import type { CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
+import type { CodingRuntimeRevertState, CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
+import {
+  narrowerMode,
+  type ScheduledWakeBlock,
+  type ScheduledWakeHost,
+  type ScheduledWakePlan,
+  type ScheduledWakeRefusal,
+  type ScheduledWakeStart,
+} from "./codingScheduledWakes.js";
 import {
   auxiliaryEventFacts,
   CodingRuntimeOrchestratorState,
@@ -113,8 +132,13 @@ import type {
   CodingRuntimeOrchestratorDeps,
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
+  CodingRuntimeStartResult,
 } from "./codingRuntimeOrchestratorTypes.js";
-import { launchRejectionDiagnosticReason, refusedLaunch } from "./launchFailure.js";
+import {
+  classifyManagerStartFailure,
+  launchRejectionDiagnosticReason,
+  refusedLaunch,
+} from "./launchFailure.js";
 import type {
   CodingRuntimeTaskDispatchResult,
   CodingRuntimeTaskOutcome,
@@ -318,6 +342,23 @@ const CODING_RUNTIME_RUN_STARTED_OPERATION = defineActivityLogOperation({
       dataClass: "opaque-id",
       required: false,
       maxLength: 128,
+    },
+    primaryAgent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["build", "plan", "custom"],
+    },
+    modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // Which runtime ran (#4359): the version the verified runtime metadata names and where it came
+    // from. Absent when the server could not name the runtime; never a guess.
+    opencodeVersion: { type: "string", dataClass: "safe-version", required: false, maxLength: 64 },
+    runtimeOrigin: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      // Literal by the registry's rule; a test pins it to CODING_WORKBENCH_RUNTIME_ORIGINS.
+      values: ["portable-release", "npm-runtime-package", "dev-checkout"],
     },
   },
   causal: "correlation",
@@ -705,7 +746,6 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: [
-        "prompt-allowance",
         "envelope-duration",
         "model-call-failure",
         "no-model-call-failure",
@@ -1204,6 +1244,7 @@ type RuntimeStartFailureReason =
 
 type RuntimeLifecycleFailureReason =
   | "failure-redacted"
+  | "history-refresh-failed"
   | "runtime-stopped-live"
   // A mutation that awaited found the run's row already moved on by a concurrent stop, takeover or
   // settlement; it abandons its stale write instead of letting the store throw (audit 2026-10).
@@ -1334,6 +1375,71 @@ function recordApprovalExpiryFailure(
   );
 }
 
+/** The live run's model and primary agent, held by the process that started it (#4068 W12). */
+interface RuntimeRunIdentity {
+  readonly runId: string;
+  readonly modelId?: string;
+  readonly agent: CodingWorkbenchAgent;
+}
+
+function startedRunIdentity(
+  runId: string,
+  request: CodingWorkbenchRuntimeStartRequest,
+): RuntimeRunIdentity {
+  return {
+    runId,
+    ...(request.modelId ? { modelId: request.modelId } : {}),
+    agent: request.agent ?? DEFAULT_CODING_WORKBENCH_AGENT,
+  };
+}
+
+function withRunAgent(
+  identity: RuntimeRunIdentity | undefined,
+  runId: string,
+  agent: CodingWorkbenchAgent,
+): RuntimeRunIdentity | undefined {
+  return identity?.runId === runId ? { ...identity, agent } : identity;
+}
+
+function publicRunIdentity(
+  identity: RuntimeRunIdentity | undefined,
+  runId: string,
+): Pick<PublicSnapshot, "modelId" | "agent"> | undefined {
+  if (identity?.runId !== runId) return undefined;
+  const { modelId, agent } = identity;
+  return { ...(modelId === undefined ? {} : { modelId }), agent };
+}
+
+function runIdentityLogFields(identity: RuntimeRunIdentity | undefined): {
+  readonly primaryAgent?: "build" | "plan" | "custom";
+  readonly modelIdDigest?: string;
+} {
+  if (identity === undefined) return {};
+  const { agent, modelId } = identity;
+  return {
+    primaryAgent: isCodingWorkbenchBuiltInAgent(agent) ? agent : "custom",
+    ...(modelId === undefined ? {} : { modelIdDigest: DIGEST(modelId) }),
+  };
+}
+
+// #4359: the version the runtime's metadata reports, bounded to a version's own shape (digits and
+// dots, an optional pre-release or build suffix). The start line is built on the run's start path, so
+// a value the registry would refuse (a space, a URL) must never reach it: both fields are omitted.
+const RUNTIME_ORIGINS: ReadonlySet<string> = new Set(CODING_WORKBENCH_RUNTIME_ORIGINS);
+const RUNTIME_VERSION_SHAPE = /^\d{1,9}(?:\.\d{1,9}){1,3}(?:[-+][0-9A-Za-z.+-]{1,32})?$/u;
+
+function runtimeVersionLogFields(runtimeVersion: CodingWorkbenchRuntimeVersion | undefined): {
+  readonly opencodeVersion?: string;
+  readonly runtimeOrigin?: CodingWorkbenchRuntimeOrigin;
+} {
+  if (runtimeVersion === undefined) return {};
+  const { opencode, origin } = runtimeVersion;
+  const shaped = opencode.length <= 64 && RUNTIME_VERSION_SHAPE.test(opencode);
+  return shaped && RUNTIME_ORIGINS.has(origin)
+    ? { opencodeVersion: opencode, runtimeOrigin: origin }
+    : {};
+}
+
 function recordRuntimeRunStarted(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
@@ -1341,6 +1447,8 @@ function recordRuntimeRunStarted(
   predecessorSelectionReason: PredecessorSelectionReason,
   taskIntent: string,
   runtimePurpose: CodingRuntimePurpose | undefined,
+  identity?: RuntimeRunIdentity,
+  runtimeVersion?: CodingWorkbenchRuntimeVersion,
 ): void {
   activityLog?.write(
     activityLogEvent(
@@ -1361,6 +1469,8 @@ function recordRuntimeRunStarted(
           ? {}
           : { predecessorRunId: snapshot.predecessorRunId }),
         ...(runtimePurpose === undefined ? {} : { runtimePurpose }),
+        ...runIdentityLogFields(identity),
+        ...runtimeVersionLogFields(runtimeVersion),
       },
     ),
   );
@@ -1822,6 +1932,7 @@ export type {
   CodingRuntimeOrchestratorDeps,
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
+  CodingRuntimeStartResult,
 } from "./codingRuntimeOrchestratorTypes.js";
 
 interface ApprovalChallenge {
@@ -1972,6 +2083,14 @@ function runtimeDeliveryErrorFields(error: unknown): RuntimeDeliveryErrorFields 
   };
 }
 
+// #4271: a start its client gave up. No run exists, nobody reads the answer, and nothing stores the
+// code, so the refusal line alone says why (`startAbandoned`).
+const ABANDONED_START = {
+  ok: false,
+  failureCode: "runtime-unavailable",
+  startAbandoned: true,
+} as const;
+
 export class CodingRuntimeOrchestrator {
   private tail: Promise<void> = Promise.resolve();
   private activeRunId: string | undefined;
@@ -1999,6 +2118,7 @@ export class CodingRuntimeOrchestrator {
    */
   private unprovenTurnFailure: { readonly runId: string; readonly failureCode: string } | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
+  private runIdentity: RuntimeRunIdentity | undefined;
   // F66: how many delivery continuations each live run has been given (at most
   // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
   private readonly deliveryContinuations = new Map<string, number>();
@@ -2043,6 +2163,8 @@ export class CodingRuntimeOrchestrator {
         this.approvals.get(runId)?.permission,
       effectiveMode: (runId: string): CodingWorkbenchMode | undefined =>
         this.activeRunId === runId ? this.activeEffectiveMode : undefined,
+      runIdentity: (runId: string): Pick<PublicSnapshot, "modelId" | "agent"> | undefined =>
+        publicRunIdentity(this.runIdentity, runId),
       ...(deps.contextUsage ? { contextUsage: deps.contextUsage } : {}),
     });
     this.operations = new CodingRuntimeOperationCoordinator({
@@ -2051,6 +2173,9 @@ export class CodingRuntimeOrchestrator {
       advanceRevision: (current, eventKind): CodingRuntimeOrchestratorResult =>
         this.advanceRevision(current, eventKind),
       publicSnapshot: (current): PublicSnapshot => this.publicSnapshotWithDescription(current),
+      recordRunAgent: (runId, agent): void => {
+        this.runIdentity = withRunAgent(this.runIdentity, runId, agent);
+      },
       taskDispatcher: deps.taskDispatcher,
       resumePaused: (current): Promise<CodingRuntimeOrchestratorResult> =>
         this.resumePausedForFollowUp(current),
@@ -2081,15 +2206,25 @@ export class CodingRuntimeOrchestrator {
    * (running, or an unacknowledged recovery) still fails closed as `active-run-conflict` inside
    * `startFresh`.
    */
-  start(input: unknown, correlationId?: string): Promise<CodingRuntimeOrchestratorResult> {
+  start(
+    input: unknown,
+    correlationId?: string,
+    abandoned?: AbortSignal,
+  ): Promise<CodingRuntimeStartResult> {
     return this.serial(async () => {
+      if (abandoned?.aborted === true) return ABANDONED_START;
       // The next run ends the previous run's undo window: its runtime holds the slot until then.
       await this.closeUndoWindow("next-run");
-      return this.startFreshAgainstPredecessor(
-        input,
-        this.acknowledgedRecoveryPredecessorId(),
-        correlationId,
-      );
+      this.startAbandoned = abandoned;
+      try {
+        return await this.startFreshAgainstPredecessor(
+          input,
+          this.acknowledgedRecoveryPredecessorId(),
+          correlationId,
+        );
+      } finally {
+        this.startAbandoned = undefined;
+      }
     });
   }
 
@@ -2130,7 +2265,9 @@ export class CodingRuntimeOrchestrator {
     input: unknown,
     predecessorRunId: string | undefined,
     correlationId?: string,
-  ): Promise<CodingRuntimeOrchestratorResult> {
+  ): Promise<CodingRuntimeStartResult> {
+    // A start still queued in the serial lane when the server began shutting down launches nothing.
+    if (this.shutdownBegan()) return this.fail("runtime-unavailable");
     if (predecessorRunId === undefined) return this.startFresh(input, undefined, correlationId);
     this.activeRunId = undefined;
     this.activeEffectiveMode = undefined;
@@ -2141,11 +2278,7 @@ export class CodingRuntimeOrchestrator {
     }
   }
 
-  retry(
-    runId: string,
-    input: unknown,
-    correlationId?: string,
-  ): Promise<CodingRuntimeOrchestratorResult> {
+  retry(runId: string, input: unknown, correlationId?: string): Promise<CodingRuntimeStartResult> {
     return this.serial(async () => {
       if (!parseCodingWorkbenchRuntimeStartRequest(input).ok) return this.fail("invalid-intent");
       const prior = this.deps.snapshots.get(runId);
@@ -2280,6 +2413,20 @@ export class CodingRuntimeOrchestrator {
     return failure?.runId === runId && this.deps.snapshots.get(runId)?.state === "recovery-required"
       ? failure.failureCode
       : undefined;
+  }
+
+  /** Durable private-input metadata changed; publish only the live run's existing status. */
+  async refreshHistory(runId: string): Promise<void> {
+    try {
+      await this.serialValue(() => {
+        const current = this.current();
+        if (current?.runId !== runId || current.state !== "running") return;
+        // This changes the public snapshot revision, never the Authority Envelope or its expiry.
+        this.advanceRevision(current);
+      });
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "history-refresh-failed", error);
+    }
   }
 
   submitFollowUp(
@@ -3504,6 +3651,8 @@ export class CodingRuntimeOrchestrator {
       runId,
       this.verificationContinuations.get(runId) ?? 0,
       state,
+      undefined,
+      state === "not-evidenced" ? this.effort.verificationBlockedReason(runId) : undefined,
     );
   }
 
@@ -3584,8 +3733,8 @@ export class CodingRuntimeOrchestrator {
   }
 
   /**
-   * F9 (#3873): the closed cause a failed task outcome settles the run with — an exhausted prompt
-   * allowance, an unreachable provider, a failed model call, or `runtime-failed` when none is on
+   * F9 (#3873): the closed cause a failed task outcome settles the run with — an exhausted time
+   * limit, an unreachable provider, a failed model call, or `runtime-failed` when none is on
    * record. A success or a cancellation is never explained by an earlier model-call failure.
    */
   private terminalFailure(
@@ -3906,6 +4055,8 @@ export class CodingRuntimeOrchestrator {
    * confirmation (owner review, PR #3452).
    */
   async shutdown(correlationId?: string): Promise<CodingRuntimeOrchestratorResult> {
+    this.shuttingDown = true;
+    this.scheduledWakes?.stop();
     await this.undoWindow.close("shutdown");
     const current = this.current();
     if (current === undefined) {
@@ -3951,11 +4102,112 @@ export class CodingRuntimeOrchestrator {
     return this.deps.history;
   }
 
+  // The start in the serial lane, if its client can still give it up; see `start`.
+  private startAbandoned: AbortSignal | undefined;
+  // Set only while a scheduled wake starts in the serial lane (`startScheduledWake`).
+  private startOrigin: CodingRuntimeTurnOrigin | undefined;
+  private shuttingDown = false;
+  private scheduledWakes: { readonly stop: () => void } | undefined;
+
+  /**
+   * The orchestrator side of scheduled wakes (#4271, ADR-0137 D10): what holds the slot, which
+   * task is live, and the wake start itself. A wake never closes an undo window and never runs
+   * over a run to recover: it waits until the slot is free.
+   */
+  scheduledWakeHost(): ScheduledWakeHost {
+    return {
+      blocked: (): ScheduledWakeBlock | undefined => this.scheduledWakeBlock(),
+      taskAdmitted: (taskId): boolean => this.scheduledTaskAdmitted(taskId),
+      taskOwned: (taskId): boolean => this.deps.history?.previousRunId(taskId) !== undefined,
+      liveTaskId: (): string | undefined => this.liveTaskId(),
+      start: (plan): Promise<ScheduledWakeStart> => this.startScheduledWake(plan),
+      serial: <T>(work: () => T): Promise<T> => this.serialValue(work),
+    };
+  }
+
+  /** The scheduled-wake service stops when the orchestrator shuts down. */
+  attachScheduledWakes(wakes: { readonly stop: () => void }): void {
+    this.scheduledWakes = wakes;
+  }
+
+  /** Read through a call: `shutdown` sets the flag while a start awaits, so it is never narrowed. */
+  private shutdownBegan(): boolean {
+    return this.shuttingDown;
+  }
+
+  private scheduledWakeBlock(): ScheduledWakeBlock | undefined {
+    if (this.shuttingDown) return "shutting-down";
+    if (this.activeRunId !== undefined || this.startup !== undefined) return "run-active";
+    return this.undoWindow.heldRunId() === undefined ? undefined : "undo-window";
+  }
+
+  private scheduledTaskAdmitted(taskId: string): boolean {
+    const active = this.activeWorkspaceOrUndefined();
+    return (
+      active !== undefined &&
+      this.deps.history?.admits(taskId, active) === true &&
+      this.deps.history.previousRunId(taskId) !== undefined
+    );
+  }
+
+  private liveTaskId(): string | undefined {
+    const runId = this.activeRunId ?? this.undoWindow.heldRunId();
+    return runId === undefined ? undefined : this.deps.history?.forRun(runId)?.id;
+  }
+
+  private startScheduledWake(plan: ScheduledWakePlan): Promise<ScheduledWakeStart> {
+    return this.serial(async (): Promise<ScheduledWakeStart> => {
+      if (this.scheduledWakeBlock() !== undefined)
+        return { ok: false, refusal: "active-run-conflict" };
+      const request = this.scheduledWakeRequest(plan);
+      if (request === undefined) return { ok: false, refusal: "invalid-intent" };
+      this.startOrigin = "schedule-wake";
+      try {
+        const result = await this.startFresh(request, undefined, request.requestId);
+        if (result.ok)
+          return {
+            ok: true,
+            runId: result.snapshot.runId ?? "",
+            mode: this.activeEffectiveMode ?? request.requestedMode,
+          };
+        return {
+          ok: false,
+          refusal: scheduledWakeRefusal(result.failureCode),
+          ...(result.runId === undefined ? {} : { runId: result.runId }),
+        };
+      } finally {
+        this.startOrigin = undefined;
+      }
+    });
+  }
+
+  /**
+   * The continuation start of a wake: the task's latest run supplies its mode bound and model, the
+   * schedule's consent bounds the mode further, and the launch clamps it to the deployment ceiling.
+   * It names no Jira Pod, MCP server, reference or command: a wake carries no grant of its own.
+   */
+  private scheduledWakeRequest(
+    plan: ScheduledWakePlan,
+  ): CodingWorkbenchRuntimeStartRequest | undefined {
+    const priorId = this.deps.history?.previousRunId(plan.taskId);
+    const prior = priorId === undefined ? undefined : this.deps.snapshots.get(priorId);
+    const intent = plan.intent.trim().slice(0, CODING_WORKBENCH_TASK_INTENT_MAX_CHARS);
+    if (prior === undefined || priorId === undefined || intent === "") return undefined;
+    const modelId = this.deps.history?.forRun(priorId)?.modelId;
+    return {
+      requestId: `scheduled-wake-${randomUUID()}`,
+      taskIntent: intent,
+      conversationId: plan.taskId,
+      requestedMode: narrowerMode(plan.consentMode, prior.requestedMode),
+      ...(modelId === undefined || modelId === "coding" ? {} : { modelId }),
+    };
+  }
+
   private async startFresh(
     input: unknown,
     predecessorRunId?: string,
     correlationId?: string,
-  ): Promise<CodingRuntimeOrchestratorResult> {
+  ): Promise<CodingRuntimeStartResult> {
     const parsed = parseCodingWorkbenchRuntimeStartRequest(input);
     if (!parsed.ok || this.activeRunId)
       return this.fail(parsed.ok ? "active-run-conflict" : "invalid-intent");
@@ -3992,6 +4244,7 @@ export class CodingRuntimeOrchestrator {
     const selection = this.selectStartPredecessor(initialSnapshot, predecessorRunId);
     const snapshot = selection.snapshot;
     this.deps.snapshots.create(snapshot);
+    this.runIdentity = startedRunIdentity(runId, request);
     this.activateStartedRun(runId, launch, selection, request.taskIntent);
     this.recordIssueAdmission(request, runId, issue.attachment);
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
@@ -4018,6 +4271,9 @@ export class CodingRuntimeOrchestrator {
     launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
     attachment: CodingRuntimeIssueAttachment | undefined,
   ): Promise<CodingRuntimeOrchestratorResult> {
+    // Shutdown began while the launch resolved: `shutdown` saw no run then, so this one releases
+    // what its launch minted instead of starting a runtime nobody would stop.
+    if (this.shutdownBegan()) return this.failMintedStart(runId);
     const startup = { runId, controller: new AbortController() };
     this.startup = startup;
     try {
@@ -4054,6 +4310,8 @@ export class CodingRuntimeOrchestrator {
       selection.reason,
       taskIntent,
       this.deps.runtimePurpose,
+      this.runIdentity,
+      this.deps.runtimeVersion,
     );
   }
 
@@ -4074,7 +4332,10 @@ export class CodingRuntimeOrchestrator {
     runId: string,
   ): boolean {
     try {
-      if (request.fork === undefined) this.deps.history?.begin(request, active, runId);
+      if (request.fork === undefined)
+        this.deps.history?.begin(request, active, runId, {
+          scheduled: this.startOrigin === "schedule-wake",
+        });
       const fork =
         request.fork === undefined
           ? undefined
@@ -4289,8 +4550,8 @@ export class CodingRuntimeOrchestrator {
     // #3390: this orchestrator-local snapshot is a separate object from runtimeAuthorityService's
     // runtimeState (synced independently by productionCodingRuntimePorts.ts's
     // startProductionRuntime, well before this method runs) -- moving this transition earlier
-    // does NOT itself admit the reservePromptTokens race; that race is closed in
-    // runtimeAuthorityService.ts (PROMPT_RESERVATION_ADMISSIBLE_STATES, which now also admits
+    // does NOT itself admit the model-call admission race; that race is closed in
+    // runtimeAuthorityService.ts (MODEL_CALL_ADMISSIBLE_STATES, which now also admits
     // "starting", the actual runtimeState during the managed runtime's own start()). What this
     // move does fix is the run's own public projection: settling into "running" BEFORE dispatch,
     // instead of only after the sidecar accepts, means an operator never observes "ready" while
@@ -4307,7 +4568,8 @@ export class CodingRuntimeOrchestrator {
     if (!isExactRunRevision(runningInternal, runId, running.snapshot.revision)) {
       return this.transitionActive("recovery-required", "recovery-required");
     }
-    const initialContext = await this.initialContextFor(request, active, runId, attachment);
+    const origin = this.startOrigin;
+    const initialContext = await this.initialTurnContext(request, active, runId, attachment);
     if (this.startupInterrupted(signal)) return this.interruptedStartResult(runId);
     const initialTurn = await this.operations.startInitialTurn({
       runId,
@@ -4317,6 +4579,7 @@ export class CodingRuntimeOrchestrator {
       ...(initialContext === undefined ? {} : { initialContext }),
       ...agentField(request.agent),
       ...promptInputFields(request),
+      ...(origin === undefined ? {} : { origin }),
     });
     if (this.startupInterrupted(signal)) return this.interruptedStartResult(runId);
     // Every OTHER guarded mutation (follow-up dispatch, question answer/reject) advances the live
@@ -4355,6 +4618,18 @@ export class CodingRuntimeOrchestrator {
     }
     recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-recovery");
     return this.transitionActive("recovery-required", "recovery-required");
+  }
+
+  // A scheduled wake posts no prompt (the runtime fires the schedule), so it builds no context.
+  private initialTurnContext(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    runId: string,
+    attachment: CodingRuntimeIssueAttachment | undefined,
+  ): Promise<string | undefined> {
+    return this.startOrigin === "schedule-wake"
+      ? Promise.resolve(undefined)
+      : this.initialContextFor(request, active, runId, attachment);
   }
 
   private async initialContextFor(
@@ -4446,31 +4721,26 @@ export class CodingRuntimeOrchestrator {
     | { readonly ok: true; readonly launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]> }
     | {
         readonly ok: false;
-        readonly failureCode: CodingWorkbenchRuntimeFailureCode;
+        readonly failureCode: CodingWorkbenchRuntimeStartFailureCode;
         readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason;
+        readonly startAbandoned?: true;
       }
   > {
     try {
-      const input = {
+      const input = this.launchInput(
+        request,
+        active,
+        principal,
         runId,
-        requestId: request.requestId,
-        taskIntent: request.taskIntent,
-        requestedMode: request.requestedMode,
-        ...(request.runtimePreference ? { runtimePreference: request.runtimePreference } : {}),
-        ...(request.modelId ? { modelId: request.modelId } : {}),
-        ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
-        projectMemoryEnabled: request.projectMemory?.enabled ?? true,
-        ...agentField(request.agent),
-        ...promptInputFields(request),
-        ...jiraPodField(request.jiraPodId),
-        ...mcpServersField(request.mcpServers),
-        workspaceId: active.instance.workspaceId,
-        workspaceRoot: active.binding.activeRoot,
-        serverPrincipal: principal,
-        ...(correlationId === undefined ? {} : { correlationId }),
-        ...(issueBinding === undefined ? {} : { issueBinding }),
-      };
+        issueBinding,
+        correlationId,
+      );
       await this.deps.launchResolver.prepare?.(input);
+      // Nothing is minted yet and no snapshot exists: a start the client gave up on ends here. Once
+      // the run exists it stays, because the client can then find it, and a reload must not end it.
+      if (this.startAbandoned?.aborted === true) return ABANDONED_START;
+      // Shutdown began while the start was prepared: nothing is minted yet, so nothing starts.
+      if (this.shutdownBegan()) return { ok: false, failureCode: "runtime-unavailable" };
       const launch = this.deps.launchResolver.resolve(input);
       return { ok: true, launch };
     } catch (error) {
@@ -4479,6 +4749,39 @@ export class CodingRuntimeOrchestrator {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "launch-resolution", error);
       return refusedLaunch(error);
     }
+  }
+
+  private launchInput(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    principal: string,
+    runId: string,
+    issueBinding?: CodingWorkbenchIssueBinding,
+    correlationId?: string,
+  ): Parameters<CodingRuntimeLaunchResolver["resolve"]>[0] {
+    return {
+      runId,
+      requestId: request.requestId,
+      taskIntent: request.taskIntent,
+      requestedMode: request.requestedMode,
+      ...(request.runtimePreference ? { runtimePreference: request.runtimePreference } : {}),
+      ...(request.modelId ? { modelId: request.modelId } : {}),
+      ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+      projectMemoryEnabled: request.projectMemory?.enabled ?? true,
+      ...agentField(request.agent),
+      ...promptInputFields(request),
+      ...jiraPodField(request.jiraPodId),
+      ...(request.connectorScopes === undefined
+        ? {}
+        : { connectorScopes: [...request.connectorScopes] }),
+      ...mcpServersField(request.mcpServers),
+      workspaceId: active.instance.workspaceId,
+      workspaceRoot: active.binding.activeRoot,
+      serverPrincipal: principal,
+      ...(correlationId === undefined ? {} : { correlationId }),
+      ...(issueBinding === undefined ? {} : { issueBinding }),
+      ...(this.startAbandoned === undefined ? {} : { abandoned: this.startAbandoned }),
+    };
   }
 
   private buildStartSnapshot(
@@ -4552,7 +4855,7 @@ export class CodingRuntimeOrchestrator {
     }
     if (!result.ok) {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, result.failureCode);
-      return this.transitionActive("failed", "runtime-failed");
+      return this.transitionActive("failed", classifyManagerStartFailure(result.failureCode));
     }
     return undefined;
   }
@@ -5319,4 +5622,11 @@ function latestSettledRunId(
   snapshots: Pick<CodingRuntimeSnapshotStore, "listAll">,
 ): string | undefined {
   return snapshots.listAll(1).find((row) => row.terminalAt !== undefined)?.runId;
+}
+
+/** A refused wake start's closed cause, as the scheduled-wake line records it. */
+function scheduledWakeRefusal(code: CodingWorkbenchRuntimeStartFailureCode): ScheduledWakeRefusal {
+  if (code === "active-run-conflict") return "active-run-conflict";
+  if (code === "authority-resolution-failed") return "authority-resolution-failed";
+  return code === "invalid-intent" ? "invalid-intent" : "start-failed";
 }

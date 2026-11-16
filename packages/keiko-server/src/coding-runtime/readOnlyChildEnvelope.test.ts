@@ -71,7 +71,6 @@ function broadParent(): CodingWorkbenchAuthorityEnvelope {
     budget: {
       maxRuntimeMs: 120_000,
       maxToolCalls: 12,
-      maxPromptTokens: 24_000,
       maxPatchBytes: 32_768,
     },
     expiresAt: "2026-07-08T12:00:00Z",

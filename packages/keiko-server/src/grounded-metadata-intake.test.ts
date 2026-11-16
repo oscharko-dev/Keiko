@@ -192,12 +192,13 @@ describe("metadata admission before retention", () => {
     writeFileSync(join(outside, "outside.csproj"), "<Project/>");
     symlinkSync(join(outside, "outside.csproj"), join(root, "linked.csproj"));
     mkdirSync(join(root, ".ssh"));
-    writeFileSync(join(root, ".ssh", "secret.csproj"), "private");
+    const deniedContents = "This excluded metadata fixture contains a copper lantern.";
+    writeFileSync(join(root, ".ssh", "secret.csproj"), deniedContents);
     const result = await retrieveConnectedContextPack(input(root, 20), deps(root));
     expect(validateConnectedContextPack(result.pack).ok).toBe(true);
     expect(result.pack.files.map((file) => file.scopePath)).toEqual(["package.json"]);
     expect(result.pack.omitted.map((entry) => entry.scopePath)).not.toContain("linked.csproj");
-    expect(JSON.stringify(result.pack)).not.toContain("private");
+    expect(JSON.stringify(result.pack)).not.toContain(deniedContents);
   });
 });
 

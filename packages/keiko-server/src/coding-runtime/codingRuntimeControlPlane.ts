@@ -1,11 +1,14 @@
 import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import type { CodingSessionContinuity } from "./codingSessionContinuity.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
+import { CodingScheduledWakes } from "./codingScheduledWakes.js";
+import type { RetainedSessionStore } from "./opencodeSessionRetention.js";
 import type { UiStore } from "../store/types.js";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchContextUsage,
   CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchRuntimeVersion,
   SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -103,14 +106,6 @@ export interface CodingRuntimeHost {
   readonly runEffort?:
     { readonly read: (runId: string) => CodingRuntimeHostRunEffort | undefined } | undefined;
   /**
-   * F9 (#3873): whether the run's most recent model-call admission was refused by its cumulative
-   * prompt allowance, the authority's own or the same `maxPromptTokens` counted by the run's CI
-   * repair, and by no other reason a CI-repair budget refuses for. Read when a failed task settles,
-   * so the run names the exhausted allowance instead of an internal error; absent, no failure is
-   * attributed to the allowance.
-   */
-  readonly promptAllowanceExhausted?: ((runId: string) => boolean) | undefined;
-  /**
    * F9 (#3873): whether the run's time limit has run out: its Authority Envelope's end, or the same
    * `maxRuntimeMs` counted by the run's CI repair when that refused its most recent model call. Read
    * when a failed task settles, so a run that reached its limit names it instead of an internal
@@ -123,8 +118,8 @@ export interface CodingRuntimeHost {
           capability: string,
           audience: "model-gateway" | "tool-facade",
         ) => unknown;
-        readonly reservePromptTokens?:
-          ((capability: string, promptTokens: number) => unknown) | undefined;
+        readonly admitModelCall?:
+          ((capability: string, estimatedPromptTokens: number) => unknown) | undefined;
         readonly unavailableOptionalTools?:
           ((runId: string) => ReadonlySet<OpenCodeOptionalToolName> | undefined) | undefined;
       }
@@ -215,6 +210,8 @@ export interface CodingRuntimeControlPlaneInput {
    * Coding Workbench's.
    */
   readonly runtimePurpose?: CodingRuntimePurpose | undefined;
+  /** The activated runtime's version facts, for the run's start line (#4359). */
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   readonly historyStore?: UiStore | undefined;
   /** The server's native session continuity service, shared with the runtime host. */
   readonly sessionContinuity?: CodingSessionContinuity | undefined;
@@ -251,6 +248,8 @@ export interface CodingRuntimeControlPlane {
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
   readonly toolFacadeBridge?: CodingRuntimeHost["toolFacadeBridge"];
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
+  /** Scheduled continuations of retained native sessions; absent when retention is off. */
+  readonly codingScheduledWakes?: CodingScheduledWakes | undefined;
 }
 
 interface RuntimeEventReceiver {
@@ -290,15 +289,37 @@ export function createCodingRuntimeControlPlane(
   // A run keeps its state while its snapshot is unsettled: live, or recovery-required and not yet
   // acknowledged. Everything else belongs to no run that could still use it.
   sweepOrphanedRunState(input);
+  const scheduledWakes = scheduledWakesField(input, orchestrator);
   return {
     orchestrator,
     eventHub,
+    ...scheduledWakes,
     runtimeHostQualified: input.runtimeHost !== undefined,
     ...(input.runtimeHost?.safeActivityProjection
       ? { safeActivityProjection: input.runtimeHost.safeActivityProjection }
       : {}),
     ...runtimeHostCapabilities(input.runtimeHost),
   };
+}
+
+/**
+ * Scheduled wakes need a qualified runtime and retained sessions: without either there is no
+ * schedule to wake (#4271). The service looks at the retained schedules while the process runs.
+ */
+function scheduledWakesField(
+  input: CodingRuntimeControlPlaneInput,
+  orchestrator: CodingRuntimeOrchestrator,
+): Pick<CodingRuntimeControlPlane, "codingScheduledWakes"> {
+  const store = input.sessionContinuity?.store;
+  if (input.runtimeHost === undefined || store === undefined) return {};
+  const wakes = new CodingScheduledWakes({
+    store: (): RetainedSessionStore => store,
+    host: orchestrator.scheduledWakeHost(),
+    activityLog: input.activityLog,
+  });
+  orchestrator.attachScheduledWakes(wakes);
+  wakes.start();
+  return { codingScheduledWakes: wakes };
 }
 
 function sweepOrphanedRunState(input: CodingRuntimeControlPlaneInput): void {
@@ -356,6 +377,7 @@ function createControlPlaneOrchestrator(
     ...(input.runtimeHost?.contextUsage
       ? { contextUsage: input.runtimeHost.contextUsage.read }
       : {}),
+    ...(input.runtimeVersion ? { runtimeVersion: input.runtimeVersion } : {}),
     ...(input.projectMemory ? { projectMemory: input.projectMemory } : {}),
     ...(input.repositoryInstructions
       ? { repositoryInstructions: input.repositoryInstructions }
@@ -369,19 +391,17 @@ function createControlPlaneOrchestrator(
 
 /**
  * F9 (#3873): the facts a failed run's settlement names its cause from, each read from the layer
- * that owns it — the sidecar gateway's failed-call causes from the control plane's event hub, the
- * prompt allowance and the envelope duration from the runtime host's authority.
+ * that owns it — the sidecar gateway's failed-call causes from the control plane's event hub and
+ * the envelope duration from the runtime host's authority.
  */
 export function codingRuntimeTerminalFacts(
   eventHub: Pick<
     CodingRuntimeEventHub,
     "lastModelCallFailure" | "lastModelCallProviderUnavailable"
   >,
-  runtimeHost:
-    Pick<CodingRuntimeHost, "promptAllowanceExhausted" | "envelopeDurationExhausted"> | undefined,
+  runtimeHost: Pick<CodingRuntimeHost, "envelopeDurationExhausted"> | undefined,
 ): CodingRuntimeTerminalFacts {
   return {
-    promptAllowanceExhausted: (runId) => runtimeHost?.promptAllowanceExhausted?.(runId) === true,
     envelopeDurationExhausted: (runId) => runtimeHost?.envelopeDurationExhausted?.(runId) === true,
     lastModelCallFailure: (runId) => eventHub.lastModelCallFailure(runId),
     lastModelCallProviderUnavailable: (runId) => eventHub.lastModelCallProviderUnavailable(runId),

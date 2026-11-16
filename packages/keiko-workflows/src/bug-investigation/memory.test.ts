@@ -1,14 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { acquireMemoryContext, emitMemoryWriteCandidate } from "./memory.js";
+import { acquireMemoryContext } from "./memory.js";
 import type {
   MemoryId,
   MemoryWorkflowPort,
   MemoryWorkflowContext,
   MemoryUsedEvent,
-  MemoryWriteCandidateEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type { ProjectId } from "@oscharko-dev/keiko-contracts/memory";
-import type { BugReportInput, BugInvestigationReport } from "./types.js";
+import type { BugReportInput } from "./types.js";
 
 const WORKSPACE_ROOT = "/repo/project-a";
 
@@ -19,28 +18,6 @@ function makePort(overrides: Partial<MemoryWorkflowPort> = {}): MemoryWorkflowPo
       includedMemoryIds: ["mem-1" as MemoryId],
     } satisfies MemoryWorkflowContext),
     onMemoryUsed: vi.fn(),
-    onMemoryWriteCandidate: vi.fn(),
-    ...overrides,
-  };
-}
-
-function makeReport(overrides: Partial<BugInvestigationReport> = {}): BugInvestigationReport {
-  return {
-    workflowId: "bug-investigation",
-    status: "fix-applied",
-    modelId: "m",
-    durationMs: 0,
-    verified: {
-      patchValidates: true,
-      patchApplied: true,
-      failureFrames: [],
-    },
-    hypothesis: { rootCause: "off-by-one in divisor" },
-    changedFiles: [],
-    regressionCoverage: 0,
-    nextActions: [],
-    modelCallCount: 1,
-    patchRetryCount: 0,
     ...overrides,
   };
 }
@@ -123,90 +100,5 @@ describe("acquireMemoryContext", () => {
     });
     const result = await acquireMemoryContext(port, { description: "bug" }, WORKSPACE_ROOT);
     expect(result).toBeUndefined();
-  });
-});
-
-describe("emitMemoryWriteCandidate", () => {
-  it("is a no-op when port is undefined", () => {
-    expect(() => {
-      emitMemoryWriteCandidate(undefined, makeReport(), WORKSPACE_ROOT);
-    }).not.toThrow();
-  });
-
-  it("is a no-op when onMemoryWriteCandidate is absent on the port", () => {
-    const port: MemoryWorkflowPort = {
-      getContextForWorkflow: vi.fn(),
-    };
-    expect(() => {
-      emitMemoryWriteCandidate(port, makeReport(), WORKSPACE_ROOT);
-    }).not.toThrow();
-  });
-
-  it.each([
-    { title: "is a no-op when status is 'failed'", status: "failed" },
-    { title: "is a no-op when status is 'cancelled'", status: "cancelled" },
-    { title: "is a no-op when status is 'rejected'", status: "rejected" },
-  ] as const)("$title", ({ status }) => {
-    const onMemoryWriteCandidate = vi.fn<(event: MemoryWriteCandidateEvent) => void>();
-    const port = makePort({ onMemoryWriteCandidate });
-    emitMemoryWriteCandidate(port, makeReport({ status }), WORKSPACE_ROOT);
-    expect(onMemoryWriteCandidate).not.toHaveBeenCalled();
-  });
-
-  it("emits a write-candidate when status is 'fix-applied'", () => {
-    const onMemoryWriteCandidate = vi.fn<(event: MemoryWriteCandidateEvent) => void>();
-    const port = makePort({ onMemoryWriteCandidate });
-    emitMemoryWriteCandidate(port, makeReport({ status: "fix-applied" }), WORKSPACE_ROOT);
-    expect(onMemoryWriteCandidate).toHaveBeenCalledOnce();
-    const event = onMemoryWriteCandidate.mock.calls[0]?.[0];
-    expect(event?.source).toBe("workflow-success");
-    expect(event?.scope).toEqual({ kind: "project", projectId: WORKSPACE_ROOT });
-  });
-
-  it("emits a write-candidate when status is 'fix-proposed'", () => {
-    const onMemoryWriteCandidate = vi.fn<(event: MemoryWriteCandidateEvent) => void>();
-    const port = makePort({ onMemoryWriteCandidate });
-    emitMemoryWriteCandidate(port, makeReport({ status: "fix-proposed" }), WORKSPACE_ROOT);
-    expect(onMemoryWriteCandidate).toHaveBeenCalledOnce();
-  });
-
-  it("emits a write-candidate when status is 'investigation-only'", () => {
-    const onMemoryWriteCandidate = vi.fn<(event: MemoryWriteCandidateEvent) => void>();
-    const port = makePort({ onMemoryWriteCandidate });
-    emitMemoryWriteCandidate(port, makeReport({ status: "investigation-only" }), WORKSPACE_ROOT);
-    expect(onMemoryWriteCandidate).toHaveBeenCalledOnce();
-  });
-
-  it("proposalSummary includes rootCause when present", () => {
-    const onMemoryWriteCandidate = vi.fn<(event: MemoryWriteCandidateEvent) => void>();
-    const port = makePort({ onMemoryWriteCandidate });
-    emitMemoryWriteCandidate(
-      port,
-      makeReport({ hypothesis: { rootCause: "off-by-one in divisor" } }),
-      WORKSPACE_ROOT,
-    );
-    const event = onMemoryWriteCandidate.mock.calls[0]?.[0];
-    expect(event?.proposalSummary).toContain("off-by-one in divisor");
-    expect(event?.proposalSummary).toContain("fix-applied");
-  });
-
-  it("proposalSummary includes status when rootCause is absent", () => {
-    const onMemoryWriteCandidate = vi.fn<(event: MemoryWriteCandidateEvent) => void>();
-    const port = makePort({ onMemoryWriteCandidate });
-    emitMemoryWriteCandidate(port, makeReport({ hypothesis: {} }), WORKSPACE_ROOT);
-    const event = onMemoryWriteCandidate.mock.calls[0]?.[0];
-    expect(event?.proposalSummary).toContain("fix-applied");
-    expect(event?.proposalSummary).toContain("without a recorded root cause");
-  });
-
-  it("degrades gracefully when onMemoryWriteCandidate throws", () => {
-    const port = makePort({
-      onMemoryWriteCandidate: vi.fn().mockImplementation(() => {
-        throw new Error("callback error");
-      }),
-    });
-    expect(() => {
-      emitMemoryWriteCandidate(port, makeReport(), WORKSPACE_ROOT);
-    }).not.toThrow();
   });
 });

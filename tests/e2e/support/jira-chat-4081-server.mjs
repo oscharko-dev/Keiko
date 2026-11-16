@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -21,6 +21,7 @@ import {
 import { probeGatewayToolCalling } from "../../../packages/keiko-server/dist/gateway-tool-calling-probe.js";
 import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { startJiraChatTransports } from "./jira-chat-4081-transport.mjs";
+import { seedBacklogPod, saveBacklogTemplates } from "./jira-chat-4081-backlog.mjs";
 
 const directory = process.env.KEIKO_E2E_JIRA_STATE;
 if (!directory) throw new TypeError("KEIKO_E2E_JIRA_STATE is required");
@@ -43,10 +44,11 @@ const raw = {
     ...createDefaultChatCapability(provider.modelId),
     streaming: true,
     toolCalling: true,
-    contextWindow: 32768,
+    structuredOutput: true,
+    supportsResponseFormat: true,
+    contextWindow: 131072,
     maxOutputTokens: 2048,
   })),
-  atlassian: { privateTargets: [{ baseUrl: transport.baseUrl, addressClass: "loopback" }] },
   egress: { caBundlePath: transport.caPath },
 };
 const verdict = await probeGatewayToolCalling(parseGatewayConfig(raw), providers[0]);
@@ -67,10 +69,21 @@ const deps = buildUiHandlerDeps({
   evidenceDir: join(directory, "evidence"),
   uiDbPath: join(directory, "ui.db"),
   env: {
+    KEIKO_STATE_DIR: directory,
+    KEIKO_MEMORY_DIR: join(directory, "memory"),
+    KEIKO_MEMORY_KEY: randomBytes(32).toString("base64"),
+    KEIKO_OS_KEYCHAIN: "off",
     [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: secret,
     KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64"),
   },
   activityLog: log,
+});
+Object.defineProperty(deps, "chatToolTurnBudget", {
+  enumerable: true,
+  get: () =>
+    existsSync(join(directory, "draft-deadline.json"))
+      ? { maxRuntimeMs: 15_000, maxToolCalls: 100, maxPatchBytes: 0 }
+      : undefined,
 });
 for (const id of [modelId, unavailableModelId]) {
   deps.gatewayConfig.recordVerifiedCapability(
@@ -83,7 +96,18 @@ const projectPath = join(directory, "workspace");
 mkdirSync(projectPath, { recursive: true });
 deps.store.createProject(projectPath);
 const chats = Object.fromEntries(
-  ["approval", "revocation", "unavailable", "accessibility-en", "accessibility-de"].map((name) => [
+  [
+    "approval",
+    "revocation",
+    "pending-stop",
+    "unavailable",
+    "accessibility-en",
+    "accessibility-de",
+    "backlog",
+    "deadline",
+    "batch-reload-en",
+    "batch-reload-de",
+  ].map((name) => [
     name,
     deps.store.createChat(
       projectPath,
@@ -92,6 +116,44 @@ const chats = Object.fromEntries(
     ),
   ]),
 );
+// Exercise the production Chat store and reload projection without a model or Jira dispatch.
+for (const locale of ["en", "de"]) {
+  const chat = chats[`batch-reload-${locale}`];
+  const clientTurnId = `persisted-batch-${locale}`;
+  const turn = deps.store.admitChatTurn(clientTurnId, {
+    chatId: chat.id,
+    role: "user",
+    content: "Synthetic persisted requirements batch",
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  if (turn.kind !== "admitted") throw new TypeError("Synthetic batch turn was not admitted");
+  const call = { id: `batch-${locale}`, name: "jira_draft_batch", arguments: {} };
+  deps.store.updateChatToolTranscript(turn.userMessage.id, { kind: "started", call }, clientTurnId);
+  deps.store.updateChatToolTranscript(
+    turn.userMessage.id,
+    {
+      kind: "progress",
+      callId: call.id,
+      batchProgress: {
+        phase: "drafting",
+        draftedCount: 2,
+        plannedCount: 4,
+        coveredRequirementCount: 3,
+        requirementCount: 8,
+        failedCount: 0,
+      },
+    },
+    clientTurnId,
+  );
+  deps.store.failChatTurn(chat.id, clientTurnId, "cancelled");
+}
+const backlogPod = await seedBacklogPod(deps);
+saveBacklogTemplates(deps);
 writeFileSync(
   join(directory, "fixture.json"),
   JSON.stringify({
@@ -101,6 +163,7 @@ writeFileSync(
     modelId,
     unavailableModelId,
     jiraBaseUrl: transport.baseUrl,
+    backlogPod,
   }),
   { mode: 0o600 },
 );

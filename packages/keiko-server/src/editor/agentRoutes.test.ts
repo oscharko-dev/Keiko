@@ -103,6 +103,7 @@ import {
 import { createCodingToolReadEditPorts } from "../coding-runtime/codingToolReadEditPorts.js";
 import { materializeReplacementChangeset } from "../coding-runtime/codingToolReplacementEdits.js";
 import { createMaterializedPatchRegistry } from "../coding-runtime/materializedPatchRegistry.js";
+import { decodeSecureWorkspaceText } from "../coding-runtime/secureWorkspaceTextReadProtocol.js";
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
@@ -242,7 +243,6 @@ function authorityEnvelope(
     budget: {
       maxRuntimeMs: 60_000,
       maxToolCalls: 20,
-      maxPromptTokens: 10_000,
       // The figure a Coding Workbench run is minted with; the human-reviewed bridge path charges
       // the same envelope, so a full-size changeset must fit it.
       maxPatchBytes: CODING_RUNTIME_PATCH_BUDGET_BYTES,
@@ -5627,6 +5627,179 @@ describe("applyChangeset line-break provenance (PR #3876 review)", () => {
     expect(registry.stats().entries).toBe(1);
     expect(actionResultStatus(committed.body)).toBe("succeeded");
     expect(readWorkspaceFile(workspaceRoot, "src/table.ts")).toBe(RESULT);
+  });
+});
+
+// 2026-11-06 (Windows, Ask for approval): every keiko_changeset_edit of a file that starts with a
+// UTF-8 byte order mark was refused CONTENT_HASH_MISMATCH at review admission. The model's read and
+// the materializer see the secure read's decoded text, which has no mark; the route's patch
+// inspection hashed the raw text with it. Here the real read and edit ports post to the real route,
+// the read decodes the file's bytes with the secure read's own decoder, and the browser's review
+// reports the human's approval.
+describe("applyChangeset review of files with and without a UTF-8 byte order mark", () => {
+  const BOM = "﻿";
+  let workspaceRoot: string;
+
+  beforeEach(() => {
+    workspaceRoot = mkdtempSync(join(tmpdir(), "keiko-agent-bom-"));
+  });
+
+  afterEach(() => {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  function reviewPorts(deps: {
+    readonly materializedPatches: ReturnType<typeof createMaterializedPatchRegistry>;
+  }): ReturnType<typeof createCodingToolReadEditPorts> {
+    return createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: {
+        readText: ({ relativePath }) => {
+          const decoded = decodeSecureWorkspaceText(
+            readFileSync(join(workspaceRoot, relativePath)),
+          );
+          return Promise.resolve(decoded.ok ? { ok: true as const, text: decoded.text } : decoded);
+        },
+      },
+      editorAgentClient: {
+        action: async (posted) => {
+          const routed = await handleEditorAgentActions(context(posted), deps);
+          return { ok: true as const, value: { result: actionResult(routed.body) } };
+        },
+      },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-1",
+        authorityRef: agentAuthorityRef ?? { runId: "run-2121", envelopeDigest: HASH },
+        origin: "agent",
+      }),
+      materializedPatches: deps.materializedPatches,
+      activityLog: { write: vi.fn() },
+    });
+  }
+
+  // The bridge names the file as its active document. The editor decodes a document as the secure
+  // read does, so the content hash it reports is the digest the read tool returned.
+  async function reviewWithActiveFile(digest: string): Promise<void> {
+    await registerSnapshotOnly({
+      workspaceRoot,
+      activeFile: "greet.js",
+      panes: [{ paneId: "pane-1", activeFile: "greet.js", openFiles: ["greet.js"] }],
+      activeFileContentHash: digest,
+    });
+    connectBridge("session-1");
+  }
+
+  async function readAndEdit(
+    ports: ReturnType<typeof createCodingToolReadEditPorts>,
+    oldString: string,
+    newString: string,
+  ): Promise<unknown> {
+    const read = await ports.repositoryRead.execute(
+      {
+        action: "read",
+        actionId: "read-bom",
+        idempotencyKey: "read-bom-key",
+        relativePath: "greet.js",
+      },
+      undefined,
+      { check: (): true => true },
+    );
+    if (read.status !== "completed" || read.read === undefined) {
+      throw new Error("expected a completed read");
+    }
+    const digest = read.read.digest;
+    await reviewWithActiveFile(digest);
+    return ports.editorChangeset.execute(
+      {
+        action: "edit",
+        actionId: "edit-bom",
+        idempotencyKey: "edit-bom-key",
+        changeset: {
+          edits: [{ file: "greet.js", oldString, newString }],
+          files: [{ file: "greet.js", expectedContentHash: digest }],
+        },
+      },
+      undefined,
+      { check: (): true => true },
+    );
+  }
+
+  it.each([
+    ["a mark and LF", `${BOM}const greeting = "hi";\nconsole.log(greeting);\n`, 1],
+    ["a mark and CRLF", `${BOM}const greeting = "hi";\r\nconsole.log(greeting);\r\n`, 1],
+    ["no mark and CRLF", `const greeting = "hi";\r\nconsole.log(greeting);\r\n`, 0],
+  ])(
+    "admits, applies and records the edit of a file with %s",
+    async (_name, source, markedFiles) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      try {
+        writeWorkspaceFile(workspaceRoot, "greet.js", source);
+        const deps = { materializedPatches: createMaterializedPatchRegistry() };
+
+        const outcome = await readAndEdit(
+          reviewPorts(deps),
+          'const greeting = "hi";',
+          'const greeting = "hello";',
+        );
+        const committed = await postActionResult(
+          action({ actionId: "edit-bom", type: "applyChangeset" }),
+          "succeeded",
+          "session-1",
+          undefined,
+          deps,
+        );
+
+        expect(outcome).toEqual({ status: "completed" });
+        expect(actionResultStatus(committed.body)).toBe("succeeded");
+        expect(readFileSync(join(workspaceRoot, "greet.js"))).toEqual(
+          Buffer.from(source.replace('"hi"', '"hello"'), "utf8"),
+        );
+        const lines = sink.events
+          .filter((event) => event.op === "editor.agent.changeset-byte-order-mark")
+          .map(formatActivityLogProofLine);
+        expect(lines).toHaveLength(markedFiles === 0 ? 0 : 2);
+        if (markedFiles === 0) return;
+        const [admission, result] = lines.map(
+          (line) => JSON.parse(line) as Record<string, unknown>,
+        );
+        expectActivityLogProof(
+          "editor.agent.changeset-byte-order-mark.emitted-line",
+          lines[0] ?? "",
+        );
+        expect(admission).toMatchObject({
+          level: "info",
+          correlationId: "run-2121",
+          stage: "admission",
+          fileCount: 1,
+          signatureFileCount: markedFiles,
+          diffTextFileCount: 0,
+        });
+        expect(result).toMatchObject({ stage: "result", signatureFileCount: markedFiles });
+        for (const body of ["greet.js", "greeting", workspaceRoot]) {
+          expect(lines.join("")).not.toContain(body);
+        }
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
+  it("admits and applies the fill of an empty file", async () => {
+    writeWorkspaceFile(workspaceRoot, "greet.js", "");
+    const deps = { materializedPatches: createMaterializedPatchRegistry() };
+
+    const outcome = await readAndEdit(reviewPorts(deps), "", 'console.log("hi");\n');
+    const committed = await postActionResult(
+      action({ actionId: "edit-bom", type: "applyChangeset" }),
+      "succeeded",
+      "session-1",
+      undefined,
+      deps,
+    );
+
+    expect(outcome).toEqual({ status: "completed" });
+    expect(actionResultStatus(committed.body)).toBe("succeeded");
+    expect(readWorkspaceFile(workspaceRoot, "greet.js")).toBe('console.log("hi");\n');
   });
 });
 

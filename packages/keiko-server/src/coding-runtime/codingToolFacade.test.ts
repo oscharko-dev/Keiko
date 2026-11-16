@@ -7,7 +7,11 @@ import {
 import { CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  defaultServerDiagnosticSink,
+  type ServerDiagnosticRecord,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { VERIFICATION_RUNNER_ERROR_CODES } from "../editor/verificationRunnerErrors.js";
 import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import {
@@ -17,6 +21,7 @@ import {
 import {
   createCodingToolFacade,
   codingToolEditPresentation,
+  codingToolGitPresentation,
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
@@ -29,7 +34,8 @@ import type {
   CodingToolMutationGuard,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import type { CodingToolActionRequest } from "./codingToolIpc.js";
+import { SHELL_VERIFICATION_STATUS_RULE } from "./codingRuntimeVerificationContinuation.js";
+import type { CodingToolActionRequest, CodingToolResult } from "./codingToolIpc.js";
 import { codingToolDiscoveryText } from "./codingToolIpc.js";
 import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
 import { createCodingToolGovernedDelegate } from "./codingToolGovernedDelegate.js";
@@ -551,6 +557,42 @@ describe("CodingToolFacade", () => {
     await expect(first).resolves.toMatchObject({ status: "completed" });
   });
 
+  // Audit 2026-11-06 finding 9: calls that park on an operator decision held the shared slots for the
+  // whole wait, so a handful of pending approvals refused every read and search as busy.
+  it("keeps calls that may await the operator in their own in-flight lane", async () => {
+    const ports = facade();
+    const releases: (() => void)[] = [];
+    ports.delegate.execute = vi.fn(
+      (request: { readonly action: string }) =>
+        new Promise((resolve) => {
+          if (request.action === "verification") {
+            releases.push(() => {
+              resolve({ outcome: "completed" });
+            });
+          } else resolve({ outcome: "completed" });
+        }),
+    );
+    const subject = createCodingToolFacade(ports, { maxInFlight: 1 });
+    const verify = requestBody({ action: "verification", verifierId: "test" });
+    const parked = subject.execute({ body: verify, capability });
+    await vi.waitFor(() => {
+      expect(releases).toHaveLength(1);
+    });
+    // The lane of the parked verification is full: a second one is busy, as before.
+    await expect(subject.execute({ body: verify, capability })).resolves.toMatchObject({
+      status: "busy",
+    });
+    // A read is not held up by it.
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "read", relativePath: "src/example.ts" }),
+        capability,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    releases[0]?.();
+    await expect(parked).resolves.toMatchObject({ status: "completed" });
+  });
+
   it("does not delegate denied or cancelled actions", async () => {
     const ports = facade();
     const controller = new AbortController();
@@ -909,6 +951,8 @@ describe("CodingToolFacade", () => {
     expect(guidance).toContain("keiko_verification");
     expect(guidance).toContain("in your shell");
     expect(guidance).toContain("Do not stage again");
+    // #4271 lab: a check piped into `tail` passed and did not count; the refusal says why.
+    expect(guidance).toContain(SHELL_VERIFICATION_STATUS_RULE);
 
     verifiedCommit.reason = "verification-failed";
     expect(await propose()).not.toHaveProperty("guidance");
@@ -1260,6 +1304,33 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // #4271 lab (T39): a verifier with nothing to run for the resolved package answered a bare code,
+  // and the model ended without running the repository's own build tool in its shell.
+  it("tells the model how a verifier without runnable steps is still evidenced", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "NO_RUNNABLE_STEPS" }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const result = (await subject.execute({
+      body: requestBody({ action: "verification", verifierId: "unit" }),
+      capability,
+    })) as { readonly reasonCode?: string; readonly guidance?: string; readonly detail?: string };
+    expect(result.reasonCode).toBe("NO_RUNNABLE_STEPS");
+    expect(result.detail).toBeUndefined();
+    expect(result.guidance).toContain("run the repository's own test command");
+    expect(result.guidance).toContain("pass one as packageDir");
+    expect(result.guidance).toContain(SHELL_VERIFICATION_STATUS_RULE);
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "VERIFICATION_NOT_RUN", notRun: [] }),
+    );
+    const notRun = (await createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "verification", verifierId: "unit" }),
+      capability,
+    })) as { readonly guidance?: string };
+    expect(notRun.guidance).toContain(SHELL_VERIFICATION_STATUS_RULE);
+  });
+
   // An empty not-run list names no step, so the facade forwards no detail; the guidance still stands
   // (PR #3452 review).
   it("forwards no detail for an empty not-run list", async () => {
@@ -1319,6 +1390,45 @@ describe("CodingToolFacade", () => {
       },
       guidance: expect.stringContaining("keiko_git_status") as string,
     });
+  });
+
+  // #4068: on a stock Git for Windows host the system scope sets core.autocrlf=true, so every stage
+  // was blocked as unsupported-transformation and the model guessed at file locks and hooks.
+  it("names the line-ending conversion and the operator's opt-out for a blocked stage", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        evidence: [],
+        git: {
+          kind: "stage",
+          proposalId: "stage-4068",
+          status: "blocked",
+          reason: "unsupported-transformation",
+          pathCount: 2,
+        },
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({
+        action: "git",
+        operation: "stage",
+        phase: "propose",
+        paths: ["math.js", "math.test.js"],
+      }),
+      capability,
+    });
+    const guidance = (result as { readonly guidance?: string }).guidance ?? "";
+
+    expect(result).toMatchObject({
+      status: "completed",
+      git: { kind: "stage", status: "blocked", reason: "unsupported-transformation" },
+    });
+    expect(guidance).toContain("core.autocrlf");
+    expect(guidance).toContain("git config core.autocrlf false");
+    expect(guidance).toContain("Do not retry");
   });
 
   // #3907: a task branch Keiko refused is a completed Git result with a closed reason, and each
@@ -1688,14 +1798,18 @@ describe("CodingToolFacade", () => {
       status: "failed",
       reasonCode: code,
       evidence: [{ kind: "governed-delegate", code }],
-      // Two refusals carry guidance: the trust refusal is the operator's decision to change, not the
-      // model's (ADR-0147 D3, 2026-09-10), and a run that left a step unexecuted tells the model
-      // what that means for its next step (F74). Every other code stays bare.
+      // Three refusals carry guidance: the trust refusal is the operator's decision to change, not
+      // the model's (ADR-0147 D3, 2026-09-10), a run that left a step unexecuted tells the model
+      // what that means for its next step (F74), and a verifier with nothing to run names the
+      // shell check that still counts (#4271). Every other code stays bare.
       ...(code === "WORKSPACE_TRUST_REQUIRED"
         ? { guidance: expect.stringContaining("Only the operator can allow them") as unknown }
         : {}),
       ...(code === "VERIFICATION_NOT_RUN"
         ? { guidance: expect.stringContaining("Not every verification step ran") as unknown }
+        : {}),
+      ...(code === "NO_RUNNABLE_STEPS"
+        ? { guidance: expect.stringContaining("This verifier has nothing to run") as unknown }
         : {}),
     });
   });
@@ -1806,6 +1920,8 @@ describe("CodingToolFacade", () => {
       status: "failed",
       reasonCode,
       evidence: [{ kind: "governed-delegate", code: reasonCode }],
+      // Audit 2026-11-06 finding 6: every closed read refusal tells the model its next step.
+      guidance: expect.stringMatching(/\S{3,}/u) as string,
     });
   });
 
@@ -2317,6 +2433,87 @@ describe("CodingToolFacade verification presentation (#3579)", () => {
   });
 });
 
+// Lab T37 (2026-11-07, #4271): the facade answers a refused Git step as a completed call that
+// carries the refusal, so the Workbench card read "Succeeded" for a commit that never happened. The
+// presentation names, in the contract's closed words, how the step the model received really ended.
+describe("CodingToolFacade Git presentation (#4271)", () => {
+  const completedWith = (field: "verifiedCommit" | "git", value: unknown): CodingToolResult =>
+    ({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      [field]: value,
+    }) as unknown as CodingToolResult;
+
+  it.each([
+    ["succeeded", "completed", "completed"],
+    ["approval-required", "approval-required", "waiting-for-approval"],
+    ["blocked", "policy-block", "blocked"],
+    ["blocked", "message-policy", "blocked"],
+    ["verification-failed", "verification-failed", "verification-failed"],
+    ["verification-failed", "verification-missing", "verification-missing"],
+    ["verification-failed", "candidate-not-staged", "not-staged"],
+    ["blocked", "buffers-dirty", "unsaved-changes"],
+    ["drift", "verification-stale", "changed"],
+    ["failed", "execution-failed", "not-done"],
+    ["recovery-required", "execution-uncertain", "not-done"],
+  ] as const)("presents a commit answered %s/%s as %s", (status, reason, gitOutcome) => {
+    expect(codingToolGitPresentation(completedWith("verifiedCommit", { status, reason }))).toEqual({
+      gitOutcome,
+    });
+  });
+
+  it.each([
+    [{ kind: "stage", status: "succeeded", reason: "none" }, "completed"],
+    [{ kind: "stage", status: "blocked", reason: "scope-denied" }, "blocked"],
+    [{ kind: "unstage", status: "drift", reason: "candidate-drift" }, "changed"],
+    [
+      { kind: "stage", status: "approval-required", reason: "approval-required" },
+      "waiting-for-approval",
+    ],
+    [{ kind: "stage", status: "failed", reason: "execution-failed" }, "not-done"],
+    [{ kind: "branch", status: "succeeded", reason: "none" }, "completed"],
+    [{ kind: "branch", status: "blocked", reason: "branch-exists" }, "blocked"],
+    [{ kind: "branch", status: "failed", reason: "rebind-failed" }, "not-done"],
+    [{ kind: "fetch", status: "succeeded" }, "completed"],
+    [{ kind: "pull", status: "up-to-date" }, "completed"],
+    [{ kind: "pull", status: "not-fast-forward" }, "not-done"],
+    [{ kind: "fetch", status: "auth-failed" }, "not-done"],
+  ] as const)("presents the Git result %j as %s", (git, gitOutcome) => {
+    expect(codingToolGitPresentation(completedWith("git", git))).toEqual({ gitOutcome });
+  });
+
+  it("fails closed to not done for a Git or commit status it does not know", () => {
+    expect(
+      codingToolGitPresentation(completedWith("git", { kind: "stage", status: "unexpected" })),
+    ).toEqual({ gitOutcome: "not-done" });
+    expect(
+      codingToolGitPresentation(
+        completedWith("verifiedCommit", { status: "unexpected", reason: "unexpected" }),
+      ),
+    ).toEqual({ gitOutcome: "not-done" });
+  });
+
+  it("presents nothing for reads, an unprepared proposal, other results and other statuses", () => {
+    expect(codingToolGitPresentation(completedWith("git", { kind: "status" }))).toEqual({});
+    expect(codingToolGitPresentation(completedWith("git", { kind: "diff" }))).toEqual({});
+    expect(
+      codingToolGitPresentation(
+        completedWith("git", { kind: "stage", status: "ready", reason: "none" }),
+      ),
+    ).toEqual({});
+    expect(
+      codingToolGitPresentation({
+        status: "completed",
+        evidence: [],
+        verification: {},
+      } as unknown as CodingToolResult),
+    ).toEqual({});
+    for (const status of ["failed", "denied", "cancelled", "timeout", "busy"] as const) {
+      expect(codingToolGitPresentation({ status, evidence: [] })).toEqual({});
+    }
+  });
+});
+
 // F5 (#3873, live Gemma qualification): a run whose edits were refused NO_ACTIVE_SESSION eleven
 // times was never stopped, because nothing above the edit port saw the refusals. The facade tells
 // the run's orchestration each applied or refused edit, as the model received it, so the run can
@@ -2748,4 +2945,132 @@ it("keeps an observer technical failure outside the delegate catch and never exe
     }),
   ).rejects.toBe(failure);
   expect(ports.delegate.execute).not.toHaveBeenCalled();
+});
+
+// Audit 2026-11-06 finding 12: a handler that threw was answered `failed` with no trace.
+describe("a governed handler that throws", () => {
+  class HandlerBoom extends Error {}
+  const DISCARDED = "HANDLER_SECRET_CANARY";
+
+  function recorder(): { records: ServerDiagnosticRecord[]; sink: ServerDiagnosticSink } {
+    const records: ServerDiagnosticRecord[] = [];
+    return {
+      records,
+      sink: {
+        record: (record: ServerDiagnosticRecord): void => {
+          records.push(record);
+        },
+      },
+    };
+  }
+
+  function expectRecorded(records: readonly ServerDiagnosticRecord[]): void {
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: "tool-call_throw",
+      operation: "coding-runtime.tool-bridge",
+      source: "coding-tool-facade.handler",
+      errorClass: "HandlerBoom",
+      message: "tool-facade-failed",
+    });
+    expect(JSON.stringify(records)).not.toContain(DISCARDED);
+  }
+
+  it("records a plain action failure under the call's correlation and still answers failed", async () => {
+    const { records, sink } = recorder();
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.reject(new HandlerBoom(DISCARDED)));
+    const subject = createCodingToolFacade(ports, { diagnostics: sink });
+
+    await expect(
+      subject.execute({
+        body: JSON.stringify({
+          action: "read",
+          relativePath: "src/example.ts",
+          actionId: "tool:call_throw",
+          idempotencyKey: "idempotency-throw",
+        }),
+        capability,
+      }),
+    ).resolves.toMatchObject({ status: "failed" });
+    expectRecorded(records);
+  });
+
+  // Audit 2026-11-06 (#4271): a handler that threw because its caller went away was recorded as a
+  // failure and answered failed; a real failure that raced the abort must still be recorded.
+  async function abortedRead(
+    thrown: (reason: Error) => Error,
+  ): Promise<{ readonly status: unknown; readonly records: ServerDiagnosticRecord[] }> {
+    const { records, sink } = recorder();
+    const ports = facade();
+    const controller = new AbortController();
+    ports.delegate.execute = vi.fn(() => {
+      controller.abort();
+      // An abort without a reason carries the platform's AbortError, an Error.
+      return Promise.reject(thrown(controller.signal.reason as Error));
+    });
+    const result = await createCodingToolFacade(ports, { diagnostics: sink }).execute({
+      body: JSON.stringify({
+        action: "read",
+        relativePath: "src/example.ts",
+        actionId: "tool:call_throw",
+        idempotencyKey: "idempotency-throw",
+      }),
+      capability,
+      signal: controller.signal,
+    });
+    return { status: result.status, records };
+  }
+
+  it("answers cancelled, and records no failure, when the handler threw its caller's abort", async () => {
+    const own = await abortedRead((reason) => reason);
+    expect(own).toEqual({ status: "cancelled", records: [] });
+    const named = await abortedRead(() => new DOMException("aborted", "AbortError"));
+    expect(named).toEqual({ status: "cancelled", records: [] });
+  });
+
+  it("records a real failure that raced its caller's abort, and answers cancelled", async () => {
+    const raced = await abortedRead(() => new HandlerBoom(DISCARDED));
+    expect(raced.status).toBe("cancelled");
+    expectRecorded(raced.records);
+  });
+
+  it("records a claimed edit failure and still answers failed", async () => {
+    const { records, sink } = recorder();
+    const ports = facade();
+    ports.authority.admit = vi.fn((): ReturnType<CodingToolAuthorityPort["admit"]> => ({
+      ok: true as const,
+      mutationGuard: { check: (): true => true },
+      binding: {
+        runId: "run-1",
+        envelopeDigest: "e".repeat(64),
+        workspaceId: "workspace-1",
+        workspaceRootDigest: "f".repeat(64),
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      },
+    }));
+    ports.delegate.execute = vi.fn(() => Promise.reject(new HandlerBoom(DISCARDED)));
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const subject = createCodingToolFacade(ports, {
+      invocationRegistry: registry,
+      requireInvocationRegistryForEdits: true,
+      diagnostics: sink,
+    });
+    try {
+      await expect(
+        subject.execute({
+          body: JSON.stringify({
+            action: "edit",
+            changeset,
+            actionId: "tool:call_throw",
+            idempotencyKey: "idempotency-throw",
+          }),
+          capability,
+        }),
+      ).resolves.toMatchObject({ status: "failed" });
+      expectRecorded(records);
+    } finally {
+      registry.dispose();
+    }
+  });
 });

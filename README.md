@@ -65,7 +65,7 @@ The desktop packages include the Node.js runtime and launch Keiko without a sepa
 | macOS (Apple Silicon) | `keiko-macos-arm64.zip`                                  |
 | macOS (Intel)         | `keiko-macos-x64.zip`                                    |
 | Windows x64           | `keiko-windows-x64-setup.exe` or `keiko-windows-x64.zip` |
-| Linux x64             | `keiko-linux-x64.zip`                                    |
+| Linux x64 (community) | `keiko-linux-x64.zip`                                    |
 
 Keiko is an open-source project and does not yet buy Apple and Microsoft code-signing certificates, so macOS and Windows ask once before the first launch: on macOS **System Settings → Privacy & Security → Open Anyway**, on Windows SmartScreen **More info → Run anyway**. Every release states this plainly. Keiko then opens at `http://127.0.0.1:1983`.
 
@@ -85,20 +85,34 @@ npm install @oscharko-dev/keiko
 npx keiko start
 ```
 
-A global installation (`npm install -g`) is not supported yet: npm leaves Keiko's runtime
-dependencies out of it, so `keiko start` fails (see Honest limits).
+Or install globally, then start Keiko from any folder:
 
-Connected folders do not need Git metadata or a `package.json`. Run `npx keiko init` only if you want to add optional commands to an existing Node.js project. `npx keiko start` and `npx keiko restart`, including the generated `keiko:start` project script, open an authenticated browser session at `http://127.0.0.1:1983` by default. Use `--no-open` for a headless start. `npx keiko stop` shuts it down, and `npx keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. On macOS, npm selects the optional coding-runtime package for Apple Silicon or Intel, and Keiko verifies its contents before use. A missing or unsupported runtime is reported as unavailable; installing Keiko does not bypass platform checks.
+```bash
+npm install -g @oscharko-dev/keiko
+keiko start
+```
+
+Connected folders do not need Git metadata or a `package.json`. Run `npx keiko init` only if you want to add optional commands to an existing Node.js project. `npx keiko start` and `npx keiko restart`, including the generated `keiko:start` project script, open an authenticated browser session at `http://127.0.0.1:1983` by default. Use `--no-open` for a headless start. `npx keiko stop` shuts it down, and `npx keiko start --port <n>` picks another port. Requires Node.js `>=26.13.1 <27`; the desktop packages bring their own runtime. On macOS, npm selects the optional coding-runtime package for Apple Silicon or Intel, and Keiko verifies its contents before use. A missing or unsupported runtime is reported as unavailable; installing Keiko does not bypass platform checks.
 
 ## Honest limits
 
-- `npm install -g @oscharko-dev/keiko` installs Keiko without its third-party runtime dependencies, and `keiko start` then fails at startup. Install it into a project folder instead, as shown above, or use the desktop packages ([#3582](https://github.com/oscharko-dev/Keiko/issues/3582)).
+- The Linux package is a community tier. It keeps what it does today, but new features that depend on the operating system are built and qualified for macOS and Windows first and may not reach Linux ([ADR-0183](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0183-linux-desktop-community-tier.md)).
 - Updating from before 1.2.0 requires manual review of custom support scripts: legacy inclusion flags, filename-based `--out` arguments and sidecar bundles are replaced by the canonical private report workflow. See the [support guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/observability/support-workspace.md).
-- Windows Chat, Files and manual Editor use are separate from Coding execution. The Windows gateway-filter work remains a development implementation and does not enable the Coding runtime; see the [qualification status](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/windows-gateway-runtime-progress.md).
+- Windows Coding requires a verified platform runtime and the matching gateway service. The development checkout has passed real read, edit and verification journeys, but the Windows npm runtime is not yet published and the complete installed Node 26 customer path remains under qualification. Chat, Files and manual Editor use are separate; see the [qualification status](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/opencode-windows-qualification.md).
 - Model weights and inference servers are not bundled. Connect a compatible local model server, including a separately installed Gemma server, through Keiko's gateway configuration, directly or through a proxy such as LiteLLM. This release does not install MLX or certify every model and context-window configuration.
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `npx keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `npx keiko start --port <n>` sets the Port to bind (default: 1983).
+
+## What's new in 1.5.0
+
+- **More complete Jira workflows.** Jira Pods support project planning and collaboration, readable structure templates, governed batch drafts and reports. Sub-task checks resolve Jira's localized parent field, and delayed Chat responses preserve the access mode you selected.
+- **Memory follows your decisions.** Clear requests to remember or forget act immediately. Keiko learns routine private facts from new conversations, replaces corrected facts and maintains a standing profile; older messages are not automatically enrolled for retrospective learning.
+- **More reliable document and conversation work.** Document parsers preserve requirement inventories, managed MCP retrieval can ground Jira drafts, and Chat keeps context across longer conversations and restarts.
+- **Updated coding runtime.** The Coding Workbench uses OpenCode 2.2.5, with fixes for build tools, corporate certificates and reopening Coding History tasks. Platform availability still depends on the installed, verified native runtime.
+- **Node 26 LTS.** npm installations require Node.js 26.13.1 or newer in the 26.x line and npm 11.20.0 or newer in the 11.x line. Desktop packages include their own runtime.
+
+This runtime transition requires a manual update review. Upgrade a host Node installation before installing 1.5.0 through npm. Back up local state and retain its private keys before replacing the application. UI, Memory Vault and Knowledge databases migrate automatically; restoring an older application requires the corresponding pre-update state backup. The existing updater-bootstrap requirement for 1.2.6 and earlier still applies.
 
 ## What's new in 1.4.0
 
@@ -225,7 +239,7 @@ See the [private Chat skills guide](https://github.com/oscharko-dev/Keiko/blob/d
 
 - **More relevant source evidence.** Connected-folder questions retain named files and relevant implementation bodies more reliably within the existing read, token and time budgets. Physical source ranges and the evidence actually sent to the model stay aligned.
 - **Reliable startup and edits.** Configured gateways and selected models survive normal project startup, readiness refreshes automatically, and governed file edits preserve ordinary text exactly. Coding completion requires fresh verification after the final edit.
-- **Workbench progress and recovery.** Compatible self-hosted models stream answers and reasoning, with bounded repair of empty answers and visible recovery from temporary gateway outages. New runs default to 2,000,000 prompt tokens and 120 minutes; operators can lower these through `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` and `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`.
+- **Workbench progress and recovery.** Compatible self-hosted models stream answers and reasoning, with bounded repair of empty answers and visible recovery from temporary gateway outages. New runs default to 120 minutes; operators can lower this through `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`. (The prompt-token allowance of that release was later removed: Keiko does not cap prompt tokens.)
 
 The original long-context Gemma question still fails complete answer and validated-citation qualification even when the relevant implementation is present in the model's evidence. This release improves source selection and reliability; it does not establish complete Gemma qualification or standalone OpenCode parity. Existing Windows Coding and manual-update limitations above remain in force.
 

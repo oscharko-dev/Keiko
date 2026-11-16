@@ -2,6 +2,7 @@ import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-act
 import { ApiError } from "./api";
 import { newClientCorrelationId } from "./bff-correlation";
 import { reportGatewayProfileRefresh, reportClientDiagnostic } from "./client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "./coding-workbench-interaction";
 import { bffRequestErrorKind } from "./http";
 import { requestCodingAppSessionReinspection } from "./coding-app-session-client";
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject } from "react";
@@ -20,6 +21,7 @@ import type {
 import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
+  type CodingWorkbenchModelCheck,
   prepareCodingWorkbenchCodexSubscriptionSetup,
 } from "./coding-workbench-provider-api";
 import {
@@ -59,7 +61,7 @@ type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
 type SourceRefresh = (
   catalogAlreadyCurrent?: boolean,
   parentCorrelationId?: string,
-  checkModel?: boolean,
+  checkModel?: CodingWorkbenchModelCheck,
 ) => Promise<void>;
 
 interface RefreshSequences {
@@ -82,6 +84,8 @@ export interface RuntimeResources {
 
 export interface RuntimeMutationActions {
   readonly start: (taskIntent: string, options: CodingWorkbenchStartOptions) => Promise<void>;
+  /** Gives up a start that has no run yet; the server then creates none (#4271). */
+  readonly cancelStart: () => void;
   readonly decideApproval: (decision: CodingWorkbenchRuntimeApprovalDecision) => Promise<void>;
   readonly stop: () => Promise<void>;
   readonly takeover: () => Promise<void>;
@@ -93,7 +97,9 @@ export interface RuntimeMutationActions {
     taskIntent: string,
     inputs?: CodingWorkbenchFollowUpInputs,
   ) => Promise<void>;
+  /** Undo the run's newest turn or restore an undo (B3, S04). */
   readonly revert: (action: CodingWorkbenchRuntimeRevertAction) => Promise<void>;
+  /** Withdraw a message waiting for the running turn, or change a queued one to Send now (S07). */
   readonly inboxAction: (
     action: CodingWorkbenchRuntimeInboxAction,
     itemId: string,
@@ -175,7 +181,7 @@ async function refreshManagedGatewaySource(
   dispatch: RuntimeDispatch,
   scheduleReread: (sequence: number) => void,
   catalogAlreadyCurrent: boolean,
-  model: { readonly id: string | null; readonly check: boolean },
+  model: { readonly id: string | null; readonly check: CodingWorkbenchModelCheck },
   parentCorrelationId?: string,
 ): Promise<void> {
   const correlationId = newClientCorrelationId();
@@ -271,7 +277,7 @@ function useSourceRefresh(
     async (
       catalogAlreadyCurrent = false,
       parentCorrelationId?: string,
-      checkModel = false,
+      checkModel: CodingWorkbenchModelCheck = false,
     ): Promise<void> => {
       const sequence = (sequenceRef.current += 1);
       const preference = stateRef.current.runtimePreference;
@@ -392,7 +398,11 @@ function useRunRefresh(
       do {
         followUp.current = false;
         runSequence.current += 1;
-        await readRun(runSequence.current, runSequence, dispatch);
+        await /* NOSONAR typescript:S9382 -- coalesced re-reads run one after another by design. */ readRun(
+          runSequence.current,
+          runSequence,
+          dispatch,
+        );
       } while (followUp.current);
     })();
     runRefresh.current = pending;
@@ -470,7 +480,7 @@ function isServerConflict(error: unknown): boolean {
   );
 }
 
-/** One enqueued mutation. Its controller is aborted, with the preemption reason, only by Stop. */
+/** One enqueued mutation. Its controller is aborted with the preemption reason by Stop or by a cancelled start. */
 interface PendingMutation {
   readonly kind: CodingWorkbenchMutationKind;
   readonly controller: AbortController;
@@ -529,7 +539,10 @@ async function failMutation(
   const failure = codingWorkbenchRuntimeApiError(error);
   dispatch({ kind: "mutation-failed", error: failure });
   if (failure.code === RUN_NOT_FOUND_CODE) requestCodingAppSessionReinspection();
-  if (isServerConflict(error)) await untilPreempted(refreshRun(), signal);
+  // A request that hit its deadline has an unknown outcome, and a start whose run already exists
+  // keeps going on the server: only a re-read shows it (#4271).
+  if (isServerConflict(error) || failure.code === RUNTIME_REQUEST_TIMEOUT_CODE)
+    await untilPreempted(refreshRun(), signal);
 }
 
 // A control that hit its own deadline is already recorded by the API layer with its call kind and
@@ -574,11 +587,70 @@ type EnqueueMutation = (
   preempting?: boolean,
 ) => Promise<void>;
 
-function useRuntimeMutationQueue(input: RuntimeMutationQueueInput): EnqueueMutation {
+interface RuntimeMutationQueue {
+  readonly enqueueMutation: EnqueueMutation;
+  readonly cancelStart: () => void;
+}
+
+/**
+ * The later reads of a cancelled start, after the immediate one. That read travels on another
+ * connection and can reach the server before the start's ended request does, while the server is
+ * still past its last check and about to create the run (#4271 audit). Two bounded reads find it; a
+ * run already shown ends them, and closing the Workbench clears them.
+ */
+export const CANCELLED_START_REREAD_DELAYS_MS: readonly number[] = [1_000, 4_000];
+
+type ScheduleReread = (reread: () => void, delayMs: number) => void;
+
+// Ending the start's request is what tells the server to create no run. The request may have lost
+// that race, so the window re-reads: a run that already exists appears with its own Stop.
+function cancelPendingStart(
+  { stateRef, refreshRun, dispatch }: RuntimeMutationQueueInput,
+  pending: ReadonlySet<PendingMutation>,
+  schedule: ScheduleReread,
+): void {
+  const starts = [...pending].filter((entry) => entry.kind === "start");
+  if (starts.length === 0) return;
+  for (const entry of starts) entry.controller.abort(new CodingWorkbenchPreemptedError());
+  dispatch({ kind: "mutation-complete" });
+  reportCodingWorkbenchInteraction({ interaction: "start-cancelled" });
+  void refreshRun();
+  const reread = (): void => {
+    if (runBoundTarget(stateRef.current) === null) void refreshRun();
+  };
+  for (const delayMs of CANCELLED_START_REREAD_DELAYS_MS) schedule(reread, delayMs);
+}
+
+function useScheduledRereads(): ScheduleReread {
+  const [timers] = useState(() => new Set<ReturnType<typeof setTimeout>>());
+  useEffect(
+    () => (): void => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    },
+    [timers],
+  );
+  return useCallback(
+    (reread, delayMs): void => {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        reread();
+      }, delayMs);
+      timers.add(timer);
+    },
+    [timers],
+  );
+}
+
+function useRuntimeMutationQueue(input: RuntimeMutationQueueInput): RuntimeMutationQueue {
   const { stateRef, refreshRun, dispatch } = input;
   const mutationTail = useRef<Promise<void>>(Promise.resolve());
   const [pending] = useState(() => new Set<PendingMutation>());
-  return useCallback(
+  const schedule = useScheduledRereads();
+  const cancelStart = useCallback((): void => {
+    cancelPendingStart({ stateRef, refreshRun, dispatch }, pending, schedule);
+  }, [dispatch, pending, refreshRun, schedule, stateRef]);
+  const enqueueMutation = useCallback<EnqueueMutation>(
     (kind, prepare, preempting = false): Promise<void> => {
       const entry: PendingMutation = { kind, controller: new AbortController() };
       if (preempting) preemptForStop(pending);
@@ -596,12 +668,13 @@ function useRuntimeMutationQueue(input: RuntimeMutationQueueInput): EnqueueMutat
     },
     [dispatch, pending, refreshRun, stateRef],
   );
+  return { enqueueMutation, cancelStart };
 }
 
 export function useCodingWorkbenchRuntimeMutations(
   input: RuntimeMutationQueueInput,
 ): RuntimeMutationActions {
-  const enqueueMutation = useRuntimeMutationQueue(input);
+  const { enqueueMutation, cancelStart } = useRuntimeMutationQueue(input);
   const start = useCallback(
     (taskIntent: string, options: CodingWorkbenchStartOptions): Promise<void> =>
       enqueueMutation("start", (current) => createStartMutation(taskIntent, current, options)),
@@ -674,6 +747,7 @@ export function useCodingWorkbenchRuntimeMutations(
   );
   return {
     start,
+    cancelStart,
     decideApproval,
     stop,
     takeover,

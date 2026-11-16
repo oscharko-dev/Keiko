@@ -51,7 +51,7 @@ const PLUGIN_BEGIN = "<!-- plugin-inventory:begin -->";
 const PLUGIN_END = "<!-- plugin-inventory:end -->";
 /** The epic #3897 child issues that can own an original surface. */
 const OWNER_ISSUES: ReadonlySet<number> = new Set([
-  3898, 3899, 3900, 3901, 3902, 3903, 3904, 3905, 3906, 3907, 3908,
+  3898, 3899, 3900, 3901, 3902, 3903, 3904, 3905, 3906, 3907, 3908, 4271,
 ]);
 
 function readLocal(name: string): string {
@@ -65,6 +65,11 @@ function inventory(version: string): ReturnType<typeof parseOpenCodeServiceInven
 }
 
 const CURRENT = inventory(OPENCODE_PINNED_VERSION);
+/**
+ * The producer the current pin replaced (#4359): kept as a committed inventory record so the
+ * upgrade's additions stay checked. It is no longer an approved runtime and has no pin.
+ */
+const PREVIOUS_PIN_VERSION = "2.1.4";
 const CLI_COMMANDS = CURRENT.cliCommands ?? [];
 const CONFIGURATION_PATHS = CURRENT.configurationPaths ?? [];
 const PLUGINS = CURRENT.plugins ?? [];
@@ -88,11 +93,11 @@ function matrixRows(document: string): ReadonlySet<string> {
   return new Set([...document.matchAll(/^\| ([TSC]\d{2}) \|/gmu)].map((match) => match[1] ?? ""));
 }
 
-describe("OpenCode 2.1.4 producer inventory fixture", () => {
+describe(`OpenCode ${OPENCODE_PINNED_VERSION} producer inventory fixture`, () => {
   // Producer facts of the pinned version: an upgrade changes them together with the fixture.
   it("is the inventory of the pinned version and has not been truncated", () => {
     expect(CURRENT.version).toBe(OPENCODE_PINNED_VERSION);
-    expect(CURRENT.operations).toHaveLength(149);
+    expect(CURRENT.operations).toHaveLength(169);
     expect(CLI_COMMANDS).toHaveLength(41);
   });
 
@@ -105,7 +110,7 @@ describe("OpenCode 2.1.4 producer inventory fixture", () => {
   });
 });
 
-describe("OpenCode 2.1.4 service dispositions fail closed", () => {
+describe(`OpenCode ${OPENCODE_PINNED_VERSION} service dispositions fail closed`, () => {
   it("give every operation of the producer a disposition", () => {
     const undisposed = CURRENT.operations.filter(
       (operation) => openCodeServiceDisposition(operation) === undefined,
@@ -206,7 +211,7 @@ describe("OpenCode 2.1.4 service dispositions fail closed", () => {
   });
 });
 
-describe("OpenCode 2.1.4 CLI dispositions fail closed", () => {
+describe(`OpenCode ${OPENCODE_PINNED_VERSION} CLI dispositions fail closed`, () => {
   it("give every leaf command a disposition and name no other", () => {
     const names = OPENCODE_CLI_DISPOSITIONS.map((entry) => entry.name);
     expect(duplicates(names)).toEqual([]);
@@ -352,12 +357,27 @@ describe("OpenCode upgrade compatibility diff", () => {
   });
 
   it("requires a disposition for every operation an upgrade adds", () => {
-    const diff = diffOpenCodeServiceOperations(PREVIOUS.operations, NEXT.operations);
+    const { operations } = inventory(PREVIOUS_PIN_VERSION);
+    const diff = diffOpenCodeServiceOperations(operations, CURRENT.operations);
     const added: ReadonlySet<string> = new Set(diff.added);
-    const missing = NEXT.operations
+    expect(added.size).toBeGreaterThan(0);
+    const missing = CURRENT.operations
       .filter((operation) => added.has(operation.operationId))
       .filter((operation) => openCodeServiceDisposition(operation) === undefined);
     expect(missing).toEqual([]);
+  });
+
+  it("lets an upgrade remove or move no operation Keiko admits", () => {
+    const { operations } = inventory(PREVIOUS_PIN_VERSION);
+    const admitted: ReadonlySet<string> = new Set(OPENCODE_V2_APPROVED_ENDPOINTS);
+    const before = operations.filter((operation) => admitted.has(endpoint(operation)));
+    const now: ReadonlySet<string> = new Set(
+      CURRENT.operations.map((operation) => endpoint(operation)),
+    );
+    expect(before.length).toBeGreaterThan(0);
+    expect(before.map((operation) => endpoint(operation)).filter((name) => !now.has(name))).toEqual(
+      [],
+    );
   });
 });
 
@@ -521,8 +541,9 @@ function declaredSettings(value: unknown, declared: ReadonlySet<string>, prefix 
 
 /** Every setting the native profile composes, at its widest: images, Full access and both MCP kinds. */
 function composedNativeSettings(): readonly string[] {
-  // #3903 AC3: a remote server with a validated issuer, with the operator's client and scope.
-  const oauthServer: McpServerDefinition = {
+  // #3903 AC3: a remote server with a validated issuer, with the operator's client and scope. Not
+  // named after OAuth: CodeQL reads such identifiers as passwords (see opencodeNativeMcp.test.ts).
+  const authorizedServer: McpServerDefinition = {
     ...REMOTE_SERVER,
     name: "issues",
     transport: {
@@ -542,9 +563,10 @@ function composedNativeSettings(): readonly string[] {
     },
   };
   const mcp = openCodeNativeMcpAdmission({
-    servers: [LOCAL_SERVER, REMOTE_SERVER, oauthServer, credentialedServer],
+    servers: [LOCAL_SERVER, REMOTE_SERVER, authorizedServer, credentialedServer],
     mode: "autonomous-delivery",
     home: "/state/home",
+    platform: "linux",
     relays: new Map([
       [
         "wiki",
@@ -583,9 +605,9 @@ function configurationNames(kind: OpenCodeConfigurationDisposition["kind"]): rea
     .sort();
 }
 
-describe("OpenCode 2.1.4 configuration dispositions fail closed", () => {
+describe(`OpenCode ${OPENCODE_PINNED_VERSION} configuration dispositions fail closed`, () => {
   it("hold the complete, ordered setting inventory of the pinned version", () => {
-    expect(CONFIGURATION_PATHS).toHaveLength(232);
+    expect(CONFIGURATION_PATHS).toHaveLength(248);
     expect(duplicates(CONFIGURATION_PATHS)).toEqual([]);
     expect(CONFIGURATION_PATHS).toEqual([...CONFIGURATION_PATHS].sort());
   });
@@ -727,20 +749,21 @@ describe("OpenCode configuration upgrade diff", () => {
 
   it("names the 33 settings 2.1.4 added to 2.0.10 and that none was removed", () => {
     const previous = inventory("2.0.10").configurationPaths ?? [];
-    const diff = diffOpenCodeConfigurationPaths(previous, CONFIGURATION_PATHS);
+    const next = inventory("2.1.4").configurationPaths ?? [];
+    const diff = diffOpenCodeConfigurationPaths(previous, next);
     expect(previous).toHaveLength(199);
     expect(diff.added).toEqual(ADDED_BY_2_1_4);
     expect(diff.removed).toEqual([]);
-    expect(diffOpenCodeConfigurationPaths(CONFIGURATION_PATHS, previous).removed).toEqual(
-      ADDED_BY_2_1_4,
-    );
+    expect(diffOpenCodeConfigurationPaths(next, previous).removed).toEqual(ADDED_BY_2_1_4);
   });
 
   it("requires a disposition for every setting an upgrade adds", () => {
-    const missing = ADDED_BY_2_1_4.filter(
-      (path) => openCodeConfigurationDisposition(path) === undefined,
+    const previous = inventory(PREVIOUS_PIN_VERSION).configurationPaths ?? [];
+    const { added } = diffOpenCodeConfigurationPaths(previous, CONFIGURATION_PATHS);
+    expect(added.length).toBeGreaterThan(0);
+    expect(added.filter((path) => openCodeConfigurationDisposition(path) === undefined)).toEqual(
+      [],
     );
-    expect(missing).toEqual([]);
   });
 });
 
@@ -818,9 +841,9 @@ function pluginNames(kind: OpenCodePluginDisposition["kind"]): readonly string[]
     .sort();
 }
 
-describe("OpenCode 2.1.4 plugin dispositions fail closed", () => {
+describe(`OpenCode ${OPENCODE_PINNED_VERSION} plugin dispositions fail closed`, () => {
   it("hold every built-in plugin of the pinned version, ordered", () => {
-    expect(PLUGINS).toHaveLength(90);
+    expect(PLUGINS).toHaveLength(92);
     expect(duplicates(PLUGINS)).toEqual([]);
     expect(PLUGINS).toEqual([...PLUGINS].sort());
   });

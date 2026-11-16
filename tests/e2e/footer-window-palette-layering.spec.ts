@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -25,9 +26,9 @@ async function seedFilesWindow(
   writeFileSync(join(fixtureRoot, "README.md"), "# Keiko overlay fixture\n", "utf8");
 
   await page.addInitScript(
-    ({ root, geometry }) => {
+    ({ argument: { root, geometry }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "issue-1426-files",
@@ -39,9 +40,9 @@ async function seedFilesWindow(
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { root: fixtureRoot, geometry },
+    await workspaceStorageArgs(page, { root: fixtureRoot, geometry }),
   );
 }
 
@@ -300,9 +301,12 @@ for (const mode of [
       page,
     }) => {
       await page.setViewportSize({ width: mode.width, height: mode.height });
-      await page.addInitScript((locale): void => {
-        localStorage.setItem("keiko.locale", locale);
-      }, mode.locale);
+      await page.addInitScript(
+        ({ argument: locale }): void => {
+          localStorage.setItem("keiko.locale", locale);
+        },
+        await workspaceStorageArgs(page, mode.locale),
+      );
       const inventory = await holdBrowserInventory(page, failed);
       let authorityMutations = 0;
       page.on("request", (request) => {

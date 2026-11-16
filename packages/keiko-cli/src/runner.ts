@@ -18,6 +18,7 @@ import { runUninstallCli } from "./uninstall.js";
 import { runRepairCli } from "./repair.js";
 import { runUpdateCli } from "./update.js";
 import { emitDoctorWarning, runDoctorCli } from "./doctor.js";
+import { runGatewayServiceCli } from "./gateway-service.js";
 import { runAuditCli } from "./audit.js";
 import { runSupportCli } from "./support.js";
 import { installLayoutOverrideEvidence } from "./install-layout.js";
@@ -62,6 +63,8 @@ Usage:
                            Export a private support report, or validate and analyze one.
   keiko repair [OPTIONS]   Repair a broken local install (offline remediation pass).
   keiko uninstall [OPTIONS] Remove Keiko's runtime artifacts (state, shortcuts, scripts).
+  keiko gateway-service <status|install|repair|uninstall>
+                           Manage the Windows runtime gateway service.
   keiko update <status|check|apply> Inspect or run governed updates (UI remains primary).
   keiko portable <setup|launch|status|resolve-root>
                            Manage archive-first portable setup and launch.
@@ -335,6 +338,19 @@ function runUninstallCommand(
   );
 }
 
+function runGatewayServiceCommand(
+  rest: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+): number | Promise<number> {
+  const help = rest[0] === "--help" || rest[0] === "-h";
+  if (help) return runGatewayServiceCli(rest, io, env);
+  return runWithDeferredSecurityLog(
+    (securityLogSinkFactory) => runGatewayServiceCli(rest, io, env, { securityLogSinkFactory }),
+    installLayoutOverrideEvidence(env)?.correlationId,
+  );
+}
+
 function runAuditCommand(
   rest: readonly string[],
   io: CliIo,
@@ -396,6 +412,7 @@ const COMMAND_HANDLERS: ReadonlyMap<string, CommandHandler> = new Map<string, Co
   ["support", runSupportCommand],
   ["repair", runRepairCommand],
   ["uninstall", runUninstallCommand],
+  ["gateway-service", runGatewayServiceCommand],
   ["update", runUpdateCli],
   [
     "start",

@@ -14,6 +14,13 @@ const CHAT_DRAFT_OPERATION = defineActivityLogOperation({
   emitter: "chat-draft-log.logChatDraftOperation",
   fields: {
     action: { type: "string", dataClass: "closed-enum", required: true, values: ["read", "save"] },
+    // Absent on lines written before the Coding Workbench draft existed; those are chat drafts.
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["chat", "coding-workbench"],
+    },
     phase: {
       type: "string",
       dataClass: "closed-enum",
@@ -32,17 +39,20 @@ const CHAT_DRAFT_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+export type PrivateDraftSurface = "chat" | "coding-workbench";
+
 export function logChatDraftOperation(
   correlationId: string | undefined,
   action: "read" | "save",
   phase: "started" | "completed" | "rejected" | "failed",
   httpStatus: number,
+  surface: PrivateDraftSurface = "chat",
 ): void {
   processServerLogSink().write(
     activityLogEvent(
       CHAT_DRAFT_OPERATION,
       { correlationId: correlationIdOrUnknown(correlationId) },
-      { action, phase, httpStatus, completeness: "complete", loss: "none" },
+      { action, surface, phase, httpStatus, completeness: "complete", loss: "none" },
     ),
   );
 }

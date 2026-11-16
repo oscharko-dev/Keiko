@@ -22,9 +22,11 @@ export default defineConfig({
   timeout: 90_000,
   expect: { timeout: 20_000 },
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
+  // The server's Activity Log of the run is copied beside the traces (#4355).
+  globalTeardown: join(root, "tests/e2e/support/jira-chat-4081-teardown.ts"),
   use: {
     baseURL: `http://127.0.0.1:${String(port)}`,
-    trace: "off",
+    trace: "retain-on-failure",
     video: "off",
     screenshot: "off",
   },
@@ -42,7 +44,11 @@ export default defineConfig({
       url: `http://127.0.0.1:${String(port)}`,
       reuseExistingServer: false,
       timeout: 240_000,
-      env: { KEIKO_E2E_JIRA_STATE: directory, KEIKO_E2E_UI_PORT: String(port) },
+      env: {
+        KEIKO_OS_KEYCHAIN: "off",
+        KEIKO_E2E_JIRA_STATE: directory,
+        KEIKO_E2E_UI_PORT: String(port),
+      },
     },
     {
       cwd: root,

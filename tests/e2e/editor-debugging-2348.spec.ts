@@ -837,6 +837,7 @@ async function startFromEditor(page: Page, pane: Locator): Promise<DebugSessionP
   activeSessionId = sessionId;
   const projection = await page.request.get(
     `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
+    { maxRetries: 1 },
   );
   expect(projection.status(), await projection.text()).toBe(200);
   const session = debugSession(await projection.json());
@@ -851,6 +852,7 @@ async function startFromDebugPanel(page: Page, panel: Locator): Promise<DebugSes
   activeSessionId = sessionId;
   const projection = await page.request.get(
     `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
+    { maxRetries: 1 },
   );
   expect(projection.status(), await projection.text()).toBe(200);
   return debugSession(await projection.json());

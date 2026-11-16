@@ -1,7 +1,11 @@
 import {
   JIRA_REPORT_INCOMPLETE_REASONS,
+  JIRA_REPORT_FAILURE_REASONS,
   JIRA_REPORT_STATUSES,
+  JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS,
+  type JiraReportEstimateUnavailableReason,
   type JiraReportIncompleteReason,
+  type JiraReportFailureReason,
   type JiraReportStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
@@ -12,6 +16,11 @@ export interface JiraReportView {
   readonly issuesRead: number;
   readonly issuesTotal: number | undefined;
   readonly reason: JiraReportIncompleteReason | undefined;
+  readonly failure?: JiraReportFailureReason;
+  readonly estimate:
+    | { readonly available: true; readonly fieldId: string; readonly fieldName: string }
+    | { readonly available: false; readonly reason: JiraReportEstimateUnavailableReason }
+    | undefined;
   readonly figures:
     | {
         readonly total: number;
@@ -22,6 +31,11 @@ export interface JiraReportView {
         readonly issuesWithDeviations: number;
         readonly issuesJudged: number;
         readonly deviationCount: number;
+        /** The issues a template judged, and those no template covers, with their issue types. */
+        readonly issuesChecked: number;
+        readonly issuesWithoutTemplate: number;
+        readonly typesWithoutTemplate: readonly string[];
+        readonly requiredFieldRules: "applied" | "partial" | "unavailable" | "not-requested";
         readonly uncoveredEpics: number;
         readonly orphans: number;
         /** `unobserved`: the scope shows no container, so the epic count is no established zero. */
@@ -54,6 +68,29 @@ function counts<Key extends string>(
     : undefined;
 }
 type Figures = NonNullable<JiraReportView["figures"]>;
+const REQUIRED_FIELD_STATES = ["applied", "partial", "unavailable", "not-requested"] as const;
+/** What a template covers, as the result states it; a result that predates it states none uncovered. */
+function templateCoverageOf(
+  compliance: Record<string, unknown> | undefined,
+): Pick<
+  Figures,
+  "issuesChecked" | "issuesWithoutTemplate" | "typesWithoutTemplate" | "requiredFieldRules"
+> {
+  const byType = compliance?.withoutTemplateByType;
+  return {
+    issuesChecked: count(compliance?.issuesChecked) ?? 0,
+    issuesWithoutTemplate: count(compliance?.issuesWithoutTemplate) ?? 0,
+    typesWithoutTemplate: Array.isArray(byType)
+      ? byType.flatMap((item: unknown) => {
+          const name = record(item)?.typeName;
+          return typeof name === "string" ? [name] : [];
+        })
+      : [],
+    requiredFieldRules:
+      REQUIRED_FIELD_STATES.find((item) => item === compliance?.requiredFieldRules) ??
+      "not-requested",
+  };
+}
 function coverageOf(
   report: Record<string, unknown>,
 ): Pick<Figures, "uncoveredEpics" | "orphans" | "containerRoles"> | undefined {
@@ -68,7 +105,8 @@ function coverageOf(
 function figuresOf(report: Record<string, unknown>): JiraReportView["figures"] {
   const project = record(record(report.progress)?.project);
   const status = counts(project, ["total", "new", "indeterminate", "done"] as const);
-  const audit = counts(record(report.compliance), [
+  const compliance = record(report.compliance);
+  const audit = counts(compliance, [
     "issuesWithDeviations",
     "issuesJudged",
     "deviationCount",
@@ -78,9 +116,42 @@ function figuresOf(report: Record<string, unknown>): JiraReportView["figures"] {
   const percent = project?.donePercent;
   if (status === undefined || audit === undefined || coverage === undefined) return undefined;
   if (inferred === undefined || typeof percent !== "number") return undefined;
-  return { ...status, ...audit, ...coverage, donePercent: percent, inferredParentFields: inferred };
+  return {
+    ...status,
+    ...audit,
+    ...templateCoverageOf(compliance),
+    ...coverage,
+    donePercent: percent,
+    inferredParentFields: inferred,
+  };
 }
 
+function reportCompleteness(
+  report: Record<string, unknown> | undefined,
+): Pick<JiraReportView, "reason" | "failure"> {
+  const completeness = record(report?.completeness);
+  const reason = JIRA_REPORT_INCOMPLETE_REASONS.find((item) => item === completeness?.reason);
+  const failure = JIRA_REPORT_FAILURE_REASONS.find((item) => item === completeness?.failure);
+  return { reason, ...(failure === undefined ? {} : { failure }) };
+}
+
+function estimateOf(report: Record<string, unknown> | undefined): JiraReportView["estimate"] {
+  const scope = record(report?.scope);
+  if (scope === undefined) return undefined;
+  if (scope.estimateUnit === "unavailable") {
+    const reason = JIRA_REPORT_ESTIMATE_UNAVAILABLE_REASONS.find(
+      (item) => item === scope.estimateUnavailableReason,
+    );
+    return { available: false, reason: reason ?? "metadata-unavailable" };
+  }
+  if (typeof scope.estimateFieldId !== "string") return undefined;
+  return {
+    available: true,
+    fieldId: scope.estimateFieldId,
+    fieldName:
+      typeof scope.estimateFieldName === "string" ? scope.estimateFieldName : scope.estimateFieldId,
+  };
+}
 /** Undefined for anything that is not a well-formed `jira.report` result. */
 export function jiraReportView(data: unknown): JiraReportView | undefined {
   const result = record(data);
@@ -95,15 +166,14 @@ export function jiraReportView(data: unknown): JiraReportView | undefined {
   )
     return undefined;
   const report = record(result.report);
-  const reason = JIRA_REPORT_INCOMPLETE_REASONS.find(
-    (item) => item === record(report?.completeness)?.reason,
-  );
+  const estimate = estimateOf(report);
   return {
     reportId: result.reportId,
     status,
     issuesRead: read,
     issuesTotal: count(progress?.issuesTotal),
-    reason,
+    ...reportCompleteness(report),
+    estimate,
     figures: report === undefined ? undefined : figuresOf(report),
   };
 }

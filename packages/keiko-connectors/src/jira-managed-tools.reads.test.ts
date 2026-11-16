@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  JIRA_DESCRIPTION_INPUT_SCHEMA,
   JIRA_MANAGED_READ_TOOLS,
+  JIRA_MUTATION_DETAIL_LIMITS,
   type JiraManagedReadToolName,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
@@ -14,9 +16,24 @@ import type {
   ManagedMcpToolDeclaration,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { createJiraManagedProvider, type JiraManagedConnection } from "./jira-managed-tools.js";
+import {
+  JIRA_READ_GENERIC_INPUT_RULE,
+  JIRA_READ_INPUT_RULES,
+  createJiraManagedProvider,
+  type JiraManagedConnection,
+} from "./jira-managed-tools.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { field, response } from "../../../tests/support/jira-managed-remote.js";
+import { asRecord } from "./atlassian-sync-classify.js";
+
+function descriptionSchemaOf(result: ManagedMcpToolResult): object {
+  const items = result.data.items;
+  if (!Array.isArray(items)) throw new TypeError("Missing edit metadata");
+  const description = items.map(asRecord).find((item) => item?.id === "description");
+  const schema = asRecord(description?.inputSchema);
+  if (schema === undefined) throw new TypeError("Missing description schema");
+  return schema;
+}
 
 // The connector owns handler selection, argument validation and remote projection; the server
 // owns the public schemas. These private declarations exercise every advertised read handler.
@@ -176,6 +193,16 @@ const READS: readonly {
 ];
 
 describe("source managed Jira read dispatch", () => {
+  it("encodes hostile JQL as one exact query value without injecting URL parameters or fragments", async () => {
+    const f = fixture({ startAt: 0, maxResults: 25, total: 0, issues: [] });
+    const jql = 'summary ~ "A &maxResults=100000#fragment? / 雪"';
+    expect((await f.run("jira.search", { jql })).isError).toBeUndefined();
+    const url = new URL(f.http.mock.calls[0]?.[0].url ?? "");
+    expect(url.searchParams.get("jql")).toBe(jql);
+    expect(url.searchParams.getAll("maxResults")).toEqual(["25"]);
+    expect(url.hash).toBe("");
+    expect(url.pathname).toBe("/context/rest/api/2/search");
+  });
   it.each(READS)(
     "executes $name through the context-bound DC v2 HTTP port",
     async ({ name, args, body, path }) => {
@@ -225,10 +252,30 @@ describe("source managed Jira read dispatch", () => {
     const f = fixture(PROJECTS);
     if (mode === "denied") f.beforeEffect.mockReturnValue(false);
     else f.controller.abort();
-    expect((await f.run("jira.projects")).isError).toBe(true);
+    expect(await f.run("jira.projects")).toEqual({
+      data: { outcome: "failed", reason: mode === "denied" ? "effect-denied" : "cancelled" },
+      isError: true,
+    });
     expect(f.http).not.toHaveBeenCalled();
   });
 });
+
+it.each([200, 401])(
+  "retains ordinary Jira issue HTTP%s after late cancellation",
+  async (status) => {
+    const f = fixture(ISSUE);
+    f.http.mockImplementation(() => {
+      f.controller.abort();
+      return Promise.resolve(
+        response(status === 200 ? ISSUE : { errorMessages: ["Native refusal"] }, status),
+      );
+    });
+    const result = await f.run("jira.issue", { issueKey: "SYN-1" });
+    expect(result.data.outcome).toBe(status === 200 ? "succeeded" : "failed");
+    if (status === 401) expect(result.data.reason).toBe("auth-failed");
+    expect(f.http).toHaveBeenCalledTimes(1);
+  },
+);
 
 it.each([
   ["jira.projects", { extra: true }],
@@ -254,14 +301,45 @@ it.each([
   "refuses invalid %s input %j before connection resolution",
   async (name, args) => {
     const f = fixture({});
+    // The refusal still happens before any connection or request; it now also says the rule (#4357).
     expect(await f.run(name, args)).toEqual({
-      data: { outcome: "failed", reason: "invalid-input" },
+      data: {
+        outcome: "failed",
+        reason: "invalid-input",
+        messages: [expect.stringMatching(/^Pass /u)],
+      },
       isError: true,
     });
     expect(f.connection).not.toHaveBeenCalled();
     expect(f.http).not.toHaveBeenCalled();
   },
 );
+
+// The exact rule text one case says (#4357): a pin that still fails when the sentence changes by accident.
+it("says the exact rule when jira.assignable-users is called without a scope", async () => {
+  const f = fixture({});
+  expect(await f.run("jira.assignable-users", { query: "ann" })).toEqual({
+    data: {
+      outcome: "failed",
+      reason: "invalid-input",
+      messages: [
+        "Pass exactly one of projectKey or issueKey, optionally with query. Do not pass both.",
+      ],
+    },
+    isError: true,
+  });
+});
+
+it("keeps every pre-dispatch rule inside the 200-byte message bound", () => {
+  for (const [tool, rule] of [
+    ...Object.entries(JIRA_READ_INPUT_RULES),
+    ["generic", JIRA_READ_GENERIC_INPUT_RULE],
+  ]) {
+    expect(Buffer.byteLength(JSON.stringify(rule)), tool).toBeLessThanOrEqual(
+      JIRA_MUTATION_DETAIL_LIMITS.messageBytes,
+    );
+  }
+});
 
 it.each([
   [401, "auth-failed"],
@@ -433,7 +511,7 @@ it("points create fields at jira.draft for several issues, and only create field
   });
   expect(created.data.draft).toEqual({
     tool: "jira.draft",
-    use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves it once, while each jira.create or jira.edit asks again. Write a description as text, each section starting h2. Title; never JSON or HTML.",
+    use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves it once, while each jira.create or jira.edit asks again. Use the description field's inputSchema; native text uses h2. Title for section headings.",
   });
   const types = await fixture({
     ...REMOTE_PAGE,
@@ -447,6 +525,89 @@ it("points create fields at jira.draft for several issues, and only create field
   expect(refused.data).toMatchObject({ outcome: "failed" });
   expect(refused.data).not.toHaveProperty("draft");
 });
+it("shows the reporter Jira assigns on create as defaulted, so the model does not invent one", async () => {
+  // Customer test 2026-11-10: Jira's create metadata marked the reporter required without a
+  // default; the model set reporter "admin" on five epics and Jira refused each as unknown user.
+  const values = [field("summary", "string", true), field("reporter", "user", true)];
+  const created = await fixture({ ...REMOTE_PAGE, total: values.length, values }).run(
+    "jira.create-fields",
+    { projectKey: "SYN", issueTypeId: "1" },
+  );
+  expect(created.data.items).toEqual([
+    expect.objectContaining({ id: "summary", required: true, hasDefaultValue: false }),
+    expect.objectContaining({ id: "reporter", required: true, hasDefaultValue: true }),
+  ]);
+});
+it("advertises explicit Markdown provenance only for Data Center description input", async () => {
+  const values = [field("description", "string"), field("environment", "string")];
+  const created = await fixture({ ...REMOTE_PAGE, total: values.length, values }).run(
+    "jira.create-fields",
+    {
+      projectKey: "SYN",
+      issueTypeId: "1",
+    },
+  );
+  expect(created.data).toMatchObject({ outcome: "succeeded" });
+  const inputSchema: unknown = expect.anything();
+  expect(created.data.items).toEqual([
+    expect.objectContaining({
+      id: "description",
+      nativeFormat: "jira-wiki",
+      markdownSerialization: "supported-markdown",
+      inputSchema: {
+        description: JIRA_DESCRIPTION_INPUT_SCHEMA.description,
+        oneOf: [
+          { type: "string", maxLength: 32768 },
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["format", "text"],
+            properties: {
+              format: { type: "string", enum: ["markdown"] },
+              text: { type: "string", maxLength: 32768 },
+            },
+          },
+        ],
+      },
+    }),
+    expect.not.objectContaining({ inputSchema }),
+  ]);
+  const cloud = await fixture({ ...REMOTE_PAGE, values }, "cloud").run("jira.create-fields", {
+    projectKey: "SYN",
+    issueTypeId: "1",
+  });
+  expect(cloud.data).toMatchObject({ outcome: "failed", reason: "unsupported-deployment" });
+});
+
+it("offers the same isolated Markdown input contract when editing a description", async () => {
+  const f = fixture({
+    fields: {
+      description: field("description", "string"),
+      environment: field("environment", "string"),
+    },
+  });
+  const first = await f.run("jira.edit-fields", { issueKey: "SYN-1" });
+  const firstItems = first.data.items;
+  if (!Array.isArray(firstItems)) throw new TypeError("Missing first edit metadata items");
+  expect(firstItems).toHaveLength(2);
+  expect(firstItems[0]).toMatchObject({
+    id: "description",
+    nativeFormat: "jira-wiki",
+    markdownSerialization: "supported-markdown",
+  });
+  expect(firstItems[1]).not.toHaveProperty("inputSchema");
+  const originalSchema = structuredClone(descriptionSchemaOf(first));
+  expect(originalSchema).toHaveProperty("oneOf.0", { type: "string", maxLength: 32768 });
+  Reflect.set(descriptionSchemaOf(first), "oneOf", []);
+  const second = await f.run("jira.edit-fields", { issueKey: "SYN-1" });
+  const secondItems = second.data.items;
+  if (!Array.isArray(secondItems)) throw new TypeError("Missing second edit metadata items");
+  expect(secondItems).toHaveLength(2);
+  expect(secondItems[0]).toMatchObject({ id: "description" });
+  expect(secondItems[1]).not.toHaveProperty("inputSchema");
+  expect(descriptionSchemaOf(second)).toEqual(originalSchema);
+});
+
 it("retains transition metadata availability and safely omits malformed targets", async () => {
   const f = fixture({
     transitions: [
@@ -571,6 +732,92 @@ describe("jira.search with requested fields (#4176)", () => {
       },
     ]);
   });
+  it("does not repeat a requested field the result row already carries, and keeps one it does not", async () => {
+    const f = fixture(
+      search([hit("SYN-1", { customfield_1: "Selected", priority: { id: "3", name: "High" } })]),
+    );
+    const result = await f.run("jira.search", {
+      jql: "project=SYN",
+      fields: ["status", "labels", "assignee", "created", "customfield_1", "reporter"],
+    });
+    const [row] = result.data.items as readonly Record<string, unknown>[];
+    expect(row).toMatchObject({
+      status: { name: "Open" },
+      labels: ["synthetic"],
+      assigneeEmpty: true,
+      created: "2026-10-28",
+    });
+    expect(row?.fieldValues).toMatchObject([
+      { id: "customfield_1", state: "value", text: "Selected" },
+      { id: "reporter" },
+    ]);
+    expect(row?.fieldValues as readonly unknown[]).toHaveLength(2);
+  });
+  it("omits fieldValues when every requested field is already on the row, but keeps an absent one visible", async () => {
+    const f = fixture(search([hit("SYN-1", {})]));
+    const carried = await f.run("jira.search", {
+      jql: "project=SYN",
+      fields: ["status", "labels"],
+    });
+    expect(JSON.stringify(carried.data.items)).not.toContain("fieldValues");
+    const absent = await f.run("jira.search", { jql: "project=SYN", fields: ["priority"] });
+    expect(absent.data.items).toMatchObject([
+      { fieldValues: [{ id: "priority", state: "unavailable" }] },
+    ]);
+  });
+  describe("steering a search that asks for bodies across more issues than one page", () => {
+    const many = (total: number, issues: readonly unknown[]): unknown => ({
+      ...(search(issues) as Record<string, unknown>),
+      total,
+    });
+    it("carries one closed guidance sentence built from counts only", async () => {
+      const f = fixture(
+        many(240, [hit("SYN-1", { customfield_1: "Private body text", description: "Secret" })]),
+      );
+      const result = await f.run("jira.search", {
+        jql: 'project = "Private Project Name"',
+        fields: ["description", "customfield_1"],
+      });
+      const guidance = result.data.guidance;
+      expect(typeof guidance).toBe("string");
+      expect(guidance).toContain("240");
+      expect(guidance).toContain("jira.report");
+      expect(guidance).toContain("jira.issue");
+      expect(guidance).not.toMatch(/Private|Secret|SYN-1/u);
+    });
+    it("never claims more than the row returned: a value cut for size is marked unavailable and the sentence says so", async () => {
+      const f = fixture(many(240, [hit("SYN-1", { customfield_1: "x".repeat(20000) })]));
+      const result = await f.run("jira.search", {
+        jql: "project=SYN",
+        fields: ["customfield_1", "customfield_2"],
+      });
+      const [row] = result.data.items as readonly Record<string, unknown>[];
+      expect(row?.fieldValues).toMatchObject([
+        { id: "customfield_1", state: "unavailable" },
+        { id: "customfield_2", state: "unavailable" },
+      ]);
+      const guidance = result.data.guidance as string;
+      expect(guidance).toMatch(/marked unavailable/u);
+      expect(guidance).toMatch(/cut/u);
+      expect(guidance).not.toMatch(/returned the requested field values/u);
+    });
+    it.each([
+      [
+        "every issue fits one page",
+        many(1, [hit("SYN-1", { customfield_1: "x" })]),
+        ["customfield_1"],
+      ],
+      ["no field is requested", many(240, [hit("SYN-1", {})]), undefined],
+      ["only row fields are requested", many(240, [hit("SYN-1", {})]), ["status", "labels"]],
+    ])("adds no guidance when %s", async (_name, body, fields) => {
+      const f = fixture(body);
+      const result = await f.run("jira.search", {
+        jql: "project=SYN",
+        ...(fields === undefined ? {} : { fields }),
+      });
+      expect(result.data).not.toHaveProperty("guidance");
+    });
+  });
   it("keeps the summary-only shape when no fields are requested", async () => {
     const f = fixture(search([hit("SYN-1", {})]));
     const result = await f.run("jira.search", { jql: "project=SYN" });
@@ -649,3 +896,63 @@ it("refuses a description whose Unicode bytes exceed the catalog string limit", 
     data: { outcome: "failed", reason: "bounds-exceeded" },
   });
 });
+
+// A description or comment over the old 32768-character cap is a bounds question the catalog byte
+// limit already answers; it was reported as a malformed payload and the whole read was lost (#4235).
+it("reads a description longer than 32768 characters that still fits the catalog limit", async () => {
+  const description = "x".repeat(40_000);
+  const f = fixture({ ...ISSUE, fields: { ...ISSUE.fields, description } });
+  const result = await f.run("jira.issue", { issueKey: "SYN-1" });
+  expect(result.isError).toBeUndefined();
+  expect(result.data.items).toEqual([expect.objectContaining({ key: "SYN-1", description })]);
+});
+it("names a description beyond the catalog byte limit a bounds failure, not a malformed payload", async () => {
+  const f = fixture({ ...ISSUE, fields: { ...ISSUE.fields, description: "x".repeat(70_000) } });
+  expect(await f.run("jira.issue", { issueKey: "SYN-1" })).toEqual({
+    isError: true,
+    data: { outcome: "failed", reason: "bounds-exceeded" },
+  });
+});
+it("names a comment beyond the catalog byte limit a bounds failure, not a malformed payload", async () => {
+  const comments = [COMMENT, { ...COMMENT, id: "11", body: "x".repeat(70_000) }];
+  const f = fixture({ startAt: 0, maxResults: 2, total: 2, comments });
+  const result = await f.run("jira.comments", { issueKey: "SYN-1", maxResults: 2 });
+  expect(result.isError).toBe(true);
+  expect(result.data).toMatchObject({ outcome: "failed", reason: "bounds-exceeded" });
+});
+
+it.each([
+  ["jira.components", { projectIdOrKey: "SYN" }, "component", "20000"],
+  ["jira.component", { componentId: "20000" }, "component", "20000"],
+  ["jira.versions", { projectIdOrKey: "SYN" }, "version", "30000"],
+  ["jira.version", { versionId: "30000" }, "version", "30000"],
+] as const)(
+  "routes advertised %s through the fixed REST v2 metadata read",
+  async (name, args, entity, id) => {
+    const f = fixture(undefined);
+    f.http.mockImplementation((request) => {
+      const path = new URL(request.url).pathname;
+      const item = { id, project: "SYN", projectId: 10000, name: "Metadata" };
+      const body = path.endsWith(`/${entity}s`)
+        ? [item]
+        : path.includes("/project/")
+          ? { id: "10000", key: "SYN" }
+          : item;
+      return Promise.resolve(response(body));
+    });
+    const tool = f.provider.tools().find((entry) => entry.name === name);
+    expect(tool).toBeDefined();
+    const result = await tool?.execute(args, {
+      invocationId: "metadata-read",
+      correlationId: "metadata-read",
+      signal: f.controller.signal,
+      beforeEffect: f.beforeEffect,
+    });
+    expect(result?.data.outcome).toBe("succeeded");
+    expect(f.http).toHaveBeenCalled();
+    for (const [request] of f.http.mock.calls) {
+      expect(request.method).toBe("GET");
+      expect(new URL(request.url).pathname.startsWith("/context/rest/api/2/")).toBe(true);
+    }
+  },
+);

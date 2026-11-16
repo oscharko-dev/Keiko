@@ -48,3 +48,63 @@ describe("unified diff source observations", () => {
     expect(observe).toHaveBeenCalledExactlyOnceWith([]);
   });
 });
+
+describe("a format-patch signature after the last hunk", () => {
+  const HUNK = "--- a/x.txt\n+++ b/x.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n";
+
+  it.each(["-- \n2.40.0\n", "--\n2.40.0\n"])(
+    "ends the patch at %j, not at an extra line",
+    (tail) => {
+      const parsed = parseUnifiedDiff(`${HUNK}${tail}`);
+      expect(parsed.files).toHaveLength(1);
+      expect(parsed.files[0]).toMatchObject({ path: "x.txt", addedLines: 1, removedLines: 1 });
+    },
+  );
+
+  it("still rejects a genuine extra removed line once the hunk budget is spent", () => {
+    expect(() => parseUnifiedDiff(`${HUNK}-extra\n`)).toThrow(PatchParseError);
+  });
+});
+
+// #4271 property testing: each of these shapes used to parse without an error and silently lose a
+// change, so a patch tool applied the rest of the patch as if it were complete.
+describe("malformed patches that would lose a change", () => {
+  it("refuses hunks of a file whose +++ line is missing instead of applying the other files", () => {
+    const diff = [
+      "--- a/x",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      "--- a/y",
+      "+++ b/y",
+      "@@ -1 +1 @@",
+      "-c",
+      "+d",
+      "",
+    ].join("\n");
+    expect(() => parseUnifiedDiff(diff)).toThrow(/file header has no \+\+\+ line/u);
+  });
+
+  it("still ignores a lone --- line that no hunk follows", () => {
+    expect(
+      parseUnifiedDiff("--- notes\nprose\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-c\n+d\n").files,
+    ).toHaveLength(1);
+  });
+
+  it("refuses a change line after the +++ header that no hunk header opened", () => {
+    expect(() => parseUnifiedDiff("--- a/x\n+++ b/x\n-a\n+b\n")).toThrow(
+      /body line outside a hunk/u,
+    );
+  });
+
+  it("still ignores prose after a finished hunk, such as a Markdown list", () => {
+    const diff = "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n\n- a note\n+ another\n";
+    expect(parseUnifiedDiff(diff).files[0]?.hunks[0]?.lines).toEqual(["-a", "+b"]);
+  });
+
+  it("refuses a hunk header number a JavaScript number cannot hold exactly", () => {
+    expect(() =>
+      parseUnifiedDiff("--- a/x\n+++ b/x\n@@ -99999999999999999999 +1 @@\n-a\n+b\n"),
+    ).toThrow(/hunk header number out of range/u);
+  });
+});

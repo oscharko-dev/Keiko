@@ -15,6 +15,7 @@ import {
 } from "../testing/chat-skills-lab/verify-tests.mjs";
 import { SUMMARY_SYSTEM_PROMPT } from "../../packages/keiko-server/dist/chat-compaction-model-summary.js";
 import { PROMPT_COMPACTION_SYSTEM } from "../../packages/keiko-server/dist/chat-prompt-compaction.js";
+import { EXPECTED_NODE_BASELINE } from "../check-runtime-toolchain.mjs";
 
 const scope = {
   question: "Review the boundary",
@@ -160,6 +161,12 @@ describe("private Chat skill qualification observations", () => {
     expect(extractGeneratedTest(code)).toBe("export const value = 1;\n");
     expect(() => extractGeneratedTest(code + code)).toThrow("one-complete-test-file-required");
     const args = containerArguments("/synthetic/input", "/synthetic/deps", "synthetic-container");
+    expect(args.find((argument) => argument.startsWith("node:"))).toMatch(
+      new RegExp(
+        `^node:${EXPECTED_NODE_BASELINE.replaceAll(".", "\\.")}-bookworm@sha256:[a-f0-9]{64}$`,
+        "u",
+      ),
+    );
     expect(args).toEqual(
       expect.arrayContaining([
         "--network",

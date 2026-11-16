@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createOpenCodeNativeMessageIdMinter } from "./opencodeNativeMessageId.js";
 
 /**
- * The layout is the one the pinned 2.1.4 executable mints for its own messages (observed on the real
+ * The layout is the one the pinned executable mints for its own messages (observed on the real
  * binary: `msg_16b08469d001DaT0xxHG2PAKe6`, where `16b08469d001` is the low 48 bits of
  * `milliseconds * 0x1000 + 1`), so a minted id sorts among the session's own ids. The real producer
  * accepts a minted id in `opencodeNativePromptInputs.real.test.ts`.

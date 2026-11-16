@@ -15,7 +15,13 @@ import type {
 import { Buffer } from "node:buffer";
 import { jiraReportCommentText } from "./jira-report-export.js";
 import { jiraReportFigures } from "./jira-report-figures.js";
-import type { JiraReport, JiraReportProgress } from "./jira-report-types.js";
+import type {
+  JiraReport,
+  JiraReportProgress,
+  JiraReportRequirementCoverage,
+  JiraReportScope,
+  JiraReportTypeProgress,
+} from "./jira-report-types.js";
 import type { JiraReportSession } from "./jira-report-session.js";
 
 /** Entries of each list in the default summary; the sections page through the rest. */
@@ -32,7 +38,7 @@ function progress(value: JiraReportProgress): CatalogJsonObject {
     done: value.done,
     noCategory: value.noCategory,
     donePercent: value.donePercent,
-    estimate: { ...value.estimate },
+    estimate: value.estimate === null ? null : { ...value.estimate },
   };
 }
 /**
@@ -53,15 +59,29 @@ function listed(
     ...(items.length > shown.length ? { section, nextStartAt: offset + shown.length } : {}),
   };
 }
+/**
+ * A summary list of a table that `report.figures` states in full (#4356). The figures are the model's
+ * one copy of such a table: a second list cut at `max` beside them reads as "the list" and was
+ * quoted in place of them (15 of 37 epics). The list is therefore whole, when the whole table fits
+ * under `max`, or no list at all: the size and where the section pages it, from `offset`.
+ */
+function listedOnce(
+  items: readonly CatalogJsonValue[],
+  section: JiraReportSection,
+  max = JIRA_REPORT_SUMMARY_LIST_MAX,
+  offset = 0,
+): CatalogJsonObject {
+  return items.length <= max
+    ? listed(items, section, max, offset)
+    : { total: items.length, section, nextStartAt: offset };
+}
 /** A list bounded for a tool result, with the true size beside it; the export carries every entry. */
 function capped<Item extends CatalogJsonValue>(
   items: readonly Item[],
 ): { readonly items: readonly Item[]; readonly total: number } {
   return { items: items.slice(0, JIRA_REPORT_RESULT_LIST_MAX), total: items.length };
 }
-function typeItems(
-  types: readonly { readonly typeName: string; readonly total: number; readonly done: number }[],
-): CatalogJsonObject {
+function typeItems(types: readonly JiraReportTypeProgress[]): CatalogJsonObject {
   const { items, total } = capped(types.map((type) => ({ ...type })));
   return { items, total };
 }
@@ -99,36 +119,102 @@ function deviationItems(report: JiraReport): readonly CatalogJsonObject[] {
     details: capped(item.details).items,
   }));
 }
+function coveredItem(item: JiraReportRequirementCoverage): CatalogJsonObject {
+  return {
+    id: item.id,
+    covered: true,
+    coveredBy: capped(item.coveredBy).items,
+    coveredByTotal: item.coveredBy.length,
+    coveringTotal: item.coveringTotal,
+    coveringDone: item.coveringDone,
+    itemCount: item.itemCount,
+    done: item.done,
+    byType: typeItems(item.byType),
+  };
+}
+function uncoveredItem(
+  id: string,
+  names: Readonly<Record<string, string>>,
+  derived: boolean,
+): CatalogJsonObject {
+  return {
+    id,
+    covered: false,
+    ...(derived ? { derived: true } : {}),
+    ...(Object.hasOwn(names, id) ? { label: names[id] ?? "" } : {}),
+  };
+}
+/** The headline's covered, then its uncovered ones, then the derived units beside it, likewise. */
 function requirementItems(report: JiraReport): readonly CatalogJsonObject[] {
   const requirements = report.coverage.requirements;
   if (requirements === undefined) return [];
+  const { derived } = requirements;
   return [
-    ...requirements.items.map((item) => ({
-      id: item.id,
-      covered: true,
-      coveredBy: capped(item.coveredBy).items,
-      coveredByTotal: item.coveredBy.length,
-      coveringTotal: item.coveringTotal,
-      coveringDone: item.coveringDone,
-      itemCount: item.itemCount,
-      done: item.done,
-      byType: typeItems(item.byType),
-    })),
-    ...requirements.uncovered.map((id) => ({ id, covered: false })),
+    ...requirements.items.map(coveredItem),
+    ...requirements.uncovered.map((id) => uncoveredItem(id, requirements.uncoveredLabels, false)),
+    ...(derived === undefined
+      ? []
+      : [
+          ...derived.items.map((item) => ({
+            ...coveredItem(item),
+            derived: true,
+            ...(Object.hasOwn(derived.names, item.id)
+              ? { label: derived.names[item.id] ?? "" }
+              : {}),
+          })),
+          ...derived.uncovered.map((id) => uncoveredItem(id, derived.names, true)),
+        ]),
   ];
 }
 function requirementsSummary(report: JiraReport): CatalogJsonValue {
   const requirements = report.coverage.requirements;
   if (requirements === undefined) return null;
+  const { derived } = requirements;
+  const all = requirementItems(report);
+  const headline = requirements.items.length + requirements.uncovered.length;
   return {
     declared: requirements.declared,
     covered: requirements.covered,
     // The section pages the covered requirements first, then the uncovered ones.
-    uncovered: listed(requirements.uncovered, "requirements", undefined, requirements.items.length),
-    items: listed(requirementItems(report).slice(0, requirements.items.length), "requirements"),
+    uncovered: listedOnce(
+      requirements.uncovered,
+      "requirements",
+      undefined,
+      requirements.items.length,
+    ),
+    items: listed(all.slice(0, requirements.items.length), "requirements"),
+    ...(derived === undefined
+      ? {}
+      : {
+          derived: {
+            declared: derived.declared,
+            covered: derived.covered,
+            items: listed(
+              all.slice(headline, headline + derived.items.length),
+              "requirements",
+              undefined,
+              headline,
+            ),
+            uncovered: listedOnce(
+              all.slice(headline + derived.items.length),
+              "requirements",
+              undefined,
+              headline + derived.items.length,
+            ),
+          },
+        }),
   };
 }
 
+/** The scope as plain JSON: the nested estimate field references are copied, not shared. */
+function scopeView(scope: JiraReportScope): CatalogJsonObject {
+  const { estimateConfigured, estimateAlso, ...flat } = scope;
+  return {
+    ...flat,
+    ...(estimateConfigured === undefined ? {} : { estimateConfigured: { ...estimateConfigured } }),
+    ...(estimateAlso === undefined ? {} : { estimateAlso: { ...estimateAlso } }),
+  };
+}
 function completenessView(report: JiraReport): CatalogJsonObject {
   const { completeness } = report;
   return {
@@ -162,17 +248,17 @@ export function jiraReportSummary(report: JiraReport): CatalogJsonObject {
     digest: report.digest,
     generatedAt: report.generatedAt,
     figures: jiraReportFigures(report),
-    scope: { ...report.scope },
+    scope: scopeView(report.scope),
     completeness: completenessView(report),
     hierarchy: { ...report.hierarchy },
     progress: {
       project: progress(report.progress.project),
       byType: report.progress.byType.slice(0, SUMMARY_TYPE_MAX).map((type) => ({ ...type })),
-      byStatus: listed(statusItems(report), "statuses", JIRA_REPORT_SUMMARY_STATUS_MAX),
+      byStatus: listedOnce(statusItems(report), "statuses", JIRA_REPORT_SUMMARY_STATUS_MAX),
       unassigned: report.progress.unassigned,
       overdue: report.progress.overdue,
     },
-    epics: listed(epicItems(report), "epics"),
+    epics: listedOnce(epicItems(report), "epics"),
     compliance: {
       requiredFieldRules: compliance.requiredFieldRules,
       checker: compliance.checker,

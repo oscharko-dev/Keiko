@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -13,6 +14,7 @@ import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./support/evidence.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 import { assertWorkbenchTrustLayout } from "./support/coding-issue-commit-evidence.js";
+import { selectCodingIssueMode } from "./support/coding-issue-browser.js";
 import {
   prepareBoundIssueForRun,
   previewAndAcceptIssue,
@@ -77,18 +79,14 @@ async function openWorkbench(page: Page): Promise<void> {
   // inline script nodes remain forbidden, including the issue fixture's hostile markup.
   await page.addInitScript({ path: createRequire(import.meta.url).resolve("axe-core/axe.min.js") });
   await page.addInitScript(
-    ({ windowId }) => {
+    ({ argument: { windowId }, storageKeys }) => {
       localStorage.setItem("keiko.theme", "dark");
-      // #3625 review: a seeded `cfg.repositoryPath` no longer pre-selects the repository.
-      // `workspace-persistence.ts`'s `sanitizeCfgForPersistence` now strips any cfg value that
-      // `looksLikeLocalPath` (an absolute path never survives a save/load round trip, a
-      // deliberate hardening against leaking a local filesystem path through synced browser
-      // storage), so a window seeded with one gets read back with an empty `cfg` -- confirmed
-      // against this exact fixture before writing this comment. The repository is chosen through
-      // the combobox instead (`bindPlainWorkspace`), the same real affordance
-      // code-task-authority.spec.ts's `bindFixtureWorkspace` already uses.
+      // The window starts without a repository: it is chosen through the combobox
+      // (`bindPlainWorkspace`), the same real affordance code-task-authority.spec.ts's
+      // `bindFixtureWorkspace` already uses. (A seeded `cfg.repositoryPath` was dropped on load
+      // until #4271 because the persistence whitelist left it out; it now survives a reload.)
       localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: windowId,
@@ -104,9 +102,9 @@ async function openWorkbench(page: Page): Promise<void> {
           },
         ]),
       );
-      localStorage.removeItem("keiko.conns.v1");
+      localStorage.removeItem(storageKeys.connections);
     },
-    { windowId: WINDOW_ID },
+    await workspaceStorageArgs(page, { windowId: WINDOW_ID }),
   );
   const fragment = encodeCodingAppSessionPairingFragment(
     mintLauncherPairingAttestation({
@@ -533,15 +531,6 @@ async function captureIssueAlertModes(page: Page): Promise<void> {
   await applyMode(page, { name: "restored-dark", theme: "dark" });
 }
 
-async function enableFullAccess(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  const settings = page.getByRole("region", { name: /^Settings/u });
-  await settings.getByRole("button", { name: "Security", exact: true }).click();
-  await page.getByRole("radio", { name: /Full access/u }).click();
-  await expect(page.getByRole("radio", { name: /Full access/u })).toBeChecked();
-  await page.getByRole("button", { name: "Close Settings window", exact: true }).click();
-}
-
 async function assertInitialModelContext(): Promise<void> {
   await expect
     .poll(() => {
@@ -570,11 +559,11 @@ async function assertInitialModelContext(): Promise<void> {
  * actually have satisfied (binding a workspace starts no run). The current, real place this pause
  * happens is exactly where the server-side comment on `requireVerificationScriptTrust` names it: the
  * bound-issue run's own scripted `keiko_verification` step, refused WORKSPACE_TRUST_REQUIRED because
- * this fixture's repository is freshly bound and never granted (ADR-0147 D3). Waits for that real
- * pause, asserts the layout, then grants the repository so the SAME in-flight verification call
- * resumes and the run continues with no further interruption (the affordance's own documented
- * contract) -- called once the run's file edit has already landed, so only verification is left
- * pending.
+ * this fixture's repository is freshly bound and never granted in Supervised workspace (ADR-0147
+ * D3). Waits for that real pause, asserts the layout, then grants the repository so the SAME
+ * in-flight verification call resumes and the run continues with no further interruption (the
+ * affordance's own documented contract) -- called once the run's file edit has already landed,
+ * so only verification is left pending.
  */
 async function assertAndGrantWorkspaceScriptTrust(page: Page): Promise<void> {
   const notice = workbench(page).getByTestId("coding-workbench-trust-affordance");
@@ -678,15 +667,19 @@ test("#3385 @coding-issue-intake prompt-resolved issue: refusal, managed workspa
   await rejectedPrompt(page, taskPrompt("#42"), "auth-required");
   await setGrant(page, true);
 
-  await enableFullAccess(page);
+  // Full access admits its own package scripts under the validated envelope (ADR-0147 D3).
+  // This journey exercises the real human trust decision, so keep its run in Supervised workspace.
+  await selectCodingIssueMode(page, "supervised-coding");
   const resolved = await sendAndPreview(
     page,
     "Implement the accepted issue within its existing authority. #42",
   );
   expect(resolved.preview.comments).toHaveLength(8);
-  await expect(workbench(page)).toHaveAttribute("data-state", "running");
-  const running = await snapshot(page);
-  expect(running.runId).toBeDefined();
+  await expect(workbench(page)).toHaveAttribute("data-state", "paused", { timeout: 60_000 });
+  const activeRun = await snapshot(page);
+  expect(activeRun.runId).toBeDefined();
+  expect(activeRun.effectiveMode).toBe("supervised-coding");
+  expect(activeRun.pauseReason).toBe("workspace-script-trust");
   // The retired "Issue preview" region's own invariant was never "never show the title/body" --
   // a preview showing them was the whole point. It was "never render them as executable markup":
   // the run's own Activity/Run-details view intentionally renders this exact untrusted title and
@@ -713,6 +706,7 @@ test("#3385 @coding-issue-intake prompt-resolved issue: refusal, managed workspa
     .toBe(ISSUE_INTAKE_EDITED);
 
   await assertAndGrantWorkspaceScriptTrust(page);
+  await expect(workbench(page)).toHaveAttribute("data-state", "running");
 
   await page.reload();
   await expect(page.getByLabel("Task instructions")).toBeVisible();
@@ -722,7 +716,7 @@ test("#3385 @coding-issue-intake prompt-resolved issue: refusal, managed workspa
   // (codingRuntimeOrchestratorState.ts's public projection maps only `issueBinding`). So unlike
   // the retired flow's composer chip, no surface names the issue after a reload any more; what
   // must still hold is that the SAME run survived the reload, never duplicated.
-  expect((await snapshot(page)).runId).toBe(running.runId);
+  expect((await snapshot(page)).runId).toBe(activeRun.runId);
   const information = page.getByRole("button", { name: "Open Coding Workbench information" });
   await information.click();
   const dialog = page.getByRole("dialog", { name: "Coding Workbench information" });
@@ -738,7 +732,7 @@ test("#3385 @coding-issue-intake prompt-resolved issue: refusal, managed workspa
 
   await page.getByRole("button", { name: "Stop run", exact: true }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "cancelled");
-  expect((await snapshot(page)).runId).toBe(running.runId);
+  expect((await snapshot(page)).runId).toBe(activeRun.runId);
 
   recordJourneyProof(authRequiredCorrelationId);
 });

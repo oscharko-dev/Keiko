@@ -7,6 +7,7 @@ import type {
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
+import { reportCodingWorkbenchSummaryActivated } from "@/lib/coding-workbench-interaction";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -168,7 +169,9 @@ function ReadinessDetails({
   if (facts.length === 0) return null;
   return (
     <details className={styles.cmpRunStatusReadiness}>
-      <summary>{t("codingWorkbench.runStatus.readiness")}</summary>
+      <summary onClick={(event) => reportCodingWorkbenchSummaryActivated("readiness", event)}>
+        {t("codingWorkbench.runStatus.readiness")}
+      </summary>
       <p data-testid="coding-runtime-readiness">{facts}</p>
     </details>
   );

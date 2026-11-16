@@ -2,11 +2,33 @@ import { describe, expect, it } from "vitest";
 import {
   JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_MUTATION_LINKS_MAX,
+  JIRA_AVATAR_MUTATIONS,
+  JIRA_AVATAR_UPLOAD_MUTATIONS,
+  isJiraAvatarUploadOperation,
   sanitizeJiraMutationFailureDetail,
   sanitizeJiraMutationLinkAccount,
 } from "./jira-tool-execution.js";
 
 const ENCODER = new TextEncoder();
+
+describe("canonical avatar upload identities", () => {
+  it("binds file review to exactly the five fixed raw upload tools", () => {
+    expect([...JIRA_AVATAR_UPLOAD_MUTATIONS]).toEqual([
+      "jira.upload-temporary-avatar",
+      "jira.upload-issue-type-avatar",
+      "jira.upload-project-avatar",
+      "jira.upload-owned-avatar",
+      "jira.upload-user-avatar",
+    ]);
+    for (const name of JIRA_AVATAR_MUTATIONS)
+      expect(isJiraAvatarUploadOperation(name)).toBe(name.startsWith("jira.upload-"));
+    expect(isJiraAvatarUploadOperation("jira.upload-avatar-arbitrary")).toBe(false);
+    expect(Reflect.set(JIRA_AVATAR_UPLOAD_MUTATIONS, "0", "jira.upload-avatar-arbitrary")).toBe(
+      false,
+    );
+    expect(Reflect.set(JIRA_AVATAR_MUTATIONS, "0", "jira.upload-avatar-arbitrary")).toBe(false);
+  });
+});
 function encodedBytes(value: unknown): number {
   return ENCODER.encode(JSON.stringify(value)).length;
 }
@@ -15,6 +37,11 @@ function messageBytes(text: string): number {
 }
 
 describe("sanitizeJiraMutationFailureDetail byte bound (#4176)", () => {
+  it("keeps only the literal true acknowledgement of an unchanged state", () => {
+    expect(sanitizeJiraMutationFailureDetail({ unchanged: true })).toEqual({ unchanged: true });
+    for (const unchanged of [false, "true", 1, {}, null])
+      expect(sanitizeJiraMutationFailureDetail({ unchanged })).toBeUndefined();
+  });
   it.each([
     ["quotes", '"'.repeat(400)],
     ["backslashes", "\\".repeat(400)],
@@ -79,5 +106,26 @@ describe("sanitizeJiraMutationLinkAccount (#4176)", () => {
     ["a link that is not an object", { ...account, missing: ["SYN-2"] }],
   ])("refuses %s", (_name, value) => {
     expect(sanitizeJiraMutationLinkAccount(value)).toBeUndefined();
+  });
+});
+
+describe("sanitizeJiraMutationFailureDetail field name (#4357)", () => {
+  it("keeps a plain name and replaces a control character with a space", () => {
+    expect(
+      sanitizeJiraMutationFailureDetail({ fieldId: "resolution", fieldName: "Resolution" }),
+    ).toEqual({ fieldId: "resolution", fieldName: "Resolution" });
+    expect(
+      sanitizeJiraMutationFailureDetail({ fieldId: "resolution", fieldName: "Reso\u0007lution" }),
+    ).toEqual({ fieldId: "resolution", fieldName: "Reso lution" });
+  });
+  it("bounds a long name and drops an empty one", () => {
+    const bounded = sanitizeJiraMutationFailureDetail({
+      fieldId: "resolution",
+      fieldName: "N".repeat(400),
+    });
+    expect(new TextEncoder().encode(bounded?.fieldName ?? "").length).toBeLessThanOrEqual(200);
+    expect(sanitizeJiraMutationFailureDetail({ fieldId: "resolution", fieldName: "   " })).toEqual({
+      fieldId: "resolution",
+    });
   });
 });

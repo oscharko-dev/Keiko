@@ -68,13 +68,13 @@ const APPROVAL = {
   schemaVersion: "1",
   approvalId: "ap-1",
   connectorId: "conn-1",
-  provider: "jira",
-  actionType: "create-issue",
+  provider: "confluence",
+  actionType: "create-page",
   actionClass: "connector-write",
-  requiredScope: "issue-tracker.write",
+  requiredScope: "knowledge-base.write",
   risk: "high",
   reviewReason: "deterministic-risk-approval-required",
-  targetRef: "PROJ-1",
+  targetRef: "4711",
   correlationId: "corr-1",
   requestedAt: 0,
   expiresAt: 10_000,
@@ -97,7 +97,7 @@ const STUBS: readonly Stub[] = [
   { re: /\/action-approvals$/u, method: "GET", body: { approvals: [APPROVAL] } },
   {
     re: /\/approve$/u,
-    body: { disposition: "review-required", result: { status: "succeeded", targetRef: "PROJ-1" } },
+    body: { disposition: "review-required", result: { status: "succeeded", targetRef: "4711" } },
   },
   {
     re: /\/reject$/u,
@@ -171,9 +171,9 @@ test.describe("Atlassian connectors @smoke", () => {
 
     // Approval: a pending write action is approved and shows the typed result.
     const approval = page.getByTestId("acx-approval");
-    await expect(approval).toContainText("Create Jira issue");
+    await expect(approval).toContainText("Create Confluence page");
     await approval.getByRole("button", { name: "Approve" }).click();
-    await expect(page.getByTestId("acx-approval-result")).toContainText("Result: PROJ-1");
+    await expect(page.getByTestId("acx-approval-result")).toContainText("Result: 4711");
 
     assertNoPageErrors();
   });

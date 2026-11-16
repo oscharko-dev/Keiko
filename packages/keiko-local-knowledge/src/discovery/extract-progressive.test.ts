@@ -12,9 +12,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createCapsule } from "../capsule-lifecycle.js";
 import { addSourceToCapsule } from "../source-lifecycle.js";
 import { freshStore, sampleCapsuleInput } from "../_support.js";
+import type { PdfDocumentLike, PdfTextContentChunk } from "../parsers/pdf-parser.js";
 import {
   buildParserOptions,
   createDefaultParserRegistry,
+  createProgressivePdfExtractor,
   syntheticProgressiveExtractor,
   type ProgressiveExtractionOptions,
   type ProgressiveExtractionWindow,
@@ -24,7 +26,7 @@ import { readDocumentTextSpan } from "./persist.js";
 import type { KnowledgeStore } from "../store.js";
 import { extractDocument } from "./extract.js";
 import { folderScope, memoryFs } from "./test-support.js";
-import { documentIdFor } from "./types.js";
+import { documentIdFor, type ExtractionResult } from "./types.js";
 
 const ROOT = "/srv/docs";
 
@@ -511,5 +513,173 @@ describe("extractDocument — progressive cancellation", () => {
       .get({ c: capsuleId, d: String(documentId) }) as
       { phase: string; page_cursor: number; retry_count: number } | undefined;
     expect(checkpoint).toMatchObject({ phase: "extracted", page_cursor: 2, retry_count: 1 });
+  });
+});
+
+describe("extractDocument — a PDF resumed from its checkpoint", () => {
+  const FILE = "manual.synthetic";
+
+  function item(str: string, y: number): PdfTextContentChunk["items"][number] {
+    return { str, transform: [10, 0, 0, 10, 50, y], width: str.length * 5, height: 10 };
+  }
+
+  // The review's document: a header on pages 1 to 3 and 7, four body lines on every page.
+  function returningHeaderDoc(): PdfDocumentLike {
+    return {
+      numPages: 7,
+      getPage: (pageNumber: number) =>
+        Promise.resolve({
+          streamTextContent: () =>
+            new ReadableStream<PdfTextContentChunk>({
+              start(controller): void {
+                const body = [700, 685, 670, 655].map((y) =>
+                  item(`Page ${String(pageNumber)} line ${String(y)}`, y),
+                );
+                const shown = pageNumber <= 3 || pageNumber === 7;
+                controller.enqueue({
+                  items: [...(shown ? [item("Manual header", 780)] : []), ...body],
+                });
+                controller.close();
+              },
+            }),
+        }),
+    };
+  }
+
+  function pdfExtractor(): ProgressiveExtractor {
+    return {
+      ...createProgressivePdfExtractor({
+        loadDocument: () => Promise.resolve(returningHeaderDoc()),
+      }),
+      matches: (input) => input.extension === "synthetic",
+    };
+  }
+
+  // Ends the run once `windows` windows are persisted, as a stopped job does.
+  function interruptedAfter(windows: number, controller: AbortController): ProgressiveExtractor {
+    const inner = pdfExtractor();
+    return {
+      ...inner,
+      extractWindows: async function* (
+        sourceBytes,
+        options,
+      ): AsyncIterable<ProgressiveExtractionWindow> {
+        for await (const window of inner.extractWindows(sourceBytes, options)) {
+          yield window;
+          if (window.windowIndex === windows - 1) controller.abort();
+        }
+      },
+    };
+  }
+
+  function threePagesAtATime(): LargeDocumentResourcePolicy {
+    return { ...policy(), extractionWindowPages: 3 };
+  }
+
+  async function extractWith(
+    relativePath: string,
+    extractor: ProgressiveExtractor,
+    signal?: AbortSignal,
+  ): Promise<ExtractionResult> {
+    const content = syntheticDoc(2, 8);
+    return extractDocument(
+      {
+        fs: memoryFs(ROOT, [{ relativePath, content }]),
+        store,
+        parserRegistry: createDefaultParserRegistry(),
+        largeDocumentPolicy: threePagesAtATime(),
+        progressiveExtractors: [extractor],
+      },
+      {
+        capsuleId,
+        source,
+        file: { relativePath, sizeBytes: content.length },
+        ...(signal === undefined ? {} : { parserOptions: buildParserOptions({ signal }) }),
+      },
+    );
+  }
+
+  function idOf(relativePath: string): DocumentId {
+    return documentIdFor({ capsuleId, sourceId: source.id, relativePath });
+  }
+
+  function storedText(documentId: DocumentId): string {
+    const db = store._internal.db;
+    return (
+      readDocumentTextSpan(db, store._internal.contentCipher, capsuleId, documentId, 0, 100_000) ??
+      ""
+    );
+  }
+
+  function storedPages(documentId: DocumentId): unknown {
+    return store._internal.db
+      .prepare(
+        "SELECT page_number, character_start, character_end FROM pages " +
+          "WHERE capsule_id = :c AND document_id = :d ORDER BY page_number",
+      )
+      .all({ c: capsuleId, d: String(documentId) });
+  }
+
+  function checkpointRow(documentId: DocumentId): {
+    readonly page_cursor: number;
+    readonly object_cursor: number;
+    readonly extracted_text_bytes: number;
+    readonly retry_count: number;
+    readonly learned_furniture_json: string;
+  } {
+    return store._internal.db
+      .prepare(
+        "SELECT page_cursor, object_cursor, extracted_text_bytes, retry_count, " +
+          "learned_furniture_json FROM extraction_checkpoints " +
+          "WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: capsuleId, d: String(documentId) }) as never;
+  }
+
+  it("stores the same text and page spans as a continuous run", async () => {
+    await extractWith("continuous.synthetic", pdfExtractor());
+    const controller = new AbortController();
+    await extractWith(FILE, interruptedAfter(2, controller), controller.signal);
+    const resumed = await extractWith(FILE, pdfExtractor());
+
+    expect(resumed.outcome.kind).toBe("persisted");
+    const whole = idOf("continuous.synthetic");
+    const stopped = idOf(FILE);
+    expect(storedText(whole)).not.toContain("Manual header");
+    expect(storedText(stopped)).toBe(storedText(whole));
+    expect(storedPages(stopped)).toEqual(storedPages(whole));
+    const { retry_count: retries, ...state } = checkpointRow(stopped);
+    const { retry_count: noRetries, ...wholeState } = checkpointRow(whole);
+    expect(retries).toBe(1);
+    expect(noRetries).toBe(0);
+    expect(state).toEqual(wholeState);
+  });
+
+  it("keeps the checkpoint free of document text", async () => {
+    const controller = new AbortController();
+    await extractWith(FILE, interruptedAfter(1, controller), controller.signal);
+    const stored = checkpointRow(idOf(FILE)).learned_furniture_json;
+
+    expect(JSON.parse(stored)).not.toEqual([]);
+    expect(stored).not.toContain("Manual");
+  });
+
+  it("starts over when what it learned cannot be read", async () => {
+    await extractWith("continuous.synthetic", pdfExtractor());
+    const controller = new AbortController();
+    await extractWith(FILE, interruptedAfter(2, controller), controller.signal);
+    store._internal.db
+      .prepare(
+        "UPDATE extraction_checkpoints SET learned_furniture_json = '[1]' WHERE document_id = :d",
+      )
+      .run({ d: String(idOf(FILE)) });
+    const restarted = await extractWith(FILE, pdfExtractor());
+
+    expect(restarted.outcome.kind).toBe("persisted");
+    expect(restarted.diagnostics.map((diagnostic) => diagnostic.message).join(" ")).toContain(
+      "learned-state",
+    );
+    expect(checkpointRow(idOf(FILE)).retry_count).toBe(0);
+    expect(storedText(idOf(FILE))).toBe(storedText(idOf("continuous.synthetic")));
   });
 });

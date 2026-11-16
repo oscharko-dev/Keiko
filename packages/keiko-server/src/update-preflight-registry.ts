@@ -17,7 +17,7 @@ import type {
   UpdatePreflightReleaseSummary,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayEgressConfig } from "./deps.js";
+import { currentGatewayEgressConfig } from "./redaction-secrets.js";
 import {
   portableFetchFailureReason,
   type PortableFetchFailureReason,

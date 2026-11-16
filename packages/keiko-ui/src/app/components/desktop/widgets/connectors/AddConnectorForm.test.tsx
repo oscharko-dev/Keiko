@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AddConnectorForm, type AddConnectorClient } from "./AddConnectorForm";
 import { ApiError } from "@/lib/api";
 import type { AtlassianConnectorMetadata } from "@/lib/atlassian-connectors-api";
+import * as diagnostics from "@/lib/client-diagnostics";
 
 const TOKEN = "s3cr3t-token-xyz";
 
@@ -22,10 +23,36 @@ const METADATA: AtlassianConnectorMetadata = {
   createdAt: 1_700_000_000_000,
 };
 
+const CREATED_JIRA = {
+  schemaVersion: "1",
+  authRef: METADATA.authRef,
+  provider: "jira",
+  deployment: "data-center",
+  authScheme: "bearer-pat",
+  generation: 1,
+  displayName: "Team Jira",
+  baseUrl: "https://jira.example.invalid/context",
+  createdAt: 1000,
+  livePod: {
+    kind: "jira-live",
+    podId: "11111111-1111-4111-8111-111111111111",
+    authenticationGeneration: 1,
+    verificationRevision: 0,
+    verificationStatus: "unverified",
+    verificationInProgress: false,
+    capabilities: ["live-read", "live-write"],
+  },
+} as const satisfies AtlassianConnectorMetadata;
+const VERIFIED_JIRA = {
+  ...CREATED_JIRA,
+  livePod: { ...CREATED_JIRA.livePod, verificationRevision: 1, verificationStatus: "ok" },
+} as const satisfies AtlassianConnectorMetadata;
+
 function makeClient(overrides: Partial<AddConnectorClient> = {}): AddConnectorClient {
   return {
     createConnector: vi.fn(async () => METADATA),
     verifyConnector: vi.fn(async () => ({ authRef: METADATA.authRef, status: "ok" as const })),
+    listConnectors: vi.fn(async () => [METADATA]),
     ...overrides,
   };
 }
@@ -34,6 +61,12 @@ async function fillValid(user: ReturnType<typeof userEvent.setup>): Promise<void
   await user.type(screen.getByLabelText("Label"), "Docs");
   await user.type(screen.getByLabelText("Base URL"), "https://x.atlassian.net");
   await user.type(screen.getByLabelText("Account email"), "me@example.com");
+  await user.type(screen.getByLabelText("API token"), TOKEN);
+}
+
+async function fillJira(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.type(screen.getByLabelText("Label"), "Team Jira");
+  await user.type(screen.getByLabelText("Base URL"), CREATED_JIRA.baseUrl);
   await user.type(screen.getByLabelText("API token"), TOKEN);
 }
 
@@ -75,6 +108,8 @@ describe("AddConnectorForm — token field", () => {
     expect(createMock.mock.calls[0]?.[0].apiToken).toBe(TOKEN);
     // No other mocked call carries the token.
     const verifyMock = vi.mocked(client.verifyConnector);
+    expect(verifyMock).not.toHaveBeenCalled();
+    expect(client.listConnectors).not.toHaveBeenCalled();
     for (const call of verifyMock.mock.calls) {
       expect(JSON.stringify(call)).not.toContain(TOKEN);
     }
@@ -153,6 +188,7 @@ describe("Jira Live Pod creation", () => {
             complete = resolve;
           }),
       ),
+      listConnectors: vi.fn(async () => [VERIFIED_JIRA]),
     });
     const created = vi.fn();
     const close = vi.fn();
@@ -180,13 +216,128 @@ describe("Jira Live Pod creation", () => {
       apiToken: TOKEN,
     });
     expect(input).not.toHaveProperty("accountEmail");
+    expect(input).not.toHaveProperty("privateTargets");
+    expect(input).not.toHaveProperty("addressClass");
     expect(input).toHaveProperty("livePodCreationRequestId", expect.any(String));
     if (complete === undefined) throw new Error("Missing create completion");
-    complete(METADATA);
+    complete(CREATED_JIRA);
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(screen.queryByTestId("acx-add-verify")).toBeNull();
     expect(screen.queryByDisplayValue(TOKEN)).toBeNull();
     expect(created).toHaveBeenCalledOnce();
+    expect(created).toHaveBeenCalledWith(VERIFIED_JIRA);
+    expect(client.verifyConnector).toHaveBeenCalledExactlyOnceWith(CREATED_JIRA.authRef);
+    expect(client.listConnectors).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Enter and all form controls busy until automatic verification finishes", async () => {
+    const user = userEvent.setup();
+    let finish: ((result: { authRef: string; status: "ok" }) => void) | undefined;
+    const client = makeClient({
+      createConnector: vi.fn(async () => CREATED_JIRA),
+      verifyConnector: vi.fn(
+        () =>
+          new Promise<{ authRef: string; status: "ok" }>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+      listConnectors: vi.fn(async () => [VERIFIED_JIRA]),
+    });
+    const created = vi.fn();
+    const close = vi.fn();
+    render(<AddConnectorForm client={client} onCreated={created} onClose={close} jiraLive />);
+    await fillJira(user);
+    fireEvent.submit(screen.getByTestId("acx-add-form"));
+    fireEvent.submit(screen.getByTestId("acx-add-form"));
+    const verifying = await screen.findByRole("button", { name: "Verifying…" });
+    expect(verifying).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(screen.getByLabelText("API token")).toHaveValue("");
+    expect(screen.getByLabelText("Base URL")).toBeDisabled();
+    expect(screen.getByTestId("acx-add-form")).toHaveAttribute("aria-busy", "true");
+    fireEvent.submit(screen.getByTestId("acx-add-form"));
+    expect(client.createConnector).toHaveBeenCalledOnce();
+    expect(client.verifyConnector).toHaveBeenCalledExactlyOnceWith(CREATED_JIRA.authRef);
+    expect(close).not.toHaveBeenCalled();
+    finish?.({ authRef: CREATED_JIRA.authRef, status: "ok" });
+    await waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(created).toHaveBeenCalledExactlyOnceWith(VERIFIED_JIRA);
+  });
+
+  it("keeps a created Pod and publishes its authoritative failed verification without retrying creation", async () => {
+    const failed = {
+      ...CREATED_JIRA,
+      generation: 2,
+      livePod: {
+        ...CREATED_JIRA.livePod,
+        authenticationGeneration: 2,
+        verificationRevision: 2,
+        verificationStatus: "auth-failed" as const,
+      },
+    };
+    const client = makeClient({
+      createConnector: vi.fn(async () => CREATED_JIRA),
+      verifyConnector: vi.fn(async () => ({
+        authRef: CREATED_JIRA.authRef,
+        status: "auth-failed" as const,
+      })),
+      listConnectors: vi.fn(async () => [failed]),
+    });
+    const created = vi.fn();
+    const close = vi.fn();
+    render(<AddConnectorForm client={client} onCreated={created} onClose={close} jiraLive />);
+    await fillJira(userEvent.setup());
+    await userEvent.click(screen.getByRole("button", { name: "Create Jira Pod" }));
+    await waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(created).toHaveBeenCalledExactlyOnceWith(failed);
+    expect(client.createConnector).toHaveBeenCalledOnce();
+    expect(client.verifyConnector).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("acx-add-verify")).toBeNull();
+  });
+
+  it("treats a rejected verification response as post-create repair and does not expose upstream text", async () => {
+    const diagnostic = vi.spyOn(diagnostics, "reportClientDiagnostic");
+    const client = makeClient({
+      createConnector: vi.fn(async () => CREATED_JIRA),
+      verifyConnector: vi.fn(async () => {
+        throw new ApiError("INTERNAL", TOKEN, 500);
+      }),
+      listConnectors: vi.fn(async () => [CREATED_JIRA]),
+    });
+    const created = vi.fn();
+    const close = vi.fn();
+    const { container } = render(
+      <AddConnectorForm client={client} onCreated={created} onClose={close} jiraLive />,
+    );
+    await fillJira(userEvent.setup());
+    await userEvent.click(screen.getByRole("button", { name: "Create Jira Pod" }));
+    await waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(created).toHaveBeenCalledExactlyOnceWith(CREATED_JIRA);
+    expect(client.createConnector).toHaveBeenCalledOnce();
+    expect(client.verifyConnector).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(container.innerHTML).not.toContain(TOKEN);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(TOKEN);
+  });
+
+  it("keeps the unverified created record if the metadata refresh fails after verification", async () => {
+    const client = makeClient({
+      createConnector: vi.fn(async () => CREATED_JIRA),
+      listConnectors: vi.fn(async () => {
+        throw new Error("metadata unavailable");
+      }),
+    });
+    const created = vi.fn();
+    const close = vi.fn();
+    render(<AddConnectorForm client={client} onCreated={created} onClose={close} jiraLive />);
+    await fillJira(userEvent.setup());
+    await userEvent.click(screen.getByRole("button", { name: "Create Jira Pod" }));
+    await waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(created).toHaveBeenCalledExactlyOnceWith(CREATED_JIRA);
+    expect(client.createConnector).toHaveBeenCalledOnce();
+    expect(client.verifyConnector).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

@@ -13,6 +13,7 @@ import { useRealtimeVoice } from "./hooks/useRealtimeVoice";
 import { clearVoiceCapabilityCacheForTests } from "./hooks/useVoiceCapability";
 import type { ChatSessionApi, SendMessageOutcome } from "./hooks/useChatSession";
 import * as api from "@/lib/api";
+import { OPTIONAL_WIDGET_EN_MESSAGES } from "@/lib/i18n-messages.optional.en";
 import type { Chat, ModelCapability, VoiceCapabilityResolution } from "@/lib/types";
 
 // Every text synthesized so far. Negative pins compare texts, independent of the request's other
@@ -1304,6 +1305,72 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
 
     expect(api.synthesizeAssistantSpeech).toHaveBeenCalledTimes(1);
     expect(spokenTexts()).not.toContain("This later text-only update must stay silent.");
+  });
+
+  // #4355 AC4: the spoken answer carries Keiko's note, the same catalog sentence a copy carries.
+  it("reads Keiko's note after an answer whose turn claimed an effect it did not produce", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const sendMessage = vi.fn().mockResolvedValue({
+      status: "completed",
+      assistantMessageId: "msg-2",
+    });
+    const { rerender } = render(
+      <ChatSessionProvider value={makeSessionWithAssistantMessage({ sendMessage })}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    await enterDialogue();
+    const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
+    await act(async () => {
+      await options?.onCanonicalUserTurn?.({ turnId: "voice-user-3", text: "Create the epic" });
+    });
+    const stored = {
+      chatId: "chat-1",
+      timestamp: Date.now(),
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    };
+    rerender(
+      <ChatSessionProvider
+        value={makeSession({
+          sendMessage,
+          messages: [
+            ...makeSessionWithAssistantMessage().messages,
+            {
+              ...stored,
+              id: "u-claim",
+              role: "user",
+              content: "Create the epic",
+              toolTranscript: {
+                schemaVersion: 1,
+                exchanges: [],
+                claimNotice: "no-jira-create",
+              },
+            },
+            { ...stored, id: "msg-2", role: "assistant", content: "I created the Epic REQ-1." },
+          ],
+          sending: false,
+          sendStatus: "completed",
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    const note = `${OPTIONAL_WIDGET_EN_MESSAGES["chat.claimNotice.label"]}: ${OPTIONAL_WIDGET_EN_MESSAGES["chat.claimNotice.noJiraCreate"]}`;
+    await waitFor(() =>
+      expect(api.synthesizeAssistantSpeech).toHaveBeenCalledWith(
+        { persona: "male", text: `I created the Epic REQ-1.\n\n${note}` },
+        expect.any(AbortSignal),
+        expect.any(String),
+      ),
+    );
   });
 
   it("speaks only the assistant message identified by the canonical send outcome", async () => {

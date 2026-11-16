@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
+import { CONVERSATION_REMEMBER_REFUSED_NOTICE } from "./conversation-prompt.js";
 import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
 import {
   buildRedactor,
@@ -100,7 +101,7 @@ function scriptedIdentityRecallModel(): ModelPort {
       const system = request.messages[0]?.content ?? "";
       const latestUser = request.messages.at(-1)?.content ?? "";
       let content = "Hallo!";
-      if (system.includes("You extract durable memories from a chat turn")) {
+      if (system.includes("You extract few durable facts")) {
         content = "[]";
       } else if (latestUser.includes("What is my name?")) {
         content = latestUser.includes("The user's name is Paul.") ? "Paul" : "unbekannt";
@@ -128,31 +129,25 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
     call(request): Promise<NormalizedResponse> {
       seenRequests.push(request);
       const system = request.messages[0]?.content ?? "";
-      const content = system.includes("You extract durable memories from a chat turn")
+      const content = system.includes("You extract few durable facts")
         ? JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "Ich heiße Oliver.",
+              evidence: "Ich heiße Oliver.",
               type: "identity",
-              confidence: 0.96,
-              scope: "user",
-              tags: ["identity", "name"],
             },
             {
-              source: "user",
+              about: "self",
               body: "Ich bin 35 Jahre alt.",
+              evidence: "Ich bin 35 Jahre alt.",
               type: "fact",
-              confidence: 0.9,
-              scope: "user",
-              tags: ["identity", "age"],
             },
             {
-              source: "user",
+              about: "self",
               body: "Ich bin Softwareentwickler.",
+              evidence: "Ich bin Softwareentwickler.",
               type: "fact",
-              confidence: 0.9,
-              scope: "user",
-              tags: ["identity", "profession"],
             },
           ])
         : "Understood.";
@@ -173,6 +168,9 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
     },
   };
 }
+
+// #4213: learning runs in a pass after a pause; these journeys learn right after the turn.
+const LEARN_AFTER_EACH_TURN = { KEIKO_MEMORY_LEARNING_IDLE_MS: "0" } as const;
 
 function deps(
   model: ModelPort = fakeModel("test response"),
@@ -368,13 +366,14 @@ function insertAcceptedMemory(
   vault: MemoryVaultStore,
   body: string,
   scope: MemoryScope = { kind: "user", userId: makeMemoryUserId("local-operator") },
+  type: MemoryRecord["type"] = "preference",
 ): MemoryRecord {
   const now = Date.now();
   return vault.insertMemory({
     id: makeMemoryId(`mem-${String(now)}`),
     schemaVersion: "1",
     scope,
-    type: "preference",
+    type,
     body,
     provenance: {
       sourceKind: "explicit-user-instruction",
@@ -1835,7 +1834,8 @@ describe("desktop chat routes", () => {
       const memoryIdsAfterFailure = memoriesAfterFailure.map((memory) => memory.id);
       expect(failed.status).toBe(500);
       expect(memoryIdsAfterFailure.length).toBeGreaterThan(0);
-      expect(memoriesAfterFailure.every((memory) => memory.status === "proposed")).toBe(true);
+      // A clear statement is accepted at once in every mode (ADR-0146 D4b).
+      expect(memoriesAfterFailure.every((memory) => memory.status === "accepted")).toBe(true);
       expect(store.listMessages(created.chat.id)).toHaveLength(1);
 
       await restartWithDeps(
@@ -1963,7 +1963,7 @@ describe("desktop chat routes", () => {
       call(request): Promise<NormalizedResponse> {
         seenRequests.push(request);
         const system = request.messages[0]?.content ?? "";
-        if (system.includes("You extract durable memories from a chat turn")) {
+        if (system.includes("You extract few durable facts")) {
           return new Promise<NormalizedResponse>((_resolve) => {
             // never settles: this case asserts the caller's own timeout, not a response
           });
@@ -1984,7 +1984,9 @@ describe("desktop chat routes", () => {
         });
       },
     };
-    await restartWithDeps(deps(chatThenHangingSalienceModel, { memoryVault }));
+    await restartWithDeps(
+      deps(chatThenHangingSalienceModel, { memoryVault, env: LEARN_AFTER_EACH_TURN }),
+    );
 
     const createRes = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",
@@ -2022,12 +2024,8 @@ describe("desktop chat routes", () => {
     await vi.waitFor(() => {
       expect(seenRequests).toHaveLength(2);
     });
-    expect(seenRequests[0]?.messages[0]?.content).not.toContain(
-      "You extract durable memories from a chat turn",
-    );
-    expect(seenRequests[1]?.messages[0]?.content).toContain(
-      "You extract durable memories from a chat turn",
-    );
+    expect(seenRequests[0]?.messages[0]?.content).not.toContain("You extract few durable facts");
+    expect(seenRequests[1]?.messages[0]?.content).toContain("You extract few durable facts");
     memoryVault.close();
   });
 
@@ -2406,7 +2404,8 @@ describe("desktop chat routes", () => {
     const proposalId = body.memory?.actions[0]?.proposalId;
     expect(proposalId).toBeDefined();
     if (proposalId !== undefined) {
-      expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
+      // A clear statement is accepted at once in every mode (ADR-0146 D4b).
+      expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("accepted");
     }
     expect(memoryVault.getAccessStats([recalled.id]).get(recalled.id)?.accessCount ?? 0).toBe(0);
     memoryVault.close();
@@ -2468,11 +2467,18 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
-  it("reinforces recalled chat memory only after the assistant uses it", async () => {
+  it("remembers that an answer used a recalled memory without strengthening it (#4212)", async () => {
     const memoryDir = join(tmp, "memory-vault-used-reinforcement");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const recalled = insertAcceptedMemory(memoryVault, "Use pnpm instead of npm for installs.");
+    // A fact, not a preference: a person's own preference reaches every answer through the standing
+    // profile (#4228), so only a fact is recalled by the question.
+    const recalled = insertAcceptedMemory(
+      memoryVault,
+      "Use pnpm instead of npm for installs.",
+      { kind: "user", userId: makeMemoryUserId("local-operator") },
+      "semantic-fact",
+    );
     await restartWithDeps(
       deps(fakeModel("Use pnpm instead of npm for installs."), { memoryVault }),
     );
@@ -2502,11 +2508,13 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(200);
     const access = memoryVault.getAccessStats([recalled.id]).get(recalled.id);
-    expect(access?.accessCount).toBe(1);
+    expect(access?.accessCount).toBe(0);
+    expect(access?.lastUsedAt).toBeGreaterThan(0);
     memoryVault.close();
   });
 
-  it("persists confidential chat-intent candidates as masked review proposals", async () => {
+  // #4206: nobody reviews a memory any more, so confidential content is refused, not parked.
+  it("refuses confidential chat-intent candidates and stores nothing", async () => {
     const memoryDir = join(tmp, "memory-vault-confidential");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
@@ -2533,27 +2541,59 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(200);
     const body = (await sendRes.json()) as {
-      memory?: {
-        actions: {
-          kind: string;
-          body?: string;
-          proposalId?: string;
-          requiresApproval?: boolean;
-        }[];
-      };
+      memory?: { actions: { kind: string; reason?: string }[] };
     };
-    expect(body.memory?.actions[0]).toMatchObject({
-      kind: "candidate",
-      body: "Sensitive memory pending review.",
-      requiresApproval: true,
+    expect(body.memory?.actions).toEqual([
+      {
+        kind: "rejected",
+        reason: "sensitive-memory-requires-approval",
+        explicitStatement: true,
+      },
+    ]);
+    expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
+    memoryVault.close();
+  });
+
+  // #4213 UI walk: Keiko refused "Merke dir: Meine Handynummer ist …" and the answer said it was
+  // stored, because the refusal was decided only after the answer was written.
+  it("tells the answer that a refused remember request was not stored", async () => {
+    const memoryDir = join(tmp, "memory-vault-refusal-notice");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(deps(fakeModel("memory response"), { memoryVault }));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
     });
-    const proposalId = body.memory?.actions[0]?.proposalId;
-    expect(proposalId).toBeDefined();
-    if (proposalId !== undefined) {
-      const record = memoryVault.getMemory(proposalId as MemoryId);
-      expect(record?.status).toBe("proposed");
-      expect(record?.provenance.sensitivity).toBe("confidential");
-    }
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const send = async (content: string): Promise<string> => {
+      const before = seenRequests.length;
+      const res = await fetch(`${base()}/api/desktop/chat`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({
+          chatId: created.chat.id,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content,
+          memory: { enabled: true, context: {} },
+        }),
+      });
+      expect(res.status).toBe(200);
+      return seenRequests
+        .slice(before)
+        .flatMap((request) => request.messages.map((message) => message.content))
+        .join("\n");
+    };
+
+    const refused = await send("remember that my private support email is developer@example.com");
+    expect(refused).toContain(CONVERSATION_REMEMBER_REFUSED_NOTICE);
+    expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
+    const kept = await send("remember that I prefer tables for numbers");
+    expect(kept).not.toContain(CONVERSATION_REMEMBER_REFUSED_NOTICE);
+    const ordinary = await send("What is the capital of France?");
+    expect(ordinary).not.toContain(CONVERSATION_REMEMBER_REFUSED_NOTICE);
     memoryVault.close();
   });
 
@@ -2591,17 +2631,21 @@ describe("desktop chat routes", () => {
     const body = (await sendRes.json()) as {
       memory?: { actions: { kind: string; reason?: string }[] };
     };
-    expect(body.memory?.actions).toEqual([{ kind: "rejected", reason: "customer-identifier" }]);
+    expect(body.memory?.actions).toEqual([
+      { kind: "rejected", reason: "customer-identifier", explicitStatement: true },
+    ]);
     expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
     memoryVault.close();
   });
 
   // eslint-disable-next-line complexity
-  it("captures an ambient identity statement, requires acceptance, and recalls it in a new chat", async () => {
+  it("captures an ambient identity statement, accepts it at once, and recalls it in a new chat", async () => {
     const memoryDir = join(tmp, "memory-vault-ambient-identity");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    await restartWithDeps(deps(scriptedIdentityRecallModel(), { memoryVault }));
+    await restartWithDeps(
+      deps(scriptedIdentityRecallModel(), { memoryVault, env: LEARN_AFTER_EACH_TURN }),
+    );
 
     const createChatA = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",
@@ -2633,23 +2677,14 @@ describe("desktop chat routes", () => {
     expect(introduceBody.memory?.actions[0]).toMatchObject({
       kind: "candidate",
       body: "The user's name is Paul.",
+      status: "accepted",
     });
     const proposalId = introduceBody.memory?.actions[0]?.proposalId;
     expect(typeof proposalId).toBe("string");
     if (proposalId === undefined) {
       throw new Error("expected ambient identity capture to return a proposal id");
     }
-    expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
-
-    const acceptRes = await fetch(
-      `${base()}/api/memory/proposals/${encodeURIComponent(proposalId)}/accept`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
-        body: "{}",
-      },
-    );
-    expect(acceptRes.status).toBe(200);
+    // #4206: a routine private fact needs no approval, so nothing waits for the person.
     expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("accepted");
     const acceptedMemory = memoryVault.getMemory(proposalId as MemoryId);
 
@@ -2700,11 +2735,66 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
-  it("captures a spoken-profile chat turn as proposed MemoriaViva candidates", async () => {
+  it("holds an ambient identity statement for review under an operator restriction", async () => {
+    const memoryDir = join(tmp, "memory-vault-ambient-identity-restricted");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    // #4206: only an operator restriction still holds a private fact for review.
+    await restartWithDeps(
+      deps(scriptedIdentityRecallModel(), {
+        memoryVault,
+        env: LEARN_AFTER_EACH_TURN,
+        memoryDeploymentCeiling: "governed-assist",
+        memoryDeploymentCeilingConfigured: true,
+      }),
+    );
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Hallo Keiko, ich bin Paul.",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      memory?: { actions: { kind: string; proposalId?: string; status?: string }[] };
+    };
+    expect(body.memory?.actions[0]).toMatchObject({ kind: "candidate", status: "proposed" });
+    const proposalId = body.memory?.actions[0]?.proposalId;
+    if (proposalId === undefined) throw new Error("expected a proposal id");
+    expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
+
+    const acceptRes = await fetch(
+      `${base()}/api/memory/proposals/${encodeURIComponent(proposalId)}/accept`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+        body: "{}",
+      },
+    );
+    expect(acceptRes.status).toBe(200);
+    expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("accepted");
+    memoryVault.close();
+  });
+
+  it("captures a spoken-profile chat turn as accepted MemoriaViva candidates", async () => {
     const memoryDir = join(tmp, "memory-vault-spoken-profile");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    await restartWithDeps(deps(scriptedOliverProfileMemoryModel(), { memoryVault }));
+    await restartWithDeps(
+      deps(scriptedOliverProfileMemoryModel(), { memoryVault, env: LEARN_AFTER_EACH_TURN }),
+    );
 
     const createRes = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",
@@ -2744,15 +2834,14 @@ describe("desktop chat routes", () => {
           "Ich bin Softwareentwickler.",
         ]),
       );
-      expect(records.every((record) => record.status === "proposed")).toBe(true);
+      expect(records.every((record) => record.status === "accepted")).toBe(true);
     });
     await vi.waitFor(() => {
       expect(
         seenRequests.some(
           (request) =>
-            request.messages[0]?.content.includes(
-              "You extract durable memories from a chat turn",
-            ) && request.messages.at(-1)?.content.includes("Oliver"),
+            request.messages[0]?.content.includes("You extract few durable facts") &&
+            request.messages.at(-1)?.content.includes("Oliver"),
         ),
       ).toBe(true);
     });
@@ -2857,7 +2946,8 @@ describe("desktop chat routes", () => {
         chatId: created.chat.id,
         projectPath: projectDir,
         modelId: CHAT_MODEL,
-        content: "remember that we deploy after the green CI run",
+        // Names the project: a statement without a scope stays private (ADR-0146 D4b).
+        content: "remember about this project: we deploy after the green CI run",
         memory: {
           enabled: true,
           context: {
@@ -2961,6 +3051,70 @@ describe("desktop chat routes", () => {
     expect(lastTurn?.content).toContain("spec.md");
     expect(lastTurn?.content).toContain("Some document content.");
   });
+
+  it.each([undefined, "document-turn"])(
+    "retains attached document context for follow-up turns and isolates other chats (%s)",
+    async (clientTurnId) => {
+      const chat = store.createChat(projectDir, "Document chat", CHAT_MODEL);
+      const send = (chatId: string, body: object): Promise<Response> =>
+        fetch(`${base()}/api/desktop/chat`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body: JSON.stringify({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, ...body }),
+        });
+      const initial = await send(chat.id, {
+        content: "Read this document",
+        clientTurnId,
+        documentContext: [
+          {
+            id: "retained-doc",
+            displayName: "spec.md",
+            mimeType: "text/markdown",
+            sizeBytes: 64,
+            extractedBytes: 64,
+            truncated: false,
+            text: "The release identifier is cobalt-lantern.",
+          },
+        ],
+      });
+      expect(initial.status).toBe(200);
+      const initialBody = (await initial.json()) as {
+        messages: readonly { documentContext?: unknown }[];
+      };
+      expect(initialBody.messages.every((message) => message.documentContext === undefined)).toBe(
+        true,
+      );
+      expect(store.listMessages(chat.id)[0]?.documentContext?.[0]?.text).toContain(
+        "cobalt-lantern",
+      );
+      const listed = await fetch(
+        `${base()}/api/chats/messages?chatId=${encodeURIComponent(chat.id)}&projectPath=${encodeURIComponent(projectDir)}`,
+      );
+      expect(listed.status).toBe(200);
+      const listedBody = (await listed.json()) as {
+        messages: readonly { documentContext?: unknown }[];
+      };
+      expect(listedBody.messages.every((message) => message.documentContext === undefined)).toBe(
+        true,
+      );
+      await restartWithDeps(deps());
+      const followup = await send(chat.id, { content: "What is the release identifier?" });
+      expect(followup.status).toBe(200);
+      const historicalUser = seenRequests
+        .at(-1)
+        ?.messages.find(
+          (message) => message.role === "user" && message.content.includes("Read this document"),
+        );
+      expect(historicalUser?.content).toContain("Attached document context:");
+      expect(historicalUser?.content).toContain("cobalt-lantern");
+      expect(store.listMessages(chat.id)[0]?.content).toBe("Read this document");
+      const otherChat = store.createChat(projectDir, "Separate chat", CHAT_MODEL);
+      expect(
+        (await send(otherChat.id, { content: "What is the release identifier?" })).status,
+      ).toBe(200);
+      expect(JSON.stringify(seenRequests.at(-1)?.messages)).not.toContain("cobalt-lantern");
+    },
+  );
 
   // Issue #502 — a selected discussion mode threads the additive directive block onto the latest
   // user turn for the model call. The mode is turn-local (never persisted to chat history).

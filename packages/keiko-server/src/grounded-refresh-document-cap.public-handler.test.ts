@@ -71,7 +71,7 @@ function embedding(request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutc
   });
 }
 
-function runtime(cap: number, transport: typeof embedding): UiHandlerDeps {
+function runtime(cap: number, transport: typeof embedding, retainCatalog = false): UiHandlerDeps {
   const deps = buildUiHandlerDeps({
     configPath: join(stateDir, "gateway.json"),
     evidenceDir: join(stateDir, "evidence"),
@@ -88,7 +88,18 @@ function runtime(cap: number, transport: typeof embedding): UiHandlerDeps {
         maxRetries: 0,
       })),
       capabilities: [
-        { ...createDefaultChatCapability(CHAT), contextWindow: 65_536, maxOutputTokens: 512 },
+        {
+          ...createDefaultChatCapability(CHAT),
+          contextWindow: 65_536,
+          maxOutputTokens: 512,
+          // An observed probe result: this model cannot call tools, not merely unchecked.
+          toolCallingVerification: {
+            status: "unsupported",
+            checkedAt: new Date().toISOString(),
+            probe: "gateway-tool-calling-v1",
+            configurationFingerprint: "0".repeat(64),
+          },
+        },
         createDefaultEmbeddingCapability(EMBEDDING),
       ],
     }),
@@ -100,7 +111,11 @@ function runtime(cap: number, transport: typeof embedding): UiHandlerDeps {
     new Date().toISOString(),
     deps.gatewayConfig.generation(),
   );
-  return { ...deps, localKnowledgeEmbeddingRequest: transport };
+  // Keep these document-cap cases on text-only synthesis, separate from Knowledge tool admission.
+  // Gateway, source stores, leases and the request-owned refresh governor stay production-owned.
+  const { knowledgeChatCatalog, ...withoutCatalog } = deps;
+  expect(knowledgeChatCatalog).toBeDefined();
+  return { ...(retainCatalog ? deps : withoutCatalog), localKnowledgeEmbeddingRequest: transport };
 }
 
 async function seedPod(
@@ -242,7 +257,11 @@ function synthesisTransport(): void {
   );
 }
 
-async function invokeTurn(deps: UiHandlerDeps, chatId: string): Promise<void> {
+async function invokeTurn(
+  deps: UiHandlerDeps,
+  chatId: string,
+  expectedStatus = 200,
+): Promise<void> {
   const result = await handleGroundedAsk(
     {
       params: {},
@@ -255,7 +274,9 @@ async function invokeTurn(deps: UiHandlerDeps, chatId: string): Promise<void> {
     },
     deps,
   );
-  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  expect(result.status, JSON.stringify(result.body)).toBe(expectedStatus);
+  if (expectedStatus === 400)
+    expect(result.body).toMatchObject({ error: { code: "CONVERSATION_UNAVAILABLE_MODEL" } });
 }
 
 async function turn(
@@ -329,6 +350,19 @@ async function repeatedSearch(mode: "healthy" | "denied" | "cancelled"): Promise
 }
 
 describe("configured public per-query refresh document cap", () => {
+  it("refuses selected Knowledge tools before reading or embedding refresh documents for a non-tool model", async () => {
+    const transport = vi.fn(embedding);
+    const deps = runtime(1, transport, true);
+    await persistPods();
+    const original = fingerprints(deps);
+    const chatId = connectFolders(deps, 2);
+    await connectKnowledge(deps, chatId);
+    synthesisTransport();
+    await invokeTurn(deps, chatId, 400);
+    expect(transport).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(fingerprints(deps)).toEqual(original);
+  });
   it.each([1, 8])("shares cap %i across two connected roots", async (cap) => {
     expect(await turn(cap)).toBe(cap);
   });

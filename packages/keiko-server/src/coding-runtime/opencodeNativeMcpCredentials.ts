@@ -6,7 +6,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
+import { isNewerCredential, type McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import type { AdmittedMcpOAuthServer } from "./opencodeNativeMcp.js";
 import type { OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 import { plainRecord } from "../operatorRegistryJson.js";
@@ -135,7 +135,11 @@ function keepMatching(
     const match = [...(run.mcpOAuth ?? [])].find(([, admitted]) => issuedFor(row, admitted));
     if (match === undefined) continue;
     const [server, admitted] = match;
-    store.save({ server, url: admitted.url, oauth: admitted.oauth }, row);
+    const binding = { server, url: admitted.url, oauth: admitted.oauth };
+    // A concurrent run may already have stored a fresher credential; the older one never wins.
+    const current = store.load(binding);
+    if (current !== undefined && isNewerCredential(current.value, row.value)) continue;
+    store.save(binding, row);
     kept += 1;
   }
   return kept;

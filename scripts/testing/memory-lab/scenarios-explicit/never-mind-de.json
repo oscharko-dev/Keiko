@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "never-mind-de",
+  "language": "de",
+  "class": "preference",
+  "difficulty": "plain",
+  "description": "\"Vergiss es\" means never mind. It forgets nothing, and the fact said before stays.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "must": true,
+      "private": true,
+      "terms": [["Tabelle*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Merke dir: Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": []
+    },
+    {
+      "user": "Vergiss es.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*"]]
+      }
+    }
+  ]
+}

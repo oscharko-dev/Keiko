@@ -28,6 +28,7 @@ import type {
   ParserRegistry,
   ParserSelectionInput,
 } from "../parsers/index.js";
+import type { ExtractionResult } from "./types.js";
 import {
   PDF_NO_TEXT_LAYER,
   PDF_TEXT_LAYER,
@@ -108,6 +109,22 @@ describe("extractDocument — markdown success path", () => {
       )
       .get({ c: capsuleId, d: doc.id }) as { readonly normalized_text?: string } | undefined;
     expect(textRow?.normalized_text).toBe("# Hello\n\nWorld");
+  });
+
+  it("reads a text file its name alone identifies (#4235)", async () => {
+    const fs = memoryFs(ROOT, [{ relativePath: "docs/README", content: "Installation" }]);
+    const result = await extractDocument(
+      { fs, store, parserRegistry: createDefaultParserRegistry() },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "docs/README", sizeBytes: 12 },
+      },
+    );
+
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.parser.parserId).toBe("text");
   });
 
   it("persists colliding-looking filenames as separate documents", async () => {
@@ -596,6 +613,70 @@ describe("extractDocument — re-extract fast-path", () => {
     expect(second.outcome.reason).toBe("unchanged");
     expect(second.outcome.document.lastExtractedAt).toBe(firstExtractedAt);
     expect(second.diagnostics).toStrictEqual([]);
+  });
+
+  describe("when the parser has changed since the document was read", () => {
+    function readerOfVersion(parserVersion: string, text: string): ParserRegistry {
+      const adapter: ParserAdapter = {
+        capability: { parserId: "fake-reader", parserVersion, matches: () => true },
+        parse: (input: ParserSelectionInput, options: ParserOptions): ParserResult =>
+          ({
+            extractedAt: options.now(),
+            documentId: input.documentId,
+            parser: { parserId: "fake-reader", parserVersion },
+            normalizedText: text,
+            pages: [],
+            sections: [],
+            units: [],
+            diagnostics: [],
+          }) as ParserResult,
+      };
+      return registerParser(createParserRegistry(), adapter);
+    }
+
+    async function read(registry: ParserRegistry): Promise<ExtractionResult> {
+      const fs = memoryFs(ROOT, [{ relativePath: "x.md", content: "stable bytes" }]);
+      return extractDocument(
+        { fs, store, parserRegistry: registry },
+        { capsuleId, source, file: { relativePath: "x.md", sizeBytes: 12 } },
+      );
+    }
+
+    it("reads the unchanged file again, so a repaired parser reaches an existing Pod", async () => {
+      await read(readerOfVersion("1", "wrong text"));
+      const second = await read(readerOfVersion("2", "right text"));
+      expect(second.outcome.kind).toBe("persisted");
+      if (second.outcome.kind !== "persisted") return;
+      expect(second.outcome.document.parser.parserVersion).toBe("2");
+      expect(second.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+        "PARSER_VERSION_CHANGED",
+      );
+    });
+
+    it("reports the change body-free and only once", async () => {
+      await read(readerOfVersion("1", "SECRET-BODY wrong"));
+      const second = await read(readerOfVersion("2", "SECRET-BODY right"));
+      const diagnostic = second.diagnostics.find(({ code }) => code === "PARSER_VERSION_CHANGED");
+      expect(diagnostic?.severity).toBe("info");
+      expect(diagnostic?.message).toBe("fake-reader parser version 1 replaced by 2");
+      const third = await read(readerOfVersion("2", "SECRET-BODY right"));
+      expect(third.outcome.kind).toBe("skipped");
+      expect(third.diagnostics).toStrictEqual([]);
+    });
+
+    it("survives a second parser change of the same document", async () => {
+      await read(readerOfVersion("1", "one"));
+      await read(readerOfVersion("2", "two"));
+      const third = await read(readerOfVersion("3", "three"));
+      expect(third.outcome.kind).toBe("persisted");
+    });
+
+    it("keeps the stored text when no parser of that id exists any more", async () => {
+      await read(readerOfVersion("1", "kept"));
+      const registry = createDefaultParserRegistry();
+      const second = await read(registry);
+      expect(second.outcome.kind).toBe("skipped");
+    });
   });
 
   it("re-parses when the content_hash changes", async () => {

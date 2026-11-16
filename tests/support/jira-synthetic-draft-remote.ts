@@ -37,6 +37,12 @@ export interface SyntheticJira {
   readonly refuseRaw: Map<string, { readonly status: number; readonly body: string }>;
   /** Issue keys Jira cannot link (answered as missing). */
   readonly refuseLinks: Set<string>;
+  /**
+   * The issue types the project read lists, when a test wants a Jira that names them. Unset, the
+   * project read lists none, as Jira may answer: a partial list would make every type a template
+   * names but the list omits unresolved (#4354), which is no part of the chains using this remote.
+   */
+  issueTypes: { id: string; name: string }[] | undefined;
 }
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
@@ -96,6 +102,15 @@ function createIssue(
   issues.push(created);
   return json({ key: created.key, id: created.id }, 201);
 }
+/** The synthetic project's answer; its issue types only when a test asked for a Jira that lists them. */
+function projectBody(issueTypes: SyntheticJira["issueTypes"]): Record<string, unknown> {
+  return {
+    id: "10000",
+    key: "SYN",
+    name: "Synthetic Project",
+    ...(issueTypes === undefined ? {} : { issueTypes }),
+  };
+}
 export function syntheticJira(existing: StoredIssue[] = []): SyntheticJira {
   const issues = [...existing];
   const refuse = new Set<string>();
@@ -103,7 +118,7 @@ export function syntheticJira(existing: StoredIssue[] = []): SyntheticJira {
   const refuseLinks = new Set<string>();
   const posted: Record<string, unknown>[] = [];
   const read = (url: URL): Response => {
-    if (url.pathname.endsWith("/project/10000")) return json({ key: "SYN" });
+    if (url.pathname.endsWith("/project/10000")) return json(projectBody(remote.issueTypes));
     if (url.pathname.endsWith("/issuetype/10001")) return json({ id: "10001", name: "Story" });
     if (url.pathname.includes("createmeta"))
       return json({
@@ -135,5 +150,14 @@ export function syntheticJira(existing: StoredIssue[] = []): SyntheticJira {
       return Promise.resolve(linkIssues(issues, body, refuseLinks));
     return Promise.resolve(createIssue(issues, refuse, refuseRaw, body));
   });
-  return { fetch: fetchImpl, issues, posts: () => posted, refuse, refuseRaw, refuseLinks };
+  const remote: SyntheticJira = {
+    fetch: fetchImpl,
+    issues,
+    posts: () => posted,
+    refuse,
+    refuseRaw,
+    refuseLinks,
+    issueTypes: undefined,
+  };
+  return remote;
 }

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts";
 
 import { listAtlassianConnectors } from "@/lib/atlassian-connectors-api";
 
@@ -15,6 +16,8 @@ export type CodingWorkbenchConnectors = Pick<
   | "selectedServers"
   | "pods"
   | "boundPodId"
+  | "jiraAdministrationEnabled"
+  | "onJiraAdministrationChange"
   | "loading"
   | "failed"
   | "onServersChange"
@@ -32,29 +35,45 @@ export type CodingWorkbenchConnectors = Pick<
 export function useCodingWorkbenchConnectors(list = listAtlassianConnectors): {
   readonly menu: CodingWorkbenchConnectors;
   readonly jiraPodId: string | undefined;
+  readonly connectorScopes: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly mcpServers: readonly string[] | undefined;
 } {
   const servers = useMcpServerChoices();
   const catalog = usePodChoices(list, true);
   const [picked, setPicked] = useState("");
+  const [administrationPodId, setAdministrationPodId] = useState<string>();
   const [mcpServers, setMcpServers] = useState<readonly string[] | undefined>(undefined);
   const jiraPodId = catalog.pods.some((pod) => pod.id === picked && pod.ready) ? picked : undefined;
+  const jiraAdministrationEnabled =
+    !catalog.failed && jiraPodId !== undefined && administrationPodId === jiraPodId;
+  // Clear the next-start selection permanently when readiness is lost; this does not revoke a run.
+  useEffect(() => {
+    if (administrationPodId !== undefined && (catalog.failed || administrationPodId !== jiraPodId))
+      setAdministrationPodId(undefined);
+  }, [administrationPodId, catalog.failed, jiraPodId]);
   return {
     menu: {
       servers: servers.servers,
       selectedServers: mcpServers,
       pods: catalog.pods,
       boundPodId: jiraPodId,
+      jiraAdministrationEnabled,
+      onJiraAdministrationChange: (enabled) =>
+        setAdministrationPodId(enabled && !catalog.failed ? jiraPodId : undefined),
       loading: servers.loading || catalog.loading,
       failed: servers.failed || catalog.failed,
       onServersChange: (selection) => setMcpServers(selection ?? undefined),
-      onPodChange: (podId) => setPicked(podId ?? ""),
+      onPodChange: (podId): void => {
+        setAdministrationPodId(undefined);
+        setPicked(podId ?? "");
+      },
       onOpen: (): void => {
         servers.reload();
         catalog.reload();
       },
     },
     jiraPodId,
+    connectorScopes: jiraAdministrationEnabled ? ["issue-tracker.admin"] : undefined,
     mcpServers,
   };
 }

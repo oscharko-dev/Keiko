@@ -10,7 +10,16 @@
 
 import type { ParsedUnit, ParserResult } from "@oscharko-dev/keiko-contracts";
 
-import { diagnostic, emptyResult, oversizeDiagnostic, shouldStop } from "../_internal.js";
+import { isCodeExtension } from "../code-parser.js";
+import {
+  diagnostic,
+  emptyResult,
+  hasImageSignature,
+  hasPdfSignature,
+  isKnownTextExtension,
+  oversizeDiagnostic,
+  shouldStop,
+} from "../_internal.js";
 import type {
   InternalParserResult,
   ParserAdapter,
@@ -21,7 +30,7 @@ import type {
 import type { OcrAdapter, OcrPageResult } from "./types.js";
 
 const PARSER_ID = "ocr-pipeline";
-const PARSER_VERSION = "1";
+const PARSER_VERSION = "2";
 
 const OCR_EXTENSIONS: ReadonlySet<string> = new Set([
   "pdf",
@@ -37,28 +46,20 @@ const OCR_EXTENSIONS: ReadonlySet<string> = new Set([
 
 const OCR_MEDIA_PREFIXES: readonly string[] = ["image/", "application/pdf"];
 
-// Magic-byte table for fallback detection when no extension / media type is present.
-const OCR_MAGIC: readonly { readonly prefix: readonly number[] }[] = Object.freeze([
-  { prefix: [0x25, 0x50, 0x44, 0x46] }, // PDF: %PDF
-  { prefix: [0x89, 0x50, 0x4e, 0x47] }, // PNG
-  { prefix: [0xff, 0xd8, 0xff] }, // JPEG
-  { prefix: [0x47, 0x49, 0x46, 0x38] }, // GIF8
-  { prefix: [0x42, 0x4d] }, // BMP
-]);
+// A document the caller already classified as text (a known text, markup or source extension, or a
+// `text/*` media type) is never re-classified by its bytes: two ASCII letters at the start of a
+// Markdown file ("BMW …") are not an image. Bytes decide only when the caller gave no usable
+// classification, and then only by a complete image or PDF signature.
+function isClassifiedAsText(input: ParserSelectionInput): boolean {
+  return (
+    input.mediaType.toLowerCase().startsWith("text/") ||
+    isKnownTextExtension(input.extension) ||
+    isCodeExtension(input.extension)
+  );
+}
 
-function matchesMagicBytes(bytes: Uint8Array): boolean {
-  for (const entry of OCR_MAGIC) {
-    if (bytes.length < entry.prefix.length) continue;
-    let match = true;
-    for (let i = 0; i < entry.prefix.length; i += 1) {
-      if (bytes[i] !== entry.prefix[i]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) return true;
-  }
-  return false;
+function hasOcrSignature(bytes: Uint8Array): boolean {
+  return hasPdfSignature(bytes) || hasImageSignature(bytes);
 }
 
 function isOcrCandidate(input: ParserSelectionInput): boolean {
@@ -66,7 +67,7 @@ function isOcrCandidate(input: ParserSelectionInput): boolean {
   for (const prefix of OCR_MEDIA_PREFIXES) {
     if (input.mediaType.toLowerCase().startsWith(prefix)) return true;
   }
-  return matchesMagicBytes(input.bytes);
+  return !isClassifiedAsText(input) && hasOcrSignature(input.bytes);
 }
 
 function unsupportedReason(input: ParserSelectionInput): string {

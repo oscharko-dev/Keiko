@@ -29,6 +29,8 @@ export interface FixtureIssue {
   readonly description?: string;
 }
 
+/** The names the acting user sees for the issue types, in that user's own profile language. */
+type TypeNames = Partial<Record<FixtureIssue["type"], string>>;
 const TYPE_IDS = { Epic: "10", Story: "11", Bug: "12", "Sub-task": "13" } as const;
 const CATEGORY_STATUS: Readonly<Record<FixtureCategory, readonly [string, string, string]>> = {
   new: ["1", "Open", "To Do"],
@@ -139,7 +141,7 @@ function plainFields(issue: FixtureIssue): Record<string, unknown> {
     description: issue.description ?? null,
   };
 }
-function typedFields(issue: FixtureIssue): Record<string, unknown> {
+function typedFields(issue: FixtureIssue, typeNames: TypeNames): Record<string, unknown> {
   const [statusId, , categoryName] = CATEGORY_STATUS[issue.category];
   const statusName = issue.status;
   return {
@@ -148,7 +150,11 @@ function typedFields(issue: FixtureIssue): Record<string, unknown> {
       name: statusName,
       statusCategory: { key: issue.category, name: categoryName },
     },
-    issuetype: { id: TYPE_IDS[issue.type], name: issue.type, subtask: issue.type === "Sub-task" },
+    issuetype: {
+      id: TYPE_IDS[issue.type],
+      name: typeNames[issue.type] ?? issue.type,
+      subtask: issue.type === "Sub-task",
+    },
     [EPIC_LINK]: issue.epic ?? null,
     [EPIC_NAME]: issue.type === "Epic" ? issue.summary : null,
     [ACCEPTANCE]: issue.type === "Story" ? issue.acceptance : "n/a",
@@ -166,15 +172,23 @@ function extraFields(count: number): Record<string, unknown> {
       index % 2 === 0 ? "free text" : null;
   return fields;
 }
-function rawIssue(issue: FixtureIssue, requested: ReadonlySet<string>, extra: number): unknown {
-  const all = { ...plainFields(issue), ...typedFields(issue), ...extraFields(extra) };
+function rawIssue(
+  issue: FixtureIssue,
+  requested: ReadonlySet<string>,
+  extra: number,
+  typeNames: TypeNames,
+): unknown {
+  const all = { ...plainFields(issue), ...typedFields(issue, typeNames), ...extraFields(extra) };
   const fields: Record<string, unknown> = {};
   for (const [id, value] of Object.entries(all))
     if (requested.has(id) && value !== undefined) fields[id] = value;
   return { id: issue.key.slice(4), key: issue.key, fields };
 }
 
-export function response(body: unknown, truncated = false): AtlassianHttpBodyResult {
+export function response(
+  body: unknown,
+  truncated = false,
+): Extract<AtlassianHttpBodyResult, { readonly kind: "response" }> {
   const bodyText = JSON.stringify(body);
   return {
     kind: "response",
@@ -187,6 +201,8 @@ export function response(body: unknown, truncated = false): AtlassianHttpBodyRes
 
 export interface FixtureOptions {
   readonly issues: readonly FixtureIssue[];
+  /** Issue type names as the acting user's profile language shows them; the ids never change. */
+  readonly typeNames?: TypeNames;
   /** Largest search response, in issues times requested fields; larger ones read as truncated. */
   readonly truncateAbove?: number;
   readonly pageClamp?: number;
@@ -234,8 +250,10 @@ function createMetaFields(
   mixedCase: boolean,
   nothingRequired: boolean,
 ): readonly unknown[] {
-  if (nothingRequired) return [{ fieldId: "summary", required: true, hasDefaultValue: false }];
+  const timeTracking = { fieldId: "timetracking", name: "Time Tracking", required: false };
+  if (nothingRequired) return [timeTracking];
   return [
+    timeTracking,
     { fieldId: "summary", required: true, hasDefaultValue: false },
     { fieldId: "issuetype", required: true, hasDefaultValue: false },
     { fieldId: "reporter", required: true, hasDefaultValue: true },
@@ -302,7 +320,27 @@ function createMeta(path: string, options: FixtureOptions): AtlassianHttpBodyRes
     );
     return response({ values, isLast: true, total: values.length });
   }
-  return response({ values: ISSUE_TYPES, isLast: true, total: ISSUE_TYPES.length });
+  const types = ISSUE_TYPES.map((type) => ({
+    ...type,
+    name: options.typeNames?.[type.name as FixtureIssue["type"]] ?? type.name,
+  }));
+  return response({ values: types, isLast: true, total: types.length });
+}
+
+function boardResponse(path: string): AtlassianHttpBodyResult | undefined {
+  if (path.endsWith("/agile/1.0/board"))
+    return response({ startAt: 0, isLast: true, values: [{ id: 7 }] });
+  if (path.endsWith("/agile/1.0/board/7/configuration"))
+    return response({
+      estimation: {
+        type: "field",
+        field: {
+          fieldId: "timeoriginalestimate",
+          displayName: "Original estimate",
+        },
+      },
+    });
+  return undefined;
 }
 
 export function fixtureJira(options: FixtureOptions): FixtureJira {
@@ -324,7 +362,9 @@ export function fixtureJira(options: FixtureOptions): FixtureJira {
     const all = select(jql, searchCall);
     const page = all
       .slice(startAt, startAt + maxResults)
-      .map((issue) => rawIssue(issue, requested, options.extraOpaqueFields ?? 0));
+      .map((issue) =>
+        rawIssue(issue, requested, options.extraOpaqueFields ?? 0, options.typeNames ?? {}),
+      );
     const total = options.totalFor?.(searchCall, all.length) ?? all.length;
     const heavy =
       options.truncateAbove !== undefined && page.length * requested.size > options.truncateAbove;
@@ -334,6 +374,8 @@ export function fixtureJira(options: FixtureOptions): FixtureJira {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^.*\/rest\/api\/2\//u, "");
     requests.push(`${request.method} ${path}${url.search}`);
+    const board = boardResponse(url.pathname);
+    if (board !== undefined) return Promise.resolve(board);
     if (path === "field") {
       const status = fieldStatuses.shift();
       if (status !== undefined && status !== 200) return Promise.resolve(failure(status));

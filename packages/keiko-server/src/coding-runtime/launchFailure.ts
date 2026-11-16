@@ -16,6 +16,7 @@ import type {
   CodingWorkbenchAgent,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeStartFailureCode,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingJiraPodRefusal } from "./codingJiraPodBinding.js";
 import type { CodingRuntimeFailureCode } from "./codingRuntimeManager.js";
@@ -138,13 +139,15 @@ export function launchRejectionDiagnosticReason(error: unknown): string | undefi
 // can explain.
 const LAUNCH_FAILURE_CODES: ReadonlyMap<
   CodingRuntimeFailureCode,
-  CodingWorkbenchRuntimeFailureCode
+  CodingWorkbenchRuntimeStartFailureCode
 > = new Map([
   ["adapter-profile-mismatch", "source-drift"],
   ["host-unavailable", "runtime-unavailable"],
   ["model-unavailable", "model-unavailable"],
   ["repository-unavailable", "workspace-unqualified"],
   ["workspace-unqualified", "workspace-unqualified"],
+  ["workspace-location-unsupported", "workspace-location-unsupported"],
+  ["workspace-volume-unsupported", "workspace-volume-unsupported"],
 ]);
 
 /**
@@ -168,7 +171,7 @@ export function launchModelRefusalReason(
  * recognize keeps the historical `authority-resolution-failed`: an unrecognized throw must not be
  * reported as a specific, wrong cause, and must never be reported as success.
  */
-export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeFailureCode {
+export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeStartFailureCode {
   // A request the runtime cannot honour is an invalid intent, not a missing authority.
   if (error instanceof CodingRuntimeAgentUnsupportedError) return "invalid-intent";
   if (error instanceof CodingRuntimeInputsUnsupportedError) return "invalid-intent";
@@ -177,10 +180,21 @@ export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeF
   return LAUNCH_FAILURE_CODES.get(error.failureCode) ?? "authority-resolution-failed";
 }
 
+/**
+ * The settled failure code of a run whose managed runtime refused to start. A workspace the person
+ * can replace (it contains Keiko's own runtime) keeps its name so the Workbench can say what to
+ * change (#4335); every other refusal stays the internal `runtime-failed`.
+ */
+export function classifyManagerStartFailure(
+  failureCode: CodingRuntimeFailureCode,
+): CodingWorkbenchRuntimeFailureCode {
+  return failureCode === "workspace-unqualified" ? "workspace-unqualified" : "runtime-failed";
+}
+
 /** The refused start a thrown launch rejection becomes: its wire code and any named model reason. */
 export function refusedLaunch(error: unknown): {
   readonly ok: false;
-  readonly failureCode: CodingWorkbenchRuntimeFailureCode;
+  readonly failureCode: CodingWorkbenchRuntimeStartFailureCode;
   readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason;
 } {
   const modelRefusalReason = launchModelRefusalReason(error);

@@ -1,3 +1,4 @@
+import { ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS } from "./activity-line-fields.js";
 import { DECLARED_MODEL_MODES } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   activityLogErrorKindOr,
@@ -63,6 +64,8 @@ const DIAGNOSTIC_OUTCOMES = [
   "source-skipped",
   "request-refused",
   "provider-busy",
+  "request-cancelled",
+  "routine",
 ] as const;
 
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
@@ -182,20 +185,7 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
     },
     promptTokens: { type: "integer", dataClass: "count", required: false },
     completionTokens: { type: "integer", dataClass: "count", required: false },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -204,6 +194,42 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["server-diagnostic"],
   proofIds: ["server.diagnostic.failure.activity-log-line"],
+  releaseImpact: "patch",
+});
+
+// Expected capability states and per-turn summaries are observations, never failure clusters.
+const SERVER_DIAGNOSTIC_OBSERVATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server.diagnostic.observation",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "diagnostics-log.diagnosticObservationEvent",
+  fields: {
+    diagnosticOperation: { type: "string", dataClass: "opaque-id", required: true, maxLength: 160 },
+    diagnosticErrorClass: {
+      type: "string",
+      dataClass: "error-kind",
+      required: true,
+      maxLength: 64,
+    },
+    source: { type: "string", dataClass: "opaque-id", required: true, maxLength: 160 },
+    parentCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    code: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    semanticCandidateCount: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["server-diagnostic"],
+  proofIds: ["server.diagnostic.observation.activity-log-line"],
   releaseImpact: "patch",
 });
 
@@ -501,16 +527,46 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   return fields;
 }
 
-function closedDiagnosticErrorKind(errorClass: string): ActivityLogErrorKind {
+// Ordered class rules: the first matching pattern wins. A class name is code-declared, so a
+// pattern here classifies the KIND of failure without ever reading error text.
+const DIAGNOSTIC_CLASS_KIND_RULES: readonly Readonly<{
+  pattern: RegExp;
+  result: ActivityLogErrorKind;
+}>[] = [
+  { pattern: /timeout/iu, result: "timeout" },
+  { pattern: /cancel|abort/iu, result: "cancelled" },
+  { pattern: /rate.?limit/iu, result: "rate-limited" },
+  { pattern: /permission|forbidden|authority/iu, result: "permission-denied" },
+  { pattern: /unavailable|connection|transport/iu, result: "unavailable" },
+];
+
+// Node reports a lost connection as `TypeError: fetch failed` whose CAUSE carries the system code,
+// so the class alone ("TypeError") cannot tell an outage from a Keiko defect. The code is a bounded
+// machine token (never text); only these reachability and deadline families are recognised.
+const DIAGNOSTIC_CODE_KIND_RULES: readonly Readonly<{
+  pattern: RegExp;
+  result: ActivityLogErrorKind;
+}>[] = [
+  { pattern: /^(?:ETIMEDOUT|UND_ERR_(?:HEADERS|BODY|CONNECT)_TIMEOUT)$/u, result: "timeout" },
+  {
+    pattern:
+      /^(?:ECONN[A-Z]+|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|EPIPE|EAI_AGAIN|UND_ERR_(?:SOCKET|CLOSED))$/u,
+    result: "unavailable",
+  },
+];
+
+function closedDiagnosticErrorKind(errorClass: string, code?: string): ActivityLogErrorKind {
+  if (code === "JIRA_AUTHENTICATION_FAILED") return "authority-denied";
   if (errorClass === "CallerAttemptAdmissionError") return "authority-denied";
   const registered = activityLogErrorKindOr(errorClass, "internal");
   if (registered !== "internal" || errorClass === "internal") return registered;
-  if (/timeout/iu.test(errorClass)) return "timeout";
-  if (/cancel/iu.test(errorClass)) return "cancelled";
-  if (/rate.?limit/iu.test(errorClass)) return "rate-limited";
-  if (/permission|forbidden|authority/iu.test(errorClass)) return "permission-denied";
-  if (/unavailable|connection|transport/iu.test(errorClass)) return "unavailable";
-  return "internal";
+  const byClass = DIAGNOSTIC_CLASS_KIND_RULES.find(({ pattern }) => pattern.test(errorClass));
+  if (byClass !== undefined) return byClass.result;
+  const byCode =
+    code === undefined
+      ? undefined
+      : DIAGNOSTIC_CODE_KIND_RULES.find(({ pattern }) => pattern.test(code));
+  return byCode?.result ?? "internal";
 }
 
 function activityLogDiagnosticOperation(operation: string): string {
@@ -518,7 +574,30 @@ function activityLogDiagnosticOperation(operation: string): string {
   return label.replace(" ", ":");
 }
 
+function diagnosticObservationEvent(record: ServerDiagnosticRecord): ServerLogEvent {
+  const code = boundedDiagnosticCode(record.code);
+  return activityLogEvent(
+    SERVER_DIAGNOSTIC_OBSERVATION_OPERATION,
+    { level: "info", correlationId: record.correlationId },
+    {
+      diagnosticOperation: activityLogDiagnosticOperation(record.operation),
+      diagnosticErrorClass: record.errorClass,
+      source: record.source,
+      ...(record.parentCorrelationId === undefined
+        ? {}
+        : { parentCorrelationId: record.parentCorrelationId }),
+      ...(code === undefined ? {} : { code }),
+      ...(record.semanticCandidateCount === undefined
+        ? {}
+        : { semanticCandidateCount: record.semanticCandidateCount }),
+      completeness: "complete",
+      loss: "none",
+    },
+  );
+}
+
 function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEvent {
+  if (record.diagnosticOutcome === "routine") return diagnosticObservationEvent(record);
   const fields = {
     diagnosticOperation: activityLogDiagnosticOperation(record.operation),
     diagnosticErrorClass: record.errorClass,
@@ -532,11 +611,12 @@ function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEv
       level:
         record.diagnosticOutcome === "source-skipped" ||
         record.diagnosticOutcome === "request-refused" ||
-        record.diagnosticOutcome === "provider-busy"
+        record.diagnosticOutcome === "provider-busy" ||
+        record.diagnosticOutcome === "request-cancelled"
           ? "warn"
           : "error",
       correlationId: record.correlationId,
-      errorKind: closedDiagnosticErrorKind(record.errorClass),
+      errorKind: closedDiagnosticErrorKind(record.errorClass, record.code),
     },
     fields,
   );
@@ -625,6 +705,8 @@ export const DEFAULT_SERVER_DIAGNOSTIC_SUMMARY = "server-operation-failed";
 // silently loses its summary on the log line instead of ever being echoed as-is.
 const SERVER_DIAGNOSTIC_SUMMARIES = [
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  "jira-private-input-activity-log-failed",
+  "jira-private-input-cleanup-failed",
   "Provider verification failed without exposing upstream response details.",
   "Workspace index key resolution or initialization failed.",
   "Encrypted workspace index snapshot was rejected.",
@@ -650,7 +732,10 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "A gateway readiness probe could not be completed.",
   "A detached capsule indexing run failed before reaching a terminal state.",
   "The coding sidecar gateway stream failed mid-response.",
+  "The coding sidecar gateway stream failed before the first response chunk.",
   "Audit or evidence persistence failed.",
+  "The memory vault could not be opened with the available key.",
+  "The memory vault could not be opened or migrated. Memory is withheld.",
   "Private context checkpoint persistence failed.",
   "Debug production service composition failed.",
   "Managed task-workspace boundary materialization failed.",
@@ -685,7 +770,11 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "runtime-history-failed",
   "runtime-lifecycle-failed",
   "runtime-start-failed",
+  "runtime-turn-expired",
   "runtime-turn-failed",
+  // #4346: an operator still sets the retired `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`, which
+  // Keiko no longer reads because it does not cap prompt tokens.
+  "retired-setting-ignored",
   "safe-activity-dropped-validation-rejected",
   "safe-activity-dropped-redactor-collapsed",
   "safe-activity-dropped-projection-rejected",
@@ -709,6 +798,20 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "prepare-bridge-close",
   "prepare-run-root-remove",
   "tool-facade-failed",
+  // Routine bookkeeping of the governed tool bridge (audit 2026-11-06): settled replay identities
+  // moved to a run's replay filter, and an approval ask refused for the per-run bound or merged into
+  // the prompt already open for the same thing. Counts in `code` only, never a path or a command.
+  "tool-invocation-identities-evicted",
+  "approval-ask-run-bound-refused",
+  "approval-ask-coalesced",
+  // One complete point-of-use verification of the secure-read helper ran (the unchanged helper is
+  // otherwise served from its identity-bound verdict); the run it served is not known here.
+  "secure-read-helper-verified",
+  // The point-of-use verification of the secure-read helper threw instead of answering; the read is
+  // refused, and the closed error class, Keiko frames and cause chain say why.
+  "secure-read-helper-verification-failed",
+  // A governed tool request body was not JSON: the bridge answers 400 and records only that.
+  "tool-bridge-request-body-invalid",
   // The sidecar tool bridge could not record how a delivered tool result renders for the model: the
   // activity-log sink refused the line. The answer, which the facade had already produced, is
   // delivered unchanged and settled once; only the record is lost (PR #3876 review).
@@ -718,6 +821,9 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   // A native OpenCode child session's ancestry could not be read from the runtime's session list;
   // the child's permission ask is refused because nothing proves it belongs to the run (#3897).
   "native-session-ancestry-failed",
+  // A subagent's live question signal failed after its session was classified; the Workbench still
+  // reads the child's question on its next question read (#4271).
+  "child-question-signal-failed",
   // #3903 AC4: the managed task-workspace owner failed an approved Code Mode `worktree_create`
   // without a classified answer; the request is refused and the producer's own call stays blocked.
   "native-worktree-provision-failed",
@@ -739,6 +845,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "coding-sidecar-gateway-tool-contract-rejected",
   "coding-sidecar-gateway-tool-adoption-gap",
   "Local credential migration failed; plaintext config remains in place.",
+  "The gateway configs in this folder could not all be read; no stored credential is pruned.",
   "Editor local-history capture failed.",
   "Verification execution failed unexpectedly.",
   "A verification event subscriber failed.",
@@ -780,6 +887,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "atlassian-credential-list-activity-log-failed",
   "atlassian-credential-updated-activity-log-failed",
   "atlassian-connection-check-activity-log-failed",
+  "atlassian-target-admission-activity-log-failed",
   // #2906 round 3: update-session-lock.ts's corrupt-lock quarantine prune used to swallow
   // directory/stat/unlink failures outright. "-pruned" reports a clean sweep (occurrenceCount is
   // the removed count); "-prune-degraded" reports one where at least one entry could not be
@@ -826,6 +934,21 @@ function nonEmpty(values: readonly string[]): readonly string[] | undefined {
 // `causeChain` (ADR-0173 D3) reuse `stack-frames.ts`'s reducers rather than re-deriving them: a
 // second stack reducer here would either duplicate that module's dist-anchoring and bounds, or,
 // worse, drift from them.
+// The first machine `code` along a bounded `cause` chain, for a wrapper that carries none of its
+// own (undici's `TypeError: fetch failed` holds the socket code one level down). Hostile accessors
+// degrade to absence through `safeProperty`; a cyclic chain stops at the first repeat.
+function causeMachineCode(error: unknown): string | undefined {
+  const seen = new Set<unknown>([error]);
+  let current: unknown = safeProperty(error, "cause");
+  for (let depth = 0; depth < 5 && current !== undefined && !seen.has(current); depth += 1) {
+    seen.add(current);
+    const code = machineToken(safeProperty(current, "code"));
+    if (code !== undefined) return code;
+    current = safeProperty(current, "cause");
+  }
+  return undefined;
+}
+
 export function describeError(error: unknown): {
   readonly errorClass: string;
   readonly code?: string | undefined;
@@ -844,7 +967,7 @@ export function describeError(error: unknown): {
   const detail = providerErrorDetail(error);
   return {
     errorClass: contentFreeErrorClass(error),
-    code: machineToken(safeProperty(error, "code")),
+    code: machineToken(safeProperty(error, "code")) ?? causeMachineCode(error),
     gatewayRequestId: machineToken(safeProperty(error, "requestId")),
     httpStatus: detail.httpStatus,
     retryAfterMs: detail.retryAfterMs,

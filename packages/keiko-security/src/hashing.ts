@@ -1,35 +1,9 @@
-// Pure, deterministic hashing primitives shared across the security trust boundary. Callers in
-// harness, audit, and UI compose these into higher-level fingerprints, evidence digests, and CSP
-// hashes without re-deriving the cryptographic boundary in each layer.
-//
-// Why these helpers live here, not in node:crypto callers: the security package is the leaf trust
-// boundary, so the canonical-JSON serialiser and the SHA-256 wrappers belong with redact() and the
-// safe-error taxonomy — any future regulated-delivery audit only needs to inspect one module to
-// confirm hashing semantics are stable.
+// SHA-256 wrappers remain owned by the security trust boundary. Canonical JSON is the same
+// pure shared Contracts function, re-exported here to preserve every existing Security API.
+// Browser-safe consumers can use that leaf without importing node:crypto.
 
 import { createHash } from "node:crypto";
-
-import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
-
-// Canonical JSON: object keys sorted recursively, array order preserved, undefined values omitted
-// (matching JSON.stringify semantics). Two structurally equal inputs serialise to byte-identical
-// strings regardless of key insertion order, so SHA-256 over the canonical form is order-stable.
-export function canonicalise(value: unknown): string {
-  if (value === undefined) {
-    return "null";
-  }
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalise(item)).join(",")}]`;
-  }
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => compareStrings(a, b))
-    .map(([key, v]) => `${JSON.stringify(key)}:${canonicalise(v)}`);
-  return `{${entries.join(",")}}`;
-}
+export { canonicalise } from "@oscharko-dev/keiko-contracts/runtime/canonical-json";
 
 // SHA-256 of a UTF-8 string, hex-encoded. Used for run-fingerprints and any other identifier-style
 // digest where hex is the expected format.

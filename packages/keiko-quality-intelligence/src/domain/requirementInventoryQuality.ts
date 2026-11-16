@@ -11,6 +11,7 @@ import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qual
 import {
   REQUIREMENT_DIGEST_SHORT_LENGTH,
   type RequirementInventoryEntry,
+  titleFromStatement,
 } from "./requirementInventory.js";
 import { analyzeRequirementQuality } from "./requirementQuality.js";
 
@@ -40,6 +41,8 @@ function atomFor(
 }
 
 function canonicalText(entry: RequirementInventoryEntry): string {
+  // A title taken from the statement says nothing else: reading both would count one obligation twice.
+  if (entry.title === titleFromStatement(entry.statement)) return entry.statement;
   return [entry.title, entry.statement].filter((part) => part.length > 0).join(". ");
 }
 

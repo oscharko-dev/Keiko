@@ -106,7 +106,17 @@ windows.
    pagehide events additionally flush pending drafts; bounded save requests use fetch keepalive
    so an admitted write can finish across page teardown. Oversized drafts retain ordinary transport
    and the warning. This is best-effort transport, not a guarantee after forced termination, a
-   pending revision conflict, or unavailable storage. Closing or cutting a
+   pending revision conflict, or unavailable storage. The Coding Workbench composer reuses this
+   same draft store, compare-and-set revision and unload flush for its unsent task and follow-up
+   text (schema 60, #4271). Its key is the Workbench window id kept by the persisted workspace
+   layout, so a reload while a start is in flight, or before a follow-up is sent, restores what was
+   typed. Its `chat.draft.operation` lines carry `surface: "coding-workbench"`. A Workbench render
+   without a window identity stays component-local. The admitted keys are the ids the shell mints
+   for that singleton window (`coding`, or a generated `coding-<base36>` id), defined once in
+   `CODING_WORKBENCH_DRAFT_WINDOW_ID_PATTERN` (`keiko-contracts` `bff-wire`). The server refuses any
+   other key, and a window restored under one stays component-local rather than asking for a draft
+   it cannot have (#4068: the first shape, `coding-workbench-…`, was one the shell never minted, so
+   every read and save of the real window was refused). Closing or cutting a
    chat window waits for private draft acknowledgement and refuses unresolved conflicts or staged
    attachments. A final synchronous readiness check preserves edits made during asynchronous
    connection teardown; acknowledged unbinds still remove their corresponding visible connections.

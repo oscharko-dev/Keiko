@@ -1,0 +1,229 @@
+import { decodeCanonicalUriSegment } from "./canonicalUriSegment.js";
+import type {
+  AtlassianCredentialMetadata,
+  AtlassianHttpBodyRequest,
+  AtlassianHttpRequest,
+  AtlassianHttpResult,
+} from "@oscharko-dev/keiko-connectors";
+
+type Request = AtlassianHttpRequest | AtlassianHttpBodyRequest;
+
+// Structural rule (ADR-0128): Jira Data Center answers 401 for a missing WebSudo or administrator
+// permission as well as for a failed authentication, and the model reaches about 450 operations
+// through discovery, so no hand-maintained route list can be complete. Every 401 from the
+// instance except the identity route itself is therefore decided by the existing same-generation
+// identity probe: only a probe that itself answers 401 discards the credential. The identity route
+// is the one place where no further evidence can exist, so its 401 stays definitive. A positive
+// probe never grants a permission, retries a write or borrows another route's facts.
+const IDENTITY_SEGMENTS: readonly string[] = ["rest", "api", "2", "myself"];
+
+// An encoded separator can never name a Jira resource; such a request is refused before dispatch.
+function canonicalSegment(part: string): boolean {
+  if (part.length === 0) return true;
+  const decoded = decodeCanonicalUriSegment(part);
+  return decoded !== undefined && !/[\\/]/u.test(decoded);
+}
+
+function canonicalPathSegments(pathname: string, basePath: string): readonly string[] | undefined {
+  if (pathname !== basePath && !pathname.startsWith(`${basePath}/`)) return undefined;
+  const parts = pathname.slice(basePath.length).split("/").slice(1);
+  return parts.every(canonicalSegment) ? parts : undefined;
+}
+
+/** The identity route, any other route of the instance, or nothing this instance owns. */
+export type JiraRouteClass = "identity" | "other";
+
+export function jiraRouteClass(
+  metadata: AtlassianCredentialMetadata,
+  request: Request,
+): JiraRouteClass | undefined {
+  if (
+    metadata.provider !== "jira" ||
+    metadata.deployment !== "data-center" ||
+    metadata.livePod === undefined
+  )
+    return undefined;
+  const base = new URL(metadata.baseUrl);
+  const target = new URL(request.url);
+  if (target.origin !== base.origin) return undefined;
+  const parts = canonicalPathSegments(target.pathname, base.pathname.replace(/\/$/u, ""));
+  if (parts === undefined || parts.length === 0) return undefined;
+  const identity =
+    request.method === "GET" &&
+    parts.length === IDENTITY_SEGMENTS.length &&
+    parts.every((part, index) => part === IDENTITY_SEGMENTS[index]);
+  return identity ? "identity" : "other";
+}
+
+export function ambiguousJiraAuthenticationResponse(
+  metadata: AtlassianCredentialMetadata,
+  request: Request,
+): boolean {
+  return jiraRouteClass(metadata, request) === "other";
+}
+
+export function currentJiraAuthenticationObservation(
+  metadata: AtlassianCredentialMetadata,
+  current: AtlassianCredentialMetadata | undefined,
+): boolean {
+  if (metadata.deployment !== "data-center" || current?.deployment !== "data-center") return false;
+  const state = current.livePod;
+  if (metadata.livePod === undefined || state === undefined) return false;
+  return (
+    current.generation === metadata.generation &&
+    state.verificationRevision === metadata.livePod.verificationRevision &&
+    state.verificationStatus === "ok" &&
+    !state.verificationInProgress &&
+    state.credentialOperation === undefined
+  );
+}
+
+function ambiguousFailure(
+  metadata: AtlassianCredentialMetadata,
+  request: Request,
+  result: AtlassianHttpResult,
+): boolean {
+  return (
+    result.kind === "response" &&
+    result.status === 401 &&
+    ambiguousJiraAuthenticationResponse(metadata, request)
+  );
+}
+function identityRoute401(
+  metadata: AtlassianCredentialMetadata,
+  request: Request,
+  result: AtlassianHttpResult,
+): boolean {
+  return (
+    result.kind === "response" &&
+    result.status === 401 &&
+    jiraRouteClass(metadata, request) === "identity"
+  );
+}
+function withinOriginalRequest(deadline: number, signal: AbortSignal | undefined): boolean {
+  return !signal?.aborted && Date.now() < deadline;
+}
+
+/** How long a positive identity read vouches for the same credential generation and revision. */
+export const JIRA_IDENTITY_PROBE_WINDOW_MS = 10_000;
+
+/**
+ * The bounded deadline of one shared identity read. It belongs to the flight, not to the caller
+ * that started it: a caller that gives up never shortens what the others wait for.
+ */
+export const JIRA_IDENTITY_PROBE_DEADLINE_MS = 10_000;
+
+/**
+ * Closed outcome of the same-generation identity read that decides a 401: `confirmed` keeps the
+ * credential, `rejected` means the identity read itself answered 401 (the owner has discarded the
+ * credential), `inconclusive` is everything else (timeout, throttling, server error, redirect,
+ * malformed data, cancellation).
+ */
+export type JiraIdentityProbeOutcome = "confirmed" | "rejected" | "inconclusive";
+export type JiraUnsettledProbe =
+  "stale" | "cancelled-or-expired" | "probe-error" | "foreign-401" | "denied-401";
+
+export interface JiraAuthenticationObservationOptions {
+  /**
+   * Called once when a probe could not settle for a reason the probe owner cannot record. A
+   * `probe-error` carries the thrown error so the owner can report it with its frames.
+   */
+  readonly onUnsettled?: (reason: JiraUnsettledProbe, error?: unknown) => void;
+}
+
+/**
+ * Original response observation stays synchronous; only the subsequent identity GET is awaited.
+ * A 401 the identity read could not settle returns `authentication: "unconfirmed"`: the request
+ * is refused, the credential is kept, and nobody reads an expired token out of an unproven 401.
+ */
+export function withJiraAuthenticationObservation<
+  TRequest extends Request,
+  TResult extends AtlassianHttpResult,
+>(
+  metadata: AtlassianCredentialMetadata,
+  port: (request: TRequest) => Promise<TResult>,
+  current: () => boolean,
+  probe: (deadlineAt: number, signal: AbortSignal | undefined) => Promise<JiraIdentityProbeOutcome>,
+  options: JiraAuthenticationObservationOptions = {},
+): (request: TRequest) => Promise<TResult> {
+  return async (input): Promise<TResult> => {
+    const request: TRequest = { ...input };
+    Object.freeze(request);
+    const deadline = Date.now() + Math.min(request.timeoutMs, 60_000);
+    const result = await port(request);
+    if (identityRoute401(metadata, request, result)) return identityRouteOutcome(result, options);
+    if (!ambiguousFailure(metadata, request, result)) return result;
+    return probeOutcome(result, { current, probe, options, deadline, request });
+  };
+}
+
+/** The identity route's own 401: only one Jira authored rejects the token (already discarded). */
+function identityRouteOutcome<TResult extends AtlassianHttpResult>(
+  result: TResult,
+  options: JiraAuthenticationObservationOptions,
+): TResult {
+  const origin = result.kind === "response" ? result.authenticationFailure : undefined;
+  if (origin === "jira") return result;
+  options.onUnsettled?.(origin === "denied" ? "denied-401" : "foreign-401");
+  return { ...result, authentication: "unconfirmed" };
+}
+
+async function probeOutcome<TResult extends AtlassianHttpResult>(
+  result: TResult,
+  context: {
+    readonly current: () => boolean;
+    readonly probe: (
+      deadlineAt: number,
+      signal: AbortSignal | undefined,
+    ) => Promise<JiraIdentityProbeOutcome>;
+    readonly options: JiraAuthenticationObservationOptions;
+    readonly deadline: number;
+    readonly request: Request;
+  },
+): Promise<TResult> {
+  const { current, probe, options, deadline, request } = context;
+  const unconfirmed = { ...result, authentication: "unconfirmed" } as const;
+  const signal = "signal" in request ? request.signal : undefined;
+  if (!probeable(current, deadline, signal, options)) return unconfirmed;
+  const outcome = await settledProbe(probe, deadline, signal, options);
+  if (outcome === "rejected") return result;
+  if (outcome === "confirmed" && current() && withinOriginalRequest(deadline, signal))
+    return { ...result, authentication: "confirmed" };
+  return unconfirmed;
+}
+
+function probeable(
+  current: () => boolean,
+  deadline: number,
+  signal: AbortSignal | undefined,
+  options: JiraAuthenticationObservationOptions,
+): boolean {
+  if (!current()) {
+    options.onUnsettled?.("stale");
+    return false;
+  }
+  if (!withinOriginalRequest(deadline, signal)) {
+    options.onUnsettled?.("cancelled-or-expired");
+    return false;
+  }
+  return true;
+}
+
+/** A credential change during the probe throws out of the port; it settles as inconclusive. */
+async function settledProbe(
+  probe: (deadlineAt: number, signal: AbortSignal | undefined) => Promise<JiraIdentityProbeOutcome>,
+  deadline: number,
+  signal: AbortSignal | undefined,
+  options: JiraAuthenticationObservationOptions,
+): Promise<JiraIdentityProbeOutcome> {
+  try {
+    return await probe(deadline, signal);
+  } catch (error) {
+    reportProbeFailure(options, error);
+    return "inconclusive";
+  }
+}
+
+function reportProbeFailure(options: JiraAuthenticationObservationOptions, error: unknown): void {
+  options.onUnsettled?.("probe-error", error);
+}

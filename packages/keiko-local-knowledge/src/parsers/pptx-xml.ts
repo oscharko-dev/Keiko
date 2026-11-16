@@ -1,11 +1,13 @@
-// PresentationML text-layer extraction for the pptx parser. A small XML-aware tokenizer (a linear
-// scan with sticky, non-backtracking patterns; no regex over document bodies) feeds a state
-// machine that collects shape paragraphs and table cells in document order. Comments are skipped
-// whole, CDATA sections yield their literal character data, and attribute values are read quote
-// aware. Entities are never expanded beyond the five predefined ones and numeric character
-// references, and every construct the text layer does not need - a DOCTYPE or ENTITY declaration,
-// a processing instruction other than the leading XML declaration, markup that does not parse -
-// fails closed instead of being skipped.
+// OOXML tokenizer shared by the docx and pptx readers. A small XML-aware tokenizer (a linear scan
+// with sticky, non-backtracking patterns; no regex over document bodies) yields element tags and
+// character data in document order. Comments are skipped whole, CDATA sections yield their
+// literal character data, and attribute values are read quote aware. Entities are never expanded
+// beyond the five predefined ones and numeric character references, and every construct the text
+// layer does not need - a DOCTYPE or ENTITY declaration, a processing instruction other than the
+// leading XML declaration, markup that does not parse, a part that is not exactly one XML document
+// - fails closed instead of being skipped. Element and attribute names carry the canonical prefix
+// of their namespace (`w`, `a`, `p`, `r`, `mc`, `m`, `c`, `dgm`), whatever prefix the producer
+// declared for it: a document that a generic XML library wrote as `ns0:p` reads like one Word wrote.
 
 import { decodeXmlEntities } from "./_internal.js";
 
@@ -19,12 +21,38 @@ const COMMENT_CLOSE = "-->";
 const CDATA_OPEN = "<![CDATA[";
 const CDATA_CLOSE = "]]>";
 const BYTE_ORDER_MARK = "﻿";
-const SKIPPED_FIELD_TYPES: readonly string[] = ["slidenum", "datetime"];
+const NAMESPACE_DECLARATION = "xmlns";
+
+// The Strict namespaces of ISO/IEC 29500. They are identifiers that documents declare and the readers
+// compare; nothing ever fetches them, and `https` would name a different namespace.
+const STRICT_NAMESPACE = "http://purl.oclc.org/ooxml"; // NOSONAR typescript:S5332
+
+// The Transitional and Strict namespaces of every vocabulary the readers match by name.
+const CANONICAL_PREFIX_BY_NAMESPACE: ReadonlyMap<string, string> = new Map([
+  ["http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w"],
+  [`${STRICT_NAMESPACE}/wordprocessingml/main`, "w"],
+  ["http://schemas.openxmlformats.org/drawingml/2006/main", "a"],
+  [`${STRICT_NAMESPACE}/drawingml/main`, "a"],
+  ["http://schemas.openxmlformats.org/presentationml/2006/main", "p"],
+  [`${STRICT_NAMESPACE}/presentationml/main`, "p"],
+  ["http://schemas.openxmlformats.org/officeDocument/2006/relationships", "r"],
+  [`${STRICT_NAMESPACE}/officeDocument/relationships`, "r"],
+  ["http://schemas.openxmlformats.org/markup-compatibility/2006", "mc"],
+  ["http://schemas.openxmlformats.org/officeDocument/2006/math", "m"],
+  [`${STRICT_NAMESPACE}/officeDocument/math`, "m"],
+  ["http://schemas.openxmlformats.org/drawingml/2006/chart", "c"],
+  [`${STRICT_NAMESPACE}/drawingml/chart`, "c"],
+  ["http://schemas.openxmlformats.org/drawingml/2006/diagram", "dgm"],
+  [`${STRICT_NAMESPACE}/drawingml/diagram`, "dgm"],
+]);
+const CANONICAL_PREFIXES: ReadonlySet<string> = new Set(CANONICAL_PREFIX_BY_NAMESPACE.values());
 
 export interface XmlTag {
   readonly kind: "tag";
   /** Element name without its namespace prefix. */
   readonly local: string;
+  /** Namespace prefix as written (`w`, `a`, `mc`), or an empty string when the name has none. */
+  readonly prefix: string;
   readonly closing: boolean;
   readonly selfClosing: boolean;
   /** Decoded attribute values keyed by their qualified name. */
@@ -39,8 +67,22 @@ export interface XmlText {
 
 export type XmlToken = XmlTag | XmlText;
 
+/** Written prefix (empty for the default namespace) to the canonical prefix its namespace has. */
+type NamespaceScope = ReadonlyMap<string, string>;
+
 interface OpenElement {
   readonly qualified: string;
+  /** Scope inside the element: the one that names it and its attributes. */
+  readonly scope: NamespaceScope;
+  /** Scope outside the element, restored when it closes. */
+  readonly outer: NamespaceScope;
+}
+
+interface ScanState {
+  readonly stack: OpenElement[];
+  scope: NamespaceScope;
+  /** Root elements opened so far; a part holds exactly one. */
+  roots: number;
 }
 
 interface Markup {
@@ -55,7 +97,7 @@ interface TagTail {
 }
 
 function malformed(): Error {
-  return new Error("pptx xml is not well formed");
+  return new Error("ooxml xml is not well formed");
 }
 
 function localNameOf(qualified: string): string {
@@ -63,24 +105,99 @@ function localNameOf(qualified: string): string {
   return colon === -1 ? qualified : qualified.slice(colon + 1);
 }
 
+function prefixOf(qualified: string): string {
+  const colon = qualified.indexOf(":");
+  return colon === -1 ? "" : qualified.slice(0, colon);
+}
+
 function matchAt(pattern: RegExp, xml: string, index: number): RegExpExecArray | null {
   pattern.lastIndex = index;
   return pattern.exec(xml);
 }
 
+// ─── Namespaces ──────────────────────────────────────────────────────────────
+
+/** The prefix a namespace declaration binds, `""` for the default namespace; undefined otherwise. */
+function declaredPrefix(attribute: string): string | undefined {
+  if (attribute === NAMESPACE_DECLARATION) return "";
+  const own = `${NAMESPACE_DECLARATION}:`;
+  return attribute.startsWith(own) ? attribute.slice(own.length) : undefined;
+}
+
+/**
+ * A known namespace binds its prefix to the canonical one. A foreign namespace that reuses a
+ * canonical prefix gets a prefix no reader matches, so it cannot impersonate the real vocabulary.
+ */
+function bindPrefix(scope: Map<string, string>, prefix: string, namespace: string): void {
+  const canonical = CANONICAL_PREFIX_BY_NAMESPACE.get(namespace);
+  if (canonical !== undefined) scope.set(prefix, canonical);
+  else if (CANONICAL_PREFIXES.has(prefix)) scope.set(prefix, `~${prefix}`);
+  else scope.delete(prefix);
+}
+
+/** The scope inside an element: the outer one plus the declarations the element itself makes. */
+function declareNamespaces(
+  outer: NamespaceScope,
+  attributes: ReadonlyMap<string, string>,
+): NamespaceScope {
+  let scope: Map<string, string> | undefined;
+  for (const [name, namespace] of attributes) {
+    const prefix = declaredPrefix(name);
+    if (prefix === undefined) continue;
+    scope ??= new Map(outer);
+    bindPrefix(scope, prefix, namespace);
+  }
+  return scope ?? outer;
+}
+
+function canonicalPrefix(scope: NamespaceScope, prefix: string): string {
+  return scope.get(prefix) ?? prefix;
+}
+
+function canonicalAttribute(scope: NamespaceScope, name: string): string {
+  const colon = name.indexOf(":");
+  if (colon === -1) return name;
+  const prefix = name.slice(0, colon);
+  const canonical = scope.get(prefix);
+  if (canonical === undefined || canonical === prefix) return name;
+  return `${canonical}${name.slice(colon)}`;
+}
+
+/** The attributes keyed by canonical qualified name; the same map when no name changes. */
+function canonicalAttributes(
+  scope: NamespaceScope,
+  attributes: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  for (const name of attributes.keys()) {
+    if (canonicalAttribute(scope, name) === name) continue;
+    return new Map(
+      Array.from(attributes, ([key, value]) => [canonicalAttribute(scope, key), value] as const),
+    );
+  }
+  return attributes;
+}
+
 function trackNesting(
-  stack: OpenElement[],
+  state: ScanState,
   tag: XmlTag,
-  qualified: string,
+  element: { readonly qualified: string; readonly scope: NamespaceScope },
   maxDepth: number,
 ): void {
+  const { stack } = state;
+  if (!tag.closing && stack.length === 0) {
+    state.roots += 1;
+    if (state.roots > 1) throw malformed();
+  }
   if (tag.selfClosing) return;
   if (!tag.closing) {
-    if (stack.length >= maxDepth) throw new Error("pptx xml exceeds nesting limit");
-    stack.push({ qualified });
+    if (stack.length >= maxDepth) throw new Error("ooxml xml exceeds nesting limit");
+    stack.push({ ...element, outer: state.scope });
+    state.scope = element.scope;
     return;
   }
-  if (stack.pop()?.qualified !== qualified) throw malformed();
+  const closed = stack.pop();
+  if (closed?.qualified !== element.qualified) throw malformed();
+  state.scope = closed.outer;
 }
 
 interface AttributeRead {
@@ -109,7 +226,7 @@ function readStartTagTail(xml: string, from: number): TagTail {
       return { attributes, selfClosing: true, next: spaceEnd + 2 };
     }
     const attribute = readAttribute(xml, spaceEnd, spaceEnd > cursor);
-    if (attributes.has(attribute.name)) throw new Error("pptx xml repeats an attribute");
+    if (attributes.has(attribute.name)) throw new Error("ooxml xml repeats an attribute");
     attributes.set(attribute.name, attribute.value);
     cursor = attribute.next;
   }
@@ -122,30 +239,35 @@ function readTagTail(xml: string, afterName: number, closing: boolean): TagTail 
   return { attributes: new Map(), selfClosing: false, next: afterName + end[0].length };
 }
 
-function readElement(xml: string, open: number, stack: OpenElement[], maxDepth: number): Markup {
+function readElement(xml: string, open: number, state: ScanState, maxDepth: number): Markup {
   const closing = xml[open + 1] === "/";
   const nameStart = open + (closing ? 2 : 1);
   const name = matchAt(NAME_PATTERN, xml, nameStart)?.[0];
   if (name === undefined) throw malformed();
   const tail = readTagTail(xml, nameStart + name.length, closing);
+  // A closing tag is named by the scope of the element it closes, a start tag by its own.
+  const scope = closing
+    ? (state.stack.at(-1)?.scope ?? state.scope)
+    : declareNamespaces(state.scope, tail.attributes);
   const tag: XmlTag = {
     kind: "tag",
     local: localNameOf(name),
+    prefix: canonicalPrefix(scope, prefixOf(name)),
     closing,
     selfClosing: tail.selfClosing,
-    attributes: tail.attributes,
+    attributes: canonicalAttributes(scope, tail.attributes),
   };
-  trackNesting(stack, tag, name, maxDepth);
+  trackNesting(state, tag, { qualified: name, scope }, maxDepth);
   return { token: tag, next: tail.next };
 }
 
 function closerOf(xml: string, open: number, opener: string, closer: string): number {
   const close = xml.indexOf(closer, open + opener.length);
-  if (close === -1) throw new Error("pptx xml has an unterminated construct");
+  if (close === -1) throw new Error("ooxml xml has an unterminated construct");
   return close;
 }
 
-function readMarkup(xml: string, open: number, stack: OpenElement[], maxDepth: number): Markup {
+function readMarkup(xml: string, open: number, state: ScanState, maxDepth: number): Markup {
   if (xml.startsWith(COMMENT_OPEN, open)) {
     const close = closerOf(xml, open, COMMENT_OPEN, COMMENT_CLOSE);
     return { token: undefined, next: close + COMMENT_CLOSE.length };
@@ -155,9 +277,9 @@ function readMarkup(xml: string, open: number, stack: OpenElement[], maxDepth: n
     const value = xml.slice(open + CDATA_OPEN.length, close);
     return { token: { kind: "text", value }, next: close + CDATA_CLOSE.length };
   }
-  if (xml.startsWith("<!", open)) throw new Error("pptx xml declares a DOCTYPE or ENTITY");
-  if (xml.startsWith("<?", open)) throw new Error("pptx xml carries a processing instruction");
-  return readElement(xml, open, stack, maxDepth);
+  if (xml.startsWith("<!", open)) throw new Error("ooxml xml declares a DOCTYPE or ENTITY");
+  if (xml.startsWith("<?", open)) throw new Error("ooxml xml carries a processing instruction");
+  return readElement(xml, open, state, maxDepth);
 }
 
 function declarationEnd(xml: string): number {
@@ -169,27 +291,39 @@ function declarationEnd(xml: string): number {
 /**
  * Yields element tags and character data in document order. Throws when the document declares a
  * DOCTYPE or ENTITY, carries a processing instruction other than the leading XML declaration,
- * contains markup that does not parse, nests deeper than `maxDepth`, or is not balanced (the
- * generator only reports a balanced document when it runs to completion).
+ * contains markup that does not parse, nests deeper than `maxDepth`, is not balanced, or is not
+ * exactly one root element with only whitespace around it (the generator only reports a complete
+ * document when it runs to completion).
  */
 export function* scanXmlTokens(
   xml: string,
   maxDepth: number,
 ): Generator<XmlToken, void, undefined> {
-  const stack: OpenElement[] = [];
+  const state: ScanState = { stack: [], scope: new Map(), roots: 0 };
   let cursor = declarationEnd(xml);
   while (cursor < xml.length) {
     const open = xml.indexOf("<", cursor);
     const textEnd = open === -1 ? xml.length : open;
     if (textEnd > cursor) {
-      yield { kind: "text", value: decodeXmlEntities(xml.slice(cursor, textEnd)) };
+      const text = decodeXmlEntities(xml.slice(cursor, textEnd));
+      requireInsideRoot(state, text);
+      yield { kind: "text", value: text };
     }
     if (open === -1) break;
-    const markup = readMarkup(xml, open, stack, maxDepth);
+    const markup = readMarkup(xml, open, state, maxDepth);
+    if (markup.token?.kind === "text") requireInsideRoot(state, markup.token.value);
     if (markup.token !== undefined) yield markup.token;
     cursor = markup.next;
   }
-  if (stack.length > 0) throw new Error("pptx xml has unterminated elements");
+  if (state.stack.length > 0) throw new Error("ooxml xml has unterminated elements");
+  if (state.roots !== 1) throw new Error("ooxml xml has no root element");
+}
+
+/** Character data outside the root element is not part of the document. */
+function requireInsideRoot(state: ScanState, text: string): void {
+  if (state.stack.length === 0 && text.trim().length > 0) {
+    throw new Error("ooxml xml has text outside its root element");
+  }
 }
 
 /** Yields only the element tags of `scanXmlTokens`. */
@@ -203,201 +337,11 @@ export function attributeOf(tag: XmlTag, name: string): string | undefined {
   return tag.attributes.get(name);
 }
 
-export type PartItem =
-  | {
-      readonly kind: "shape";
-      readonly placeholder: string | undefined;
-      readonly paragraphs: readonly string[];
-    }
-  | { readonly kind: "table"; readonly headerRow: boolean; readonly rows: readonly string[][] };
+// No-break and narrow no-break spaces keep a number and its unit together on screen; in indexed
+// text they would stop "10 EUR" from matching a query typed with an ordinary space.
+const NO_BREAK_SPACES = new RegExp(`[${String.fromCodePoint(0xa0, 0x2007, 0x202f)}]`, "gu");
 
-export interface PartWalkLimits {
-  readonly maxDepth: number;
-  /** Remaining paragraph + table-cell budget; the walk stops when it is exceeded. */
-  readonly maxObjects: number;
-}
-
-export interface PartWalkResult {
-  readonly items: readonly PartItem[];
-  readonly objectCount: number;
-  readonly limitReached: boolean;
-}
-
-interface ShapeAccumulator {
-  placeholder: string | undefined;
-  readonly paragraphs: string[];
-}
-
-interface TableAccumulator {
-  headerRow: boolean;
-  readonly rows: string[][];
-}
-
-interface WalkState {
-  readonly items: PartItem[];
-  shape: ShapeAccumulator | undefined;
-  table: TableAccumulator | undefined;
-  row: string[] | undefined;
-  cell: string[] | undefined;
-  runs: string[] | undefined;
-  /** Character data of the open `a:t` element; undefined outside text or inside a skipped field. */
-  text: string[] | undefined;
-  readonly fieldSkip: boolean[];
-  objectCount: number;
-}
-
-type TagHandler = (state: WalkState, tag: XmlTag) => void;
-
-function skippingField(state: WalkState): boolean {
-  return state.fieldSkip.some(Boolean);
-}
-
-function finishParagraph(state: WalkState): void {
-  const runs = state.runs;
-  state.runs = undefined;
-  state.text = undefined;
-  if (runs === undefined) return;
-  state.objectCount += 1;
-  const text = runs.join("").trim();
-  if (text.length === 0) return;
-  if (state.cell !== undefined) state.cell.push(text);
-  else state.shape?.paragraphs.push(text);
-}
-
-function openShape(state: WalkState): void {
-  state.shape = { placeholder: undefined, paragraphs: [] };
-}
-
-function closeShape(state: WalkState): void {
-  const shape = state.shape;
-  state.shape = undefined;
-  if (shape === undefined || shape.paragraphs.length === 0) return;
-  state.items.push({
-    kind: "shape",
-    placeholder: shape.placeholder,
-    paragraphs: shape.paragraphs,
-  });
-}
-
-function closeTable(state: WalkState): void {
-  const table = state.table;
-  state.table = undefined;
-  if (table === undefined || table.rows.length === 0) return;
-  state.items.push({ kind: "table", headerRow: table.headerRow, rows: table.rows });
-}
-
-function closeRow(state: WalkState): void {
-  const row = state.row;
-  state.row = undefined;
-  if (row !== undefined) state.table?.rows.push(row);
-}
-
-function closeCell(state: WalkState): void {
-  const cell = state.cell;
-  state.cell = undefined;
-  state.objectCount += 1;
-  if (cell !== undefined) state.row?.push(cell.join(" "));
-}
-
-function openText(state: WalkState): void {
-  if (state.runs !== undefined && !skippingField(state)) state.text = [];
-}
-
-function closeText(state: WalkState): void {
-  const text = state.text;
-  state.text = undefined;
-  if (text === undefined || state.runs === undefined) return;
-  state.runs.push(text.join(""));
-}
-
-function openField(state: WalkState, tag: XmlTag): void {
-  const type = (attributeOf(tag, "type") ?? "").toLowerCase();
-  state.fieldSkip.push(SKIPPED_FIELD_TYPES.some((prefix) => type.startsWith(prefix)));
-}
-
-function isEnabledFlag(value: string | undefined): boolean {
-  return value === "1" || value?.toLowerCase() === "true";
-}
-
-const OPEN_HANDLERS: Readonly<Record<string, TagHandler>> = {
-  sp: openShape,
-  ph: (state, tag) => {
-    if (state.shape !== undefined) state.shape.placeholder = attributeOf(tag, "type") ?? "obj";
-  },
-  tbl: (state) => {
-    state.table = { headerRow: false, rows: [] };
-  },
-  tblPr: (state, tag) => {
-    if (state.table !== undefined)
-      state.table.headerRow = isEnabledFlag(attributeOf(tag, "firstRow"));
-  },
-  tr: (state) => {
-    state.row = [];
-  },
-  tc: (state) => {
-    state.cell = [];
-  },
-  p: (state) => {
-    state.runs = [];
-  },
-  t: openText,
-  br: (state) => {
-    state.runs?.push("\n");
-  },
-  fld: openField,
-};
-
-const CLOSE_HANDLERS: Readonly<Record<string, TagHandler>> = {
-  sp: closeShape,
-  tbl: closeTable,
-  tr: closeRow,
-  tc: closeCell,
-  p: finishParagraph,
-  t: closeText,
-  fld: (state) => {
-    state.fieldSkip.pop();
-  },
-};
-
-function handlerFor(
-  table: Readonly<Record<string, TagHandler>>,
-  local: string,
-): TagHandler | undefined {
-  return Object.hasOwn(table, local) ? table[local] : undefined;
-}
-
-function applyTag(state: WalkState, tag: XmlTag): void {
-  if (!tag.closing) handlerFor(OPEN_HANDLERS, tag.local)?.(state, tag);
-  if (tag.closing || tag.selfClosing) handlerFor(CLOSE_HANDLERS, tag.local)?.(state, tag);
-}
-
-function initialState(): WalkState {
-  return {
-    items: [],
-    shape: undefined,
-    table: undefined,
-    row: undefined,
-    cell: undefined,
-    runs: undefined,
-    text: undefined,
-    fieldSkip: [],
-    objectCount: 0,
-  };
-}
-
-/**
- * Collects shape paragraphs and table rows from one PresentationML part (slide or notes slide)
- * in document order. Malformed markup throws; exceeding `maxObjects` ends the walk early and
- * reports `limitReached` so the caller can disclose the truncation.
- */
-export function walkPresentationPart(xml: string, limits: PartWalkLimits): PartWalkResult {
-  const state = initialState();
-  for (const token of scanXmlTokens(xml, limits.maxDepth)) {
-    if (token.kind === "text") state.text?.push(token.value);
-    else applyTag(state, token);
-    if (state.objectCount > limits.maxObjects) {
-      return { items: state.items, objectCount: state.objectCount, limitReached: true };
-    }
-  }
-  return { items: state.items, objectCount: state.objectCount, limitReached: false };
+/** The text with every no-break space replaced by an ordinary one. */
+export function plainSpaces(text: string): string {
+  return text.replaceAll(NO_BREAK_SPACES, " ");
 }

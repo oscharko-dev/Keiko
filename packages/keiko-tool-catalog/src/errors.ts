@@ -14,6 +14,12 @@ export type CatalogFailureReason =
   | "expired-compatibility"
   | "result-contract-failed";
 
+/** One rejected or missing property and the rule the schema states there. */
+export interface CatalogExpectation {
+  readonly path: string;
+  readonly rule: string;
+}
+
 /**
  * Body-free account of why a value fails a compiled catalog schema. Every path is built from the
  * schema's own property names (array items as `[]`, additional properties as `*`), never from the
@@ -32,6 +38,39 @@ export interface CatalogSchemaMismatch {
    * lists never repeat a path, so this counts genuinely different violations, not repeated items.
    */
   readonly droppedPathCount: number;
+  /**
+   * Set only for an external JSON Schema, whose `required` list alone says what is mandatory: the
+   * managed-runtime dialect's rule that every declared property is required does not hold there.
+   */
+  readonly optionalProperties?: true;
+  /**
+   * A top-level `oneOf` or `anyOf` of required-property branches the value did not satisfy: the
+   * rule the model must meet, which a first-error account cannot state. Each alternative lists the
+   * property names that branch requires, taken from the schema.
+   */
+  readonly choice?: {
+    readonly kind: "exactly-one" | "at-least-one";
+    readonly alternatives: readonly (readonly string[])[];
+  };
+  /**
+   * Root-level property names the closed schema declares, set only with `unexpectedPropertyCount`
+   * from an external schema: the account of what to keep when a value carried one it does not. The
+   * names come from the schema, never from the value.
+   */
+  readonly declaredProperties?: readonly string[];
+  /**
+   * What the schema states at each rejected or missing property (type, allowed values, format,
+   * length and numeric bounds), as a phrase completing "<path> must be …"; from the schema only.
+   * Covers every mismatching property, not just the first one an external validator reports.
+   */
+  readonly expected?: readonly CatalogExpectation[];
+  /** Explained properties the bound on `expected` left out; absent when none were. */
+  readonly expectedOmittedCount?: number;
+  /** The values a `const` or `enum` property accepts, from the schema; never the rejected value. */
+  readonly allowed?: {
+    readonly path: string;
+    readonly values: readonly (string | number | boolean | null)[];
+  };
 }
 
 /**

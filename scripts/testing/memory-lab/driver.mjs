@@ -75,9 +75,28 @@ async function sendTurn(instance, chatId, content, context, enabled) {
   return {
     answer,
     actions: json.memory?.actions ?? [],
-    supplied: json.memory?.context?.memories ?? [],
+    ...suppliedMemory(json.memory?.context),
     elapsedMs: Date.now() - startedAt,
   };
+}
+
+// Everything that reached the model: the standing profile (#4228), supplied with every answer, and
+// the memories retrieved for this question. `retrieved` alone is what the answer marks.
+function suppliedMemory(context) {
+  const retrieved = context?.memories ?? [];
+  const profile = profileEntries(context?.profile);
+  return { supplied: [...profile, ...retrieved], retrieved, profileCount: profile.length };
+}
+
+// A profile fact in the shape of a retrieved memory, so every check that reads what reached the
+// model reads it too. A subject without a standing profile supplies none.
+function profileEntries(profile) {
+  const entries = Array.isArray(profile?.entries) ? profile.entries : [];
+  return entries.map((entry) => ({
+    memoryId: entry.memoryId,
+    bodyExcerpt: entry.text ?? "",
+    via: "profile",
+  }));
 }
 
 function idOf(entry) {
@@ -286,6 +305,8 @@ async function runProbes(scenario, instance, context) {
     const score = scoreProbe(scenario, probe, sent.answer, sent.supplied);
     rows.push({
       ...score,
+      retrievedCount: sent.retrieved.length,
+      profileCount: sent.profileCount,
       elapsedMs: sent.elapsedMs,
       suppliedIds: sent.supplied.map((entry) => entry.memoryId),
       ...(context.retainBodies ? { answer: sent.answer } : {}),

@@ -75,6 +75,7 @@ import {
   type EditorModelTokenBudget,
   type EditorModelTokenReservation,
 } from "./editorModelTokenBudget.js";
+import { strictRedactor } from "../content-redactor.js";
 
 // The overlay buffer may be up to the document-size cap; allow 64 KiB of JSON envelope on top.
 const MAX_COMPLETION_BODY_BYTES = DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes + 64 * 1024;
@@ -304,7 +305,7 @@ function recordModelEvidence(input: {
 }): void {
   recordEditorCompletionModelEvidence(
     input.deps.evidenceStore,
-    input.deps.redactor,
+    strictRedactor(input.deps),
     {
       modelId: input.modelId,
       modelMode: input.selection.mode,
@@ -390,7 +391,7 @@ async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutco
   });
   recordCodingContextEvidence(
     ctx.deps.evidenceStore,
-    ctx.deps.redactor,
+    strictRedactor(ctx.deps),
     toCodingContextWirePack(pack),
     ctx.nowMs,
   );

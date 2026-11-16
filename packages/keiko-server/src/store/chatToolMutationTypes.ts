@@ -76,6 +76,11 @@ export interface ChatToolMutationLinkCounts {
   readonly created: number;
   readonly failed: number;
 }
+/** Count-only preparation evidence for the actual attempt; never persisted in the journal. */
+export interface ChatToolMutationMetrics {
+  readonly descriptionConvertedHeadingCount?: number;
+  readonly descriptionProjection?: "supported-markdown";
+}
 /**
  * What a caller proves when it settles a dispatched write as `rejected` (#4176): Jira answered with
  * a client error and its own parsable error document. Without it a response never proves that no
@@ -105,6 +110,7 @@ export interface ChatToolMutationStore {
     links?: ChatToolMutationLinkCounts,
     evidence?: ChatToolMutationSettleEvidence,
     refusal?: ChatToolMutationLocalRefusal,
+    metrics?: ChatToolMutationMetrics,
   ) => ChatToolMutationRecord;
   /** Finds one admitted call; an ambiguous dispatch is refused, never guessed. */
   readonly preparedNative?: (input: {

@@ -1,9 +1,12 @@
 import type {
   JiraReportEstimateUnit,
+  JiraReportEstimateSource,
+  JiraReportEstimateUnavailableReason,
   JiraReportFailureReason,
   JiraReportIncompleteReason,
   JiraReportStatusCategory,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
 /**
  * One deviation from a rule. `ruleId` is a stable identifier. `subject` names the template element
@@ -32,6 +35,13 @@ export interface JiraReportIssue {
   readonly assigned: boolean;
   readonly dueDate: string | undefined;
   readonly estimate: number | undefined;
+  /**
+   * Present (`true`) when the issue's type has no estimate field at all, so the issue is not
+   * estimable, which is not the same as not yet estimated. Absent otherwise.
+   */
+  readonly estimateNotCarried?: true;
+  /** The value of the alternate estimate field (see `JiraReportScope.estimateAlso`), when held. */
+  readonly alternateEstimate?: number;
   readonly deviations: readonly JiraReportDeviation[];
   /**
    * Whether at least one issue template applied to this issue and judged it (#4181). `false` when
@@ -66,7 +76,15 @@ export interface JiraReportIssueFacts {
  */
 export interface JiraReportComplianceChecker {
   readonly fieldIds: readonly string[];
-  readonly check: (facts: JiraReportIssueFacts) => readonly JiraReportDeviation[];
+  readonly requiresNativeEvidence?: true;
+  /** Auxiliary native evidence shares this slice's GET-only admission and deadline. */
+  readonly check: (
+    facts: JiraReportIssueFacts,
+    request?: JiraMutationRequest,
+  ) =>
+    | readonly JiraReportDeviation[]
+    | "unavailable"
+    | Promise<readonly JiraReportDeviation[] | "unavailable">;
   /**
    * Whether at least one template applies to the issue, so that `check` actually judged it (#4181).
    * A checker without it is taken to judge every issue.
@@ -78,6 +96,8 @@ export interface JiraReportComplianceChecker {
 export interface JiraReportFieldCatalogEntry {
   readonly id: string;
   readonly name: string;
+  /** The field's non-localized schema `custom` key, when the metadata states one. */
+  readonly schemaKey?: string;
 }
 
 /**
@@ -113,13 +133,23 @@ export interface JiraReportEstimate {
 export interface JiraReportProgress extends JiraReportStatusCounts {
   /** Done issues over all issues, in percent with one decimal; 0 for an empty set. */
   readonly donePercent: number;
-  readonly estimate: JiraReportEstimate;
+  /** Null when no project estimate field could be established; never an invented zero. */
+  readonly estimate: JiraReportEstimate | null;
 }
 
 export interface JiraReportTypeProgress {
   readonly typeName: string;
   readonly total: number;
   readonly done: number;
+  /** Issues of this type with an estimate; `null` when no estimate is available, like the project's. */
+  readonly estimated: number | null;
+  /** Issues of this type without one; per-type counts sum to the project's `estimate.unestimated`. */
+  readonly unestimated: number | null;
+  /**
+   * `not-carried`: the type has no estimate field, so its issues read as unestimated because they
+   * cannot be estimated, not because nobody did. Absent for a type that carries the field.
+   */
+  readonly estimateField?: "not-carried";
 }
 
 export interface JiraReportStatusCount {
@@ -150,6 +180,13 @@ export interface JiraReportDeviationRecord {
   readonly details: readonly string[];
 }
 
+export interface JiraReportRequirementSet {
+  readonly declared: number;
+  readonly covered: number;
+  readonly items: readonly JiraReportRequirementCoverage[];
+  readonly uncovered: readonly string[];
+}
+
 export interface JiraReportRequirementCoverage {
   readonly id: string;
   readonly coveredBy: readonly string[];
@@ -174,12 +211,46 @@ export interface JiraReportCompleteness {
   readonly pageCount: number;
 }
 
+export interface JiraReportEstimateFieldRef {
+  readonly fieldId: string;
+  readonly fieldName: string;
+  readonly unit: JiraReportEstimateUnit;
+}
+
 export interface JiraReportScope {
   readonly projectKey?: string;
+  /** The Epic a report was scoped to; `jql` states the clause that selects it and its members. */
+  readonly epicKey?: string;
+  /** Members of the Epic that can hold sub-tasks, and the digest of their sorted keys. */
+  readonly epicMemberCount?: number;
+  readonly epicMembersDigest?: string;
+  /** Whether the Epic Link field was addressed by id, or the instance has none. */
+  readonly epicLink?: "field" | "absent";
   readonly jql: string;
   readonly estimateFieldId?: string;
+  readonly estimateFieldName?: string;
+  readonly estimateSource?: JiraReportEstimateSource;
+  readonly estimateUnavailableReason?: JiraReportEstimateUnavailableReason;
   /** Seconds of original time estimate, or the named field's own unit. */
   readonly estimateUnit: JiraReportEstimateUnit;
+  /**
+   * Set when the report took another estimate field than the configured one because the
+   * configured field holds no value on any issue in scope: the configured field, named here.
+   */
+  readonly estimateConfigured?: JiraReportEstimateFieldRef;
+  /**
+   * Set (`true`) when Jira withheld the configured estimate field on an issue: that field could not
+   * be read, which is not the same as holding no value, so no other field is substituted.
+   */
+  readonly estimateUnreadable?: true;
+  /**
+   * Set when a second estimate field also holds values beside the one the figures use, so nothing
+   * is hidden: that field, how many issues hold a value in it and their total in its own unit.
+   */
+  readonly estimateAlso?: JiraReportEstimateFieldRef & {
+    readonly issues: number;
+    readonly total: number;
+  };
   /** The date overdue is judged against, in `timeZone`. */
   readonly asOf: string;
   readonly timeZone: "UTC";
@@ -221,8 +292,8 @@ export interface JiraReport {
      * With `checker: "applied"`: the issues at least one template judged. An issue of a type no
      * template covers is not counted here; it is counted in `issuesWithoutTemplate`, because "no
      * deviation" is only a statement about an issue something judged (#4181). With `none` or
-     * `unavailable` no template judged anything: the number is the issues read, which only the
-     * required-field rules (`requiredFieldRules`) could have judged.
+     * `unavailable` complete template coverage is unknown: the number is the issues read.
+     * Independently measured partial deviations may remain, while missing evidence never adds one.
      */
     readonly issuesChecked: number;
     /**
@@ -256,13 +327,23 @@ export interface JiraReport {
     readonly containerRoles: "observed" | "unobserved";
     readonly uncoveredEpics: readonly string[];
     readonly orphans: readonly string[];
+    /**
+     * The headline coverage. With explicit identifiers in the documents it counts those only; a
+     * document without any has the derived units as its requirements and they form the figure.
+     */
     readonly requirements:
-      | {
-          readonly declared: number;
-          readonly covered: number;
-          readonly items: readonly JiraReportRequirementCoverage[];
-          readonly uncovered: readonly string[];
-        }
+      | (JiraReportRequirementSet & {
+          /** The readable name of each uncovered identifier Keiko derived (headline of a document without explicit ones). */
+          readonly uncoveredLabels: Readonly<Record<string, string>>;
+          /**
+           * Units Keiko derived from statements without an identifier, beside an explicit headline,
+           * with their own counts and their readable names. A context sentence the detector took
+           * for a requirement shows up here, never in the headline and never dropped.
+           */
+          readonly derived?: JiraReportRequirementSet & {
+            readonly names: Readonly<Record<string, string>>;
+          };
+        })
       | undefined;
   };
   /** Per-issue rows for the export; never part of the tool result. */

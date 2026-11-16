@@ -18,6 +18,11 @@ const nextConfig = {
   productionBrowserSourceMaps: false,
   images: { unoptimized: true },
   reactStrictMode: true,
+  // The production build type-checks the shipped sources only. Tests, fixtures and test setup are
+  // type-checked by `npm run typecheck` (tsconfig.json); checking them here as well pushed the
+  // build past the default V8 heap of 2 GB-class CI runners (macOS) without checking any more of
+  // what ships.
+  typescript: { tsconfigPath: "tsconfig.build.json" },
   transpilePackages: ["@monaco-editor/react", "monaco-editor"],
   turbopack: {
     root: repoRoot,

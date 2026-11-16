@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { createElement } from "react";
+import { describe, expect, it, vi } from "vitest";
+import { listAtlassianConnectors } from "@/lib/atlassian-connectors-api";
+import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
+import { ConnectorPickerWidget } from "../widgets/cards/ConnectorPickerWidget";
 import type { AppWindow, Connection } from "../windows/types";
 import {
   MAX_PERSISTED_CONNECTION_SCAN,
@@ -17,6 +22,16 @@ import { subText } from "../windows/connectionUtils";
 import { isSecretShapedString } from "./isSecretShapedString";
 import { chatReferenceFingerprint } from "../widgets/chatReferenceFingerprint";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
+
+vi.mock("@/lib/atlassian-connectors-api", async (original) => ({
+  ...(await original<typeof import("@/lib/atlassian-connectors-api")>()),
+  listAtlassianConnectors: vi.fn(),
+}));
+vi.mock("@/lib/local-knowledge-api", async (original) => ({
+  ...(await original<typeof import("@/lib/local-knowledge-api")>()),
+  fetchCapsules: vi.fn(),
+  fetchCapsuleSets: vi.fn(),
+}));
 
 function win(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -43,6 +58,126 @@ function hostileWindow(type: string, extra: Record<string, unknown> = {}): unkno
 }
 
 describe("workspace-persistence", () => {
+  it("preserves a Jira Pod node selection through save and reload", () => {
+    const selected = win({
+      id: "connector-jira",
+      type: "connector",
+      cfg: {
+        presentation: "node",
+        selectedKind: "jira-live",
+        selectedId: "b0e5678a-2974-4a6b-a56c-9e74fc989a85",
+      },
+    });
+    const saved = sanitizePersistedWindows([selected]);
+    expect(saved).toEqual([selected]);
+    expect(parsePersistedWindows(JSON.stringify(saved))).toEqual([selected]);
+    expect(sanitizePersistedWorkspace(saved, []).wins).toEqual([selected]);
+  });
+
+  it("renders the restored Jira node from persisted renderer props instead of the empty picker", async () => {
+    const podId = "b0e5678a-2974-4a6b-a56c-9e74fc989a85";
+    vi.mocked(listAtlassianConnectors).mockResolvedValue([
+      {
+        schemaVersion: "1",
+        authRef: "synthetic-jira",
+        provider: "jira",
+        deployment: "data-center",
+        authScheme: "bearer-pat",
+        generation: 1,
+        displayName: "Restored Jira",
+        baseUrl: "https://jira.example.invalid",
+        createdAt: 1,
+        livePod: {
+          kind: "jira-live",
+          podId,
+          authenticationGeneration: 1,
+          verificationRevision: 1,
+          verificationStatus: "ok",
+          verificationInProgress: false,
+          capabilities: ["live-read"],
+        },
+      },
+    ]);
+    vi.mocked(fetchCapsules).mockResolvedValue({ capsules: [] });
+    vi.mocked(fetchCapsuleSets).mockResolvedValue({ capsuleSets: [] });
+    const saved = sanitizePersistedWindows([
+      win({
+        id: "connector-jira",
+        type: "connector",
+        cfg: { presentation: "node", selectedKind: "jira-live", selectedId: podId },
+      }),
+    ]);
+    const restored = parsePersistedWindows(JSON.stringify(saved))?.[0];
+    if (restored === undefined) throw new TypeError("Missing restored Jira node");
+    render(createElement(ConnectorPickerWidget, { ...restored.cfg, onSelect: vi.fn() }));
+    expect(await screen.findByText("Restored Jira")).toBeVisible();
+    expect(screen.queryByText("Verified Jira Pod")).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Jira" })).toBeVisible();
+    expect(screen.getByTestId("knowledge-connector-node")).toBeVisible();
+    expect(fetchCapsules).not.toHaveBeenCalled();
+    expect(fetchCapsuleSets).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { selectedKind: "capsule", selectedId: "cap-policy" },
+    { selectedKind: "capsule-set", selectedId: "set-policy" },
+  ])(
+    "retains the closed $selectedKind selection without copied labels or readiness",
+    (selection) => {
+      const node = win({
+        id: "connector-local",
+        type: "connector",
+        cfg: {
+          ...selection,
+          presentation: "node",
+          selectedLabel: "Old display name",
+          selectedState: "ready",
+          token: "never-persist-this",
+          authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+          authority: "allowed",
+        },
+      });
+      const saved = sanitizePersistedWindows([node]);
+      const expected = { ...selection, presentation: "node" };
+      expect(saved[0]?.cfg).toEqual(expected);
+      expect(parsePersistedWindows(JSON.stringify(saved))?.[0]?.cfg).toEqual(expected);
+    },
+  );
+
+  it.each([
+    { selectedKind: "another-kind", selectedId: "cap-policy" },
+    { selectedKind: "jira-live", selectedId: "not-a-pod-uuid" },
+    { selectedKind: "jira-live", selectedId: "1404206d-9ab6-4bca-8853-813867352087" },
+    { selectedKind: "capsule", selectedId: `ghp_${"A".repeat(36)}` },
+    { selectedKind: "capsule", selectedId: "../other" },
+    { selectedKind: "capsule", selectedId: "https://other.example" },
+    { selectedKind: "capsule", selectedId: " leading-space" },
+    { selectedKind: "capsule", selectedId: "a".repeat(257) },
+    { selectedKind: "capsule", selectedId: "" },
+    { selectedKind: "capsule", selectedId: 42 },
+    { selectedKind: "capsule" },
+    { selectedId: "cap-policy" },
+  ])("drops a malformed or secret-shaped connector selection atomically (%j)", (cfg) => {
+    const hostile = {
+      ...win({ id: "connector-hostile", type: "connector" }),
+      cfg: { presentation: "node", ...cfg },
+    };
+    const saved = sanitizePersistedWindows([hostile]);
+    expect(saved[0]?.cfg).toEqual({});
+    expect(parsePersistedWindows(JSON.stringify(saved))?.[0]?.cfg).toEqual({});
+  });
+
+  it.each(["another-presentation", "NODE", true, 42])(
+    "refuses an unrecognized connector display marker (%j)",
+    (presentation) => {
+      const selection = { selectedKind: "capsule", selectedId: "cap-policy" };
+      const saved = sanitizePersistedWindows([
+        win({ id: "connector-local", type: "connector", cfg: { ...selection, presentation } }),
+      ]);
+      expect(saved[0]?.cfg).toEqual(selection);
+    },
+  );
+
   it.each([
     { newChatModelSelection: "explicit" },
     { newChatModelSelection: "explicit", newChatModelId: `ghp_${"A".repeat(36)}` },
@@ -143,6 +278,43 @@ describe("workspace-persistence", () => {
     ).toEqual({});
   });
 
+  // #4271: the Workbench's repository, branch and location selection lived only in memory. After a
+  // reload the window fell back to whichever of the shell's project and the active task binding
+  // loaded first, and bound that root in place of the person's choice.
+  it("retains the Coding Workbench's repository, branch and location selection", () => {
+    const selection = {
+      repositoryPath: "/repos/selected",
+      targetBranch: "feature/x",
+      targetBranchRoot: "/repos/selected",
+      executionLocation: "worktree",
+    };
+    const [retained] = sanitizePersistedWindows([
+      win({
+        id: "coding-1",
+        type: "coding",
+        cfg: { ...selection, historySelection: "task-1", unknownKey: "dropped" },
+      }),
+    ]);
+    expect(retained?.cfg).toEqual(selection);
+    for (const repositoryPath of [
+      "/repos/ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "/repos/.env",
+      "x".repeat(2_049),
+      42,
+    ]) {
+      const [dropped] = sanitizePersistedWindows([
+        { ...win({ id: "coding-1", type: "coding" }), cfg: { repositoryPath } },
+      ]);
+      expect(dropped?.cfg).toEqual({});
+    }
+    for (const executionLocation of ["remote", "", true, 1, { location: "local" }]) {
+      const [rejected] = sanitizePersistedWindows([
+        { ...win({ id: "coding-1", type: "coding" }), cfg: { executionLocation } },
+      ]);
+      expect(rejected?.cfg).toEqual({});
+    }
+  });
+
   it("retains only the closed Coding Workbench Git binding marker", () => {
     const retained = sanitizePersistedWindows([
       win({
@@ -168,6 +340,82 @@ describe("workspace-persistence", () => {
       rootBinding: "coding-repository",
     });
     expect(rejected[0]?.cfg).toEqual({ projectPath: "/other" });
+  });
+
+  // #3563 made the Coding Workbench remember the repository a person chose, so the window reopens
+  // on it. The sanitizer had no `coding` keys and dropped that choice on every save and reload: a
+  // restored Workbench fell back to whatever folder the shell held, which in the customer-shape
+  // qualification was sometimes the Yarn project instead of the provisioned repository.
+  it("retains the Coding Workbench's own repository, branch and location across a reload", () => {
+    const cfg = {
+      repositoryPath: "/repos/synthetic-repository",
+      targetBranch: "feature/review",
+      targetBranchRoot: "/repos/synthetic-repository",
+      executionLocation: "worktree",
+    };
+    const retained = parsePersistedWindows(
+      JSON.stringify([win({ id: "workbench", type: "coding", cfg })]),
+    );
+    expect(retained?.[0]?.cfg).toEqual(cfg);
+  });
+
+  it("keeps POSIX and Windows drive roots and drops every other root or branch shape", () => {
+    for (const root of ["/repos/a b", "C:\\repos\\keiko", "D:/repos/keiko"]) {
+      const kept = sanitizePersistedWindows([
+        {
+          ...win({ id: "w", type: "coding" }),
+          cfg: { repositoryPath: root, targetBranchRoot: root },
+        },
+      ]);
+      expect(kept[0]?.cfg).toEqual({ repositoryPath: root, targetBranchRoot: root });
+    }
+    const rejected: readonly Record<string, unknown>[] = [
+      ...[
+        "../../x",
+        "~/x",
+        "file:///etc",
+        "\\\\srv\\sh",
+        "\\\\?\\C:\\x",
+        "//srv/sh",
+        "/a\nb",
+        "rel/x",
+      ].flatMap((root) => [{ repositoryPath: root }, { targetBranchRoot: root }]),
+      ...["a..b", "-x", "a b", "a\nb", "a:b", "a~1", "x.lock", "a/", "/a", "a//b", "a@{1}"].map(
+        (targetBranch) => ({ targetBranch }),
+      ),
+    ];
+    for (const cfg of rejected) {
+      const sanitized = sanitizePersistedWindows([
+        { ...win({ id: "workbench", type: "coding" }), cfg },
+      ]);
+      expect(sanitized[0]?.cfg).toEqual({});
+    }
+  });
+
+  it("drops a Coding Workbench selection that is not a bounded, secret-free value", () => {
+    const secretRoot = `/repos/ghp_${"a".repeat(36)}`;
+    expect(isSecretShapedString(secretRoot)).toBe(true);
+    const rejected: readonly Record<string, unknown>[] = [
+      { repositoryPath: "" },
+      { repositoryPath: "   " },
+      { repositoryPath: 42 },
+      { repositoryPath: `/${"r".repeat(4_096)}` },
+      { repositoryPath: secretRoot },
+      { targetBranch: "" },
+      { targetBranch: `refs/${"b".repeat(1_024)}` },
+      { targetBranchRoot: secretRoot },
+      { executionLocation: "remote" },
+      { executionLocation: true },
+      // A pending Coding History hand-off is consumed once by the mounted window; replaying it
+      // after a reload would reopen a task nobody asked for.
+      { historySelection: "task:1" },
+    ];
+    for (const cfg of rejected) {
+      const sanitized = sanitizePersistedWindows([
+        { ...win({ id: "workbench", type: "coding" }), cfg },
+      ]);
+      expect(sanitized[0]?.cfg).toEqual({});
+    }
   });
 
   // Epic #3384 live-flow defect (#3401 "Review description"): the governed pull request window is

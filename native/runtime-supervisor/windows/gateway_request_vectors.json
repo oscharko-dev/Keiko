@@ -1,0 +1,26 @@
+[
+  {
+    "schemaVersion": 1,
+    "profile": "keiko-gateway",
+    "addressFamily": "ipv4",
+    "port": 1,
+    "runId": "run-3423",
+    "treeBindingId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "envelopeDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "runtimeArtifactDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "modelProfileDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "policyDigest": "8ab11d0c0a06f7abdf54b2c8d8c7ecb2353d79931991aaa1a19683876de4f4ad"
+  },
+  {
+    "schemaVersion": 1,
+    "profile": "keiko-gateway",
+    "addressFamily": "ipv6",
+    "port": 65535,
+    "runId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "treeBindingId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "envelopeDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "runtimeArtifactDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "modelProfileDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "policyDigest": "e52f7b17a7e8083907cd3302bcb3a616750845aae9172e4c58a4ed378ac164f9"
+  }
+]

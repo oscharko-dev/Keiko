@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -12,6 +12,7 @@ import {
   createNodeGitPullRequestAdapter,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { resolveGitHubIssue } from "../coding-context/githubIssueResolution.js";
+import { plantDirectoryRedirect } from "../../../../tests/support/symlink-fixture.js";
 import { resolvedLinkedIssueNumbers } from "../coding-context/codingRuntimeIssueIntake.js";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 import type {
@@ -506,7 +507,8 @@ describe("production draft delivery dependencies", () => {
   it("retains the original checkout grant when that registered project uses a symlink alias", async () => {
     const f = await fixture();
     const alias = join(f.scratch, "registered-alias");
-    symlinkSync(f.root, alias, "dir");
+    // A junction on Windows (no symlink privilege), a directory symlink elsewhere.
+    plantDirectoryRedirect(f.root, alias);
     f.store.deleteProject(f.root);
     f.store.createProject(alias, "alias");
     expect(await f.factory.resolveTarget(f.context)).toEqual({

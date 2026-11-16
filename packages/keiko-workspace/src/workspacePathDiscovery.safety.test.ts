@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { memFs } from "./_memfs.js";
 import {
@@ -18,8 +18,8 @@ import type { WorkspaceInfo } from "./types.js";
 import { discoverWorkspacePaths } from "./workspacePathDiscovery.js";
 
 const WORKSPACE: WorkspaceInfo = {
-  root: "/repo",
-  selectedRoot: "/repo",
+  root: resolve("/repo"),
+  selectedRoot: resolve("/repo"),
   name: "fixture",
   version: "1",
   testFramework: "vitest",
@@ -101,7 +101,7 @@ describe("workspace path discovery scope and coverage", () => {
     const fs: WorkspaceFs = {
       ...base,
       iterateDirectory: async function* (path) {
-        if (path === "/repo/bad") throw failure;
+        if (path === join(WORKSPACE.root, "bad")) throw failure;
         yield* base.iterateDirectory?.(path) ?? [];
       },
     };
@@ -119,7 +119,7 @@ describe("workspace path discovery scope and coverage", () => {
       ...base,
       iterateDirectory: async function* (path) {
         yield* base.iterateDirectory?.(path) ?? [];
-        if (path === "/repo/changed")
+        if (path === join(WORKSPACE.root, "changed"))
           throw new WorkspaceDescriptorReadError("directory-membership-changed");
       },
     };
@@ -134,10 +134,13 @@ describe("workspace path discovery scope and coverage", () => {
     let moved = false;
     const fs: WorkspaceFs = {
       ...base,
-      realPath: (path) => (moved && path === "/repo/changed" ? "/repo/other" : base.realPath(path)),
+      realPath: (path) =>
+        moved && path === join(WORKSPACE.root, "changed")
+          ? join(WORKSPACE.root, "other")
+          : base.realPath(path),
       iterateDirectory: async function* (path) {
         yield* base.iterateDirectory?.(path) ?? [];
-        if (path === "/repo/changed") moved = true;
+        if (path === join(WORKSPACE.root, "changed")) moved = true;
       },
     };
     const result = await discoverWorkspacePaths(
@@ -177,7 +180,8 @@ describe("workspace path discovery scope and coverage", () => {
       let moved = false;
       const fs: WorkspaceFs = {
         ...base,
-        realPath: (path) => (moved && path === WORKSPACE.root ? "/outside" : base.realPath(path)),
+        realPath: (path) =>
+          moved && path === WORKSPACE.root ? resolve("/outside") : base.realPath(path),
         iterateDirectory: async function* (path) {
           yield* base.iterateDirectory?.(path) ?? [];
           moved = true;
@@ -197,8 +201,9 @@ describe("workspace path discovery scope and coverage", () => {
     try {
       mkdirSync(join(root, "real"));
       writeFileSync(join(root, "real/target.ts"), "source");
-      symlinkSync(join(root, "real"), join(root, "alias"), "dir");
-      symlinkSync(tmpdir(), join(root, "external"), "dir");
+      const linkType = process.platform === "win32" ? "junction" : "dir";
+      symlinkSync(join(root, "real"), join(root, "alias"), linkType);
+      symlinkSync(tmpdir(), join(root, "external"), linkType);
       const workspace = { ...WORKSPACE, root, selectedRoot };
       const result = await discoverWorkspacePaths(
         workspace,

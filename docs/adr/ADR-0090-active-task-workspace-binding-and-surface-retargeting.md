@@ -116,7 +116,12 @@ window is the repository-control exception: a concrete `projectPath`/`workspaceR
 or the global selected repository root is repository truth for that window, for
 any repository, and `ctx.activeRoot` remains an internal task-worktree detail.
 The Coding Workbench keeps its selected repository, execution location, and target
-branch in its own window configuration. Its compact controls sit above the composer:
+branch in its own window configuration, and that selection survives a reload of the saved layout
+(#4271). A window without a stored repository decides its starting repository once, and only after
+the task-workspace state has answered: an active task binding wins, otherwise the shell's selected
+project; a read that has not answered or failed decides nothing. A restored selection binds like an
+in-session one: when the active pointer names another workspace, the reload re-binds the window's
+own selection. Its compact controls sit above the composer:
 repository, **Work in** (Local or New local worktree), and branch. Local uses the
 registered checkout and the selected local branch; a new local worktree uses the
 existing managed task-workspace provisioning path. Selection binds the execution
@@ -468,7 +473,7 @@ Reuse `requireService`/`unavailable` pattern but gated on a new optional
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/task-workspaces?root=<repoRoot>` | `handleListTaskWorkspaces` | — | `{ instances: WorkspaceInstance[] }` | `resolveRoot(deps.store, root, deps.redactor)` then `lifecycle.list(realRoot)`. Read-only. Matches the **collection** path with a `root` query, distinct from the existing `GET /api/task-workspaces/:workspaceId`. Without a `root` (absent or blank) the handler answers `lifecycle.listAll()` — every managed workspace across repositories, the inventory the switcher needs because the active pointer is global (2026-09-03). |
 | GET | `/api/task-workspaces/active` | `handleGetActiveTaskWorkspace` | — | `{ active: ActiveWorkspaceView \| null }` | `lifecycle.getActive() ?? null`. Read-only. MUST be registered **before** `GET /api/task-workspaces/:workspaceId` so the literal `active` wins over `:workspaceId`. |
-| POST | `/api/task-workspaces/active` | `handleSetActiveTaskWorkspace` | `{ workspaceId, requestedBy, acquireLock? }` | `{ instance, binding }` | CSRF-gated. `boundedString` each field; `acquireLock = body.acquireLock === true`. Calls `lifecycle.setActive`. |
+| POST | `/api/task-workspaces/active` | `handleSetActiveTaskWorkspace` | `{ workspaceId, requestedBy, acquireLock? }` | `{ instance, binding }` | CSRF-gated. `boundedString` each field; `acquireLock = body.acquireLock === true`. An id `lifecycle.selectable` does not know (absent, the `listAll()` inventory decides) is refused with `WORKSPACE_NOT_FOUND` before selection admission; then calls `lifecycle.setActive`. The inventory leaves Local checkouts and folders out, but `selectable` admits their persisted records, so a Coding History task of another checkout reopens through this route and `setActive` re-validates the checkout; a checkout or folder whose directory identity no longer matches the id is refused with `WORKSPACE_NOT_FOUND` before any branch switch (#4271). |
 | DELETE | `/api/task-workspaces/active` | `handleClearActiveTaskWorkspace` | — | `{ active: null }` | CSRF-gated. `lifecycle.clearActive()`. |
 | POST | `/api/task-workspaces/:workspaceId/pause` | `handlePauseTaskWorkspace` | `{ requestedBy }` | `{ instance, binding }` | CSRF-gated. `lifecycle.pause`. |
 | POST | `/api/task-workspaces/:workspaceId/resume` | `handleResumeTaskWorkspace` | `{ requestedBy }` | `{ instance, binding }` | CSRF-gated. `lifecycle.resume`. |

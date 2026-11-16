@@ -1,4 +1,5 @@
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchMcpAuthorizationStart,
   CodingWorkbenchMcpAuthorizationState,
   CodingWorkbenchMcpServer,
@@ -73,6 +74,8 @@ interface RuntimeOperationCoordinatorDeps {
   readonly publicSnapshot: (
     current: CodingRuntimeSnapshot,
   ) => Extract<CodingRuntimeOrchestratorResult, { readonly ok: true }>["snapshot"];
+  /** The run's latest accepted primary agent, stated on its snapshot (#4068 W12). */
+  readonly recordRunAgent?: (runId: string, agent: CodingWorkbenchAgent) => void;
   readonly taskDispatcher: CodingRuntimeTaskDispatcher;
   /**
    * Returns a paused run to running before a follow-up replaces its task. The runtime admits tool
@@ -368,6 +371,8 @@ export class CodingRuntimeOperationCoordinator {
         return failure(followUpDispatchRefusal(dispatched.result));
       }
       settleGenerationReservation(dispatched.generation, true);
+      const acceptedAgent = operation.value.agent;
+      if (isCodingWorkbenchAgent(acceptedAgent)) this.deps.recordRunAgent?.(runId, acceptedAgent);
       // Committed at the revision the replacement was dispatched against, not the one it was
       // admitted at: a resume moved the run N -> N+1 before this advance to N+2, and a record kept at
       // N would already be evicted by the next admission, dispatching the same requestId twice

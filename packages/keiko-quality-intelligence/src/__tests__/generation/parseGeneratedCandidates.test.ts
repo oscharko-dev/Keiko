@@ -200,6 +200,24 @@ describe("parseGeneratedCandidates — JSON recovery", () => {
     expect(result.candidates[0]?.title).toBe("Recovered later");
   });
 
+  it("is not shadowed by evidence citations such as [1] in a preamble", () => {
+    const citations = "See [1] and [2]; also ".concat(
+      "[3] ".repeat(MAX_JSON_RECOVERY_ATTEMPTS * 2),
+    );
+    const raw = `${citations}\n${wrapInTestCases([validItem({ title: "After citations" })])}`;
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    expect(result.recovered).toBe(true);
+    expect(result.candidates.map((candidate) => candidate.title)).toEqual(["After citations"]);
+  });
+
+  it("recovers a payload that carries trailing commas, outside strings only", () => {
+    const raw =
+      '{"testCases":[{"title":"Trailing, \\"]\\",}","steps":["open",],"expectedResults":["ok" , ],},]}';
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    expect(result.candidates.map((candidate) => candidate.title)).toEqual(['Trailing, "]",}']);
+    expect(result.candidates[0]?.steps).toEqual(["open"]);
+  });
+
   it("recovers common chat-model wrapper aliases for generated cases", () => {
     const raw = JSON.stringify({ cases: [validItem({ title: "Alias wrapper" })] });
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());

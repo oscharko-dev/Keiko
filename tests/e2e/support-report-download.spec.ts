@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import {
   expect,
   test,
@@ -53,9 +54,9 @@ async function createChat(request: APIRequestContext): Promise<string> {
 
 async function openChat(page: Page, chatId: string): Promise<Locator> {
   await page.addInitScript(
-    ({ id, name }): void => {
+    ({ argument: { id, name }, storageKeys }): void => {
       localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "support-chat",
@@ -70,9 +71,9 @@ async function openChat(page: Page, chatId: string): Promise<Locator> {
           },
         ]),
       );
-      localStorage.removeItem("keiko.conns.v1");
+      localStorage.removeItem(storageKeys.connections);
     },
-    { id: chatId, name: title },
+    await workspaceStorageArgs(page, { id: chatId, name: title }),
   );
   await page.goto(`/${editorM11PairingFragment("support-download")}`);
   const window = page.getByRole("region", { name: `Chat — ${title}` });
@@ -318,14 +319,14 @@ async function assertScrollableNoticeStack(stack: Locator): Promise<void> {
   await expect(stack).toHaveCSS("overflow-y", "auto");
 }
 
-interface BrowserModalFocus {
+interface BrowserConnectionFocus {
   readonly invokerPresent: boolean;
   readonly invokerActive: boolean;
   readonly bodyActive: boolean;
   readonly dialogActive: boolean;
 }
 
-async function browserModalFocus(button: Locator): Promise<BrowserModalFocus> {
+async function browserConnectionFocus(button: Locator): Promise<BrowserConnectionFocus> {
   return button.evaluateAll((elements) => ({
     invokerPresent: elements[0] !== undefined,
     invokerActive: elements[0] !== undefined && document.activeElement === elements[0],
@@ -334,7 +335,7 @@ async function browserModalFocus(button: Locator): Promise<BrowserModalFocus> {
   }));
 }
 
-async function observeBrowserInvokerFocus(button: Locator): Promise<BrowserModalFocus> {
+async function observeBrowserInvokerFocus(button: Locator): Promise<BrowserConnectionFocus> {
   await button.evaluate((element) => {
     element.setAttribute("data-e2e-invoker-focused", "false");
     element.addEventListener(
@@ -345,45 +346,48 @@ async function observeBrowserInvokerFocus(button: Locator): Promise<BrowserModal
       { once: true },
     );
   });
-  return browserModalFocus(button);
+  return browserConnectionFocus(button);
 }
 
-async function checkBrowserNoticeModal(page: Page, recoverInventory: () => void): Promise<void> {
+async function checkBrowserNoticeConnection(
+  page: Page,
+  recoverInventory: () => void,
+): Promise<void> {
   const notice = page
     .locator("header.header")
     .getByRole("complementary", { name: "Connect this browser", exact: true });
   await expect(notice.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
   recoverInventory();
   await notice.getByRole("button", { name: "Retry", exact: true }).click();
-  const connect = notice.getByRole("button", { name: "Connect browser", exact: true });
-  const before = await observeBrowserInvokerFocus(connect);
-  await connect.click();
-  const dialog = page.getByRole("dialog", { name: "Connect this browser", exact: true });
-  await expect(dialog).toBeVisible();
-  await expect(page.locator(".app")).toHaveAttribute("inert", "");
-  await expect(dialog).toBeFocused();
-  const focusedBeforeDialog =
-    (await page
-      .locator("header.header [data-e2e-invoker-focused]")
-      .getAttribute("data-e2e-invoker-focused")) === "true";
-  await page.keyboard.press("Shift+Tab");
-  await expect(dialog.getByRole("button", { name: "Request approval", exact: true })).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(dialog).toBeHidden();
+  await page.route("**/api/coding-workbench/app-session/open-browser", async (route) => {
+    await route.fulfill({ json: { state: "failed" } });
+  });
+  await expect(notice.getByRole("button", { name: "Connect browser", exact: true })).toBeVisible();
+  const invoker = notice.getByRole("button");
+  const before = await observeBrowserInvokerFocus(invoker);
+  await invoker.click();
+  await expect(page.getByRole("dialog", { name: "Connect this browser", exact: true })).toHaveCount(
+    0,
+  );
+  await expect(notice.getByRole("alert")).toContainText("Keiko could not connect this browser");
+  await expect(notice.getByRole("button", { name: "Retry", exact: true })).toBeEnabled();
   await expect(page.locator(".app")).not.toHaveAttribute("inert");
-  try {
-    await expect(connect).toBeFocused();
-  } finally {
-    const after = await browserModalFocus(connect);
-    const path = test.info().outputPath("browser-modal-focus.json");
-    writeFileSync(path, JSON.stringify({ before, focusedBeforeDialog, after }) + "\n");
-    await test.info().attach("browser-modal-focus", {
-      path,
-      contentType: "application/json",
-    });
-  }
+  const focusedBeforeConnection =
+    (await invoker.getAttribute("data-e2e-invoker-focused")) === "true";
+  expect(focusedBeforeConnection || before.invokerActive).toBe(true);
+  await invoker.focus();
+  // Safari on macOS uses Option-Tab for native button navigation, as in the a11y smoke lane.
+  const tab =
+    process.platform === "darwin" && page.context().browser()?.browserType().name() === "webkit"
+      ? "Alt+Tab"
+      : "Tab";
+  await page.keyboard.press(tab);
+  await page.keyboard.press(`Shift+${tab}`);
+  await expect(invoker).toBeFocused();
+  const after = await browserConnectionFocus(invoker);
+  const path = test.info().outputPath("browser-connection-focus.json");
+  writeFileSync(path, JSON.stringify({ before, focusedBeforeConnection, after }) + "\n");
+  await test.info().attach("browser-connection-focus", { path, contentType: "application/json" });
 }
 
 test("keeps stacked workspace error reports reachable on a short narrow viewport @smoke", async ({
@@ -432,7 +436,7 @@ test("keeps stacked workspace error reports reachable on a short narrow viewport
   await expect(readiness.locator("..")).toHaveCSS("position", "static");
   await expect(failure).toHaveCSS("position", "static");
   await assertScrollableNoticeStack(stack);
-  await checkBrowserNoticeModal(page, () => {
+  await checkBrowserNoticeConnection(page, () => {
     inventoryFailed = false;
   });
   expect(inventoryReads).toBeGreaterThanOrEqual(2);

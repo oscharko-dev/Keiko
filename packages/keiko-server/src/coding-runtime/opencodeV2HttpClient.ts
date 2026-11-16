@@ -1,4 +1,5 @@
 import { parseRuntimeLoopbackServiceEndpoint } from "@oscharko-dev/keiko-sandbox";
+import { isLocalAbsolutePath } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import {
   CODING_WORKBENCH_PROMPT_REFERENCES_MAX,
   isCodingWorkbenchAgent,
@@ -55,7 +56,13 @@ const TAIL_PAGE_SIZE = 50;
 const MAX_MESSAGE_PAGES = 64;
 const MAX_MESSAGES = 4096;
 const MAX_TAIL_PAGES = Math.ceil(MAX_MESSAGES / TAIL_PAGE_SIZE) + 1;
+// How many older pages a window past the bound reads to find the user message its newest messages
+// answer, holding only that one message (#4279).
+const MAX_PARENT_SEARCH_PAGES = 64;
 const MAX_EVENT_FRAME_BYTES = 1024 * 1024;
+// The runtime sends a heartbeat comment every 15 s on an otherwise silent stream, so three missed
+// ones mean it stopped answering (#4271). The monitor then reconnects within its failure budget.
+const DEFAULT_EVENT_IDLE_TIMEOUT_MS = 45_000;
 const MAX_DIFF_FILES = 4096;
 const MAX_DIFF_PATH_CHARS = 4096;
 
@@ -64,6 +71,7 @@ export interface OpenCodeV2HttpClientOptions {
   readonly password: string;
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly eventIdleTimeoutMs?: number | undefined;
 }
 
 export interface OpenCodeV2PromptDisplay {
@@ -72,7 +80,7 @@ export interface OpenCodeV2PromptDisplay {
 }
 
 /**
- * One file attached to a prompt (`PromptInput.FileAttachment` of the pinned 2.1.4 schema, reduced to
+ * One file attached to a prompt (`PromptInput.FileAttachment` of the pinned schema, reduced to
  * the two fields Keiko sends): the absolute `file://` URI the runtime reads and the name it shows the
  * model. Which file may be named is decided before this client (`opencodePromptInputs.ts`); the
  * client only keeps the wire shape closed.
@@ -95,7 +103,7 @@ export interface OpenCodeV2PromptInputs {
   readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
   readonly files?: readonly OpenCodeV2PromptFile[] | undefined;
   /**
-   * The message's own id (`Session.Message.ID` of the pinned 2.1.4 schema, the prompt body's `id`).
+   * The message's own id (`Session.Message.ID` of the pinned schema, the prompt body's `id`).
    * The producer stores one input per id and answers a repeated post with the receipt it holds, so a
    * caller that resends the id after a lost acknowledgement does not create a second input. The
    * receipt must name this id, or the post fails with `OpenCodeV2ReceiptMismatchError`.
@@ -115,7 +123,7 @@ export interface OpenCodeV2PromptInputs {
 export const OPENCODE_TURN_ORIGIN_METADATA = "keikoTurnOriginV1";
 
 /**
- * One slash command the runtime lists (`Command.Info` of the pinned 2.1.4 schema): its name and the
+ * One slash command the runtime lists (`Command.Info` of the pinned schema): its name and the
  * one-line description it gives, both untrusted display text. The command's template stays with the
  * runtime; Keiko never reads it.
  */
@@ -132,7 +140,7 @@ const MAX_COMMANDS = 256;
 const COMMAND_DESCRIPTION_MAX_CHARS = 1_024;
 
 /**
- * A subagent the runtime lists (`Agent.Info` of the pinned 2.1.4 schema, mode `subagent` or `all`,
+ * A subagent the runtime lists (`Agent.Info` of the pinned schema, mode `subagent` or `all`,
  * not hidden), by the id a prompt mentions it with, and a skill (`Skill.Info`) by its id and name.
  * Only these closed fields are kept: an agent's system prompt and permissions and a skill's path and
  * content never leave the client.
@@ -158,7 +166,7 @@ export interface OpenCodeV2PromptMentions {
 const MAX_MENTIONABLES = 256;
 
 /**
- * One entry of a session's inbox (`Session.Inbox.Info` of the pinned 2.1.4 schema), reduced to the
+ * One entry of a session's inbox (`Session.Inbox.Info` of the pinned schema), reduced to the
  * three fields Keiko reads: the input's own message id, whether it is an operator message (`user`,
  * the only kind Keiko delivers) or something else the runtime queued itself, and how it will be
  * delivered. The payload (the text, the attachments, the metadata) is never copied.
@@ -269,7 +277,7 @@ export interface OpenCodeV2StagedRevert {
 }
 
 /**
- * The session `session.fork` created (`Session.Info` of the pinned 2.1.4 schema, reduced to what
+ * The session `session.fork` created (`Session.Info` of the pinned schema, reduced to what
  * Keiko checks): its id, the directory the runtime placed it in, the session it was forked from and
  * the boundary the copy ended at. `before` ends it just ahead of a message, `through` at the last one.
  */
@@ -607,7 +615,7 @@ function commandDescription(value: unknown): string | undefined {
 }
 
 function locationQuery(directory: string): string {
-  if (!directory.startsWith("/")) throw new Error("opencode-v2-directory-invalid");
+  if (!isLocalAbsolutePath(directory)) throw new Error("opencode-v2-directory-invalid");
   return `location%5Bdirectory%5D=${encodeURIComponent(directory)}`;
 }
 
@@ -1104,24 +1112,35 @@ function parseEventFrame(frame: string): Readonly<Record<string, unknown>> | und
   return event;
 }
 
+function assertEventFrameBound(frame: string): void {
+  if (Buffer.byteLength(frame, "utf8") > MAX_EVENT_FRAME_BYTES) {
+    throw new Error("opencode-v2-event-oversized");
+  }
+}
+
+// The bound is per frame: one read can carry many small frames, and only what stays pending after
+// they are taken is a frame still growing. An oversized frame ends this subscription, and the
+// monitor's reconnect reads the history, which is complete, so the event's content is not lost.
 async function* readEventFrames(
   body: ReadableStream<Uint8Array>,
+  onChunk: () => void,
 ): AsyncIterable<Readonly<Record<string, unknown>>> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let pending = "";
   for await (const chunk of body) {
+    onChunk();
     pending += decoder.decode(chunk, { stream: true });
     pending = pending.replaceAll("\r\n", "\n");
-    if (Buffer.byteLength(pending, "utf8") > MAX_EVENT_FRAME_BYTES) {
-      throw new Error("opencode-v2-event-oversized");
-    }
     let boundary = pending.indexOf("\n\n");
     while (boundary >= 0) {
-      const event = parseEventFrame(pending.slice(0, boundary));
+      const frame = pending.slice(0, boundary);
+      assertEventFrameBound(frame);
+      const event = parseEventFrame(frame);
       pending = pending.slice(boundary + 2);
       if (event !== undefined) yield event;
       boundary = pending.indexOf("\n\n");
     }
+    assertEventFrameBound(pending);
   }
   if (pending.length > 0) throw new Error("opencode-v2-event-truncated");
 }
@@ -1131,21 +1150,44 @@ async function* openEvents(
   authorization: string,
   fetchFn: typeof globalThis.fetch,
   signal: AbortSignal,
+  idleTimeoutMs: number,
 ): AsyncIterable<Readonly<Record<string, unknown>>> {
-  const response = await fetchFn(new URL("/api/event", endpoint), {
-    method: "GET",
-    redirect: "manual",
-    signal,
-    headers: { Authorization: authorization, Accept: "text/event-stream" },
-  });
-  if (
-    !response.ok ||
-    response.headers.get("content-type")?.startsWith("text/event-stream") !== true ||
-    response.body === null
-  ) {
-    throw new Error("opencode-v2-event-unavailable");
+  // One deadline for connecting and for every read, renewed by each chunk, heartbeats included. A
+  // runtime that accepts the connection and then stops answering keeps its process alive, so
+  // nothing else would ever end this wait.
+  // The caller's own stop is a cancellation, named apart from the idle deadline (#4271 audit).
+  if (signal.aborted) throw new Error("opencode-v2-event-cancelled");
+  const watchdog = new AbortController();
+  const idle = (): void => {
+    watchdog.abort(new Error("opencode-v2-event-idle"));
+  };
+  const abort = (): void => {
+    watchdog.abort(new Error("opencode-v2-event-cancelled"));
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(idle, idleTimeoutMs);
+  timer.unref();
+  try {
+    const response = await fetchFn(new URL("/api/event", endpoint), {
+      method: "GET",
+      redirect: "manual",
+      signal: watchdog.signal,
+      headers: { Authorization: authorization, Accept: "text/event-stream" },
+    });
+    if (
+      !response.ok ||
+      response.headers.get("content-type")?.startsWith("text/event-stream") !== true ||
+      response.body === null
+    ) {
+      throw new Error("opencode-v2-event-unavailable");
+    }
+    yield* readEventFrames(response.body, () => {
+      timer.refresh();
+    });
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", abort);
   }
-  yield* readEventFrames(response.body);
 }
 
 // The runtime pages its session list (50 rows by default). A session-tree proof that read only the
@@ -1232,17 +1274,35 @@ async function pagedMessages(
       signal,
     );
     const batch = arrayEnvelope(response);
-    if (rows.length + batch.length > MAX_MESSAGES) return overBound(mode, rows.concat(batch));
-    const anchorAt = anchorId === undefined ? -1 : batch.findIndex((row) => row.id === anchorId);
-    rows.push(...batch);
-    if (anchorAt >= 0) return anchoredWindow(rows, rows.length - batch.length + anchorAt);
-    if (batch.length < pageSize) {
-      rows.reverse();
-      return { messages: rows, truncated: false };
-    }
+    if (rows.length + batch.length > MAX_MESSAGES)
+      return overBound(
+        mode,
+        rows.concat(batch),
+        batch.length < pageSize ? undefined : { request, base, response, cursors, signal },
+      );
+    const settled = settledPage(rows, batch, pageSize, anchorId);
+    if (settled !== undefined) return settled;
     cursor = nextMessagesCursor(response, cursors);
   }
   return overBound(mode, rows);
+}
+
+// Adds one page (newest first) to `rows`. The read ends at the page that holds the anchor, or at a
+// short page, the oldest; `undefined` means the next page is needed.
+function settledPage(
+  rows: Readonly<Record<string, unknown>>[],
+  batch: readonly Readonly<Record<string, unknown>>[],
+  pageSize: number,
+  anchorId: string | undefined,
+): OpenCodeV2MessageWindow | undefined {
+  const anchorAt = anchorId === undefined ? -1 : batch.findIndex((row) => row.id === anchorId);
+  rows.push(...batch);
+  if (anchorAt >= 0) return anchoredWindow(rows, rows.length - batch.length + anchorAt);
+  if (batch.length < pageSize) {
+    rows.reverse();
+    return { messages: rows, truncated: false };
+  }
+  return undefined;
 }
 
 // The messages from the anchor to the newest, oldest first. `rows` run newest first.
@@ -1256,9 +1316,10 @@ function anchoredWindow(
 function overBound(
   mode: "complete" | "recent",
   newestFirst: readonly Readonly<Record<string, unknown>>[],
-): OpenCodeV2MessageWindow {
-  if (mode === "complete") throw new Error("opencode-v2-history-oversized");
-  return newestWindow(newestFirst);
+  older?: OlderPages,
+): Promise<OpenCodeV2MessageWindow> {
+  if (mode === "complete") return Promise.reject(new Error("opencode-v2-history-oversized"));
+  return newestWindow(newestFirst, older);
 }
 
 function nextMessagesCursor(
@@ -1273,14 +1334,56 @@ function nextMessagesCursor(
   return next;
 }
 
+/** Where the read past the bound stopped, so the user message before its window can be found. */
+interface OlderPages {
+  readonly request: V2Request;
+  readonly base: string;
+  readonly response: Readonly<Record<string, unknown>>;
+  readonly cursors: Set<string>;
+  readonly signal: AbortSignal | undefined;
+}
+
 // The newest messages that fit the bound, oldest first. An assistant message is projected against
-// the user message it answers, so the window opens on a user message.
-function newestWindow(
+// the user message it answers, so the window opens on a user message. When the newest messages
+// hold none (one long autonomous turn of more messages than the bound), the window opens on the
+// nearest older user message instead, followed by the newest messages: everything between them is
+// left out, which the truncation says. Without it the window was empty, so the run showed nothing
+// and every later read was a complete one again (#4279).
+async function newestWindow(
   newestFirst: readonly Readonly<Record<string, unknown>>[],
-): OpenCodeV2MessageWindow {
+  older: OlderPages | undefined,
+): Promise<OpenCodeV2MessageWindow> {
   const kept = newestFirst.slice(0, MAX_MESSAGES).reverse();
-  const firstUser = kept.findIndex((message) => message.type === "user");
-  return { messages: firstUser < 0 ? [] : kept.slice(firstUser), truncated: true };
+  const firstUser = kept.findIndex(isUserMessage);
+  if (firstUser >= 0) return { messages: kept.slice(firstUser), truncated: true };
+  const parent =
+    newestFirst.slice(MAX_MESSAGES).find(isUserMessage) ??
+    (older === undefined ? undefined : await olderUserMessage(older));
+  return { messages: parent === undefined ? [] : [parent, ...kept.slice(1)], truncated: true };
+}
+
+function isUserMessage(message: Readonly<Record<string, unknown>>): boolean {
+  return message.type === "user";
+}
+
+/** The newest user message older than the pages read so far, reading at most a bounded number. */
+async function olderUserMessage(
+  older: OlderPages,
+  page = 0,
+  response = older.response,
+): Promise<Readonly<Record<string, unknown>> | undefined> {
+  if (page >= MAX_PARENT_SEARCH_PAGES) return undefined;
+  const cursor = nextMessagesCursor(response, older.cursors);
+  const next = await older.request(
+    "GET",
+    `${older.base}?limit=${String(MESSAGE_PAGE_SIZE)}&cursor=${encodeURIComponent(cursor)}`,
+    undefined,
+    older.signal,
+  );
+  const batch = arrayEnvelope(next);
+  const parent = batch.find(isUserMessage);
+  if (parent !== undefined || batch.length < MESSAGE_PAGE_SIZE) return parent;
+  return olderUserMessage(older, page + 1, next);
 }
 
 /** Only the session API needed by a governed run is reachable from this client. */
@@ -1318,9 +1421,15 @@ export function createOpenCodeV2HttpClient(
     info: (signal) => request("GET", "/api/info", undefined, signal),
     document: (signal) => request("GET", "/openapi.json", undefined, signal),
     events: (signal) =>
-      openEvents(endpoint, authorization, options.fetch ?? globalThis.fetch, signal),
+      openEvents(
+        endpoint,
+        authorization,
+        options.fetch ?? globalThis.fetch,
+        signal,
+        options.eventIdleTimeoutMs ?? DEFAULT_EVENT_IDLE_TIMEOUT_MS,
+      ),
     createSession: async (directory, signal): Promise<Readonly<Record<string, unknown>>> => {
-      if (!directory.startsWith("/")) throw new Error("opencode-v2-directory-invalid");
+      if (!isLocalAbsolutePath(directory)) throw new Error("opencode-v2-directory-invalid");
       return objectEnvelope(
         await request(
           "POST",

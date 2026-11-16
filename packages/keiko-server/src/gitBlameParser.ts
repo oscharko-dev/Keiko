@@ -75,7 +75,8 @@ function hasRequiredRecordFields(
 }
 
 function parseRecord(lines: readonly string[]): GitEditorBlameLine | undefined {
-  if (lines.some((line) => line.includes("\uFFFD"))) return undefined;
+  // Only the metadata must be intact; the tab-prefixed content line is source text, never output.
+  if (lines.some((line) => !line.startsWith("\t") && line.includes("\uFFFD"))) return undefined;
   const header = parseHeader(lines[0] ?? "");
   const author = field(lines, "author");
   const authorTime = field(lines, "author-time");

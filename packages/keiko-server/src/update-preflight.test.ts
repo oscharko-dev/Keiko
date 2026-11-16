@@ -26,6 +26,7 @@ import {
 import type { RouteContext } from "./routes.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { isStableVersionString } from "./update-preflight-registry.js";
+import { OPENCODE_RUNTIME_VERSION_PINS } from "./coding-runtime/opencodeRuntimeVersions.js";
 
 const APPROVED_RELEASE_REFERENCE = "github-pr-review:oscharko-dev/Keiko#1717#484740";
 const ARCHIVE_SHA = "a".repeat(64);
@@ -294,9 +295,9 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "2.0.10",
-      tag: "v2.0.10",
-      commit: "b8cedc1a7a5e2916bbb65dc1d4b620729c261638",
+      version: "2.2.5",
+      tag: "v2.2.5",
+      commit: "9bbb8ce18c80f099e0e448775f59d965ead40a21",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -305,7 +306,7 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
     },
     protocolSchema: {
       path: "packages/protocol/openapi.json",
-      sha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
+      sha256: OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "",
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
       digestInput: "upstream-raw-bytes",
@@ -1103,7 +1104,7 @@ describe("update preflight service", () => {
     expect(report.oneClickEligible).toBe(true);
     expect(report.portableAsset?.asset?.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "2.0.10",
+      upstreamVersion: "2.2.5",
       platformTarget: target,
       payloadSha256: "f".repeat(64),
       payloadSha256Prefix: "f".repeat(12),

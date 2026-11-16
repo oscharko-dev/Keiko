@@ -948,10 +948,28 @@ async function multiSourceGatewayAnswer(
 ): Promise<GroundedAnswerResult> {
   const countsBefore = capturePluralSynthesisCounts(ctx.synthesisBudget);
   ensureNotCancelled(ctx.signal);
+  let retainedSent: MultiSourceGatewayContext["sent"];
   const response = await withAdoptedContextWindowRetry(
     ctx.deps,
-    { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
-    () => multiSourceGatewayAttempt(ctx, question, labeledPacks),
+    {
+      modelId: ctx.modelId,
+      surface: "grounded",
+      correlationId: ctx.correlationId,
+      settleRetryFailure: (error, originalFailure) => {
+        const settled = ctx.deps.chatToolTurn?.settleRetryFailure(
+          error,
+          originalFailure,
+          ctx.modelId,
+          ctx.signal,
+        );
+        if (settled !== undefined && retainedSent !== undefined) ctx.sent = retainedSent;
+        return settled;
+      },
+    },
+    (attempt) => {
+      if (attempt.retrying) retainedSent = ctx.sent;
+      return multiSourceGatewayAttempt(ctx, question, labeledPacks, attempt.retryFollows);
+    },
   );
   const sent = ctx.sent;
   if (sent === undefined) throw new TypeError("Multi-source fitted prompt is unavailable");
@@ -969,6 +987,7 @@ async function multiSourceGatewayAttempt(
   ctx: MultiSourceGatewayContext,
   question: string,
   packs: readonly LabeledPack[],
+  retryFollows: (error: unknown) => boolean,
 ): Promise<NormalizedResponse | undefined> {
   const accounting = currentContextProfileForModel(ctx.deps, ctx.modelId)?.tokenAccounting;
   const options = multiSourceRemainingPromptOptions(ctx, packs, accounting);
@@ -994,6 +1013,7 @@ async function multiSourceGatewayAttempt(
   );
   const grants = multiSourceSynthesisGrants(ctx, packs);
   return callPluralGroundedSynthesis({
+    retryFollows,
     deps: ctx.deps,
     evidenceCount: sent.sentReferenceCount,
     model: ctx.model,
@@ -1066,11 +1086,7 @@ function multiSourceRemainingPromptOptions(
         ? undefined
         : ctx.deps.store.markdownSkills.forTurn(ctx.answerOptions.userMessageId),
     ownAssessmentPolicy: currentOwnAssessmentPolicy(ctx.deps),
-    callerInputTokensMax: Math.max(
-      0,
-      multiSourceSynthesisGrants(ctx, packs).inputTokensMax -
-        ctx.synthesisBudget.pendingUsage().promptTokens,
-    ),
+    callerInputTokensMax: multiSourceSynthesisGrants(ctx, packs).inputTokensMax,
   };
 }
 
@@ -1125,6 +1141,7 @@ async function multiSourceGatewayRepair(
     return uninvokedCitationRepair(original);
   ensureNotCancelled(signal);
   const response = await callPluralGroundedSynthesis({
+    purpose: "citation-repair",
     deps: ctx.deps,
     evidenceCount: sent.sentReferenceCount,
     model: ctx.model,
@@ -1905,7 +1922,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   ensureNotCancelled(ctx.signal);
   const completedAnswer = withToolResultsAsSource(
     withAnswerDuration(answer, startedAtMs),
-    ctx.deps.store,
+    ctx.deps.chatToolTurn,
   );
   recordMultiSourceAnswer(ctx, retrieved, completedAnswer, persisted.assistantMessageId, abstained);
   return { status: 200, body: completedAnswer };
@@ -2100,6 +2117,7 @@ async function repairMultiSourceAnswer(
       signal: ctx.signal,
       reliableCitationBehaviour: citationBehaviourFor(ctx.deps, ctx.modelId),
       observeCitationBehaviour,
+      toolTurn: ctx.deps.chatToolTurn,
     },
   };
   const repaired = await repairGroundedAnswer(repairContext);

@@ -18,7 +18,14 @@ describe("portable secure-read native qualification", () => {
       );
       return;
     }
-    await expect(qualifyPortableSecureRead(target, false)).resolves.toBeUndefined();
+    const evidence = await qualifyPortableSecureRead(target, false);
+    expect(evidence).toEqual({
+      platformTarget: target,
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      sizeBytes: expect.any(Number),
+      sourceTreeSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(evidence.sizeBytes).toBeGreaterThan(0);
   });
 
   it.each([undefined, "amiga-68k"])("rejects unsupported target %s", async (target) => {
@@ -63,9 +70,15 @@ describe("portable secure-read native qualification", () => {
       return;
     }
     expect(code).toBe(0);
-    expect(info).toHaveBeenCalledExactlyOnceWith(
-      `portable-secure-read-qualification: PASS ${target}`,
-    );
+    expect(info).toHaveBeenCalledTimes(2);
+    const prefix = "portable-secure-read-qualification: identity ";
+    expect(info.mock.calls[0][0]).toMatch(new RegExp(`^${prefix}`, "u"));
+    const evidence = JSON.parse(info.mock.calls[0][0].slice(prefix.length));
+    expect(evidence.platformTarget).toBe(target);
+    expect(evidence.sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(evidence.sizeBytes).toBeGreaterThan(0);
+    expect(evidence.sourceTreeSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(info).toHaveBeenNthCalledWith(2, `portable-secure-read-qualification: PASS ${target}`);
     expect(errors).not.toHaveBeenCalled();
   });
 });

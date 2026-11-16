@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { validateCodingWorkbenchCodexSubscriptionProfile } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
 import { createHash } from "node:crypto";
@@ -222,12 +223,16 @@ function codingWindow(mode: ModeCase): JsonObject {
 
 async function seedUnavailableWorkbench(page: Page, mode: ModeCase): Promise<void> {
   await page.addInitScript(
-    ({ key, theme, win }) => {
+    ({ argument: { key, theme, win }, storageKeys }) => {
       window.localStorage.setItem("keiko.theme", theme);
       window.localStorage.setItem(key, JSON.stringify([win]));
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { key: WORKSPACE_KEY, theme: mode.theme, win: codingWindow(mode) },
+    await workspaceStorageArgs(page, {
+      key: WORKSPACE_KEY,
+      theme: mode.theme,
+      win: codingWindow(mode),
+    }),
   );
 }
 

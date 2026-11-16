@@ -1,6 +1,7 @@
-import type {
-  JiraIssueTemplate,
-  JiraTemplateViolation,
+import {
+  jiraTemplateGovernsWrites,
+  type JiraIssueTemplate,
+  type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   checkJiraIssueTemplates,
@@ -21,6 +22,8 @@ import type {
   JiraReportFieldCatalogEntry,
   JiraReportIssueFacts,
 } from "./jira-report-types.js";
+import { bindJiraTemplateParentTypes } from "./jira-template-parent-types.js";
+import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
 /**
  * The compliance section of the report (#4181) fed by the one template checker (#4177) and the
@@ -36,9 +39,7 @@ import type {
 const CHECKED_FIELDS = ["summary", "description", "labels", "issuelinks"] as const;
 
 function definesStructure(template: JiraIssueTemplate): boolean {
-  return template.activations.some(
-    (activation) => activation.kind === "edit" || activation.kind === "create",
-  );
+  return jiraTemplateGovernsWrites(template);
 }
 
 /** The report judges the state an edit would leave, whatever write the template was meant for. */
@@ -55,11 +56,15 @@ function catalogOf(
   return [...known.values()];
 }
 
-function references(templates: readonly JiraIssueTemplate[]): readonly string[] {
-  return templates.flatMap((template) => [
-    ...template.requiredFields,
-    ...(template.parent.field === undefined ? [] : [template.parent.field]),
-  ]);
+function references(
+  templates: readonly JiraIssueTemplate[],
+): readonly { readonly template: JiraIssueTemplate; readonly reference: string }[] {
+  return templates.flatMap((template) =>
+    [
+      ...template.requiredFields,
+      ...(template.parent.field === undefined ? [] : [template.parent.field]),
+    ].map((reference) => ({ template, reference })),
+  );
 }
 
 function unresolved(
@@ -67,7 +72,8 @@ function unresolved(
   catalog: readonly JiraFieldCatalogEntry[],
 ): boolean {
   return references(templates).some(
-    (reference) => resolveJiraTemplateFieldIds(reference, catalog).length === 0,
+    ({ reference, template }) =>
+      resolveJiraTemplateFieldIds(reference, catalog, template).length === 0,
   );
 }
 
@@ -76,8 +82,8 @@ function fieldIdsOf(
   catalog: readonly JiraFieldCatalogEntry[],
 ): readonly string[] {
   const ids = new Set<string>(CHECKED_FIELDS);
-  for (const reference of references(templates))
-    for (const id of resolveJiraTemplateFieldIds(reference, catalog)) ids.add(id);
+  for (const { reference, template } of references(templates))
+    for (const id of resolveJiraTemplateFieldIds(reference, catalog, template)) ids.add(id);
   return [...ids];
 }
 
@@ -149,18 +155,75 @@ function deviation(
   };
 }
 
+/**
+ * An issue record without an issue type id cannot be matched to a template bound by id, and its
+ * localized name proves nothing about one: it is neither covered nor uncovered, so it is judged
+ * `unavailable` and the report says so instead of counting it "without template" (#4354).
+ */
+function needsTypeId(
+  templates: readonly JiraIssueTemplate[],
+  facts: Pick<JiraReportIssueFacts, "projectKey" | "issueTypeId">,
+): boolean {
+  return (
+    facts.issueTypeId.length === 0 &&
+    templates.some(
+      (template) =>
+        template.binding !== undefined &&
+        template.project.trim().toLowerCase() === facts.projectKey.trim().toLowerCase(),
+    )
+  );
+}
+
 function checkerOf(
   templates: readonly JiraIssueTemplate[],
   catalog: readonly JiraFieldCatalogEntry[],
 ): JiraReportComplianceChecker {
   return {
     fieldIds: fieldIdsOf(templates, catalog),
-    covers: (facts) => matchingJiraIssueTemplates(templates, subjectOf(facts)).length > 0,
-    check: (facts) =>
-      checkJiraIssueTemplates(templates, subjectOf(facts), catalog).map((violation) =>
-        deviation(violation, catalog),
-      ),
+    ...(templates.some((template) => template.parent.issueTypes !== undefined)
+      ? { requiresNativeEvidence: true as const }
+      : {}),
+    covers: (facts) =>
+      needsTypeId(templates, facts) ||
+      matchingJiraIssueTemplates(templates, subjectOf(facts)).length > 0,
+    check: (facts, request) =>
+      needsTypeId(templates, facts)
+        ? Promise.resolve("unavailable" as const)
+        : checkSubject(templates, catalog, subjectOf(facts), request),
   };
+}
+
+async function checkSubject(
+  templates: readonly JiraIssueTemplate[],
+  catalog: readonly JiraFieldCatalogEntry[],
+  subject: JiraTemplateSubject,
+  request: JiraMutationRequest | undefined,
+): Promise<readonly JiraReportDeviation[] | "unavailable"> {
+  const matching = matchingJiraIssueTemplates(templates, subject);
+  const needsParent = matching.some((template) => template.parent.issueTypes !== undefined);
+  if (!parentFieldsObserved(matching, subject, catalog)) return "unavailable";
+  if (needsParent && request === undefined) return "unavailable";
+  const bound =
+    needsParent && request !== undefined
+      ? await bindJiraTemplateParentTypes(request, subject, matching, catalog)
+      : subject;
+  const violations = checkJiraIssueTemplates(matching, bound, catalog);
+  if (violations.some(({ ruleId }) => ruleId === "template-unreadable")) return "unavailable";
+  return violations.map((violation) => deviation(violation, catalog));
+}
+
+/** A withheld requested field is unknown; an observed null still proves an absent parent. */
+function parentFieldsObserved(
+  templates: readonly JiraIssueTemplate[],
+  subject: JiraTemplateSubject,
+  catalog: readonly JiraFieldCatalogEntry[],
+): boolean {
+  return templates.every((template) => {
+    const { parent } = template;
+    if (parent.field === undefined) return true;
+    const ids = resolveJiraTemplateFieldIds(parent.field, catalog, template);
+    return ids.length === 1 && ids.every((id) => Object.hasOwn(subject.fields, id));
+  });
 }
 
 /**

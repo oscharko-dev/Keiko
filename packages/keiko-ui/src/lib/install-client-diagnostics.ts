@@ -70,7 +70,12 @@ import {
   takeClientDiagnosticLoss,
 } from "./client-diagnostics";
 import { ApiError } from "./api-shared-primitives";
+import { newClientCorrelationId } from "./bff-correlation";
 import { bffFetchJson } from "./http";
+
+// This document's own random reference, minted once per page load (#4068). Tabs and windows of one
+// origin share the session cookie, so only this tells their reports apart in the Activity Log.
+const DOCUMENT_REF = newClientCorrelationId();
 
 function writeToBrowserConsole(message: string, meta?: ClientDiagnosticMeta): void {
   // The single sanctioned console access in keiko-ui production code. Everything above this line is
@@ -221,6 +226,7 @@ function clientSessionRepairPostBody(
     repairCorrelationId,
     errorKind: report.errorKind,
     stream: report.stream,
+    documentRef: validCorrelationId(DOCUMENT_REF),
   };
 }
 
@@ -281,6 +287,38 @@ function codingReportFields(
   };
 }
 
+// What a cited source did when the person opened it: the click and the frame drawn on its page.
+function citationReportFields(
+  meta: ClientDiagnosticMeta,
+): Pick<ClientDiagnosticIngestRequest, "citationActivation" | "citationHighlight"> {
+  return { citationActivation: meta.citationActivation, citationHighlight: meta.citationHighlight };
+}
+
+// Closed composer facts share the existing diagnostic transport.
+function composerReportFields(
+  meta: ClientDiagnosticMeta,
+): Pick<
+  ClientDiagnosticIngestRequest,
+  "composerActivity" | "composerSubmission" | "composerFocusIndicator" | "composerCodeStage"
+> {
+  return {
+    composerActivity: meta.composerActivity,
+    composerSubmission: meta.composerSubmission,
+    composerFocusIndicator: meta.composerFocusIndicator,
+    composerCodeStage: meta.composerCodeStage,
+  };
+}
+
+// Closed Jira presentation facts share the existing diagnostic transport.
+function jiraPresentationFields(
+  meta: ClientDiagnosticMeta,
+): Pick<ClientDiagnosticIngestRequest, "jiraResultPresentation" | "jiraFieldPresentation"> {
+  return {
+    jiraResultPresentation: meta.jiraResultPresentation,
+    jiraFieldPresentation: meta.jiraFieldPresentation,
+  };
+}
+
 // Builds the wire body for one already-bounded diagnostic message. `clientTs` is stamped at send
 // time (not at the original `reportClientDiagnostic` call), which is close enough for an operator
 // diagnostic and avoids threading a timestamp through the sink's string-only contract.
@@ -303,6 +341,7 @@ function clientMessagePostBody(
     clientTs: new Date().toISOString(),
     correlationId: validCorrelationId(meta.correlationId),
     parentCorrelationId: validCorrelationId(meta.parentCorrelationId),
+    documentRef: validCorrelationId(DOCUMENT_REF),
     errorKind: meta.errorKind,
     renderFailure: meta.renderFailure,
     voiceDialogueStage: meta.voiceDialogueStage,
@@ -319,7 +358,7 @@ function clientMessagePostBody(
     knowledgeCatalog: meta.knowledgeCatalog,
     answerCopy: meta.answerCopy,
     answerSpeech: meta.answerSpeech,
-    citationActivation: meta.citationActivation,
+    ...citationReportFields(meta),
     scopeNotice: meta.scopeNotice,
     evidenceInspection: meta.evidenceInspection,
     supportReportDelivery: meta.supportReportDelivery,
@@ -327,11 +366,10 @@ function clientMessagePostBody(
     filesScopeDecision: meta.filesScopeDecision,
     updateNotice: meta.updateNotice,
     editorLineEnding: meta.editorLineEnding,
+    knowledgeCatalogRefresh: meta.knowledgeCatalogRefresh,
     ...codingReportFields(meta),
-    composerActivity: meta.composerActivity,
-    composerSubmission: meta.composerSubmission,
-    composerFocusIndicator: meta.composerFocusIndicator,
-    composerCodeStage: meta.composerCodeStage,
+    ...composerReportFields(meta),
+    ...jiraPresentationFields(meta),
     loss,
   };
   const readyStateDigit = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message)?.[1];
@@ -407,16 +445,22 @@ function gitClientOperationPostBudget(
 // else is a failure report. The binding, repair and git-client rules are the server's own
 // (keiko-contracts), so the two budgets never drift.
 // The closed report shapes, by the server's own rule (client-diagnostics-routes closedReportBudget).
+// The Editor's line-ending adoption and a Knowledge Pod catalog refresh: closed, routine evidence.
+function routineClientSurfaceEvidence(meta: ClientDiagnosticMeta): boolean {
+  return meta.editorLineEnding !== undefined || meta.knowledgeCatalogRefresh !== undefined;
+}
+
 function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
   return (
     meta.supportReportDelivery !== undefined ||
     meta.supportReportPreparation !== undefined ||
     meta.filesScopeDecision !== undefined ||
     meta.updateNotice !== undefined ||
-    meta.editorLineEnding !== undefined ||
+    routineClientSurfaceEvidence(meta) ||
     meta.codingRunRestore !== undefined ||
     meta.codingWorkbenchInteraction !== undefined ||
     meta.citationActivation !== undefined ||
+    meta.citationHighlight !== undefined ||
     meta.scopeNotice !== undefined
   );
 }
@@ -438,6 +482,8 @@ function routineClosedReportEvidence(meta: ClientDiagnosticMeta): boolean {
     meta.gitRetryAttemptReport !== undefined ||
     meta.selectDismissal !== undefined ||
     meta.knowledgeCatalog !== undefined ||
+    meta.jiraResultPresentation !== undefined ||
+    meta.jiraFieldPresentation !== undefined ||
     meta.answerSpeech !== undefined ||
     routineSupportReportEvidence(meta)
   );
@@ -644,12 +690,17 @@ async function sendClientDiagnosticBody(
   signal?: AbortSignal,
 ): Promise<boolean> {
   try {
-    await bffFetchJson<undefined>("/api/diagnostics/client", {
-      method: "POST",
-      body: JSON.stringify(body),
-      keepalive: true,
-      signal: signal ?? AbortSignal.timeout(CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS),
-    });
+    // Delivery failures are counted below, never sent back through their own diagnostic transport.
+    await bffFetchJson<undefined>(
+      "/api/diagnostics/client",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        keepalive: true,
+        signal: signal ?? AbortSignal.timeout(CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS),
+      },
+      { repairSession: false },
+    );
     return true;
   } catch (error) {
     recordFailedPost(loss, error);

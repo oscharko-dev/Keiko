@@ -1,15 +1,14 @@
-// Wire contract for the live HTML Manual Knowledge Pod create/refresh job (Issue #2063).
+// Wire contract for the retained HTML Manual Knowledge Pod refresh job (Issue #2063).
 //
-// The BFF runs `createHtmlManualPod` / `refreshHtmlManualPod` (keiko-local-knowledge) as an
+// The BFF runs `refreshHtmlManualPod` (keiko-local-knowledge) as an
 // in-process background job and projects its body-free `HtmlManualIndexingProgress` onto this wire
 // type so the UI can poll live progress. Body-free by construction: it carries only a job id, an
 // operation/state/phase, non-negative counts, and closed reason+generic-guidance remediation pairs —
 // never a raw page path, URL, page body, crawl fingerprint, or diagnostic string.
 //
 // Leaf-package rule (ADR-0019 direction 1): no `@oscharko-dev/keiko-*` imports; pure types and pure
-// validators only. The two REQUEST validators are the inbound trust boundary the route enforces.
+// validators only. The refresh request validator is the inbound trust boundary the route enforces.
 
-import { isSafeManualOrigin, isSafeManualPathPrefix } from "./html-manual-source.js";
 import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";
 
 export const HTML_MANUAL_POD_JOB_SCHEMA_VERSION = "1" as const;
@@ -85,18 +84,6 @@ export interface HtmlManualPodRefreshRequest {
   readonly sourceId: string;
 }
 
-// Create a new HTTP HTML manual pod. The caller approves the origin + path prefix (the crawl scope);
-// the server derives the source, allocates the capsule/source ids, and indexes with the configured
-// embedding identity. Only the http scope is exposed here (a local-manual create is not a product
-// trigger surface).
-export interface HtmlManualPodCreateRequest {
-  readonly displayName: string;
-  readonly origin: string;
-  readonly pathPrefix: string | null;
-}
-
-const MAX_DISPLAY_NAME_LENGTH = 120;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -106,12 +93,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isSafeManualPodId(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > 128) return false;
   return /^[A-Za-z0-9_.:-]+$/u.test(value);
-}
-
-function isSafeDisplayName(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  return trimmed.length > 0 && trimmed.length <= MAX_DISPLAY_NAME_LENGTH;
 }
 
 function onlyKnownKeys(
@@ -133,37 +114,4 @@ export function validateHtmlManualPodRefreshRequest(
   if (!isSafeManualPodId(input.sourceId)) errors.push("sourceId must be a safe id token");
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, value: input as unknown as HtmlManualPodRefreshRequest };
-}
-
-// Normalise + validate an optional path prefix: undefined/null -> null; a string is scope-checked;
-// any other type is rejected.
-function validateOptionalPathPrefix(value: unknown, errors: string[]): string | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "string" || !isSafeManualPathPrefix(value)) {
-    errors.push("pathPrefix must be a safe path prefix or null");
-    return null;
-  }
-  return value;
-}
-
-export function validateHtmlManualPodCreateRequest(
-  input: unknown,
-): LocalKnowledgeValidation<HtmlManualPodCreateRequest> {
-  if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
-  const errors = onlyKnownKeys(input, ["displayName", "origin", "pathPrefix"], "request");
-  const { displayName, origin } = input;
-  if (!isSafeDisplayName(displayName)) {
-    errors.push("displayName must be a non-empty bounded name");
-  }
-  if (typeof origin !== "string" || !isSafeManualOrigin(origin)) {
-    errors.push("origin must be a safe https/http origin");
-  }
-  const pathPrefix = validateOptionalPathPrefix(input.pathPrefix, errors);
-  if (errors.length > 0 || typeof displayName !== "string" || typeof origin !== "string") {
-    return { ok: false, errors: errors.length > 0 ? errors : ["request is invalid"] };
-  }
-  // isSafeDisplayName bounds the TRIMMED length, so the trimmed string is the value that was
-  // actually checked — returning the raw one let leading padding carry an arbitrarily long name
-  // past a bound this validator exists to enforce.
-  return { ok: true, value: { displayName: displayName.trim(), origin, pathPrefix } };
 }

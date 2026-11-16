@@ -65,9 +65,10 @@ import {
 } from "./opencodeProtocolSurface.js";
 import { OPENCODE_GOVERNED_ACTION_PERMISSION } from "./opencodeToolSchemas.js";
 import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";
+import { OPENCODE_RUNTIME_VERSION_PINS } from "./opencodeRuntimeVersions.js";
 
 const tempDirs: string[] = [];
-const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
+const OPENCODE_SCHEMA_SHA256 = OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "";
 const TEST_QUALIFICATION: RuntimeQualificationIdentity = {
   platform: "win32",
   arch: "x64",
@@ -730,7 +731,7 @@ function createPortableRuntimeFixture(): {
         name: "opencode-compatible",
         kind: "coding-runtime",
         upstreamName: "opencode",
-        upstreamVersion: "2.0.10",
+        upstreamVersion: "2.2.5",
         adapterName: "keiko-coding-sidecar",
         adapterVersion: "1",
         protocolVersion: "http-sse",
@@ -935,6 +936,50 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(result)).not.toContain(unmanaged);
   });
 
+  it("refuses a workspace that contains the managed runtime as unqualified, before spawn (#4335)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin" },
+    });
+
+    // The temporary directory holds the resolver-owned runtime payload, like a home folder that
+    // holds a portable Keiko install.
+    const result = await manager.start(
+      launchRequest(realpathSync(tmpdir()), fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(result).toEqual({ ok: false, failureCode: "workspace-unqualified", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("keeps refusing an executable outside the managed runtime root as sidecar-unmanaged (#4335)", async () => {
+    const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
+    executable(join(portable.resourceRoot, "runtime/outside"), "opencode-sidecar");
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin" },
+      portableRuntimeResolver: () => ({
+        verification: {
+          ...portable.verification,
+          executablePath: "runtime/outside/opencode-sidecar",
+        },
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+
+    const result = await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(result).toEqual({ ok: false, failureCode: "sidecar-unmanaged", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
   it("launches a Full-access run whose mode value the host also carries under a non-secret name (#3897)", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
@@ -950,6 +995,42 @@ describe("coding runtime manager", () => {
     expect(result).toMatchObject({ ok: true });
     expect(harness.captures[0]?.env).toMatchObject({ KEIKO_CODING_MODE: "autonomous-delivery" });
     expect(harness.captures[0]?.env).not.toHaveProperty("KEIKO_CODING_DEPLOYMENT_CEILING");
+  });
+
+  it("keeps host proxy, CA, OpenSSL and credential settings out of a mapped launch (#4068 W11)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://user:proxy-password@proxy.example.test:8080",
+        http_proxy: "http://proxy.example.test:8080",
+        ALL_PROXY: "socks5://proxy.example.test:1080",
+        NO_PROXY: "*",
+        SSL_CERT_FILE: "/host/ca.pem",
+        NODE_EXTRA_CA_CERTS: "/host/extra-ca.pem",
+        OPENSSL_CONF: "/host/openssl.cnf",
+        OPENSSL_MODULES: "/host/ossl-modules",
+        NODE_OPTIONS: "--force-fips",
+        OPENAI_API_KEY: "host-api-key-value",
+        AZURE_OPENAI_API_KEY: "host-azure-key-value",
+        GITHUB_TOKEN: "host-github-token-value",
+      },
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    const spawnedEnv = harness.captures[0]?.env ?? {};
+    expect(spawnedEnv.PATH).toBe("/usr/bin");
+    const names = Object.keys(spawnedEnv);
+    expect(names.filter((name) => !name.startsWith("KEIKO_") && name !== "PATH")).toEqual([]);
+    const values = JSON.stringify(spawnedEnv);
+    for (const hostValue of ["proxy-password", "proxy.example.test", "/host/", "host-api-key"]) {
+      expect(values).not.toContain(hostValue);
+    }
   });
 
   it("refuses a child env value that equals a credential-named host value (#3897)", async () => {
@@ -1783,6 +1864,55 @@ describe("coding runtime manager", () => {
       ).toEqual({ ok: false, failureCode: "signature-unverified", retryable: false });
       expect(harness.children).toHaveLength(0);
     });
+  });
+
+  // A run must not be able to write to its own runtime. A checkout selected as its own workspace does
+  // this, because the dev lane stages the runtime inside it. Only this cause of an unmanaged runtime
+  // has something the operator can do about it, so the two are told apart. The managed root is the
+  // verified payload's, never the request's, so these cases place the workspace around that payload.
+  it.each([
+    ["below the workspace", (resourceRoot: string): string => resourceRoot],
+    [
+      "at the workspace itself",
+      (resourceRoot: string, payloadRootPath: string): string =>
+        join(resourceRoot, payloadRootPath),
+    ],
+  ])("refuses a managed root %s before anything spawns", async (_label, workspaceOf) => {
+    const { resourceRoot, verification, executablePath } = createPortableRuntimeFixture();
+    const workspaceRoot = workspaceOf(resourceRoot, verification.payloadRootPath);
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin" },
+      portableRuntimeResolver: () => ({ verification, resourceRoot, target: "windows-x64" }),
+    });
+
+    expect(
+      await manager.start(launchRequest(workspaceRoot, resourceRoot, executablePath)),
+    ).toMatchObject({ ok: false, failureCode: "workspace-unqualified", retryable: false });
+    expect(harness.captures).toHaveLength(0);
+  });
+
+  it("keeps an executable outside its managed root a refusal of its own", async () => {
+    const { resourceRoot, verification, executablePath } = createPortableRuntimeFixture();
+    executable(join(resourceRoot, "runtime", "outside"));
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin" },
+      portableRuntimeResolver: () => ({
+        verification: { ...verification, executablePath: "runtime/outside/opencode-sidecar" },
+        resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+
+    expect(
+      await manager.start(
+        launchRequest(tempDir("keiko-runtime-workspace-"), resourceRoot, executablePath),
+      ),
+    ).toMatchObject({ ok: false, failureCode: "sidecar-unmanaged", retryable: false });
+    expect(harness.captures).toHaveLength(0);
   });
 
   it("starts a managed sidecar with only allowlisted inherited env and runtime projection", async () => {

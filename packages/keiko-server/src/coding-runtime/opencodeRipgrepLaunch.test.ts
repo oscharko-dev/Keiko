@@ -21,6 +21,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
 import {
   OPENCODE_RIPGREP_UNVERIFIED_REASONS,
   recordOpenCodeRipgrepResolution,
@@ -38,6 +39,8 @@ import {
 } from "./ripgrepRuntime.js";
 
 const POSIX = process.platform !== "win32";
+const NATIVE_ALLOWLIST_POSIX_ONLY =
+  "the native kernel read allowlist is POSIX-only; Windows has no native sandbox backend";
 const roots: string[] = [];
 
 function sha256(value: string): string {
@@ -516,7 +519,7 @@ describe("the child environment", () => {
 describe("the kernel read allowlist the verified directory produces", () => {
   // The native profile's toolchain roots come from the child's PATH (keiko-sandbox, read-only
   // here). Exactly the verified directory must become a root: not its parent, not a sibling.
-  it.each([
+  it.for([
     ["portable", packaged, (value: Fixture): string => value.portableDirectory],
     ["npm-package", npmPackage, (value: Fixture): string => value.portableDirectory],
     [
@@ -529,7 +532,7 @@ describe("the kernel read allowlist the verified directory produces", () => {
     ],
   ] as const)(
     "admits exactly the %s ripgrep directory and nothing broader",
-    (layout, location, pick) => {
+    ([layout, location, pick], context) => {
       const value = fixture();
       const resolution = resolveOpenCodeRipgrep(request(value, location(value)));
       expect(resolution).toMatchObject({
@@ -537,6 +540,9 @@ describe("the kernel read allowlist the verified directory produces", () => {
         layout,
         directory: pick(value),
       });
+      // The native profile's kernel read allowlist exists only for the POSIX kernel backends
+      // (Seatbelt, Landlock); a Windows host has no native backend and runs the container profile.
+      if (WINDOWS_HOST) context.skip(NATIVE_ALLOWLIST_POSIX_ONLY);
       const path = ripgrepNativePath("/usr/bin:/bin", resolution);
       expect(homedir().startsWith(value.root)).toBe(false);
       expect(nativeToolchainReadRoots(path, homedir())).toEqual([realpathSync(pick(value))]);

@@ -250,6 +250,7 @@ async function setupCampaign(parsed) {
   requireHeldHead(runtime);
   const env = {
     ...process.env,
+    KEIKO_OS_KEYCHAIN: "off",
     KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: readFileSync(runtime.launcherPath, "utf8"),
   };
   const session = {

@@ -26,6 +26,7 @@ import {
   type SessionPairingDecision,
   type SessionPairingPort,
 } from "./sessionPairingPort.js";
+import type { LauncherBrowser } from "./launcherBrowser.js";
 import type { AppSession } from "./sessionRegistry.js";
 
 export interface FakeSessionPairingPortOptions {
@@ -77,6 +78,7 @@ export function createStaticContentSource(
 }
 
 export interface AppSessionTestServerOptions {
+  readonly launcherBrowser?: LauncherBrowser | undefined;
   readonly sessionPairingPort?: SessionPairingPort | undefined;
   readonly contentSource?: CodingAppSessionContentSource | undefined;
   /** Injected diagnostic sink, e.g. to observe the KEIKO-0838 pairing-denial aggregate directly. */
@@ -108,6 +110,7 @@ export async function startAppSessionTestServer(
     env: {},
     store: createInMemoryUiStore(),
     sessionPairingPort: options.sessionPairingPort,
+    launcherBrowser: options.launcherBrowser,
     codingAppSessionContentSource: options.contentSource,
     diagnostics: options.diagnostics,
   });

@@ -29,6 +29,7 @@ import {
   verifyStatusCopyKey,
   verifyStatusLabelKey,
   verifyStatusTone,
+  writeFailureReasonKey,
 } from "./connector-labels";
 
 function catalogHas(key: string): boolean {
@@ -68,7 +69,8 @@ describe("connector-labels — every mapped key exists in the widget or shared c
 
   it("maps every write failure reason to real copy", () => {
     for (const reason of ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS) {
-      expect(catalogHas(deniedReasonCopyKey(undefined))).toBe(true);
+      expect(catalogHas(writeFailureReasonKey(reason))).toBe(true);
+      expect(Object.hasOwn(OPTIONAL_WIDGET_DE_MESSAGES, writeFailureReasonKey(reason))).toBe(true);
     }
   });
 });

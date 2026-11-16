@@ -12,13 +12,18 @@ const WORKSPACE_PERFORMANCE_SCRIPT_INPUT = "package.json#scripts.test:e2e:worksp
 export const WORKSPACE_PERFORMANCE_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
   "scripts/check-perf-evidence.mjs",
   "scripts/lib/git-changed-paths.mjs",
+  "scripts/lib/d12-baseline.mjs",
   "scripts/lib/host-executable.mjs",
   "scripts/lib/is-main-module.mjs",
+  "scripts/lib/workspace-storage-fixture.mjs",
+  "scripts/lib/workspace-storage-fixture.d.mts",
   "scripts/workspace-performance-evidence-gate.mjs",
   "scripts/workspace-performance-measurement-toolchain.mjs",
   "tests/e2e/config/playwright.workspace-performance.config.ts",
   "tests/e2e/fixtures/keiko.e2e.config.json",
   "tests/e2e/workspace-performance.spec.ts",
+  "tests/e2e/support/workspace-storage.ts",
+  "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts",
 ]);
 
 function updateDigest(hash, path, contents) {

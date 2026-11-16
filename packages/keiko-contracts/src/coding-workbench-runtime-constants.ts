@@ -104,8 +104,9 @@ export type CodingWorkbenchRuntimeFailureCode =
   | "workspace-unqualified"
   // F9 (#3873, live Gemma qualification): a run whose last turn ended on one of its own bounds or on
   // a failed model call names that cause instead of `runtime-failed`, which the Workbench renders as
-  // an internal error. `prompt-allowance-exhausted`: the run's cumulative prompt allowance (the
-  // Authority Envelope's `maxPromptTokens`) refused its most recent model call.
+  // an internal error. `prompt-allowance-exhausted` is LEGACY and never produced any more (#4346,
+  // Keiko does not limit tokens): the literal stays only so a run settled by an older Keiko still
+  // decodes from the durable snapshot store, whose CHECK constraint admits it.
   // `envelope-duration-exhausted`: the run's Authority Envelope ran out of time (its `expiresAt`, or
   // `maxRuntimeMs` since minting). `output-exhausted-repeated`: the most recent model call spent the
   // whole output budget again without a tool call or an answer, after the gateway's steered repair
@@ -128,6 +129,21 @@ export type CodingWorkbenchRuntimeFailureCode =
   // the latest refusal's closed reason.
   | "edits-blocked"
   | "edit-retries-exhausted";
+
+/**
+ * #4068: refusals of a start the Windows broker cannot confine. A confined Windows run reads only
+ * what it is granted, and Keiko grants a workspace only as a Keiko-managed worktree (ADR-0043 D18).
+ * A start in the operator's own checkout or folder is refused before anything spawns with
+ * `workspace-location-unsupported`; one whose worktree lies on another volume than Windows, where
+ * the AppContainer cannot resolve its path, with `workspace-volume-unsupported`. No run exists when
+ * they are answered, so no run snapshot ever carries one: they are not run failure codes.
+ */
+export type CodingWorkbenchRuntimeStartRefusalCode =
+  "workspace-location-unsupported" | "workspace-volume-unsupported";
+
+/** What a refused start answers with: a run failure code, or a start-only refusal (#4068). */
+export type CodingWorkbenchRuntimeStartFailureCode =
+  CodingWorkbenchRuntimeFailureCode | CodingWorkbenchRuntimeStartRefusalCode;
 
 /**
  * Redacted facts about the model gateway under a coding turn (#3873 review). `model-gateway-retrying`:

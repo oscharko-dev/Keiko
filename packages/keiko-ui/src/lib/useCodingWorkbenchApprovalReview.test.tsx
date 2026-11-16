@@ -15,6 +15,16 @@ import {
   useCodingWorkbenchApprovalReview,
   type UseCodingWorkbenchApprovalReviewInput,
 } from "./useCodingWorkbenchApprovalReview";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
+
+/** Every report the hook made, message and structured facts, for the leak checks below. */
+function captureReports(): unknown[] {
+  const reports: unknown[] = [];
+  setClientDiagnosticWriter((message, meta) => {
+    reports.push({ message, meta });
+  });
+  return reports;
+}
 
 const getApprovalReviewMock = vi.hoisted(() => vi.fn());
 const pairingSettledMock = vi.hoisted(() => vi.fn());
@@ -91,17 +101,27 @@ describe("useCodingWorkbenchApprovalReview", () => {
     vi.restoreAllMocks();
   });
 
-  it("#3386: publishes a matching commit and records only its bounded facts", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("#3386: publishes a matching commit and records only its closed step", async () => {
+    const reports = captureReports();
     getApprovalReviewMock.mockResolvedValue({ session: "active", pending: commitReview() });
     const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
     await waitFor(() => expect(result.current.status).toBe("ready"));
     expect(result.current.review).toEqual(commitReview());
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "[keiko] verified commit review ready: files 2 tree 333333333333",
-    );
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("never copy");
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("src/alpha.ts");
+    // #4271: a closed step and state on the routine budget, not a warn sentence.
+    expect(reports).toEqual([
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          codingWorkbenchInteraction: {
+            interaction: "delivery-step-shown",
+            deliveryStep: "commit-review",
+            deliveryState: "ready",
+          },
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(reports)).not.toContain("never copy");
+    expect(JSON.stringify(reports)).not.toContain("src/alpha.ts");
+    resetClientDiagnosticWriter();
   });
 
   it("#3386: refuses a commit from another run even when the permission identifier matches", async () => {
@@ -119,22 +139,18 @@ describe("useCodingWorkbenchApprovalReview", () => {
   });
 
   it.each(["push", "pull-request"] as const)(
-    "#3387: logs only bounded %s review facts",
+    "#3387: records nothing of a ready %s review: its card reports what it showed",
     async (action) => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const reports = captureReports();
       const pending = draftDeliveryReview(action);
       getApprovalReviewMock.mockResolvedValue({ session: "active", pending });
       const { result } = renderHook(() =>
         useCodingWorkbenchApprovalReview({ ...RUN, permissionRequestId: pending.requestId }),
       );
       await waitFor(() => expect(result.current.status).toBe("ready"));
-      const phase = action === "push" ? "push-proposed" : "pr-proposed";
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        `[keiko] draft delivery review ready: ${phase} head 333333333333`,
-      );
-      expect(JSON.stringify(warn.mock.calls)).not.toMatch(
-        /Original template|reviewed delivery|owner|Closes/u,
-      );
+      // #4271: `CodingWorkbenchDeliveryReview` reports the shown state as a closed interaction.
+      expect(reports).toEqual([]);
+      resetClientDiagnosticWriter();
     },
   );
 

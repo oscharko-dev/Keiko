@@ -386,12 +386,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-cli/src/portable.ts",
-      "owner": "upgradeManagedWhileLocked",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-cli/src/process-guards.ts",
       "owner": "boundedSinkWrite",
       "kind": "unregistered-catch",
@@ -507,12 +501,6 @@
     },
     {
       "path": "packages/keiko-cli/src/ui-process-identity.ts",
-      "owner": "readWindowsCommandLine",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/ui-process-identity.ts",
       "owner": "runPs",
       "kind": "unregistered-catch",
       "count": 1
@@ -580,18 +568,6 @@
     {
       "path": "packages/keiko-connectors/src/atlassian-sync-lane.ts",
       "owner": "worker",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-contracts/src/atlassian-connectors.ts",
-      "owner": "canonicalHttpsBrowseTarget",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-contracts/src/atlassian-connectors.ts",
-      "owner": "isSafeAtlassianConnectorBaseUrl",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -1148,12 +1124,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-local-knowledge/src/crawl/link-extract.ts",
-      "owner": "decodeEntityBody",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-local-knowledge/src/crawl/scope-guard.ts",
       "owner": "decodePathComponent",
       "kind": "unregistered-catch",
@@ -1436,12 +1406,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-local-knowledge/src/parsers/json-parser.ts",
-      "owner": "parseJsonValue",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-local-knowledge/src/parsers/large-document/capability-discovery.ts",
       "owner": "probeMultimodalCapability",
       "kind": "unregistered-catch",
@@ -1642,12 +1606,6 @@
     {
       "path": "packages/keiko-memory-vault/src/schema.ts",
       "owner": "attemptWalCheckpointTruncate",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/vault-log.ts",
-      "owner": "errorKindProperty",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -1870,24 +1828,6 @@
     {
       "path": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts",
       "owner": "dispatch",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-model-gateway/src/toolCatalogBridge.ts",
-      "owner": "bindCall",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-model-gateway/src/toolCatalogBridge.ts",
-      "owner": "bindCalls",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-model-gateway/src/toolCatalogBridge.ts",
-      "owner": "createGatewayToolCatalogBridge",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -2128,18 +2068,6 @@
     {
       "path": "packages/keiko-server/src/atlassian/credentialRoutes.ts",
       "owner": "decodeAuthRefParam",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/atlassian/httpPort.ts",
-      "owner": "createGatewayAtlassianHttpBodyPort",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/atlassian/httpPort.ts",
-      "owner": "createGatewayAtlassianHttpPort",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -2648,18 +2576,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/coding-runtime/codingToolFacade.ts",
-      "owner": "executeClaimedEdit",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingToolFacade.ts",
-      "owner": "executePlainAction",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/coding-runtime/codingToolIpc.ts",
       "owner": "parseJson",
       "kind": "unregistered-catch",
@@ -2823,12 +2739,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
-      "owner": "pollTurnOnce",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
       "owner": "reconcile",
       "kind": "unregistered-catch",
       "count": 1
@@ -2865,19 +2775,7 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
-      "owner": "prepare",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
       "owner": "projectOpenCodeRuntimeDatabase",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
-      "owner": "validJson",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -3124,12 +3022,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadPortable.ts",
       "owner": "resolvePortableSecureWorkspaceReadBinding",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadPortable.ts",
-      "owner": "verifyAtPointOfUse",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -4714,12 +4606,6 @@
     {
       "path": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts",
       "owner": "VerifiedCommitController.persist",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gitDiffParser.ts",
-      "owner": "decodeQuotedPath",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -7881,12 +7767,6 @@
     },
     {
       "path": "packages/keiko-ui/src/app/local-knowledge/connector-graph-state.ts",
-      "owner": "doCreate",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/local-knowledge/connector-graph-state.ts",
       "owner": "runAction",
       "kind": "unregistered-catch",
       "count": 1
@@ -7894,12 +7774,6 @@
     {
       "path": "packages/keiko-ui/src/app/local-knowledge/connector-graph-state.ts",
       "owner": "runDelete",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/local-knowledge/connector-graph-state.ts",
-      "owner": "useCapsuleLoader",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -8146,12 +8020,6 @@
     {
       "path": "packages/keiko-workflows/src/bug-investigation/memory.ts",
       "owner": "acquireMemoryContext",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-workflows/src/bug-investigation/memory.ts",
-      "owner": "emitMemoryWriteCandidate",
       "kind": "unregistered-catch",
       "count": 1
     },

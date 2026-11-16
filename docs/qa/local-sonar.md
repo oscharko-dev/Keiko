@@ -27,6 +27,13 @@ none of them in either its JavaScript or TypeScript rule repository. All four af
 were correctly classified as main sources, rather than tests. Review these shapes explicitly until
 the pinned local analyzer contains the rules; a clean local scan cannot check an absent rule.
 
+PR #4288 (2026-11-10) showed the same gap for `S9381` and `S9382`: SonarCloud added them on
+2026-09-29, after the then-pinned 26.7.0 image (508 TypeScript rules against SonarCloud's 552). The
+pin is now 26.11.0, which carries both, and the runner selects SonarCloud's profile (below).
+Verified by scanning the PR's earlier head: the local gate reports exactly the three findings
+SonarCloud reported. Keep the pin current: an analyzer older than SonarCloud's is a broken
+measuring instrument, not a smaller one. Compare the two rule counts after every bump.
+
 | Cloud rule | Required shape                                         | Preserved behavior                                                                                                            |
 | ---------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
 | `S9382`    | Check whether loop iterations are independent.         | Keep dependent retries, readiness probes and backpressure yields sequential; parallelize only independent work.               |
@@ -74,6 +81,13 @@ A green `check:sonar-rules` therefore says **nothing** about these. Only a real 
 is what this command runs. The `Coverage and SonarCloud` job demands **zero** unresolved issues, so a
 single MINOR of this class fails the required `ci` context.
 
+PR #4276 also confirmed that `NOSONAR` must be on the diagnostic's **primary start line**, not a
+later line in its range. For an object-property async function, S7503 starts at the property name,
+even when `async function` starts on the following line. An async generator delegating with `yield*`
+already awaits the delegated async iterator and preserves its `next`/`throw`/`return` protocol;
+retain that behavior when recording this evidenced false positive. Check the reported primary
+location after formatting rather than assuming the `await` or `async` line is always its start.
+
 ## What it does, exactly
 
 1. Starts a **self-hosted** SonarQube (digest-pinned, bound to `127.0.0.1:9234`) from
@@ -92,8 +106,15 @@ single MINOR of this class fails the required `ci` context.
    revoking each other's in-flight token.
 5. Prints the findings that land **on files this branch changed against `origin/dev`**, and exits
    non-zero if there are any. If a changed path cannot be expressed as an exact Sonar inclusion
-   (for example, a Next.js `[capsuleId]` route), analysis safely expands to the whole project while
-   the report and verdict remain losslessly filtered to the changed-file set.
+   (for example, a filename containing a literal `*`, `?`, comma, backslash, or line break), analysis
+   safely expands to the whole project while the report and verdict remain losslessly filtered to
+   the changed-file set.
+
+Next.js route brackets such as `[capsuleId]` remain literal in both inclusion properties. Sonar
+supports only `*`, `**`, and `?` as wildcards, and its
+[matching implementation](https://github.com/SonarSource/sonar-plugin-api/blob/13.8.0.4399/plugin-api/src/main/java/org/sonar/api/utils/WildcardPattern.java)
+escapes brackets. The runner passes each complete property as one quoted argument, preserving all
+selected route files in the separate source and test inventories.
 
 ```bash
 npm run gates:sonar          # findings on your diff — the pre-push question
@@ -102,14 +123,17 @@ npm run gates:sonar:stop     # stop the server, keep its cache
 ./docker/gates/run-sonar.sh --base main   # diff against another base
 ```
 
+Both local containers are limited to 2 CPUs each from startup (up to 4 CPUs combined) for controlled
+load without performance qualification.
+
 The local runner gives the SonarJS bridge 4.5 GiB and caps the scanner coordinator at 768 MiB. This
 keeps enough analyzer headroom while leaving space for the concurrently required SonarQube service
 inside Docker Desktop's common 8 GiB VM; the scanner's automatic heap choice can otherwise exceed
 the VM limit and terminate the bridge before it reports findings.
 
-A whole-project scan — the fallback when a changed path such as a Next.js `[capsuleId]` route
-cannot be expressed as an exact inclusion — needs more than 4.5 GiB on this repository. On a
-machine whose Docker VM has the room, raise the bridge heap for that run:
+A whole-project scan — requested with `--all` or required when a changed path cannot be expressed
+as an exact inclusion — needs more than 4.5 GiB on this repository. On a machine whose Docker VM
+has the room, raise the bridge heap for that run:
 
 ```bash
 KEIKO_LOCAL_SONAR_NODE_MAXSPACE=12288 npm run gates:sonar
@@ -140,10 +164,17 @@ complete substitute: SonarCloud's `shelldre:S7679` (bind a positional parameter 
 against those two as well.
 
 **It is not the gate.** The verdict stays with SonarCloud on the pull request
-([`local-gates.md`](local-gates.md)). Three things differ by construction:
+([`local-gates.md`](local-gates.md)). These things differ by construction:
 
-- the quality **profile** is SonarQube's built-in "Sonar way", not the organisation's profile, so a
-  rule the organisation activated or silenced may differ;
+- the quality **profile** is SonarQube's built-in "Sonar way comprehensive", the one SonarCloud
+  applies to this project for JavaScript, TypeScript, CSS, JSON and YAML. A fresh SonarQube defaults
+  to the smaller "Sonar way core", which leaves `S9381` and `S9382` inactive, so `run-sonar.sh`
+  selects comprehensive on every run and fails closed if the image lacks it. Issues the organisation
+  marked as false positives on `dev` are not imported, so a changed file can show older findings
+  SonarCloud no longer reports on new code;
+- an older pinned image keeps its schema in the persisted `sonar-data` volume, and the embedded
+  database cannot be migrated. The runner recreates that disposable cache once when the server
+  reports `DB_MIGRATION_NEEDED`;
 - **coverage is not imported**, on purpose — coverage has its own gate
   (`npm run check:coverage:new-code`) and importing it here would double the runtime for no signal.
 - **new-code density conditions are invisible to it.** The cloud gate scores duplication and
@@ -180,11 +211,12 @@ is real, and the organisation's profile can change.
 
 ## Troubleshooting
 
-| Symptom                                   | Cause and fix                                                                                                                                                                                                                                        |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Port 9234 is already allocated            | Another analyzer is active. Run with an unused `KEIKO_LOCAL_SONAR_PORT` as shown above; do not stop or delete an unrelated server.                                                                                                                   |
-| `could not obtain a local analysis token` | The selected server's persisted password and credential file disagree. Stop that same port, remove only its repository/port-scoped `sonar-data` volume and reported credential file, then re-run. Never delete a different Compose project's volume. |
-| The server never becomes healthy          | SonarQube needs roughly 2 GB. Raise Docker Desktop's memory limit, then re-run.                                                                                                                                                                      |
-| `base origin/dev cannot be resolved`      | Fetch first (`git fetch origin`). Because the diff cannot be determined, analysis and verdict fail closed to the whole project.                                                                                                                      |
-| `no diff against origin/dev`              | The diff is known to be empty. Analysis covers the whole project because Sonar cannot accept an empty inclusion, but the verdict remains filtered to zero changed files.                                                                             |
-| The scan is slow on the first run         | Expected: the analyzer downloads its Node runtime once into a cached volume. Later runs reuse it.                                                                                                                                                    |
+| Symptom                                                                                     | Cause and fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Port 9234 is already allocated                                                              | Another analyzer is active. Run with an unused `KEIKO_LOCAL_SONAR_PORT` as shown above; do not stop or delete an unrelated server.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `could not obtain a local analysis token`                                                   | The selected server's persisted password and credential file disagree. Stop that same port, remove only its repository/port-scoped `sonar-data` volume and reported credential file, then re-run. Never delete a different Compose project's volume.                                                                                                                                                                                                                                                                                                                                                                     |
+| The server never becomes healthy                                                            | SonarQube needs roughly 2 GB. Raise Docker Desktop's memory limit, then re-run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `no installed dependencies are visible to the scanner` / `workspace packages are not built` | SonarJS resolves types through TypeScript; a worktree has an empty `node_modules`, so type-dependent rules (S2871, S4043, …) would stay silent and the run could PASS on code CI reports (#4351). The runner exits 2 instead. It mounts a populated gates `node_modules` volume read-only when it finds one (`KEIKO_LOCAL_SONAR_NODE_MODULES_VOLUME=<compose project>_gates-node-modules` names it; the gates compose project and `keiko-gates` are tried), else run `npm ci` in the checkout; then `npm run build:packages` (in the gates container when `node_modules` is a volume). `--check-types` tests this alone. |
+| `base origin/dev cannot be resolved`                                                        | Fetch first (`git fetch origin`). Because the diff cannot be determined, analysis and verdict fail closed to the whole project.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `no diff against origin/dev`                                                                | The diff is known to be empty. Analysis covers the whole project because Sonar cannot accept an empty inclusion, but the verdict remains filtered to zero changed files.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| The scan is slow on the first run                                                           | Expected: the analyzer downloads its Node runtime once into a cached volume. Later runs reuse it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |

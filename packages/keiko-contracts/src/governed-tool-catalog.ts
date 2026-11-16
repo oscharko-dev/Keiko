@@ -23,6 +23,8 @@ export type CatalogJsonObject = Readonly<Record<string, CatalogJsonValue>>;
 export const TOOL_CATALOG_LIMITS = Object.freeze({
   maxArgumentBytes: 262_144,
   maxResultBytes: 262_144,
+  // Node and MCP SDK timers must not overflow their signed 32-bit millisecond bound.
+  maxDurationMs: 2_147_483_647,
   maxSchemaDepth: 16,
   maxObjectKeys: 128,
   maxArrayItems: 1_000,
@@ -306,3 +308,13 @@ export type ToolResultEnvelope =
       readonly data: CatalogJsonObject;
     })
   | ToolFailureEnvelope;
+
+/**
+ * The one spelling rule of tool names: the dotted registry name and its underscore form name the
+ * same operation (`jira.issue-types` and `jira_issue_types`), so dots and hyphens fold to
+ * underscores and nothing else changes. Every place that matches a name a model wrote against the
+ * names a catalog offers uses this function; a second rule would let two layers disagree.
+ */
+export function foldToolOperationName(name: string): string {
+  return name.replace(/[.-]/gu, "_");
+}

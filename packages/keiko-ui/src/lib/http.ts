@@ -40,6 +40,7 @@
 
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { ApiError } from "./api";
+import { reinspectSessionAfterMutationRefusal } from "./bff-session-reinspection";
 import {
   buildBffHeaders,
   CORRELATION_HEADER,
@@ -51,6 +52,7 @@ import {
   type ClientDiagnosticSessionRepairReport,
 } from "./client-diagnostics";
 import { clientErrorSummary } from "./client-error-summary";
+import { coalescedFetch, mayJoinInflightRead } from "./inflight-reads";
 
 // Re-exported for the consumers that import these from "./http" (SelectionAwareWorkspaceHosts.tsx,
 // coding-app-session-channel-api.ts, GitClientWindow.tsx, AddRepositoryDialog.tsx). The
@@ -106,6 +108,13 @@ export interface BffFetchOptions<T> {
    * repair's own request, a replay that joins the denied request's timeline). Minted otherwise.
    */
   readonly correlationId?: string;
+  /**
+   * A mount-time read that several panes issue at once may share one network request with an
+   * identical read still in flight (`inflight-reads.ts`). Opt in only for an idempotent read where
+   * a response a few milliseconds old is as good as a fresh one; a deliberate refresh never opts
+   * in. Ignored when the caller names its correlation id or owns the abort signal.
+   */
+  readonly shareInflight?: boolean;
 }
 
 function defaultParseFailureMessage(status: number): string {
@@ -158,16 +167,32 @@ async function parseBffErrorBody<T>(
   }
 }
 
+function sendBffRequest<T>(
+  path: string,
+  init: RequestInit | undefined,
+  opts: BffFetchOptions<T> | undefined,
+  correlationId: string,
+): Promise<Response> {
+  return coalescedFetch(
+    path,
+    { ...init, headers: buildBffHeaders(init, correlationId) },
+    {
+      joinable: mayJoinInflightRead({
+        shareInflight: opts?.shareInflight,
+        correlationId: opts?.correlationId,
+        signal: init?.signal,
+      }),
+    },
+  );
+}
+
 async function performBffFetch<T>(
   path: string,
   init: RequestInit | undefined,
   opts: BffFetchOptions<T> | undefined,
 ): Promise<T> {
   const correlationId = opts?.correlationId ?? newClientCorrelationId();
-  const res = await fetch(path, {
-    ...init,
-    headers: buildBffHeaders(init, correlationId),
-  });
+  const res = await sendBffRequest(path, init, opts, correlationId);
   const receivedAtMs = performance.now();
 
   if (!res.ok) {
@@ -257,6 +282,7 @@ const BFF_CODE_ERROR_KINDS: ReadonlyMap<string, ActivityLogErrorKind> = new Map(
   ["DESKTOP_CHAT_STREAM_STALLED", "timeout"],
   ["REQUEST_CANCELLED", "cancelled"],
   ["GROUNDING_SCOPE_CHANGED", "conflict"],
+  ["JIRA_AUTHENTICATION_FAILED", "authority-denied"],
   ["PAYLOAD_TOO_LARGE", "invalid-request"],
   ["INVALID_REQUEST", "invalid-request"],
   ["VALIDATION_FAILED", "invalid-request"],
@@ -291,13 +317,17 @@ export function bffCodeErrorKind(code: string | undefined): ActivityLogErrorKind
  * The closed error kind of a failed BFF request, for evidence (#3557 review): an HTTP refusal by its
  * status, a cancellation, a transport failure. Never the error's message.
  */
+function apiErrorKind(error: ApiError): ActivityLogErrorKind {
+  // The local app session is valid; a revoked Jira credential invalidated this turn's binding.
+  // Its 409 must retain the same authentication classification after serialization.
+  if (error.code === "JIRA_AUTHENTICATION_FAILED") return bffCodeErrorKind(error.code);
+  const exact = HTTP_STATUS_ERROR_KINDS[error.status];
+  if (exact !== undefined) return exact;
+  if (error.status >= 500) return "unavailable";
+  return error.status >= 400 ? "invalid-request" : bffCodeErrorKind(error.code);
+}
 export function bffRequestErrorKind(error: unknown): ActivityLogErrorKind {
-  if (error instanceof ApiError) {
-    const exact = HTTP_STATUS_ERROR_KINDS[error.status];
-    if (exact !== undefined) return exact;
-    if (error.status >= 500) return "unavailable";
-    return error.status >= 400 ? "invalid-request" : bffCodeErrorKind(error.code);
-  }
+  if (error instanceof ApiError) return apiErrorKind(error);
   if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
   if (error instanceof DOMException && error.name === "AbortError") return "cancelled";
   // `fetch` rejects a transport failure (refused connection, lost network) with a TypeError.
@@ -387,6 +417,8 @@ export async function bffFetchJson<T>(
   try {
     return await performBffFetch(path, init, opts);
   } catch (error) {
+    if (error instanceof ApiError && opts?.repairSession !== false && !isDeniedError(error))
+      await reinspectSessionAfterMutationRefusal(error, init?.method, path);
     if (!isDeniedError(error) || opts?.repairSession === false) throw error;
     return repairAndReplay(error, path, init, opts);
   }

@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,7 +15,7 @@ interface ChatResponse {
 }
 
 interface RecentCapture {
-  readonly outcome: "captured" | "proposed" | "auto-accepted" | "rejected";
+  readonly outcome: "captured" | "proposed" | "auto-accepted" | "rejected" | "forgotten";
   readonly occurredAt: number;
   readonly memoryId?: string;
 }
@@ -59,9 +60,9 @@ async function verifyChatModel(request: APIRequestContext): Promise<void> {
 
 async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<void> {
   await page.addInitScript(
-    ({ chatId, title }) => {
+    ({ argument: { chatId, title }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "memory-journal-chat",
@@ -76,9 +77,9 @@ async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<v
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { chatId: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, { chatId: chat.id, title: chat.title }),
   );
 }
 
@@ -176,13 +177,25 @@ async function exerciseDeniedCaptures(context: JournalJourneyContext): Promise<v
   await expectPersistedCount(context.request, context.since, 0);
 }
 
+// The Journal lists every recent decision in the scopes the chat reaches, and a refusal is recorded
+// in the person's own scope (#4212), which outlives this test's chat: the other browser's run of
+// this journey on the same server leaves its own "Refused" row there. The journey counts only the
+// rows it produced, by their capture time.
+async function rowCountSince(rows: Locator, since: number): Promise<number> {
+  return rows.evaluateAll(
+    (elements, from) =>
+      elements.filter((element) => {
+        const time = element.querySelector("time")?.getAttribute("datetime");
+        return time !== null && time !== undefined && Date.parse(time) >= from;
+      }).length,
+    since,
+  );
+}
+
 async function captureAndOpenJournal(
   context: JournalJourneyContext,
 ): Promise<{ readonly memoryId: string; readonly memoryWindow: Locator; readonly row: Locator }> {
-  await sendTurn(
-    context.chatWindow,
-    `${CAPTURE_MARKER}: remember the deterministic release window.`,
-  );
+  await sendTurn(context.chatWindow, `${CAPTURE_MARKER}: I keep a deterministic release window.`);
   await expectPersistedCount(context.request, context.since, 1);
   const recent = await fetchRecent(context.request, context.since);
   const memoryId = persistedCaptures(recent)[0]?.memoryId;
@@ -191,21 +204,29 @@ async function captureAndOpenJournal(
   const memoryWindow = await openMemoryWindow(context.page);
   await memoryWindow.getByRole("button", { name: "Journal", exact: true }).click();
   const rows = memoryWindow.getByTestId("memory-journal-row");
-  // Two rows: the just-captured proposal, plus a content-free "Refused" row for the earlier
+  // Two rows: the just-captured fact, plus a content-free "Refused" row for the earlier
   // secret-content turn from exerciseDeniedCaptures() — #2551 made denied/secret captures
   // visible-but-content-free in the Journal for transparency (certified by
   // tests/e2e/memoriaviva-m1-certification.spec.ts's certifyContentFreeJournalRefusal), so a
   // refused turn is no longer literally absent from the Journal, only its content is withheld.
-  await expect(rows).toHaveCount(2);
+  await expect.poll(async () => rowCountSince(rows, context.since)).toBe(2);
   const row = memoryWindow.locator(
     `[data-testid="memory-journal-row"][data-memory-id="${memoryId ?? ""}"]`,
   );
   await expect(row).toHaveAttribute("data-memory-id", memoryId ?? "");
-  await expect(row.getByText("Ask for approval")).toBeVisible();
-  await expect(row.getByText("Awaiting review")).toBeVisible();
-  await expect(row.getByText(/^Capture reason /)).toBeVisible();
-  const refusedRow = rows.filter({ hasNotText: "Awaiting review" });
-  await expect(refusedRow).toHaveCount(1);
+  // #4206: a routine fact is used at once in every mode. Nothing waits for review, and the row
+  // names no mode, because no approval was asked for.
+  await expect(row.getByText("Auto-captured")).toBeVisible();
+  await expect(row.getByText("Awaiting review")).toHaveCount(0);
+  await expect(row.getByText("Ask for approval")).toHaveCount(0);
+  await expect(row.getByText(/^Why: /)).toBeVisible();
+  await expect
+    .poll(async () => retrieveMemoryIds(context.request, context.chat, context.projectPath))
+    .toContain(memoryId);
+  // Newest first: this journey's refusal is the first refused row.
+  const refusedRows = rows.filter({ hasText: "Refused" });
+  await expect.poll(async () => rowCountSince(refusedRows, context.since)).toBe(1);
+  const refusedRow = refusedRows.first();
   await expect(refusedRow.getByText("Refused", { exact: true })).toBeVisible();
   await expect(
     refusedRow.getByText("Capture refused by policy. No content was retained."),
@@ -266,9 +287,10 @@ async function completeForget(
   // and remains — one row, not the empty state. Focus moves to that remaining row, not the
   // heading (the heading is only focused when the list becomes fully empty).
   const rows = memoryWindow.getByTestId("memory-journal-row");
-  await expect(rows).toHaveCount(1);
-  await expect(rows.getByText("Refused", { exact: true })).toBeVisible();
-  await expect(rows).toBeFocused();
+  await expect.poll(async () => rowCountSince(rows, context.since)).toBe(1);
+  const remaining = rows.first();
+  await expect(remaining.getByText("Refused", { exact: true })).toBeVisible();
+  await expect(remaining).toBeFocused();
   await expect(memoryWindow.getByRole("status")).toContainText("Memory forgotten");
   await expect
     .poll(async () => persistedCaptures(await fetchRecent(context.request, context.since)).length)
@@ -286,7 +308,7 @@ test.afterEach(() => {
 
 test.use({ viewport: { width: 1440, height: 1000 } });
 
-test("disabled capture stays empty; secret input stays absent; a captured proposal is newest and legible; Keep promotes it; failed Forget is closed; successful Forget removes it from Journal and retrieval @smoke", async ({
+test("disabled capture stays empty; secret input stays absent; a captured fact is newest, legible and in use at once; Keep acknowledges it; failed Forget is closed; successful Forget removes it from Journal and retrieval @smoke", async ({
   page,
   request,
 }) => {

@@ -20,6 +20,13 @@ export {
   nativeOpenSslNodeOptions,
   nativeOpenSslReadRoots,
   nativeToolchainReadRoots,
+  NATIVE_BUILD_ENV_NAMES,
+  nativeBuildCacheReadRoots,
+  nativeBuildCertificateFiles,
+  nativeBuildInheritedEnvNames,
+  nativeBuildToolReadRoots,
+  nativeBuildWrapperReadRoots,
+  type NativeBuildCertificateFiles,
 } from "./native-toolchain-roots.js";
 export {
   NATIVE_LINKED_FILES_MAX,
@@ -68,6 +75,7 @@ export {
 export {
   longLivedRuntimeEgressPolicyDigest,
   planLongLivedRuntimeSandbox,
+  planWindowsGatewayRuntimeSandbox,
   verifyLongLivedRuntimeSandboxAttestation,
 } from "./runtime-egress.js";
 export type {

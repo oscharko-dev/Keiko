@@ -8,11 +8,19 @@ import type {
   MarkdownSkillUpload,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
-import { bffFetchJson } from "./http";
+import { bffFetchJson, type BffFetchOptions } from "./http";
+import { carryMarkdownSkillRefusal } from "./markdown-skill-refusal";
 
-async function skillRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function skillRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  options: BffFetchOptions<T> = {},
+): Promise<T> {
   await codingAppSessionPairingSettled();
-  return bffFetchJson<T>(path, { signal: AbortSignal.timeout(15_000), ...init });
+  const request = { signal: AbortSignal.timeout(15_000), ...init };
+  return Object.keys(options).length === 0
+    ? bffFetchJson<T>(path, request)
+    : bffFetchJson<T>(path, request, options);
 }
 
 export async function fetchMarkdownSkills(): Promise<readonly MarkdownSkillMetadata[]> {
@@ -21,10 +29,13 @@ export async function fetchMarkdownSkills(): Promise<readonly MarkdownSkillMetad
 
 export async function readMarkdownSkill(
   skill: MarkdownSkillReference,
+  correlationId?: string,
 ): Promise<MarkdownSkillDocument> {
   return (
     await skillRequest<{ skill: MarkdownSkillDocument }>(
       `/api/skills/${encodeURIComponent(skill.id)}?revision=${String(skill.revision)}`,
+      {},
+      correlationId === undefined ? {} : { correlationId },
     )
   ).skill;
 }
@@ -36,13 +47,17 @@ export async function saveMarkdownSkill(
   const path =
     previous === undefined ? "/api/skills" : `/api/skills/${encodeURIComponent(previous.id)}`;
   return (
-    await skillRequest<{ skill: MarkdownSkillDocument }>(path, {
-      method: previous === undefined ? "POST" : "PUT",
-      body: JSON.stringify({
-        ...upload,
-        ...(previous === undefined ? {} : { expectedRevision: previous.revision }),
-      }),
-    })
+    await skillRequest<{ skill: MarkdownSkillDocument }>(
+      path,
+      {
+        method: previous === undefined ? "POST" : "PUT",
+        body: JSON.stringify({
+          ...upload,
+          ...(previous === undefined ? {} : { expectedRevision: previous.revision }),
+        }),
+      },
+      { enrichError: carryMarkdownSkillRefusal },
+    )
   ).skill;
 }
 

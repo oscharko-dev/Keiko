@@ -5,25 +5,48 @@
 // can add and remove the same visibilitychange listener.
 export function createVisibilityPoller(
   pull: () => void,
-  intervalMs: number,
-): { readonly start: () => void; readonly sync: () => void; readonly stop: () => void } {
+  intervalMs: number | (() => number),
+): {
+  readonly start: () => void;
+  readonly sync: () => void;
+  readonly stop: () => void;
+  readonly reset: () => void;
+} {
   let interval: number | null = null;
+  let generation = 0;
+  const run = (): void => {
+    const current = generation;
+    pull();
+    if (current === generation) start();
+  };
+  const tick = (): void => {
+    interval = null;
+    run();
+  };
   const start = (): void => {
     if (interval !== null || document.visibilityState === "hidden") return;
-    interval = window.setInterval(pull, intervalMs);
+    interval =
+      typeof intervalMs === "number"
+        ? window.setInterval(pull, intervalMs)
+        : window.setTimeout(tick, intervalMs());
   };
   const stop = (): void => {
+    generation += 1;
     if (interval === null) return;
-    window.clearInterval(interval);
+    if (typeof intervalMs === "number") window.clearInterval(interval);
+    else window.clearTimeout(interval);
     interval = null;
+  };
+  const reset = (): void => {
+    stop();
+    start();
   };
   const sync = (): void => {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") {
       stop();
     } else {
-      pull();
-      start();
+      run();
     }
   };
-  return { start, sync, stop };
+  return { start, sync, stop, reset };
 }

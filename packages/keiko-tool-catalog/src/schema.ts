@@ -6,8 +6,12 @@ import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparator
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import { catalogArray, catalogObject, catalogString, copyCatalogJson } from "./json.js";
 import { requireCatalog, type CatalogSchemaMismatch } from "./errors.js";
+import { collectExpectations } from "./schema-expectation.js";
 import { isExternalJsonSchemaDialect } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { compileExternalCatalogSchema, externalCatalogSchemaMismatch } from "./external-schema.js";
+import {
+  compileOwnedExternalCatalogSchema,
+  externalCatalogSchemaMismatch,
+} from "./external-schema.js";
 
 const TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
 const COMMON_KEYS = new Set(["type", "description", "enum", "const"]);
@@ -143,7 +147,7 @@ function normalizeTypedSchema(schema: CatalogJsonObject, type: string): CatalogJ
 export function compileCatalogSchema(value: unknown): CatalogJsonObject {
   const schema = catalogObject(copyCatalogJson(value));
   return isExternalJsonSchemaDialect(schema.$schema)
-    ? compileExternalCatalogSchema(schema)
+    ? compileOwnedExternalCatalogSchema(schema)
     : normalizeSchema(schema);
 }
 
@@ -168,6 +172,8 @@ const MAX_MISMATCH_PATHS = 16;
 interface MismatchCollector {
   readonly missingRequired: Set<string>;
   readonly invalidPaths: Set<string>;
+  /** The schema node at each missing or invalid path, for the rule the correction states. */
+  readonly nodes: Map<string, CatalogJsonValue>;
   unexpectedPropertyCount: number;
 }
 
@@ -175,13 +181,20 @@ function joinSchemaPath(path: string, key: string): string {
   return path === "" ? key : `${path}.${key}`;
 }
 
-function noteInvalid(out: MismatchCollector, path: string): false {
-  out.invalidPaths.add(path === "" ? "$" : path);
+function noteInvalid(out: MismatchCollector, path: string, node: CatalogJsonObject): false {
+  const named = path === "" ? "$" : path;
+  out.invalidPaths.add(named);
+  if (!out.nodes.has(named)) out.nodes.set(named, node);
   return false;
 }
 
-function noteMissing(out: MismatchCollector, path: string): void {
+function noteMissing(
+  out: MismatchCollector,
+  path: string,
+  node: CatalogJsonValue | undefined,
+): void {
   out.missingRequired.add(path);
+  if (node !== undefined && !out.nodes.has(path)) out.nodes.set(path, node);
 }
 
 // The cap applies to the SORTED distinct set, so which paths are listed is deterministic, and what
@@ -207,7 +220,7 @@ function collectObjectMismatch(
   let matched = true;
   for (const key of catalogArray(schema.required).map(catalogString)) {
     if (Object.hasOwn(value, key)) continue;
-    noteMissing(out, joinSchemaPath(path, key));
+    noteMissing(out, joinSchemaPath(path, key), properties[key]);
     matched = false;
   }
   for (const [key, child] of Object.entries(value)) {
@@ -233,7 +246,7 @@ function collectArrayMismatch(
   out: MismatchCollector,
 ): boolean {
   if (!Array.isArray(value) || !withinNumericBounds(schema, value.length, "minItems", "maxItems")) {
-    return noteInvalid(out, path);
+    return noteInvalid(out, path, schema);
   }
   const items = catalogObject(schema.items);
   let matched = true;
@@ -253,10 +266,10 @@ function collectTypedMismatch(
   if (type === "object") {
     return typeof value === "object" && value !== null && !Array.isArray(value)
       ? collectObjectMismatch(schema, value as CatalogJsonObject, path, out)
-      : noteInvalid(out, path);
+      : noteInvalid(out, path, schema);
   }
   if (type === "array") return collectArrayMismatch(schema, value, path, out);
-  return scalarWithinSchema(schema, type, value) ? true : noteInvalid(out, path);
+  return scalarWithinSchema(schema, type, value) ? true : noteInvalid(out, path, schema);
 }
 
 function scalarWithinSchema(
@@ -291,13 +304,13 @@ function collectMismatch(
   if (!collectTypedMismatch(schema, value, path, out)) return false;
   const identity = canonicalise(value);
   if (schema.const !== undefined && identity !== canonicalise(schema.const)) {
-    return noteInvalid(out, path);
+    return noteInvalid(out, path, schema);
   }
   if (
     schema.enum !== undefined &&
     !catalogArray(schema.enum).some((item) => canonicalise(item) === identity)
   ) {
-    return noteInvalid(out, path);
+    return noteInvalid(out, path, schema);
   }
   return true;
 }
@@ -317,16 +330,22 @@ export function describeCatalogSchemaMismatch(
   const out: MismatchCollector = {
     missingRequired: new Set<string>(),
     invalidPaths: new Set<string>(),
+    nodes: new Map<string, CatalogJsonValue>(),
     unexpectedPropertyCount: 0,
   };
   if (collectMismatch(schema, value, "", out)) return undefined;
   const missing = cappedPaths(out.missingRequired);
   const invalid = cappedPaths(out.invalidPaths);
+  const { expected, omittedCount } = collectExpectations(
+    [...missing.listed, ...invalid.listed].map((path) => ({ path, node: out.nodes.get(path) })),
+  );
   return Object.freeze({
     missingRequired: missing.listed,
     invalidPaths: invalid.listed,
     unexpectedPropertyCount: out.unexpectedPropertyCount,
     droppedPathCount: missing.dropped + invalid.dropped,
+    ...(expected.length === 0 ? {} : { expected }),
+    ...(omittedCount === 0 ? {} : { expectedOmittedCount: omittedCount }),
   });
 }
 

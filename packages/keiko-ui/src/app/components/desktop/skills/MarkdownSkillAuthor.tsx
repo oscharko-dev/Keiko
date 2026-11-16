@@ -1,65 +1,47 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
-import { SafeMarkdown } from "../SafeMarkdown";
-import { downloadSkillMarkdown, type MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
-import {
-  skillTextFits,
-  useMarkdownSkillAuthor,
-  type MarkdownSkillAuthorState,
-} from "./useMarkdownSkillAuthor";
+import { Icons } from "../Icons";
+import { useMarkdownSkillAuthor, type MarkdownSkillAuthorState } from "./useMarkdownSkillAuthor";
 import styles from "./MarkdownSkillControl.module.css";
 
+const FileIcon = Icons.file;
+
+/**
+ * Drafts a skill from a document or pasted text with the chat model. The draft opens in the
+ * editor as a new, unsaved skill: the person reviews and saves it there.
+ */
 export function MarkdownSkillAuthor({
   modelId,
-  library,
+  onDraft,
 }: {
   readonly modelId: string | undefined;
-  readonly library: MarkdownSkillLibrary;
-}): ReactNode {
-  const t = useTranslate();
-  const [open, setOpen] = useState(false);
-  return (
-    <section className={styles.cmpAuthor}>
-      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {t("chat.skills.author.title")}
-      </button>
-      {open ? <AuthorForm modelId={modelId} library={library} /> : null}
-    </section>
-  );
-}
-
-function AuthorForm({
-  modelId,
-  library,
-}: {
-  readonly modelId: string | undefined;
-  readonly library: MarkdownSkillLibrary;
+  readonly onDraft: (text: string) => void;
 }): ReactNode {
   const t = useTranslate();
   const author = useMarkdownSkillAuthor(modelId);
+  useDraftHandoff(author.draft, onDraft);
   return (
-    <>
+    <div className={styles.cmpForm}>
+      <h3>{t("chat.skills.author.title")}</h3>
       <p>{t("chat.skills.author.description")}</p>
       <SkillSource author={author} />
-      <div className={styles.cmpActions}>
+      <div className={styles.cmpInline}>
         <button
           type="button"
+          className={styles.cmpPrimary}
           disabled={author.busy || !modelId}
           onClick={() => {
             void author.generate();
           }}
         >
-          {t("chat.skills.author.generate")}
+          {t(author.busy ? "chat.skills.author.generating" : "chat.skills.author.generate")}
         </button>
         {author.busy ? (
-          <>
-            <output>{t("chat.skills.author.generating")}</output>
-            <button type="button" onClick={author.cancel}>
-              {t("chat.skills.cancel")}
-            </button>
-          </>
+          <button type="button" onClick={author.cancel}>
+            {t("chat.skills.cancel")}
+          </button>
         ) : null}
       </div>
       {!modelId ? <p>{t("chat.skills.author.modelRequired")}</p> : null}
@@ -72,9 +54,25 @@ function AuthorForm({
           )}
         </p>
       ) : null}
-      {author.draft !== undefined ? <SkillDraft author={author} library={library} /> : null}
-    </>
+    </div>
   );
+}
+
+/** Each generated draft is handed to the editor once per generation. */
+function useDraftHandoff(draft: string | undefined, onDraft: (text: string) => void): void {
+  const handed = useRef<string | undefined>(undefined);
+  const latest = useRef(onDraft);
+  latest.current = onDraft;
+  useEffect(() => {
+    if (draft === undefined) {
+      // A new generation starts empty, so an identical draft from it is handed over again.
+      handed.current = undefined;
+      return;
+    }
+    if (draft === handed.current) return;
+    handed.current = draft;
+    latest.current(draft);
+  }, [draft]);
 }
 
 function SkillSource({ author }: { readonly author: MarkdownSkillAuthorState }): ReactNode {
@@ -82,7 +80,8 @@ function SkillSource({ author }: { readonly author: MarkdownSkillAuthorState }):
   return (
     <>
       <label className={styles.cmpFilePicker} data-disabled={author.busy}>
-        {t("chat.skills.author.file")}
+        <FileIcon size={16} />
+        <span>{t("chat.skills.author.file")}</span>
         <input
           type="file"
           className="visually-hidden"
@@ -95,61 +94,15 @@ function SkillSource({ author }: { readonly author: MarkdownSkillAuthorState }):
           }}
         />
       </label>
-      <label className={styles.cmpUpload}>
-        {t("chat.skills.author.source")}
+      <label className={styles.cmpField}>
+        <span>{t("chat.skills.author.source")}</span>
         <textarea
-          rows={6}
+          rows={12}
           value={author.source}
           disabled={author.busy}
           onChange={(event) => author.setSource(event.target.value)}
         />
       </label>
     </>
-  );
-}
-
-function SkillDraft({
-  author,
-  library,
-}: {
-  readonly author: MarkdownSkillAuthorState;
-  readonly library: MarkdownSkillLibrary;
-}): ReactNode {
-  const t = useTranslate();
-  const draft = author.draft ?? "";
-  const disabled = library.busy || !skillTextFits(draft);
-  return (
-    <section>
-      <p>{t("chat.skills.author.review")}</p>
-      <label className={styles.cmpUpload}>
-        {t("chat.skills.author.draft")}
-        <textarea
-          rows={10}
-          value={draft}
-          onChange={(event) => author.setDraft(event.target.value)}
-        />
-      </label>
-      <div className={styles.cmpMarkdown}>
-        <SafeMarkdown source={draft} />
-      </div>
-      <div className={styles.cmpActions}>
-        <button
-          type="button"
-          disabled={disabled || !library.available}
-          onClick={() => {
-            void library.upload(new File([draft], "skill.md", { type: "text/markdown" }));
-          }}
-        >
-          {t("chat.skills.author.save")}
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => downloadSkillMarkdown(draft, "skill.md")}
-        >
-          {t("chat.skills.export")}
-        </button>
-      </div>
-    </section>
   );
 }

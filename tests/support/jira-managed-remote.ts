@@ -1,4 +1,13 @@
-import type { AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
+import { expect } from "vitest";
+import type {
+  AtlassianHttpBodyRequest,
+  AtlassianHttpBodyResult,
+} from "@oscharko-dev/keiko-connectors";
+import type { JiraMutationRequest } from "../../packages/keiko-connectors/src/jira-managed-mutation-metadata.js";
+import type {
+  AtlassianWriteHttpMethod,
+  AtlassianWriteHttpOutcome,
+} from "../../packages/keiko-connectors/src/atlassian-write-http.js";
 
 export function field(id: string, type: string, required = false): Record<string, unknown> {
   return { fieldId: id, name: id, required, operations: ["set"], schema: { type, system: id } };
@@ -7,7 +16,7 @@ export const REQUIRED_CUSTOM = {
   ...field("customfield_10000", "string", true),
   schema: { type: "string", custom: "com.atlassian.jira.plugin.system.customfieldtypes:textfield" },
 };
-const LABEL_FIELD = {
+export const LABEL_FIELD = {
   ...field("labels", "array"),
   operations: ["set", "add", "remove"],
   schema: { type: "array", items: "string", system: "labels" },
@@ -33,13 +42,70 @@ export function response(body: unknown, status = 200): AtlassianHttpBodyResult {
     truncated: false,
   };
 }
+/** A native-port outcome as the transport returns it: the observed payload, or a bare failure status. */
+export function nativeOutcomeResponse(result: AtlassianWriteHttpOutcome): AtlassianHttpBodyResult {
+  return result.ok
+    ? response(result.items ?? result.body, result.status)
+    : response({}, result.httpStatus ?? 503);
+}
+/** Asserts the serialized native write is exactly the reviewed one, then hands its known body on;
+ * a request for any other target is left unhandled. */
+export async function sendReviewedNativeWrite(
+  plan: {
+    readonly request: AtlassianHttpBodyRequest;
+    readonly root: string;
+    readonly selected: { readonly path: string; readonly method: AtlassianWriteHttpMethod };
+    readonly body: Parameters<JiraMutationRequest>[2];
+    readonly experimental: true | undefined;
+    readonly writeCount: number;
+  },
+  port: JiraMutationRequest,
+): Promise<AtlassianHttpBodyResult | undefined> {
+  const url = new URL(plan.request.url);
+  if (`${url.pathname}${url.search}` !== `${plan.root}/${plan.selected.path}`) return undefined;
+  expect(plan.request.method).toBe(plan.selected.method);
+  expect(plan.request.jiraExperimental).toBe(plan.experimental);
+  expect(plan.request.bodyJson).toBe(
+    plan.body === undefined ? undefined : JSON.stringify(plan.body),
+  );
+  expect(plan.writeCount).toBe(1);
+  return nativeOutcomeResponse(
+    await port(plan.selected.path, plan.selected.method, plan.body, "none"),
+  );
+}
+export interface ReviewedAgileTransport<Snapshot> {
+  readonly snapshot: Snapshot;
+  readonly read: (
+    request: AtlassianHttpBodyRequest,
+  ) => Promise<AtlassianHttpBodyResult | undefined>;
+  readonly write: (
+    request: AtlassianHttpBodyRequest,
+  ) => Promise<AtlassianHttpBodyResult | undefined>;
+}
+/** A transport whose single write must be the reviewed one; reads are the caller's own. */
+export function reviewedAgileTransport<Snapshot>(
+  plan: Omit<Parameters<typeof sendReviewedNativeWrite>[0], "request" | "writeCount"> & {
+    readonly snapshot: Snapshot;
+    readonly read: ReviewedAgileTransport<Snapshot>["read"];
+    readonly port: JiraMutationRequest;
+  },
+): ReviewedAgileTransport<Snapshot> {
+  let writes = 0;
+  return {
+    snapshot: plan.snapshot,
+    read: plan.read,
+    write: (request) =>
+      sendReviewedNativeWrite({ ...plan, request, writeCount: ++writes }, plan.port),
+  };
+}
 export interface SyntheticJira {
   fields: Record<string, unknown>;
   comment: string;
 }
 /** The instance's own attachment switch and upload limit (#4176). */
 export const SYNTHETIC_UPLOAD_LIMIT = 1_048_576;
-export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBodyResult {
+/** The metadata routes: attachment switch, create/edit screens and the available transitions. */
+function fixtureMetadataRead(path: string): AtlassianHttpBodyResult | undefined {
   if (path.endsWith("/attachment/meta"))
     return response({ enabled: true, uploadLimit: SYNTHETIC_UPLOAD_LIMIT });
   if (path.includes("createmeta"))
@@ -57,6 +123,39 @@ export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBo
     return response({
       transitions: [{ id: "31", to: { id: "3" }, fields: { customfield_10000: REQUIRED_CUSTOM } }],
     });
+  return undefined;
+}
+/**
+ * The issue types the synthetic project lists, as Jira always does (#4354): every name and numeric id
+ * the fixtures' templates use resolves to one of them, so no template reads as naming a type nobody sees.
+ */
+export const FIXTURE_PROJECT_ISSUE_TYPES = [
+  { id: "10000", name: "Epic" },
+  { id: "10001", name: "Story" },
+  { id: "10002", name: "Task" },
+  { id: "10003", name: "Sub-task" },
+  { id: "1", name: "Bug" },
+  { id: "2", name: "Improvement" },
+  { id: "3", name: "New Feature" },
+  { id: "4", name: "Type 4" },
+  { id: "5", name: "Type 5" },
+  { id: "7", name: "Type 7" },
+];
+/** The identity a creation is judged by: a template governs a project and an issue type (#4354). */
+function fixtureIdentityRead(path: string): AtlassianHttpBodyResult | undefined {
+  const project = /\/project\/([A-Za-z0-9_]{1,40})$/u.exec(path);
+  if (project?.[1] !== undefined)
+    return response({
+      id: "10000",
+      key: /^\d+$/u.test(project[1]) ? "SYN" : project[1],
+      issueTypes: FIXTURE_PROJECT_ISSUE_TYPES,
+    });
+  const issueType = /\/issuetype\/(\d{1,10})$/u.exec(path);
+  return issueType === null ? undefined : response({ id: issueType[1], name: "Task" });
+}
+export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBodyResult {
+  const routed = fixtureMetadataRead(path) ?? fixtureIdentityRead(path);
+  if (routed !== undefined) return routed;
   if (path.endsWith("assignable/search"))
     return response([{ name: "synthetic-user", active: true }]);
   // A draft item's identity search: the synthetic project holds the one issue SYN-1, found by its
@@ -69,8 +168,13 @@ export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBo
       issues: [{ key: "SYN-1", id: "10001", fields: { summary: state.fields.summary } }],
     });
   if (path.endsWith("/comment/10002")) return response({ id: "10002", body: state.comment });
-  if (path.endsWith("/issue/SYN-1"))
-    return response({ id: "10001", key: "SYN-1", fields: state.fields });
+  const issueNumber = /\/issue\/SYN-(\d{1,3})$/u.exec(path)?.[1];
+  if (issueNumber !== undefined)
+    return response({
+      id: String(10000 + Number(issueNumber)),
+      key: `SYN-${issueNumber}`,
+      fields: state.fields,
+    });
   return response({}, 404);
 }
 function fixtureLabelUpdates(mutation: Record<string, unknown>, state: SyntheticJira): void {

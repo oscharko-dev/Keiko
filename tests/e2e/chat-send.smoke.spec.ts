@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -82,9 +83,9 @@ async function createChat(
 
 async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<void> {
   await page.addInitScript(
-    ({ chatId, title }) => {
+    ({ argument: { chatId, title }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "e2e-chat-window",
@@ -99,9 +100,9 @@ async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<v
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { chatId: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, { chatId: chat.id, title: chat.title }),
   );
 }
 
@@ -327,9 +328,10 @@ test("keeps a long private skill preview keyboard-scrollable and accessible @smo
   await page.getByRole("button", { name: "Skills", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
   const body = "# Long synthetic method\n\n" + "Review the next boundary.\n\n".repeat(60);
-  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
+  const upload = dialog.getByLabel("Import", { exact: true });
+  await expect(upload).toBeEnabled();
   const chooser = page.waitForEvent("filechooser");
-  await dialog.getByText("Upload Markdown (.md, up to 128 KiB)", { exact: true }).click();
+  await dialog.getByText("Import", { exact: true }).click();
   await (
     await chooser
   ).setFiles({
@@ -337,34 +339,39 @@ test("keeps a long private skill preview keyboard-scrollable and accessible @smo
     mimeType: "text/markdown",
     buffer: Buffer.from(body),
   });
-  const content = dialog.getByRole("region", { name: "Long synthetic method · v1" });
+  await expect(
+    dialog.getByRole("heading", { name: "Long synthetic method", level: 3 }),
+  ).toBeVisible();
+  const content = dialog.getByRole("textbox", { name: "Long synthetic method" });
   await expect(content).toBeVisible();
   await content.focus();
   await expect(content).toBeFocused();
   await content.press("PageDown");
-  await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  // The editable document is the focus target; its parent page is the scroll container.
+  await expect
+    .poll(() => content.evaluate((element) => element.parentElement?.scrollTop ?? 0))
+    .toBeGreaterThan(0);
   const violations = await runAxe(page, "dialog");
   expect(violations, formatViolations(violations)).toEqual([]);
-  const preview = dialog.getByRole("region", { name: "Skill preview", exact: true });
-  await preview.getByRole("button", { name: "Delete", exact: true }).click();
-  await preview.getByRole("button", { name: "Delete skill", exact: true }).click();
-  await expect(preview).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await dialog.getByRole("button", { name: "Delete skill", exact: true }).click();
+  await expect(content).toHaveCount(0);
 });
 
 async function uploadAndSelectBoundarySkill(page: Page): Promise<void> {
   const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
   const body = readFileSync(new URL("./fixtures/private-markdown-skill.md", import.meta.url));
-  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
+  await expect(dialog.getByLabel("Import", { exact: true })).toBeEnabled();
   const chooser = page.waitForEvent("filechooser");
-  await dialog.getByText("Upload Markdown (.md, up to 128 KiB)", { exact: true }).click();
+  await dialog.getByText("Import", { exact: true }).click();
   await (await chooser).setFiles({ name: "synthetic.md", mimeType: "text/markdown", buffer: body });
   await expect(
-    dialog.getByRole("heading", { name: "Synthetic boundary method · v1" }),
+    dialog.getByRole("heading", { name: "Synthetic boundary method", level: 3 }),
   ).toBeVisible();
   const selection = dialog
     .getByRole("listitem")
     .filter({ hasText: "Synthetic boundary method" })
-    .getByRole("button", { name: "Select", exact: true });
+    .getByRole("button", { name: "Use in this chat", exact: true });
   await expect(selection).toBeVisible();
   await selection.click();
   await expect(dialog.getByRole("button", { name: "Active in this chat" })).toBeVisible();
@@ -459,7 +466,10 @@ test("creates, reviews, exports and reimports a private skill without automatic 
   await page.goto(`/${editorM11PairingFragment("skill-authoring")}`);
   await page.getByRole("button", { name: "Skills", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
-  await dialog.getByRole("button", { name: "Create from document or text" }).click();
+  await dialog
+    .getByRole("complementary", { name: "Skill library" })
+    .getByRole("button", { name: "Draft with AI" })
+    .click();
   await dialog.getByLabel("Source file (.md or .txt)").setInputFiles({
     name: "concept.txt",
     mimeType: "text/plain",
@@ -469,33 +479,37 @@ test("creates, reviews, exports and reimports a private skill without automatic 
   });
   await expect(dialog.getByLabel("Source text")).toHaveValue(/SYNTHETIC_GARDEN_SOURCE_COMPLETE/);
   await dialog.getByRole("button", { name: "Prepare draft" }).click();
-  const draft = dialog.getByLabel("Skill draft (Markdown)");
+  // The draft opens as a new, unsaved skill in the editor; review it in the Markdown view.
+  await expect(dialog.getByText("Not saved yet", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Markdown", exact: true }).click();
+  const draft = dialog.getByRole("textbox", { name: "Garden calibration review · Markdown" });
   await expect(draft).toHaveValue(/Weekly calibration is proposed, not approved/);
   await expect(dialog.getByRole("button", { name: "Active in this chat" })).toHaveCount(0);
   await draft.fill(`${await draft.inputValue()}\nReviewed by the local operator.`);
-  await dialog.getByRole("button", { name: "Save reviewed skill" }).click();
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(
-    dialog.getByRole("heading", { name: "Garden calibration review · v1" }),
+    dialog.getByRole("heading", { name: "Garden calibration review", level: 3 }),
   ).toBeVisible();
+  await expect(dialog.getByText("v1", { exact: true }).first()).toBeVisible();
+  await expect(dialog.getByText("Not saved yet", { exact: true })).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "Active in this chat" })).toHaveCount(0);
   const downloaded = page.waitForEvent("download");
-  const preview = dialog.getByRole("region", { name: "Skill preview" });
-  await preview.getByRole("button", { name: "Download Markdown" }).click();
+  await dialog.getByRole("button", { name: "Download Markdown" }).click();
   const saved = testInfo.outputPath("reviewed-skill.md");
   await (await downloaded).saveAs(saved);
   expect(readFileSync(saved, "utf8")).toContain("Reviewed by the local operator.");
-  await preview.getByRole("button", { name: "Delete", exact: true }).click();
-  await preview.getByRole("button", { name: "Delete skill", exact: true }).click();
-  await expect(preview).toHaveCount(0);
-  await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
-  await dialog.getByLabel(/Upload Markdown/).setInputFiles(saved);
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await dialog.getByRole("button", { name: "Delete skill", exact: true }).click();
+  await expect(draft).toHaveCount(0);
+  await expect(dialog.getByLabel("Import", { exact: true })).toBeEnabled();
+  await dialog.getByLabel("Import", { exact: true }).setInputFiles(saved);
   await expect(
-    dialog.getByRole("heading", { name: "Garden calibration review · v1" }),
+    dialog.getByRole("heading", { name: "Garden calibration review", level: 3 }),
   ).toBeVisible();
   await dialog
     .getByRole("listitem")
     .filter({ hasText: "Garden calibration review" })
-    .getByRole("button", { name: "Select", exact: true })
+    .getByRole("button", { name: "Use in this chat", exact: true })
     .click();
   await expect(dialog.getByRole("button", { name: "Active in this chat" })).toBeVisible();
   await dialog.getByRole("button", { name: "Close skills" }).click();
@@ -782,23 +796,27 @@ test("scrolls and searches twelve models while hiding unsupported attachments @s
   request,
 }) => {
   await page.setViewportSize({ width: 1116, height: 850 });
-  await page.route("**/api/models", async (route) => {
-    const response = await route.fetch();
-    const body = (await response.json()) as { models: ModelCapability[] };
-    const model = body.models.find((entry) => entry.id === CHAT_MODEL_ID);
-    if (model === undefined) throw new TypeError("Missing configured fixture model");
-    await route.fulfill({
-      response,
-      json: {
-        models: Array.from({ length: 12 }, (_, index) => ({
-          ...model,
-          id: index === 0 ? CHAT_MODEL_ID : `e2e-model-${String(index)}`,
-          supportsImageInput: false,
-          supportsDocumentInput: false,
-        })),
-      },
-    });
-  });
+  await page.route(
+    (url) => url.pathname === "/api/models",
+    async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as { models: ModelCapability[] };
+      const model = body.models.find((entry) => entry.id === CHAT_MODEL_ID);
+      if (model === undefined) throw new TypeError("Missing configured fixture model");
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          models: Array.from({ length: 12 }, (_, index) => ({
+            ...model,
+            id: index === 0 ? CHAT_MODEL_ID : `e2e-model-${String(index)}`,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+          })),
+        },
+      });
+    },
+  );
   await openFixtureComposer(page, request);
   await expect(page.getByRole("button", { name: "Attach file", exact: true })).toHaveCount(0);
   await page.getByRole("combobox", { name: "Models", exact: true }).click();
@@ -812,7 +830,7 @@ test("scrolls and searches twelve models while hiding unsupported attachments @s
   await expect(menu.getByRole("option")).toHaveText("e2e-model-11");
 });
 
-test("deletes selected chats with one mouse action and no confirmation @smoke", async ({
+test("moves selected chats to Deleted, then purges them only after confirmation @smoke", async ({
   page,
   request,
 }) => {
@@ -824,26 +842,29 @@ test("deletes selected chats with one mouse action and no confirmation @smoke", 
   expect(create.status()).toBe(201);
   const second = (await create.json()) as ChatResponse;
   await seedChatWindow(page, chat);
-  await page.addInitScript(() => {
-    const windows = JSON.parse(localStorage.getItem("keiko.workspace.v4") ?? "[]") as unknown[];
-    localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        ...windows,
-        {
-          id: "e2e-history-window",
-          type: "chatHistory",
-          x: 40,
-          y: 30,
-          w: 800,
-          h: 680,
-          z: 20,
-          cfg: {},
-          max: false,
-        },
-      ]),
-    );
-  });
+  await page.addInitScript(
+    ({ storageKeys }) => {
+      const windows = JSON.parse(localStorage.getItem(storageKeys.workspace) ?? "[]") as unknown[];
+      localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          ...windows,
+          {
+            id: "e2e-history-window",
+            type: "chatHistory",
+            x: 40,
+            y: 30,
+            w: 800,
+            h: 680,
+            z: 20,
+            cfg: {},
+            max: false,
+          },
+        ]),
+      );
+    },
+    await workspaceStorageArgs(page, undefined),
+  );
   await page.goto("/");
   // The seeded chat window binds its chat and loads its composer chunk after the page is up, and
   // the history panel below must not be driven while that bind is still settling: on a slow CI
@@ -858,13 +879,30 @@ test("deletes selected chats with one mouse action and no confirmation @smoke", 
   await expect(history.getByRole("checkbox", { name: /^Select Batch deletion/u })).toHaveCount(2);
   await history.getByRole("checkbox", { name: "Select all displayed chats" }).check();
   await history.getByRole("button", { name: "Delete selected (2)", exact: true }).click();
+  // Delete in Active is reversible: the rows leave Active without a dialog, stay stored, and
+  // reappear in the Deleted tab.
   await expect(history.getByRole("checkbox", { name: /^Select Batch deletion/u })).toHaveCount(0);
-  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const messagesUrl = (id: string): string =>
+    `/api/chats/messages?${new URLSearchParams({ chatId: id, projectPath }).toString()}`;
   for (const id of [chat.id, second.chat.id]) {
-    const response = await request.get(
-      `/api/chats/messages?${new URLSearchParams({ chatId: id, projectPath }).toString()}`,
-    );
-    expect(response.status()).toBe(404);
+    expect((await request.get(messagesUrl(id))).status()).toBe(200);
+  }
+  await history.getByRole("tab", { name: /^Deleted/u }).click();
+  await expect(history.getByRole("checkbox", { name: /^Select Batch deletion/u })).toHaveCount(2);
+  // Only the Deleted tab purges, and only after the person confirms.
+  await history.getByRole("checkbox", { name: "Select all displayed chats" }).check();
+  await history.getByRole("button", { name: "Delete selected (2)", exact: true }).click();
+  const purge = page.getByRole("button", { name: "Delete permanently", exact: true });
+  await expect(purge).toBeVisible();
+  // An open confirmation has purged nothing yet.
+  for (const id of [chat.id, second.chat.id]) {
+    expect((await request.get(messagesUrl(id))).status()).toBe(200);
+  }
+  await purge.click();
+  await expect(history.getByRole("checkbox", { name: /^Select Batch deletion/u })).toHaveCount(0);
+  for (const id of [chat.id, second.chat.id]) {
+    expect((await request.get(messagesUrl(id))).status()).toBe(404);
   }
 });
 
@@ -881,9 +919,9 @@ test("locks layout while native scrolling works in an unselected window @smoke",
     expect(response.status()).toBe(201);
   }
   await page.addInitScript(
-    ({ chatId, title }) => {
+    ({ argument: { chatId, title }, storageKeys }) => {
       localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "e2e-scroll-first",
@@ -910,7 +948,7 @@ test("locks layout while native scrolling works in an unselected window @smoke",
         ]),
       );
     },
-    { chatId: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, { chatId: chat.id, title: chat.title }),
   );
   await page.goto("/");
   const windows = page.locator('.window[data-window-id^="e2e-scroll-"]');

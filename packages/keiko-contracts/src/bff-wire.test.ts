@@ -4,6 +4,7 @@
 // query text, excerpt content) and the documented `-1` sentinel for workspace-root scope.
 
 import { describe, expect, it } from "vitest";
+import { isDesktopChatStreamEvent } from "./desktop-chat-stream-wire.js";
 import {
   assertNeverFilesTreeEntryKind,
   buildGroundedAnswerContextPackSummary,
@@ -22,7 +23,11 @@ import {
   GROUNDING_LIMIT_CEILINGS,
   isExpandableDirectory,
   isGroundedRerankerFailureKind,
-  isDesktopChatStreamEvent,
+  isChatToolBatchProgress,
+  isChatToolTurnEnd,
+  chatTurnEndAnswerFingerprint,
+  CHAT_TOOL_TURN_END_REASONS,
+  CHAT_TURN_END_RECEIPTS_MAX,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_MIME_BYTES,
   MAX_CONNECTED_SOURCES,
@@ -1702,4 +1707,100 @@ it("admits a running tool call as it starts and settles, and nothing else on tha
     frame({ messageId: "message-1", exchange: { call, mutationOutcome: 1 } }),
   ])
     expect(isDesktopChatStreamEvent(hostile)).toBe(false);
+});
+
+it("admits counted batch progress on the draft batch exchange only, and nothing malformed", () => {
+  const progress = {
+    phase: "drafting",
+    draftedCount: 4,
+    plannedCount: 10,
+    coveredRequirementCount: 8,
+    requirementCount: 30,
+    failedCount: 1,
+  };
+  const frame = (name: string, batchProgress: unknown): unknown => ({
+    event: "tool-exchange",
+    data: {
+      messageId: "message-1",
+      exchange: { call: { id: "call-1", name, arguments: {} }, batchProgress },
+    },
+  });
+  expect(isChatToolBatchProgress(progress)).toBe(true);
+  expect(isDesktopChatStreamEvent(frame("jira_draft_batch", progress))).toBe(true);
+  expect(isDesktopChatStreamEvent(frame("jira_search", progress))).toBe(false);
+  expect(isDesktopChatStreamEvent(frame("jira_draft", progress))).toBe(false);
+  for (const hostile of [
+    { ...progress, phase: "finished" },
+    { ...progress, draftedCount: -1 },
+    { ...progress, draftedCount: 1.5 },
+    { ...progress, plannedCount: 5001 },
+    { ...progress, draftedCount: 10, failedCount: 1 },
+    { ...progress, coveredRequirementCount: 31 },
+    { ...progress, extra: "text" },
+    { phase: "drafting" },
+    [],
+    null,
+  ]) {
+    expect(isChatToolBatchProgress(hostile)).toBe(false);
+    expect(isDesktopChatStreamEvent(frame("jira_draft_batch", hostile))).toBe(false);
+  }
+});
+
+describe("the turn ending record (#4355)", () => {
+  const end = {
+    reason: "deadline",
+    answer: chatTurnEndAnswerFingerprint("This request was not finished."),
+    completed: [{ tool: "jira_create", key: "REQ-1" }],
+    unconfirmed: [{ tool: "jira_draft", item: 2, state: "uncertain" }],
+    unsettled: [{ tool: "jira_transition" }],
+    notDone: [],
+    moreCount: 0,
+    readCount: 3,
+    refusedCount: 1,
+  };
+
+  it("accepts every closed reason and nothing else", () => {
+    for (const reason of CHAT_TOOL_TURN_END_REASONS) {
+      expect(isChatToolTurnEnd({ ...end, reason })).toBe(true);
+    }
+    expect(CHAT_TOOL_TURN_END_REASONS).toHaveLength(9);
+    expect(isChatToolTurnEnd({ ...end, reason: "Jira is down" })).toBe(false);
+    expect(isChatToolTurnEnd({ ...end, reason: undefined })).toBe(false);
+  });
+
+  it.each([
+    ["an unknown field", { ...end, extra: true }],
+    ["a missing field", { ...end, notDone: undefined }],
+    ["a receipt with free text", { ...end, completed: [{ tool: "jira_create", note: "x" }] }],
+    ["an empty tool name", { ...end, completed: [{ tool: "" }] }],
+    ["an unknown item state", { ...end, notDone: [{ tool: "jira_draft", state: "done" }] }],
+    ["a zero item position", { ...end, notDone: [{ tool: "jira_draft", item: 0 }] }],
+    ["a negative count", { ...end, readCount: -1 }],
+    ["a fractional count", { ...end, refusedCount: 0.5 }],
+    ["a list that is not an array", { ...end, unsettled: "jira_transition" }],
+    ["an over-long key", { ...end, completed: [{ tool: "t", key: "K".repeat(601) }] }],
+    [
+      "a list beyond the bound",
+      {
+        ...end,
+        completed: Array.from({ length: CHAT_TURN_END_RECEIPTS_MAX + 1 }, () => ({ tool: "t" })),
+      },
+    ],
+    ["a missing answer fingerprint", { ...end, answer: undefined }],
+    ["an answer fingerprint of another shape", { ...end, answer: "not a fingerprint" }],
+    ["an array", [end]],
+    ["null", null],
+  ])("refuses %s", (_name, value) => {
+    expect(isChatToolTurnEnd(value)).toBe(false);
+  });
+});
+
+describe("the answer fingerprint of a turn ending (#4355)", () => {
+  it("binds a record to the exact text it was built with", () => {
+    const text = "This request was not finished: this turn reached its time limit.";
+    expect(chatTurnEndAnswerFingerprint(text)).toBe(chatTurnEndAnswerFingerprint(text));
+    expect(chatTurnEndAnswerFingerprint(text)).toMatch(/^\d+:[0-9a-f]{8}$/u);
+    for (const other of [`${text} `, text.replace("time", "tame"), "", "Here is the real answer."])
+      expect(chatTurnEndAnswerFingerprint(other)).not.toBe(chatTurnEndAnswerFingerprint(text));
+  });
 });

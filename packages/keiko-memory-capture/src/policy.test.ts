@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  LINEAR_RATIO_MAX,
+  measureScaling,
+  scalingRatio,
+} from "../../../tests/support/property-testing.js";
 import { applyPolicy, classifySensitivity } from "./policy.js";
 
 describe("classifySensitivity", () => {
@@ -10,6 +15,31 @@ describe("classifySensitivity", () => {
   it("returns confidential when the body contains an email address", () => {
     expect(classifySensitivity("contact alice@example.com for review")).toBe("confidential");
   });
+
+  it("takes an address only where its local part starts at a word boundary", () => {
+    expect(classifySensitivity("write to a-b@example.com")).toBe("confidential");
+    expect(classifySensitivity("write to .x@example.com")).toBe("confidential");
+    expect(classifySensitivity("an @example.com handle")).toBe("public");
+    expect(classifySensitivity("a stray -@example.com")).toBe("public");
+    expect(classifySensitivity("alice@example")).toBe("public");
+  });
+
+  // "1.1.1." and "z.B.z.B." once cost quadratic time: the address pattern read the rest of the
+  // text from every position before it found no "@".
+  it.each(["1.", "z.B.", "a.", "x.x@"])(
+    "classifies a long run of %j in linear time",
+    { timeout: 60_000 },
+    (piece) => {
+      const scaling = measureScaling({
+        build: (size) => piece.repeat(Math.ceil(size / piece.length)),
+        run: (text) => classifySensitivity(text),
+        size: 1_000,
+        maximumSize: 1_000,
+      });
+      expect(scaling.measurable, JSON.stringify(scaling)).toBe(true);
+      expect(scalingRatio(scaling), JSON.stringify(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
+    },
+  );
 
   it("returns confidential when the body contains a phone-shape number", () => {
     expect(classifySensitivity("call +1-555-123-4567")).toBe("confidential");
@@ -39,6 +69,45 @@ describe("classifySensitivity", () => {
     expect(classifySensitivity("Steuer-ID: 12 345 678 901")).toBe("confidential");
     expect(classifySensitivity("Ruf mich unter +49 30 1234567 an")).toBe("confidential");
     expect(classifySensitivity("Lokale Nummer 030-1234567 ist privat")).toBe("confidential");
+  });
+
+  // #4206 audit: with no review step left a confidential body is refused, and a calendar date had
+  // the shape of a local telephone number, so a fact with an end date was never learned.
+  it("reads a calendar date as a date, not as a telephone number", () => {
+    expect(classifySensitivity("Ich arbeite bei Acme bis 31.12.2027.")).toBe("public");
+    expect(classifySensitivity("seit 01.03.2024 bei Acme")).toBe("public");
+    expect(classifySensitivity("I started on 2026-11-07.")).toBe("public");
+    expect(classifySensitivity("from 1/2/2026 on")).toBe("public");
+    expect(classifySensitivity("bis 31.12.2027, Tel 030 1234 5678")).toBe("confidential");
+    expect(classifySensitivity("Ruf mich am 31.12.2027 unter +49 30 1234567 an")).toBe(
+      "confidential",
+    );
+  });
+
+  // A dotted telephone number has date-shaped groups; only a standalone date may be blanked.
+  it("keeps a dotted telephone number confidential", () => {
+    expect(classifySensitivity("Meine Nummer ist 01.23.45.67.89")).toBe("confidential");
+    expect(classifySensitivity("Durchwahl 030.12.05.2020")).toBe("confidential");
+    expect(classifySensitivity("call 12.34.5678")).toBe("confidential");
+  });
+
+  // #4206 audit: blanking every date-shaped token removed the tail of a telephone number whose
+  // subscriber part looks like a date, and the remaining prefix no longer read as a number.
+  it("keeps a telephone number with a date-shaped tail confidential", () => {
+    expect(classifySensitivity("Tel 0171 12.12.12")).toBe("confidential");
+    expect(classifySensitivity("Ruf 089 10.11.12 an")).toBe("confidential");
+    expect(classifySensitivity("Meine Nummer ist +49 30 12.05.2020")).toBe("confidential");
+    expect(classifySensitivity("Ab 31.12.2027 030 1234 5678")).toBe("confidential");
+  });
+
+  it("keeps a date next to an ordinary number or another date public", () => {
+    expect(classifySensitivity("Termin am 12.05.2026 10 Uhr")).toBe("public");
+    expect(classifySensitivity("Raum 3 12.05.2026")).toBe("public");
+    expect(classifySensitivity("Projekt vom 01.01.2026 - 31.12.2027")).toBe("public");
+    // A short date opening a range, or a time, is no dialling prefix.
+    expect(classifySensitivity("Urlaub 01.03. - 31.03.2026")).toBe("public");
+    expect(classifySensitivity("Kurs 09.30 12.03.2026")).toBe("public");
+    expect(classifySensitivity("Sitzung am 05. 12.03.2026")).toBe("public");
   });
 
   it("keeps false-positive-near German number examples public", () => {

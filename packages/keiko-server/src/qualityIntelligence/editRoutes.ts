@@ -22,6 +22,7 @@ import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { appendEditAudit, candidateReviewStateOf, loadRunReviewState } from "./reviewStore.js";
 import { resolveQualityIntelligenceReviewPrincipal } from "./reviewPrincipal.js";
+import { strictRedactor } from "../content-redactor.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_TITLE_LEN = 256;
@@ -293,7 +294,7 @@ function recordEdit(
       editorLabel: edit.editorLabel,
     },
     evidenceDir,
-    redact: deps.redactor,
+    redact: strictRedactor(deps),
   });
   if (!result.ok) {
     if (result.reason === "no-edited-fields") {
@@ -319,7 +320,7 @@ function recordEdit(
         reviewerLabel: edit.editorLabel,
         actor: resolveQualityIntelligenceReviewPrincipal(ctx.req, deps),
         now: new Date().toISOString(),
-        redact: deps.redactor,
+        redact: strictRedactor(deps),
       });
     } catch (error) {
       if (before !== undefined) {

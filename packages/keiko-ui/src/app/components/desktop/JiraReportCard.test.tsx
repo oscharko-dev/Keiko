@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 
 const exportJiraReport = vi.fn();
 const saveTextDownload = vi.fn();
@@ -79,6 +81,88 @@ beforeEach(() => {
 });
 
 describe("Jira report card", () => {
+  it("names the resolved estimate field before and after transcript serialization", () => {
+    const result = data({
+      report: {
+        ...report,
+        scope: {
+          estimateFieldId: "customfield_10200",
+          estimateFieldName: "Story Points",
+          estimateUnit: "custom-field",
+          estimateSource: "board-configuration",
+        },
+      },
+    });
+    const live = render(<JiraChatTools transcript={transcript(result)} />);
+    // The field is named as Jira names it; its id is not for the person reading the card.
+    expect(screen.getByText("Estimate field: Story Points")).toBeInTheDocument();
+    expect(screen.queryByText(/customfield_10200/u)).not.toBeInTheDocument();
+    const text = live.container.textContent;
+    live.unmount();
+    const saved = JSON.parse(JSON.stringify(transcript(result))) as ChatToolTranscript;
+    const restored = render(<JiraChatTools transcript={saved} />);
+    expect(restored.container.textContent).toBe(text);
+  });
+
+  it.each([
+    ["field-not-found", "no estimate field is configured on the project's boards or screens"],
+    ["ambiguous-field", "the project has conflicting estimate fields"],
+    ["metadata-unavailable", "the project's estimate configuration could not be read"],
+    ["project-not-specified", "no project was specified"],
+  ])(
+    "explains an unavailable estimate (%s) without presenting zero estimates",
+    (reason, explanation) => {
+      const result = data({
+        report: {
+          ...report,
+          scope: {
+            estimateUnit: "unavailable",
+            estimateSource: "unavailable",
+            estimateUnavailableReason: reason,
+          },
+          progress: { ...report.progress, project: { ...report.progress.project, estimate: null } },
+        },
+      });
+      render(<JiraChatTools transcript={transcript(result)} />);
+      expect(screen.getByText(`Estimate unavailable: ${explanation}`)).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Estimate field:|0 total|without an estimate/u),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("Complete: 2350 issues read")).toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    ["effect-denied", "Local authority no longer permits this Jira request."],
+    ["cancelled", "This Jira request was cancelled."],
+  ] as const)(
+    "retains local %s guidance and an unknown denominator after reload",
+    (failure, guidance) => {
+      const interrupted = data({
+        status: "incomplete",
+        progress: { issuesRead: 1 },
+        report: {
+          completeness: {
+            complete: false,
+            reason: "read-failed",
+            failure,
+            issuesRead: 1,
+            pageCount: 1,
+          },
+        },
+      });
+      const saved = JSON.parse(JSON.stringify(transcript(interrupted))) as ChatToolTranscript;
+      const first = render(<JiraChatTools transcript={saved} />);
+      const before = first.container.textContent;
+      first.unmount();
+      const next = render(<JiraChatTools transcript={saved} />);
+      expect(next.container.textContent).toBe(before);
+      expect(next.container.textContent).toContain(guidance);
+      expect(next.container.textContent).toContain("1 issues read; the total is unknown");
+      expect(next.container.textContent).not.toContain("1 of 1 issues");
+      expect(next.container.querySelector("pre, a, button")).toBeNull();
+    },
+  );
   it("shows the computed figures and no export while the report is still being read", async () => {
     const reading = data({
       status: "reading",
@@ -254,6 +338,213 @@ describe("Jira report card", () => {
   it("offers no export without a Chat to bind the report to", () => {
     render(<JiraChatTools transcript={transcript(data())} />);
     expect(screen.queryByRole("button", { name: "Export CSV" })).not.toBeInTheDocument();
+  });
+});
+
+/** A project with no template for its issue types (RPT): the required-field rules judged every issue. */
+function unchecked(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return data({
+    report: {
+      ...report,
+      progress: { project: { ...report.progress.project, total: 181, donePercent: 20.4 } },
+      completeness: { complete: true, issuesRead: 181, issuesTotal: 181, pageCount: 4 },
+      compliance: {
+        requiredFieldRules: "applied",
+        issuesChecked: 0,
+        issuesJudged: 181,
+        issuesWithDeviations: 0,
+        deviationCount: 0,
+        issuesWithoutTemplate: 181,
+        withoutTemplateByType: [
+          { typeName: "Task", count: 111 },
+          { typeName: "Epic", count: 37 },
+          { typeName: "Sub-task", count: 23 },
+          { typeName: "Bug", count: 10 },
+        ],
+        ...overrides,
+      },
+    },
+    progress: { issuesRead: 181, issuesTotal: 181, pageCount: 4, elapsedMs: 1 },
+  });
+}
+
+describe("the card says what was checked against a template (#4356)", () => {
+  it("never shows a deviation count that reads as clean when no template governed any issue", () => {
+    const { container } = render(<JiraChatTools transcript={transcript(unchecked())} />);
+    expect(
+      screen.getByText(
+        "No issue was checked against a template: no template exists for Task, Epic, Sub-task, Bug.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Required fields: 181 issues checked, no deviation."),
+    ).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/deviate|0 of 181|\(0 deviations\)/u);
+  });
+
+  it("says how many issues were checked and how many were not when only some types have a template", () => {
+    const partial = unchecked({
+      issuesChecked: 171,
+      issuesWithoutTemplate: 10,
+      withoutTemplateByType: [{ typeName: "Bug", count: 10 }],
+    });
+    render(<JiraChatTools transcript={transcript(partial)} />);
+    expect(
+      screen.getByText(
+        "171 of 181 issues were checked against a template; 10 were not: no template for Bug.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/deviate/u)).not.toBeInTheDocument();
+  });
+
+  it("keeps a real deviation count beside the unchecked issues", () => {
+    const partial = unchecked({
+      issuesChecked: 171,
+      issuesWithDeviations: 3,
+      deviationCount: 4,
+      issuesWithoutTemplate: 10,
+      withoutTemplateByType: [{ typeName: "Bug", count: 10 }],
+    });
+    render(<JiraChatTools transcript={transcript(partial)} />);
+    expect(screen.getByText("3 of 181 issues deviate (4 deviations)")).toBeInTheDocument();
+    expect(screen.getByText(/10 were not: no template for Bug\./u)).toBeInTheDocument();
+    expect(screen.queryByText(/Required fields:/u)).not.toBeInTheDocument();
+  });
+
+  it("names five types and says there are more", () => {
+    const many = unchecked({
+      withoutTemplateByType: ["A", "B", "C", "D", "E", "F", "G"].map((typeName) => ({
+        typeName,
+        count: 1,
+      })),
+    });
+    render(<JiraChatTools transcript={transcript(many)} />);
+    expect(screen.getByText(/no template exists for A, B, C, D, E …\./u)).toBeInTheDocument();
+  });
+
+  it("makes no claim about types when the result names none", () => {
+    render(<JiraChatTools transcript={transcript(unchecked({ withoutTemplateByType: [] }))} />);
+    expect(screen.getByText("No issue was checked against a template.")).toBeInTheDocument();
+    const partial = unchecked({
+      issuesChecked: 171,
+      issuesWithoutTemplate: 10,
+      withoutTemplateByType: [],
+    });
+    render(<JiraChatTools transcript={transcript(partial)} />);
+    expect(
+      screen.getByText("171 of 181 issues were checked against a template; 10 were not."),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/no template (exists )?for\s*\./u);
+  });
+
+  it.each([
+    ["partial", "Required fields were checked for some issue types only."],
+    ["unavailable", "Required fields could not be checked."],
+  ])(
+    "says the required-field check was %s instead of staying silent beside unchecked issues",
+    (state, sentence) => {
+      render(<JiraChatTools transcript={transcript(unchecked({ requiredFieldRules: state }))} />);
+      expect(screen.getByText(sentence)).toBeInTheDocument();
+      expect(screen.queryByText(/Required fields: \d+ issues checked/u)).not.toBeInTheDocument();
+      expect(screen.queryByText(/deviate/u)).not.toBeInTheDocument();
+    },
+  );
+
+  it("says nothing about required fields when none were asked for", () => {
+    render(
+      <JiraChatTools transcript={transcript(unchecked({ requiredFieldRules: "not-requested" }))} />,
+    );
+    expect(screen.queryByText(/Required fields/u)).not.toBeInTheDocument();
+  });
+
+  it("leaves a fully covered report as it was", () => {
+    render(<JiraChatTools transcript={transcript(data())} />);
+    expect(screen.getByText("235 of 2350 issues deviate (240 deviations)")).toBeInTheDocument();
+    expect(screen.queryByText(/template/u)).not.toBeInTheDocument();
+  });
+
+  it("copies the figures a card needs from the result without deriving them", () => {
+    const view = jiraReportView(unchecked());
+    expect(view?.figures).toMatchObject({
+      issuesChecked: 0,
+      issuesWithoutTemplate: 181,
+      typesWithoutTemplate: ["Task", "Epic", "Sub-task", "Bug"],
+      requiredFieldRules: "applied",
+    });
+  });
+});
+
+describe("the German card (#4356)", () => {
+  async function renderGerman(result: Record<string, unknown>): Promise<string> {
+    await Promise.all([loadLocaleMessages("de"), loadOptionalWidgetMessages("de")]);
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const view = render(
+        <I18nProvider>
+          <JiraChatTools transcript={transcript(result)} chatId="chat-1" />
+        </I18nProvider>,
+      );
+      await screen.findByText(/Vollständig/u);
+      const text = view.container.textContent ?? "";
+      view.unmount();
+      return text;
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
+  }
+
+  it("writes the percentage and the counts with the German separators", async () => {
+    const text = await renderGerman(unchecked());
+    expect(text).toContain("20,4 % erledigt");
+    expect(text).not.toContain("20.4");
+    const large = await renderGerman(data());
+    expect(large).toContain("27,7 % erledigt");
+  });
+
+  it("says in German that Keiko computes the figures", async () => {
+    const text = await renderGerman(unchecked());
+    expect(text).toContain(
+      "Keiko berechnet die Zahlen aus den gelesenen Jira-Daten, nicht das Modell.",
+    );
+    expect(text).not.toContain("Die Zahlen berechnet Keiko");
+  });
+
+  it("states what was not checked against a template, and the required fields, in German", async () => {
+    const text = await renderGerman(unchecked());
+    expect(text).toContain(
+      "Kein Vorgang wurde gegen eine Vorlage geprüft: Für Task, Epic, Sub-task, Bug gibt es keine Vorlage.",
+    );
+    expect(text).toContain("Pflichtfelder: 181 Vorgänge geprüft, keine Abweichung.");
+    expect(text).not.toMatch(/weichen ab/u);
+  });
+
+  it("states the same two cases in German", async () => {
+    const unnamed = await renderGerman(unchecked({ withoutTemplateByType: [] }));
+    expect(unnamed).toContain("Kein Vorgang wurde gegen eine Vorlage geprüft.");
+    expect(unnamed).not.toMatch(/gibt es keine Vorlage/u);
+    const partial = await renderGerman(unchecked({ requiredFieldRules: "partial" }));
+    expect(partial).toContain("Pflichtfelder wurden nur für einen Teil der Vorgangstypen geprüft.");
+    const unavailable = await renderGerman(unchecked({ requiredFieldRules: "unavailable" }));
+    expect(unavailable).toContain("Pflichtfelder konnten nicht geprüft werden.");
+  });
+
+  it("names the estimate field without its id", async () => {
+    const withField = unchecked();
+    const result = data({
+      ...withField,
+      report: {
+        ...(withField.report as Record<string, unknown>),
+        scope: {
+          estimateFieldId: "timeoriginalestimate",
+          estimateFieldName: "Ursprüngliche Schätzung",
+          estimateUnit: "seconds",
+          estimateSource: "board-configuration",
+        },
+      },
+    });
+    const text = await renderGerman(result);
+    expect(text).toContain("Schätzfeld: Ursprüngliche Schätzung");
+    expect(text).not.toContain("timeoriginalestimate");
   });
 });
 

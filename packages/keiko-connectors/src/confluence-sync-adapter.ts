@@ -40,7 +40,7 @@ import {
   atlassianApiEndpointsFor,
   atlassianApiUrl,
   classifyListResult,
-  failureReasonForStatus,
+  classifyItemFailureResponse,
   parseJsonRecord,
   type AtlassianApiEndpoints,
 } from "./atlassian-sync-classify.js";
@@ -327,12 +327,6 @@ type PageFetchResult =
   | { readonly kind: "skipped"; readonly reason: AtlassianSyncFailureReason }
   | { readonly kind: "fatal"; readonly reason: AtlassianSyncFailureReason };
 
-function classifyPageFailureStatus(status: number): PageFetchResult {
-  if (status === 401) return { kind: "fatal", reason: "auth-failed" };
-  if (status === 404) return { kind: "missing" };
-  return { kind: "skipped", reason: failureReasonForStatus(status) };
-}
-
 function parsePagePayload(bodyText: string, pageId: string): PageFetchResult {
   const record = parseJsonRecord(bodyText);
   const storageBody = record === undefined ? undefined : storageBodyOf(record);
@@ -363,7 +357,7 @@ async function fetchPagePayload(
   if (result.kind === "timeout") return { kind: "skipped", reason: "timeout" };
   if (result.kind === "network-error") return { kind: "skipped", reason: "unavailable" };
   if (result.status < 200 || result.status >= 300) {
-    return classifyPageFailureStatus(result.status);
+    return classifyItemFailureResponse(result);
   }
   // A truncated page body can never be indexed (mid-tag truncation is malformed by construction):
   // the page is skipped with `bounds-exceeded`, the run continues (the AC's oversized-page case).
@@ -399,8 +393,10 @@ function collectCommentBodies(
 
 interface CommentFetchOutcome {
   readonly bodies: readonly string[];
-  // Only 'auth-failed' propagates — the header contract makes 401 fatal for every lane, comment
-  // lane included (KEIKO-0453). Other comment-lane failures still degrade to a page-without-
+  // Only an authentication stop propagates — the header contract makes 401 fatal for every lane,
+  // comment lane included (KEIKO-0453): `auth-failed`, and `auth-unverified` (a 401 the server's
+  // identity read could not settle, #4353), which stops the run without blaming the token. Other
+  // comment-lane failures, a missing permission included, still degrade to a page-without-
   // comments so the page body remains citable.
   readonly fatalReason: AtlassianSyncFailureReason | undefined;
 }
@@ -425,7 +421,10 @@ async function fetchCommentBodies(
     if (!collectCommentBodies(results, bodies, allowance)) return false;
     return pages < MAX_COMMENT_PAGES_PER_ITEM;
   });
-  const fatalReason = !walk.ok && walk.reason === "auth-failed" ? walk.reason : undefined;
+  const fatalReason =
+    !walk.ok && (walk.reason === "auth-failed" || walk.reason === "auth-unverified")
+      ? walk.reason
+      : undefined;
   return { bodies, fatalReason };
 }
 

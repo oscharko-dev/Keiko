@@ -3,6 +3,11 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserApprovalManagementResult } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import * as api from "@/lib/browser-approval-api";
+import { ApiError, askGrounded, sendDesktopChatStream } from "@/lib/api";
+import { readChatDraft, writeChatDraft } from "@/lib/chat-draft-api";
+import { bffFetchJson } from "@/lib/http";
+import { openLauncherBrowser } from "@/lib/launcher-browser-client";
+vi.mock("@/lib/launcher-browser-client", () => ({ openLauncherBrowser: vi.fn() }));
 import {
   codingAppSessionPairingSettled,
   ensureLocalCodingAppSession,
@@ -27,6 +32,7 @@ vi.mock("@/lib/coding-app-session-client", async (original) => ({
 }));
 
 let active = true;
+let inspectionClock = 0;
 function inspection(): BrowserApprovalManagementResult {
   return active
     ? {
@@ -61,6 +67,9 @@ function RefreshCounter(): ReactNode {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Independent cases are separate denial bursts, beyond the production five-second cooldown.
+  inspectionClock += 10_000;
+  vi.spyOn(performance, "now").mockReturnValue(inspectionClock);
   active = true;
   vi.mocked(codingAppSessionPairingSettled).mockResolvedValue(false);
   vi.mocked(api.inspectBrowserApprovals).mockImplementation(async () => inspection());
@@ -72,23 +81,197 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   resetClientDiagnosticWriter();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("browser notice authentication lifecycle", () => {
-  it("returns to the compact invoker after a pointer-opened dialog without granting authority", async () => {
-    active = false;
+  it.each(["grounded", "streamed", "draft"] as const)(
+    "reinspects only session-concealing %s mutation refusals",
+    async (surface) => {
+      render(<BrowserApprovalNotice compact />);
+      await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce());
+      expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
+      active = false;
+      const fetchMock = vi.fn().mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { code: "NOT_FOUND", message: "Private resource not found." },
+            }),
+            { status: 404, headers: { "Content-Type": "application/json" } },
+          ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      await act(async () => {
+        const pending =
+          surface === "grounded"
+            ? askGrounded({
+                chatId: "a",
+                content: "Retain this prompt.",
+                expectedSkillSelectionRevision: 1,
+              })
+            : surface === "streamed"
+              ? sendDesktopChatStream(
+                  { chatId: "a", projectPath: "/workspace", content: "Retain this prompt." },
+                  new AbortController().signal,
+                  {
+                    onToken: () => undefined,
+                    onDone: () => undefined,
+                    onError: () => undefined,
+                    onCancelled: () => undefined,
+                  },
+                )
+              : writeChatDraft("a", { text: "Retain this prompt.", expectedRevision: 1 });
+        await expect(pending).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+      });
+      // ADR-0141 D6: only private drafts conceal missing session authority here.
+      // Ordinary missing Chat responses stay final and do not invalidate the held inspection.
+      if (surface === "draft") await screen.findByRole("button", { name: "Connect browser" });
+      else expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(api.inspectBrowserApprovals).toHaveBeenCalledTimes(surface === "draft" ? 3 : 1);
+      expect(api.requestBrowserApproval).not.toHaveBeenCalled();
+      expect(openLauncherBrowser).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [401, "UNAUTHORIZED", true],
+    [403, "FORBIDDEN", true],
+    [403, "PATH_ESCAPE", false],
+    [409, "SKILL_SELECTION_CHANGED", false],
+    [404, "OTHER_NOT_FOUND", false],
+  ] as const)(
+    "reinspects only session-relevant mutation refusals: %s %s",
+    async (status, code, expected) => {
+      render(<BrowserApprovalNotice compact />);
+      await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce());
+      active = false;
+      const fetchMock = vi.fn().mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { code, message: "Refused." },
+            }),
+            { status },
+          ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      await act(async () => {
+        await expect(
+          bffFetchJson("/api/chats/a/draft", { method: "PUT", body: "{}" }),
+        ).rejects.toMatchObject({ status, code });
+      });
+      if (expected) await screen.findByRole("button", { name: "Connect browser" });
+      else expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
+      expect(api.inspectBrowserApprovals).toHaveBeenCalledTimes(expected ? 3 : 1);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not recurse when session-dependent follow-up reads are also concealed", async () => {
     render(<BrowserApprovalNotice compact />);
-    const connect = await screen.findByRole("button", { name: "Connect browser" });
-    expect(document.body).toHaveFocus();
-    fireEvent.click(connect);
-    const dialog = screen.getByRole("dialog", { name: "Connect this browser" });
-    await waitFor(() => expect(dialog).toHaveFocus());
-    expect(screen.getByRole("button", { name: "Request approval" })).toBeEnabled();
+    await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce());
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: { code: "NOT_FOUND", message: "Private resource not found." },
+          }),
+          { status: 404, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(readChatDraft("a")).rejects.toMatchObject({ status: 404 });
+    await expect(bffFetchJson("/api/chats/a/skill")).rejects.toMatchObject({ status: 404 });
+    expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
+  });
+
+  it("preserves genuine missing-resource errors when the authoritative session is still active", async () => {
+    render(<BrowserApprovalNotice compact />);
+    await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: { code: "NOT_FOUND", message: "Chat not found." },
+          }),
+          { status: 404 },
+        ),
+      ),
+    );
+    await act(async () => {
+      await expect(
+        askGrounded({ chatId: "removed", content: "Keep this prompt." }),
+      ).rejects.toMatchObject(new ApiError("NOT_FOUND", "Chat not found.", 404));
+    });
+    // ADR-0141 D6 preserves ordinary missing-resource errors without a global refresh.
+    expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
+  });
+
+  it("connects in one click through the native launcher without a code dialog", async () => {
+    active = false;
+    vi.mocked(openLauncherBrowser).mockImplementation(async () => {
+      active = true;
+    });
+    render(<BrowserApprovalNotice compact />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect browser" }));
+    await waitFor(() => expect(openLauncherBrowser).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull(),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(api.requestBrowserApproval).not.toHaveBeenCalled();
     expect(api.approveBrowserRequest).not.toHaveBeenCalled();
-    fireEvent.keyDown(dialog, { key: "Escape" });
-    await waitFor(() => expect(connect).toHaveFocus());
+  });
+
+  it("reports an opener failure without starting the code flow or changing saved work", async () => {
+    active = false;
+    vi.mocked(openLauncherBrowser).mockRejectedValueOnce(new TypeError("unavailable"));
+    render(<BrowserApprovalNotice compact />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect browser" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("reopen Keiko from its launcher");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.requestBrowserApproval).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a launcher acknowledgement as authenticated access and offers a retry", async () => {
+    active = false;
+    vi.mocked(openLauncherBrowser).mockResolvedValue(undefined);
+    render(<BrowserApprovalNotice compact />);
+    const button = await screen.findByRole("button", { name: "Connect browser" });
+    vi.useFakeTimers();
+    fireEvent.click(button);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    // The opener said "opened": the person is told what happened, not that Keiko failed (#4370).
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Keiko opened the connection in a new browser window or tab. If it opened in another browser or profile, continue there.",
+    );
+    expect(screen.getByRole("alert")).not.toHaveTextContent("reopen Keiko from its launcher");
+    // It claims nothing about which browser the server chose, and gives no advice on the default.
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/default browser|your default/u);
+    expect(screen.getByRole("alert").textContent).not.toMatch(/Chrome|Safari|Firefox|Edge|Arc/u);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps the launcher text when the opener itself failed, and names no browser", async () => {
+    active = false;
+    vi.mocked(openLauncherBrowser).mockRejectedValueOnce(new TypeError("unavailable"));
+    render(<BrowserApprovalNotice compact />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect browser" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("reopen Keiko from its launcher");
+    expect(alert).not.toHaveTextContent("new browser window");
+    expect(alert.textContent).not.toMatch(/Chrome|Safari|Firefox|Edge|Arc/u);
   });
 
   it("keeps compact inventory retry read-only", async () => {

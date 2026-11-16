@@ -227,7 +227,6 @@ import {
   withConversationReadinessAdmission,
   type ConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
-import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 
 // ─── Canonical connector reader ───────────────────────────────────────────────
 
@@ -1107,6 +1106,7 @@ async function hybridGatewayAnswer(
   const profile =
     ctx.deps === undefined ? undefined : currentContextProfileForModel(ctx.deps, ctx.modelId);
   const response = await callPluralGroundedSynthesis({
+    retryFollows: options.retryFollows,
     deps: ctx.deps,
     evidenceCount: ctx.sourceEvidenceCount,
     model: ctx.model,
@@ -1248,6 +1248,7 @@ async function hybridGatewayRepair(
     return uninvokedCitationRepair(original);
   ensureNotCancelled(signal);
   const response = await callPluralGroundedSynthesis({
+    purpose: "citation-repair",
     deps: ctx.deps,
     evidenceCount: ctx.sourceEvidenceCount,
     model: ctx.model,
@@ -2334,7 +2335,6 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
     ctx.modelId,
     readinessAdmission,
     ctx.deps,
-    (id, correlationId) => awaitInitializedConversationReadiness(ctx.deps, id, correlationId),
   );
   return {
     answer: createHybridAnswerer(
@@ -2449,7 +2449,7 @@ function withHybridAnswerDuration(
 ): HybridGroundedAnswer {
   const elapsedMs = Math.max(0, Date.now() - (ctx.startedAtMs ?? Date.now()));
   return {
-    ...withToolResultsAsSource(answer, ctx.deps.store),
+    ...withToolResultsAsSource(answer, ctx.deps.chatToolTurn),
     elapsedMs,
     contextPack: {
       ...answer.contextPack,
@@ -2901,6 +2901,8 @@ interface FittedHybridAnswer {
   readonly promptCtx: HybridGroundedAskCtx;
 }
 
+type HybridAnswerPlan = Omit<FittedHybridAnswer, "assistant">;
+
 function conversationOnlyHybridAnswer(fitted: FittedHybridAnswer): boolean {
   const folders = fitted.promptCtx.folderOmissionPacks ?? [];
   return (
@@ -2919,11 +2921,7 @@ async function answerHybridWithinWindow(
   const remainingBefore = answerer.answer.remainingSynthesisCalls?.();
   const reservedBefore = answerer.answer.reservedSynthesisOutputTokens?.();
   const completedBefore = answerer.answer.completedSynthesisCalls?.();
-  const fitted = await withAdoptedContextWindowRetry(
-    ctx.deps,
-    { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
-    () => hybridAnswerAttempt(ctx, answerer, selected),
-  );
+  const fitted = await fitHybridWithinWindow(ctx, answerer, selected);
   const assistant = {
     ...fitted.assistant,
     ...pluralSynthesisCountFields(
@@ -2956,24 +2954,66 @@ async function answerHybridWithinWindow(
   };
 }
 
-async function hybridAnswerAttempt(
+function fitHybridWithinWindow(
   ctx: HybridGroundedAskCtx,
   answerer: ResolvedAnswerer,
   selected: readonly SelectedCandidate<HybridPayload>[],
 ): Promise<FittedHybridAnswer> {
+  let retainedPlan: HybridAnswerPlan | undefined;
+  return withAdoptedContextWindowRetry(
+    ctx.deps,
+    {
+      modelId: ctx.modelId,
+      surface: "grounded",
+      correlationId: ctx.correlationId,
+      settleRetryFailure: (error, originalFailure) =>
+        settleHybridRetry(ctx, answerer, retainedPlan, error, originalFailure),
+    },
+    (attempt) =>
+      hybridAnswerAttempt(ctx, answerer, selected, attempt.retryFollows, (plan) => {
+        if (!attempt.retrying) retainedPlan = plan;
+      }),
+  );
+}
+
+function settleHybridRetry(
+  ctx: HybridGroundedAskCtx,
+  answerer: ResolvedAnswerer,
+  plan: HybridAnswerPlan | undefined,
+  error: unknown,
+  originalFailure: unknown,
+): FittedHybridAnswer | undefined {
+  if (plan === undefined) return undefined;
+  const response = ctx.deps.chatToolTurn?.settleRetryFailure(
+    error,
+    originalFailure,
+    ctx.modelId,
+    ctx.signal,
+  );
+  if (response === undefined) return undefined;
+  const assistant = hybridGatewayAnswerResult(response, ctx.modelId);
+  return {
+    ...plan,
+    assistant: {
+      ...assistant,
+      usage: answerer.answer.takeFailedSynthesisUsage?.() ?? assistant.usage,
+    },
+  };
+}
+
+async function hybridAnswerAttempt(
+  ctx: HybridGroundedAskCtx,
+  answerer: ResolvedAnswerer,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  retryFollows: (error: unknown) => boolean,
+  observePlan: (plan: HybridAnswerPlan) => void,
+): Promise<FittedHybridAnswer> {
   const budget = ctx.originalSynthesisBudget ?? modelWindowAwareBudget(ctx.deps, ctx.modelId);
   const usage = hybridRetrievalUsage(ctx);
-  const pending = answerer.answer.pendingSynthesisUsage?.() ?? {
-    promptTokens: 0,
-    completionTokens: 0,
-  };
   const promptCtx = hybridContextWithinWindow(
     {
       ...ctx,
-      synthesisInputTokensMax: Math.max(
-        0,
-        budget.modelInputTokensMax - usage.promptTokens - pending.promptTokens,
-      ),
+      synthesisInputTokensMax: Math.max(0, budget.modelInputTokensMax - usage.promptTokens),
     },
     selected,
   );
@@ -2981,8 +3021,10 @@ async function hybridAnswerAttempt(
   const user = hybridUserMessage(promptCtx, sent);
   const system = hybridSystemPrompt(ctx.deps);
   logFittedHybridSelection(promptCtx, sent, system, user);
+  observePlan({ sent, promptCtx });
   const assistant = normalizeGroundedAnswerPayload(
     await answerer.answer(system, user, {
+      retryFollows,
       sourceEvidenceCount: sent.length,
       modelInputTokensMax: budget.modelInputTokensMax - usage.promptTokens,
       modelOutputTokensMax: budget.modelOutputTokensMax - usage.completionTokens,
@@ -3122,6 +3164,7 @@ async function repairHybridAnswer(
       signal: ctx.signal,
       reliableCitationBehaviour: citationBehaviourFor(ctx.deps, ctx.modelId),
       observeCitationBehaviour,
+      toolTurn: ctx.deps.chatToolTurn,
     },
   };
   const repaired = await repairGroundedAnswer(repairContext);

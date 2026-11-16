@@ -8,6 +8,8 @@ import {
 } from "../gitDelivery/verifiedCommitTypes.js";
 import { isCodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import { emitToolHandlerFailure } from "./codingToolFacadeFailure.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import {
   isCodingRuntimeGitResult,
   type CodingRuntimeGitResult,
@@ -38,6 +40,7 @@ import type {
 import {
   CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
   isCodingSafeActivityPresentationPath,
+  type CodingSafeActivityGitOutcome,
   type CodingSafeActivityToolPresentation,
   type CodingSafeActivityVerificationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
@@ -171,7 +174,11 @@ import type {
   CodingToolInvocationRegistry,
   CodingToolInvocationTakeResult,
 } from "./codingToolInvocationRegistry.js";
-import type { CanonicalCatalogFacadeBridge } from "../tool-catalog/catalogToolFacadeBridge.js";
+import { SHELL_VERIFICATION_STATUS_RULE } from "./codingRuntimeVerificationContinuation.js";
+import {
+  openCodeToolMayAwaitOperator,
+  type CanonicalCatalogFacadeBridge,
+} from "../tool-catalog/catalogToolFacadeBridge.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   refuseReviewRunAction,
@@ -189,6 +196,8 @@ export interface CodingToolFacadeCreateOptions extends CodingToolFacadeOptions {
    * execution (descriptor, disposition, budget, tool-catalog.* lifecycle log lines). Actions the
    * catalog does not cover dispatch exactly as before -- no behaviour change, no log line. */
   readonly catalogBridge?: CanonicalCatalogFacadeBridge | undefined;
+  /** Where a governed handler's thrown failure is recorded; the process sink when absent. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 export function createCodingToolFacade(
@@ -202,6 +211,7 @@ export function createCodingToolFacade(
     invocationRegistry: options.invocationRegistry,
     requireInvocationRegistryForEdits: options.requireInvocationRegistryForEdits === true,
     catalogBridge: options.catalogBridge,
+    diagnostics: options.diagnostics,
     onToolSettled: options.onToolSettled,
     observeEditOutcome: options.observeEditOutcome,
     runtimePurpose: options.runtimePurpose,
@@ -211,6 +221,7 @@ export function createCodingToolFacade(
       correlationId: () => undefined,
     },
     inFlight: { count: 0 },
+    operatorLane: { count: 0 },
   };
   return {
     execute: async (input) => execute(context, input),
@@ -224,12 +235,14 @@ interface ExecutionContext {
   readonly invocationRegistry: CodingToolInvocationRegistry | undefined;
   readonly requireInvocationRegistryForEdits: boolean;
   readonly catalogBridge: CanonicalCatalogFacadeBridge | undefined;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly onToolSettled: CodingToolFacadeOptions["onToolSettled"];
   readonly observeEditOutcome: ((outcome: CodingToolEditOutcome) => void) | undefined;
   readonly runtimePurpose: CodingToolFacadeOptions["runtimePurpose"];
   readonly reviewReadAllowance: CodingToolFacadeOptions["reviewReadAllowance"];
   readonly runtimePurposeLog: NonNullable<CodingToolFacadeOptions["runtimePurposeLog"]>;
   readonly inFlight: { count: number };
+  readonly operatorLane: { count: number };
 }
 
 async function executeCatalogRequest(
@@ -303,14 +316,17 @@ async function executeParsed(
   if (reviewReadAllowanceRefuses(context.runtimePurpose, request, context.reviewReadAllowance)) {
     return { status: "denied", evidence: [], guidance: REVIEW_READ_ALLOWANCE_GUIDANCE };
   }
-  if (context.inFlight.count >= context.maxInFlight) return empty("busy");
-  context.inFlight.count += 1;
+  // A call that may park on a human decision counts in its own lane (same bound), so pending
+  // approvals never starve a read or a search of its slot.
+  const lane = openCodeToolMayAwaitOperator(request) ? context.operatorLane : context.inFlight;
+  if (lane.count >= context.maxInFlight) return empty("busy");
+  lane.count += 1;
   try {
     const result = await routeParsed(context, input, request);
     if (request.action === "edit") observeEditResult(context.observeEditOutcome, result);
     return result;
   } finally {
-    context.inFlight.count -= 1;
+    lane.count -= 1;
   }
 }
 
@@ -325,13 +341,7 @@ function routeParsed(
     return executeCatalogRequest(context, input, request);
   }
   context.catalogBridge?.recordUnbound(request, input);
-  return executeAdmitted(
-    context.ports,
-    input,
-    request,
-    context.invocationRegistry,
-    context.requireInvocationRegistryForEdits,
-  );
+  return executeAdmitted(context.ports, input, request, context);
 }
 
 // F5 (#3873): the run's refusal bound counts the edit as the model received it, whatever path
@@ -424,22 +434,84 @@ export function codingToolVerificationPresentation(
   return verificationOutcome === undefined ? {} : Object.freeze({ verificationOutcome });
 }
 
+// The shared lifecycle statuses of a stage, an unstage, a branch and the verified commit. A status
+// this table does not name fails closed to `not-done`: an unknown outcome never reads "Succeeded".
+const GIT_STEP_OUTCOME_BY_STATUS: ReadonlyMap<string, CodingSafeActivityGitOutcome> = new Map([
+  ["succeeded", "completed"],
+  ["approval-required", "waiting-for-approval"],
+  ["blocked", "blocked"],
+  ["drift", "changed"],
+  ["failed", "not-done"],
+  ["recovery-required", "not-done"],
+  ["verification-failed", "verification-missing"],
+]);
+
+// Commit refusals whose cause the card names exactly (lab T37 audit, #4271): a failed check, a
+// change only partly staged, and open editor files with unsaved changes. Every other reason keeps
+// its status word.
+const COMMIT_OUTCOME_BY_REASON: ReadonlyMap<string, CodingSafeActivityGitOutcome> = new Map([
+  ["verification-failed", "verification-failed"],
+  ["candidate-not-staged", "not-staged"],
+  ["buffers-dirty", "unsaved-changes"],
+]);
+
+const GIT_SYNC_COMPLETED_STATUSES: ReadonlySet<string> = new Set(["succeeded", "up-to-date"]);
+
+function gitStepOutcome(status: string): CodingSafeActivityGitOutcome {
+  return GIT_STEP_OUTCOME_BY_STATUS.get(status) ?? "not-done";
+}
+
+function commitOutcome(commit: VerifiedCommitResult): CodingSafeActivityGitOutcome {
+  return COMMIT_OUTCOME_BY_REASON.get(commit.reason) ?? gitStepOutcome(commit.status);
+}
+
+// `ready` is a stage or unstage proposal prepared but not yet carried out: it claims no outcome.
+function gitResultOutcome(git: CodingRuntimeGitResult): CodingSafeActivityGitOutcome | undefined {
+  if (git.kind === "fetch" || git.kind === "pull")
+    return GIT_SYNC_COMPLETED_STATUSES.has(git.status) ? "completed" : "not-done";
+  if (git.kind !== "stage" && git.kind !== "unstage" && git.kind !== "branch") return undefined;
+  return git.status === "ready" ? undefined : gitStepOutcome(git.status);
+}
+
+/**
+ * Server-private live presentation of one answered Git step (stage, unstage, fetch, pull, branch or
+ * the verified commit): how it really ended, in the contract's closed words, from the result the
+ * model received. The facade answers a refusal as a completed call that carries it, so without this
+ * the card reads "Succeeded" for a commit that never happened (lab T37, #4271). A read, a prepared
+ * proposal and every other result present nothing.
+ */
+export function codingToolGitPresentation(
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  if (result.status !== "completed") return {};
+  let gitOutcome: CodingSafeActivityGitOutcome | undefined;
+  if ("verifiedCommit" in result) gitOutcome = commitOutcome(result.verifiedCommit);
+  else if ("git" in result) gitOutcome = gitResultOutcome(result.git);
+  return gitOutcome === undefined ? {} : Object.freeze({ gitOutcome });
+}
+
 async function executeAdmitted(
   ports: CodingToolFacadePorts,
   input: CodingToolFacadeInput,
   request: CodingToolActionRequest,
-  invocationRegistry: CodingToolInvocationRegistry | undefined,
-  requireInvocationRegistryForEdits: boolean,
+  options: Pick<
+    ExecutionContext,
+    "invocationRegistry" | "requireInvocationRegistryForEdits" | "diagnostics"
+  >,
 ): Promise<CodingToolResult> {
+  const { invocationRegistry, requireInvocationRegistryForEdits, diagnostics } = options;
   const admission = ports.authority.admit(input.capability, request);
   if (!admission.ok) return empty("denied");
   if (input.signal?.aborted === true) return empty("cancelled");
   if (!admission.mutationGuard.check()) return empty("denied");
   if (request.action === "edit" && invocationRegistry !== undefined) {
-    return executeStagedEdit(ports, input, request, admission, invocationRegistry);
+    return executeStagedEdit(ports, input, request, admission, {
+      registry: invocationRegistry,
+      diagnostics,
+    });
   }
   if (request.action === "edit" && requireInvocationRegistryForEdits) return empty("denied");
-  return executePlainAction(ports, input, request, admission);
+  return executePlainAction(ports, input, request, admission, diagnostics);
 }
 
 // F8 (#3413): every non-edit action's delegate call, optionally resolved as a catalog binding and
@@ -450,6 +522,7 @@ async function executePlainAction(
   input: CodingToolFacadeInput,
   request: CodingToolActionRequest,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingToolResult> {
   input.onDelegateStarted?.();
   const runDelegate = (): Promise<unknown> =>
@@ -457,8 +530,8 @@ async function executePlainAction(
   try {
     const outcome = await runDelegate();
     return project(request, outcome);
-  } catch {
-    return projected("failed");
+  } catch (error) {
+    return recordHandlerThrow(input.signal, request.actionId, error, diagnostics);
   }
 }
 
@@ -467,8 +540,12 @@ async function executeStagedEdit(
   input: CodingToolFacadeInput,
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
-  registry: CodingToolInvocationRegistry,
+  staging: {
+    readonly registry: CodingToolInvocationRegistry;
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+  },
 ): Promise<CodingToolResult> {
+  const { registry, diagnostics } = staging;
   const binding = admission.binding ?? admission.mutationGuard.binding;
   const payload = typeof input.body === "string" ? Buffer.from(input.body, "utf8") : input.body;
   if (binding === undefined) return wipeAndReturn(payload, empty("denied"));
@@ -489,7 +566,7 @@ async function executeStagedEdit(
   const claimed = registry.take(identity);
   if (claimed.kind !== "ready") return wipeAndReturn(payload, empty("denied"));
   try {
-    return await executeClaimedEdit(ports, input, request, admission, claimed);
+    return await executeClaimedEdit(ports, input, request, admission, { claimed, diagnostics });
   } finally {
     registry.settle(identity);
   }
@@ -507,8 +584,12 @@ async function executeClaimedEdit(
   input: CodingToolFacadeInput,
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
-  claimed: Extract<CodingToolInvocationTakeResult, { readonly kind: "ready" }>,
+  staged: {
+    readonly claimed: Extract<CodingToolInvocationTakeResult, { readonly kind: "ready" }>;
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+  },
 ): Promise<CodingToolResult> {
+  const { claimed, diagnostics } = staged;
   const signal =
     input.signal === undefined ? claimed.signal : AbortSignal.any([input.signal, claimed.signal]);
   if (isAborted(signal)) return empty("cancelled");
@@ -518,9 +599,28 @@ async function executeClaimedEdit(
   try {
     const result = await runDelegate();
     return isAborted(signal) ? empty("cancelled") : project(request, result);
-  } catch {
-    return projected("failed");
+  } catch (error) {
+    return recordHandlerThrow(signal, request.actionId, error, diagnostics);
   }
+}
+
+// A handler that threw its own abort because its caller went away was cancelled and records no
+// failure. Any other throw is recorded, also when an abort raced it, so the defect stays visible;
+// a caller that left is still answered cancelled.
+function recordHandlerThrow(
+  signal: AbortSignal | undefined,
+  actionId: string,
+  error: unknown,
+  diagnostics: ServerDiagnosticSink | undefined,
+): CodingToolResult {
+  const aborted = signal?.aborted === true;
+  const abortCaused = aborted && (error === signal.reason || isAbortError(error));
+  if (!abortCaused) emitToolHandlerFailure(diagnostics, actionId, error);
+  return aborted ? empty("cancelled") : projected("failed");
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
 
 function isAborted(signal: AbortSignal): boolean {
@@ -799,8 +899,7 @@ const PROTECTED_BRANCH_COMMIT_GUIDANCE =
 // AC3 lab T17 (round I, #3907): the staged candidate had no verification, the governed verifier could
 // not run on the host and named the shell instead, and the model, seeing only `verification-missing`
 // on every commit, restaged and re-proposed until the deadline. The refusal names the model's step.
-const UNVERIFIED_COMMIT_GUIDANCE =
-  "The staged change has no verification yet; it is already staged. Do not stage again and do not retry this commit unchanged. Verify the staged change first: run keiko_verification, or, when it says to run the check in your shell, run the repository's own test command in your shell, where it counts for the staged change. Then propose the commit again.";
+const UNVERIFIED_COMMIT_GUIDANCE = `The staged change has no verification yet; it is already staged. Do not stage again and do not retry this commit unchanged. Verify the staged change first: run keiko_verification, or, when it says to run the check in your shell, run the repository's own test command in your shell, where it counts for the staged change. ${SHELL_VERIFICATION_STATUS_RULE} Then propose the commit again.`;
 
 function commitBlockGuidance(result: VerifiedCommitResult): { readonly guidance?: string } {
   if (result.status === "blocked" && result.blockReason === "protected-branch")
@@ -878,6 +977,18 @@ const REPOSITORY_REQUIRED_GUIDANCE =
   "This workspace is a plain folder, not a Git repository, so Git tools (status, diff, stage, commit, sync, push, pull request) are unavailable here. Keep working with file edits, commands and verification, and report the result; do not try to initialize a repository or run Git another way.";
 
 const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  // A window past the read byte bound is cut to whole lines with nextStartLine, so a read refused as
+  // too large has a first line that alone exceeds the bound (audit 2026-11-06, finding 6).
+  read: {
+    "workspace-read-too-large":
+      "The first line of this window alone is larger than the read limit, so this file cannot be returned as text by this tool. Locate the part you need with keiko_repository_search (literal or regex mode) instead of retrying the same read, or report the file as unreadable.",
+    "workspace-read-not-text":
+      "This file is not readable text (binary or not valid UTF-8). Do not retry it; continue with other files or report it.",
+    "workspace-read-not-found":
+      "No such file in the allowed workspace. Check the path with keiko_workspace_discover before reading again.",
+    "workspace-read-denied":
+      "This path is outside what the run may read. Do not retry it or route around the denial.",
+  },
   verification: {
     WORKSPACE_TRUST_REQUIRED:
       "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",
@@ -886,8 +997,10 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     // step still checked something, so the guidance claims no more than the named steps (PR #3452).
     // A Python repository read "add the script" as an order and gained a package.json the task
     // forbade (AC3 lab T19, #3907); the shell command is the verification that already counts.
-    VERIFICATION_NOT_RUN:
-      "Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier, or the repository has no package.json at all: choose a verifier the repository defines, or run the repository's own command for that check in your shell (for example python3 -m unittest or pytest), where its result counts as that verification. Never add a package.json or a script only to satisfy this verifier. A step to run in your own shell cannot run in the isolated verifier on this host: run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
+    VERIFICATION_NOT_RUN: `Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier, or the repository has no package.json at all: choose a verifier the repository defines, or run the repository's own command for that check in your shell (for example python3 -m unittest or pytest), where its result counts as that verification. Never add a package.json or a script only to satisfy this verifier. A step to run in your own shell cannot run in the isolated verifier on this host: run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification. ${SHELL_VERIFICATION_STATUS_RULE} Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.`,
+    // #4271 lab (T39): a verifier with no step for the package it resolved answered a bare code,
+    // and the model gave up instead of running the build tool the repository already uses.
+    NO_RUNNABLE_STEPS: `This verifier has nothing to run for that package. Where the detail names several packages, pass one as packageDir. Otherwise run the repository's own test command for the changed code in your shell (for example mvn test, ./gradlew test, npm test or pytest), where its result counts as that verification. ${SHELL_VERIFICATION_STATUS_RULE} Never add a script or build file only to satisfy this verifier, and do not retry the same verifier unchanged.`,
   },
   // Push and pull request proposals (CodingRuntimeDeliveryResult, contracts). Each names the true
   // cause and the one next step that is the model's to take; none suggests another remote or URL.
@@ -1000,6 +1113,10 @@ const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
     "An editor session holds unsaved changes in this workspace, so the bytes to stage are not settled. Report the blocker; only the operator can save or discard them.",
   "proposal-limit":
     "Too many stage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
+  // #4068: Git for Windows sets core.autocrlf=true for the whole system, so every stage there was
+  // refused and the model guessed at file locks and hooks.
+  "unsupported-transformation":
+    "Git would change these files' bytes while staging them: the effective core.autocrlf or core.safecrlf is not false (Git for Windows sets core.autocrlf=true by default), or a .gitattributes text, eol or filter rule applies. Keiko stages only the exact bytes it verified. Do not retry. Report to the operator that this repository must opt out locally, for example with `git config core.autocrlf false`, before Keiko can stage and commit here.",
 };
 
 // An unstage proposal is refused for its own reasons (#3902 AC2).

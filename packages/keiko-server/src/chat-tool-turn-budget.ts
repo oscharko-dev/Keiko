@@ -4,13 +4,12 @@ import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/ru
 /**
  * The Authority Envelope budget of one accepted Chat tool turn (#4175). It is sized for backlog
  * work — dozens of reads and approved writes with a slow local model — and it is the only turn
- * bound: the loop derives its iteration and model-call ceilings from it instead of the coding
+ * bound (Keiko does not limit tokens, #4346): the loop derives its iteration and model-call ceilings from it instead of the coding
  * harness defaults. The human can stop the turn at any time; approval semantics are unchanged.
  */
 export const CHAT_TOOL_TURN_BUDGET: ChatToolAuthorityEnvelope["budget"] = Object.freeze({
   maxRuntimeMs: 60 * 60_000,
   maxToolCalls: 250,
-  maxPromptTokens: 5_000_000,
   maxPatchBytes: 0,
 });
 
@@ -25,14 +24,11 @@ export function chatToolTurnBudget(deps: {
   if (composed === undefined) return CHAT_TOOL_TURN_BUDGET;
   const ceiling = CHAT_TOOL_TURN_BUDGET;
   const narrows =
-    composed.maxRuntimeMs <= ceiling.maxRuntimeMs &&
-    composed.maxToolCalls <= ceiling.maxToolCalls &&
-    composed.maxPromptTokens <= ceiling.maxPromptTokens;
+    composed.maxRuntimeMs <= ceiling.maxRuntimeMs && composed.maxToolCalls <= ceiling.maxToolCalls;
   if (narrows) return composed;
   return Object.freeze({
     maxRuntimeMs: Math.min(composed.maxRuntimeMs, ceiling.maxRuntimeMs),
     maxToolCalls: Math.min(composed.maxToolCalls, ceiling.maxToolCalls),
-    maxPromptTokens: Math.min(composed.maxPromptTokens, ceiling.maxPromptTokens),
     maxPatchBytes: 0,
   });
 }

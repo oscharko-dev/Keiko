@@ -282,6 +282,53 @@ describe("pdfParser", () => {
     expect(cancelled).toBe(false);
   });
 
+  it("removes repeated page rows with a body-free count and builds sections", async () => {
+    const input = selectionFromBytes(PDF_MAGIC, {
+      extension: "pdf",
+      mediaType: "application/pdf",
+    });
+    const line = (str: string, y: number, height = 10): PdfTextContentChunk["items"][number] => ({
+      str,
+      transform: [height, 0, 0, height, 50, y],
+      width: str.length * 5,
+      height,
+      fontName: height === 10 ? "body" : "heading",
+    });
+    const doc: PdfDocumentLike = {
+      numPages: 3,
+      getPage: (pageNumber) =>
+        positionedPage([
+          line("Vertraulich: Lastenheft Muster", 800),
+          line(`Kapitel ${String(pageNumber)}`, 760, 16),
+          line(`Text der Seite ${String(pageNumber)} eins`, 730),
+          line(`Text der Seite ${String(pageNumber)} zwei`, 718),
+          line(`Text der Seite ${String(pageNumber)} drei`, 706),
+          line(`Seite ${String(pageNumber)} von 3`, 40),
+        ]),
+    };
+
+    const result = await extractPages(doc, input, buildParserOptions({ now: () => 0 }), 0);
+
+    expect(result.normalizedText).not.toContain("Vertraulich");
+    expect(result.normalizedText).not.toContain("von 3");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "PDF_PAGE_FURNITURE_REMOVED",
+        message: "pdf parser removed 6 repeated page header or footer rows",
+        severity: "info",
+      }),
+    ]);
+    expect(result.sections.map(({ sectionPath }) => sectionPath)).toEqual([
+      ["Kapitel 1"],
+      ["Kapitel 2"],
+      ["Kapitel 3"],
+    ]);
+    const second = result.sections[1];
+    expect(result.normalizedText?.slice(second?.characterStart, second?.characterEnd)).toBe(
+      "Kapitel 2\n\nText der Seite 2 eins\nText der Seite 2 zwei\nText der Seite 2 drei\n\n",
+    );
+  });
+
   it("orders simple two-column positioned text by column and normalizes ligatures", async () => {
     const input = selectionFromBytes(PDF_MAGIC, {
       extension: "pdf",

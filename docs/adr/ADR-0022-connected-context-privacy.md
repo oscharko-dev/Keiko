@@ -290,8 +290,13 @@ citation marker. The existing repair owner inserts markers at original coordinat
 the unchanged verbatim-content, code, assessment, token-boundary, sent-evidence and size guards.
 Ambiguous anchors, duplicate coordinates, extra schema fields and unsupported ranges fail
 closed. Existing literal marker-only responses remain compatible under those guards. This
-changes neither the turn's physical-attempt ceiling nor its remaining input/output/time grants;
+changes neither the turn's physical-attempt ceiling, its per-request input caps nor its remaining output/time grants;
 existing answer-details and reconciliation events record the actual disposition without bodies.
+Single-source, multi-source and hybrid marker repair use an explicit tool-free purpose through
+the same admitted, turn-metered model port. Repair advertises no catalog and never enters the
+tool loop or dispatches a returned call. Unexpected tool-call output is refused with its observed
+usage retained. Current readiness/configuration generation, authority, cancellation, prompt/output
+bounds and physical-attempt/spend admission remain binding.
 When that budget requires shrinking a located excerpt, a complete matching line that fits the
 remaining UTF-8 byte grant takes priority over an unrelated leading prefix. Adjacent complete
 lines may fill the remaining grant. The fitted excerpt retains its physical source offsets and
@@ -821,6 +826,34 @@ receive their final monotonic sensitivity before one scalar span is emitted. Kno
 private keys and configured secret literals remain unconditional. Malformed inferred code, parser
 stack exhaustion and the existing source-size ceiling produce body-free refusals; a connected source
 with an unavailable projection is omitted through the existing read-failure/uncertainty path.
+Java parses run in a worker thread with a heap ceiling and a deadline that grows with the text
+(2026-11-06, #4212): the pinned java-parser's ALL(*) prediction grows superlinearly on some invalid
+expressions (400 characters took 21 s, 1,600 exhausted a 4 GB heap) and keeps its DFA caches across
+parses. A missed deadline or an exhausted worker heap is a budget refusal, closed like stack
+exhaustion; the worker is replaced at once in the background and only node names, token types,
+offsets and images leave it, never a library diagnostic. A worker loads its grammar on its own
+thread: the real launch starts the first one when the server listens, and a caller waits for a
+worker that is still starting at most two seconds and only once per start (a cold start measured 132
+to 236 ms). A parse without a ready worker, including one whose grammar failed to load, is answered
+as unavailable, a property of the machine rather than of the text: text that holds no double quote,
+backslash, apostrophe at a word's edge (an apostrophe inside a word, as in "it's", is prose),
+sensitive name, strict-redaction candidate or value of a private literal seen elsewhere in the same
+projection stays readable as prose, and everything else stays closed like a refused parse, which
+keeps every apostrophe closed. The first such answer per start or cooldown is recorded as
+`security.java-parser.unavailable` with a closed reason (`starting`, `start-refused`). The worker
+keeps the in-process stack size (1 MB), so nesting of roughly 150 to 200 levels parses and deeper
+nesting fails closed as a depth refusal; a tree the worker cannot pass back, or this thread cannot
+read back, is also a depth refusal. Every answer carries its request's id: an answer that lost step
+with its request is never used, retires the worker and is not reused for the text, which it says
+nothing about. The caller's wait cannot observe a worker's exit, so a worker that dies mid-parse is
+retired at its deadline and an exit between parses is found before the next one. A worker that
+cannot start, or has not answered within 15 seconds, is not started again for a minute. A refusal on
+time is reused for the same text for five seconds, so two callers of one hostile message wait out
+one deadline, and the text is parsed afresh afterwards. A worker whose heap grew past what it may
+keep is replaced after its answer as routine. `security.java-parser.worker-started`,
+`security.java-parser.worker-recycled` and `security.java-parser.worker-retired` record each start,
+routine replacement and failure on the Activity Log under one correlation per worker lifetime, with
+the worker's ordinal, parse count, age and, for a retirement, a closed reason, never text.
 Completed standalone private-key intervals are opaque whitespace only in the parser input, with
 unchanged UTF-16 offsets and CR/LF delimiters. Unconditional masking consumes their original bytes;
 public code after a closed interval remains readable. Unclosed intervals receive no parser exemption.
@@ -1144,7 +1177,9 @@ while charging the actual completed repair attempt within the unchanged shared g
 The existing Activity Log records the actual repair disposition and final citation behaviour;
 clarifications and already cited answers do not acquire an extra model call.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
-maximum of two physical synthesis attempts and the original remaining search/read/token/spend/time grants.
+maximum of two physical synthesis attempts and the original remaining search/read/output/spend/time grants.
+Each prompt fits its current model and caller input caps; earlier synthesis prompts do not consume
+that input capacity (owner decision 2026-11-11, ADR-0137 D2).
 Declared unread targets receive priority during final prompt fitting;
 the actual sent pack must retain each admitted target before a second gateway dispatch. A rejected
 fit preserves the first insufficiency and all physical-read usage. Injected answerers are also checked
@@ -1511,6 +1546,16 @@ retains a single `no-evidence` marker, and budget clipping remains `budget-clipp
 
 ### D4 — The summary is structurally redaction-free, and we prove it
 
+**Content threshold amendment (owner decision, 2026-11-04).** Keiko runs on the user's own device and
+its stores never leave it, so what a person reads and what the model receives lose only the credential
+floor by default. An absent or empty `KEIKO_CONTENT_REDACTION` now preserves like `off`; `on` lowers the
+threshold back to the strict projection, and an unrecognized value still warns and keeps redaction.
+The preserving lane described below is therefore the default for Chat, and `deps.redactor`, which every
+live payload passes, follows the same policy. Evidence, audit records, memory proposals and Quality
+Intelligence use `strictRedactor`. The Activity Log has its own stricter sink and carries no personal
+data (ADR-0173). A store written before this change keeps its stored text; a preserving workspace uses
+its own index snapshot, so the first connected-folder question may rebuild it.
+
 **Authorized content amendment (owner decision, 2026-10-27, #4098).** A user permitted to read
 connected documents must be able to receive their contents under the deployment's processing
 policy. `KEIKO_CONTENT_REDACTION=off`, resolved once at server startup, gives Chat a preserving
@@ -1533,6 +1578,23 @@ search, counts-only summaries and audit manifests retain their existing redactio
 contracts, and conversation-history compaction summaries keep the default projection. The Coding
 Workbench agent's answers follow ADR-0003 D7 independently of this switch. Already masked historic chat text
 cannot be recovered: re-read sources and generate a new answer.
+
+The default (strict) projection is a superset of that floor (#4271, found by seeded property
+tests): an `Authorization` header value is masked on the whole projection, also one without a
+Bearer/Basic scheme inside a JSON or YAML region; that pass takes one whole token and never a
+scheme word, a template literal, a call or an interpolation, so preserved source keeps its syntax.
+Plain text masks a header value as wholly as the floor does, and `Authorization` and
+`Proxy-Authorization` are sensitive structured keys: their value is masked whole, also when it holds
+`$`, `(`, `[`, `{` or a backtick, and only a leading `Bearer`, `Basic` or `Token` scheme word stays
+readable, for these keys alone. Like any secret key, such a key masks its whole subtree, so a
+schema's `authorization: { type: string }` is masked too: deliberate strict over-redaction.
+A structured key (JSON, YAML, source property) is sensitive by the same label grammar as flat text:
+a secret label that starts at a word or camelCase boundary and ends the key, so `openai_api_key`,
+`my_password`, `GITHUB_TOKEN` and `sessionToken` count and `max_tokens`, `mypassword` or
+`tokenizer` do not. Known limit: source inference re-parses the remainder at each
+line that only looks like source, so text with many such lines costs quadratic time under the strict
+projection; a work or time bound cannot separate that input from real documents without masking
+their tails, so it remains open in #4271 for an incremental classifier.
 
 The wire boundary is asserted by `grounded-qa.redaction.test.ts`: an attacker-controlled
 pack with secret-shaped strings (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `Bearer …`, PEM
@@ -1612,13 +1674,14 @@ Synthesis accounting refines the two-call rule at the actual attempt boundary: i
 marker repair, follow-up, and context/provider retries share the same turn-owned allowance. The
 answer-details sibling records optional `synthesisCallCount`, `completedSynthesisCallCount` and
 `synthesisReservedOutputTokens`. Physical synthesis attempts remain separate from completed
-responses: overflow, transient and compatibility failures consume attempt and token/spend grants
+responses: overflow, transient and compatibility failures consume attempt and output/spend grants
 without incrementing completed-response count. A completed marker repair increments that count
 even when its content is rejected; a completed follow-up does likewise. The common grounded
 evidence producer receives the completed count for `usageTotals.requestCount` and the human report
 (ADR-0010 D7); unchanged callers retain the existing one-request default. The existing factory
 ledger owns the lifetime completed counter, per-result deltas and caught-repair recovery.
-Input charges use the canonical sent-prompt estimate as a floor and retain larger reported counts.
+Recorded input usage uses the canonical sent-prompt estimate as a floor and retains larger reported
+counts, including discarded attempts. It never reduces a later request's input capacity.
 Reported partial output is charged; an uncertain interrupted stream retains its requested output
 upper reservation. A definitive HTTP rejection before generation leaves the spare output grant
 available for bounded recovery. These admission charges do not claim exact measured consumption.
@@ -1633,10 +1696,11 @@ their existing resilience classification. Caller attempt/cap refusals use the no
 `GATEWAY_ATTEMPT_ADMISSION_DENIED` code and HTTP 403, also preserved in streamed error notices.
 The localized request-limit notice does not diagnose context-window overflow or claim exact
 unknown output consumption; genuine context-window refusals retain `GATEWAY_CONTEXT_OVERFLOW`.
-Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
+Prompt fitting retains separate model and caller input caps for each request. Mandatory overhead that
 fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
 the model retains context-overflow handling. Best-effort citation repair keeps the completed
-answer when its remaining input allowance or synthesis attempt slots cannot fund the repair. Early
+answer when its current prompt does not fit, its cumulative output grant is exhausted, or no
+synthesis attempt slot remains. Early
 iterator close and aborted reads without terminal usage retain uncertain output exposure.
 An acquired caller reservation is also settled when local cap validation or HTTP preparation fails
 before fetch; that failure does not claim a provider dispatch or token consumption. Canonical token

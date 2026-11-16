@@ -182,6 +182,7 @@ export class GatewayPromptAdmission {
       this.options.correlationId,
       measured,
       this.retainedTokenFloor(projected, measured),
+      this.options.provider.reasoningHistoryField,
     );
     return this.remainingBudget(request, budgetMs, start, "validation");
   }
@@ -246,7 +247,10 @@ export class GatewayPromptAdmission {
     const estimated = countGatewayPromptTokens(
       { messages: request.messages, tools: request.tools },
       profile.tokenAccounting,
-      { contextWindow: profile.maxInputTokens },
+      {
+        contextWindow: profile.maxInputTokens,
+        reasoningHistoryField: this.options.provider.reasoningHistoryField,
+      },
     );
     const retained =
       this.previous === undefined

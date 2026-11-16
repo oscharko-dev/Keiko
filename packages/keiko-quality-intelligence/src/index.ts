@@ -41,10 +41,14 @@ export {
 export {
   REQUIREMENT_DIGEST_SHORT_LENGTH,
   REQUIREMENT_DOCUMENT_SCOPE_LENGTH,
+  REQUIREMENT_DOCUMENT_SCOPE_MAX_LENGTH,
+  REQUIREMENT_DOCUMENT_SCOPE_PATTERN,
+  REQUIREMENT_DOCUMENT_SCOPE_SCHEMA,
   REQUIREMENT_INVENTORY_ENTRIES_MAX,
   deriveRequirementInventory,
   derivedRequirementId,
   documentScopeOf,
+  documentScopesOf,
   requirementContentDigest,
 } from "./domain/requirementInventory.js";
 export type {

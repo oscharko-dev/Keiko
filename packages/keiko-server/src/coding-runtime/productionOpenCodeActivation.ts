@@ -61,7 +61,10 @@ import {
 } from "./devLanePortableCodingRuntime.js";
 import { createDevLaneSecureWorkspaceTextReadPort } from "./devLaneSecureWorkspaceTextRead.js";
 import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
-import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
+import {
+  createProductionOpenCodeBackend,
+  windowsGatewayHelperPin,
+} from "./productionOpenCodeBackend.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import type {
   ProductionOpenCodeBackendInput,
@@ -69,7 +72,14 @@ import type {
 } from "./productionOpenCodeBackend.js";
 import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorkspaceTextRead.js";
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
-import { discoverQualifiedPortableOpenCode } from "./productionPortableCodingRuntime.js";
+import {
+  discoverPortableOpenCode,
+  readWindowsGatewayServiceStatus,
+} from "./productionPortableCodingRuntime.js";
+import {
+  createWindowsGatewayServiceProbe,
+  type WindowsGatewayServiceProbe,
+} from "./windowsGatewayServiceProbe.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 
 type ProductionOpenCodePorts = Pick<
@@ -149,6 +159,7 @@ const CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION = defineActivityLogOperation({
         "payload-missing",
         "payload-unapproved",
         "payload-tampered",
+        "payload-outdated",
         "native-helper-directory-untrusted",
         "secure-read-helper-missing",
         "secure-read-helper-stale",
@@ -181,10 +192,11 @@ export interface ProductionOpenCodeActivationInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
     OpenCodeGatewayReadinessRegistry,
-    "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile"
+    "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile" | "bindContinuationRoute"
   >;
   readonly resolveGatewayRunMetadata?:
     ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
+  readonly requiresCompleteReasoningHistory?: ProductionOpenCodeBackendInput["requiresCompleteReasoningHistory"];
   /** The gateway's coding-capable model ids right now (#3903 AC1); absent offers none beside a run's. */
   readonly gatewayCodingModelIds?: (() => readonly string[]) | undefined;
   /** Explicit test/composition override; packaged production constructs its own verified port. */
@@ -222,12 +234,15 @@ export type ProductionOpenCodeActivationResult =
       readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass;
       /** What the activated runtime is, from its verified release metadata (#3904 AC4). */
       readonly runtimeVersion: CodingWorkbenchRuntimeVersion;
+      /** Present only for a Windows runtime, whose every launch needs the broker (#4068). */
+      readonly windowsGatewayService?: WindowsGatewayServiceProbe;
       readonly unavailableReason?: undefined;
     }
   | {
       readonly ports?: undefined;
       readonly evidenceClass?: undefined;
       readonly runtimeVersion?: undefined;
+      readonly windowsGatewayService?: undefined;
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
@@ -353,6 +368,7 @@ function activatedPorts(
     backend: createProductionOpenCodeBackend({
       historyCapture: input.historyCapture,
       sessionContinuity: input.sessionContinuity,
+      requiresCompleteReasoningHistory: input.requiresCompleteReasoningHistory,
       portable,
       runtimeStateRoot: input.runtimeStateDir,
       processEnv: input.env,
@@ -421,8 +437,42 @@ export function resolveProductionOpenCodeActivation(
   return {
     evidenceClass: runtimeEvidenceClass(runtime.portable),
     runtimeVersion: runtimeVersionFacts(runtime.portable),
+    ...windowsGatewayServiceFacts(input, runtime.portable),
     ports: activatedPorts(input, runtime.portable, endpoints, secureWorkspaceTextRead),
   };
+}
+
+/**
+ * Every Windows launch carries the gateway policy, and only the installed broker can enforce it. A
+ * Windows runtime that yields no broker pin therefore refuses every start (ADR-0043), so readiness
+ * must not offer one. No host state changes this, hence a constant rather than a probe.
+ */
+const UNQUALIFIED_WINDOWS_RUNTIME: {
+  readonly windowsGatewayService: WindowsGatewayServiceProbe;
+} = {
+  windowsGatewayService: { unavailableReason: () => "gateway-service-unqualified" },
+};
+
+export function windowsGatewayServiceFacts(
+  input: Pick<ProductionOpenCodeActivationInput, "activityLog">,
+  portable: ResolvedPortableOpenCodeRuntime,
+): { readonly windowsGatewayService?: WindowsGatewayServiceProbe } {
+  if (portable.target !== "windows-x64") return {};
+  // A release-qualified package, a Windows dev checkout and the Windows npm runtime package carry a
+  // broker pin (ADR-0043 D19); all
+  // then report the installed broker's state, so a checkout without one is told to install it.
+  const helperSha256 = windowsGatewayHelperPin(portable);
+  const helperPath = portable.nativeHelperPath;
+  return helperSha256 === undefined || helperPath === undefined
+    ? UNQUALIFIED_WINDOWS_RUNTIME
+    : {
+        windowsGatewayService: createWindowsGatewayServiceProbe({
+          helperPath,
+          helperSha256,
+          activityLog: input.activityLog ?? processServerLogSink(),
+          runStatus: readWindowsGatewayServiceStatus,
+        }),
+      };
 }
 
 /**
@@ -473,8 +523,14 @@ function resolveRuntime(
     arch: input.arch,
     diagnostics: input.diagnostics,
   };
-  const packaged = discoverQualifiedPortableOpenCode(host);
-  if (packaged !== undefined) return { portable: packaged };
+  const packaged = discoverPortableOpenCode(host);
+  if (packaged !== undefined) {
+    // A portable install whose folder the volume check refuses is still a portable install: it
+    // reports that reason instead of falling through to the checkout and npm lanes.
+    return "runtime" in packaged
+      ? { portable: packaged.runtime }
+      : { unavailableReason: packaged.unavailableReason };
+  }
   const activityLog = input.activityLog ?? processServerLogSink();
   // The trusted dev launcher explicitly selected current checkout artifacts. Honor that selection
   // (including its refusal) before an optional npm dependency left from a released installation.
@@ -547,24 +603,26 @@ function devLaneRuntime(discovery: DevLaneOpenCodeDiscovery): ResolvedRuntime {
   return { unavailableReason: devLaneRefusalReason(discovery.reason) };
 }
 
+const DEV_LANE_REFUSAL_REASONS: Readonly<
+  Record<DevLaneOpenCodeRefusalReason, CodingWorkbenchRuntimeUnavailableReason>
+> = Object.freeze({
+  "platform-unsupported": "dev-lane-refused",
+  "packaged-install-present": "dev-lane-refused",
+  "not-a-dev-checkout": "dev-lane-refused",
+  "secure-read-helper-missing": "secure-read-unavailable",
+  "secure-read-helper-stale": "secure-read-unavailable",
+  "payload-missing": "payload-missing",
+  "payload-unapproved": "payload-unapproved",
+  "payload-tampered": "payload-tampered",
+  // #4359: an earlier OpenCode's package is refused, and the person is told to update Keiko.
+  "payload-outdated": "runtime-outdated",
+  "native-helper-directory-untrusted": "payload-tampered",
+});
+
 function devLaneRefusalReason(
   reason: DevLaneOpenCodeRefusalReason,
 ): CodingWorkbenchRuntimeUnavailableReason {
-  switch (reason) {
-    case "platform-unsupported":
-    case "packaged-install-present":
-    case "not-a-dev-checkout":
-      return "dev-lane-refused";
-    case "secure-read-helper-missing":
-    case "secure-read-helper-stale":
-      return "secure-read-unavailable";
-    case "payload-missing":
-    case "payload-unapproved":
-    case "payload-tampered":
-      return reason;
-    case "native-helper-directory-untrusted":
-      return "payload-tampered";
-  }
+  return DEV_LANE_REFUSAL_REASONS[reason];
 }
 
 function resolveSecureRead(

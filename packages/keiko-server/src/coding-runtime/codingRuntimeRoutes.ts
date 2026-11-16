@@ -7,7 +7,7 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
-  CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeStartFailureCode,
   CodingWorkbenchRuntimeMcpChannelPayload,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
   CodingWorkbenchRuntimeReadiness,
@@ -16,7 +16,15 @@ import type {
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchScheduleControlResponse,
+  CodingWorkbenchSchedulesResponse,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  isCodingWorkbenchScheduleAction,
+  isCodingWorkbenchScheduleId,
+  isCodingWorkbenchTaskIdForSchedules,
+  parseCodingWorkbenchScheduleControlRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-schedules";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { parseCodingWorkbenchRuntimeReadinessRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
@@ -54,13 +62,18 @@ import {
 import { SSE_HEADERS, startSseHeartbeat } from "../sse.js";
 import { writeSseFrame } from "../sse-write.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
-import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
+import type {
+  CodingRuntimeOrchestrator,
+  CodingRuntimeStartResult,
+} from "./codingRuntimeOrchestrator.js";
+import type { ScheduleControlReason } from "./codingScheduledWakes.js";
 import { openCodeSelectableAgents } from "./opencodeAgents.js";
 import { openCodePromptInputs } from "./opencodePromptInputs.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-type RuntimeMutationRefusalReason = CodingWorkbenchRuntimeFailureCode | "payload-too-large";
+type RuntimeMutationRefusalReason =
+  CodingWorkbenchRuntimeStartFailureCode | "payload-too-large" | "start-abandoned";
 
 // Every state-changing coding-runtime route the `mutation()` funnel below serves. Named after the
 // route it backs so a log line names exactly which mutation was refused.
@@ -110,6 +123,9 @@ const RUNTIME_REFUSAL_REASONS = [
   "verification-not-evidenced",
   "model-unavailable",
   "workspace-unqualified",
+  "workspace-location-unsupported",
+  "workspace-volume-unsupported",
+  "start-abandoned",
   "prompt-allowance-exhausted",
   "envelope-duration-exhausted",
   "output-exhausted-repeated",
@@ -162,9 +178,12 @@ const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
   Readonly<Record<RuntimeMutationRefusalReason, ActivityLogErrorKind>>
 > = {
   "runtime-unavailable": "unavailable",
+  "start-abandoned": "cancelled",
   "issue-context-unavailable": "unavailable",
   "model-unavailable": "unavailable",
   "workspace-unqualified": "conflict",
+  "workspace-location-unsupported": "conflict",
+  "workspace-volume-unsupported": "conflict",
   "active-run-conflict": "conflict",
   "recovery-required": "conflict",
   "task-drift": "conflict",
@@ -250,15 +269,21 @@ function runChannelRead(
   return { orchestrator: required.orchestrator, runId };
 }
 
-function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
+function failureStatus(failureCode: CodingWorkbenchRuntimeStartFailureCode): number {
   if (failureCode === "active-run-conflict" || failureCode === "recovery-required") return 409;
   if (failureCode === "authority-resolution-failed") return 403;
-  if (failureCode === "model-unavailable" || failureCode === "workspace-unqualified") return 409;
+  if (
+    failureCode === "model-unavailable" ||
+    failureCode === "workspace-unqualified" ||
+    failureCode === "workspace-location-unsupported" ||
+    failureCode === "workspace-volume-unsupported"
+  )
+    return 409;
   return 400;
 }
 
 function failureResult(
-  failureCode: CodingWorkbenchRuntimeFailureCode,
+  failureCode: CodingWorkbenchRuntimeStartFailureCode,
   correlationId?: string,
   issueBindingFailure?: CodingWorkbenchIssueBindingFailure,
   modelRefusalReason?: CodingWorkbenchModelRefusalReason,
@@ -283,6 +308,12 @@ function notFound(correlationId?: string): RouteResult {
     status: 404,
     body: errorBody("CODING_RUNTIME_RUN_NOT_FOUND", "Runtime run was not found.", correlationId),
   };
+}
+
+function refusalReason(
+  result: Extract<CodingRuntimeStartResult, { readonly ok: false }>,
+): RuntimeMutationRefusalReason {
+  return result.startAbandoned === true ? "start-abandoned" : result.failureCode;
 }
 
 // AGENTS.md §8 rule 1 / epic #3384 defect B: a refused runtime operation (a malformed body, a
@@ -491,7 +522,7 @@ async function mutation(
       // result's run id comes first: a refused start or retry minted a NEW run before it was refused,
       // and a retry's URL names only the predecessor -- keyed on that, the refusal and its cause
       // shared no key (review of PR #3452). The URL run is the fallback for a result without one.
-      logMutationRefusal(deps, ctx, operationName, result.runId ?? runId, result.failureCode);
+      logMutationRefusal(deps, ctx, operationName, result.runId ?? runId, refusalReason(result));
       return failureResult(
         result.failureCode,
         ctx.correlationId,
@@ -506,12 +537,23 @@ async function mutation(
   );
 }
 
+// The start route's client hung up (its deadline, Stop or a closed page) before an answer. A body
+// fully read also closes the request side, so only the response's own close says this.
+function clientAbandonSignal(ctx: RouteContext): AbortSignal {
+  const abandoned = new AbortController();
+  ctx.res.once("close", () => {
+    if (!ctx.res.writableFinished) abandoned.abort();
+  });
+  return abandoned.signal;
+}
+
 export function handleCreateCodingRuntimeRun(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  const abandoned = clientAbandonSignal(ctx);
   return mutation(ctx, deps, undefined, "start", (runtime, body, correlationId) =>
-    runtime.start(body, correlationId),
+    runtime.start(body, correlationId, abandoned),
   );
 }
 
@@ -532,12 +574,51 @@ export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps
  */
 function composedProfileReadiness(
   deps: UiHandlerDeps,
-): Pick<CodingWorkbenchRuntimeReadiness, "selectableAgents" | "promptInputs"> {
+): Pick<CodingWorkbenchRuntimeReadiness, "selectableAgents" | "promptInputs" | "toolProfile"> {
   const profile = deps.openCodeGatewayReadinessRegistry?.toolProfile ?? "direct";
   return {
     selectableAgents: openCodeSelectableAgents(profile),
     promptInputs: openCodePromptInputs(profile),
+    // A mapped profile is never labeled native (#4068 W12).
+    toolProfile: profile === "native" ? "native" : "mapped",
   };
+}
+
+// Both branches name themselves. The available branch's `??` is the fail-closed default: an
+// unthreaded dep yields `undefined`, and `undefined` must never serialize into a verified claim
+// (audit F-01). A Windows runtime is available only while a broker it may use is ready (#4068).
+function runtimeAvailabilityFacts(
+  deps: UiHandlerDeps,
+): Pick<
+  CodingWorkbenchRuntimeReadiness,
+  "runtimeAvailable" | "runtimeEvidenceClass" | "runtimeVersion" | "runtimeUnavailableReason"
+> {
+  if (deps.codingRuntimeHostQualified !== true) {
+    return {
+      runtimeAvailable: false,
+      runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
+    };
+  }
+  const gatewayServiceReason = deps.codingRuntimeGatewayService?.unavailableReason();
+  if (gatewayServiceReason !== undefined) {
+    return { runtimeAvailable: false, runtimeUnavailableReason: gatewayServiceReason };
+  }
+  return {
+    runtimeAvailable: true,
+    runtimeEvidenceClass: deps.codingRuntimeEvidenceClass ?? "functional-not-platform-qualified",
+    // #3904 AC4: only what the activation verified; an unthreaded value is not reported.
+    ...(deps.codingRuntimeVersion === undefined
+      ? {}
+      : { runtimeVersion: deps.codingRuntimeVersion }),
+  };
+}
+
+// #4068: a runtime behind the Windows broker confines only a Keiko-managed worktree (ADR-0043 D18),
+// so the browser preselects one and does not offer the operator's own checkout.
+function executionLocationFacts(
+  deps: UiHandlerDeps,
+): Pick<CodingWorkbenchRuntimeReadiness, "executionLocations"> {
+  return deps.codingRuntimeGatewayService === undefined ? {} : { executionLocations: ["worktree"] };
 }
 
 export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -553,7 +634,6 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
   // The readiness projection must report the same ceiling the coding-runtime mint clamp
   // enforces; the autonomous-delivery ceiling is a separate authority knob (#2475).
   const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? "governed-assist";
-  const runtimeAvailable = deps.codingRuntimeHostQualified === true;
   return {
     status: 200,
     body: {
@@ -561,23 +641,9 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       requestedMode: parsed.value.requestedMode,
       deploymentCeiling,
       effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
-      runtimeAvailable,
-      // Both branches name themselves. The available branch's `??` is the fail-closed default: an
-      // unthreaded dep yields `undefined`, and `undefined` must never serialize into a verified
-      // claim (audit F-01).
-      ...(runtimeAvailable
-        ? {
-            runtimeEvidenceClass:
-              deps.codingRuntimeEvidenceClass ?? "functional-not-platform-qualified",
-            // #3904 AC4: only what the activation verified; an unthreaded value is not reported.
-            ...(deps.codingRuntimeVersion === undefined
-              ? {}
-              : { runtimeVersion: deps.codingRuntimeVersion }),
-          }
-        : {
-            runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
-          }),
+      ...runtimeAvailabilityFacts(deps),
       ...composedProfileReadiness(deps),
+      ...executionLocationFacts(deps),
     },
   };
 }
@@ -1166,7 +1232,96 @@ export function openCodingRuntimeSse(
   req.once("aborted", close);
 }
 
+function scheduleError(
+  status: number,
+  code: string,
+  correlationId: string | undefined,
+): RouteResult {
+  return { status, body: errorBody(code, "Schedule request was rejected.", correlationId) };
+}
+
+const SCHEDULE_REFUSAL_STATUS: Readonly<Record<ScheduleControlReason, number>> = {
+  "not-found": 404,
+  "not-applicable": 409,
+  "run-active": 409,
+  "no-retained-state": 404,
+  "integrity-failed": 409,
+  "schema-unknown": 409,
+  unavailable: 503,
+};
+
+function scheduleRefusal(reason: ScheduleControlReason, correlationId?: string): RouteResult {
+  return scheduleError(
+    SCHEDULE_REFUSAL_STATUS[reason],
+    `CODING_SCHEDULE_${reason.replaceAll("-", "_").toUpperCase()}`,
+    correlationId,
+  );
+}
+
+/**
+ * A task's scheduled continuations (#4271, ADR-0137 D10): the retained schedules of the task's
+ * native session, as the Workbench shows them. The scheduled prompt never leaves the server. A task
+ * that is not the operator's reads as not found.
+ */
+export function handleCodingRuntimeSchedules(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined)
+    return scheduleError(403, "CODING_SCHEDULE_AUTHORITY_RESOLUTION_FAILED", ctx.correlationId);
+  const taskId = ctx.url.searchParams.get("taskId");
+  if (ctx.url.searchParams.size !== 1 || !isCodingWorkbenchTaskIdForSchedules(taskId))
+    return scheduleError(400, "CODING_SCHEDULE_INVALID_REQUEST", ctx.correlationId);
+  const wakes = deps.codingScheduledWakes;
+  if (wakes === undefined) {
+    const empty: CodingWorkbenchSchedulesResponse = { taskId, schedules: [] };
+    return { status: 200, body: empty };
+  }
+  const listed = wakes.list(taskId, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
+  if (!listed.ok) return scheduleRefusal(listed.reason, ctx.correlationId);
+  const body: CodingWorkbenchSchedulesResponse = { taskId, schedules: listed.schedules };
+  return { status: 200, body };
+}
+
+/** A human's pause, resume or delete of one scheduled continuation of a task. */
+export function handleCodingRuntimeScheduleControl(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined)
+    return Promise.resolve(
+      scheduleError(403, "CODING_SCHEDULE_AUTHORITY_RESOLUTION_FAILED", ctx.correlationId),
+    );
+  const { scheduleId, action } = ctx.params;
+  const wakes = deps.codingScheduledWakes;
+  if (!isCodingWorkbenchScheduleId(scheduleId) || !isCodingWorkbenchScheduleAction(action))
+    return Promise.resolve(scheduleError(404, "CODING_SCHEDULE_NOT_FOUND", ctx.correlationId));
+  if (wakes === undefined)
+    return Promise.resolve(scheduleRefusal("unavailable", ctx.correlationId));
+  return withBody(async () => {
+    const request = parseCodingWorkbenchScheduleControlRequest(await readBody(ctx.req));
+    if (request === undefined)
+      return scheduleError(400, "CODING_SCHEDULE_INVALID_REQUEST", ctx.correlationId);
+    const outcome = await wakes.control(
+      request.taskId,
+      scheduleId,
+      action,
+      ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
+    if (!outcome.ok) return scheduleRefusal(outcome.reason, ctx.correlationId);
+    const body: CodingWorkbenchScheduleControlResponse = { status: outcome.status };
+    return { status: 200, body };
+  }, ctx.correlationId);
+}
+
 export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/schedules",
+    handler: handleCodingRuntimeSchedules,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/schedules/:scheduleId/:action",
+    handler: handleCodingRuntimeScheduleControl,
+  },
   {
     method: "POST",
     pattern: "/api/coding-workbench/runtime/runs",

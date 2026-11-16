@@ -1,13 +1,26 @@
-import type { ChatToolExchange, GroundedUncertainty } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CHAT_TURN_END_RECEIPTS_MAX,
+  chatTurnEndAnswerFingerprint,
+  type ChatToolExchange,
+  type ChatToolTurnEnd,
+  type ChatToolTurnEndReason,
+  type ChatTurnEndReceipt,
+  type GroundedUncertainty,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   activityLogEvent,
   defineActivityLogOperation,
   recordActivityLogLoss,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { ERROR_CODES, GatewayError } from "@oscharko-dev/keiko-model-gateway";
+import {
+  ERROR_CODES,
+  GatewayError,
+  GatewayToolCatalogError,
+} from "@oscharko-dev/keiko-model-gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { ServerLogSink } from "./observability/index.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
+import { BATCH_DRAFT_SKIP_REASONS, type BatchDraftSkipReason } from "./chat-tool-batch-draft.js";
 import {
   chatToolDraftReceipts,
   chatToolIssueKey,
@@ -19,30 +32,26 @@ import {
  * that replaces it is built from the stored tool transcript, never from the model, so it names
  * exactly the writes Jira acknowledged.
  */
-export type ChatToolTurnEndReason =
-  | "budget-exhausted"
-  | "deadline"
-  | "authority-invalid"
-  | "tool-failure"
-  | "output-exhausted"
-  | "context-overflow"
-  | "model-failure";
-const REASONS: readonly ChatToolTurnEndReason[] = [
-  "budget-exhausted",
-  "deadline",
-  "authority-invalid",
-  "tool-failure",
-  "output-exhausted",
-  "context-overflow",
-  "model-failure",
-];
+export type { ChatToolTurnEndReason };
+/**
+ * A turn that ended without any answer of its own (#4355). `deadline-cancelled`: the deadline fired and
+ * no exchange had settled. `request-aborted`: the request signal aborted, which is a person's Stop or a
+ * dropped connection; the server cannot tell the two apart, so they share one closed word.
+ */
+export type ChatToolTurnCancelReason = "deadline-cancelled" | "request-aborted";
 const REASON_TEXT: Readonly<Record<ChatToolTurnEndReason, string>> = {
-  "budget-exhausted": "this turn used up its tool-call or prompt budget",
+  "budget-exhausted": "this turn used up its tool-call budget",
   deadline: "this turn reached its time limit",
   "authority-invalid": "the Chat's mode, sources or connection changed",
+  "authentication-failed":
+    "Jira authentication failed. The token may have expired or been revoked: open the Knowledge Pods hub, replace the token and verify the connection",
   "tool-failure": "a tool call could not be settled",
   "output-exhausted": "the model ran out of output budget",
   "context-overflow": "the conversation no longer fits the model's context window",
+  // The model named an action this chat did not offer, twice (the turn allows one correction):
+  // not a failed request, so the person is told what happened and what to do.
+  "tool-not-offered":
+    "the model asked for an action that is not available in this chat. Ask again, or name the action you want",
   "model-failure": "the model request failed",
 };
 
@@ -73,49 +82,58 @@ export function chatToolTurnEndReason(
 ): ChatToolTurnEndReason | undefined {
   if (error instanceof CatalogDispatchFault) return dispatchReason(error);
   if (!(error instanceof GatewayError)) return undefined;
+  if (error instanceof GatewayToolCatalogError && error.unofferedName !== undefined)
+    return "tool-not-offered";
   if (error.code === ERROR_CODES.ATTEMPT_ADMISSION_DENIED && turn.envelopeRefusedAttempt === true)
     return "budget-exhausted";
   return KEPT_GATEWAY_CODES.has(error.code) ? undefined : gatewayReason(error);
 }
 
 interface Tally {
-  readonly succeeded: string[];
-  readonly unconfirmed: string[];
+  readonly succeeded: ChatTurnEndReceipt[];
+  readonly unconfirmed: ChatTurnEndReceipt[];
   /** Started but never settled: the call may have reached Jira before bookkeeping failed. */
-  readonly unsettled: string[];
+  readonly unsettled: ChatTurnEndReceipt[];
   /** Draft items Jira refused, or that an earlier failed or uncertain item kept from being sent. */
-  readonly notDone: string[];
+  readonly notDone: ChatTurnEndReceipt[];
   reads: number;
   refused: number;
 }
-function receipt(exchange: ChatToolExchange): string {
+function receipt(exchange: ChatToolExchange): ChatTurnEndReceipt {
   const key = chatToolIssueKey(exchange.result?.data);
-  return key === undefined ? exchange.call.name : `${exchange.call.name} ${key}`;
+  return key === undefined ? { tool: exchange.call.name } : { tool: exchange.call.name, key };
 }
-function countDraftItem(result: Tally, item: ChatToolDraftReceipt, label: string): void {
-  if (item.state === "created" || item.state === "existing") result.succeeded.push(label);
-  else if (item.state === "uncertain") result.unconfirmed.push(label);
+function countDraftItem(
+  result: Tally,
+  item: ChatToolDraftReceipt,
+  entry: ChatTurnEndReceipt,
+): void {
+  if (item.state === "created" || item.state === "existing") result.succeeded.push(entry);
+  else if (item.state === "uncertain") result.unconfirmed.push(entry);
   else if (item.state === "failed") {
     result.refused++;
-    result.notDone.push(label);
+    result.notDone.push(entry);
   }
   // A skipped item was blocked by a failed or uncertain one and a pending item never started
   // before the run's time ended; only an excluded item is deselected.
-  else if (item.state === "skipped" || item.state === "pending") result.notDone.push(label);
+  else if (item.state === "skipped" || item.state === "pending") result.notDone.push(entry);
 }
 /** A backlog draft reports each item: created or reconciled items completed, uncertain ones sent. */
 function countDraft(result: Tally, exchange: ChatToolExchange): boolean {
   const items = chatToolDraftReceipts(exchange);
   if (items === undefined) return false;
   for (const [index, item] of items.entries()) {
-    const key = item.issueKey ?? `(item ${String(index + 1)}, no key)`;
-    countDraftItem(result, item, `${exchange.call.name} ${key} (${item.state})`);
+    countDraftItem(result, item, {
+      tool: exchange.call.name,
+      ...(item.issueKey === undefined ? { item: index + 1 } : { key: item.issueKey }),
+      state: item.state,
+    });
   }
   return true;
 }
 function count(result: Tally, exchange: ChatToolExchange): void {
   const outcome = exchange.mutationOutcome;
-  if (exchange.result === undefined) result.unsettled.push(exchange.call.name);
+  if (exchange.result === undefined) result.unsettled.push({ tool: exchange.call.name });
   else if (countDraft(result, exchange)) return;
   else if (outcome === "succeeded") result.succeeded.push(receipt(exchange));
   else if (outcome === "succeeded-unconfirmed" || outcome === "unknown")
@@ -140,8 +158,50 @@ export function chatToolTurnHoldsWrite(exchanges: readonly ChatToolExchange[]): 
   const { succeeded, unconfirmed } = tally(exchanges);
   return succeeded.length + unconfirmed.length > 0;
 }
-function bullets(title: string, entries: readonly string[]): string[] {
-  return entries.length === 0 ? [] : [title, ...entries.map((entry) => `- ${entry}`), ""];
+/** One receipt line of the English answer; a keyless draft item is named by its position. */
+function receiptLine(entry: ChatTurnEndReceipt): string {
+  const subject =
+    entry.key ?? (entry.item === undefined ? "" : `(item ${String(entry.item)}, no key)`);
+  const named = subject === "" ? entry.tool : `${entry.tool} ${subject}`;
+  return entry.state === undefined ? named : `${named} (${entry.state})`;
+}
+function bullets(title: string, entries: readonly ChatTurnEndReceipt[]): string[] {
+  return entries.length === 0
+    ? []
+    : [title, ...entries.map((entry) => `- ${receiptLine(entry)}`), ""];
+}
+function bounded(entries: readonly ChatTurnEndReceipt[]): readonly ChatTurnEndReceipt[] {
+  return entries.slice(0, CHAT_TURN_END_RECEIPTS_MAX);
+}
+function omitted(entries: readonly ChatTurnEndReceipt[]): number {
+  return Math.max(0, entries.length - CHAT_TURN_END_RECEIPTS_MAX);
+}
+
+/**
+ * The ending of a turn as closed facts the Chat words in the person's language (#4355): the same
+ * reason the log line records and the same receipts the English answer lists.
+ */
+export function chatToolTurnEnd(
+  exchanges: readonly ChatToolExchange[],
+  reason: ChatToolTurnEndReason,
+): ChatToolTurnEnd {
+  const counts = tally(exchanges);
+  return {
+    reason,
+    // Bound to the stored English ending, which is built from the same tally and reason.
+    answer: chatTurnEndAnswerFingerprint(chatToolTurnPartialAnswer(exchanges, reason)),
+    completed: bounded(counts.succeeded),
+    unconfirmed: bounded(counts.unconfirmed),
+    unsettled: bounded(counts.unsettled),
+    notDone: bounded(counts.notDone),
+    moreCount:
+      omitted(counts.succeeded) +
+      omitted(counts.unconfirmed) +
+      omitted(counts.unsettled) +
+      omitted(counts.notDone),
+    readCount: counts.reads,
+    refusedCount: counts.refused,
+  };
 }
 
 /** The deterministic answer of a turn that ended early; it repeats only Keiko's own receipts. */
@@ -166,7 +226,11 @@ export function chatToolTurnPartialAnswer(
   ].join("\n");
 }
 
-const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
+const COUNT_FIELD = {
+  type: "integer",
+  dataClass: "count",
+  required: true,
+} as const;
 
 const TURN_ENDED = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -176,8 +240,32 @@ const TURN_ENDED = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "chat-tool-turn-ending.recordChatToolTurnEnded",
   fields: {
-    messageDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    reason: { type: "string", dataClass: "closed-enum", required: true, values: REASONS },
+    messageDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      // A literal list: the registry resolves a closed object literal. A test pins it to the
+      // shared vocabulary in keiko-contracts.
+      values: [
+        "budget-exhausted",
+        "deadline",
+        "authority-invalid",
+        "authentication-failed",
+        "tool-failure",
+        "output-exhausted",
+        "context-overflow",
+        "tool-not-offered",
+        "model-failure",
+        "deadline-cancelled",
+        "request-aborted",
+      ],
+    },
     exchangeCount: COUNT_FIELD,
     succeededWriteCount: COUNT_FIELD,
     unconfirmedWriteCount: COUNT_FIELD,
@@ -186,7 +274,11 @@ const TURN_ENDED = defineActivityLogOperation({
     refusedCount: COUNT_FIELD,
     maxToolCalls: COUNT_FIELD,
     maxRuntimeMs: { type: "integer", dataClass: "duration", required: true },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    completeness: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
@@ -203,9 +295,12 @@ export function recordChatToolTurnEnded(
   input: {
     readonly correlationId: string;
     readonly messageId: string;
-    readonly reason: ChatToolTurnEndReason;
+    readonly reason: ChatToolTurnEndReason | ChatToolTurnCancelReason;
     readonly exchanges: readonly ChatToolExchange[];
-    readonly budget: { readonly maxToolCalls: number; readonly maxRuntimeMs: number };
+    readonly budget: {
+      readonly maxToolCalls: number;
+      readonly maxRuntimeMs: number;
+    };
   },
 ): void {
   const counts = tally(input.exchanges);
@@ -213,7 +308,12 @@ export function recordChatToolTurnEnded(
     log.write(
       activityLogEvent(
         TURN_ENDED,
-        { correlationId: input.correlationId, level: "warn" },
+        // A person's stop or a dropped connection is a routine ending, not a warning; every other
+        // ending is a turn that ran out of room or time.
+        {
+          correlationId: input.correlationId,
+          level: input.reason === "request-aborted" ? "info" : "warn",
+        },
         {
           messageDigest: sha256Hex(input.messageId),
           reason: input.reason,
@@ -235,6 +335,69 @@ export function recordChatToolTurnEnded(
   }
 }
 
+const RESULT_CONDENSED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.tool-turn.result-condensed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "chat-tool-turn-ending.recordChatToolTurnResultCondensed",
+  fields: {
+    messageDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
+    rowCount: { type: "integer", dataClass: "count", required: true },
+    keptRowCount: { type: "integer", dataClass: "count", required: true },
+    completeness: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-tool-transcript"],
+  proofIds: ["chat.tool-turn.result-condensed.line"],
+  releaseImpact: "minor",
+});
+
+/**
+ * Recorded when the model read a Jira draft result condensed, as key ranges and groups of alike
+ * rows: how many rows the stored result holds and how many entries the model read (#4292).
+ */
+export function recordChatToolTurnResultCondensed(
+  log: ServerLogSink,
+  input: {
+    readonly correlationId: string;
+    readonly messageId: string;
+    readonly rowCount: number;
+    readonly keptRowCount: number;
+  },
+): void {
+  try {
+    log.write(
+      activityLogEvent(
+        RESULT_CONDENSED,
+        { correlationId: input.correlationId, level: "info" },
+        {
+          messageDigest: sha256Hex(input.messageId),
+          rowCount: input.rowCount,
+          keptRowCount: input.keptRowCount,
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
+  } catch {
+    recordActivityLogLoss("port-sink-failed");
+  }
+}
+
 const CONTEXT_FITTED = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -243,10 +406,23 @@ const CONTEXT_FITTED = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "chat-tool-turn-ending.recordChatToolTurnContextFitted",
   fields: {
-    messageDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    messageDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
     elidedResultCount: { type: "integer", dataClass: "count", required: true },
-    continuationMessageCount: { type: "integer", dataClass: "count", required: true },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    continuationMessageCount: {
+      type: "integer",
+      dataClass: "count",
+      required: true,
+    },
+    completeness: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
@@ -294,8 +470,17 @@ const CORRECTED = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "chat-tool-turn-ending.recordChatToolTurnCorrected",
   fields: {
-    messageDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    settledExchangeCount: { type: "integer", dataClass: "count", required: true },
+    messageDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
+    settledExchangeCount: {
+      type: "integer",
+      dataClass: "count",
+      required: true,
+    },
     correctionKind: {
       type: "string",
       dataClass: "closed-enum",
@@ -306,12 +491,47 @@ const CORRECTED = defineActivityLogOperation({
         "report-omission",
         "report-coverage",
         "unsupported-issue-key",
+        "knowledge-coverage",
+        "raw-report-key",
+        "announced-create",
+        "tool-call-as-text",
       ],
     },
-    omittedFindingCount: { type: "integer", dataClass: "count", required: false },
-    mismatchedRequirementCount: { type: "integer", dataClass: "count", required: false },
-    unsupportedKeyCount: { type: "integer", dataClass: "count", required: false },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    omittedFindingCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    mismatchedRequirementCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    unsupportedKeyCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    rawReportKeyCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    announcementCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    pendingKnowledgePageCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    completeness: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
@@ -322,6 +542,57 @@ const CORRECTED = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
+interface ChatToolTurnCorrectionInput {
+  readonly correlationId: string;
+  readonly messageId: string;
+  readonly settledExchangeCount: number;
+  readonly correctionKind:
+    | "tool-schema"
+    | "empty-answer"
+    | "report-omission"
+    | "report-coverage"
+    | "unsupported-issue-key"
+    | "knowledge-coverage"
+    | "raw-report-key"
+    | "announced-create"
+    | "tool-call-as-text";
+  readonly omittedFindingCount?: number;
+  readonly mismatchedRequirementCount?: number;
+  readonly unsupportedKeyCount?: number;
+  readonly rawReportKeyCount?: number;
+  readonly announcementCount?: number;
+  readonly pendingKnowledgePageCount?: number;
+}
+
+type CorrectionCountField =
+  | "omittedFindingCount"
+  | "mismatchedRequirementCount"
+  | "unsupportedKeyCount"
+  | "rawReportKeyCount"
+  | "announcementCount"
+  | "pendingKnowledgePageCount";
+
+/** The optional body-free counts of one correction line: the ones the caller supplied. */
+function correctionCounts(
+  input: ChatToolTurnCorrectionInput,
+): Readonly<Partial<Record<CorrectionCountField, number>>> {
+  const supplied: Readonly<Record<CorrectionCountField, number | undefined>> = {
+    omittedFindingCount: input.omittedFindingCount,
+    mismatchedRequirementCount: input.mismatchedRequirementCount,
+    unsupportedKeyCount: input.unsupportedKeyCount,
+    rawReportKeyCount: input.rawReportKeyCount,
+    announcementCount: input.announcementCount,
+    pendingKnowledgePageCount: input.pendingKnowledgePageCount,
+  };
+  const counts: Partial<Record<CorrectionCountField, number>> = {};
+  for (const [name, value] of Object.entries(supplied) as [
+    CorrectionCountField,
+    number | undefined,
+  ][])
+    if (value !== undefined) counts[name] = value;
+  return counts;
+}
+
 /**
  * Recorded when a turn gets one further round carrying a correction instead of ending: a tool call
  * the gateway rejected again after its own schema correction (`tool-schema`), a round the model
@@ -329,24 +600,15 @@ const CORRECTED = defineActivityLogOperation({
  * out findings the turn's report pages list (`report-omission`, with their count; never the keys),
  * an answer that gave requirements other issues than the report's requirement pages state
  * (`report-coverage`, with the requirement count; never the ids or keys), or an answer that named issue keys no tool result showed (`unsupported-issue-key`, with their
- * count; never the keys).
+ * count; never the keys), or an answer that printed the report's internal result keys (`raw-report-key`, with
+ * their count; never the keys), an answer that announced a created issue although the turn held no
+ * create call (`announced-create`) or wrote a tool call as text (`tool-call-as-text`), each with
+ * the count of such sentences or calls and never their text, or unfinished Knowledge pages (`knowledge-coverage`, with the pending
+ * page count). A combined correction emits one line per kind for the same admitted model round.
  */
 export function recordChatToolTurnCorrected(
   log: ServerLogSink,
-  input: {
-    readonly correlationId: string;
-    readonly messageId: string;
-    readonly settledExchangeCount: number;
-    readonly correctionKind:
-      | "tool-schema"
-      | "empty-answer"
-      | "report-omission"
-      | "report-coverage"
-      | "unsupported-issue-key";
-    readonly omittedFindingCount?: number;
-    readonly mismatchedRequirementCount?: number;
-    readonly unsupportedKeyCount?: number;
-  },
+  input: ChatToolTurnCorrectionInput,
 ): void {
   try {
     log.write(
@@ -357,15 +619,7 @@ export function recordChatToolTurnCorrected(
           messageDigest: sha256Hex(input.messageId),
           settledExchangeCount: input.settledExchangeCount,
           correctionKind: input.correctionKind,
-          ...(input.omittedFindingCount === undefined
-            ? {}
-            : { omittedFindingCount: input.omittedFindingCount }),
-          ...(input.mismatchedRequirementCount === undefined
-            ? {}
-            : { mismatchedRequirementCount: input.mismatchedRequirementCount }),
-          ...(input.unsupportedKeyCount === undefined
-            ? {}
-            : { unsupportedKeyCount: input.unsupportedKeyCount }),
+          ...correctionCounts(input),
           completeness: "complete",
           loss: "none",
         },
@@ -376,12 +630,68 @@ export function recordChatToolTurnCorrected(
   }
 }
 
-interface ToolTranscriptLookup {
-  findMessageById(
-    id: string,
-  ):
-    | { readonly toolTranscript?: { readonly exchanges: readonly ChatToolExchange[] } | undefined }
-    | undefined;
+const DRAFT_OFFER = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.tool-turn.batch-draft-offer",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "chat-tool-turn-ending.recordChatToolBatchDraftOffer",
+  fields: {
+    messageDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["dispatched", "skipped"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...BATCH_DRAFT_SKIP_REASONS],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-tool-transcript"],
+  proofIds: ["chat.tool-turn.batch-draft-offer.line"],
+  releaseImpact: "minor",
+});
+
+/**
+ * Recorded once per settled draft batch: Keiko dispatched the `jira.draft` approval itself
+ * (`dispatched`), or left it to the human and the model (`skipped`, with the closed reason). The
+ * line carries no draft id, digest, count or text.
+ */
+export function recordChatToolBatchDraftOffer(
+  log: ServerLogSink,
+  input: {
+    readonly correlationId: string;
+    readonly messageId: string;
+    readonly decision: "dispatched" | BatchDraftSkipReason;
+  },
+): void {
+  try {
+    log.write(
+      activityLogEvent(
+        DRAFT_OFFER,
+        { correlationId: input.correlationId, level: "info" },
+        {
+          messageDigest: sha256Hex(input.messageId),
+          outcome: input.decision === "dispatched" ? "dispatched" : "skipped",
+          ...(input.decision === "dispatched" ? {} : { reason: input.decision }),
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
+  } catch {
+    recordActivityLogLoss("port-sink-failed");
+  }
 }
 
 /**
@@ -393,9 +703,9 @@ export function withToolResultsAsSource<
     readonly userMessageId: string;
     readonly uncertainty: readonly GroundedUncertainty[];
   },
->(answer: Answer, store: ToolTranscriptLookup): Answer {
-  const exchanges = store.findMessageById(answer.userMessageId)?.toolTranscript?.exchanges ?? [];
-  if (!exchanges.some((exchange) => exchange.result?.status === "completed")) return answer;
+>(answer: Answer, turn: { readonly hasUsableObservation: () => boolean } | undefined): Answer {
+  // The request owns origin custody; persisted legacy-compatible rows cannot authenticate it.
+  if (turn?.hasUsableObservation() !== true) return answer;
   return {
     ...answer,
     uncertainty: answer.uncertainty.filter((marker) => marker.kind !== "uncited-answer"),

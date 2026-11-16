@@ -2,6 +2,7 @@ import {
   chatAuthorityFixture,
   CHAT_AUTHORITY_TEST_NOW,
 } from "./editor/chatAuthority.test-support.js";
+import { JIRA_DEFAULT_CATALOG_TOOLS } from "./atlassian/jiraChatCatalogRuntime.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -33,10 +34,7 @@ import type {
   MemoryUserId,
   WorkspaceManifest,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
-  JIRA_MANAGED_ACTION_TYPES,
-} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { composeCodingContextConnectors } from "./coding-context/codingContextRoutes.js";
@@ -86,6 +84,7 @@ import {
 } from "./deps.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  defaultServerDiagnosticSink,
   type ServerDiagnosticRecord,
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
@@ -121,6 +120,7 @@ import { createCodingSafeActivityProjection } from "./coding-runtime/codingSafeA
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
 import { createUpdateRemediationManager } from "./update-remediation.js";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
+import { strictRedactor } from "./content-redactor.js";
 
 const tmpDirs: string[] = [];
 
@@ -510,6 +510,29 @@ async function drain<T>(stream: AsyncIterable<T>): Promise<readonly T[]> {
   return out;
 }
 
+// Every table and column whose text holds the needle, as `table.column`, sorted.
+function plaintextColumnsHolding(db: DatabaseSync, needle: string): readonly string[] {
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+    readonly name: string;
+  }[];
+  return tables
+    .flatMap(({ name: table }) => {
+      const columns = db.prepare(`PRAGMA table_info("${table}")`).all() as {
+        readonly name: string;
+      }[];
+      return columns
+        .filter(({ name: column }) =>
+          db
+            .prepare(
+              `SELECT 1 FROM "${table}" WHERE instr(CAST("${column}" AS TEXT), :needle) > 0 LIMIT 1`,
+            )
+            .get({ needle }),
+        )
+        .map(({ name: column }) => `${table}.${column}`);
+    })
+    .sort((left, right) => left.localeCompare(right));
+}
+
 function readAllStoreBytes(dbPath: string): Buffer {
   const chunks: Buffer[] = [];
   for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
@@ -722,7 +745,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const shutdown = records.filter((event) => event.op === "server.runtime.shutdown");
     expect(shutdown).toHaveLength(2);
     expect(shutdown[0]).toMatchObject({
-      level: "warn",
+      level: "info",
       category: "process",
       extra: {
         state: "started",
@@ -801,6 +824,34 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     } finally {
       closeFileServerLogSinks();
     }
+  }, 15000);
+
+  // #4068 (W9): the graph opened the memory vault's node:sqlite handle and never closed it, so
+  // `dispose` left `keiko-memory.db` with its `-wal`/`-shm` siblings open. POSIX tolerates unlinking
+  // an open file; Windows does not, so the state directory of a disposed graph could not be removed
+  // and the WAL was never checkpointed. The closed handle is asserted on every OS; the removal is
+  // the Windows-visible consequence.
+  it("closes the memory vault it opened when the graph is disposed", async (): Promise<void> => {
+    const stateDir = tmp("memory-vault-dispose-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("memory-vault-dispose-ev-"),
+      env: { KEIKO_STATE_DIR: stateDir },
+      uiDbPath: join(stateDir, "ui-db", "keiko-ui.db"),
+    });
+    const vault = deps.memoryVault;
+    if (vault === undefined) throw new Error("memory vault not composed");
+    expect(vault.listMemoryScopes()).toEqual([]);
+    expect(existsSync(join(stateDir, "memory", "keiko-memory.db"))).toBe(true);
+
+    await deps.dispose?.();
+
+    expect(() => vault.listMemoryScopes()).toThrow();
+    // A second dispose (SIGTERM plus the CLI's finally block) must not fault on the closed vault.
+    await expect(deps.dispose?.()).resolves.toBeUndefined();
+    expect(() => {
+      rmSync(stateDir, { recursive: true, force: true });
+    }).not.toThrow();
   }, 15000);
 
   // Owner review, PR #3452: the teardown's cleanup can fail on its own. Both branches of that failure
@@ -1972,7 +2023,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const sourceDir = tmp("lk-src-");
     const uiDbPath = join(uiDir, "keiko-ui.db");
     const heading = "Server Heading ZGRZZY-SERVER-1322";
-    const html = `<html><body><h1>${heading}</h1><p>retrieval needle for encrypted heading citations</p></body></html>`;
+    const anchor = "anchor-zgrzzy-server-1322";
+    const html = `<html><body><h1 id="${anchor}">${heading}</h1><p>retrieval needle for encrypted heading citations</p></body></html>`;
     writeFileSync(join(sourceDir, "guide.html"), html, "utf8");
 
     const deps = buildUiHandlerDeps({
@@ -2046,10 +2098,19 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       deps.memoryVault?.close();
     }
 
+    // An anchor is metadata alone and stays out of every byte of the store. A heading is also text
+    // of the document since #4235, and document text has one plaintext home: the lexical index
+    // (ADR-0047). It may be found there and in no other column of any table.
     const bytes = readAllStoreBytes(knowledgeDbPath);
-    expect(bytes.includes(Buffer.from(heading, "utf8"))).toBe(false);
+    expect(bytes.includes(Buffer.from(anchor, "utf8"))).toBe(false);
     const raw = new DatabaseSync(knowledgeDbPath);
     try {
+      expect(plaintextColumnsHolding(raw, "ZGRZZY-SERVER-1322")).toEqual([
+        "chunk_lexical_fts.exact_text",
+        "chunk_lexical_fts.text",
+        "chunk_lexical_index.exact_text",
+        "chunk_lexical_index.text",
+      ]);
       const row = raw
         .prepare("SELECT heading_path_json FROM parsed_units WHERE heading_path_json IS NOT NULL")
         .get() as { readonly heading_path_json: string };
@@ -2078,6 +2139,36 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     // resources; `dispose` closes the shared sqlite handle that backs the store and the vault
     // together (deps.ts PersistenceBundle.dispose).
     await deps.dispose?.();
+  });
+
+  // #4371 F21: the launch directory is the default project only when the read surface lets the
+  // person use it. One inside a tool's own state area (here `.claude`) is refused by every Git and
+  // Files read, so seeding it made the first project a refused one.
+  it("does not seed a launch directory that the read surface refuses", async () => {
+    const refused = join(tmp("launch-refused-"), ".claude", "worktrees", "keiko");
+    mkdirSync(refused, { recursive: true });
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-launch-refused-"),
+      env: {},
+      uiDbPath: join(tmp("db-launch-refused-"), "keiko-ui.db"),
+      initialProjectPath: refused,
+    });
+
+    try {
+      expect(deps.preferredProjectPath).toBeUndefined();
+      expect(deps.store.listProjects()).toEqual([]);
+      // The skip is recorded body-free: the closed reason, never the path.
+      const lines = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ extra: { decision: "denied", reason: "denied-locus" } });
+      expect(JSON.stringify(lines[0])).not.toContain("launch-refused-");
+    } finally {
+      await deps.dispose?.();
+      resetServerLogger();
+    }
   });
 
   it("grants package-script trust for an explicitly launcher-selected initial project", async () => {
@@ -2261,8 +2352,47 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.memoryVault?.close();
   });
 
+  // Owner decision 2026-11-04. Everything a person reads and the model receives goes through
+  // `deps.redactor`; everything stored as evidence, audit or memory goes through `strictRedactor`.
   it.each([
-    [undefined, "redact", "default", "info"],
+    [undefined, true],
+    ["on", false],
+    ["off", true],
+    ["OFF", false],
+  ] as const)(
+    "with KEIKO_CONTENT_REDACTION=%j the reader's projection keeps standards and dates: %s",
+    async (value, keepsContent) => {
+      const stateDir = tmp("content-threshold-state-");
+      const secret = "synthetic-configured-infrastructure-value";
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp("content-threshold-evidence-"),
+        uiDbPath: join(stateDir, "keiko-ui.db"),
+        env: {
+          KEIKO_DEFAULT_API_KEY: secret,
+          ...(value === undefined ? {} : { KEIKO_CONTENT_REDACTION: value }),
+        },
+      });
+      try {
+        const contents = ["pacs.008.001.08", "camt.053.001.08", "Stand: 12.03.2026 10:15"];
+        for (const content of contents) {
+          expect(deps.redactor(content) === content).toBe(keepsContent);
+          expect(strictRedactor(deps)(content)).not.toBe(content);
+        }
+        const credential = `key ${secret} Authorization: Bearer fixture-token-value`;
+        for (const projected of [deps.redactor(credential), strictRedactor(deps)(credential)]) {
+          expect(projected).not.toContain(secret);
+          expect(projected).not.toContain("fixture-token-value");
+        }
+      } finally {
+        await deps.dispose?.();
+      }
+    },
+  );
+
+  it.each([
+    [undefined, "preserve", "default", "info"],
+    ["on", "redact", "on", "info"],
     ["off", "preserve", "off", "info"],
     ["OFF", "redact", "invalid", "warn"],
   ] as const)(
@@ -2327,6 +2457,56 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     } finally {
       await deps.dispose?.();
       resetServerLogger();
+    }
+  });
+
+  it("starts without memory when the stored vault does not open with the available key", async () => {
+    const memoryDir = tmp("memory-vault-unreadable-");
+    const keyA = Buffer.alloc(32, 7).toString("base64");
+    const keyB = Buffer.alloc(32, 9).toString("base64");
+    const sealed = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("memory-vault-unreadable-evidence-"),
+      env: { KEIKO_MEMORY_DIR: memoryDir, KEIKO_MEMORY_KEY: keyA },
+      store: createInMemoryUiStore(),
+    });
+    requiredMemoryVault(sealed).insertMemory(memoryAuditFixture());
+    await sealed.dispose?.();
+
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const withheld = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("memory-vault-unreadable-evidence-"),
+      env: { KEIKO_MEMORY_DIR: memoryDir, KEIKO_MEMORY_KEY: keyB },
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      store: createInMemoryUiStore(),
+    });
+    try {
+      expect(withheld.memoryVault).toBeUndefined();
+      expect(withheld.memoryAuthorization).toBeUndefined();
+      expect(diagnostics).toEqual([
+        expect.objectContaining({
+          operation: "server.composition",
+          source: "memory-vault.open",
+          code: "vault-unreadable",
+          errorClass: "MemoryStorageError",
+          message: "The memory vault could not be opened with the available key.",
+        }) as unknown,
+      ]);
+    } finally {
+      await withheld.dispose?.();
+    }
+
+    const reopened = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("memory-vault-unreadable-evidence-"),
+      env: { KEIKO_MEMORY_DIR: memoryDir, KEIKO_MEMORY_KEY: keyA },
+      store: createInMemoryUiStore(),
+    });
+    try {
+      expect(requiredMemoryVault(reopened).getMemory(memoryAuditFixture().id)).toBeDefined();
+    } finally {
+      await reopened.dispose?.();
     }
   });
 
@@ -3229,16 +3409,41 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     });
   }
 
-  // #3873: both Authority Envelope bounds are operator settings parsed once at composition, before
+  // #3873: the Authority Envelope duration is an operator setting parsed once at composition, before
   // runtime activation; an invalid value fails the composition closed instead of minting a silently
-  // defaulted envelope later, whether or not the runtime activates on this host.
+  // defaulted envelope later, whether or not the runtime activates on this host. Keiko does not limit
+  // tokens (#4346): the former `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` setting is no longer read, so
+  // even an invalid value of it no longer fails the composition.
   it("fails closed at composition on an invalid envelope bound setting", () => {
     expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES: "0" })).toThrow(
       RangeError,
     );
-    expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "1.5" })).toThrow(
-      RangeError,
-    );
+    expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "1.5" })).not.toThrow();
+  });
+
+  it("records once, body-free, that the retired prompt-token setting is ignored (#4346)", () => {
+    const record = vi
+      .spyOn(defaultServerDiagnosticSink, "record")
+      .mockImplementation(() => undefined);
+    try {
+      depsWithEnv({});
+      expect(
+        record.mock.calls.filter(([entry]) => entry.message === "retired-setting-ignored"),
+      ).toEqual([]);
+      depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "200000" });
+      const retired = record.mock.calls
+        .map(([entry]) => entry)
+        .filter((entry) => entry.message === "retired-setting-ignored");
+      expect(retired).toHaveLength(1);
+      expect(retired[0]).toMatchObject({
+        operation: "coding-runtime.composition.retired-setting",
+        diagnosticOutcome: "routine",
+        code: "setting=prompt-token-allowance",
+      });
+      expect(JSON.stringify(retired[0])).not.toContain("200000");
+    } finally {
+      record.mockRestore();
+    }
   });
 
   it("intersects explicit option and environment ceilings before defaulting to all-mode availability", () => {
@@ -3467,11 +3672,11 @@ describe("buildUiHandlerDeps — Atlassian registry isolation (KEIKO-0565, PR #3
         approval: {
           schemaVersion: "1",
           approvalId: "apr_isolation-test",
-          connectorId: "jira:isolation-test",
-          provider: "jira",
-          actionType: "add-issue-comment",
+          connectorId: "confluence:isolation-test",
+          provider: "confluence",
+          actionType: "add-page-comment",
           actionClass: "connector-write",
-          requiredScope: "issue-tracker.write",
+          requiredScope: "knowledge-base.write",
           risk: "low",
           reviewReason: "deterministic-risk-approval-required",
           correlationId: "req_isolation-test",
@@ -3483,10 +3688,10 @@ describe("buildUiHandlerDeps — Atlassian registry isolation (KEIKO-0565, PR #3
           envelopeDigest: "digest-isolation-test",
           workspaceRoot: "/repo",
         },
-        authRef: "atlassian:jira:isolation-test",
+        authRef: "atlassian:confluence:isolation-test",
         payload: {
           kind: "write-action",
-          action: { type: "add-issue-comment", issueKey: "PROJ-1", commentText: "isolation" },
+          action: { type: "add-page-comment", pageId: "1", commentText: "isolation" },
         },
       });
       expect(created.ok).toBe(true);
@@ -3499,9 +3704,9 @@ describe("buildUiHandlerDeps — Atlassian registry isolation (KEIKO-0565, PR #3
         schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
         activityId: "act_isolation-test",
         occurredAt: Date.now(),
-        connectorId: "jira:isolation-test",
-        provider: "jira",
-        actionType: "add-issue-comment",
+        connectorId: "confluence:isolation-test",
+        provider: "confluence",
+        actionType: "add-page-comment",
         actionClass: "connector-write",
         disposition: "allowed",
         outcome: "succeeded",
@@ -3509,10 +3714,10 @@ describe("buildUiHandlerDeps — Atlassian registry isolation (KEIKO-0565, PR #3
         durationMs: 0,
       });
       expect(
-        resolveAtlassianSyncJobRegistry(depsA).listActivity("jira:isolation-test"),
+        resolveAtlassianSyncJobRegistry(depsA).listActivity("confluence:isolation-test"),
       ).toHaveLength(1);
       expect(
-        resolveAtlassianSyncJobRegistry(depsB).listActivity("jira:isolation-test"),
+        resolveAtlassianSyncJobRegistry(depsB).listActivity("confluence:isolation-test"),
       ).toHaveLength(0);
     } finally {
       await depsA.dispose?.();
@@ -3545,11 +3750,11 @@ describe("buildUiHandlerDeps — Atlassian registry disposal (#2906 round 2)", (
         approval: {
           schemaVersion: "1",
           approvalId: "apr_dispose-test",
-          connectorId: "jira:dispose-test",
-          provider: "jira",
-          actionType: "add-issue-comment",
+          connectorId: "confluence:dispose-test",
+          provider: "confluence",
+          actionType: "add-page-comment",
           actionClass: "connector-write",
-          requiredScope: "issue-tracker.write",
+          requiredScope: "knowledge-base.write",
           risk: "low",
           reviewReason: "deterministic-risk-approval-required",
           correlationId: "req_dispose-test",
@@ -3561,10 +3766,10 @@ describe("buildUiHandlerDeps — Atlassian registry disposal (#2906 round 2)", (
           envelopeDigest: "digest-dispose-test",
           workspaceRoot: "/repo",
         },
-        authRef: "atlassian:jira:dispose-test",
+        authRef: "atlassian:confluence:dispose-test",
         payload: {
           kind: "write-action",
-          action: { type: "add-issue-comment", issueKey: "PROJ-1", commentText: "dispose" },
+          action: { type: "add-page-comment", pageId: "1", commentText: "dispose" },
         },
       });
       expect(created.ok).toBe(true);
@@ -3572,9 +3777,9 @@ describe("buildUiHandlerDeps — Atlassian registry disposal (#2906 round 2)", (
         schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
         activityId: "act_dispose-test",
         occurredAt: Date.now(),
-        connectorId: "jira:dispose-test",
-        provider: "jira",
-        actionType: "add-issue-comment",
+        connectorId: "confluence:dispose-test",
+        provider: "confluence",
+        actionType: "add-page-comment",
         actionClass: "connector-write",
         disposition: "allowed",
         outcome: "succeeded",
@@ -3582,24 +3787,24 @@ describe("buildUiHandlerDeps — Atlassian registry disposal (#2906 round 2)", (
         durationMs: 0,
       });
       expect(resolveAtlassianActionApprovalRegistry(depsA).listPending()).toHaveLength(1);
-      expect(resolveAtlassianSyncJobRegistry(depsA).listActivity("jira:dispose-test")).toHaveLength(
-        1,
-      );
+      expect(
+        resolveAtlassianSyncJobRegistry(depsA).listActivity("confluence:dispose-test"),
+      ).toHaveLength(1);
 
       // Disposing graph A must clear ITS OWN registries -- before the fix, createUiHandlerDispose
       // never called reset(), so both the pending approval and the recorded activity survived
       // disposal, indistinguishable from a live graph.
       await depsA.dispose?.();
       expect(resolveAtlassianActionApprovalRegistry(depsA).listPending()).toHaveLength(0);
-      expect(resolveAtlassianSyncJobRegistry(depsA).listActivity("jira:dispose-test")).toHaveLength(
-        0,
-      );
+      expect(
+        resolveAtlassianSyncJobRegistry(depsA).listActivity("confluence:dispose-test"),
+      ).toHaveLength(0);
 
       // Graph B was never touched: no write from A ever landed there, disposing A notwithstanding.
       expect(resolveAtlassianActionApprovalRegistry(depsB).listPending()).toHaveLength(0);
-      expect(resolveAtlassianSyncJobRegistry(depsB).listActivity("jira:dispose-test")).toHaveLength(
-        0,
-      );
+      expect(
+        resolveAtlassianSyncJobRegistry(depsB).listActivity("confluence:dispose-test"),
+      ).toHaveLength(0);
     } finally {
       await depsB.dispose?.();
     }
@@ -3648,6 +3853,9 @@ describe("Local checkout activity projection composition", () => {
       expect(active.binding.activeRoot).toBe(root);
       expect(deps.workspaceLifecycle?.getActive()?.binding).toEqual(active.binding);
       expect(projection.currentContent()).toBeNull();
+      // #4271: the activation route asks the composed lifecycle whether a Local checkout can be
+      // reselected; the activity wrapper must not drop that answer.
+      expect(deps.workspaceLifecycle?.selectable?.(active.instance.workspaceId)).toBe(true);
     } finally {
       await deps.dispose?.();
     }
@@ -3777,7 +3985,7 @@ describe("runtime gateway accepted source and active inventory", () => {
     }
   }
 
-  it("expires a genuine chat success at five minutes without replacing its generation", async () => {
+  it("retains a genuine startup success for the configuration generation without a five-minute recheck", async () => {
     await withFreshnessDeps((deps): void => {
       const holder = deps.gatewayConfig;
       holder?.recordVerifiedCapability(
@@ -3790,8 +3998,8 @@ describe("runtime gateway accepted source and active inventory", () => {
       expect(currentConversationReady(deps, "retained-chat")).toBe(true);
       vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
       expect(holder?.generation()).toBe(generation);
-      expect(currentConversationReady(deps, "retained-chat")).toBe(false);
-      expect(currentConversationReadinessObservation(deps, "retained-chat")).toBeUndefined();
+      expect(currentConversationReady(deps, "retained-chat")).toBe(true);
+      expect(currentConversationReadinessObservation(deps, "retained-chat")).toBe(true);
     });
   });
 
@@ -3828,7 +4036,7 @@ describe("runtime gateway accepted source and active inventory", () => {
       });
       expect(currentConversationReady(deps, "retained-chat")).toBe(true);
       vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
-      expect(currentConversationReady(deps, "retained-chat")).toBe(false);
+      expect(currentConversationReady(deps, "retained-chat")).toBe(true);
     });
   });
 });
@@ -3863,9 +4071,12 @@ it("shares one lazy Jira catalog per graph and closes it on disposal (#4089)", a
     if (runtime === undefined) throw new Error("Expected graph-owned managed catalog");
     const [first, second] = await Promise.all([runtime.get(), runtime.get()]);
     expect(second).toBe(first);
-    // Every canonical Jira tool, read or write, is one handler (#4178 added `jira.draft`), beside
-    // the one local `knowledge.requirements` read the same catalog hosts (#4179).
-    const toolCount = Object.keys(JIRA_MANAGED_ACTION_TYPES).length + 1;
+    // The default catalog offers exactly the curated production set (curated Jira tools, batch,
+    // discovery and the local Knowledge tools); the rest of the canonical set is selected per turn.
+    const toolCount = JIRA_DEFAULT_CATALOG_TOOLS.length;
+    expect(first.handlerBindings.map((handler) => handler.catalogAction).sort()).toEqual(
+      [...JIRA_DEFAULT_CATALOG_TOOLS].sort(),
+    );
     expect(
       activityLog.events.filter((event) => event.op === "mcp.managed.lifecycle"),
     ).toMatchObject([

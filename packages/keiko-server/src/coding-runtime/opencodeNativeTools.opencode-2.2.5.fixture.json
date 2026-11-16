@@ -1,0 +1,138 @@
+{
+  "producer": {
+    "upstream": "anomalyco/opencode",
+    "version": "2.2.5",
+    "commit": "9bbb8ce18c80f099e0e448775f59d965ead40a21",
+    "capturedBy": "ctx.tool.list() of a plugin loaded by the staged macOS arm64 `opencode serve` 2.2.5, 2026-11-05 (opencodeNativeQualification.real.test.ts pins every id against the registry)",
+    "permissionActionsSource": "Permission.Request.action values observed through the permission.evaluate hook and the Tool.Info.options.permission field"
+  },
+  "tools": [
+    {
+      "id": "read",
+      "action": "read",
+      "codemode": false
+    },
+    {
+      "id": "glob",
+      "action": "glob",
+      "codemode": false
+    },
+    {
+      "id": "grep",
+      "action": "grep",
+      "codemode": false
+    },
+    {
+      "id": "edit",
+      "action": "edit",
+      "codemode": false
+    },
+    {
+      "id": "write",
+      "action": "edit",
+      "codemode": false
+    },
+    {
+      "id": "patch",
+      "action": "edit",
+      "codemode": false
+    },
+    {
+      "id": "shell",
+      "action": "shell",
+      "codemode": false
+    },
+    {
+      "id": "webfetch",
+      "action": "webfetch",
+      "codemode": false
+    },
+    {
+      "id": "websearch",
+      "action": "websearch",
+      "codemode": false
+    },
+    {
+      "id": "skill",
+      "action": "skill",
+      "codemode": false
+    },
+    {
+      "id": "subagent",
+      "action": "subagent",
+      "codemode": false
+    },
+    {
+      "id": "question",
+      "action": "question",
+      "codemode": false
+    },
+    {
+      "id": "todowrite",
+      "action": "todowrite",
+      "codemode": false
+    },
+    {
+      "id": "execute",
+      "action": "execute",
+      "codemode": true
+    },
+    {
+      "id": "opencode_session_rename",
+      "action": "execute",
+      "codemode": true
+    },
+    {
+      "id": "opencode_session_move",
+      "action": "execute",
+      "codemode": true
+    },
+    {
+      "id": "opencode_worktree_create",
+      "action": "execute",
+      "codemode": true
+    },
+    {
+      "id": "opencode_worktree_list",
+      "action": "execute",
+      "codemode": true
+    },
+    {
+      "id": "opencode_worktree_remove",
+      "action": "edit",
+      "codemode": true
+    },
+    {
+      "id": "opencode_models",
+      "action": "execute",
+      "codemode": true
+    },
+    {
+      "id": "opencode_list_mcp_resources",
+      "action": "execute",
+      "codemode": true
+    },
+    {
+      "id": "opencode_read_mcp_resource",
+      "action": "execute",
+      "codemode": true
+    }
+  ],
+  "permissionActions": [
+    "read",
+    "glob",
+    "grep",
+    "list",
+    "edit",
+    "shell",
+    "webfetch",
+    "websearch",
+    "skill",
+    "subagent",
+    "question",
+    "todowrite",
+    "execute",
+    "external_directory",
+    "doom_loop"
+  ]
+}

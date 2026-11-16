@@ -165,6 +165,23 @@ describe("findCitationMarkerGroups", () => {
     expect(citationMarkerIndices("| a ` | TLS [1] | c ` |\n|---|---|---|")).toEqual([1]);
   });
 
+  it.each([1, 2, 3, 4])(
+    "keeps raw citation offsets after %i backslashes before a table pipe",
+    (count) => {
+      const source = [
+        "| Code | Evidence |",
+        "| --- | --- |",
+        "| `a " + "\\".repeat(count) + "| [1]` | TLS [2] |",
+      ].join("\n");
+      const groups = findCitationMarkerGroups(source);
+      expect(groups.map((group) => group.indices)).toEqual(count % 2 === 1 ? [[2]] : [[1], [2]]);
+      for (const group of groups) {
+        expect(source.slice(group.start, group.end)).toBe(group.text);
+        expect(group.start).toBe(source.indexOf(group.text));
+      }
+    },
+  );
+
   it("keeps a code span across lines the chat renderer joins into one paragraph", () => {
     // Neither `1)` nor a setext underline starts a block there, and quoted lines form one paragraph.
     expect(citationMarkerIndices("A ` tick\n1) item [1] ` end [2]")).toEqual([2]);

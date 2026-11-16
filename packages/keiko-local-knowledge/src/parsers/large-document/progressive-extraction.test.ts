@@ -152,6 +152,49 @@ describe("runProgressiveExtraction", () => {
     expect(summary.pageCount).toBeLessThan(40);
   });
 
+  it("reports cancelled, not complete, when the extractor stops on abort without another window", async () => {
+    // The PDF extractor returns silently when it sees the abort between pages; the driver never
+    // sees a further window, so the loop ends "naturally" with pages missing.
+    const config = { totalPages: 20, pageChars: 10, pagesPerWindow: 2 };
+    const controller = new AbortController();
+    const inner = syntheticProgressiveExtractor(config);
+    const extractor = {
+      ...inner,
+      extractWindows: async function* (
+        source: Parameters<typeof inner.extractWindows>[0],
+        opts: Parameters<typeof inner.extractWindows>[1],
+      ): AsyncGenerator<ProgressiveExtractionWindow> {
+        for await (const window of inner.extractWindows(source, opts)) {
+          yield window;
+          controller.abort();
+          return;
+        }
+      },
+    };
+    const summary = await runProgressiveExtraction(
+      extractor,
+      syntheticStreamingSource(config),
+      options({ signal: controller.signal }),
+      collectingSink(),
+    );
+    expect(summary.stopReason).toBe("cancelled");
+    expect(summary.coverage).toBe("partial");
+    expect(summary.pageCount).toBe(2);
+  });
+
+  it("keeps a run that finished before any abort complete", async () => {
+    const config = { totalPages: 4, pageChars: 10, pagesPerWindow: 2 };
+    const controller = new AbortController();
+    const summary = await runProgressiveExtraction(
+      syntheticProgressiveExtractor(config),
+      syntheticStreamingSource(config),
+      options({ signal: controller.signal }),
+      collectingSink(),
+    );
+    expect(summary.stopReason).toBe("completed");
+    expect(summary.coverage).toBe("complete");
+  });
+
   it("resumes from a page cursor and keeps offsets aligned with a full run", async () => {
     const config = { totalPages: 6, pageChars: 7, pagesPerWindow: 2 };
     // Page boundaries: page p ends at characterEnd. After pages 1..2 (each 7 chars + one "\n\n"):

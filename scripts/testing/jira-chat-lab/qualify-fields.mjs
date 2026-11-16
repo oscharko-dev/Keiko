@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checked, loadSession, readPrivateFile, requireLicense, basicAuth } from "./lab-client.mjs";
-import { ensureFixtureField, prepareTransitionFixtures } from "./seed-fields.mjs";
+import {
+  ensureFixtureField,
+  prepareTransitionFixtures,
+  recoverFixtureFieldRequirement,
+} from "./seed-fields.mjs";
 
 async function issueCount(session, auth) {
   const result = await checked(session, "fixture-count", "POST", "/rest/api/2/search", auth, {
@@ -99,6 +103,7 @@ async function main() {
   await requireLicense(session);
   const path = join(session.directory, "fixture.json");
   const fixture = JSON.parse(readFileSync(path, "utf8"));
+  await recoverFixtureFieldRequirement(session);
   const fieldId = await ensureFixtureField(session);
   for (const key of fixture.issueKeys.slice(0, 2))
     await checked(

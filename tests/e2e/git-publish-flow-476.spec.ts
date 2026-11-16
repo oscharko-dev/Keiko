@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -280,9 +281,9 @@ async function interceptGovernedPushRoutes(page: Page, ledger: RouteLedger): Pro
 // governedGit persists as "fs-reference", so an absolute path survives sanitizeCfgForPersistence.
 async function seedGitClientWindow(page: Page, projectPath: string): Promise<void> {
   await page.addInitScript(
-    ({ root, windowId }) => {
+    ({ argument: { root, windowId }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: windowId,
@@ -297,9 +298,9 @@ async function seedGitClientWindow(page: Page, projectPath: string): Promise<voi
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { root: projectPath, windowId: WINDOW_ID },
+    await workspaceStorageArgs(page, { root: projectPath, windowId: WINDOW_ID }),
   );
 }
 

@@ -95,7 +95,7 @@ describe("MemoriaViva memory autonomy mode", () => {
       />,
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The memory autonomy mode could not be loaded. Ask for approval remains active.",
+      "The memory autonomy mode could not be loaded. Waiting memories stay proposals.",
     );
     expect(screen.getByRole("radio", { name: /Ask for approval/ })).toBeChecked();
     failedHydration.unmount();

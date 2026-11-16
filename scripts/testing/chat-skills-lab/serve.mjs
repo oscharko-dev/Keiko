@@ -26,10 +26,11 @@ if (!process.env.KEIKO_SKILL_LAB_STATIC_ROOT)
     "<!doctype html><title>Private Chat qualification</title>\n",
   );
 const deps = buildUiHandlerDeps({
+  // Also when this file is started directly, without the environment `runtime.mjs` prepares.
+  env: { ...env, KEIKO_OS_KEYCHAIN: "off" },
   configPath: env.KEIKO_CONFIG_FILE,
   evidenceDir: env.KEIKO_EVIDENCE_DIR,
   uiDbPath: join(env.KEIKO_UI_DATA_DIR, "keiko-ui.db"),
-  env,
   initialProjectPath: env.KEIKO_INITIAL_PROJECT_PATH,
   closeActivityLogOnDispose: true,
 });

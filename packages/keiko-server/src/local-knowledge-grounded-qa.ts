@@ -6,7 +6,9 @@ import {
   findCapability,
   findConfiguredCapability,
   requestOpenAIEmbedding,
+  invalidateEmbeddingCapability,
   type GatewayConfig,
+  type ModelProviderConfig,
   type NormalizedResponse,
   type OpenAIEmbeddingAdapter,
   type OpenAIEmbeddingOutcome,
@@ -15,7 +17,15 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { createGroundedSynthesisCallBudget } from "./grounded-answer.js";
-import { callPluralGroundedSynthesis } from "./grounded-plural-synthesis.js";
+import {
+  buildCitationRepairPrompt,
+  citationRepairContent,
+  fitsCitationRepairTextLimit,
+} from "./grounded-citation-repair.js";
+import {
+  callPluralGroundedSynthesis,
+  type GroundedSynthesisPurpose,
+} from "./grounded-plural-synthesis.js";
 import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
@@ -97,6 +107,7 @@ import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safet
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   type UiHandlerDeps,
+  type RuntimeGatewayConfig,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentGroundingLimits,
@@ -122,6 +133,7 @@ import {
 } from "./grounded-rerank-facade.js";
 import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 import {
+  buildPackCitationIndex,
   entailmentUnavailableMarker,
   missingCitationMarkerFor,
   reconcileNumericCitations,
@@ -133,6 +145,7 @@ import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import {
   logAnswerAssessment,
   logCitationReconciliation,
+  citationRepairLineCounts,
   logCitationSupport,
   type CitationSupportCaveat,
 } from "./grounded-citation-log.js";
@@ -147,7 +160,6 @@ import {
   withConversationReadinessAdmission,
   type ConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
-import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import { requirementCoverage } from "./requirement-coverage-note.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
@@ -254,45 +266,113 @@ function isConfiguredEmbeddingModel(config: GatewayConfig, modelId: string): boo
   return findConfiguredCapability(config, modelId)?.kind === "embedding";
 }
 
-// ONE adapter per live GatewayConfig object (the deps holder returns the same config reference
-// until setup replaces it). The retrieval layer scopes its cross-request query-embedding and
-// identity-preflight caches PER ADAPTER INSTANCE, so reusing the adapter is what lets repeated
-// asks skip redundant embedding/preflight network calls — and replacing the gateway config
-// naturally rotates the adapter, dropping every cache scoped to it. Availability is checked
-// live per request (equivalent to the former precomputed per-capsule unavailable set: both
-// reduce to `provider === undefined || !isConfiguredEmbeddingModel(config, modelId)`), so the
-// adapter is independent of the selected capsules.
-const EMBEDDING_ADAPTERS_BY_CONFIG = new WeakMap<GatewayConfig, OpenAIEmbeddingAdapter>();
+// A transient query outage says nothing new about an already verified embedding space.
+// First-probe failures are still cached by verifyEmbeddingCapability itself.
+const TRANSIENT_EMBEDDING_QUERY_FAILURES = new Set([
+  "cancelled",
+  "timeout",
+  "transport",
+  "rate-limited",
+]);
+function embeddingFailureRetiresProof(
+  outcome: Extract<OpenAIEmbeddingOutcome, { readonly ok: false }>,
+): boolean {
+  if (TRANSIENT_EMBEDDING_QUERY_FAILURES.has(outcome.kind)) return false;
+  return (
+    outcome.kind !== "http-error" ||
+    outcome.status === undefined ||
+    outcome.status < 500 ||
+    outcome.status >= 600
+  );
+}
+
+// One adapter per accepted connection generation. Metadata-only refinements keep the generation
+// and its proof; replacing credentials, endpoints or inventory advances it and drops both caches.
+const EMBEDDING_ADAPTERS_BY_CONFIG = new WeakMap<
+  RuntimeGatewayConfig | GatewayConfig,
+  { readonly generation: number; readonly adapter: OpenAIEmbeddingAdapter }
+>();
+
+function embeddingProviderAtGeneration(
+  deps: UiHandlerDeps,
+  generation: number,
+  request: OpenAIEmbeddingRequest,
+): ModelProviderConfig | undefined {
+  const activeConfig = currentGatewayConfig(deps);
+  const provider = activeConfig?.providers.find((entry) => entry.modelId === request.modelId);
+  if (
+    provider === undefined ||
+    activeConfig === undefined ||
+    (deps.gatewayConfig?.generation() ?? 0) !== generation ||
+    !isConfiguredEmbeddingModel(activeConfig, provider.modelId)
+  ) {
+    return undefined;
+  }
+  return provider;
+}
+
+function embeddingRequestForProvider(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  request: OpenAIEmbeddingRequest,
+  log: OpenAIEmbeddingRequest["log"],
+): OpenAIEmbeddingRequest {
+  return {
+    log,
+    ...(deps.gatewayReadinessFetch === undefined ? {} : { fetchImpl: deps.gatewayReadinessFetch }),
+    timeoutMs: provider.timeoutMs,
+    ...request,
+    endpoint: provider.baseUrl,
+    apiKey: provider.apiKey,
+    ...(provider.apiKeyHeaderName !== undefined
+      ? { apiKeyHeaderName: provider.apiKeyHeaderName }
+      : {}),
+    ...((provider.egress ?? config.egress) === undefined
+      ? {}
+      : { egress: provider.egress ?? config.egress }),
+  };
+}
 
 export function createEmbeddingAdapter(deps: UiHandlerDeps): OpenAIEmbeddingAdapter | RouteResult {
   const config = currentGatewayConfig(deps);
   if (config === undefined) {
-    return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
+    return {
+      status: 400,
+      body: errorBody("NO_MODEL", "No model provider is configured."),
+    };
   }
-  const cached = EMBEDDING_ADAPTERS_BY_CONFIG.get(config);
-  if (cached !== undefined) return cached;
+  const owner = deps.gatewayConfig ?? config;
+  const generation = deps.gatewayConfig?.generation() ?? 0;
+  const cached = EMBEDDING_ADAPTERS_BY_CONFIG.get(owner);
+  if (cached?.generation === generation) return cached.adapter;
   const log = processServerLogSink();
   const adapter: OpenAIEmbeddingAdapter = {
     endpoint: "local-knowledge",
     apiKey: "local-knowledge",
     request: async (request): Promise<OpenAIEmbeddingOutcome> => {
-      const provider = config.providers.find((entry) => entry.modelId === request.modelId);
-      if (provider === undefined || !isConfiguredEmbeddingModel(config, provider.modelId)) {
+      const provider = embeddingProviderAtGeneration(deps, generation, request);
+      if (provider === undefined) {
         return { ok: false, kind: "unsupported-model" };
       }
-      return requestEmbeddingImpl(deps)({
-        log,
-        ...request,
-        endpoint: provider.baseUrl,
-        apiKey: provider.apiKey,
-        ...(provider.apiKeyHeaderName !== undefined
-          ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-          : {}),
-        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
-      });
+      const outcome = await requestEmbeddingImpl(deps)(
+        embeddingRequestForProvider(deps, config, provider, request, log),
+      );
+      const finalConfig = currentGatewayConfig(deps);
+      if (
+        (deps.gatewayConfig?.generation() ?? 0) !== generation ||
+        finalConfig === undefined ||
+        !isConfiguredEmbeddingModel(finalConfig, request.modelId)
+      ) {
+        invalidateEmbeddingCapability(adapter, request.modelId);
+        return { ok: false, kind: "unsupported-model" };
+      }
+      if (!outcome.ok && embeddingFailureRetiresProof(outcome))
+        invalidateEmbeddingCapability(adapter, request.modelId);
+      return outcome;
     },
   };
-  EMBEDDING_ADAPTERS_BY_CONFIG.set(config, adapter);
+  EMBEDDING_ADAPTERS_BY_CONFIG.set(owner, { generation, adapter });
   return adapter;
 }
 
@@ -681,7 +761,8 @@ function renderConnectorEvidence(
 
 // The count of the references this prompt actually shows: a window-fitted prompt carries fewer than
 // retrieval found, and telling the model the retrieved total invites markers beyond the ones sent.
-function localKnowledgeRepairInstruction(assessmentAllowed: boolean): string {
+function localKnowledgeRepairInstruction(assessmentAllowed: boolean, original?: string): string {
+  if (original !== undefined) return buildCitationRepairPrompt(original, "numeric");
   const scope = assessmentAllowed ? "outside the <assessment> block " : "";
   return `The previous answer was rejected because it did not use valid inline [n] citations. Rewrite the answer now. Every factual sentence ${scope}must include at least one matching [n] marker from the supplied citations. Do not invent citations.`;
 }
@@ -700,6 +781,7 @@ function buildLocalKnowledgeMessages(
   redactExcerpt: (value: string) => string,
   limits: ReturnType<typeof currentGroundingLimits>,
   protectedSkill?: MarkdownSkillDocument,
+  repairOriginal?: string,
 ): {
   readonly messages: readonly { readonly role: "system" | "user"; readonly content: string }[];
   readonly numericEvidence: readonly NumericEntailmentEvidence[];
@@ -707,7 +789,9 @@ function buildLocalKnowledgeMessages(
   const rendered = buildReferenceLines(input, store, redactExcerpt, limits);
   const assessmentAllowed = input.query.ownAssessment === "allowed";
   const repairInstruction =
-    input.citationRepair === true ? ["", localKnowledgeRepairInstruction(assessmentAllowed)] : [];
+    input.citationRepair === true
+      ? ["", localKnowledgeRepairInstruction(assessmentAllowed, repairOriginal)]
+      : [];
   const messages = [
     {
       role: "system",
@@ -746,6 +830,13 @@ interface SentKnowledgePrompt {
   readonly profile: ContextProfile | undefined;
 }
 
+interface KnowledgeAnswerPromptState {
+  readonly renderedNumericEvidence: readonly NumericEntailmentEvidence[];
+  readonly sentReferences: readonly RetrievalReference[];
+  readonly sent: SentKnowledgePrompt | undefined;
+  readonly measuredPromptTokens: number;
+}
+
 class StoreBackedAnswerGenerator implements AnswerGenerator {
   private renderedNumericEvidence: readonly NumericEntailmentEvidence[] = [];
   private sentReferences: readonly RetrievalReference[] = [];
@@ -754,6 +845,8 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   private readonly synthesis = createGroundedSynthesisCallBudget();
   private lastComplete = true;
   private lastInput: AnswerGeneratorInput | undefined;
+  /** The original of this generator's mixed answer, never another turn or persisted history. */
+  private lastAnswer: string | undefined;
 
   public constructor(
     private readonly model: ModelPort,
@@ -787,29 +880,115 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     this.lastComplete = response.finishReason === "stop";
     const content = response.content.trim();
     assertUsableAssistantContent(content, this.modelId);
-    return content;
+    if (input.citationRepair !== true) this.lastAnswer = content;
+    const original = this.mixedRepairOriginal(input);
+    return original === undefined ? content : this.validatedRepair(original, content);
+  }
+
+  private mixedRepairOriginal(input: AnswerGeneratorInput): string | undefined {
+    return input.citationRepair === true && this.context.deps.chatToolTurn !== undefined
+      ? this.lastAnswer
+      : undefined;
+  }
+
+  private validatedRepair(original: string, candidate: string): string {
+    if (!this.lastComplete) {
+      this.recordRepair(original, candidate, "rejected-truncated");
+      return original;
+    }
+    const markers = new Set(this.sentReferences.map((_reference, index) => index + 1));
+    try {
+      const repaired = citationRepairContent(
+        original,
+        candidate,
+        buildPackCitationIndex([]),
+        markers,
+      );
+      this.recordRepair(
+        original,
+        repaired ?? candidate,
+        repaired === undefined ? "rejected-content-changed" : "applied",
+      );
+      return repaired ?? original;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      // Malformed annotation JSON is an unavailable optional repair, never a replacement answer.
+      this.recordRepair(original, candidate, "failed");
+      return original;
+    }
+  }
+
+  private recordRepair(
+    original: string,
+    proposed: string,
+    disposition: "applied" | "rejected-content-changed" | "rejected-truncated" | "failed",
+  ): void {
+    const markers = new Set(this.sentReferences.map((_reference, index) => index + 1));
+    const answer = disposition === "applied" ? proposed : original;
+    logCitationReconciliation(
+      {
+        answer,
+        referenceCount: this.sentReferences.length,
+        attachedIndices: [...reconcileNumericCitations(answer, markers).citedMarkers],
+        refusal: false,
+      },
+      this.context.correlationId,
+      { citationRepairDisposition: disposition, ...citationRepairLineCounts(original, proposed) },
+    );
   }
 
   private async answerResponse(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
-    const { renderedNumericEvidence, sentReferences, sent, measuredPromptTokens } = this;
+    const before = this.promptState();
+    let retryState: KnowledgeAnswerPromptState | undefined;
     try {
       // Re-planned per attempt: when the provider's overflow answer taught Keiko the model's real
       // window, the retry fits the references into it (gateway-context-window.ts).
       return await withAdoptedContextWindowRetry(
         this.context.deps,
-        { modelId: this.modelId, surface: "grounded", correlationId: this.context.correlationId },
-        () => this.callWithinWindow(input),
+        {
+          modelId: this.modelId,
+          surface: "grounded",
+          correlationId: this.context.correlationId,
+          settleRetryFailure: (error, originalFailure) => {
+            const settled = this.context.deps.chatToolTurn?.settleRetryFailure(
+              error,
+              originalFailure,
+              this.modelId,
+              input.signal ?? new AbortController().signal,
+            );
+            if (settled !== undefined && retryState !== undefined)
+              this.restorePromptState(retryState);
+            return settled;
+          },
+        },
+        (attempt) => {
+          if (attempt.retrying) retryState = this.promptState();
+          return this.callWithinWindow(input, attempt.retryFollows);
+        },
       );
     } catch (error) {
       // The answer that stands was built from the prompt before this refused repair.
       if (input.citationRepair === true && this.repairRefused(error)) {
-        this.renderedNumericEvidence = renderedNumericEvidence;
-        this.sentReferences = sentReferences;
-        this.sent = sent;
-        this.measuredPromptTokens = measuredPromptTokens;
+        this.restorePromptState(before);
       }
       throw error;
     }
+  }
+
+  private promptState(): KnowledgeAnswerPromptState {
+    return {
+      renderedNumericEvidence: this.renderedNumericEvidence,
+      sentReferences: this.sentReferences,
+      sent: this.sent,
+      measuredPromptTokens: this.measuredPromptTokens,
+    };
+  }
+
+  private restorePromptState(state: KnowledgeAnswerPromptState): void {
+    this.renderedNumericEvidence = state.renderedNumericEvidence;
+    this.sentReferences = state.sentReferences;
+    this.sent = state.sent;
+    this.measuredPromptTokens = state.measuredPromptTokens;
   }
 
   public repairRefused(error: unknown): boolean {
@@ -829,10 +1008,17 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
    * An optional citation repair needs a free synthesis attempt slot (#4179), a turn that has not
    * ended, and the grant its prompt costs: refused at admission it would fail the finished turn.
    */
+  /** An answer after a change tool reports that action and needs no document citation. */
+  public reportsToolAction(): boolean {
+    return this.context.deps.chatToolTurn?.reportsToolAction === true;
+  }
+
   public repairAvailable(): boolean {
     if (this.synthesis.remaining() <= 0) return false;
     const toolTurn = this.context.deps.chatToolTurn;
     if (toolTurn === undefined) return true;
+    if (this.lastAnswer === undefined || !fitsCitationRepairTextLimit(this.lastAnswer))
+      return false;
     return !toolTurn.endedEarly && this.repairFitsGrant();
   }
 
@@ -849,13 +1035,12 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       this.redactExcerpt,
       this.limits,
       this.selectedSkill(),
+      this.lastAnswer,
     ).messages;
-    // A repair sends the tool results again, which only the last measured prompt counts (S11).
-    const promptTokens = Math.max(
-      countGatewayPromptTokens({ messages }, limits.tokenAccounting),
-      this.measuredPromptTokens,
-    );
-    return promptTokens <= limits.effectiveInputBudget - pending.promptTokens;
+    // The prior response can total several tool rounds. The complete current repair, including
+    // projected tool results, is checked by callPluralGroundedSynthesis before dispatch.
+    const promptTokens = countGatewayPromptTokens({ messages }, limits.tokenAccounting);
+    return promptTokens <= limits.effectiveInputBudget;
   }
 
   /** Whether the last answer ended on its own rather than being interrupted (S12 of #4173). */
@@ -875,18 +1060,30 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     return id === undefined ? undefined : this.context.deps.store.markdownSkills.forTurn(id);
   }
 
-  private callWithinWindow(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
+  private renderPrompt(
+    input: AnswerGeneratorInput,
+    count: number,
+    skill: MarkdownSkillDocument | undefined,
+  ): ReturnType<typeof buildLocalKnowledgeMessages> {
+    return buildLocalKnowledgeMessages(
+      input.query.answerQuestion ?? input.query.text,
+      { ...input, references: input.references.slice(0, count) },
+      this.store,
+      this.redactExcerpt,
+      this.limits,
+      skill,
+      this.mixedRepairOriginal(input),
+    );
+  }
+
+  private callWithinWindow(
+    input: AnswerGeneratorInput,
+    retryFollows: (error: unknown) => boolean,
+  ): Promise<NormalizedResponse> {
     const available = Math.min(input.references.length, this.limits.maxPromptReferences);
     const skill = this.selectedSkill();
     const render = (count: number): ReturnType<typeof buildLocalKnowledgeMessages> =>
-      buildLocalKnowledgeMessages(
-        input.query.answerQuestion ?? input.query.text,
-        { ...input, references: input.references.slice(0, count) },
-        this.store,
-        this.redactExcerpt,
-        this.limits,
-        skill,
-      );
+      this.renderPrompt(input, count, skill);
     const profile = currentContextProfileForModel(this.context.deps, this.modelId);
     const fitted = fitKnowledgePrompt(available, render, profile, {
       correlationId: this.context.correlationId,
@@ -908,12 +1105,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       profile,
     };
     this.measuredPromptTokens = 0;
-    logGroundedPromptSelection(
-      this.context.correlationId,
-      this.sent.prompt,
-      profile?.effectiveInputBudget ?? 0,
-      profile?.tokenAccounting,
-    );
+    this.logSelectedPrompt(this.sent.prompt, profile);
     return this.callModel(
       {
         modelId: this.modelId,
@@ -923,6 +1115,17 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       },
       input.signal ?? new AbortController().signal,
       profile,
+      retryFollows,
+      input.citationRepair === true ? "citation-repair" : "answer",
+    );
+  }
+
+  private logSelectedPrompt(sent: SentGroundedPrompt, profile: ContextProfile | undefined): void {
+    logGroundedPromptSelection(
+      this.context.correlationId,
+      sent,
+      profile?.effectiveInputBudget ?? 0,
+      profile?.tokenAccounting,
     );
   }
 
@@ -930,15 +1133,20 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     request: GatewayCallRequest,
     signal: AbortSignal,
     profile: ContextProfile | undefined,
+    retryFollows: (error: unknown) => boolean,
+    purpose: GroundedSynthesisPurpose,
   ): Promise<NormalizedResponse> {
     const toolTurn = this.context.deps.chatToolTurn;
     if (toolTurn === undefined) return this.model.call(request, signal);
     const limits = profile ?? DEFAULT_CONTEXT_PROFILE;
     const outputTokensMax = limits.reservedOutputTokens;
     return callPluralGroundedSynthesis({
+      purpose,
+      retryFollows,
       model: this.model,
       deps: this.context.deps,
       evidenceCount: this.sentReferences.length,
+      evidenceSources: sentReferenceSources(this.sentReferences, this.redactExcerpt),
       coverage: requirementCoverage({
         deps: this.context.deps,
         store: this.store,
@@ -962,6 +1170,20 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       },
     });
   }
+}
+
+/** The `[n]` markers of the references this prompt sent, with the label the model was shown. */
+function sentReferenceSources(
+  references: readonly RetrievalReference[],
+  redactExcerpt: (value: string) => string,
+): ReadonlyMap<number, string> {
+  const safeRedact = (value: string): string => redactExcerpt(stripUnsafeFormatChars(value));
+  return new Map(
+    references.map((reference, index) => [
+      index + 1,
+      renderCitationLabel(reference.citation, safeRedact),
+    ]),
+  );
 }
 
 function promptText(messages: GatewayCallRequest["messages"]): string {
@@ -1599,7 +1821,6 @@ function resolveModel(
     modelId,
     readinessAdmission,
     deps,
-    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
 }
 
@@ -2784,7 +3005,7 @@ async function persistScopedGroundedAnswer(
   );
   const finalAnswer = withToolResultsAsSource(
     withScopedPromptContext(entailed, persistedInput.promptContext),
-    deps.store,
+    deps.chatToolTurn,
   );
   attachGroundedAnswerWithPreviewCitations(
     deps,

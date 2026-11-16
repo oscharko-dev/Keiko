@@ -1,6 +1,6 @@
 // ADR-0013 D4 — resolveUiDbPath precedence: explicit → KEIKO_UI_DATA_DIR/keiko-ui.db → ~/.keiko/keiko-ui.db.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { assertUiDbOutsideProject, resolveUiDbPath, UiStoreError } from "./index.js";
 import { homedir, tmpdir } from "node:os";
@@ -151,5 +151,76 @@ describe("assertUiDbOutsideProject", () => {
     expect(() => {
       assertUiDbOutsideProject(dbPath, project);
     }).not.toThrow();
+  });
+});
+
+// #4068 W7: Windows paths name the same file whatever their letter case, and process.cwd() keeps
+// the drive letter as the shell spelled it. Every containment rule here must hold for any spelling.
+describe.runIf(process.platform === "win32")("UI DB containment on Windows letter case", () => {
+  const swapCase = (path: string): string =>
+    path === path.toUpperCase() ? path.toLowerCase() : path.toUpperCase();
+
+  it("rejects an explicit database path inside the current workspace in another case", () => {
+    expectCode(
+      () => resolveUiDbPath(swapCase(join(process.cwd(), "keiko-ui.db")), {}),
+      "INVALID_REQUEST",
+    );
+  });
+
+  it("rejects a UI DB path inside a selected project in another case", () => {
+    const project = join(makeTempDir(), "repo");
+    expectCode(() => {
+      assertUiDbOutsideProject(swapCase(join(project, "state", "keiko-ui.db")), project);
+    }, "INVALID_REQUEST");
+  });
+
+  it("rejects a selected project inside the UI DB directory in another case", () => {
+    const dbPath = join(makeTempDir(), "app-data", "keiko-ui.db");
+    expectCode(() => {
+      assertUiDbOutsideProject(dbPath, swapCase(join(dirname(dbPath), "repo")));
+    }, "INVALID_REQUEST");
+  });
+
+  it("still allows the project's own .keiko runtime UI DB in another case", () => {
+    const project = makeTempDir();
+    expect(() => {
+      assertUiDbOutsideProject(swapCase(join(project, ".keiko", "ui", "keiko-ui.db")), project);
+    }).not.toThrow();
+  });
+});
+
+// The runtime-state exception must match the exact `.keiko` spelling on darwin, where a volume may
+// be case-sensitive; the workspace test stays case-insensitive.
+describe("UI DB runtime-state exception on darwin", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("admits <project>/.keiko and rejects <project>/.KEIKO", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const project = makeTempDir();
+    expect(() => {
+      assertUiDbOutsideProject(join(project, ".keiko", "x.db"), project);
+    }).not.toThrow();
+    expectCode(() => {
+      assertUiDbOutsideProject(join(project, ".KEIKO", "x.db"), project);
+    }, "INVALID_REQUEST");
+    expectCode(() => {
+      assertUiDbOutsideProject(join(project, ".keikoX", "x.db"), project);
+    }, "INVALID_REQUEST");
+  });
+
+  it("keeps linux unchanged: only the exact spelling is the state root", (ctx) => {
+    // A win32 host's path.relative compares letter case insensitively whatever process.platform
+    // reports, so the case-sensitive Linux comparison cannot be reproduced there.
+    if (process.platform === "win32") ctx.skip();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const project = makeTempDir();
+    expect(() => {
+      assertUiDbOutsideProject(join(project, ".keiko", "x.db"), project);
+    }).not.toThrow();
+    expectCode(() => {
+      assertUiDbOutsideProject(join(project, ".KEIKO", "x.db"), project);
+    }, "INVALID_REQUEST");
   });
 });

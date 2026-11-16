@@ -1,3 +1,5 @@
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSinkFor } from "../process-log-sink.js";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -16,11 +18,28 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import {
+  compareCodingWorkbenchModeAuthority,
+  isCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+
+import {
+  inspectWindowsOwnerPrivateFiles,
+  protectWindowsOwnerPrivateFile,
+  windowsOwnerPrivateVerdict,
+} from "@oscharko-dev/keiko-security/windows-owner-private";
+
+import {
+  OPENCODE_PERSISTENCE_SCHEMAS,
+  OPENCODE_PERSISTENCE_TABLE_CLASSES,
+  type OpenCodePersistenceTableClass,
+} from "./opencodePersistenceContract.js";
 
 /**
  * Server-owned retention of a settled native run's own session state (S02/S03, #3904).
@@ -36,7 +55,9 @@ import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
  * credential, no queued input and no staged undo, and a resumed run mints its own authority and
  * capabilities exactly like a fresh one. Anything that does not match the run that asks for it is
  * refused with a closed reason, and the run falls back to a fresh session with Coding History
- * context. The module reads no database content: it counts rows and compares identities.
+ * context. The module reads no database content: it counts rows and compares identities. The one
+ * owner that reads or edits a retained session's schedules does so through `readEntry` and
+ * `editEntry` (`opencodeRetainedSchedules.ts`).
  */
 
 const MIB = 1024 * 1024;
@@ -94,7 +115,8 @@ export type RetentionRefusal =
   | "expired"
   | "version-changed"
   | "workspace-changed"
-  | "window-shrunk";
+  | "window-shrunk"
+  | "model-route-changed";
 
 /**
  * Which audit check refused a copy as `schema-unknown`, so a refusal names the table or read that
@@ -105,6 +127,9 @@ export type RetentionRefusal =
 export type RetentionAuditCheck =
   | "kv-rows"
   | "workspace-rows"
+  | "job-rows"
+  | "blob-rows"
+  | "schedule-rows"
   | "copy-unreadable"
   | "audit-unreadable"
   | "count-invalid"
@@ -118,6 +143,7 @@ export interface RetainedSessionSource {
 
 /** What a retained entry is valid for. A resume must present the same task, workspace and version. */
 export interface RetainedSessionBinding {
+  readonly continuationRouteDigest?: string | undefined;
   readonly taskId: string;
   /** A digest of the workspace identity (id and canonical root); never the root itself. */
   readonly workspaceKey: string;
@@ -126,12 +152,20 @@ export interface RetainedSessionBinding {
   readonly maxInputTokens: number;
 }
 
+/**
+ * Per schedule of the retained session, the narrowest autonomy mode a run that held it was in
+ * (#4271, ADR-0137 D10): the consent a scheduled wake is bounded by. Keyed by the schedule's id.
+ */
+export type RetainedScheduleModes = Readonly<Record<string, CodingWorkbenchMode>>;
+
 export interface RetainedSessionManifest extends RetainedSessionBinding {
   readonly schemaVersion: typeof MANIFEST_SCHEMA_VERSION;
   readonly sessionId: string;
   readonly databaseBytes: number;
   readonly databaseSha256: string;
   readonly retainedAtMs: number;
+  /** Absent when the session holds no schedule. */
+  readonly scheduleModes?: RetainedScheduleModes | undefined;
 }
 
 export type RetainResult =
@@ -141,6 +175,8 @@ export type RetainResult =
       readonly messageCount: number;
       readonly entryCount: number;
       readonly prunedCount: number;
+      /** Entries a pruning wanted gone but a process holds open; the next pruning retries them. */
+      readonly blockedCount: number;
     }
   | {
       readonly ok: false;
@@ -165,11 +201,20 @@ export type CheckoutResult =
       readonly removed: boolean;
     };
 
+export type EditEntryResult<Value> =
+  | { readonly ok: true; readonly value: Value }
+  | {
+      readonly ok: false;
+      readonly reason: "no-retained-state" | "integrity-failed" | "schema-unknown";
+    };
+
 export interface PruneResult {
   readonly expired: number;
   readonly orphaned: number;
   readonly invalid: number;
   readonly quota: number;
+  /** Entries left in place because a process holds them open; the next pruning retries them. */
+  readonly blocked: number;
   readonly entryCount: number;
 }
 
@@ -183,6 +228,11 @@ export interface RetainedSessionStore {
     readonly sessionId: string;
     readonly directory: string;
     readonly sourceDatabase: string;
+    /**
+     * The settled run's effective mode: a schedule the entry did not hold before is recorded with
+     * it, and a schedule it held keeps the narrower of the two. Absent records the narrowest mode.
+     */
+    readonly scheduleConsentMode?: CodingWorkbenchMode | undefined;
   }): RetainResult;
   /**
    * Validates the task's entry against the run that asks for it and, when it matches, places a
@@ -202,8 +252,24 @@ export interface RetainedSessionStore {
     readonly source?: RetainedSessionSource | undefined;
   }): CheckoutResult;
   remove(taskId: string): void;
+  /**
+   * Reads the task's retained database read-only, when its entry is whole and its digest matches;
+   * `undefined` when the task has no entry or its entry is not one Keiko wrote.
+   */
+  readEntry<Value>(
+    taskId: string,
+    read: (database: DatabaseSync, manifest: RetainedSessionManifest) => Value,
+  ): Value | undefined;
+  /**
+   * Applies `edit` to a staged copy of the task's verified database and publishes it under the same
+   * binding and retention time with its new digest: the entry is replaced as a whole or left as it
+   * was. A copy whose classified rows the audit would refuse is never published.
+   */
+  editEntry<Value>(taskId: string, edit: (database: DatabaseSync) => Value): EditEntryResult<Value>;
   /** Removes expired, invalid, orphaned and over-quota entries and any interrupted staging. */
   prune(isLiveTask?: (taskId: string) => boolean): PruneResult;
+  /** The ids of the tasks that have an entry, from the manifests Keiko wrote. */
+  listTaskIds(): readonly string[];
 }
 
 export interface RetainedSessionStoreOptions {
@@ -215,6 +281,8 @@ export interface RetainedSessionStoreOptions {
    * entry of a task that does not.
    */
   readonly isLiveTask?: ((taskId: string) => boolean) | undefined;
+  /** Makes one retained path private to this account. Throwing refuses the retain or checkout. */
+  readonly protectPrivatePath?: ((path: string) => void) | undefined;
 }
 
 export function retainedSessionKey(taskId: string): string {
@@ -231,7 +299,10 @@ export function createRetainedSessionStore(
     remove: (taskId): void => {
       store.remove(taskId);
     },
+    readEntry: (taskId, read) => store.readEntry(taskId, read),
+    editEntry: (taskId, edit) => store.editEntry(taskId, edit),
     prune: (isLiveTask) => store.prune(isLiveTask),
+    listTaskIds: () => store.listTaskIds(),
   };
 }
 
@@ -254,11 +325,13 @@ class Store {
   private readonly now: () => number;
   private readonly limits: RetainedSessionLimits;
   private readonly isLiveTask: ((taskId: string) => boolean) | undefined;
+  private readonly protectPrivatePath: (path: string) => void;
 
   public constructor(options: RetainedSessionStoreOptions) {
     this.root = options.root;
     this.now = options.now ?? Date.now;
     this.isLiveTask = options.isLiveTask;
+    this.protectPrivatePath = options.protectPrivatePath ?? protectPrivatePathOnWindows;
     this.limits = { ...RETAINED_SESSION_LIMITS, ...options.limits };
   }
 
@@ -269,7 +342,8 @@ class Store {
     const staging = join(this.root, `.staging-${randomBytes(8).toString("hex")}`);
     try {
       this.ensureRoot();
-      const staged = this.stage(input, staging);
+      const previous = this.readManifest(join(this.root, retainedSessionKey(input.binding.taskId)));
+      const staged = this.stage(input, staging, previous?.scheduleModes);
       if (!staged.ok) return staged;
       this.publish(staging, input.binding.taskId);
       const pruned = this.prune();
@@ -279,6 +353,7 @@ class Store {
         messageCount: staged.messageCount,
         entryCount: pruned.entryCount,
         prunedCount: pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota,
+        blockedCount: pruned.blocked,
       };
     } finally {
       // A refusal is a result; a filesystem or database failure propagates to the caller, which owns
@@ -288,6 +363,9 @@ class Store {
   }
 
   public checkout(input: Parameters<RetainedSessionStore["checkout"]>[0]): CheckoutResult {
+    if (this.existingRoot() === undefined) {
+      return { ok: false, reason: "no-retained-state", removed: false };
+    }
     const entry = join(this.root, retainedSessionKey(input.binding.taskId));
     if (!existsSync(entry)) return { ok: false, reason: "no-retained-state", removed: false };
     const manifest = this.readManifest(entry);
@@ -308,18 +386,114 @@ class Store {
   }
 
   public remove(taskId: string): void {
+    if (this.existingRoot() === undefined) return;
     rmSync(join(this.root, retainedSessionKey(taskId)), { recursive: true, force: true });
+  }
+
+  public readEntry<Value>(
+    taskId: string,
+    read: (database: DatabaseSync, manifest: RetainedSessionManifest) => Value,
+  ): Value | undefined {
+    const entry = join(this.root, retainedSessionKey(taskId));
+    if (!existsSync(entry)) return undefined;
+    const manifest = this.readManifest(entry);
+    const path = join(entry, DATABASE_FILE);
+    if (manifest?.taskId !== taskId || !this.verifiedDatabase(path, manifest)) return undefined;
+    const database = new DatabaseSync(path, { readOnly: true });
+    try {
+      return read(database, manifest);
+    } finally {
+      database.close();
+    }
+  }
+
+  // A database is hashed once per digest, size and modification time: a periodic reader does not
+  // rehash an unchanged entry, and any change to the file is hashed again.
+  private readonly verified = new Map<string, string>();
+
+  private verifiedDatabase(path: string, manifest: RetainedSessionManifest): boolean {
+    let stat: ReturnType<typeof statSync>;
+    try {
+      stat = statSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    if (!stat.isFile() || stat.size !== manifest.databaseBytes) return false;
+    const key = `${manifest.databaseSha256}:${String(stat.size)}:${String(stat.mtimeMs)}`;
+    if (this.verified.get(path) === key) return true;
+    if (hashFile(path).sha256 !== manifest.databaseSha256) return false;
+    this.verified.set(path, key);
+    return true;
+  }
+
+  public listTaskIds(): readonly string[] {
+    if (!existsSync(this.root)) return [];
+    const ids: string[] = [];
+    for (const name of readdirSync(this.root)) {
+      if (!ENTRY_NAME.test(name)) continue;
+      const manifest = this.readManifest(join(this.root, name));
+      if (manifest !== undefined && retainedSessionKey(manifest.taskId) === name)
+        ids.push(manifest.taskId);
+    }
+    return ids;
+  }
+
+  public editEntry<Value>(
+    taskId: string,
+    edit: (database: DatabaseSync) => Value,
+  ): EditEntryResult<Value> {
+    const entry = join(this.root, retainedSessionKey(taskId));
+    if (!existsSync(entry)) return { ok: false, reason: "no-retained-state" };
+    const manifest = this.readManifest(entry);
+    const source = join(entry, DATABASE_FILE);
+    if (
+      manifest?.taskId !== taskId ||
+      fileSize(source) !== manifest.databaseBytes ||
+      hashFile(source).sha256 !== manifest.databaseSha256
+    ) {
+      return { ok: false, reason: "integrity-failed" };
+    }
+    const staging = join(this.root, `.staging-${randomBytes(8).toString("hex")}`);
+    try {
+      mkdirSync(staging, { mode: 0o700 });
+      const database = join(staging, DATABASE_FILE);
+      copyFileSync(source, database, fsConstants.COPYFILE_EXCL);
+      chmodSync(database, 0o600);
+      const value = editDatabase(database, edit);
+      if (stagedRowsRefused(database, manifest)) return { ok: false, reason: "schema-unknown" };
+      const hashed = hashFile(database);
+      const { scheduleModes: _previous, ...rest } = manifest;
+      // An edit adds no schedule and widens no consent; a removed schedule leaves the ledger.
+      const scheduleModes = consentLedger(
+        database,
+        manifest.scheduleModes,
+        "governed-assist",
+        "autonomous-delivery",
+      );
+      const updated: RetainedSessionManifest = {
+        ...rest,
+        databaseBytes: hashed.bytes,
+        databaseSha256: hashed.sha256,
+        ...(scheduleModes === undefined ? {} : { scheduleModes }),
+      };
+      writeFileSync(join(staging, MANIFEST_FILE), JSON.stringify(updated), { mode: 0o600 });
+      this.publish(staging, taskId);
+      return { ok: true, value };
+    } finally {
+      rmSync(staging, { recursive: true, force: true });
+    }
   }
 
   public prune(
     isLiveTask: ((taskId: string) => boolean) | undefined = this.isLiveTask,
   ): PruneResult {
-    const counts = { expired: 0, orphaned: 0, invalid: 0, quota: 0 };
-    if (!existsSync(this.root)) return { ...counts, entryCount: 0 };
+    const counts = { expired: 0, orphaned: 0, invalid: 0, quota: 0, blocked: 0 };
+    if (this.existingRoot() === undefined) return { ...counts, entryCount: 0 };
     const entries: PrunableEntry[] = [];
     for (const name of readdirSync(this.root)) {
       if (INTERRUPTED_ENTRY.test(name)) {
-        rmSync(join(this.root, name), { recursive: true, force: true });
+        if (!removeUnlessHeld(join(this.root, name))) counts.blocked += 1;
         continue;
       }
       // A name Keiko did not write is not Keiko's to delete.
@@ -328,7 +502,7 @@ class Store {
       if (kept !== undefined) entries.push(kept);
     }
     const remaining = this.evictOverQuota(entries, counts);
-    return { ...counts, entryCount: remaining };
+    return { ...counts, entryCount: remaining + counts.blocked };
   }
 
   // The steps of a retain, in the order that makes a refusal cost nothing: the compacted copy is
@@ -336,15 +510,19 @@ class Store {
   private stage(
     input: Parameters<RetainedSessionStore["retain"]>[0],
     staging: string,
+    previousModes: RetainedScheduleModes | undefined,
   ): StageResult {
     const size = fileSize(input.sourceDatabase);
     if (size === undefined) return { ok: false, reason: "database-missing" };
     if (size > this.limits.maxDatabaseBytes) return { ok: false, reason: "database-oversized" };
     mkdirSync(staging, { mode: 0o700 });
+    this.protectPrivatePath(staging);
     const database = join(staging, DATABASE_FILE);
     if (compactCopy(input.sourceDatabase, database) === "unreadable") {
       return { ok: false, reason: "schema-unknown", check: "copy-unreadable" };
     }
+    this.protectPrivatePath(database);
+    dropSchedulerLease(database);
     const audit = auditDatabase(database, {
       sessionId: input.sessionId,
       directory: input.directory,
@@ -358,6 +536,8 @@ class Store {
     if (hashed.bytes > this.limits.maxDatabaseBytes) {
       return { ok: false, reason: "database-oversized" };
     }
+    const consent = input.scheduleConsentMode ?? "governed-assist";
+    const scheduleModes = consentLedger(database, previousModes, consent, consent);
     const manifest: RetainedSessionManifest = {
       schemaVersion: MANIFEST_SCHEMA_VERSION,
       ...input.binding,
@@ -365,8 +545,10 @@ class Store {
       databaseBytes: hashed.bytes,
       databaseSha256: hashed.sha256,
       retainedAtMs: this.now(),
+      ...(scheduleModes === undefined ? {} : { scheduleModes }),
     };
     writeFileSync(join(staging, MANIFEST_FILE), JSON.stringify(manifest), { mode: 0o600 });
+    this.protectPrivatePath(join(staging, MANIFEST_FILE));
     return { ok: true, databaseBytes: hashed.bytes, messageCount: audit.messageCount };
   }
 
@@ -380,7 +562,8 @@ class Store {
       renameSync(entry, aside);
     }
     renameSync(staging, entry);
-    if (aside !== undefined) rmSync(aside, { recursive: true, force: true });
+    // The new entry is published; a replaced one a process still holds is an interrupted leftover.
+    if (aside !== undefined) removeUnlessHeld(aside);
   }
 
   private copyOut(
@@ -389,7 +572,7 @@ class Store {
     input: Parameters<RetainedSessionStore["checkout"]>[0],
   ): CheckoutResult {
     const source = join(entry, DATABASE_FILE);
-    if (fileSize(source) !== manifest.databaseBytes) {
+    if (fileSize(source, "retained") !== manifest.databaseBytes) {
       return this.refuse(input.binding.taskId, "integrity-failed");
     }
     // Exclusive: a file that is already there is not Keiko's to overwrite, and not to delete either.
@@ -408,6 +591,7 @@ class Store {
     input: Parameters<RetainedSessionStore["checkout"]>[0],
   ): CheckoutResult {
     chmodSync(input.destinationDatabase, 0o600);
+    this.protectPrivatePath(input.destinationDatabase);
     const verdict = copyVerdict(manifest, input);
     if (typeof verdict === "string") {
       rmSync(input.destinationDatabase, { force: true });
@@ -425,10 +609,12 @@ class Store {
   }
 
   // A refusal that cannot become valid removes the entry; one that depends on the asking run only
-  // (a smaller window) leaves it for a run that can take it.
+  // (a smaller window, another model route) leaves it for a run that can take it.
   private refuse(taskId: string, reason: RetentionRefusal): CheckoutResult {
-    const removed = reason !== "window-shrunk";
-    if (removed) this.remove(taskId);
+    const removed =
+      reason !== "window-shrunk" &&
+      reason !== "model-route-changed" &&
+      removeUnlessHeld(join(this.root, retainedSessionKey(taskId)));
     return { ok: false, reason, removed };
   }
 
@@ -445,26 +631,44 @@ class Store {
       manifest.workspaceKey !== source?.workspaceKey
     )
       return "workspace-changed";
+    if (binding.continuationRouteDigest !== manifest.continuationRouteDigest)
+      return "model-route-changed";
     if (binding.maxInputTokens < manifest.maxInputTokens) return "window-shrunk";
     return undefined;
   }
 
   private ensureRoot(): void {
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
-    const stat = lstatSync(this.root);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("retained-root-invalid");
+    const stat = this.existingRoot();
+    if (stat === undefined) throw new Error("retained-root-invalid");
     if ((stat.mode & 0o077) !== 0) chmodSync(this.root, 0o700);
+  }
+
+  // Recheck at every public entry: a root accepted during retain may have been redirected since.
+  // This rejects an existing link/junction; it is not descriptor-relative protection from races.
+  private existingRoot(): Stats | undefined {
+    let stat: Stats;
+    try {
+      stat = lstatSync(this.root);
+    } catch (error) {
+      if (isAbsentPath(error)) return undefined;
+      throw error;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("retained-root-invalid");
+    return stat;
   }
 
   private readManifest(entry: string): RetainedSessionManifest | undefined {
     const path = join(entry, MANIFEST_FILE);
-    const size = fileSize(path);
-    if (size === undefined || size > this.limits.maxManifestBytes) return undefined;
     try {
+      const directory = lstatSync(entry);
+      if (!directory.isDirectory() || directory.isSymbolicLink()) return undefined;
+      const size = fileSize(path, "retained");
+      if (size === undefined || size > this.limits.maxManifestBytes) return undefined;
       return parseManifest(JSON.parse(readFileSync(path, "utf8")) as unknown);
     } catch (error) {
       // Text that is not JSON is a manifest that cannot be trusted; an unreadable file is a failure.
-      if (error instanceof SyntaxError) return undefined;
+      if (error instanceof SyntaxError || isAbsentPath(error)) return undefined;
       throw error;
     }
   }
@@ -472,7 +676,7 @@ class Store {
   private pruneEntry(
     name: string,
     isLiveTask: ((taskId: string) => boolean) | undefined,
-    counts: { expired: number; orphaned: number; invalid: number },
+    counts: { expired: number; orphaned: number; invalid: number; blocked: number },
   ): PrunableEntry | undefined {
     const path = join(this.root, name);
     const manifest = this.readManifest(path);
@@ -480,8 +684,8 @@ class Store {
     if (verdict === "kept" && manifest !== undefined) {
       return { path, bytes: manifest.databaseBytes, retainedAtMs: manifest.retainedAtMs };
     }
-    rmSync(path, { recursive: true, force: true });
-    if (verdict !== "kept") counts[verdict] += 1;
+    if (!removeUnlessHeld(path)) counts.blocked += 1;
+    else if (verdict !== "kept") counts[verdict] += 1;
     return undefined;
   }
 
@@ -495,7 +699,10 @@ class Store {
     return isLiveTask !== undefined && !isLiveTask(manifest.taskId) ? "orphaned" : "kept";
   }
 
-  private evictOverQuota(entries: PrunableEntry[], counts: { quota: number }): number {
+  private evictOverQuota(
+    entries: PrunableEntry[],
+    counts: { quota: number; blocked: number },
+  ): number {
     entries.sort((a, b) => a.retainedAtMs - b.retainedAtMs);
     let total = entries.reduce((sum, entry) => sum + entry.bytes, 0);
     while (
@@ -504,9 +711,9 @@ class Store {
     ) {
       const oldest = entries.shift();
       if (oldest === undefined) break;
-      rmSync(oldest.path, { recursive: true, force: true });
       total -= oldest.bytes;
-      counts.quota += 1;
+      if (removeUnlessHeld(oldest.path)) counts.quota += 1;
+      else counts.blocked += 1;
     }
     return entries.length;
   }
@@ -564,6 +771,9 @@ function copyVerdict(
 
 function validBinding(binding: RetainedSessionBinding): boolean {
   return (
+    (binding.continuationRouteDigest === undefined ||
+      (typeof binding.continuationRouteDigest === "string" &&
+        SHA256.test(binding.continuationRouteDigest))) &&
     TASK_ID.test(binding.taskId) &&
     SHA256.test(binding.workspaceKey) &&
     RUNTIME_VERSION.test(binding.runtimeVersion) &&
@@ -592,12 +802,18 @@ function compareKeys(a: string, b: string): number {
 
 function parseManifest(value: unknown): RetainedSessionManifest | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const keys = Object.keys(value).sort(compareKeys);
+  const keys = Object.keys(value)
+    .filter((key) => key !== "continuationRouteDigest" && key !== "scheduleModes")
+    .sort(compareKeys);
   if (keys.length !== MANIFEST_KEYS.length || keys.some((key, i) => key !== MANIFEST_KEYS[i])) {
     return undefined;
   }
   const candidate = value as RetainedSessionManifest;
-  return validBinding(candidate) && validManifestEvidence(candidate) ? candidate : undefined;
+  return validBinding(candidate) &&
+    validManifestEvidence(candidate) &&
+    validScheduleModes(candidate.scheduleModes)
+    ? candidate
+    : undefined;
 }
 
 function validManifestEvidence(manifest: RetainedSessionManifest): boolean {
@@ -613,15 +829,51 @@ function validManifestEvidence(manifest: RetainedSessionManifest): boolean {
   );
 }
 
-function fileSize(path: string): number | undefined {
+function fileSize(path: string, kind: "source" | "retained" = "source"): number | undefined {
   try {
-    const stat = statSync(path);
-    return stat.isFile() ? stat.size : undefined;
+    // Stored entries are private copies: never read through a final link or a second file name.
+    // The runtime-owned source retains its existing read-only input semantics.
+    const stat = kind === "retained" ? lstatSync(path) : statSync(path);
+    return stat.isFile() && (kind !== "retained" || stat.nlink === 1) ? stat.size : undefined;
   } catch (error) {
     // Only an absent path is "no file"; a path that cannot be examined is a failure.
     if (isAbsentPath(error)) return undefined;
     throw error;
   }
+}
+
+/**
+ * On Windows a file a process holds open cannot be removed, nor can a directory above it. That is a
+ * state to retry, counted by the caller and written to the Activity Log; any other failure, and any
+ * failure on a host whose removal does not depend on open handles, keeps its own cause.
+ */
+function removeUnlessHeld(path: string): boolean {
+  try {
+    rmSync(path, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const held = code === "EPERM" || code === "EBUSY" || code === "EACCES" || code === "ENOTEMPTY";
+    if (process.platform === "win32" && held) return false;
+    throw error;
+  }
+}
+
+/**
+ * Windows reports synthesized mode bits, so `chmod` keeps nobody out and a retained conversation
+ * would inherit whatever its parent directory grants. The DACL is replaced, and a file is read back
+ * through the shared owner-private verdict. A failure propagates and refuses the operation.
+ */
+function protectPrivatePathOnWindows(path: string): void {
+  if (process.platform !== "win32") return;
+  const securityLogSink = processServerLogSinkFor(UNKNOWN_CORRELATION_ID);
+  protectWindowsOwnerPrivateFile(path, { securityLogSink });
+  const opened = statSync(path, { bigint: true });
+  if (!opened.isFile()) return;
+  const inspection = inspectWindowsOwnerPrivateFiles([path], { securityLogSink });
+  const facts = inspection.files[0] ?? { kind: "unavailable" as const };
+  const verdict = windowsOwnerPrivateVerdict(facts, inspection.principal, opened);
+  if (verdict.kind !== "owner-private") throw new Error("retained-session-not-owner-private");
 }
 
 function isAbsentPath(error: unknown): boolean {
@@ -669,20 +921,130 @@ function compactCopy(source: string, destination: string): "copied" | "unreadabl
   }
 }
 
+/** Runs an edit on a private copy; closing the last connection leaves no journal beside it. */
+function editDatabase<Value>(path: string, edit: (database: DatabaseSync) => Value): Value {
+  const database = new DatabaseSync(path);
+  try {
+    return edit(database);
+  } finally {
+    database.close();
+  }
+}
+
+/** Whether the classified rows of an edited copy are ones a retain would refuse. */
+function stagedRowsRefused(path: string, manifest: RetainedSessionManifest): boolean {
+  const classes = Object.hasOwn(OPENCODE_PERSISTENCE_TABLE_CLASSES, manifest.runtimeVersion)
+    ? OPENCODE_PERSISTENCE_TABLE_CLASSES[manifest.runtimeVersion]
+    : undefined;
+  if (classes === undefined) return true;
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    return refusalForClassifiedRows(database, classes, manifest.sessionId) !== undefined;
+  } finally {
+    database.close();
+  }
+}
+
+/** The scheduler's leader lease row (`kv`, 2.2.5): process-lifetime state of the runtime. */
+const SCHEDULER_LEASE_KEY = "schedule:leader";
+const SCHEDULE_ID = /^sch_[0-9A-Za-z]{1,64}$/u;
+/** At most this many schedules are carried in a ledger; more refuse the retain as unknown state. */
+export const RETAINED_SCHEDULE_MAX = 64;
+
+/**
+ * The lease row is process-lifetime state: Keiko's own hold (`opencodeScheduleLease.ts`) or a
+ * runtime's lease left behind when its process was ended. The staged copy drops exactly that row;
+ * every other `kv` row still refuses the copy, and every checkout writes Keiko's hold afresh.
+ */
+function dropSchedulerLease(path: string): void {
+  const database = new DatabaseSync(path);
+  try {
+    const table = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'kv'")
+      .get();
+    if (table !== undefined) {
+      database.prepare("DELETE FROM kv WHERE key = ?").run(SCHEDULER_LEASE_KEY);
+    }
+  } finally {
+    database.close();
+  }
+}
+
+function validScheduleModes(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const entries = Object.entries(value);
+  return (
+    entries.length > 0 &&
+    entries.length <= RETAINED_SCHEDULE_MAX &&
+    entries.every(([id, mode]) => SCHEDULE_ID.test(id) && isCodingWorkbenchMode(mode))
+  );
+}
+
+/**
+ * The consent ledger of a staged copy: every schedule it holds, with the narrower of the mode it
+ * was recorded with and `bound`; a schedule the ledger did not hold is recorded with `unrecorded`.
+ * `undefined` when the copy holds no schedule.
+ */
+function consentLedger(
+  path: string,
+  previous: RetainedScheduleModes | undefined,
+  unrecorded: CodingWorkbenchMode,
+  bound: CodingWorkbenchMode,
+): RetainedScheduleModes | undefined {
+  const ids = scheduleIds(path);
+  if (ids.length === 0) return undefined;
+  const ledger: Record<string, CodingWorkbenchMode> = {};
+  for (const id of ids) {
+    const recorded =
+      (previous !== undefined && Object.hasOwn(previous, id) ? previous[id] : undefined) ??
+      unrecorded;
+    ledger[id] = compareCodingWorkbenchModeAuthority(recorded, bound) < 0 ? recorded : bound;
+  }
+  return ledger;
+}
+
+function scheduleIds(path: string): readonly string[] {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    const table = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schedule'")
+      .get();
+    if (table === undefined) return [];
+    const rows = database
+      .prepare("SELECT id FROM schedule ORDER BY id LIMIT ?")
+      .all(RETAINED_SCHEDULE_MAX + 1) as readonly { readonly id?: unknown }[];
+    const ids = rows.map((row) => row.id);
+    if (
+      ids.length > RETAINED_SCHEDULE_MAX ||
+      ids.some((id) => typeof id !== "string" || !SCHEDULE_ID.test(id))
+    )
+      throw new Error("retained-schedules-invalid");
+    return ids as readonly string[];
+  } finally {
+    database.close();
+  }
+}
+
 function sqliteErrorCode(error: unknown): number | undefined {
   const code = (error as { readonly errcode?: unknown } | null)?.errcode;
   return typeof code === "number" ? code : undefined;
 }
 
-/** Tables the runtime keeps authority or credentials in; a retained copy holds none of their rows. */
-const GRANT_TABLES = ["permission"] as const;
-const CREDENTIAL_TABLES = ["credential", "account", "account_state", "control_account"] as const;
-const PENDING_TABLES = ["session_pending", "session_inbox"] as const;
-/** Tables whose content Keiko does not model: any row is a state it cannot vouch for. */
-const UNKNOWN_STATE_TABLES = ["kv", "workspace"] as const;
-const UNKNOWN_STATE_CHECKS: Readonly<
-  Record<(typeof UNKNOWN_STATE_TABLES)[number], RetentionAuditCheck>
-> = { kv: "kv-rows", workspace: "workspace-rows" };
+/** Which refusal a row in each class of table earns; the classes are per runtime version. */
+const CLASS_REFUSALS = [
+  ["grant", "grant-present"],
+  ["credential", "credential-present"],
+  ["pending-input", "pending-input"],
+] as const;
+/** The closed check each table of unknown content reports. */
+const UNKNOWN_STATE_CHECKS: Readonly<Record<string, RetentionAuditCheck>> = {
+  kv: "kv-rows",
+  workspace: "workspace-rows",
+  job: "job-rows",
+  blob: "blob-rows",
+  blob_ref: "blob-rows",
+};
 
 interface SessionRow {
   readonly id?: unknown;
@@ -732,23 +1094,14 @@ export function auditDatabase(path: string, expected: AuditExpectation): AuditRe
 }
 
 function auditOpenDatabase(database: DatabaseSync, expected: AuditExpectation): AuditResult {
-  const tables: readonly (readonly [readonly string[], RetentionRefusal])[] = [
-    [GRANT_TABLES, "grant-present"],
-    [CREDENTIAL_TABLES, "credential-present"],
-    [PENDING_TABLES, "pending-input"],
-  ];
-  for (const [names, reason] of tables) {
-    for (const name of names) {
-      if (rowCount(database, `SELECT COUNT(*) AS n FROM "${name}"`) !== 0) {
-        return { ok: false, reason };
-      }
-    }
-  }
-  for (const name of UNKNOWN_STATE_TABLES) {
-    if (rowCount(database, `SELECT COUNT(*) AS n FROM "${name}"`) !== 0) {
-      return { ok: false, reason: "schema-unknown", check: UNKNOWN_STATE_CHECKS[name] };
-    }
-  }
+  const classes = Object.hasOwn(OPENCODE_PERSISTENCE_TABLE_CLASSES, expected.version)
+    ? OPENCODE_PERSISTENCE_TABLE_CLASSES[expected.version]
+    : undefined;
+  const refusal =
+    classes === undefined
+      ? undefined
+      : refusalForClassifiedRows(database, classes, expected.sessionId);
+  if (refusal !== undefined) return refusal;
   if (!matchesPersistenceContract(database, expected.version)) {
     return { ok: false, reason: "schema-unknown", check: "schema-drift" };
   }
@@ -761,14 +1114,65 @@ function auditOpenDatabase(database: DatabaseSync, expected: AuditExpectation): 
   if (sessions.length !== 1 || session === undefined) {
     return { ok: false, reason: "session-mismatch" };
   }
-  const refusal = sessionRefusal(session, expected);
-  if (refusal !== undefined) return { ok: false, reason: refusal };
+  const sessionProblem = sessionRefusal(session, expected);
+  if (sessionProblem !== undefined) return { ok: false, reason: sessionProblem };
   const messageCount = rowCount(
     database,
     "SELECT COUNT(*) AS n FROM session_message WHERE session_id = ?",
     expected.sessionId,
   );
   return { ok: true, messageCount };
+}
+
+function refusalForClassifiedRows(
+  database: DatabaseSync,
+  classes: Readonly<Record<string, OpenCodePersistenceTableClass>>,
+  sessionId: string,
+): AuditResult | undefined {
+  const entries = Object.entries(classes);
+  const hasRows = ([name]: readonly [string, unknown]): boolean =>
+    rowCount(database, `SELECT COUNT(*) AS n FROM "${name}"`) !== 0;
+  for (const [tableClass, reason] of CLASS_REFUSALS) {
+    if (entries.filter((entry) => entry[1] === tableClass).some((entry) => hasRows(entry))) {
+      return { ok: false, reason };
+    }
+  }
+  const unknown = entries
+    .filter((entry) => entry[1] === "unknown-state")
+    .find((entry) => hasRows(entry));
+  if (unknown === undefined) {
+    const schedules = entries.filter((entry) => entry[1] === "schedule-state");
+    return schedules.some(([name]) => unadmittedScheduleRows(database, name, sessionId) !== 0)
+      ? { ok: false, reason: "schema-unknown", check: "schedule-rows" }
+      : undefined;
+  }
+  return {
+    ok: false,
+    reason: "schema-unknown",
+    check: UNKNOWN_STATE_CHECKS[unknown[0]] ?? "schema-drift",
+  };
+}
+
+/** The largest schedule action (its prompt) and name a retained copy may carry, in characters. */
+export const RETAINED_SCHEDULE_ACTION_MAX_CHARS = 16_384;
+export const RETAINED_SCHEDULE_NAME_MAX_CHARS = 256;
+
+/**
+ * Schedule rows a retained copy may not carry: one of another session or of none, a status the
+ * producer does not write, an id Keiko cannot name, an oversized action or name, check state, or any
+ * `if`/`until` check. A shell check runs with the runtime server's whole environment, its secrets
+ * included, outside the policy hook's shell scrub (measured with the real 2.2.5 runtime); a Code
+ * Mode check would boot a runtime for every poll. The policy refuses both at creation, so a row
+ * that carries one is state Keiko did not admit. More than `RETAINED_SCHEDULE_MAX` rows count too.
+ */
+function unadmittedScheduleRows(database: DatabaseSync, table: string, sessionId: string): number {
+  const unadmitted = rowCount(
+    database,
+    `SELECT COUNT(*) AS n FROM "${table}" WHERE session_id IS NOT ? OR status NOT IN ('active', 'paused', 'done') OR "check" IS NOT NULL OR state IS NOT NULL OR id NOT GLOB 'sch_?*' OR substr(id, 5) GLOB '*[^0-9A-Za-z]*' OR length(id) > 68 OR length(action) > ${String(RETAINED_SCHEDULE_ACTION_MAX_CHARS)} OR length(COALESCE(name, '')) > ${String(RETAINED_SCHEDULE_NAME_MAX_CHARS)}`,
+    sessionId,
+  );
+  const total = rowCount(database, `SELECT COUNT(*) AS n FROM "${table}"`);
+  return unadmitted + Math.max(0, total - RETAINED_SCHEDULE_MAX);
 }
 
 interface SchemaObjectRow {
@@ -816,13 +1220,22 @@ function sameMembers(actual: readonly string[], expected: readonly string[] | un
   return new Set(actual).size === actual.length && actual.every((name) => known.has(name));
 }
 
+/**
+ * The spelling the runtime's database keeps a directory in. Its API answers `C:\work`, and its
+ * `session_v2` row holds `C:/work`. A backslash is an ordinary file name character on POSIX, so only
+ * a drive path is respelled.
+ */
+function persistedDirectory(directory: string): string {
+  return /^[A-Za-z]:[\\/]/u.test(directory) ? directory.replaceAll("\\", "/") : directory;
+}
+
 function sessionRefusal(
   session: SessionRow,
   expected: AuditExpectation,
 ): RetentionRefusal | undefined {
   if (
     session.id !== expected.sessionId ||
-    session.directory !== expected.directory ||
+    session.directory !== persistedDirectory(expected.directory) ||
     session.version !== expected.version ||
     session.parent_id !== null ||
     session.workspace_id !== null ||

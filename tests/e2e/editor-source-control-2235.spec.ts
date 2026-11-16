@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GitEditorDiffResponse } from "@oscharko-dev/keiko-contracts";
@@ -88,11 +89,11 @@ async function currentSessionId(
 
 async function seedFilesAndEditorWindows(page: Page, fixture: GitEditorWorkspace): Promise<void> {
   await page.addInitScript(
-    ({ root, file }) => {
+    ({ argument: { root, file }, storageKeys }) => {
       window.localStorage.setItem("keiko.theme", "dark");
-      window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "source-control-files-2235",
@@ -118,9 +119,9 @@ async function seedFilesAndEditorWindows(page: Page, fixture: GitEditorWorkspace
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { root: fixture.root, file: fixture.nestedChangedPath },
+    await workspaceStorageArgs(page, { root: fixture.root, file: fixture.nestedChangedPath }),
   );
 }
 

@@ -273,16 +273,17 @@ describe("a Coding Workbench run keeps its window's session active (ADR-0141 D5)
     abortCodingRunSessionLeases(fixture.deps.codingAppSessionChannel);
   });
 
-  // Rotation re-issues the session as a new registry record whose operation count starts at zero,
-  // so the lease its predecessor held no longer protects it (PR #4096 review).
-  it("holds a rotated session again on the run's next admitted mutation", () => {
+  // Rotation preserves the admitted run lease even before the browser sends its next mutation.
+  it("preserves a rotated run lease before and after the next admitted mutation", () => {
     const fixture = leaseFixture();
     fixture.hold();
     const sessionId = fixture.registry.verify(fixture.token)?.sessionId;
     if (sessionId === undefined) throw new Error("session missing");
     const rotated = fixture.registry.rotate(sessionId);
     if (rotated === undefined) throw new Error("rotation refused");
-    expect(fixture.registry.inspectOperationCount(rotated.cookieToken)).toBe(0);
+    expect(fixture.registry.inspectOperationCount(rotated.cookieToken)).toBe(1);
+    vi.advanceTimersByTime(IDLE_TTL_MS + 60_000);
+    expect(fixture.registry.inspect(rotated.cookieToken)).toBeDefined();
 
     fixture.request.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${rotated.cookieToken}`;
     fixture.hold();

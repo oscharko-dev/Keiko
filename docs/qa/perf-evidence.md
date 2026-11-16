@@ -172,7 +172,7 @@ npm run perf:evidence:regen:tool-catalog:portable -- --baseline origin/dev
 
 Start from an installed checkout with `npm run build:packages` completed so the producer's workspace
 imports exist. Commit the implementation first and fetch the intended baseline before this command.
-It requires a clean checkout, a baseline that is an ancestor of HEAD, Node 24.18.0, npm 11.16.0,
+It requires a clean checkout, a baseline that is an ancestor of HEAD, Node 26.13.1, npm 11.20.0,
 and a dedicated Linux, macOS or Windows x64/arm64 host with at least 14 logical cores. It archives
 the baseline into a separate directory, installs both lockfiles with `npm ci --ignore-scripts`,
 and builds both package trees. Two fresh Node processes then measure the baseline and candidate
@@ -267,7 +267,7 @@ copies both documents back — review and commit them as your final commit (the 
 subject paths, so committing them does not invalidate what they bind).
 
 On macOS/Windows the command fails closed and prints the pinned container invocation
-(`node:24.18.0-bookworm`, `--privileged` for Bubblewrap, Playwright Chromium). A bind mount
+(`node:26.13.1-bookworm`, `--privileged` for Bubblewrap, Playwright Chromium). A bind mount
 installs Linux binaries into the mounted repo's `node_modules` — irrelevant with the recommended
 throwaway clone below; only after mounting your working checkout directly re-run `npm install`.
 
@@ -281,7 +281,7 @@ throwaway clone below; only after mounting your working checkout directly re-run
   independent evidence checker are. Name the clone directory `*.noindex` so Spotlight does not
   index-storm the host during the run.
 - **Single occupancy.** Measurement is exclusive: before starting, check
-  `docker ps` for any other `node:24*` measurement container (other agents measure too) and do
+  `docker ps` for any other `node:26*` measurement container (other agents measure too) and do
   not run builds/tests/gates on the host for the duration. A budget verdict measured on a loaded
   host is an environment verdict, not a product regression — fix the load, not the code. Since
   ADR-0156 D5 the run still completes and writes its document, so you can read the numbers and
@@ -404,7 +404,7 @@ npm run perf:evidence:coding-runtime
 npm run check:perf-evidence:coding-runtime -- --enforce-source-freshness
 ```
 
-Use the pinned Node 24.18.0/npm 11.16.0 installation. Staging uses the existing approved-payload
+Use the pinned official Node 26.13.1/npm 11.20.0 installation. Staging uses the existing approved-payload
 downloader/verifier and builds the secure-read helper; production discovery checks their integrity
 again for the measurement. The producer compiles the existing test-only production-composition
 support before collecting samples. Source, ruler and environment stamps must remain equal before
@@ -438,6 +438,14 @@ npm run perf:evidence:coding-runtime -- --recalibrate
 npm run perf:evidence:coding-runtime
 npm run check:perf-evidence:coding-runtime -- --enforce-source-freshness
 ```
+
+The 2026-11-15 owner decision retires Node 24. For that exact toolchain migration,
+`--recalibrate-toolchain` accepts only the newly governed Node/npm pair while requiring every other
+recorded host, Git, OpenCode payload and helper identity to match the previous calibration. It uses
+the same non-widening budget ratchet as ordinary recalibration. Then record an independent candidate
+measurement. The tool-catalog paired producer validates historical documents with the baseline
+revision's checker and measures both revisions under Node 26 with the candidate's ruler; its six
+ceilings remain unchanged. D12 and workspace measurements use the Node 26 reference container.
 
 `--recalibrate` requires the exact existing reference environment and a valid existing calibration
 and budget. It derives ceilings from the new samples but writes the minimum of each new ceiling and
@@ -643,6 +651,45 @@ ceilings.
 The cold-start ceiling rose by 18 %. The measured p95 rose by 7 % over the 1.3.2 measurement, and the
 unchanged 1.3.2 commit itself rose by 10 % on the same host. The next ordinary re-measurement on this
 reference uses `--recalibrate` and its shrink-only ratchet again.
+
+**Reference re-established, 2026-11-06 (owner decision, PR #4275, #4271).** The OpenCode upgrade
+from 2.1.4 to 2.2.5 changed the runtime version and payload digest, and three ruler inputs moved
+(`productionOpenCodeBackend.functional/_support.ts`, `portable-runtime-approvals.json` and
+`scripts/coding-runtime-performance-harness.mjs`). The rest of the recorded environment is
+unchanged: kernel 27.0.0, cores, memory, CPU model digest, Node 24.18.0 / npm 11.16.0, Apple Git
+2.54.0 and the secure-read helper digest. The shrink-only ratchet of #4260 had tightened the
+cold-start ceiling to 1512.4 on 2026-11-05, from a measurement of 1478.6.
+
+The 2.2.5 upgrade is not slower, but the host drifted:
+
+- First, `--recalibrate-runtime` ran. Its candidate was within every ceiling except cold start.
+- An A/B in the same quiet window, with the lab models unloaded, measured cold start at p95 1685.0
+  on 2.2.5 at the head under review and 1682.1 on the unchanged 2.1.4 merge base `033dd3bc2`.
+- Bounded throughput was faster on 2.2.5: 138.7 against 159.0.
+- An earlier attempt the same night, while two lab models were serving inference, measured p95
+  3158.4 on the head and 2520.0 on the base. Those runs were discarded as host load.
+
+The ratchet cannot raise the cold-start ceiling, so the owner decided to re-establish the
+reference for cold start only.
+
+The step 2 procedure ran at `343e103f6` in one quiet window: `npm ci`, the staged runtime,
+`--calibrate`, an independent measurement and the freshness check. Only cold start takes its fresh
+ceiling. Readiness, the first SSE byte and bounded throughput keep their previously reviewed,
+tighter ceilings.
+
+| Metric                | Previous ceiling (2026-11-05) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1512.4                        | 1799.9                    | 1799.9            | 1775.0       |
+| `readinessMs`         | 3.18                          | 5.09                      | 3.18              | 2.60         |
+| `sseFirstByteMs`      | 3.25                          | 4.03                      | 3.25              | 2.30         |
+| `boundedThroughputMs` | 160.0                         | 162.5                     | 160.0             | 142.3        |
+
+The cold-start ceiling rose by 19 %. Lower it again with `--recalibrate` once the host measures
+the base below it.
+
+Homebrew Git 2.56.0 precedes Apple Git on this host's default `PATH`, and the producer records the
+Git it finds first. Put `/usr/bin` ahead of `/opt/homebrew/bin` with the pinned Node, or the
+environment no longer matches the reference.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set

@@ -13,8 +13,6 @@ import {
   MAX_RETAINED_JOBS,
   ManualPodJobRegistry,
   applyCrawlEvent,
-  buildHttpManualSource,
-  createTerminalState,
   currentManualPodEgressConfig,
   executeJob,
   getManualPodJob,
@@ -22,7 +20,6 @@ import {
   manualPodJobRegistry,
   projectJob,
   refreshTerminalState,
-  startManualPodCreate,
   startManualPodRefresh,
   type ManualPodJobContext,
 } from "./manual-pod-service.js";
@@ -177,7 +174,7 @@ describe("ManualPodJobRegistry", () => {
     // Regression for the round-3 finding: when no terminal job exists to evict, evictIfFull()
     // previously dropped the oldest RUNNING entry's registry record without touching its
     // controller. The underlying crawl/index pipeline (which cooperatively honors
-    // controller.signal -- see refreshRun/createRun) kept running invisibly: no longer reachable
+    // controller.signal -- see refreshRun) kept running invisibly: no longer reachable
     // via get()/patch(), so it could not be polled or cancelled, and its eventual terminal patch
     // would silently no-op. Fill the registry to capacity with only running jobs, then register
     // one more and assert the evicted victim's controller was actually aborted.
@@ -354,70 +351,6 @@ describe("refreshTerminalState", () => {
   });
 });
 
-describe("createTerminalState", () => {
-  it("is succeeded only when at least one document's vectors were persisted", () => {
-    expect(createTerminalState(PROGRESS)).toBe("succeeded");
-  });
-
-  // Audit regression (0.3.0): a partially crawled / partially indexed import persisted SOME vectors,
-  // so the terminal state was "succeeded" and the UI showed its success message — while pages of the
-  // approved manual had been skipped or had failed to index. A usable-but-incomplete pod is neither a
-  // success nor a failure; it is `partial`, and the operator has to be told so.
-  it("is partial when a usable pod exists but the import did not cover the whole manual", () => {
-    expect(
-      createTerminalState({
-        ...PROGRESS,
-        phase: "degraded",
-        indexing: {
-          status: "succeeded",
-          totalDocuments: 4,
-          processedDocuments: 3,
-          failedDocuments: 1,
-          skippedDocuments: 0,
-          vectorsPersisted: 6,
-        },
-      }),
-    ).toBe("partial");
-  });
-
-  it("is failed when nothing was indexed or the index persisted no vectors", () => {
-    expect(createTerminalState({ ...PROGRESS, indexing: null })).toBe("failed");
-    expect(
-      createTerminalState({
-        ...PROGRESS,
-        phase: "degraded",
-        indexing: {
-          status: "failed",
-          totalDocuments: 2,
-          processedDocuments: 2,
-          failedDocuments: 2,
-          skippedDocuments: 0,
-          vectorsPersisted: 0,
-        },
-      }),
-    ).toBe("failed");
-  });
-});
-
-describe("buildHttpManualSource", () => {
-  it("builds a valid http manual source from an approved origin + path prefix", () => {
-    const built = buildHttpManualSource({
-      displayName: "Ops",
-      origin: "https://manual.example.com",
-      pathPrefix: "/docs/",
-    });
-    expect(built.ok).toBe(true);
-    if (built.ok) {
-      expect(built.source.scope).toEqual({
-        kind: "html-manual-http",
-        origin: "https://manual.example.com",
-        pathPrefix: "/docs/",
-      });
-      expect(built.source.proposedPodName).toBe("Ops");
-    }
-  });
-});
-
 describe("startManualPodRefresh (injected seams)", () => {
   it("registers a running job and executes the injected run", async () => {
     const run = vi.fn().mockResolvedValue({ progress: PROGRESS, state: "succeeded" });
@@ -469,34 +402,6 @@ describe("startManualPodRefresh (injected seams)", () => {
     ).toThrow("db unavailable");
     expect(run).not.toHaveBeenCalled();
     expect(throwingContext.env.close).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("startManualPodCreate (injected seams)", () => {
-  it("rejects an invalid source before starting a job", async () => {
-    // A create request whose derived source cannot be validated fails closed as invalid-source.
-    const result = await startManualPodCreate(
-      {} as UiHandlerDeps,
-      { displayName: "", origin: "not-a-url", pathPrefix: null },
-      { context: stubContext(), run: vi.fn(), identity: {} as never },
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe("invalid-source");
-  });
-
-  it("registers a running create job and executes the injected run", async () => {
-    const run = vi.fn().mockResolvedValue({ progress: PROGRESS, state: "succeeded" });
-    const result = await startManualPodCreate(
-      {} as UiHandlerDeps,
-      { displayName: "Ops", origin: "https://manual.example.com", pathPrefix: null },
-      { context: stubContext(), run, identity: {} as never },
-    );
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.job.operation).toBe("create");
-      await flush();
-      expect(run).toHaveBeenCalledTimes(1);
-    }
   });
 });
 

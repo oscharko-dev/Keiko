@@ -4,7 +4,7 @@
 
 The `Code task real binary` workflow is the Wave-1 anti-false-green lane. It runs nightly and on
 demand on `macos-14`, stages the review-approved OpenCode payload (the version pinned as
-`OPENCODE_PINNED_VERSION`, 2.1.4 today) with `npm run dev:coding-runtime:stage`, provisions the
+`OPENCODE_PINNED_VERSION`) with `npm run dev:coding-runtime:stage`, provisions the
 pinned ripgrep runtime with `npm run provision:ripgrep`, and drives the existing Milestone-1 browser
 journey through production discovery and production composition. The server entry supplies no runtime resolver,
 runtime ports, supervisor, or `KEIKO_OPENCODE_REAL_*` environment seam. The lane carries the

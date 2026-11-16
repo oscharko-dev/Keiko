@@ -8,7 +8,9 @@ import type {
   CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchContextUsage,
+  CodingWorkbenchRuntimeVersion,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeStartFailureCode,
   CodingWorkbenchRuntimeQuestionsResponse,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeStartRequest,
@@ -47,6 +49,8 @@ export interface CodingRuntimeLaunchResolver {
   ) => Promise<void>;
   /** Resolves server-only launch material; the intent remains transient and must not be persisted. */
   resolve(input: {
+    /** Ends a preparation's wait when the client gave the start up; only `prepare` reads it. */
+    readonly abandoned?: AbortSignal | undefined;
     readonly runId: string;
     readonly requestId: string;
     readonly taskIntent: string;
@@ -74,6 +78,7 @@ export interface CodingRuntimeLaunchResolver {
      * `CodingRuntimeJiraPodRefusedError` before any run is minted or confirmation consumed.
      */
     readonly jiraPodId?: string | undefined;
+    readonly connectorScopes?: CodingWorkbenchRuntimeStartRequest["connectorScopes"];
     /** The Pod identity the resolver bound the run to; the resolver sets it, the orchestrator never. */
     readonly jiraPod?: CodingJiraPodBinding | undefined;
     /** The MCP servers the human selected for the run; absent offers every enabled server. */
@@ -132,6 +137,11 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly permissionPort?: CodingRuntimePermissionPort | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   readonly contextUsage?: ((runId: string) => CodingWorkbenchContextUsage | undefined) | undefined;
+  /**
+   * The version facts of the runtime the server activated, from the same verified metadata the
+   * readiness reports. A run's start line names them, so a support export says which runtime ran.
+   */
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
   /**
    * The task workspace's own `AGENTS.md`, attached as bounded untrusted initial context beside the
@@ -160,7 +170,7 @@ export interface CodingRuntimeOrchestratorDeps {
    */
   readonly pendingResearchApprovals?: PendingResearchApprovals | undefined;
   /**
-   * F9 (#3873): the facts that name why a run's failed turn ended — an exhausted prompt allowance,
+   * F9 (#3873): the facts that name why a run's failed turn ended — an exhausted time limit,
    * an unreachable provider, a failed model call. Read at settlement so a failed task outcome
    * settles under its closed cause; absent, a failed outcome settles `runtime-failed` as before.
    */
@@ -187,6 +197,8 @@ export type CodingRuntimeOrchestratorResult =
       readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
       // #3603: the closed reason a start refused the chosen model with, for the Workbench's sentence.
       readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason | undefined;
+      // #4271: the start's client hung up before a run existed; the refusal line names it.
+      readonly startAbandoned?: true;
       // The run id a refused start had already minted (issue admission, launch resolution). The
       // route's refusal line carries it, so the request correlation the operator sees as the support
       // id leads to the run-scoped lines that hold the actual cause; without it the two halves of one
@@ -194,6 +206,16 @@ export type CodingRuntimeOrchestratorResult =
       // the git preparation failure under the run id, and no join between them).
       readonly runId?: string | undefined;
     };
+
+/**
+ * What a start answers: a start refused before any run exists may also answer a start-only refusal
+ * (#4068), which no other operation and no run snapshot ever carries.
+ */
+export type CodingRuntimeStartResult =
+  | Extract<CodingRuntimeOrchestratorResult, { readonly ok: true }>
+  | (Omit<Extract<CodingRuntimeOrchestratorResult, { readonly ok: false }>, "failureCode"> & {
+      readonly failureCode: CodingWorkbenchRuntimeStartFailureCode;
+    });
 
 export type CodingRuntimeQuestionOperationResult =
   | {

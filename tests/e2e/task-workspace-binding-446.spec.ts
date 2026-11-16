@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 // Issue #446 (Epic #443) — browser evidence that a bound Studio surface targets the ACTIVE task
@@ -235,27 +236,30 @@ async function installRoutes(page: Page, state: BindingServer): Promise<void> {
 }
 
 async function seedFilesWindow(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-446-files",
-          type: "files",
-          x: 24,
-          y: 24,
-          w: 520,
-          h: 640,
-          z: 20,
-          // A seeded cfg root the active binding must OVERRIDE — if the override regresses, the Files
-          // surface would request this instead of the active root and the assertions fail.
-          cfg: { root: "/seed/cfg/root" },
-          max: true,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  });
+  await page.addInitScript(
+    ({ storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-446-files",
+            type: "files",
+            x: 24,
+            y: 24,
+            w: 520,
+            h: 640,
+            z: 20,
+            // A seeded cfg root the active binding must OVERRIDE — if the override regresses, the Files
+            // surface would request this instead of the active root and the assertions fail.
+            cfg: { root: "/seed/cfg/root" },
+            max: true,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, undefined),
+  );
 }
 
 test("active task-workspace binding targets, re-targets, and manages lifecycle in the real app", async ({

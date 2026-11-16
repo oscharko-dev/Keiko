@@ -4,7 +4,10 @@ import {
   type JiraDraftProblem,
   type JiraDraftStore,
 } from "@oscharko-dev/keiko-connectors";
-import type { JiraDraftRefusalReason } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  JiraDraftProblemCode,
+  JiraDraftRefusalReason,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 /**
@@ -27,7 +30,11 @@ export function chatDraftArguments(
   chatId: string,
   args: Readonly<Record<string, unknown>>,
 ): ChatDraftArguments {
-  const resolved = resolveJiraDraftArguments(args, (draftId) => store?.get(draftId, chatId));
+  const resolved = resolveJiraDraftArguments(
+    args,
+    (draftId) => store?.get(draftId, chatId),
+    store?.connectionOf(chatId),
+  );
   if (resolved === undefined)
     return { ok: true, arguments: args as CatalogJsonObject, staged: false };
   return resolved.ok
@@ -83,6 +90,9 @@ const PROBLEM_GUIDANCE: Readonly<Record<JiraDraftProblem, string>> = {
     "The parent and link relations form a cycle. A parent must be an item that does not depend on its child.",
 };
 const DRAFT_REFUSED = "Nothing was changed. Correct the draft and send it once.";
+/** The fixed sentence for a draft that belongs to another Jira connection (never its content). */
+const CONNECTION_CHANGED_GUIDANCE =
+  "The Jira connection changed since this draft was made, so nothing was changed. Create the draft again for the current Jira.";
 export function jiraDraftProblemGuidance(
   problem: JiraDraftProblem,
   item: number | undefined,
@@ -90,6 +100,30 @@ export function jiraDraftProblemGuidance(
   const sentence = PROBLEM_GUIDANCE[problem];
   const named = item === undefined ? sentence : `Item ${String(item)} ${sentence}`;
   return `${named} ${DRAFT_REFUSED}`;
+}
+
+/** The fixed sentence of a refusal that names no draft problem, if its closed reason has one. */
+function refusalGuidance(
+  reason: JiraDraftRefusalReason,
+): { readonly guidance: string } | Record<string, never> {
+  return reason === "connection-changed" ? { guidance: CONNECTION_CHANGED_GUIDANCE } : {};
+}
+
+/**
+ * What a refused draft reports about its problem: the model's guidance sentence, and the closed
+ * problem code and 1-based item the person's card turns into one localized sentence (#4355). The
+ * assignment checks that every problem the draft check can name is a code the contract declares.
+ */
+export function draftProblemData(
+  problem: JiraDraftProblem,
+  item: number | undefined,
+): CatalogJsonObject {
+  const draftProblem: JiraDraftProblemCode = problem;
+  return {
+    guidance: jiraDraftProblemGuidance(problem, item),
+    draftProblem,
+    ...(item === undefined ? {} : { draftItem: item }),
+  };
 }
 
 /**
@@ -105,8 +139,8 @@ export function draftRefusalData(
     reason: "field-validation",
     draftRefusal: refusal.reason,
     ...(refusal.problem === undefined
-      ? {}
-      : { guidance: jiraDraftProblemGuidance(refusal.problem, refusal.item) }),
+      ? refusalGuidance(refusal.reason)
+      : draftProblemData(refusal.problem, refusal.item)),
     items: [],
   };
 }

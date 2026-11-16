@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  grantOthersWrite,
+  makeOwnerPrivateDirectory,
+} from "../test-support/owner-private-fixture.js";
+import {
   parsedConfigDocument,
   readConfigDocuments,
   readGlobalConfigDocuments,
@@ -22,6 +26,7 @@ describe("OpenCode configuration documents (#3900 AC3/AC4)", () => {
   function directory(): string {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-config-documents-")));
     created.push(root);
+    makeOwnerPrivateDirectory(root);
     return root;
   }
 
@@ -59,7 +64,8 @@ describe("OpenCode configuration documents (#3900 AC3/AC4)", () => {
     writeFileSync(join(config, "opencode.jsonc"), "{not json");
     writeFileSync(join(config, "config.json"), "{not json");
     writeFileSync(join(config, "opencode.json"), "{}");
-    chmodSync(join(config, "opencode.json"), 0o666);
+    if (process.platform === "win32") grantOthersWrite(join(config, "opencode.json"));
+    else chmodSync(join(config, "opencode.json"), 0o666);
     expect(readGlobalConfigDocuments(config)).toEqual({
       documents: [],
       refused: ["not-owner-private", "config-malformed"],

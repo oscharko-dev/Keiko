@@ -560,6 +560,14 @@ function renderListNode(
   }
 }
 
+// Only a cell holds inline content. A table that is still streaming can end in an empty body or
+// row, so trailing content follows its last cell, or the table itself when it has none.
+function tableEndsInCell(node: SafeMarkdownNode): boolean {
+  if (node.kind === "td" || node.kind === "th") return true;
+  const last = node.children?.at(-1);
+  return last !== undefined && tableEndsInCell(last);
+}
+
 function renderTableNode(
   node: SafeMarkdownNode,
   key: string,
@@ -569,12 +577,17 @@ function renderTableNode(
   const alignStyle = node.align !== undefined ? { textAlign: node.align } : undefined;
 
   switch (node.kind) {
-    case "table":
+    case "table": {
+      const inCell = tableEndsInCell(node);
       return (
         <div key={key} className="sm-table-wrapper">
-          <table className="sm-table">{renderChildren(node, key, options, trailing)}</table>
+          <table className="sm-table">
+            {renderChildren(node, key, options, inCell ? trailing : undefined)}
+          </table>
+          {inCell ? null : trailing}
         </div>
       );
+    }
 
     case "thead":
       return <thead key={key}>{renderChildren(node, key, options, trailing)}</thead>;
@@ -892,13 +905,14 @@ function renderMarkdownTree(
 const EMPTY_ROOTS: readonly RepositoryReferenceRoot[] = Object.freeze([]);
 
 // Emit layout coordinates only; the stable message identity joins re-renders to their message.
-function reportListStarts(
+function reportMarkdownLayout(
   tree: readonly SafeMarkdownNode[],
   correlationId: string | undefined,
-  cursor: { index: number; messageId?: string | undefined },
+  cursor: { index: number; escapedPipeCount: number; messageId?: string | undefined },
   depth = 0,
 ): void {
   for (const node of tree) {
+    if (node.kind === "table") cursor.escapedPipeCount += node.escapedPipeCount ?? 0;
     if (node.kind === "ol") {
       const listIndex = cursor.index++;
       if (node.start !== undefined && node.start !== 1) {
@@ -910,11 +924,11 @@ function reportListStarts(
       }
     }
     if (node.children !== undefined)
-      reportListStarts(node.children, correlationId, cursor, depth + 1);
+      reportMarkdownLayout(node.children, correlationId, cursor, depth + 1);
   }
 }
 
-function useMarkdownListEvidence(
+function useMarkdownLayoutEvidence(
   tree: readonly SafeMarkdownNode[],
   streaming: boolean,
   correlationId: string | undefined,
@@ -924,7 +938,15 @@ function useMarkdownListEvidence(
   useEffect(() => {
     if (streaming || lastReported.current === tree) return;
     lastReported.current = tree;
-    reportListStarts(tree, correlationId, { index: 0, messageId });
+    const cursor = { index: 0, escapedPipeCount: 0, messageId };
+    reportMarkdownLayout(tree, correlationId, cursor);
+    if (cursor.escapedPipeCount > 0) {
+      reportClientDiagnostic("markdown:escaped-table-pipes", {
+        kind: "markdown-layout",
+        correlationId,
+        markdownLayout: { messageId, escapedPipeCount: cursor.escapedPipeCount },
+      });
+    }
   }, [tree, streaming, correlationId, messageId]);
 }
 
@@ -1011,7 +1033,7 @@ function SafeMarkdownImpl({
   richContent,
 }: SafeMarkdownProps): ReactNode {
   const tree = useMarkdownTree(source, literalUserInput, richContent);
-  useMarkdownListEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
+  useMarkdownLayoutEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
   const repositoryPathLabels = useMemo(
     () =>
       literalUserInput || openRepositoryReference === undefined

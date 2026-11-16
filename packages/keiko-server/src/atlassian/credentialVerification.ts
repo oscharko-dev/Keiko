@@ -1,25 +1,47 @@
 import {
   AtlassianCredentialCustodyError,
   verifyAtlassianConnection,
-  verifyJiraDataCenterConnection,
+  verifyJiraDataCenterCompatibility,
   type AtlassianCredentialCustody,
   type AtlassianCredentialMetadata,
 } from "@oscharko-dev/keiko-connectors";
 import type { AtlassianConnectionVerificationStatus } from "@oscharko-dev/keiko-contracts";
+import type { JiraDataCenterCompatibilityFacts } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import { recordConnectionCheck } from "./credentialActivity.js";
 
+/** What started a check: a person's explicit action, or the check that follows a token replacement. */
+export type VerificationTrigger = "verify" | "verify-after-replace";
+
 type VerificationTicket = NonNullable<ReturnType<AtlassianCredentialCustody["beginVerification"]>>;
 
-function probeCredential(
+interface CredentialProbeResult {
+  readonly status: AtlassianConnectionVerificationStatus;
+  readonly compatibility?: JiraDataCenterCompatibilityFacts;
+}
+
+function compatibilityOutcome(
+  deployment: AtlassianCredentialMetadata["deployment"],
+  compatibility: JiraDataCenterCompatibilityFacts | undefined,
+): "unverified" | "verified" | undefined {
+  if (deployment !== "data-center") return undefined;
+  return compatibility === undefined ? "unverified" : "verified";
+}
+
+async function probeCredential(
   deps: AtlassianConnectorCredentialDeps,
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
-): Promise<AtlassianConnectionVerificationStatus> {
+): Promise<CredentialProbeResult> {
   const port = deps.httpBodyPortFactory(metadata, correlationId, { purpose: "verification" });
-  return metadata.deployment === "data-center"
-    ? verifyJiraDataCenterConnection(port, metadata.baseUrl)
-    : verifyAtlassianConnection(port, { provider: metadata.provider, baseUrl: metadata.baseUrl });
+  if (metadata.deployment === "data-center")
+    return verifyJiraDataCenterCompatibility(port, metadata.baseUrl);
+  return {
+    status: await verifyAtlassianConnection(port, {
+      provider: metadata.provider,
+      baseUrl: metadata.baseUrl,
+    }),
+  };
 }
 
 function completeProbe(
@@ -27,19 +49,35 @@ function completeProbe(
   ticket: VerificationTicket,
   status: AtlassianConnectionVerificationStatus | "unverified",
   correlationId: string,
+  trigger: VerificationTrigger,
+  compatibility?: JiraDataCenterCompatibilityFacts,
 ): boolean {
-  const applied = deps.custody.finishVerification(
-    ticket.metadata.authRef,
-    ticket.metadata.generation ?? 1,
-    ticket.revision,
-    status,
-    correlationId,
-  );
+  // A 401 Jira did not author neither confirms nor rejects the token: the Pod keeps its previous
+  // state and nothing is invalidated, so a person behind a sign-in proxy can try again or replace
+  // the token at any time.
+  const applied =
+    status === "auth-unverified"
+      ? deps.custody.releaseVerification(
+          ticket.metadata.authRef,
+          ticket.metadata.generation ?? 1,
+          ticket.revision,
+          ticket.previous,
+        )
+      : deps.custody.finishVerification(
+          ticket.metadata.authRef,
+          ticket.metadata.generation ?? 1,
+          ticket.revision,
+          status,
+          correlationId,
+          compatibility,
+        );
   recordConnectionCheck(
     deps,
     correlationId,
     status === "unverified" ? "verification-aborted" : status,
     applied ? "applied" : "stale",
+    trigger,
+    compatibility === undefined ? "unverified" : "verified",
   );
   return applied;
 }
@@ -48,23 +86,31 @@ export async function verifyStoredCredential(
   deps: AtlassianConnectorCredentialDeps,
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
+  trigger: VerificationTrigger = "verify",
 ): Promise<AtlassianConnectionVerificationStatus> {
   const ticket = deps.custody.beginVerification(metadata.authRef, metadata.generation ?? 1);
   if (ticket === undefined) {
     if (metadata.deployment === "data-center" && metadata.livePod !== undefined)
       throw new AtlassianCredentialCustodyError("credential-changed");
-    const status = await probeCredential(deps, metadata, correlationId);
-    recordConnectionCheck(deps, correlationId, status);
-    return status;
+    const result = await probeCredential(deps, metadata, correlationId);
+    recordConnectionCheck(
+      deps,
+      correlationId,
+      result.status,
+      undefined,
+      trigger,
+      compatibilityOutcome(metadata.deployment, result.compatibility),
+    );
+    return result.status;
   }
-  let status: AtlassianConnectionVerificationStatus;
+  let result: CredentialProbeResult;
   try {
-    status = await probeCredential(deps, ticket.metadata, correlationId);
+    result = await probeCredential(deps, ticket.metadata, correlationId);
   } catch (error) {
-    completeProbe(deps, ticket, "unverified", correlationId);
+    completeProbe(deps, ticket, "unverified", correlationId, trigger);
     throw error;
   }
-  if (!completeProbe(deps, ticket, status, correlationId))
+  if (!completeProbe(deps, ticket, result.status, correlationId, trigger, result.compatibility))
     throw new AtlassianCredentialCustodyError("credential-changed");
-  return status;
+  return result.status;
 }

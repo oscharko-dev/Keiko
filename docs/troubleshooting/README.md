@@ -59,6 +59,11 @@ LiteLLM production-gateway issues are covered in the dedicated
 `x-litellm-key` authentication, `PROXY_BLOCKED_BY_POLICY` on a local proxy, `max_tokens`
 rejections on reasoning aliases, and truncated discovery on large multi-team proxies.
 
+A newly added model that does not call tools, a tool turn that ends with an HTTP 400 after the first
+tool, or a tool the provider refuses for its schema are covered in
+[A new model does not call tools](model-does-not-call-tools.md), including the closed outcomes of
+the tool-calling check and how to read them.
+
 Whisper dictation failures after a successful microphone capture are covered in
 [Dictation through LiteLLM](voice-dictation-litellm.md), including browser codec compatibility
 and the body-free STT dispatch/completion diagnostics.
@@ -71,6 +76,9 @@ Coding Workbench tasks whose next run or fork starts a fresh runtime with the ta
 context, instead of resuming the retained native session, are covered in
 [Coding Workbench task continues with context only](coding-workbench-session-not-resumed.md),
 including the closed reasons on the `coding-runtime.session-continuity` line.
+
+Scheduled continuations that wait or were paused after missed wakes are covered in
+[Coding Workbench scheduled continuation does not run](coding-workbench-scheduled-continuation.md).
 
 Chat answers that request a file already inside the connected folder are covered in
 [Restore connected-folder file grounding](chat-connected-folder-file-not-read.md). Use that entry
@@ -178,13 +186,23 @@ that Keiko UI is not running.
 **Root Cause**
 
 The lifecycle command spawns the UI process and polls
-`http://127.0.0.1:<port>/api/health` until either the configured start
-timeout elapses or the child process exits. The error is emitted when the
-child process started but never returned a healthy response inside the
-configured timeout window (default 20 seconds via `KEIKO_START_TIMEOUT_SECS`).
-The two common causes are an immediate process crash (`process-exited`),
-recorded in the Activity Log as `process.fatal`, and a slow start on cold
-caches where the default timeout is too tight (`health-timeout`).
+`http://127.0.0.1:<port>/api/health` until the child process answers, exits,
+or shows no sign of life for the start window (default 20 seconds via
+`KEIKO_START_TIMEOUT_SECS`). The window bounds silence, not the whole start:
+while the UI process loads its code and initialises it records that it is
+working, and every record restarts the window. A first start after an
+installation or update can therefore take minutes (code loading under a virus
+scanner) and still succeed; `keiko start` then prints
+`Keiko is still starting.` once. A start that still shows life after fifteen
+minutes without becoming healthy is ended as well. Fifteen minutes is four
+times the slowest start measured (239 seconds, x64 Node under emulation on
+Windows on ARM); a first start on native x64 hardware has not been measured.
+
+The error is emitted when the child process exited (`process-exited`,
+recorded in the Activity Log as `process.fatal`) or went quiet for a whole
+window (`health-timeout`). The `cli.lifecycle.health` line carries `lifeSigns`,
+the number of times a sign of life restarted the window: `0` means the UI
+process never reported, a larger number that it worked and then stopped.
 
 **Diagnostic Steps**
 
@@ -214,9 +232,20 @@ than a process crash.
 - If the Activity Log contains `process.fatal`, address the underlying
   error it classifies (typically a port conflict or a Node.js version
   outside the [supported runtime range](../../package.json)).
-- If the foreground UI starts cleanly, raise the start timeout for slow
-  hosts by exporting `KEIKO_START_TIMEOUT_SECS=60` before invoking
-  `keiko start` or `npm run keiko:start`.
+- If the foreground UI starts cleanly and `lifeSigns` is `0`, the UI process
+  could not record its sign of life: its `process.started` line then carries
+  `startupSign: record-unavailable` or `write-failed` (the state directory was
+  not writable for it), or the launcher's line counts `unreadableSigns` (a link
+  or a non-regular file at `ui.starting`). Raise the window for that host by exporting
+  `KEIKO_START_TIMEOUT_SECS=60` before invoking `keiko start` or
+  `npm run keiko:start`, and check the state directory's permissions.
+- The waiting described above applies to Windows; on macOS and Linux the start
+  window is the fixed 20 seconds it always was.
+- `keiko start: cannot create the Keiko state directory in the current working
+directory` means Keiko was started from a folder the account cannot write to,
+  for example `C:\Windows\System32` from a scheduled task or a shortcut
+  without a "Start in" folder. Start it from a folder you own, or pass
+  `--state-dir` with a folder inside your home folder.
 
 ---
 
@@ -886,6 +915,126 @@ the sole live writer: it republishes the record, and later `adopted` lines stop.
 
 ---
 
+### 13. Windows refuses an operator file as not owner-private
+
+| Field             | Value                                                                            |
+| ----------------- | -------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                           |
+| Surface           | Local UI / Run engine                                                            |
+| Stable identifier | `owner-private-file-not-owner-private`, `security.windows-owner-private.refused` |
+
+**Symptom**
+
+On Windows, Central Settings shows no MCP servers, or a Coding Workbench run reports a native
+plugin, plugin package, remote skill, global OpenCode configuration document or external
+instruction source as unreadable or invalid, although the file exists and is valid. The Activity
+Log may contain `security.windows-owner-private.refused` with a `phase` of `resolve` or `inspect`.
+
+**Root Cause**
+
+These inputs are trusted only when they are owned by the user Keiko runs as and no other principal
+may modify them ([ADR-0182](../adr/ADR-0182-windows-owner-private-files-via-handle-bound-dacl-inspection.md)).
+On Windows this is decided from the file's ACL. Only the user, SYSTEM and Administrators may hold
+write, delete or permission rights. A directory with a broad inherited ACL — a non-system drive,
+where Authenticated Users have Modify by default, or a profile directory to which other local
+accounts were added — makes every file inside it fail this check. A `resolve` or `inspect` phase
+means the check itself could not run (Windows PowerShell missing or blocked by AppLocker or
+Constrained Language Mode); then every such file is refused.
+
+**Diagnostic Steps**
+
+In Windows PowerShell, list the file's owner and the principals with write rights, by SID:
+
+```powershell
+$acl = Get-Acl -LiteralPath '<path-to-file>'
+$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+$acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) |
+  Where-Object { $_.AccessControlType -eq 'Allow' } |
+  ForEach-Object { '{0} {1}' -f $_.IdentityReference.Value, $_.FileSystemRights }
+[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+```
+
+Any write-capable entry for a SID other than your own (last line), `S-1-5-18` or `S-1-5-32-544`
+explains the refusal.
+
+**Resolution**
+
+Restrict the file to its owner, SYSTEM and Administrators, removing inherited entries:
+
+```powershell
+$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+icacls '<path-to-file>' /inheritance:r /grant:r "*${me}:(F)" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)'
+```
+
+For a plugin package directory, apply the same command to the directory with `(OI)(CI)(F)` grants
+and `/T`. Keiko itself writes its private state files with this ACL. If the phase is `resolve` or
+`inspect`, ask your administrator to allow inbox Windows PowerShell 5.1 for Keiko; Keiko does not
+fall back to a weaker check.
+
+---
+
+### 14. Windows credential custody is `unattested`, `exposed`, or the vault is refused
+
+| Field             | Value                                         |
+| ----------------- | --------------------------------------------- |
+| Severity          | High                                          |
+| Surface           | CLI / Local UI / credential vault             |
+| Stable identifier | `credentialCustody`, `security.vault.custody` |
+
+**Symptom**
+
+`keiko status` prints a `Credential custody:` line that is not `attested`, `/api/health` carries
+`credentialCustody` with `unattested`, `exposed` or `protected`, or a stored credential (for example
+a Jira token) cannot be used and the Activity Log holds `security.vault.custody` with
+`outcome: refused`.
+
+**Root Cause**
+
+On Windows, Keiko keeps the key that seals stored credentials in a key file. Before it reads that
+key it asks Windows who may access the key file and its folder
+([ADR-0182 D5](../adr/ADR-0182-windows-owner-private-files-via-handle-bound-dacl-inspection.md)).
+
+| State        | Meaning                                                                                                                                 |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `attested`   | Only this account, SYSTEM and Administrators can reach the key file and its folder.                                                     |
+| `protected`  | The folder was open to other accounts. Keiko made it private. The key file itself was private, so the key was not readable.             |
+| `exposed`    | The key file was readable by another account before Keiko protected it. The key may have been read.                                     |
+| `unattested` | Windows could not be asked (PowerShell is blocked or unavailable). Nothing is known and nothing is claimed; credentials keep working.   |
+| refused      | The key file or folder is reachable by another account and Keiko could not make it private. Keiko does not read the key (fails closed). |
+
+**Diagnostic Steps**
+
+```bash
+keiko status            # the standing place for the custody state
+```
+
+`keiko status` and `/api/health` always show the current state. A support report carries the
+`security.vault.custody` line only when it belongs to the reported incident's evidence: around a
+vault key-resolution failure (the refused case), or in a report filed at that moment. An
+`unattested` or `exposed` state on an otherwise healthy start is not in a support report; read it
+from `keiko status`. `keiko support analyze <report.json> --json` shows the line with its level and error kind (an
+`error` line with `unsafe-target` is the refused outcome); the line's `target` and `reason` are not
+projected.
+
+The workspace shows a notice for `exposed` and `unattested`. The state is kept for the lifetime of
+the server process only: `exposed` is reported by the start that found and protected the key file.
+After a restart the key file is private and the state is `attested`, so a person who did not see
+the notice or `keiko status` during that run does not learn of the exposure from them. The lasting
+record is the Activity Log line `security.vault.custody` with `outcome: exposed`.
+
+**Resolution**
+
+- `exposed`: replace the stored tokens (disconnect and reconnect the Jira Pod with a new token),
+  because the old key may have been read. The files are private from now on.
+- `unattested`: allow the inbox Windows PowerShell to run for this account, or accept the state: it
+  is the custody Keiko had before this check existed. It is never reported as `attested`.
+- refused: restrict the credential folder and key file next to `keiko.config.json` to this account,
+  SYSTEM and Administrators, and remove entries for other accounts. An owner other than this
+  account, SYSTEM or Administrators (`foreign-owner`) must be corrected by an administrator.
+- `protected` needs no action.
+
+---
+
 ## HTML Manual Knowledge Pod refresh
 
 Common failures and operational guidance for explicit refresh of an indexed HTML manual
@@ -905,7 +1054,9 @@ live Jira read, or performing a governed write action are documented separately.
 (`auth-failed`, `forbidden`, `unreachable`, `timeout`) and degradation reason (`permission-denied`,
 `rate-limited`, `unavailable`, `scope-exceeded`, `bounds-exceeded`, `cancelled`, `malformed-payload`,
 `conflict`, `invalid-transition`, and the scope/authority denials), including the
-`NODE_EXTRA_CA_CERTS` guidance for enterprise proxy and CA failures.
+`NODE_EXTRA_CA_CERTS` guidance for enterprise proxy and CA failures. Jira Pods that disappear from
+the list after the configuration file moved are covered in
+[Jira Pods are gone after the configuration file moved](./jira-pods-gone-after-configuration-moved.md).
 
 ---
 
@@ -920,6 +1071,7 @@ live Jira read, or performing a governed write action are documented separately.
 - [Keiko Editor troubleshooting](../keiko-editor/troubleshooting.md) — Monaco workers, CSP, unsupported files, completion, and verification failures.
 - [HTML Manual Knowledge Pod refresh runbook](./html-manual-pod-refresh.md) — refresh-specific troubleshooting and operational guidance.
 - [Atlassian connector troubleshooting runbook](./atlassian-connector.md) — verify statuses, sync and write degradation reasons, and enterprise proxy/CA failures for the Atlassian connector.
+- [Jira Pods are gone after the configuration file moved](./jira-pods-gone-after-configuration-moved.md) — an empty Jira Pod list because the credential custody lives beside the configuration file in use.
 - [Native OS file/folder dialog runbook](./native-file-dialog.md) — unsupported platforms, macOS privacy (TCC) read limits, and Windows interactive-session requirements for Browse.
 - [macOS portable first-launch runbook](./macos-portable-first-launch.md) — the "damaged" Gatekeeper verdict, silent double-click exits, and same-path adoption for hand-moved bundles.
 - [Windows portable first-launch runbook](./windows-portable-first-launch.md) — the console flash-and-exit, the three native bootstrap dialogs, and the detached UI server that outlives the setup companion.

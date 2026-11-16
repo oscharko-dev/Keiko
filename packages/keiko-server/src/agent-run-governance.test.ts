@@ -163,7 +163,7 @@ describe("agent-run governance", () => {
       reserveAgentRunBudget({
         binding,
         workspaceRoot: "/repo",
-        usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        usage: { toolCalls: 1, patchBytes: 0 },
         nowIso: NOW,
       }),
     ).toEqual({ ok: false, reason: "authority-revoked" });
@@ -176,16 +176,11 @@ describe("agent-run governance", () => {
     });
   });
 
-  it("atomically exhausts prompt budget before model dispatch with a body-free failure", async () => {
+  // Keiko does not limit tokens (#4346): a governed run's model call is dispatched however large its
+  // prompt is (the former 128,000-token allowance refused it), while the retained authority is still
+  // revalidated before every dispatch, so a revoked run is refused body-free before the provider.
+  it("dispatches a live run's model call whatever its prompt size and refuses a revoked run before dispatch, body-free", async () => {
     const binding = mint("supervised-coding");
-    expect(
-      reserveAgentRunBudget({
-        binding,
-        workspaceRoot: "/repo",
-        usage: { toolCalls: 0, patchBytes: 0, promptTokens: 128_000 },
-        nowIso: NOW,
-      }),
-    ).toEqual({ ok: true });
     let modelCalls = 0;
     const model: ModelPort = {
       call: (): Promise<NormalizedResponse> => {
@@ -199,18 +194,32 @@ describe("agent-run governance", () => {
       model,
       nowIso: () => NOW,
     });
+    const signal = new AbortController().signal;
 
+    const hugePrompt = "x".repeat(2_000_000);
+    const callInTurn = async (remaining: number): Promise<void> => {
+      if (remaining === 0) return;
+      await guarded.call(
+        { modelId: "model-1", messages: [{ role: "user", content: hugePrompt }] },
+        signal,
+      );
+      await callInTurn(remaining - 1);
+    };
+    await callInTurn(3);
+    expect(modelCalls).toBe(3);
+
+    revokeAgentRunGovernance(binding);
     let error: unknown;
     try {
       await guarded.call(
         { modelId: "model-1", messages: [{ role: "user", content: "secret-prompt-marker" }] },
-        new AbortController().signal,
+        signal,
       );
     } catch (caught) {
       error = caught;
     }
 
-    expect(modelCalls).toBe(0);
+    expect(modelCalls).toBe(3);
     expect(error).toMatchObject({ name: "AgentRunBudgetExhaustedError" });
     expect(String(error)).not.toContain("secret-prompt-marker");
   });
@@ -275,7 +284,7 @@ describe("agent-run governance", () => {
       reserveAgentRunBudget({
         binding,
         workspaceRoot: "/repo",
-        usage: { toolCalls: 0, patchBytes, promptTokens: 0 },
+        usage: { toolCalls: 0, patchBytes },
         nowIso: NOW,
       });
 

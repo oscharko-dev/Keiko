@@ -1,34 +1,39 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import { useOptionalWidgetTranslate, type WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import styles from "./ChatWindow.module.css";
 import type { ChatDraftPersistence } from "./hooks/useChatDraft";
 
-function hasVisibleDraftStatus(
-  draft: string,
+function draftNoticeKey(
   persistence: ChatDraftPersistence | undefined,
-): persistence is ChatDraftPersistence {
-  return persistence !== undefined && (persistence.phase !== "saved" || draft.length > 0);
+): WidgetMessageKey | undefined {
+  if (persistence === undefined) return undefined;
+  const { phase, hasUnsavedChanges } = persistence;
+  if (phase === "conflict") return "chat.draft.conflict";
+  if (phase === "load-failed") {
+    return hasUnsavedChanges ? "chat.draft.loadFailedUnsaved" : "chat.draft.loadFailed";
+  }
+  // A failed save stays visible until a successful read/save resolves it, even if later edits
+  // happen to match the last acknowledged text. Hydration failures have their own phase.
+  if (phase === "failed") return "chat.draft.failed";
+  if (hasUnsavedChanges && phase === "unavailable") return "chat.draft.unavailable";
+  return undefined;
 }
 
 export function ChatDraftStatus({
-  draft,
   persistence,
 }: {
-  readonly draft: string;
   readonly persistence: ChatDraftPersistence | undefined;
 }): ReactNode {
   const t = useOptionalWidgetTranslate();
-  if (!hasVisibleDraftStatus(draft, persistence)) return null;
+  const notice = draftNoticeKey(persistence);
+  if (notice === undefined || persistence === undefined) return null;
   const { phase, pending, retry, keepLocal, restoreSaved } = persistence;
-  const failed = phase === "failed" || phase === "unavailable";
+  const failed = phase === "failed" || phase === "unavailable" || phase === "load-failed";
   return (
-    <div
-      className={failed || phase === "conflict" ? styles.cmpDraftNotice : styles.cmpBatchModeLabel}
-      role={failed || phase === "conflict" ? "alert" : "status"}
-    >
-      <span>{t(`chat.draft.${phase}`)}</span>
+    <div className={styles.cmpDraftNotice} role="alert">
+      <span>{t(notice)}</span>
       {failed ? (
         <button
           type="button"
@@ -36,7 +41,7 @@ export function ChatDraftStatus({
           disabled={pending}
           onClick={() => void retry()}
         >
-          {t("chat.draft.retry")}
+          {t(phase === "load-failed" ? "chat.draft.retryLoad" : "chat.draft.retry")}
         </button>
       ) : null}
       {phase === "conflict" ? (

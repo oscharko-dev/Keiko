@@ -2,15 +2,27 @@
 // identity-validated inbox PowerShell resolver rather than a candidate-provided helper: evaluation
 // archives do not carry the production attestor and an archive must never vouch for its own root.
 import { spawnSync } from "node:child_process";
-import { win32 as win32Path } from "node:path";
 import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts";
 import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
+import {
+  kernel32PInvokePrelude,
+  runBoundedPowerShellProgram,
+  WindowsProgramHostStartError,
+  WindowsProgramWorkTimeoutError,
+  type BoundedPowerShellResult,
+  type WindowsProgramRunner,
+} from "./windows-powershell-program.js";
 import { resolveWindowsPowerShellExecutable } from "./windows-system-directory.js";
 
+/**
+ * The limit on the volume query itself, counted from the program's first statement (#4358). It is
+ * what cuts off a query against an unreachable or stalled path. The inbox PowerShell host coming up
+ * is bounded separately, see windows-powershell-program.ts.
+ */
 export const WINDOWS_LOCAL_VOLUME_TIMEOUT_MS = 10_000;
 export const WINDOWS_LOCAL_VOLUME_MAX_OUTPUT_BYTES = 256;
 const SUCCESS = "KEIKO_LOCAL_VOLUME_OK";
@@ -28,7 +40,13 @@ const SECURITY_WINDOWS_LOCAL_VOLUME_REFUSED_OPERATION = defineActivityLogOperati
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["input", "resolve", "verify"],
+      values: ["input", "resolve", "host-start", "verify"],
+    },
+    verdict: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["not-local", "unverifiable"],
     },
   },
   causal: "none",
@@ -39,24 +57,7 @@ const SECURITY_WINDOWS_LOCAL_VOLUME_REFUSED_OPERATION = defineActivityLogOperati
   releaseImpact: "patch",
 });
 
-export type WindowsLocalVolumeRunner = (
-  command: string,
-  args: readonly string[],
-  options: {
-    readonly encoding: "utf8";
-    readonly env: NodeJS.ProcessEnv;
-    readonly maxBuffer: number;
-    readonly input: string;
-    readonly shell: false;
-    readonly timeout: number;
-    readonly windowsHide: true;
-  },
-) => {
-  readonly error?: Error | undefined;
-  readonly status: number | null;
-  readonly stdout: string | Buffer | null;
-  readonly stderr: string | Buffer | null;
-};
+export type WindowsLocalVolumeRunner = WindowsProgramRunner;
 
 /** Hermetic command seam; production callers never supply a locality verdict. */
 export interface WindowsLocalVolumeOptions {
@@ -80,16 +81,7 @@ while (-not [IO.Directory]::Exists($p)) {
   $p = $parent
 }
 try {
-  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly([Reflection.AssemblyName]::new('KeikoLocalVolume'), [Reflection.Emit.AssemblyBuilderAccess]::Run)
-  $module = $assembly.DefineDynamicModule('KeikoLocalVolume')
-  $type = $module.DefineType('KeikoLocalVolumeApi', [Reflection.TypeAttributes]'Public, Abstract, Sealed')
-  $attributes = [Reflection.MethodAttributes]'Public, Static, PinvokeImpl'
-  function pinvoke($name, $returnType, $parameters) {
-    $method = $type.DefinePInvokeMethod($name, 'kernel32.dll', $name, $attributes, [Reflection.CallingConventions]::Standard, $returnType, [type[]]$parameters, [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Unicode)
-    $method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
-    return $method
-  }
-  $create = pinvoke 'CreateFileW' ([Microsoft.Win32.SafeHandles.SafeFileHandle]) @([string], [uint32], [uint32], [IntPtr], [uint32], [uint32], [IntPtr])
+${kernel32PInvokePrelude("KeikoLocalVolume")}  $create = pinvoke 'CreateFileW' ([Microsoft.Win32.SafeHandles.SafeFileHandle]) @([string], [uint32], [uint32], [IntPtr], [uint32], [uint32], [IntPtr])
   $tagInfo = pinvoke 'GetFileInformationByHandleEx' ([bool]) @([Microsoft.Win32.SafeHandles.SafeFileHandle], [int], [IntPtr], [uint32])
   $finalName = pinvoke 'GetFinalPathNameByHandleW' ([uint32]) @([Microsoft.Win32.SafeHandles.SafeFileHandle], [Text.StringBuilder], [uint32], [uint32])
   $volumePath = pinvoke 'GetVolumePathNameW' ([bool]) @([string], [Text.StringBuilder], [uint32])
@@ -121,45 +113,148 @@ try {
   } finally { $handle.Dispose() }
 } catch { exit 1 }`;
 
-function encodedQuery(): string {
-  return Buffer.from(QUERY, "utf16le").toString("base64");
-}
-
-function trustedEnvironment(executable: string): NodeJS.ProcessEnv {
-  const root = win32Path.dirname(
-    win32Path.dirname(win32Path.dirname(win32Path.dirname(executable))),
-  );
-  return {
-    SystemRoot: root,
-    WINDIR: root,
-    SystemDrive: root.slice(0, 2),
-  };
-}
-
-function text(value: string | Buffer | null): string {
-  if (value === null) return "";
-  return Buffer.isBuffer(value) ? value.toString("utf8") : value;
-}
-
 function assertUsablePath(path: string): void {
   if (path.length === 0 || /[\0\r\n]/u.test(path)) {
     throw new Error("Windows managed root locality is unavailable");
   }
 }
 
-function commandFailed(result: ReturnType<WindowsLocalVolumeRunner>): boolean {
+function commandFailed(result: BoundedPowerShellResult): boolean {
   return [
+    !result.started,
     result.error !== undefined,
     result.status !== 0,
-    text(result.stderr) !== "",
-    text(result.stdout) !== SUCCESS,
+    result.stderr !== "",
+    result.stdout !== SUCCESS,
   ].some(Boolean);
 }
 
-function localVolumeErrorKind(phase: "input" | "resolve" | "verify"): ActivityLogErrorKind {
+export type WindowsLocalVolumePhase = "input" | "resolve" | "host-start" | "verify";
+
+/**
+ * What a refusal says about the folder. `not-local`: the query ran to its answer and denied it, or
+ * the input can never be accepted. `unverifiable`: nothing was learned about the volume, because
+ * Windows PowerShell could not be resolved, did not start in time, never ran the query (it could
+ * not be started, or was ended), or the query did not finish in time. Both deny; only the second
+ * one can pass a moment later.
+ */
+export type WindowsLocalVolumeVerdict = "not-local" | "unverifiable";
+
+/**
+ * A refusal of the check in the `input`, `host-start` and `verify` phases. The message and the
+ * cause are those of the refusal itself. A `resolve`-phase failure keeps its own error class (the
+ * launcher matches it), and `windowsLocalVolumeVerdict` reads it as `unverifiable`.
+ */
+export class WindowsLocalVolumeError extends Error {
+  readonly verdict: WindowsLocalVolumeVerdict;
+  readonly phase: WindowsLocalVolumePhase;
+
+  constructor(
+    message: string,
+    verdict: WindowsLocalVolumeVerdict,
+    phase: WindowsLocalVolumePhase,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.name = "WindowsLocalVolumeError";
+    this.verdict = verdict;
+    this.phase = phase;
+  }
+}
+
+/** The verdict of any error a caller caught around the check; a foreign error learned nothing. */
+export function windowsLocalVolumeVerdict(error: unknown): WindowsLocalVolumeVerdict {
+  return error instanceof WindowsLocalVolumeError ? error.verdict : "unverifiable";
+}
+
+// The process answered without running the query to its end: it could not be started, was ended,
+// or never reached the program. Nothing about the volume was learned.
+class WindowsLocalVolumeQueryNotRunError extends Error {
+  public override readonly name = "WindowsLocalVolumeQueryNotRunError";
+  public readonly code = "query-not-run";
+  public constructor(cause: unknown) {
+    super("Windows managed root could not be verified as a local volume: the check did not run", {
+      cause,
+    });
+  }
+}
+
+function learnedNothing(error: unknown): boolean {
+  return (
+    error instanceof WindowsProgramWorkTimeoutError ||
+    error instanceof WindowsLocalVolumeQueryNotRunError
+  );
+}
+
+function refusalVerdict(phase: WindowsLocalVolumePhase, error: unknown): WindowsLocalVolumeVerdict {
+  if (phase === "resolve" || phase === "host-start") return "unverifiable";
+  return learnedNothing(error) ? "unverifiable" : "not-local";
+}
+
+function localVolumeErrorKind(
+  phase: WindowsLocalVolumePhase,
+  error: unknown,
+): ActivityLogErrorKind {
   if (phase === "input") return "invalid-request";
   if (phase === "resolve") return "unavailable";
+  if (phase === "host-start" || error instanceof WindowsProgramWorkTimeoutError) return "timeout";
+  if (error instanceof WindowsLocalVolumeQueryNotRunError) return "unavailable";
   return "unsafe-target";
+}
+
+// Both messages keep "local volume": the launcher prints them, and a person must be able to tell a
+// volume that is not local from a check that could not be made.
+const HOST_START_MESSAGE =
+  "Windows managed root could not be verified as a local volume: Windows PowerShell did not start in time";
+const NOT_LOCAL_MESSAGE = "Windows managed root must be on a local volume";
+
+function refusalMessage(error: unknown): string {
+  if (error instanceof WindowsProgramHostStartError) return HOST_START_MESSAGE;
+  if (error instanceof WindowsProgramWorkTimeoutError) return NOT_LOCAL_MESSAGE;
+  return error instanceof Error ? error.message : NOT_LOCAL_MESSAGE;
+}
+
+function reportLocalVolumeRefusal(
+  sink: SecurityLogSink | undefined,
+  detected: WindowsLocalVolumePhase,
+  error: unknown,
+): never {
+  // The host never reached the program: nothing about the volume was learned.
+  const phase = error instanceof WindowsProgramHostStartError ? "host-start" : detected;
+  const verdict = refusalVerdict(phase, error);
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_WINDOWS_LOCAL_VOLUME_REFUSED_OPERATION,
+      { level: "error", errorKind: localVolumeErrorKind(phase, error) },
+      { failureKind: securityErrorKind(error), phase, verdict },
+    ),
+  );
+  // The resolver's own error classes are matched by the launcher (its "trusted helper
+  // unavailable" handling); they keep their identity. Nothing about the volume was learned.
+  if (phase === "resolve") throw error;
+  throw new WindowsLocalVolumeError(refusalMessage(error), verdict, phase, error);
+}
+
+function verifyLocalVolume(
+  path: string,
+  executable: string,
+  options: WindowsLocalVolumeOptions,
+): void {
+  const result = runBoundedPowerShellProgram({
+    program: "local-volume",
+    executable,
+    source: QUERY,
+    input: `${Buffer.from(path, "utf8").toString("base64")}\n`,
+    workTimeoutMs: WINDOWS_LOCAL_VOLUME_TIMEOUT_MS,
+    maxOutputBytes: WINDOWS_LOCAL_VOLUME_MAX_OUTPUT_BYTES,
+    runner: options.runner ?? spawnSync,
+    securityLogSink: options.securityLogSink,
+  });
+  if (!result.started || result.error !== undefined || result.status === null) {
+    throw new WindowsLocalVolumeQueryNotRunError(result.error);
+  }
+  if (commandFailed(result)) throw new Error(NOT_LOCAL_MESSAGE);
 }
 
 export function assertWindowsLocalVolume(
@@ -167,38 +262,43 @@ export function assertWindowsLocalVolume(
   options: WindowsLocalVolumeOptions = {},
 ): void {
   if ((options.platform ?? process.platform) !== "win32") return;
-  let phase: "input" | "resolve" | "verify" = "input";
+  let phase: WindowsLocalVolumePhase = "input";
   try {
     assertUsablePath(path);
     phase = "resolve";
     const executable = options.resolvePowerShell?.() ?? resolveWindowsPowerShellExecutable();
-    const runner = options.runner ?? spawnSync;
     phase = "verify";
-    const result = runner(
-      executable,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedQuery()],
-      {
-        encoding: "utf8",
-        env: trustedEnvironment(executable),
-        input: `${Buffer.from(path, "utf8").toString("base64")}\n`,
-        maxBuffer: WINDOWS_LOCAL_VOLUME_MAX_OUTPUT_BYTES,
-        shell: false,
-        timeout: WINDOWS_LOCAL_VOLUME_TIMEOUT_MS,
-        windowsHide: true,
-      },
-    );
-    if (commandFailed(result)) {
-      throw new Error("Windows managed root must be on a local volume");
-    }
+    verifyLocalVolume(path, executable, options);
   } catch (error) {
-    emitSecurityLogEvent(
-      options.securityLogSink,
-      activityLogEvent(
-        SECURITY_WINDOWS_LOCAL_VOLUME_REFUSED_OPERATION,
-        { level: "error", errorKind: localVolumeErrorKind(phase) },
-        { failureKind: securityErrorKind(error), phase },
-      ),
-    );
-    throw error;
+    reportLocalVolumeRefusal(options.securityLogSink, phase, error);
   }
+}
+
+// Folders a passive read has seen pass, by their exact spelling, for the life of this process.
+const REMEMBERED_LOCAL_VOLUMES = new Set<string>();
+
+/**
+ * The same check for PASSIVE reads only: the update pre-report, which answers whether an update is
+ * available and how it could be installed. A folder that passed once is not asked again in this
+ * process, because each check runs Windows PowerShell and blocks its caller for as long as that
+ * takes. Only
+ * a pass is remembered; a refusal of either verdict is asked again every time.
+ *
+ * Nothing that ACTS on the verdict may call this: the launcher's root policy, the update session
+ * and the start of the portable coding runtime call `assertWindowsLocalVolume`, which neither reads
+ * nor writes this memory.
+ */
+export function assertWindowsLocalVolumeForPassiveRead(
+  path: string,
+  options: WindowsLocalVolumeOptions = {},
+): void {
+  if ((options.platform ?? process.platform) !== "win32") return;
+  if (REMEMBERED_LOCAL_VOLUMES.has(path)) return;
+  assertWindowsLocalVolume(path, options);
+  REMEMBERED_LOCAL_VOLUMES.add(path);
+}
+
+/** Test seam: a process forgets nothing on its own. */
+export function forgetRememberedWindowsLocalVolumesForTest(): void {
+  REMEMBERED_LOCAL_VOLUMES.clear();
 }

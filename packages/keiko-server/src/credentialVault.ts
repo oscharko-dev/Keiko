@@ -17,7 +17,7 @@ import { dirname, join } from "node:path";
 import {
   createLocalSecretVault,
   readLocalVaultReferences,
-  resolveLocalVaultKey,
+  resolveLocalVaultKeyOnce,
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
@@ -73,16 +73,35 @@ export interface OpenCredentialVaultOptions {
   readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
-export function openProviderCredentialVault(options: OpenCredentialVaultOptions): LocalSecretVault {
-  const vaultDir = credentialVaultDir(options.configPath);
-  const { key } = resolveLocalVaultKey({
+/** The env, keychain and keyfile names of one credential store's key. */
+export interface CredentialVaultKeyNamespace {
+  readonly envVarName: string;
+  readonly keychainService: string;
+  readonly keyfileName: string;
+}
+
+/**
+ * The key of a credential store in the `credentials/` directory next to the config, resolved once
+ * per process and key namespace (each store keeps its own namespace).
+ */
+export function resolveCredentialVaultKey(
+  options: OpenCredentialVaultOptions,
+  namespace: CredentialVaultKeyNamespace,
+): Buffer {
+  return resolveLocalVaultKeyOnce({
     env: options.env,
-    vaultDir,
+    vaultDir: credentialVaultDir(options.configPath),
+    ...namespace,
+    ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
+    sink: options.securityLogSink,
+  }).key;
+}
+
+export function openProviderCredentialVault(options: OpenCredentialVaultOptions): LocalSecretVault {
+  const key = resolveCredentialVaultKey(options, {
     envVarName: CREDENTIALS_KEY_ENV,
     keychainService: CREDENTIALS_KEYCHAIN_SERVICE,
     keyfileName: CREDENTIALS_KEYFILE,
-    ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
-    sink: options.securityLogSink,
   });
   return createLocalSecretVault({
     key,
@@ -384,15 +403,39 @@ function persistVaultEntries(
   openProviderCredentialVault(options).setMany(entries);
 }
 
+/** The secret references a gateway config file names: its providers' and its reranker's. */
+export function secretRefsOfConfig(raw: unknown): readonly string[] {
+  if (!isRecord(raw)) return [];
+  const providers: readonly unknown[] = Array.isArray(raw.providers)
+    ? (raw.providers as readonly unknown[])
+    : [];
+  return [...providers, raw.reranker].flatMap((entry) =>
+    isRecord(entry) ? (existingSecretRef(entry) ?? []) : [],
+  );
+}
+
+/**
+ * One vault serves every config file in its directory, so a seal may delete only what its OWN
+ * config owned and gave up: the references the previous version of this config file named and the
+ * new version no longer names. A reference this config never named belongs to someone else (another
+ * config beside it, a credential stored by hand) and stays. The count of entries removed and of
+ * foreign entries left rides the vault's own deletion line.
+ */
 export function pruneProviderCredentialVault(
   options: OpenCredentialVaultOptions,
   activeSecretRefs: readonly string[],
-): void {
+  previousSecretRefs: readonly string[],
+): { readonly removedCount: number; readonly foreignRetainedCount: number } {
   const storePath = credentialStorePath(options.configPath);
-  if (!existsSync(storePath)) return;
+  if (!existsSync(storePath)) return { removedCount: 0, foreignRetainedCount: 0 };
   const active = new Set(activeSecretRefs);
+  const previous = new Set(previousSecretRefs);
   const vault = openProviderCredentialVault(options);
-  vault.deleteMany(vault.list().filter((reference) => !active.has(reference)));
+  const stored = vault.list().filter((reference) => !active.has(reference));
+  const removed = stored.filter((reference) => previous.has(reference));
+  const foreignRetainedCount = stored.length - removed.length;
+  vault.deleteMany(removed, { foreignRetainedCount });
+  return { removedCount: removed.length, foreignRetainedCount };
 }
 
 export function sealProviderApiKeys(options: SealProviderApiKeysOptions): readonly unknown[] {

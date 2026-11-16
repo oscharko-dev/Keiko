@@ -1,3 +1,4 @@
+import { ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS } from "./activity-line-fields.js";
 import { CODE_REDACTION_REVISION } from "@oscharko-dev/keiko-security/redaction";
 import {
   hasRecursiveTraversalQuery,
@@ -729,20 +730,7 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
     rerankerCandidateCount: { type: "integer", dataClass: "count", required: false },
     rerankerDocumentCount: { type: "integer", dataClass: "count", required: false },
     failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     stackTraceFrameCount: { type: "integer", dataClass: "count", required: false },
     stackTraceExternalFrameCount: { type: "integer", dataClass: "count", required: false },
     continuityReferentSource: {
@@ -948,20 +936,7 @@ const SEARCH_METADATA_UNAVAILABLE_OPERATION = defineActivityLogOperation({
       ],
     },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1132,20 +1107,7 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
       required: false,
       maxLength: 64,
     },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1160,6 +1122,8 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
 // ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface GroundedAnswerOptions {
+  /** The existing context-window owner decides whether this attempt must stay open. */
+  readonly retryFollows?: ((error: unknown) => boolean) | undefined;
   /** Actual fitted source count, supplied by the existing hybrid prompt owner. */
   readonly sourceEvidenceCount?: number | undefined;
   readonly modelInputTokensMax?: number | undefined;
@@ -1225,6 +1189,8 @@ export interface OrchestratorDeps {
   readonly followUpConfigurationDisposition?: FollowUpConfiguration["disposition"] | undefined;
   readonly reliableCitationBehaviour?: GroundedCitationBehaviour | undefined;
   readonly observeCitationBehaviour?: ((behaviour: GroundedCitationBehaviour) => void) | undefined;
+  /** The Chat tool turn the answer came from; a sent change makes the answer a report. */
+  readonly toolTurn?: { readonly reportsToolAction: boolean } | undefined;
   readonly answerer: GroundedAnswerer;
   readonly nowMs?: () => number;
   readonly signal?: AbortSignal | undefined;
@@ -8516,14 +8482,19 @@ async function readExcerptExpansionWaves(
     ),
   );
   const expansionInputs = { ...inputs, previousExcerptResults: state.pathResults };
-  for (const alreadyServed of [false, true]) {
-    if (state.elapsedBudgetBlocked || state.remainingBytes <= 0) return;
-    await readExcerptWaves(
-      retryablePaths.filter((path) => servedPaths.has(path) === alreadyServed),
-      expansionInputs,
-      state,
-    );
-  }
+  const budgetBlocked = (): boolean => state.elapsedBudgetBlocked || state.remainingBytes <= 0;
+  if (budgetBlocked()) return;
+  await readExcerptWaves(
+    retryablePaths.filter((path) => !servedPaths.has(path)),
+    expansionInputs,
+    state,
+  );
+  if (budgetBlocked()) return;
+  await readExcerptWaves(
+    retryablePaths.filter((path) => servedPaths.has(path)),
+    expansionInputs,
+    state,
+  );
 }
 
 function initialExcerptWaveState(
@@ -8936,13 +8907,10 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function strongFileCacheIdentity(
-  scopePath: string,
-  canonicalRelativePath: string,
-  stat: WorkspaceStat,
-): string | undefined {
+// `scopePath` must already be admitted by `isCanonicalAllowedContainedPath`, which proves that the
+// canonical relative path equals it under the platform's separator normalization.
+function strongFileCacheIdentity(scopePath: string, stat: WorkspaceStat): string | undefined {
   if (
-    canonicalRelativePath !== scopePath ||
     !stat.isFile ||
     stat.isSymbolicLink ||
     stat.hardLinkCount !== 1 ||
@@ -8954,7 +8922,7 @@ function strongFileCacheIdentity(
   }
   return JSON.stringify({
     scopePath,
-    canonicalRelativePath,
+    canonicalRelativePath: scopePath,
     size: stat.size,
     fileIdentity: stat.fileIdentity,
     mtimeNs: stat.mtimeNs,
@@ -8981,7 +8949,10 @@ async function fileStateCacheIdentity(
     throwIfCancelled(signal);
     if (nowMs() >= deadlineAtMs) return Promise.resolve(undefined);
     const stat = guardedFs.stat(target.path);
-    const strongIdentity = strongFileCacheIdentity(scopePath, target.realRelative, stat);
+    // `target.realRelative` keeps the native separator, so on Windows comparing it with `scopePath`
+    // again refused every nested file and the warm cache never hit (#4068); the admission above
+    // already proved the two equal.
+    const strongIdentity = strongFileCacheIdentity(scopePath, stat);
     if (strongIdentity === undefined) return Promise.resolve(undefined);
     return (identity.length + 1) % 64 === 0
       ? groundedSchedulingYield(signal).then(() => strongIdentity)
@@ -12660,9 +12631,6 @@ function exhaustedAnswerBudgetDimensions(
   elapsedMs: number,
 ): readonly string[] {
   return [
-    ...(pack.usage.modelInputTokens + answer.usage.promptTokens > pack.budget.modelInputTokensMax
-      ? ["modelInputTokens"]
-      : []),
     ...(pack.usage.modelOutputTokens + answer.usage.completionTokens >
     pack.budget.modelOutputTokensMax
       ? ["modelOutputTokens"]

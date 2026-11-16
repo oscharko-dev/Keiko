@@ -23,6 +23,7 @@ import {
   commitControlPath,
   commitObservationPath,
   COMMIT_MESSAGE,
+  COMMIT_TARGET,
   type CommitFixtureOperation,
 } from "./support/coding-issue-commit.js";
 import {
@@ -739,7 +740,9 @@ test("#3387 @coding-issue-delivery dirty worktree after approval cannot publish"
   expect(proposed.result).toHaveProperty("approvalDisposition", "ready");
   const proposalId = proposed.result?.draftDelivery?.record?.proposalId;
   if (proposalId === undefined) throw new Error("Expected ready push proposal");
-  writeFileSync(join(root, "unverified.txt"), "Unverified fixture content.");
+  // Full access permits unrelated untracked files; change the verified tracked content instead.
+  writeFileSync(join(root, COMMIT_TARGET), "export const value = 'UNVERIFIED_DELIVERY_3387';\n");
+  expect(git(root, ["diff", "--name-only"])).toBe(COMMIT_TARGET);
   expect(recordFor(await control("push-execute", proposalId), "recovery-required").reason).toBe(
     "remote-drift",
   );

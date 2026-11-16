@@ -201,11 +201,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/format-error.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/hooks/assistant-speech-streaming.ts": {
     "max-lines-per-function": {
       "count": 1
@@ -904,14 +899,11 @@
     }
   },
   "src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 5
-    },
     "complexity": {
-      "count": 5
+      "count": 3
     },
     "max-lines-per-function": {
-      "count": 7
+      "count": 5
     }
   },
   "src/app/components/desktop/widgets/cards/ReviewWidget.tsx": {
@@ -1636,9 +1628,6 @@
     }
   },
   "src/app/local-knowledge/[capsuleId]/capsule-detail-state.ts": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 1
-    },
     "max-lines-per-function": {
       "count": 1
     }
@@ -1702,18 +1691,13 @@
   },
   "src/app/local-knowledge/connector-graph.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 3
+      "count": 2
     },
     "complexity": {
       "count": 2
     },
     "max-lines-per-function": {
-      "count": 11
-    }
-  },
-  "src/app/local-knowledge/html-manual-pod-create.tsx": {
-    "max-lines-per-function": {
-      "count": 2
+      "count": 7
     }
   },
   "src/app/local-knowledge/html-manual-pod-refresh.tsx": {
@@ -1870,9 +1854,6 @@
     }
   },
   "src/lib/coding-workbench-runtime-actions.ts": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 1
-    },
     "max-lines-per-function": {
       "count": 2
     }

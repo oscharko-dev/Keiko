@@ -43,9 +43,9 @@ function runCiAggregate(overrides = {}) {
       CORE_QUALITY_RESULT: "success",
       COVERAGE_SONAR_RESULT: "success",
       CROSS_PLATFORM_RESULT: "success",
+      FIREFOX_RESULT: "success",
       DOCUMENTATION_ONLY: "false",
       EDITOR_FAST_PR: "false",
-      NODE_26_COMPATIBILITY_RESULT: "success",
       PORTABLE_SECURE_READ_RESULT: "success",
       PROTECTED_BRANCH_RESULT: "success",
       SECRET_SCAN_RESULT: "success",
@@ -105,7 +105,7 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain("timeout-minutes: 180");
     expect(mutation).toContain("group: mutation-security-full");
     expect(mutation).toContain("cancel-in-progress: false");
-    expect(mutation).toContain('node-version: "24.18.0"');
+    expect(mutation).toContain('node-version: "26.13.1"');
     expect(mutation).toContain("node scripts/check-runtime-toolchain.mjs --exact");
     expect(mutation).toContain("npm run test:mutation:security");
     expect(mutation).toContain("second-order mutation proof");
@@ -337,10 +337,15 @@ describe("dev quality workflows", () => {
   });
 
   it("isolates local rule analysis from mutable coverage while retaining CI coverage inputs", () => {
-    const scannerInvocation = localSonar.slice(
-      localSonar.indexOf('"${compose[@]}" run --rm --no-deps scanner'),
-      localSonar.indexOf("# SonarQube Community carries no shell analyzer"),
+    // The scanner invocation starts at the compose `run --rm --no-deps` call that carries the token.
+    // A moved or reworded line must fail here, never turn into an empty or wrong slice.
+    const start = localSonar.indexOf(
+      'KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm --no-deps',
     );
+    const end = localSonar.indexOf("# SonarQube Community carries no shell analyzer");
+    expect(start, "the local scanner invocation was not found").toBeGreaterThanOrEqual(0);
+    expect(end, "the end of the scanner invocation was not found").toBeGreaterThan(start);
+    const scannerInvocation = localSonar.slice(start, end);
     expect(scannerInvocation).toContain('-Dsonar.javascript.lcov.reportPaths=""');
     const properties = readFileSync(resolve(root, "sonar-project.properties"), "utf8");
     expect(properties).toMatch(/^sonar\.javascript\.lcov\.reportPaths=.+$/mu);
@@ -380,7 +385,9 @@ describe("dev quality workflows", () => {
       'empty_test_inclusion=".keiko/local-sonar-empty-test-${checkout_id}"',
     );
     expect(localSonar).not.toContain('"-Dsonar.test.inclusions=${inclusions}"');
-    expect(localSonar).toContain('"${compose[@]}" run --rm --no-deps scanner');
+    // `--no-deps` keeps the scanner on the already verified server; the optional node_modules volume
+    // arguments sit between that flag and the service name.
+    expect(localSonar).toMatch(/"\$\{compose\[@\]\}" run --rm --no-deps \\\n[^\n]*scanner \\\n/u);
     expect(localSonar).not.toContain('"${compose[@]}" run --rm scanner');
     expect(localSonarCompose).toContain('"127.0.0.1:${KEIKO_LOCAL_SONAR_PORT:-9234}:9000"');
     expect(localSonarCompose).toContain('SONAR_SCANNER_OPTS: "-Xmx768m"');
@@ -521,7 +528,7 @@ describe("dev quality workflows", () => {
     expect(job.name).toBe(`Coverage shard (packages \${{ matrix.shard }}/${shards.length})`);
     expect(measure.run).toContain(`--shard=\${{ matrix.shard }}/${shards.length} `);
     expect(guard.run).toMatch(new RegExp(`^expected=${shards.length}$`, "mu"));
-    expect(job["timeout-minutes"]).toBe(30);
+    expect(job["timeout-minutes"]).toBe(45);
     expect(job.strategy["fail-fast"]).toBe(false);
     expect(measure.env.NODE_OPTIONS).toBe("--max-old-space-size=3072");
   });
@@ -558,6 +565,122 @@ describe("dev quality workflows", () => {
     },
   );
 
+  // #4288: the whole `scripts/__tests__` suite ran in ONE 30-minute job and was cancelled at the
+  // limit (about 2475 s of test time plus about 4 min of setup). It is sharded exactly like the
+  // package suite, and the timeout is NOT raised: the shards buy distance to the unchanged limit.
+  describe("script coverage shards (#4288)", () => {
+    const SCRIPT_SHARDS = 3;
+    const job = ciWorkflow.jobs["coverage-scripts"];
+    const sonarSteps = ciWorkflow.jobs["coverage-sonar"].steps;
+    const stepNamed = (name) => sonarSteps.find((step) => step.name === name);
+    const guardName = "Verify every script coverage shard delivered its evidence";
+
+    it("splits the suite across a three-shard matrix without raising the 30-minute limit", () => {
+      expect(job.strategy["fail-fast"]).toBe(false);
+      expect(job.strategy.matrix.shard).toEqual([1, 2, 3]);
+      expect(job.name).toBe(`Coverage shard (scripts \${{ matrix.shard }}/${SCRIPT_SHARDS})`);
+      expect(job["timeout-minutes"]).toBe(30);
+      const measure = job.steps.find((step) => step.name === "Measure script coverage shard");
+      expect(measure.run).toBe(
+        `npm run test:coverage:scripts:shard -- --shard=\${{ matrix.shard }}/${SCRIPT_SHARDS} --reporter=github-actions`,
+      );
+    });
+
+    it("uploads each shard blob under its own artifact name", () => {
+      const upload = job.steps.find(
+        (step) => step.name === "Upload script coverage shard evidence",
+      );
+      expect(upload.with.name).toBe("coverage-blob-scripts-${{ matrix.shard }}");
+      expect(upload.with.path).toBe(".vitest-reports/");
+      expect(upload.with["include-hidden-files"]).toBe(true);
+      expect(upload.with["if-no-files-found"]).toBe("error");
+      expect(upload.with["retention-days"]).toBe(1);
+    });
+
+    it("keeps the shard scripts blob-based, with no explicit blob output path", () => {
+      expect(packageJson.scripts["test:coverage:scripts"]).toContain(
+        "vitest.coverage.scripts.config.ts",
+      );
+      const shard = packageJson.scripts["test:coverage:scripts:shard"];
+      expect(shard).toContain("--config vitest.coverage.scripts.config.ts");
+      expect(shard).toContain("--reporter=blob");
+      expect(shard).not.toContain("--outputFile");
+      expect(packageJson.scripts["test:coverage:scripts:merge"]).toContain(
+        "--config vitest.coverage.scripts.config.ts --coverage --mergeReports=.vitest-reports-scripts",
+      );
+    });
+
+    it("merges script blobs from a directory the package merge can never absorb", () => {
+      const download = stepNamed("Download script coverage shard evidence");
+      expect(download.with.path).toBe(".vitest-reports-scripts");
+      expect(download.with.pattern).toBe("coverage-blob-scripts-*");
+      expect(download.with["merge-multiple"]).toBe(true);
+      const packages = stepNamed("Download package coverage shard evidence");
+      expect(packages.with.path).toBe(".vitest-reports");
+      expect(packages.with.pattern).toBe("coverage-blob-packages-*");
+      expect(download.with.path).not.toBe(packages.with.path);
+      expect(JSON.stringify(sonarSteps)).not.toContain("coverage-report-scripts");
+      const merge = sonarSteps.find((step) => step.run === "npm run test:coverage:scripts:merge");
+      expect(merge, "the scripts merge step must exist").toBeDefined();
+      const order = (name) => sonarSteps.findIndex((step) => step.name === name);
+      expect(order(guardName)).toBeGreaterThan(order(download.name));
+      expect(sonarSteps.indexOf(merge)).toBeGreaterThan(order(guardName));
+      expect(sonarSteps.indexOf(merge)).toBeLessThan(
+        sonarSteps.findIndex((step) => step.run === "npm run check:coverage:quality"),
+      );
+    });
+
+    it.each(["empty", "missing", "complete", "extra"])(
+      "runs the actual script shard evidence guard against a %s blob set",
+      (kind) => {
+        const guard = stepNamed(guardName);
+        expect(guard.run).toMatch(new RegExp(`^expected=${SCRIPT_SHARDS}$`, "mu"));
+        const counts = {
+          empty: 0,
+          missing: SCRIPT_SHARDS - 1,
+          complete: SCRIPT_SHARDS,
+          extra: SCRIPT_SHARDS + 1,
+        };
+        const scratch = mkdtempSync(join(tmpdir(), "keiko-script-shards-"));
+        try {
+          const reports = join(scratch, ".vitest-reports-scripts");
+          mkdirSync(reports);
+          // A package blob must never count toward the script guard.
+          mkdirSync(join(scratch, ".vitest-reports"));
+          writeFileSync(join(scratch, ".vitest-reports", "blob-1-4.json"), "{}");
+          for (let index = 1; index <= counts[kind]; index += 1) {
+            writeFileSync(join(reports, `blob-${index}-${SCRIPT_SHARDS}.json`), "{}");
+          }
+          const result = spawnSync("bash", ["-euo", "pipefail", "-c", guard.run], {
+            cwd: scratch,
+            encoding: "utf8",
+          });
+          expect(result.error).toBeUndefined();
+          expect(result.status).toBe(kind === "complete" ? 0 : 1);
+        } finally {
+          rmSync(scratch, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it("discards both blob directories so the Sonar scope never sees them", () => {
+      const discard = stepNamed("Discard the shard blobs now that the merged coverage exists");
+      expect(discard.run).toContain(".vitest-reports");
+      expect(discard.run).toContain(".vitest-reports-scripts");
+      expect(discard.run).toMatch(/^rm -rf /u);
+      const order = (name) => sonarSteps.findIndex((step) => step.name === name);
+      const merge = sonarSteps.find((step) => step.run === "npm run test:coverage:scripts:merge");
+      expect(order(discard.name)).toBeGreaterThan(sonarSteps.indexOf(merge));
+    });
+
+    it("still fails closed on the script matrix result", () => {
+      const gate = stepNamed("Require every coverage suite to have executed");
+      expect(gate.env.SCRIPTS_RESULT).toBe("${{ needs.coverage-scripts.result }}");
+      expect(gate.run).toContain('"scripts:${SCRIPTS_RESULT}"');
+      expect(gate.run).toContain('if [ "${entry#*:}" != "success" ]');
+    });
+  });
+
   // The live isolation proof the coverage run depends on moved with the suites. Asserting it on all
   // three jobs is stricter than the single assertion it replaces.
   // KEIKO-1020: the identical `Install sandbox isolation backend (bubblewrap)` + AppArmor-relax
@@ -593,6 +716,21 @@ describe("dev quality workflows", () => {
     expect(compositeAction).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
   });
 
+  it("reuses the successful prepack only for the immediately following optional install smoke", () => {
+    const job = ciWorkflow.jobs["build-scan-sbom-smoke"];
+    const ordinaryAt = job.steps.findIndex((step) => step.run === "npm run smoke:install");
+    const optionalAt = job.steps.findIndex((step) => step.run === "npm run smoke:install:optional");
+    expect(ordinaryAt).toBeGreaterThan(-1);
+    expect(optionalAt).toBe(ordinaryAt + 1);
+    expect(job.env?.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS).toBeUndefined();
+    expect(job.steps[ordinaryAt].env?.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS).toBeUndefined();
+    expect(job.steps[optionalAt].env?.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS).toBe("1");
+    for (const index of [ordinaryAt, optionalAt]) {
+      expect(job.steps[index].if).toBeUndefined();
+      expect(job.steps[index]["continue-on-error"]).toBeUndefined();
+    }
+  });
+
   it("aggregates required CI fail closed", () => {
     // Sliced to the NEXT top-level key rather than to the `actionlint:` job, which ADR-0159 moved
     // into the `workflow hygiene` context. Same idiom as the coverage-suite test above, and it can
@@ -606,13 +744,15 @@ describe("dev quality workflows", () => {
     expect(aggregateJob).toContain("- build-scan-sbom-smoke");
     expect(aggregateJob).toContain("- coverage-sonar");
     expect(aggregateJob).toContain("- cross-platform-smoke");
-    expect(aggregateJob).toContain("- node-26-compatibility");
+    expect(aggregateJob).toContain("- firefox-smoke");
+    expect(aggregateJob).toContain("FIREFOX_RESULT");
+    expect(aggregateJob).not.toContain("- runtime-qualification");
     expect(aggregateJob).toContain("- ui");
     expect(aggregateJob).toContain("BUILD_SCAN_SBOM_SMOKE_RESULT");
     expect(aggregateJob).toContain("CHANGE_SCOPE_RESULT");
     expect(aggregateJob).toContain("CROSS_PLATFORM_RESULT");
     expect(aggregateJob).toContain("EDITOR_FAST_PR");
-    expect(aggregateJob).toContain("NODE_26_COMPATIBILITY_RESULT");
+    expect(aggregateJob).not.toContain("RUNTIME_QUALIFICATION_RESULT");
     expect(aggregateJob).toContain("UI_RESULT");
     expect(aggregateJob).toContain('if [ "$result" != "success" ]');
   });
@@ -678,12 +818,12 @@ describe("dev quality workflows", () => {
 
   it("runs native compensation on its owning platforms and aggregates it fail closed", () => {
     const crossPlatform = ci.match(
-      / {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}node-26-compatibility:\n)/u,
+      / {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}firefox-smoke:\n)/u,
     )?.[0];
     expect(crossPlatform).toBeDefined();
     expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(crossPlatform).toContain(
-      "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68",
+      "actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73",
     );
     expect(crossPlatform).toContain("npm run check:native:macos");
     expect(crossPlatform).toContain("npm run check:native:windows");

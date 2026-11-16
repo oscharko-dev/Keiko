@@ -132,7 +132,11 @@ import {
   handleEditorWorkspaceSymbols,
 } from "./workspaceSearchRoutes.js";
 import type { CodingRuntimeEditorMutationLeaseRequest } from "../coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
-import { changesetLineBreakMarkers } from "./changesetLineBreakProvenance.js";
+import { recordChangesetByteOrderMarks } from "./changesetByteOrderMarkEvidence.js";
+import {
+  changesetLineBreakMarkers,
+  type ChangesetProvenanceStage,
+} from "./changesetLineBreakProvenance.js";
 
 // How this route ends a runtime mutation: applied, failed, or rejected in its review.
 type RuntimeMutationCompletion = "succeeded" | "failed" | "rejected";
@@ -170,6 +174,7 @@ import {
   type EditorAgentRootResolution,
   serverResolvedDocumentText,
 } from "./agentRootBoundary.js";
+import { strictRedactor } from "../content-redactor.js";
 
 type EditorAgentRouteDeps = Pick<
   UiHandlerDeps,
@@ -737,12 +742,19 @@ function inspectChangeset(
   snapshot: EditorAgentSessionSnapshot,
   fs: WorkspaceFs = nodeWorkspaceFs,
   lineBreakMarkers: PatchLineBreakMarkers = "reject",
+  stage: ChangesetProvenanceStage = "admission",
 ): ChangesetInspection {
   const inspection = inspectPatch(
     workspaceInfoFromRoot(snapshot.workspaceRoot),
     action.changeset?.patch ?? "",
     { fs, lineBreakMarkers, limits: EDITOR_AGENT_CHANGESET_PATCH_LIMITS },
   );
+  recordChangesetByteOrderMarks({
+    action,
+    files: inspection.files ?? [],
+    stage,
+    correlationId: actionCorrelationId(action),
+  });
   const validation = inspection.validation;
   const issues = firstChangesetIssueGroup(action, snapshot, inspection);
   if (issues.length > 0) {
@@ -2315,7 +2327,7 @@ function projectApprovedChangeset(
     stage: "result",
     correlationId: actionCorrelationId(action),
   });
-  const inspection = inspectChangeset(action, snapshot, inspectionFs, lineBreakMarkers);
+  const inspection = inspectChangeset(action, snapshot, inspectionFs, lineBreakMarkers, "result");
   if (inspection.result !== null) {
     return { kind: "conflict", result: inspection.result };
   }
@@ -3495,7 +3507,7 @@ function finishQueryGitCancellation(
   deps: EditorAgentActionRouteDeps,
 ): RouteResult {
   const result = failedResult(action, "The bounded Git context request was cancelled.");
-  auditAction(action, snapshot, decision, result, deps.redactor);
+  auditAction(action, snapshot, decision, result, strictRedactor(deps));
   editorAgentRegistry.reportResult(result);
   return { status: 200, body: { result } };
 }

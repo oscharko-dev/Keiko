@@ -3,6 +3,7 @@
 // deselection also leaves out, using the same rule: an item depends on its parent and linked items.
 // Everything shown is read from the exact request the human approves: target project and issue
 // type, the relation field and every field value, so two drafts that differ anywhere differ here.
+import { projectJiraDescriptionInput } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 interface JiraDraftTreeLink {
   readonly type: string;
@@ -193,10 +194,15 @@ function valueAt(value: unknown, depth: number): JiraDraftValue {
 export function jiraDraftValueOf(value: unknown): JiraDraftValue {
   return valueAt(value, 0);
 }
+/** Only explicit managed description Markdown has a wire-text projection; native strings stay exact. */
+export function jiraDraftFieldValueOf(id: string, value: unknown): JiraDraftValue {
+  const projected = id === "description" ? projectJiraDescriptionInput(value) : undefined;
+  return jiraDraftValueOf(projected?.text ?? value);
+}
 function fieldsOf(fields: Raw): readonly JiraDraftField[] {
   return Object.entries(fields)
     .filter(([id]) => id !== "summary")
-    .map(([id, value]) => ({ id, value: jiraDraftValueOf(value) }));
+    .map(([id, value]) => ({ id, value: jiraDraftFieldValueOf(id, value) }));
 }
 type Identity = Pick<JiraDraftTreeItem, "ref" | "summary" | "projectId" | "issueTypeId">;
 function identityOf(raw: Raw | undefined, fields: Raw | undefined): Identity | undefined {

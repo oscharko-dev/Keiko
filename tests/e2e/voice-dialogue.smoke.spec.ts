@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 // Voice Dialogue browser smoke. Drives the REAL app composer in headless Chromium through the documented
 // Studio path (Left Rail → Chat History → New). It proves the colleague-like dialogue surface renders
 // and starts the Realtime WebRTC transport from the single Voice Dialogue switch:
@@ -24,8 +25,7 @@ import { evidenceScreenshotPath } from "./support/evidence.js";
 import { openChatComposer } from "./support/chat-composer.js";
 import { fakeDictationMediaInit } from "./support/dictation-media.js";
 
-const MEMORY_CAPTURE_TRANSCRIPT =
-  "KEIKO_E2E_JOURNAL_CAPTURE: remember the deterministic release window.";
+const MEMORY_CAPTURE_TRANSCRIPT = "KEIKO_E2E_JOURNAL_CAPTURE: I dictate my release notes.";
 const GROUNDING_PARITY_TRANSCRIPT = "Where is repositoryParityStatus defined?";
 const GROUNDING_PARITY_CLAIM = "repositoryParityStatus is defined in the repository fixture";
 const GROUNDING_PARITY_ANSWER = `${GROUNDING_PARITY_CLAIM} [src/repository-parity.ts:2].`;
@@ -425,9 +425,9 @@ async function createGroundingParityChat(
 
 async function seedGroundingParityChat(page: Page, chat: GroundingParityChat): Promise<void> {
   await page.addInitScript(
-    ({ chatId, title }) => {
+    ({ argument: { chatId, title }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "e2e-grounding-parity-chat-window",
@@ -442,9 +442,9 @@ async function seedGroundingParityChat(page: Page, chat: GroundingParityChat): P
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { chatId: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, { chatId: chat.id, title: chat.title }),
   );
 }
 
@@ -872,27 +872,30 @@ async function persistedVoiceTurnCounts(
   };
 }
 
+// Counts the persisted captures of one fact. Learning runs in a pass after the turn settles, so a
+// previous test's capture can land inside this test's `since` window; only the fact names the turn.
 async function persistedMemoryCaptureCount(
   request: APIRequestContext,
   since: number,
-  scope?: "user" | "project",
+  fact: string,
 ): Promise<number | string> {
-  const params = new URLSearchParams({
-    order: "desc",
-    since: String(since),
-    ...(scope === undefined ? {} : { scope }),
-  });
+  const params = new URLSearchParams({ order: "desc", since: String(since) });
   const response = await request.get(`/api/memory?${params.toString()}`);
   if (!response.ok()) return `HTTP ${String(response.status())}`;
   const body = (await response.json()) as {
     readonly captures?: readonly {
       readonly memoryId?: unknown;
       readonly outcome?: unknown;
+      readonly bodyExcerpt?: unknown;
     }[];
   };
   const captures = body.captures ?? [];
   return captures.filter(
-    (capture) => capture.outcome !== "rejected" && typeof capture.memoryId === "string",
+    (capture) =>
+      capture.outcome !== "rejected" &&
+      typeof capture.memoryId === "string" &&
+      typeof capture.bodyExcerpt === "string" &&
+      capture.bodyExcerpt.includes(fact),
   ).length;
 }
 
@@ -1048,7 +1051,9 @@ async function voiceMemoryCaptureFlow(page: Page, request: APIRequestContext): P
   const conversation = page.getByRole("log", { name: "Conversation" });
   await expect(conversation.getByText(MEMORY_CAPTURE_TRANSCRIPT, { exact: true })).toHaveCount(1);
   await expect(conversation.getByText(/KEIKO_E2E_STREAM_OK/u)).toHaveCount(1);
-  await expect.poll(() => persistedMemoryCaptureCount(request, since)).toBe(1);
+  await expect
+    .poll(() => persistedMemoryCaptureCount(request, since, MEMORY_CAPTURE_TRANSCRIPT))
+    .toBe(1);
   expectCanonicalVoiceSend(chatSends, MEMORY_CAPTURE_TRANSCRIPT);
 
   await dialogSwitch.click();

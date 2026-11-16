@@ -136,6 +136,128 @@ function denyingCapsule(): KnowledgeCapsule {
   } as unknown as KnowledgeCapsule;
 }
 
+// #4355: the judge reads the figures Keiko computed for a Jira report beside a claim's own excerpt.
+// The fake judge supports a claim only when every word of two characters or more occurs in the text
+// it is shown, so it reads the real prompt the gateway judge sends.
+/** The rule the prompt states: turn evidence can support a claim about the Jira result only. */
+function visibleText(claim: string, excerpt: string, turn: string | undefined): string {
+  const aboutDocument = /\b(?:document|requirements?)\b/iu.test(claim);
+  return turn === undefined || aboutDocument ? excerpt : `${excerpt}\n${turn}`;
+}
+
+function strictPort(shown: string[] = []): ModelPort {
+  return {
+    call: (request: GatewayRequest, signal: AbortSignal): Promise<NormalizedResponse> => {
+      const prompt = request.messages.map((message) => message.content).join("\n");
+      const claim = /<ge-claim>\n([\s\S]*?)\n<\/ge-claim>/u.exec(prompt)?.[1] ?? "";
+      const excerpt = /<ge-excerpt>\n([\s\S]*?)\n<\/ge-excerpt>/u.exec(prompt)?.[1] ?? "";
+      const turn = /<ge-turn-evidence[^>]*>\n([\s\S]*?)\n<\/ge-turn-evidence>/u.exec(prompt)?.[1];
+      shown.push(turn === undefined ? excerpt : `${excerpt}\n[turn-evidence] ${turn}`);
+      const read = visibleText(claim, excerpt, turn).toLowerCase();
+      // Words that only name the origin ("the report", "Keiko") are not checked against the text.
+      const words = (claim.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? []).filter(
+        (word) => !["the", "report", "keiko"].includes(word),
+      );
+      const supported = words.every((word) => read.includes(word));
+      return portReturning(
+        JSON.stringify({ verdict: supported ? "supported" : "unsupported" }),
+      ).call(request, signal);
+    },
+  };
+}
+
+function withReport(port: ModelPort, lines: { current: readonly string[] }): UiHandlerDeps {
+  return {
+    ...depsWith(port),
+    chatToolTurn: {
+      get reportEvidence(): readonly string[] {
+        return lines.current;
+      },
+    },
+  } as unknown as UiHandlerDeps;
+}
+
+describe("createEntailmentStage - computed report figures (#4355)", () => {
+  const FIGURES = ["Issues checked: 33", "Issues with deviations: 5"];
+  const KNOWLEDGE = [
+    { marker: 1, excerptText: "The requirements document lists five requirements." },
+  ];
+
+  it("flags a computed figure when no report ran in the turn", async () => {
+    const stage = createEntailmentStage(depsWith(strictPort()), [], MODEL_ID);
+    const markers = await stage?.evaluateNumeric("Keiko checked 33 issues.[1]", KNOWLEDGE, NOW);
+    expect(markers?.map((marker) => marker.kind)).toEqual(["unsupported-claim"]);
+  });
+
+  it("accepts the figure when the report settled after the stage was built", async () => {
+    const lines: { current: readonly string[] } = { current: [] };
+    const shown: string[] = [];
+    const stage = createEntailmentStage(withReport(strictPort(shown), lines), [], MODEL_ID);
+    lines.current = FIGURES;
+    const markers = await stage?.evaluateNumeric("Keiko checked 33 issues.[1]", KNOWLEDGE, NOW);
+    expect(markers).toEqual([]);
+    expect(shown[0]).toContain("[turn-evidence] Issues checked: 33");
+  });
+
+  it("still flags a figure the report did not compute", async () => {
+    const stage = createEntailmentStage(
+      withReport(strictPort(), { current: FIGURES }),
+      [],
+      MODEL_ID,
+    );
+    const markers = await stage?.evaluateNumeric("Keiko checked 99 issues.[1]", KNOWLEDGE, NOW);
+    expect(markers?.map((marker) => marker.kind)).toEqual(["unsupported-claim"]);
+  });
+
+  it("does not let the report launder an unrelated claim about the document", async () => {
+    const shown: string[] = [];
+    const stage = createEntailmentStage(
+      withReport(strictPort(shown), { current: FIGURES }),
+      [],
+      MODEL_ID,
+    );
+    const markers = await stage?.evaluateNumeric(
+      "The document requires ten years of retention.[1]",
+      KNOWLEDGE,
+      NOW,
+    );
+    expect(markers?.map((marker) => marker.kind)).toEqual(["unsupported-claim"]);
+    // No report line shares a figure or word with the claim, so the judge reads the excerpt alone.
+    expect(shown[0]).toBe("The requirements document lists five requirements.");
+  });
+
+  it("keeps a document claim flagged although it shares the figure 33 with a report line", async () => {
+    const shown: string[] = [];
+    const stage = createEntailmentStage(
+      withReport(strictPort(shown), { current: FIGURES }),
+      [],
+      MODEL_ID,
+    );
+    const markers = await stage?.evaluateNumeric(
+      "The document lists 33 requirements.[1]",
+      KNOWLEDGE,
+      NOW,
+    );
+    expect(markers?.map((marker) => marker.kind)).toEqual(["unsupported-claim"]);
+    // The report line reached the judge, labelled as turn evidence, and still could not carry it.
+    expect(shown[0]).toContain("[turn-evidence] Issues checked: 33");
+  });
+
+  it("accepts a claim about the Jira result itself from the same turn evidence", async () => {
+    const stage = createEntailmentStage(
+      withReport(strictPort(), { current: FIGURES }),
+      [],
+      MODEL_ID,
+    );
+    const markers = await stage?.evaluateNumeric(
+      "The report checked 33 issues.[1]",
+      KNOWLEDGE,
+      NOW,
+    );
+    expect(markers).toEqual([]);
+  });
+});
+
 describe("createEntailmentStage — inertness", () => {
   it("is inert (undefined) when no compatible judge model is configured", () => {
     const config = configWithChatModel();

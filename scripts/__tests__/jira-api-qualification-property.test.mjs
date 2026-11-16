@@ -1,0 +1,99 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { URL } from "node:url";
+import { expect, it, vi } from "vitest";
+import { ATLASSIAN_CONNECTOR_ACTION_CLASS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { DEFAULT_LAB_CONNECTION } from "../testing/jira-chat-lab/lab-client.mjs";
+import {
+  API_QUALIFICATION_PROPERTY_CASES,
+  API_QUALIFICATION_COMMENT_PROPERTY_CASES,
+} from "../testing/jira-chat-lab/api-qualification-property-cases.mjs";
+
+it("compares the production property node list with a separately read native value", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-property-"));
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/api-user-password"), "synthetic-api", { mode: 0o600 });
+  const fixture = { issueKeys: ["KEIKO-1"], runId: "synthetic-run" };
+  const syntheticProperty = ["keiko", "ac7", "synthetic", "run"].join("-");
+  const value = "Synthetic AC7 synthetic-run";
+  const native = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    const path = new URL(url).pathname;
+    const body = path.endsWith(syntheticProperty)
+      ? { key: syntheticProperty, value }
+      : path.endsWith("/properties")
+        ? { keys: [{ key: syntheticProperty }] }
+        : { id: "10000", key: "KEIKO-1" };
+    return new globalThis.Response(JSON.stringify(body), { status: 200 });
+  });
+  try {
+    const specification = API_QUALIFICATION_PROPERTY_CASES.find(
+      ({ tool }) => tool === "jira.issue-property",
+    );
+    const context = { actor: "api", session: { ...DEFAULT_LAB_CONNECTION, directory } };
+    await expect(
+      specification.readback(
+        context,
+        {
+          propertyKey: syntheticProperty,
+          items: [
+            Object.assign(Object.create(null), { path: "", kind: "string", textValue: value }),
+          ],
+        },
+        fixture,
+      ),
+    ).resolves.toMatchObject({ matched: true });
+    await expect(
+      specification.readback(
+        context,
+        {
+          propertyKey: syntheticProperty,
+          items: [{ path: "", kind: "string", textValue: "Different value" }],
+        },
+        fixture,
+      ),
+    ).rejects.toThrow();
+  } finally {
+    native.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("compares the comment property's native keys wrapper with the product key list", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-ac7-comment-keys-"));
+  mkdirSync(join(directory, "secrets"));
+  writeFileSync(join(directory, "secrets/api-user-password"), "synthetic-api", { mode: 0o600 });
+  const native = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new globalThis.Response(JSON.stringify({ keys: [{ key: "synthetic-key" }] }), {
+      status: 200,
+    }),
+  );
+  try {
+    const specification = API_QUALIFICATION_COMMENT_PROPERTY_CASES.find(
+      ({ tool }) => tool === "jira.comment-property-keys",
+    );
+    await expect(
+      specification.readback(
+        { actor: "api", session: { ...DEFAULT_LAB_CONNECTION, directory } },
+        { items: [{ key: "synthetic-key" }] },
+        { createdIssueKey: "KEIKO-1", commentId: "37" },
+      ),
+    ).resolves.toMatchObject({ matched: true });
+  } finally {
+    native.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("requests the operation's existing administration class for every property mutation", () => {
+  for (const entry of [
+    ...API_QUALIFICATION_PROPERTY_CASES,
+    ...API_QUALIFICATION_COMMENT_PROPERTY_CASES,
+  ]) {
+    const action = entry.tool.slice("jira.".length);
+    if (entry.mutation && ATLASSIAN_CONNECTOR_ACTION_CLASS[action] === "connector-admin") {
+      expect(entry.administration, entry.tool).toBe(true);
+      expect(entry.actor, entry.tool).toBe("admin");
+    }
+  }
+});

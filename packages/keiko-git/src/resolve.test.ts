@@ -22,7 +22,7 @@ function git(cwd: string, args: readonly string[]): string {
 }
 
 beforeEach(() => {
-  base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-resolve-")));
+  base = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-git-resolve-")));
   repo = join(base, "repo");
   mkdirSync(repo);
   git(repo, ["init", "-q"]);
@@ -54,8 +54,26 @@ describe("resolveGitMembership", () => {
     const resolution = await resolveGitMembership(repo, defaultGitProcessRunner, TIMEOUT);
     expect(resolution.ok).toBe(true);
     if (!resolution.ok) return;
-    expect(realpathSync(resolution.membership.repositoryRoot)).toBe(repo);
+    expect(realpathSync.native(resolution.membership.repositoryRoot)).toBe(repo);
     expect(resolution.membership.prefix).toBe("");
+  });
+
+  it("treats a folder whose configuration names another work tree as no repository (#4271)", async () => {
+    const elsewhere = join(base, "elsewhere");
+    mkdirSync(elsewhere);
+    git(repo, ["config", "core.worktree", elsewhere]);
+    const resolution = await resolveGitMembership(repo, defaultGitProcessRunner, TIMEOUT);
+    expect(resolution.ok).toBe(false);
+    if (resolution.ok) return;
+    expect(classifyGitFailure(resolution.result)).toBe("not-a-repository");
+  });
+
+  it("keeps a linked worktree a repository", async () => {
+    git(repo, ["commit", "-q", "--allow-empty", "-m", "seed"]);
+    const linked = join(base, "linked");
+    git(repo, ["worktree", "add", "-q", linked]);
+    const resolution = await resolveGitMembership(linked, defaultGitProcessRunner, TIMEOUT);
+    expect(resolution.ok).toBe(true);
   });
 
   it("resolves a nested subdirectory to the owning repository with its prefix", async () => {
@@ -64,7 +82,7 @@ describe("resolveGitMembership", () => {
     const resolution = await resolveGitMembership(nested, defaultGitProcessRunner, TIMEOUT);
     expect(resolution.ok).toBe(true);
     if (!resolution.ok) return;
-    expect(realpathSync(resolution.membership.repositoryRoot)).toBe(repo);
+    expect(realpathSync.native(resolution.membership.repositoryRoot)).toBe(repo);
     expect(resolution.membership.prefix).toBe("packages/sub");
   });
 
@@ -88,7 +106,7 @@ describe("resolveGitMembership", () => {
     const resolution = await resolveGitMembership(nested, defaultGitProcessRunner, TIMEOUT);
     expect(resolution.ok).toBe(true);
     if (!resolution.ok) return;
-    expect(realpathSync(resolution.membership.repositoryRoot)).toBe(worktree);
+    expect(realpathSync.native(resolution.membership.repositoryRoot)).toBe(worktree);
     expect(resolution.membership.prefix).toBe("deep");
   });
 
@@ -117,6 +135,12 @@ describe("containsPath", () => {
   it("rejects lookalike prefixes that are different directories", () => {
     expect(containsPath(repo, `${repo}-suffix`)).toBe(false);
     expect(containsPath(repo, `${repo}-suffix${sep}inner`)).toBe(false);
+  });
+
+  it("accepts a descendant whose name only begins with two dots", () => {
+    expect(containsPath(repo, join(repo, "..cache"))).toBe(true);
+    expect(containsPath(repo, join(repo, "..cache", "inner"))).toBe(true);
+    expect(containsPath(repo, join(repo, ".."))).toBe(false);
   });
 
   it("matches platform filesystem identity for letter case", () => {

@@ -58,6 +58,10 @@ describe("validateConversationPayload", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("CONVERSATION_UNAVAILABLE_MODEL");
+      expect(result.message).toBe(
+        "Selected model is not available for conversation. Pick a chat-capable model.",
+      );
+      expect(result.message).not.toMatch(/Jira|connected tools|tool.call|check/iu);
     }
   });
 
@@ -71,6 +75,10 @@ describe("validateConversationPayload", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("CONVERSATION_UNAVAILABLE_MODEL");
+      expect(result.message).toBe(
+        "Selected model is not available for conversation. Pick a chat-capable model.",
+      );
+      expect(result.message).not.toMatch(/Jira|connected tools|tool.call|check/iu);
     }
   });
 
@@ -82,6 +90,10 @@ describe("validateConversationPayload", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("CONVERSATION_UNAVAILABLE_MODEL");
+      expect(result.message).toBe(
+        "Selected model is not available for conversation. Pick a chat-capable model.",
+      );
+      expect(result.message).not.toMatch(/Jira|connected tools|tool.call|check/iu);
       // The error message must NEVER echo the caller-supplied model id.
       expect(result.message).not.toContain(SECRET_MODEL_ID);
     }

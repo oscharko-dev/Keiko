@@ -12,6 +12,8 @@
 // `KEIKO_MCP_SECRET_*` variable of Keiko's own environment that holds it (#3903 AC3), which Keiko
 // adds to the requests it relays and never hands to a runtime.
 
+import { isLocalAbsolutePath } from "./text-safety.js";
+
 export const MCP_SERVER_REGISTRY_SCHEMA_VERSION = 1;
 export const MCP_SERVER_MAX = 16;
 export const MCP_SERVER_TOOL_MAX = 64;
@@ -156,11 +158,7 @@ function literal(value: string): boolean {
 
 /** Portable local paths; UNC shares and Windows device namespaces remain denied. */
 export function isMcpLocalAbsolutePath(value: unknown): value is string {
-  return (
-    boundedText(value) &&
-    literal(value) &&
-    ((value.startsWith("/") && !value.startsWith("//")) || /^[A-Za-z]:[\\/]/u.test(value))
-  );
+  return boundedText(value) && literal(value) && isLocalAbsolutePath(value);
 }
 
 function localTransport(value: Json): McpLocalTransport | undefined {
@@ -453,10 +451,20 @@ function admitUniqueActions(server: McpServerDefinition, actions: Set<string>): 
 
 /**
  * The permission action an MCP tool reaches a runtime's policy under: `<server>_<tool>`, with the
- * tool name's characters outside `[A-Za-z0-9_-]` replaced by `_`, as OpenCode 2.1.4 names it.
+ * tool name's characters outside `[A-Za-z0-9_-]` replaced by `_`, as the pinned OpenCode names it.
  */
 export function mcpToolAction(server: string, tool: string): string {
-  return `${server}_${tool.replaceAll(/[^A-Za-z0-9_-]/gu, "_")}`;
+  return `${server}_${mcpToolKey(tool)}`;
+}
+
+/**
+ * The name a tool has inside its server's namespace in a Code Mode program
+ * (`tools.<server>["<key>"]`): the tool name's characters outside `[A-Za-z0-9_-]` replaced by `_`,
+ * as the pinned OpenCode names it. One function for the policy action above and for what a model is
+ * told it may call.
+ */
+export function mcpToolKey(tool: string): string {
+  return tool.replaceAll(/[^A-Za-z0-9_-]/gu, "_");
 }
 
 /** A private native identity may contain both bounded names; admission still requires its exact grant. */

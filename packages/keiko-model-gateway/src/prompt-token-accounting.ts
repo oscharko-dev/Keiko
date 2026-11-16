@@ -1,3 +1,4 @@
+import { providerToolSchema } from "./provider-tool-schema.js";
 import {
   countContextTokens,
   countContextTokensForSegments,
@@ -32,6 +33,8 @@ export interface OpenAiCompatiblePromptMessage {
   readonly role: string;
   readonly content: string | ProviderMessageContentParts | null;
   readonly tool_call_id?: string | undefined;
+  readonly reasoning_content?: string | undefined;
+  readonly reasoning?: string | undefined;
   readonly tool_calls?:
     | readonly {
         readonly id: string;
@@ -68,7 +71,21 @@ function providerContent(
   return providerContentParts(message.contentParts);
 }
 
-export function openAiCompatiblePromptMessage(message: ChatMessage): OpenAiCompatiblePromptMessage {
+function reasoningFields(
+  message: ChatMessage,
+  reasoningField: "reasoning_content" | "reasoning",
+  includeReasoning: boolean,
+): Pick<OpenAiCompatiblePromptMessage, "reasoning_content" | "reasoning"> {
+  return includeReasoning && message.role === "assistant" && message.reasoningContent !== undefined
+    ? { [reasoningField]: message.reasoningContent }
+    : {};
+}
+
+export function openAiCompatiblePromptMessage(
+  message: ChatMessage,
+  reasoningField: "reasoning_content" | "reasoning" = "reasoning_content",
+  includeReasoning = true,
+): OpenAiCompatiblePromptMessage {
   const toolCalls = message.toolCalls?.map((call) => ({
     id: call.id,
     type: "function" as const,
@@ -82,23 +99,32 @@ export function openAiCompatiblePromptMessage(message: ChatMessage): OpenAiCompa
       ? { tool_call_id: message.toolCallId }
       : {}),
     ...(hasToolCalls ? { tool_calls: toolCalls } : {}),
+    ...reasoningFields(message, reasoningField, includeReasoning),
   };
 }
 
 export function openAiCompatiblePromptTools(
   tools: readonly ToolDefinition[],
 ): readonly Record<string, unknown>[] {
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-    },
-  }));
+  // The one place every tool definition leaves for an OpenAI-compatible provider, whichever source
+  // built it (the governed catalog, a native extension, a direct definition): a parameters schema a
+  // provider refuses at the top level is projected here. A schema that needs nothing passes through
+  // unchanged, and an already projected one is its own fixed point.
+  return tools.map((tool) => {
+    const advertised = providerToolSchema(tool.parameters, tool.description);
+    return {
+      type: "function",
+      function: {
+        name: tool.name,
+        description: advertised.description,
+        parameters: advertised.parameters,
+      },
+    };
+  });
 }
 
 export interface GatewayPromptTokenOptions {
+  readonly reasoningHistoryField?: "reasoning_content" | "reasoning" | undefined;
   readonly contextWindow?: number | undefined;
   /**
    * A positive provider count already includes the media contribution (images and PDF documents).
@@ -117,18 +143,22 @@ function fallbackImageTokens(options: GatewayPromptTokenOptions): number {
     : 8_192;
 }
 
+function selectedReasoning(message: OpenAiCompatiblePromptMessage): string {
+  return message.reasoning_content ?? message.reasoning ?? "";
+}
+
 function countMessageTokens(
   message: ChatMessage,
   accounting: ContextTokenAccounting | undefined,
   options: GatewayPromptTokenOptions,
 ): number {
-  const projected = openAiCompatiblePromptMessage(message);
+  const projected = openAiCompatiblePromptMessage(message, options.reasoningHistoryField);
   const parts =
     typeof projected.content === "string" || projected.content === null
       ? undefined
       : projected.content;
   // Media bytes are never text tokens: an image or a PDF document takes the media reserve instead.
-  const mediaCount = parts?.filter((part) => part.type !== "text").length ?? 0;
+  const mediaCount = parts === undefined ? 0 : parts.filter((part) => part.type !== "text").length;
   const content =
     parts?.map((part) => (part.type === "text" ? part : { type: part.type })) ?? projected.content;
   const text =
@@ -139,7 +169,8 @@ function countMessageTokens(
   // Preserve the dense-text floor when the JSON projection escapes literal newlines.
   return (
     Math.max(
-      countContextTokens(text, accounting),
+      countContextTokens(text, accounting) +
+        countContextTokens(selectedReasoning(projected), accounting),
       countContextTokens(JSON.stringify({ ...projected, content }), accounting),
     ) +
     mediaCount * fallbackImageTokens(options)

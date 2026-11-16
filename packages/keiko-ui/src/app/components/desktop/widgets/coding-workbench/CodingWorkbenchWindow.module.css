@@ -56,7 +56,9 @@
 .statusBadge[data-tone="warning"],
 .resourceState[data-tone="warning"],
 .activityBadge[data-state="cancelled"],
-.activityBadge[data-state="waiting-for-trust"] {
+.activityBadge[data-state="waiting-for-trust"],
+.activityBadge[data-state="waiting-for-approval"],
+.activityBadge[data-state="not-done"] {
   color: var(--feedback-warning);
 }
 
@@ -456,10 +458,13 @@
   display: grid;
   width: min(100%, 24rem);
   min-width: 0;
-  align-self: center;
+  min-height: 0;
+  align-self: stretch;
   justify-self: center;
   place-items: center;
   padding: var(--space-5);
+  /* The welcome graphic stays in its row when readiness needs the available height. */
+  overflow: clip;
 }
 
 .welcomeBubble {

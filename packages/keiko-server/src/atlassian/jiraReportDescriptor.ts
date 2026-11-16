@@ -18,6 +18,7 @@ const FIELD_ID = { ...text(64), pattern: JIRA_FIELD_ID_PATTERN };
 const REPORT_INPUT = object({
   projectKey: text(128),
   jql: { type: "string", minLength: 1, maxLength: ATLASSIAN_JQL_MAX_CHARS },
+  epicKey: text(128),
   estimateFieldId: FIELD_ID,
   asOf: { type: "string", pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", maxLength: 10 },
   parentFieldIds: { type: "array", maxItems: 4, items: FIELD_ID },
@@ -38,51 +39,55 @@ const REPORT_INPUT = object({
 });
 
 const DESCRIPTION =
-  "Deterministic Jira report; use it, not jira.search or jira.issue, for any question about a whole project or many issues: " +
-  "progress, estimates, template compliance, requirement coverage, epics without members, issues without an epic. " +
-  "Scope: projectKey and/or jql. Keiko computes every number: quote report.figures verbatim, never recompute. " +
-  "requirementsFromPods covers this Chat's Pod requirements. Estimate is seconds of original estimate unless estimateFieldId. " +
-  "While status is reading, call again with only the reportId. " +
-  "Name a section on the first call to page its list (maxResults up to 100, then nextStartAt; report every deviation). " +
-  "For a Jira comment, get section comment and post its text verbatim. issuesWithoutTemplate: no template judged them. " +
-  "A refusal names invalidArguments or a message.";
+  "Deterministic Jira report computed by Keiko over a project's issues: progress, estimates, template compliance (which issues deviate). " +
+  "Scope: a project, JQL or one Epic; also counts, requirement coverage, epics without members, issues without an epic. " +
+  "It does not list how a project is configured (workflow statuses, issue types, fields, components, versions): search jira.discover for those. " +
+  "Keiko computes every number: quote report.figures verbatim, never recompute (estimate field and unit included). " +
+  "requirementsFromPods covers this Chat's Pod requirements. " +
+  "While reading, call again with only the reportId. " +
+  "A call without a section returns the summary and report.figures; a call that names a section returns only that page. " +
+  "Page a list with reportId, section and startAt (0, then the returned nextStartAt; maxResults up to 100; report every deviation). " +
+  "A call that names a reportId takes reportId, section, startAt and maxResults: repeating the report's own projectKey, jql or epicKey is harmless, a different one is refused. " +
+  "For a Jira comment, get section comment and post its text verbatim. issuesWithoutTemplate: no template judged them.";
 
-export const JIRA_REPORT_DECLARATION: ManagedMcpToolDeclaration = Object.freeze({
-  name: "jira.report",
-  risk: "read",
-  descriptor: createToolDescriptor({
-    toolRef: createToolRef("keiko.jira.report", 1),
-    description: DESCRIPTION,
-    inputSchema: REPORT_INPUT,
-    resultSchema: object(
-      {
-        outcome: { type: "string", enum: ["succeeded", "failed"] },
-        reason: text(64),
-        status: { type: "string", enum: JIRA_REPORT_STATUSES },
-        reportId: text(64),
-        progress: OPEN_OBJECT,
-        report: OPEN_OBJECT,
-        section: OPEN_OBJECT,
-        exports: { type: "array", maxItems: 4, items: text(16) },
-        comment: object({ section: text(16), use: text(256) }, ["section", "use"]),
-        lastFailure: text(64),
-        invalidArguments: { type: "array", maxItems: 16, items: text(64) },
-        message: text(256),
-        nextStartAt: { type: "integer", minimum: 0, maximum: 1000000000 },
+export function jiraReportDeclaration(): ManagedMcpToolDeclaration {
+  return Object.freeze({
+    name: "jira.report",
+    risk: "read",
+    descriptor: createToolDescriptor({
+      toolRef: createToolRef("keiko.jira.report", 1),
+      description: DESCRIPTION,
+      inputSchema: REPORT_INPUT,
+      resultSchema: object(
+        {
+          outcome: { type: "string", enum: ["succeeded", "failed"] },
+          reason: text(64),
+          status: { type: "string", enum: JIRA_REPORT_STATUSES },
+          reportId: text(64),
+          progress: OPEN_OBJECT,
+          report: OPEN_OBJECT,
+          section: OPEN_OBJECT,
+          exports: { type: "array", maxItems: 4, items: text(16) },
+          comment: object({ section: text(16), use: text(256) }, ["section", "use"]),
+          lastFailure: text(64),
+          invalidArguments: { type: "array", maxItems: 16, items: text(64) },
+          message: text(256),
+          nextStartAt: { type: "integer", minimum: 0, maximum: 1000000000 },
+        },
+        ["outcome"],
+      ),
+      effects: ["connector-access"],
+      actionMapping: [{ action: "jira.report", effects: ["connector-access"] }],
+      policyReferences: ["adr-0128.d4"],
+      handlerRequirement: { id: "jira.report", contractVersion: 1 },
+      bounds: {
+        maxArgumentBytes: 65536,
+        maxResultBytes: JIRA_REPORT_RESULT_BYTES_MAX,
+        maxResultCount: 100,
+        maxDurationMs: 30000,
       },
-      ["outcome"],
-    ),
-    effects: ["connector-access"],
-    actionMapping: [{ action: "jira.report", effects: ["connector-access"] }],
-    policyReferences: ["adr-0128.d4"],
-    handlerRequirement: { id: "jira.report", contractVersion: 1 },
-    bounds: {
-      maxArgumentBytes: 65536,
-      maxResultBytes: JIRA_REPORT_RESULT_BYTES_MAX,
-      maxResultCount: 100,
-      maxDurationMs: 30000,
-    },
-    idempotency: "server-key-required",
-    cancellation: "before-effect",
-  }),
-});
+      idempotency: "server-key-required",
+      cancellation: "before-effect",
+    }),
+  });
+}

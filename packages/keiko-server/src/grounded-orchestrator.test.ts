@@ -5574,7 +5574,7 @@ describe("runGroundedExploration", () => {
     },
   );
 
-  it("clips answer-phase budget overages into a valid pack", async () => {
+  it("clips answer usage into a valid pack and reports only output and elapsed overages", async () => {
     let now = NOW;
     const budget: OrchestratorInput["budget"] = {
       ...DEFAULT_EXPLORATION_BUDGET,
@@ -5601,7 +5601,7 @@ describe("runGroundedExploration", () => {
     expect(out.pack.usage.modelInputTokens).toBe(10);
     expect(out.pack.usage.modelOutputTokens).toBe(5);
     expect(out.pack.usage.elapsedMs).toBe(100);
-    expect(out.pack.uncertainty.some((u) => u.claim.includes("modelInputTokens"))).toBe(true);
+    expect(out.pack.uncertainty.some((u) => u.claim.includes("modelInputTokens"))).toBe(false);
     expect(out.pack.uncertainty.some((u) => u.claim.includes("modelOutputTokens"))).toBe(true);
     expect(out.pack.uncertainty.some((u) => u.claim.includes("elapsedMs"))).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);

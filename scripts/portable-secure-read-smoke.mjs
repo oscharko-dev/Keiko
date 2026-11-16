@@ -71,6 +71,11 @@ function decode(bytes) {
   return { status, content: bytes.subarray(12) };
 }
 
+/** One decoded helper read, for host-specific qualifications that own their own fixtures. */
+export function readSecureWorkspaceFile(executable, root, relativePath) {
+  return runDecoded(executable, request(root, relativePath));
+}
+
 function manifestFailures(manifest) {
   return portableManifestValidationFailuresForDeclaredLane(manifest);
 }

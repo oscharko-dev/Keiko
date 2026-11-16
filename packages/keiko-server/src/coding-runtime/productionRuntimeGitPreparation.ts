@@ -77,6 +77,12 @@ function contextDigest(context: CodingRuntimeTrustedContext): string {
   return sha256Hex(canonicalise({ ...context, expiresAt: "" }));
 }
 
+// Cancellation is a live server-owned handle, not part of the human's request material. Keep every
+// authoritative field in the digest; the orchestrator still observes this same signal before mint.
+function requestDigest(request: LaunchInput): string {
+  return sha256Hex(canonicalise({ ...request, abandoned: undefined }));
+}
+
 class GitPreparation implements RuntimeGitPreparation {
   private readonly prepared = new WeakMap<LaunchInput, PreparedContext>();
   public constructor(private readonly input: PreparationInput) {}
@@ -101,7 +107,7 @@ class GitPreparation implements RuntimeGitPreparation {
         );
       this.prepared.set(request, {
         repositoryIdentity,
-        requestDigest: sha256Hex(canonicalise(request)),
+        requestDigest: requestDigest(request),
         contextDigest: contextDigest(before),
         expiresAtMs,
       });
@@ -119,7 +125,7 @@ class GitPreparation implements RuntimeGitPreparation {
     if (
       record === undefined ||
       this.input.now() >= record.expiresAtMs ||
-      record.requestDigest !== sha256Hex(canonicalise(request)) ||
+      record.requestDigest !== requestDigest(request) ||
       record.contextDigest !== contextDigest(current)
     ) {
       logPreparation(this.input.deps, request.runId, "denied");

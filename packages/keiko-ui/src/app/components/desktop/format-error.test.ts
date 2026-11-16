@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CHAT_PATH_ERROR_CODES } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError } from "@/lib/api";
 import {
   I18N_STORAGE_KEY,
@@ -6,18 +7,160 @@ import {
   resetLoadedMessageCatalogs,
   translate,
 } from "@/lib/i18n";
-import { formatUserError, toUserErrorNotice } from "./format-error";
+import { OPTIONAL_WIDGET_DE_MESSAGES } from "@/lib/i18n-messages.optional.de";
+import { OPTIONAL_WIDGET_EN_MESSAGES } from "@/lib/i18n-messages.optional.en";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
+import {
+  CHAT_ERROR_CODE_TABLE,
+  CODE_MESSAGE_KEYS,
+  GATEWAY_ERROR_KEYS,
+  GROUPS_KEEPING_SERVER_MESSAGE,
+  formatUserError,
+  toUserErrorNotice,
+  type ErrorGroup,
+} from "./format-error";
 
 describe("formatUserError", () => {
   it.each(["en", "de"] as const)(
-    "explains unavailable Chat capabilities and Jira remedies in %s",
+    "explains expired Jira credentials and preserves the saved support reference in %s",
+    async (locale) => {
+      await loadLocaleMessages(locale);
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      try {
+        const error = new ApiError("JIRA_AUTHENTICATION_FAILED", "Private provider detail", 409);
+        error.correlationId = "jira-auth-proof";
+        const notice = toUserErrorNotice(error, "Could not send message.");
+        expect(notice.title).toBe(
+          locale === "en" ? "Jira authentication failed" : "Jira-Anmeldung fehlgeschlagen",
+        );
+        expect(notice.message).toBe(
+          locale === "en"
+            ? "Jira rejected the token of this connection. It may have expired or been revoked."
+            : "Jira hat das Token dieser Verbindung abgelehnt. Es ist möglicherweise abgelaufen oder widerrufen worden.",
+        );
+        expect(notice.remediation).toBe(
+          locale === "en"
+            ? "Open the Local Knowledge window, replace the token on the Jira Pod and verify the connection. This Chat and its draft stay as they are. Before requesting another change, check its outcome in Jira."
+            : "Öffne das Fenster Lokales Wissen, ersetze das Token am Jira Pod und verifiziere die Verbindung. Dieser Chat und sein Entwurf bleiben erhalten. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+        );
+        const restored = toUserErrorNotice(
+          formatUserError(error, "Could not send message."),
+          "Could not send message.",
+        );
+        expect(restored).toEqual(notice);
+        expect(restored).toMatchObject({
+          code: "JIRA_AUTHENTICATION_FAILED",
+          correlationId: "jira-auth-proof",
+        });
+        expect(JSON.stringify(restored)).not.toContain("Private provider detail");
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+        resetLoadedMessageCatalogs();
+      }
+    },
+  );
+  // The server's English text is a fallback for other clients: the UI reads these closed codes
+  // through the catalogs, so a German clerk reads German and the next step (#4371).
+  it.each(
+    (["en", "de"] as const).flatMap((locale) =>
+      (
+        [
+          "KNOWLEDGE_POD_UNAVAILABLE",
+          "KNOWLEDGE_STORE_UNAVAILABLE",
+          "JIRA_POD_UNAVAILABLE",
+          "JIRA_POD_VERIFICATION_REQUIRED",
+          "JIRA_POD_CONNECTION_CHANGED",
+        ] as const
+      ).map((code) => [locale, code] as const),
+    ),
+  )("shows %s %s from the catalog, with a title and a next step", async (locale, code) => {
+    await loadLocaleMessages(locale);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    try {
+      const serverText = "Server English fallback text that must not be shown";
+      const error = new ApiError(code, serverText, 409);
+      const notice = toUserErrorNotice(error, "Could not send message.");
+
+      expect(notice.message).not.toBe(serverText);
+      expect(notice.title).not.toBe("Request failed");
+      expect(notice.remediation).toBeDefined();
+      expect(formatUserError(error, "fallback")).toBe(`${notice.message} (${code})`);
+      if (locale === "de") {
+        expect(`${notice.title} ${notice.message}`).toMatch(/[äöüÄÖÜ]|nicht|Wähle|Prüfe|Versuche/u);
+      }
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+  // Whole-word match, so the check cannot pass by accident on a substring of another word and can
+  // be shown to bite: it finds the control name in a wrong next step.
+  const namesControl = (text: string, name: string): boolean =>
+    new RegExp(
+      `(^|[^\\p{L}])${name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}($|[^\\p{L}])`,
+      "u",
+    ).test(text);
+  it("tells a next step that names the picker above the conversation from the right one", () => {
+    expect(namesControl("Open the Sources menu, then try again.", "Sources")).toBe(true);
+    expect(namesControl("Choose the Jira Pod in Connectors.", "Sources")).toBe(false);
+    expect(namesControl("Wähle es unter Wissensquellen aus.", "Wissensquellen")).toBe(true);
+  });
+  // The next step of a Jira Pod refusal names the control where the Pod is switched on. The name
+  // comes from that control's own catalog entry, so a rename fails here instead of leaving a clerk
+  // looking for a menu that no longer exists under that name (#4371).
+  it.each(
+    (["en", "de"] as const).flatMap((locale) =>
+      (["JIRA_POD_UNAVAILABLE", "JIRA_POD_CONNECTION_CHANGED"] as const).map(
+        (code) => [locale, code] as const,
+      ),
+    ),
+  )("names the Connectors menu as the control in the %s next step of %s", async (locale, code) => {
+    await loadLocaleMessages(locale);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    try {
+      const optional = locale === "en" ? OPTIONAL_WIDGET_EN_MESSAGES : OPTIONAL_WIDGET_DE_MESSAGES;
+      const controlName = optional["chat.connectors.title"];
+      const notice = toUserErrorNotice(new ApiError(code, "Server text", 409), "Could not send.");
+
+      expect(notice.remediation).toContain(controlName);
+      // The picker above the conversation is "Sources"; the refusal must not send the clerk there.
+      const groundingLabel = optional["chat.grounding.label"];
+      if (groundingLabel === undefined) throw new TypeError("Missing the picker's label");
+      if (notice.remediation === undefined) throw new TypeError("Missing the next step");
+      expect(namesControl(notice.remediation, groundingLabel)).toBe(false);
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+  it("falls back to the server's text for a refusal code the catalogs do not know", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const error = new ApiError("JIRA_POD_SOMETHING_NEW", "Plain server text.", 409);
+      const notice = toUserErrorNotice(error, "Could not send message.");
+
+      expect(notice.message).toBe("Plain server text.");
+      expect(notice.title).toBe("Request failed");
+      expect(notice.remediation).toBeUndefined();
+      expect(formatUserError(error, "fallback")).toBe(
+        "Plain server text. (JIRA_POD_SOMETHING_NEW)",
+      );
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+
+  it.each(["en", "de"] as const)(
+    "explains unavailable Chat capabilities without service-specific checks in %s",
     async (locale) => {
       await loadLocaleMessages(locale);
       window.localStorage.setItem(I18N_STORAGE_KEY, locale);
       try {
         const error = new ApiError(
           "CONVERSATION_UNAVAILABLE_MODEL",
-          "Jira access requires verified tool calling.",
+          "The selected model cannot use the connected tools. Choose a model with tool calling.",
           400,
         );
         error.correlationId = "tool-capability-proof";
@@ -27,13 +170,76 @@ describe("formatUserError", () => {
         );
         expect(notice.remediation).toBe(
           locale === "de"
-            ? "Wähle ein einsatzbereites Chat-Modell. Prüfe für den Jira-Zugriff Tool-Calling unter Einstellungen > Modelle oder trenne den Jira-Pod."
-            : "Select a ready Chat model. For Jira access, run the tool-calling check in Settings > Models or disconnect the Jira Pod.",
+            ? "Wähle ein verfügbares Chat-Modell, das die benötigten Funktionen unterstützt."
+            : "Choose an available Chat model that supports the required capabilities.",
         );
+        expect(notice.message).toBe(
+          locale === "de"
+            ? "Das ausgewählte Modell kann die benötigten Chat-Funktionen derzeit nicht ausführen."
+            : "The selected model cannot currently run the required Chat capabilities.",
+        );
+        expect(`${notice.message} ${notice.remediation}`).not.toMatch(
+          /Jira|connected tools|verbundenen Werkzeuge|tool.call|Settings|check|disconnect|Einstellungen|prüf|trenn/iu,
+        );
+        const nonTool = toUserErrorNotice(
+          new ApiError(
+            "CONVERSATION_UNAVAILABLE_MODEL",
+            "Selected model is not available for conversation. Pick a chat-capable model.",
+            400,
+          ),
+          "Could not send message.",
+        );
+        expect(nonTool.message).toBe(notice.message);
+        expect(nonTool.remediation).toBe(notice.remediation);
         expect(notice.correlationId).toBe("tool-capability-proof");
         expect(notice.code).toBe("CONVERSATION_UNAVAILABLE_MODEL");
         expect(formatUserError(error, "Could not send message.")).toContain(
           "CONVERSATION_UNAVAILABLE_MODEL",
+        );
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+        resetLoadedMessageCatalogs();
+      }
+    },
+  );
+  it.each(["en", "de"] as const)(
+    "directs a missing, stale or changed readiness proof to model verification after a saved error round trip in %s",
+    async (locale) => {
+      await loadLocaleMessages(locale);
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      try {
+        const error = new ApiError(
+          "CONVERSATION_MODEL_NOT_READY",
+          "Private provider detail must not determine the recovery action.",
+          400,
+        );
+        error.correlationId = "readiness-proof-support";
+        const notice = toUserErrorNotice(error, "Could not send message.");
+        expect(notice.title).toBe(
+          locale === "de" ? "Modellprüfung erforderlich" : "Model verification needed",
+        );
+        expect(notice.message).toBe(
+          locale === "de"
+            ? "Die Bereitschaftsprüfung für das ausgewählte Modell fehlt, ist nicht mehr gültig oder ist fehlgeschlagen."
+            : "A readiness check is missing, no longer valid, or failed for the selected model.",
+        );
+        expect(notice.remediation).toBe(
+          locale === "de"
+            ? "Öffne Einstellungen > Modelle, führe die Bereitschaftsprüfung für das ausgewählte Modell aus und sende deine Nachricht anschließend erneut."
+            : "Open Settings > Models, run the readiness check for the selected model, then send your message again.",
+        );
+        const restored = toUserErrorNotice(
+          formatUserError(error, "Could not send message."),
+          "Could not send message.",
+        );
+        expect(restored).toEqual(notice);
+        expect(restored).toMatchObject({
+          code: "CONVERSATION_MODEL_NOT_READY",
+          correlationId: "readiness-proof-support",
+        });
+        expect(JSON.stringify(restored)).not.toContain("Private provider detail");
+        expect(notice.remediation).not.toBe(
+          translate(locale, "chat.error.capabilityUnavailable.remediation"),
         );
       } finally {
         window.localStorage.removeItem(I18N_STORAGE_KEY);
@@ -527,5 +733,201 @@ describe("formatUserError", () => {
     expect(notice.message).toBe(
       "Model timed out (GATEWAY_UPSTREAM_FAILURE) Support ID: req-visible-999",
     );
+  });
+});
+
+// #4355: every code a person can reach on the Chat path has text, in both languages, by what the
+// person can do about it. A code with neither a group, a notice of its own nor an explicit
+// "never shown" reason fails here (and, through the table's type, the build).
+describe("the Chat error code table", () => {
+  const GROUPS: readonly ErrorGroup[] = [
+    "retry",
+    "stopped",
+    "inProgress",
+    "modelDeclined",
+    "gatewaySignIn",
+    "proxyUnreachable",
+    "proxySignIn",
+    "proxyFailed",
+    "proxyBlocked",
+    "gatewayCertificate",
+    "configChanged",
+    "configInvalid",
+    "modelUnavailable",
+    "noModel",
+    "tooLarge",
+    "unsupported",
+    "invalidPath",
+    "reload",
+    "chatClosed",
+    "regenerateRefused",
+    "other",
+  ];
+  const PARTS = ["title", "message", "remediation"] as const;
+  const placeholders = (text: string): string[] => text.match(/\{\w+\}/gu)?.sort() ?? [];
+
+  it("gives every reachable code a group, an own notice or a stated reason, and nothing else", () => {
+    expect(Object.keys(CHAT_ERROR_CODE_TABLE).sort()).toEqual([...CHAT_PATH_ERROR_CODES].sort());
+    for (const code of CHAT_PATH_ERROR_CODES) {
+      const entry = CHAT_ERROR_CODE_TABLE[code];
+      if ("group" in entry) expect(GROUPS, code).toContain(entry.group);
+      else if ("neverShown" in entry) expect(entry.neverShown.length, code).toBeGreaterThan(10);
+      else {
+        // `own`: the code really has a notice of its own.
+        const hasOwn =
+          code in GATEWAY_ERROR_KEYS ||
+          code in CODE_MESSAGE_KEYS ||
+          code === "CLARIFICATION_NEEDED";
+        expect(hasOwn, `${code} claims an own notice but has none`).toBe(true);
+      }
+    }
+  });
+
+  // A group that keeps the server's message words its title and remedy only.
+  const partsOf = (group: ErrorGroup): readonly (typeof PARTS)[number][] =>
+    GROUPS_KEEPING_SERVER_MESSAGE.has(group) ? ["title", "remediation"] : PARTS;
+  const membersOf = (group: ErrorGroup): string[] =>
+    CHAT_PATH_ERROR_CODES.filter((code) => {
+      const entry = CHAT_ERROR_CODE_TABLE[code];
+      return "group" in entry && entry.group === group;
+    }).sort();
+  const sorted = (codes: string[]): string[] => [...codes].sort();
+
+  // The advice of a group must be true for EVERY code in it. The groups whose advice depends on the
+  // code being transient or on the person doing one thing are pinned member by member, so a code
+  // cannot be added to one without a deliberate change here.
+  it("keeps each group's advice true for every code in it", () => {
+    expect(membersOf("retry")).toEqual(
+      sorted([
+        "GATEWAY_TRANSPORT",
+        "GATEWAY_RATE_LIMIT",
+        "GATEWAY_CIRCUIT_OPEN",
+        "GATEWAY_PROVIDER_ERROR",
+        "GATEWAY_MALFORMED_TOOL_CALL",
+        "CHAT_TOOL_TIMEOUT",
+        "CHAT_TOOL_UNAVAILABLE",
+        "TOO_MANY_STREAMS",
+        "UNAVAILABLE",
+        "STARTUP_RECOVERY_PENDING",
+      ]),
+    );
+    expect(membersOf("inProgress")).toEqual(sorted(["CHAT_TURN_IN_PROGRESS"]));
+    expect(membersOf("modelDeclined")).toEqual(sorted(["GATEWAY_MODEL_REFUSAL"]));
+    expect(membersOf("chatClosed")).toEqual(sorted(["CHAT_CLOSED"]));
+    expect(membersOf("regenerateRefused")).toEqual(sorted(["NOT_APPLIABLE"]));
+    expect(membersOf("proxyBlocked")).toEqual(sorted(["GATEWAY_PROXY_BLOCKED_BY_POLICY"]));
+    expect(membersOf("configChanged")).toEqual(sorted(["GATEWAY_CONFIG_CHANGED"]));
+    expect(membersOf("stopped")).toEqual(
+      sorted(["REQUEST_CANCELLED", "CANCELLED", "GATEWAY_CANCELLED"]),
+    );
+  });
+
+  it.each(["en", "de"] as const)("has every text of every group in %s", async (locale) => {
+    await loadLocaleMessages(locale);
+    for (const group of GROUPS) {
+      for (const part of partsOf(group)) {
+        const key = `chat.error.group.${group}.${part}` as Parameters<typeof translate>[1];
+        const text = translate(locale, key);
+        expect(text, key).not.toBe(key);
+        expect(text.length, key).toBeGreaterThan(5);
+      }
+    }
+  });
+
+  it("words German with the same placeholders and not as English", async () => {
+    await Promise.all([loadLocaleMessages("en"), loadLocaleMessages("de")]);
+    for (const group of GROUPS) {
+      for (const part of partsOf(group)) {
+        const key = `chat.error.group.${group}.${part}` as Parameters<typeof translate>[1];
+        expect(translate("de", key), key).not.toBe(translate("en", key));
+        expect(placeholders(translate("de", key)), key).toEqual(placeholders(translate("en", key)));
+      }
+    }
+  });
+
+  it.each([
+    ["GATEWAY_RATE_LIMIT", "retry"],
+    ["REQUEST_CANCELLED", "stopped"],
+    ["CHAT_TURN_IN_PROGRESS", "inProgress"],
+    ["GATEWAY_MODEL_REFUSAL", "modelDeclined"],
+    ["GATEWAY_AUTHENTICATION", "gatewaySignIn"],
+    ["GATEWAY_PROXY_UNREACHABLE", "proxyUnreachable"],
+    ["GATEWAY_PROXY_AUTH_REQUIRED", "proxySignIn"],
+    ["GATEWAY_PROXY_EGRESS_FAILED", "proxyFailed"],
+    ["GATEWAY_PROXY_BLOCKED_BY_POLICY", "proxyBlocked"],
+    ["GATEWAY_TLS_CA_FAILURE", "gatewayCertificate"],
+    ["GATEWAY_CONFIG_CHANGED", "configChanged"],
+    ["GATEWAY_CONFIG_INVALID", "configInvalid"],
+    ["GATEWAY_UNKNOWN_MODEL", "modelUnavailable"],
+    ["NO_MODEL", "noModel"],
+    ["PAYLOAD_TOO_LARGE", "tooLarge"],
+    ["CONVERSATION_UNSUPPORTED_FILE_TYPE", "unsupported"],
+    ["INVALID_PATH", "invalidPath"],
+    ["SKILL_SELECTION_CHANGED", "reload"],
+    ["CHAT_CLOSED", "chatClosed"],
+    ["NOT_APPLIABLE", "regenerateRefused"],
+    ["INTERNAL", "other"],
+    ["GIT_CHANGE_APPLY_UNAVAILABLE", "other"],
+  ] as const)(
+    "shows %s as the %s notice in German, with its code and support ID kept",
+    async (code, group) => {
+      await loadLocaleMessages("de");
+      window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+      try {
+        const error = new ApiError(code, "Private English provider detail", 502);
+        error.correlationId = "group-proof";
+        const notice = toUserErrorNotice(error, "fallback");
+        expect(notice.title).toBe(translate("de", `chat.error.group.${group}.title`));
+        expect(notice.remediation).toBe(translate("de", `chat.error.group.${group}.remediation`));
+        if (GROUPS_KEEPING_SERVER_MESSAGE.has(group)) {
+          // The server's sentence carries the fact the group cannot (which limit, which path).
+          expect(notice.message).toBe("Private English provider detail");
+        } else {
+          const key = `chat.error.group.${group}.message` as Parameters<typeof translate>[1];
+          expect(notice.message).toBe(translate("de", key));
+          expect(notice.message).not.toContain("Private English provider detail");
+        }
+        expect(notice.code).toBe(code);
+        expect(notice.correlationId).toBe("group-proof");
+        // The saved string a surface keeps restores the same notice.
+        expect(toUserErrorNotice(formatUserError(error, "fallback"), "fallback")).toEqual(notice);
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+      }
+    },
+  );
+
+  // A person's own Stop is not a failure: it never reads as "Request failed".
+  it("words the person's own stop as a neutral notice, never as a failure", async () => {
+    await loadLocaleMessages("en");
+    for (const code of ["REQUEST_CANCELLED", "CANCELLED", "GATEWAY_CANCELLED"]) {
+      const notice = toUserErrorNotice(new ApiError(code, "aborted", 499), "fallback");
+      expect(notice.title, code).toBe("Stopped");
+      expect(notice.title, code).not.toMatch(/failed|wrong|error/iu);
+    }
+  });
+
+  it("states a different cause and remedy for each proxy kind", async () => {
+    await loadLocaleMessages("de");
+    const kinds = ["proxyUnreachable", "proxySignIn", "proxyFailed", "proxyBlocked"] as const;
+    const messages = kinds.map((kind) => translate("de", `chat.error.group.${kind}.message`));
+    expect(new Set(messages).size).toBe(kinds.length);
+    expect(translate("de", "chat.error.group.proxyBlocked.remediation")).toContain("Netzwerkteam");
+    expect(translate("de", "chat.error.group.chatClosed.remediation")).toContain("Stelle");
+    expect(translate("de", "chat.error.group.reload.title")).not.toContain("Stand");
+  });
+
+  it("names the kind of gateway fault in plain words, so the operator can act", async () => {
+    await loadLocaleMessages("de");
+    expect(translate("de", "chat.error.group.gatewaySignIn.title")).toContain("Anmeldung");
+    expect(translate("de", "chat.error.group.proxyUnreachable.message")).toContain("Proxy");
+    expect(translate("de", "chat.error.group.gatewayCertificate.message")).toContain("Zertifikat");
+  });
+
+  it("keeps the server's text for a code the Chat does not know", async () => {
+    await loadOptionalWidgetMessages("de");
+    const notice = toUserErrorNotice(new ApiError("SOME_NEW_CODE", "Server detail", 500), "x");
+    expect(notice.message).toBe("Server detail");
+    expect(notice.code).toBe("SOME_NEW_CODE");
   });
 });

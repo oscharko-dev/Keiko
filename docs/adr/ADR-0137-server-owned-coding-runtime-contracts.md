@@ -114,15 +114,17 @@ bounded whole-file read admits ordinary large repository instructions and retain
 digest for edit preconditions. The native helper allocates only the observed file size plus one
 growth-detection byte; it still checks final file and directory identity and rejects concurrent
 changes. Model-facing read windows remain capped at 64 KiB, and the initial-turn block of the mapped
-profiles remains capped at 16 KiB and 800 lines; the native copy is not (below). An oversized requested model window returns the existing
-`workspace-read-too-large` refusal and a body-free failed-read event so the model can request a
-smaller line window. Files above 1 MiB remain refused; neither a tool argument nor this loader can
+profiles remains capped at 16 KiB and 800 lines; the native copy is not (below). A requested model window past that 64 KiB bound is cut to its largest
+whole-line prefix and reports `nextStartLine` like a window cut by `maxLines`, so "startLine 1,
+maxLines 5000" always answers; only a window whose first line alone exceeds the bound returns the
+existing `workspace-read-too-large` refusal (with model-facing guidance to search instead) and a
+body-free failed-read event. Files above 1 MiB remain refused; neither a tool argument nor this loader can
 override the pinned helper ceiling.
 
 On the native profile the same read reaches the model through the producer's own
 instruction plugin instead of the first message (#3900 AC3, 2026-10-25). Keiko writes it, under a
 header that labels it repository-authored and untrusted and grants no authority, to `AGENTS.md` in
-the run's private configuration directory: the pinned 2.1.4 runtime's global instruction file,
+the run's private configuration directory: the pinned runtime's global instruction file,
 which the agent cannot write. The producer watches that one slot from launch (a configured
 `instructions` source is watched only when it exists at launch, so it would miss a file created
 during the run), so Keiko refreshes the copy before the launch and before every turn, through the
@@ -132,8 +134,8 @@ file the guided `init` command creates and a removal reach the next model call a
 own instruction update. The initial turn then attaches no block, so the text reaches the model
 once; the mapped profiles keep the first-message block. The copy carries the whole
 credential-masked file, as a standalone run loads its AGENTS.md (2026-10-29): the 16 KiB/800-line cut
-belongs to the first-message block alone. It is bounded by the helper's 1 MiB ceiling and by the
-run's prompt budget, half the model's input window at three bytes per token
+belongs to the first-message block alone. It is bounded by the helper's 1 MiB ceiling and by a
+per-request copy budget, half the model's input window at three bytes per token
 (`repositoryInstructionsCopyBudget`, from the geometry the run launches with; about 168 KiB on a
 131,072-token window). A file beyond that budget arrives cut at a line boundary with the explicit
 truncation line instead of failing every turn on a window it cannot fit, and the context line then
@@ -162,7 +164,7 @@ omitted and counted. The context line adds per-kind counts (`globalSourceCount`,
 `ancestorSourceCount`, `configuredSourceCount`, `remoteSourceCount`) and the refused and omitted
 counts; a failed discovery or remote pull is its own `refused` line (`sourceKind`) with frames, and
 the root file's copy is kept. `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables every
-source. 2.1.4 reads no `CLAUDE.md`.
+source. The pinned runtime reads no `CLAUDE.md`.
 
 An application upgrade may still resolve the immutable npm runtime 1.1.3. Its previously approved
 helper digests remain admitted with their original 64 KiB wire capability; unknown bytes remain
@@ -188,14 +190,13 @@ opaque run id and envelope digest cross into the adapter seam.
 
 Minting requires a server-issued, action-bound, one-use human confirmation. The Authority Envelope
 itself is retained for the complete run so the existing registry remains the sole source of
-cumulative runtime/tool/patch budgets. Two of those bounds are operator settings, read once at
-composition and copied into every newly minted envelope: the cumulative prompt-token allowance
-`KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` (default 2,000,000; positive decimal integers up to
-20,000,000) and the envelope duration `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` (default 120;
-positive decimal integers from 1 to 480), from which both `budget.maxRuntimeMs` and `expiresAt`
-derive. An invalid value fails the composition closed; neither setting can alter an existing
-envelope or reset its usage, and a run that exhausts either bound still fails closed at its next
-delegation. The cumulative patch allowance `budget.maxPatchBytes` is not an operator setting: every
+cumulative runtime/tool/patch budgets. One of those bounds is an operator setting, read once at
+composition and copied into every newly minted envelope: the envelope duration
+`KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` (default 120; positive decimal integers from 1 to 480),
+from which both `budget.maxRuntimeMs` and `expiresAt` derive. An invalid value fails the composition
+closed; the setting cannot alter an existing envelope or reset its usage, and a run that exhausts it
+still fails closed at its next delegation. The envelope carries no prompt-token bound (owner
+decision 2026-11-11, below). The cumulative patch allowance `budget.maxPatchBytes` is not an operator setting: every
 envelope is minted with `CODING_RUNTIME_PATCH_BUDGET_BYTES` (64 MiB, owner decision 2026-10-28;
 previously 256 KiB), eight changesets of the per-changeset cap of ADR-0125 D3, charged by the size of
 the diff each edit renders. Native context compaction changes subsequent request size, not
@@ -215,21 +216,30 @@ completion, so an answer or summary cannot bypass pending tools or verification 
 compaction configuration and execution ordering remain native-runtime concerns; the historical
 post-answer delay remains open until a reproducible native qualification identifies the cause.
 
-The allowance is the only default per-run token bound: a Model Gateway spend ceiling is enforced
-only where an operator configures one. It therefore counts every prompt the provider processed for
-a turn: the turn's own prompt and, when the gateway discarded attempts on the way to its answer (a
-steered repair's first answer, a catalog-rejected tool call, a stream that failed after its usage
-arrived), their provider-reported prompt tokens (`discardedAttemptUsage`, ADR-0003; #3873 review). The former defaults (200,000 tokens and a fixed 30 minutes)
-rested on the premise that only a refused-edit loop exhausts them; the live Gemma qualification
-(#3873, run `run-65084062444586162471229658028402064666`, Supervised workspace, Gemma 4 31B behind
-LiteLLM) disproved it. An ordinary task — fix 13 ESLint findings across six files, then run
-`npm run check` — ran 17 model turns in 27.5 minutes with all three replacement edits applied first
-time and no refused edit, yet every turn re-sends the whole conversation, so the prompt grew from
-4,128 to 18,520 tokens per turn, the cumulative sum reached 200,000, the gateway rejected turn 18
-(`coding-sidecar.gateway.rejected`, `runtime-prompt-budget-denied`) and the run settled `failed`.
+**Keiko does not cap prompt tokens — owner decision (2026-11-11, #4346).** The envelope formerly
+carried a cumulative prompt-token allowance (`budget.maxPromptTokens`, operator setting
+`KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`, last default 2,000,000) that summed every prompt the
+provider processed for the run. Every agent step re-sends the whole conversation, so that sum grows
+quadratically with ordinary progress and any fixed allowance ends healthy long runs: the live Gemma
+qualification (#3873, run `run-65084062444586162471229658028402064666`) hit the earlier 200,000 after
+17 normal turns, and a customer run on a real repository failed "prompt allowance used up" at
+2,000,000 while still progressing. The owner removed the allowance rather than raising it: Keiko does
+not meter tokens on the operator's behalf, and cost control belongs to the operator-configured Model Gateway spend ceiling,
+enforced only where an operator configures one. The removal covers every cumulative prompt quota in
+the product: this envelope, the Chat tool turn (ADR-0129), governed agent runs (ADR-0125) and the CI
+repair budget. A model call is still admitted only while the run's authority is live, unexpired and
+unrevoked and, for a CI repair, its deadline remains (`admitModelCall`); the admission books no
+tokens. Per-request context-window fitting, output limits, duration, tool-call and patch budgets are
+unchanged. `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` is no longer read; a legacy envelope or durable
+record that still carries a well-formed `maxPromptTokens` validates and is ignored, a malformed one
+is still refused. The closed failure code `prompt-allowance-exhausted` stays decodable for runs
+stored before the removal and is never produced. Provider-reported usage, including discarded
+attempts (`discardedAttemptUsage`, ADR-0003), is still recorded for the run's effort roll-up. A
+better guard against a model that loops unnoticed is tracked in #4346; the refused-edit escalation
+below already ends the known loop.
 A slow self-hosted model (about 24 tokens/s, 1,600 to 4,400 mostly-reasoning completion tokens per
-turn) likewise turns a fixed 30-minute duration into a wall that ordinary multi-file tasks hit. The
-minted allowance and duration are reported body-free as `maxPromptTokens` and `maxRuntimeMs` on
+turn) turns a fixed 30-minute duration into a wall that ordinary multi-file tasks hit, so the
+duration default is 120 minutes. The minted duration is reported body-free as `maxRuntimeMs` on
 `coding-runtime.authority.minted`. Every other bound that must not be shorter than the run follows
 the configured duration: the safe-activity projection retains a run's feed for the duration plus a
 margin, and the OpenCode adapter bounds one submitted task's whole agent loop by the run's
@@ -241,18 +251,13 @@ project, branch, action/connector scope, budget, runtime source, or model source
 delegation replay, stop, and takeover fail closed. V1 permits exactly one active run per BFF; a
 concurrent start returns `active-run-conflict` deterministically.
 
-**Default envelope widened — owner decision (2026-10-07, PR #3876).** Raising the two defaults
-widens the default Authority Envelope of every installation: ten times the prompt-token allowance,
-four times the duration, and with `expiresAt` a minted run capability that lives up to 120 minutes
-instead of 30. The owner decided to ship these defaults (2,000,000 tokens, 120 minutes) for every
-installation, with the two variables as the operator's opt-down, rather than a tighter compromise:
-the measured need of ordinary multi-file tasks on self-hosted reasoning models exceeds the former
-defaults (above), and a run still fails closed at either bound. Operators who meter a paid provider
-set `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` and `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` before
-the server starts, and configure a Model Gateway spend ceiling where they need a per-provider cost
-bound. Release note: "Coding Workbench runs now allow up to 2,000,000 prompt tokens and 120 minutes
-by default (previously 200,000 tokens and 30 minutes); lower them with
-`KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` and `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`."
+**Default envelope widened — owner decision (2026-10-07, PR #3876).** Raising the duration
+default widens the default Authority Envelope of every installation: four times the duration, and
+with `expiresAt` a minted run capability that lives up to 120 minutes instead of 30. The owner
+decided to ship 120 minutes for every installation, with `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`
+as the operator's opt-down, and a run still fails closed at that bound. (The same decision raised the
+prompt-token allowance tenfold; the allowance itself was removed on 2026-11-11, above.) Operators who
+need a per-provider cost bound configure a Model Gateway spend ceiling.
 
 The same aggregate answers a budget question without spending: `delegationFits` says whether one
 more delegation of a given usage would still fit the run's budget, for the same capability, run and
@@ -291,7 +296,7 @@ received it, to the orchestrator, which counts the run's refusals since its last
 whatever their closed reason codes. (The first version counted refusals with the same code and
 restarted on any other; a model that alternated two refusals — an edit that does not match, a stale
 re-read, an edit that does not match again — repeated no code, was never bounded and spent the whole
-prompt allowance: PR #3876 review.) Other tool calls between two refused edits do not interrupt the
+prompt allowance of that time: PR #3876 review.) Other tool calls between two refused edits do not interrupt the
 streak — re-reading the file is exactly what the refusal guidance asks for — while an applied edit
 ends it. A human's rejection of a change in its review is a decision, never a refusal (ADR-0124 D6),
 and an edit whose preparation was cancelled says nothing about the edit: neither counts. Refusals
@@ -322,7 +327,7 @@ latest refusal's closed words when it had them. The run then settles through the
 failed turn, its runtime stopped and its changes kept in the task workspace, and
 `coding-runtime.run.settled` carries the cause with `failureBasis: "refusal-escalation"` and
 `refusalReasonCode`. The bounds are fixed: every refused attempt resends the run's growing context,
-so a loop spends the prompt allowance on nothing.
+so a loop spends tokens and time on nothing.
 
 **A paused run says what it is waiting for.** `paused` covers two different situations and the
 operator has to be able to tell them apart, so the snapshot carries an optional `pauseReason` from a
@@ -446,24 +451,17 @@ discarded with the run.
 **A failed run names the bound or model-call cause that ended it** (F9 of the live Gemma
 qualification, #3873). A failed task outcome carries no cause of its own, and settling every one as
 `runtime-failed` told an operator "internal error" for runs that had only reached a bound: run
-`run-65084062444586162471229658028402064666` used up its prompt allowance, and run
+`run-65084062444586162471229658028402064666` used up the prompt allowance of that time (removed
+2026-11-11, D2), and run
 `run-272120967981827964065820685403290179367` reached its 30-minute envelope with a model call in
 flight (`coding-sidecar.gateway.outcome` `cancelled`, `cancellationCause=run-stopped`). At
 settlement the orchestrator reads, before it stops the runtime, the facts the owning layers hold:
-the runtime authority answers whether the run's most recent model-call admission was refused by the
-cumulative prompt allowance itself (not by the runtime's time budget, expiry, revocation, or a run
-state that admits no model call; a refusal by the run's CI-repair budget answers before the
-authority is asked and is recorded in the same place with the closed reason the budget refused with,
-and only its own `prompt-budget-exhausted`, which counts the same `maxPromptTokens` over the repair,
-is the allowance: every other reason names no allowance, so a repair that spent its failed attempts
-or lost its authority never settles as an exhausted prompt allowance, which no setting could fix;
-#3873 review) and whether the run's time limit ran out (`maxRuntimeMs` after minting or `expiresAt`,
+the runtime authority answers whether the run's time limit ran out (`maxRuntimeMs` after minting or `expiresAt`,
 whichever comes first, or the CI repair's own `deadline-exhausted`, which counts the same
 `maxRuntimeMs` over the repair), and the control plane's event
 hub keeps the closed cause the coding sidecar gateway reported for the run's most recent failed
 model call until a later call of the run is answered, with the gateway's own fact that the provider
-could not serve that call. In that order, the run settles `prompt-allowance-exhausted`,
-`envelope-duration-exhausted`, `output-exhausted-repeated` (the gateway's `output-exhausted`, which
+could not serve that call. In that order, the run settles `envelope-duration-exhausted`, `output-exhausted-repeated` (the gateway's `output-exhausted`, which
 ends a run only after the gateway's one steered repair or the runtime's retries exhausted the budget
 again), `provider-unavailable`, or `model-turn-failed` (any other failed-call cause, which the
 failed turn's own frame names), and `runtime-failed` (the runtime crashed or failed internally) only
@@ -492,7 +490,7 @@ the same stop path, so the settled snapshot and its terminal status event are id
 `coding-runtime.run.shutdown` in the server's Activity Log names a shutdown. An earlier text claimed
 "You stopped this run" for every `cancelled` run, which blamed the operator for a restart (#3873
 review). Nothing is read from OpenCode's error text. `coding-runtime.run.settled` records the cause
-with `failureBasis` (`prompt-allowance`, `envelope-duration`, `model-call-failure`,
+with `failureBasis` (`envelope-duration`, `model-call-failure`,
 `no-model-call-failure`, or `refusal-escalation` for an escalated run) and `modelCallFailure` (a
 `provider-unavailable` run that ended on a retryable status names `provider-failed` there), and an
 error class that matches it instead of `internal`.
@@ -718,8 +716,9 @@ facts come from the governed producer, remain bounded by the existing aggregate 
 survive native restatement and immutable replay. Raw arguments/results, unknown refusal strings,
 unknown outcomes and unsafe paths are rejected. The verification outcome is derived from the closed
 result code the model received (`codingToolVerificationPresentation`), so the timeline shows a
-package-script decision still waiting on the operator, a repository with nothing the verifier can
-run and a run whose steps were skipped, denied or cancelled as what they were and not as a failed
+package-script decision still waiting on the operator, a request for which the verifier found
+nothing it can run (the selected package or target has no test, lint or build script; the repository
+may define others) and a run whose steps were skipped, denied or cancelled as what they were and not as a failed
 check; only a check that ran and went red keeps the failed badge, and a timeout, a resource ceiling
 or a refusal before the runner claim nothing beyond the generic failure.
 Paths never enter Activity Log evidence, model-facing edit refusal replies or Coding History;
@@ -727,6 +726,20 @@ the existing tool-result operation records service duration through its standard
 and the existing `coding-runtime.tool-result-rendered` operation records the closed verification
 outcome as an optional field, declared `diagnosticWhen` for every outcome but `passed` so a support
 report keeps a verification that did not pass.
+
+The same projection carries a governed Git step's closed outcome (`gitOutcome`: `completed`,
+`waiting-for-approval`, `verification-failed`, `verification-missing`, `not-staged`,
+`unsaved-changes`, `blocked`, `changed`, `not-done`; lab T37, #4271). The facade answers a refused
+stage, unstage, branch, fetch, pull or verified commit as a completed call that carries the
+refusal, so the call state alone painted a commit that never happened as "Succeeded".
+`codingToolGitPresentation` derives the word from the result the model received (never from a
+message or path): a commit's exact cause where the card can name it (a failed check, a change only
+partly staged, unsaved editor files), otherwise its status, and a status it does not know fails
+closed to `not-done`. A prepared stage or unstage proposal (`ready`) claims no outcome. The timeline
+shows every word but `completed` as not done or waiting for approval, with a one-line reason, and
+keeps such a card out of the collapsed group of succeeded steps; a carried-out step adds no
+sentence to its badge. The same field is recorded body-free on `coding-runtime.tool-result-rendered`,
+declared `diagnosticWhen` for every word but `completed` and `waiting-for-approval`.
 
 An explicit Stop or takeover keeps the run's live safe-activity feed, as standalone OpenCode keeps
 the tool steps of an aborted session (owner decision 2026-10-30, #3907 F3). Until then both ends
@@ -982,18 +995,87 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
 - **Default on, operator opt-out.** A coding turn's gateway call, which carries the explicit
   `reasoningDelivery: "forward"` that only the coding sidecar route sets, forwards the model's
   reasoning unless the gateway configuration sets `codingReasoningDisplay: "off"`; with the switch off
-  the gateway still parses the reasoning and discards it. Every other surface always discards it,
+  the gateway still parses reasoning and suppresses its display. Other surfaces do not receive it,
   also one that borrows the `coding-workbench` latency profile for its timeout floors (ADR-0003,
   #3873 F23).
-- **Never resent upstream.** The runtime records the forwarded reasoning in its history and sends it
-  back with later requests. The sidecar drops it there: the reasoning fields of prior assistant
-  messages never reach the gateway request, and an assistant message that carries nothing but
-  reasoning (no answer text, no tool call) is dropped and counted
-  (`droppedReasoningMessageCount` on `coding-sidecar.gateway.request-validated`), so a failed turn's
-  reasoning does not grow the prompt of the attempts that follow it (#3873 F23). The answer text a
-  model wrote beside its tool calls is not reasoning: the gateway resends it as written, as a
-  standalone OpenCode run does, and sends `content: null` only for a tool-calling turn without
-  text (#3907 AC3; `toolCallTextMessageCount` on the same line).
+- **Qualified protocol continuation, independent of display.** For default and shared-history profiles, the sidecar discards
+  runtime-echoed reasoning fields and reasoning-only assistant messages rather than forwarding those
+  fields directly (#3873 F23). Providers omit prior reasoning by default. An explicit
+  `providers[].reasoningHistory: "required-with-tools"` requires all historical assistant reasoning
+  when a tool catalog is advertised; `"current-turn"` retains only assistants after the last human
+  message. `reasoningHistoryField` selects the qualified wire field, `reasoning_content` by default
+  or `reasoning` for a provider that requires that spelling. No alias-name inference enables it.
+  The gateway captures the successful complete response before display suppression; failed,
+  cancelled and output-truncated attempts do not supply continuation. Its state is memory-only,
+  bounded to 2,048 entries and 32 MiB (reasoning plus assistant payloads). A successful restore
+  refreshes both expiry and eviction priority; idle entries expire
+  after 30 minutes on the next lookup. Keys bind the trusted session/run, provider configuration,
+  most recent human message and exact assistant payload. Conflicting successful reasoning for
+  an identical payload is ambiguous and refused. Chat's split persisted tool pairs may be restored
+  only against the exact saved group, including its original prose and parallel calls; fitting old
+  tool observations does not change the response identity. Runtime echoes never populate this state.
+- **Detected, not configured (amended 2026-11-13, #4351).** A deployment with no `reasoningHistory`
+  or `reasoningContinuation` setting is not left to fail. When a provider answers a tool-turn
+  continuation with an HTTP 400 that the gateway attributes to no other cause (not a context
+  overflow, an admission refusal, an exhausted output budget, an empty answer or a rejected tool-call
+  shape), and the current turn holds the retained reasoning of every assistant message, the gateway
+  retries that one model request once with the current turn's reasoning restored. The retry is the
+  closed steered-repair reason `reasoning-restore-repair` on `gateway.retry.scheduled`, counted
+  against attempts and spend like every discarded attempt; it repeats the model request only (a tool
+  that already ran is never executed again, a write is never replayed), and a stream is retried only
+  before its first chunk. Only a successful retry teaches anything: the deployment is then remembered
+  as wanting its reasoning back and behaves as `"current-turn"` from the next request on. A second
+  rejection surfaces the original error and learns nothing. A learned deployment can also be wrong
+  or change: when it rejects a continuation that carried its reasoning with an unattributed HTTP 400,
+  that one retry (the closed reason `reasoning-withhold-repair`, never a second retry for the same
+  call) is sent without the reasoning, and its success unlearns the deployment (state `unlearned`);
+  a failed retry changes nothing and surfaces the original error. To make the retry possible, the
+  reasoning of a tool-calling response is now kept for the CURRENT turn even without a setting (same
+  caps, TTL, redaction and binding to the trusted session, provider configuration and generation,
+  memory only); it is dropped as soon as the turn ENDS (a final answer, a failure or a cancellation
+  of a gateway call) and by a request of a new turn, and it is kept beyond the turn only for a
+  configured or learned deployment. A turn that ends outside the gateway (a Chat round cap, a tool
+  error with no further model call) makes no more requests, so its entries wait for the session's
+  next turn or, at the latest, the 30-minute idle TTL and the entry and byte caps. The learned fact is one content-free flag per deployment fingerprint, lives with the
+  gateway instance (so it is gone with a configuration generation change), is never persisted and is
+  never logged beyond the closed `gateway.reasoning-history` states `learned` and `unlearned`. An explicit provider
+  setting always wins. Settings > Models shows the fact as "Returns its reasoning on tool turns:
+  detected". This replaces the earlier statement that providers omit prior reasoning unless a setting
+  says otherwise; no alias name decides anything.
+  Provider prompt admission and the token counter include the same reasoning projection as transport.
+  Same-generation context-window refinements join state, including in-flight writers; actual
+  generation changes start independent state (old admitted references stay pinned). Missing required
+  state after restart, expiry or capacity eviction requires a fresh session rather
+  than an invented reasoning placeholder. Full-history providers therefore use the existing fresh
+  Coding session/history replay path for native resume and fork requests; current-turn providers
+  can resume after a new human message. This is a deliberate continuity limit of transient state.
+  A full-history provider's startup handshake also uses a scratch session on a fresh run, so a
+  synthetic readiness reply never becomes an uncached historical assistant message.
+  The Activity Log records `gateway.reasoning-history` states and byte/message counts only.
+  The text beside a tool call remains ordinary assistant content and is preserved (#3907 AC3).
+- **Runtime part types require version qualification.** OpenCode's admitted source
+  [converts failed or interrupted reasoning to ordinary text](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/session/runner/to-llm-message.ts#L155).
+  The inspected upstream snapshot
+  [drops those reasoning parts instead](https://github.com/anomalyco/opencode/blob/008619ae06cd00dc21f60e4bdb29c04a60b07b6b/packages/core/src/session/runner/to-llm-message.ts#L142).
+  The sidecar cannot recover a part type already lost by the runtime. Qualified profiles reject
+  unknown assistant payloads inside their required history window; `current-turn` does not validate
+  older ordinary text before a later human message, and the default profile does not restore or
+  validate reasoning history. Therefore this contract does not promise removal of failed reasoning
+  that a runtime has relabelled as text. A runtime upgrade or repair needs its own failed-turn replay
+  qualification; readable-text heuristics must not erase legitimate assistant content.
+- **Native session-owned protocol continuation.** The mutually exclusive provider contract
+  `reasoningContinuation: "required-with-tools"` uses the authenticated native session rather than
+  the shared transient history cache (#4059); `reasoningHistory` and `reasoningHistoryField` cannot
+  be combined with it. The qualified field is `reasoning_content`. Its context hook reads canonical
+  `session.context` and removes excluded rounds from the lowered context before provider serialization:
+  aborted, unfinished and foreign-model rounds with orphan results, and retains valid completed
+  length continuations and compaction checkpoints. The run registry and retained manifest bind
+  primary and required model routes; changed or unproven routes start fresh. This path preserves
+  existing native resume/fork, independently of display, while exact state must pass the current
+  credential floor and byte/context/spend admission. Missing, conflicting, secret-bearing or oversized
+  state fails closed. Evidence carries only registered counts and closed outcomes. The transient
+  history continuity limit and part-type qualification above apply to the shared policy; they do not
+  replace this native context qualification.
 - **Shown as what it is.** The sidecar hands reasoning to the managed runtime as
   `reasoning_content`; the runtime records it as a reasoning part, and the live safe-activity
   projection carries it beside its assistant message, never inside the answer. The timeline shows
@@ -1166,12 +1248,18 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `direct` until a native boundary is qualified there); no request field can select a profile. The mapped `direct` and `code-mode` profiles remain available to tests and to an
   explicit server selection, and the governed `keiko_*` catalog, the tool facade and Chat
   repository search stay in place for the surfaces that use them.
+- **Windows qualification (#4068, 2026-10-26).** The task owner explicitly retained the mapped
+  `direct` profile for this qualification. Profile selection alone does not establish availability:
+  production Windows gateway confinement still refuses before spawn. The
+  [Windows record](../qa/opencode-windows-qualification.md) distinguishes executed helper proofs,
+  unavailable native capabilities and remaining install/service blockers. No mapped result may be
+  labeled native or close unexecuted Windows acceptance criteria.
 - **The runtime keeps its own tools, agents and configuration.** The launch configuration of the
   native profile (`opencodeLaunchProfile.ts`) names no ordinary action: it denies only the
   mode-independent `external_directory` escape (admitting the run's own plan directory), keeps
-  `update` and `share` off (a session is never published, and OpenCode 2.1.4 has no share operation;
+  `update` and `share` off (a session is never published, and OpenCode has no share operation;
   the equivalent is the human's local export and import of a task's Coding History, D4), keeps the single `keiko-runtime` provider behind the Model
-  Gateway, and enables native snapshots. The producer appends configured rules after each built-in agent's own
+  Gateway, and enables native snapshots. A call the producer settles with its closed `permission.rejected` error type (a configured rule such as this escape deny, Keiko's policy hook replying reject, or a person pressing Deny; the token names no origin, and its message is never read) projects as a denied card, live and in Coding History, and `coding-runtime.native-tool.denied` records it once per call (#4271); a matching `coding-runtime.native-policy.decided` line exists only when Keiko's policy hook made or relayed the decision. The producer appends configured rules after each built-in agent's own
   rules and the last match wins, so any configured rule naming an ordinary action would replace an
   agent's own denial: the earlier blanket `allow` (and a blanket `ask`) let the Plan agent write
   project files in Full access (#3897 review). Without it every built-in agent keeps the producer's
@@ -1183,6 +1271,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   (`opencodeNativeProjectBoundary.real.test.ts`) pins it with the production plugin and a facade
   that allows everything: Plan's project write leaves the file unchanged without asking the hook,
   its plan-file write and Build's write go through.
+- **Machine-wide OpenCode configuration stays out (#4271).** OpenCode reads
+  `/Library/Application Support/opencode` and the `ai.opencode.managed` managed preferences and
+  lets them win over the configuration Keiko supplies. The native profile runs on macOS only, and
+  its kernel read boundary admits neither tree, so a value placed there cannot change a run. A
+  backend test pins that boundary. Linux and Windows map to `direct`, whose governed catalog does
+  not take its authority from OpenCode configuration; a future native boundary there must close
+  `/etc/opencode` and the Windows equivalent before it qualifies.
 - **A native run readies only with its governing plugins active.** No configured rule stands in for
   the policy hook, so the fail-closed property lives in readiness: after the protocol digest the
   adapter enters the `policy-plugin` phase, which polls the producer's admitted `GET /api/plugin`
@@ -1216,9 +1311,57 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   execution, so Ask for approval and Supervised workspace ask before a program starts and a
   refusal blocks it before it runs. The human reviews the program itself: its text, split at line
   breaks into the bounded review resources (64 × 2,048 characters; a longer line is refused as too
-  large to review), is the ask's resource and is never logged. `fetch` is a Code Mode primitive that
-  neither hook sees inside an admitted program: the kernel egress rule governs it (loopback below
-  Full access).
+  large to review), is the ask's resource and is never logged. A `fetch` inside an admitted program
+  asserts the `webfetch` permission since OpenCode 2.2, so the policy decides it like the ordinary
+  tool; the kernel egress rule stays underneath (loopback below Full access). The `opencode_session_rename` tool, which asserted no permission and was decided by nothing, is now
+  governed like a move: it sets only the title of the run's own session, so it is allowed in every
+  mode for that session and refused for another, one line of at most 200 characters. The worktree
+  listing and the model search change nothing and stay reads.
+  **History (#4359, 2026-11-14):** the retired OpenCode 2.1.4 did not decide a nested `fetch`
+  (it produced no `webfetch` decision line; only the kernel egress rule stopped it below Full access
+  and Full access reached the open internet), so the program card had to stay while that runtime was
+  approved. OpenCode 2.2.5, the one runtime Keiko approves, decides it (the next bullet).
+- **The Code Mode program passes without a card on a runtime that decides every nested effect
+  (#4359, owner decision of 2026-11-14 with its three conditions).** The program asserts no
+  permission and can only call its nested tools, so the card for the program itself reviewed
+  nothing the nested decisions do not already decide. The condition is a fact about the runtime, not
+  a setting: the runtime's pin in `opencode-runtime-pins.json` carries `decidesNestedEffects`, set
+  only after every effect kind was observed live in Ask for approval and Full access
+  (`coding-runtime.native-policy.decided`, counts and closed values) on that exact version. On
+  2.2.5: session move and rename (own session, inside the workspace), worktree creation (ask in
+  every mode), worktree removal (`edit`), MCP resources and every MCP tool including a Jira write
+  through the relay (`mcp`), and `fetch` (`webfetch`: refused below Full access, allowed in Full
+  access) each reach their own decision; only the worktree listing and the model search, which
+  change nothing, decide nothing; edit, write and shell are not callable inside a program and its
+  interpreter has no process, module or environment access. For such a runtime the program is a
+  plain computation: allowed in every mode and no longer sent for review, so the 64 × 2,048
+  character review bounds no longer refuse a long program. A runtime whose pin does not say so
+  (absent, false, an unknown version) keeps the card exactly as before and refuses a program that
+  offers no text to review: the decision fails closed. Hard denials are unchanged
+  (`opencodeCodeModeProgram.test.ts`, one pin per effect kind). Measured 2026-11-14 on OpenCode 2.2.5 from the 1.1.5 npm runtime package (`coding-runtime.native-policy.decided`, closed values only; one program per row and mode, each with the program's own line first).
+  `fetch` is refused rather than asked below Full access because the run has no route outside the
+  machine in those modes: the capability-availability rule of this section's web paragraph and
+  ADR-0138 D4 (parity Q5), not a defect. A Jira write is exactly one card: the `mcp` ask is the plain
+  Jira write card, bound to the digest of the dispatched arguments (`nativeMcpInvocationId`), so
+  changed arguments are never approved by it; a write the template gate refuses is refused before
+  any card. Listing and reading the resources of the run's own managed server is the human's own
+  grant (the Pod was chosen for the run) and asks nothing.
+
+| Effect a program can cause                      | Permission the policy decides | Ask for approval                 | Full access             |
+| ----------------------------------------------- | ----------------------------- | -------------------------------- | ----------------------- |
+| Session rename (own session)                    | `opencode_session_rename`     | allow, low                       | allow, low              |
+| Session move inside the workspace               | `opencode_session_move`       | allow, low                       | allow, low              |
+| Session move outside the workspace              | `opencode_session_move`       | deny (`workspace-escape`)        | deny (`workspace-escape`) |
+| Worktree creation                               | `opencode_worktree_create`    | ask, high                        | ask, high               |
+| Worktree removal                                | `edit` (the directory)        | ask, medium                      | allow, medium           |
+| MCP resource listing and reading (managed Pod)  | `mcp`                         | ask, medium (now allow, see ADR) | allow, medium           |
+| MCP tool call, Jira read                        | `mcp`                         | allow                            | allow                   |
+| MCP tool call, Jira write                       | `mcp`                         | ask (the one write card)         | allow                   |
+| Web fetch                                       | `webfetch`                    | deny (`mode-denied`)             | allow, medium           |
+| Worktree listing, model search                  | none (pure reads)             | none                             | none                    |
+| File write, edit, patch, shell, sub-agent start | not callable from a program   | not reachable                    | not reachable           |
+
+
 - **A Code Mode session move stays inside the task workspace (#3903 AC4).** The policy plugin sends
   `opencode_session_move`'s `directory` and the session it names to the policy. The run's own
   session may move to an existing directory inside the task workspace, named by its absolute,
@@ -1273,7 +1416,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   Linux mount allowlist names no external root yet, so none is admitted there; repository
   references would leave the machine and stay refused.
 - **Web search runs through the search integration the operator admitted (T15, #3903 AC3,
-  PR #4064 review).** The pinned 2.1.4 `websearch` asks the policy for its query and then calls the
+  PR #4064 review).** The pinned `websearch` asks the policy for its query and then calls the
   selected provider of the runtime's websearch service; with no provider selected it waits on the
   user's choice. The generated `keiko.native-delivery` plugin registers Keiko's provider, `keiko`,
   as that service's default (`ctx.websearch`), so the original tool, its permission ask and its
@@ -1321,7 +1464,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   starts through `/usr/bin/env -i` with a fixed `PATH`, the run's private `HOME` and its own
   variables only. It runs inside the run's sandbox; its executable's install prefix is opened for
   reading under the same toolchain rule as the launcher's `PATH`, and the supervisor's resource
-  coalition reaps it with the tree. A remote server is written only for Full access; without an
+  coalition reaps it with the tree. Only a darwin or linux host has that env-scrubbing launcher; on any
+  other platform (Windows today, #4068 W10) `openCodeNativeMcpAdmission` omits every local server not
+  reached through the relay, with its tools and grants, rather than start it with the inherited
+  environment, and `coding-runtime.native-mcp-local.refused` records the refused count only. This is a
+  static refusal, not a Windows launcher and not a Windows qualification pass. A remote server is
+  written only for Full access; without an
   operator-named issuer its OAuth stays off.
   The runtime exposes MCP tools through Code Mode, and every nested call reaches the policy as
   `<server>_<tool>`: a named local `read` tool is a vetted command (Ask for approval asks,
@@ -1401,7 +1549,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   in Ask for approval is allowed without a human and projects as the plan; the control without the
   switch is offered no plan tool and the call is the producer's own error.
 - **Built-in formatters follow the launch mode, and only Full access runs them (#3897, parity row
-  C07).** The pinned 2.1.4 producer runs a built-in formatter (`gofmt`, `rustfmt`, `shfmt`,
+  C07).** The pinned producer runs a built-in formatter (`gofmt`, `rustfmt`, `shfmt`,
   `prettier`, ...) after its own `write` and `edit` as a plain child process of the runtime. No
   permission is evaluated for it, so the policy hook sees the edit and never the formatter, and it
   runs only when the configuration says `formatter: true`; its own default is off. Keiko therefore
@@ -1442,7 +1590,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   configured and refused entry counts).
 - **Repository configuration is data until the operator admits its executable effects (#3903).**
   A first increment loaded the repository's `opencode.json` and `.opencode/` directory like
-  standalone. That is retired. The pinned 2.1.4 producer discovers a project's `opencode.json`,
+  standalone. That is retired. The pinned producer discovers a project's `opencode.json`,
   `.opencode/` agents, commands, skills and `plugins/` modules (and any module an `opencode.json`
   `plugins` entry names) as one layer, imports a plugin module's top-level code and `setup` before
   any permission is evaluated, and merges a project `providers`/`model` entry above the private
@@ -1703,7 +1851,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   composer shows a Build | Plan switch only where that list offers `plan`, keeps it operable
   between turns (idle, paused) and fixed while a turn runs, sends the selection with every start,
   retry and follow-up (`build` included, so a follow-up can switch back), and names the plan agent
-  in the run status line and information panel.
+  in the run status line and information panel. The snapshot of a run its server process started
+  states that run's `modelId` and latest accepted `agent`; readiness states the closed `toolProfile`
+  (`native`, or `mapped` for anything else). A reloaded window adopts the run's identity once, and a
+  live run's facts never fall back to the browser's selection: an absent value reads as not reported
+  (#4068 W12).
 - **The prompt takes a message while a turn runs and the files its text references.** A follow-up
   may carry `delivery` (`steer` or `queue`, the closed `CODING_WORKBENCH_PROMPT_DELIVERIES`
   vocabulary) and `references` (at most 16 `{ path }` entries relative to the run's workspace root;
@@ -1733,7 +1885,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   refused (`request-conflict`) rather than answered with the receipt of the first, and a receipt
   that names another id is committed as accepted but unreconciled and never retried. A retry that
   arrives after the turn settled is refused with no way to tell whether the first attempt was
-  applied; the log shows its `delivery-unconfirmed` attempt. The pinned 2.1.4 behaviour is proven against the original executable
+  applied; the log shows its `delivery-unconfirmed` attempt. The pinned behaviour is proven against the original executable
   (`opencodeNativePromptInputs.real.test.ts`): `steer` reaches the model with the running turn's
   next step and `queue` after its final answer, both inside one execution, so the one settlement
   Keiko waits for covers them, and a lost acknowledgement followed by a retry of the same request
@@ -1830,8 +1982,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   stopped or undone turn cannot hand them to the next prompt; a failed withdrawal is logged and does
   not fail the stop. The Workbench lists the messages above the composer with Cancel and, for a queued
   one, Send now, and refreshes on the run's revision and on the conversation gaining a message (no
-  polling); a failed read is a retryable error, never an empty list.
-- **A turn may run as one of the runtime's slash commands (C02).** The pinned 2.1.4 producer lists its
+  polling); a failed read is a retryable error, never an empty list. It reads the list only while
+  readiness offers delivery (`promptInputs.delivery`): under a profile that takes no delivery, such as
+  the mapped Windows profile, the server refuses every read as `unsupported`, and the Workbench left
+  one warn line per refresh until it stopped asking (#4068, 2026-11-07).
+- **A turn may run as one of the runtime's slash commands (C02).** The pinned producer lists its
   commands (`GET /api/command`, `command.list`: `init`, guided AGENTS.md setup, and `review`, review
   of the changes, defaulting to the uncommitted ones) and runs one as a turn (`POST
   /api/session/{sessionID}/command`, `session.command`, body `{ name, text, files?, agents?, skills?,
@@ -2185,6 +2340,29 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `keiko-contracts` (`.env`, `.env.*` except `.env.example`, keys, certificates, token and history
   files, `.npmrc`, ...) is the single list that the native read tool's `isDenied` and the kernel
   rule both read, and the kernel translates it into the last Seatbelt rule, after every re-allow.
+  That rule leaves exactly two kinds of `*.pem` leaf to the earlier rules (#4271): the public
+  certificate-authority bundles every TLS client reads (`/private/etc/ssl/cert.pem`, Homebrew's
+  `ca-certificates` bundle and the `cert.pem` link of each Homebrew OpenSSL, and an installed
+  certifi's `site-packages/certifi/cacert.pem`, also as pip's vendored copy), without which no HTTPS client of a native shell verified a server, and
+  the exact files the operator names with `SSL_CERT_FILE` or `NODE_EXTRA_CA_CERTS`
+  (`certificateReadFiles`, at the spelled and the real location, read-only, bound into the policy
+  digest and recorded as counts on `coding-runtime.native-certificates.admitted`). The event also
+  counts admitted custom certificate directories. On macOS, the filesystem's leading `/private`
+  prefix is not a private-key directory: a dedicated custom bundle directory under `/private/var`
+  or `/private/tmp` can qualify as a read root. Shared temporary roots (`/tmp`, `/var/tmp`, the host's
+  resolved temporary directory) and their ancestors never qualify; a selected bundle directly in
+  one admits only its exact file. Directory depth uses the logical macOS path without `/private`.
+  `/private/etc` and any nested `etc` or `private` component remain excluded with both platform path
+  separators and case-insensitive matching; all denied roots and credential-name rules still apply.
+  The carve-out
+  is a leaf exception only: a credential-named directory above such a file still denies it, every
+  other credential name keeps its rule, and whether the file is readable at all stays with the
+  read allowlist and the denied roots. The system and Homebrew bundles stay unwritable because they
+  lie outside the writable roots; a certifi bundle in the workspace's own `site-packages` stays
+  writable, so installing a package into a project environment works. That adds no trust a run
+  lacks: the same run already writes the environment's code that names the bundle. A named file is
+  admitted by its path alone; Keiko does not inspect its content, so naming a private key there
+  would expose it to the run: the operator's own environment owns that choice.
   The tool-state half of `isDenied` (`.git`, `node_modules`, caches, `.gitconfig`, `.config`)
   stays a policy guard only, because Git, npm and the build need those paths. A symlink in the
   workspace to a file outside it, and the `/System/Volumes/Data` spelling of a home path, are
@@ -2255,7 +2433,47 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `--openssl-config` with its file inline or as the next option, and the directories they name
   (the configuration file's directory, the include directory, the modules, an
   `--openssl-config=` file's directory) open read-only through `nativeOpenSslReadRoots`, under the
-  toolchain root rule: never the user's home or above it, a system prefix or a credential store. The launch gate that keeps a host secret out of the child compares the
+  toolchain root rule: never the user's home or above it, a system prefix or a credential store.
+  Build tools in a nested monorepo (#4271) follow the same shape. The build names `JAVA_HOME`,
+  `MAVEN_HOME`/`M2_HOME`/`GRADLE_HOME`, `MAVEN_OPTS`, `MAVEN_ARGS`, `GRADLE_OPTS`, the proxy family,
+  `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and `npm_config_registry` are inherited
+  (`nativeBuildInheritedEnvNames`) only when the value carries no credential (URL user-info, or a
+  Maven/Gradle option naming a password or token); the JDK or build tool they name, and the JDK of the
+  first `java` on `PATH`, open read-only through `nativeBuildToolReadRoots` under the toolchain root
+  rule, and only when the directory holds the tool's `bin/` executable. The private `HOME` hides the
+  user's build settings, so Keiko admits them as sanitized copies (`nativeBuildSettings.ts`, one
+  `coding-runtime.native-build-settings.admitted` line per run with closed dispositions and counts
+  only): `~/.m2/settings.xml` keeps `mirrors`, `proxies`, `profiles`, `activeProfiles` and
+  `pluginGroups` without `servers`, any credential-named element or URL user-info; `~/.npmrc` keeps
+  the registry, scoped registries, `strict-ssl`, proxy and fetch settings and none of its `_auth*`,
+  token or `//host/:` keys, written to a user-config file whose name is not `.npmrc` and bound with
+  `NPM_CONFIG_USERCONFIG` (the kernel denies the name `.npmrc` anywhere, so a sanitized `.npmrc` could
+  never be read, and the real file stays denied); `~/.gradle/gradle.properties` keeps proxy and daemon
+  keys only. Java takes `user.home` from the account database and ignores `HOME`, so the private
+  home reaches every JVM of the run as `-Duser.home` in `JAVA_TOOL_OPTIONS` and Gradle through
+  `GRADLE_USER_HOME`; without them Maven and Gradle read the real `~/.m2` and `~/.gradle` and never
+  see the sanitized copies. Maven's `localRepository` is always the run's own writable repository,
+  because Maven writes into its local repository even offline. Below Full access the sanitized
+  Maven settings run `offline`, with the user's `~/.m2/repository` opened as one READ-ONLY root
+  (`nativeBuildCacheReadRoots`) and chained behind the run's repository as its tail
+  (`-Dmaven.repo.local.tail`, Maven 3.9 and later), so a warm cache builds without a network and a
+  run can never poison the user's cache. The Maven wrapper's installed
+  distributions (`~/.m2/wrapper/dists`) open the same way (`nativeBuildWrapperReadRoots`) and are
+  linked into the private home, so `./mvnw` runs the distribution a standalone shell runs instead of
+  trying a download without a network; the Gradle wrapper is not admitted, because it takes a lock
+  file inside its installed distribution. At Full access the run resolves into its own writable
+  private cache and downloads a wrapper distribution there. Maven splits the tail at commas, so a
+  cache path with a comma is not chained (`mavenCache: refused`); Maven interpolates `${...}` in
+  settings, so a run home spelling one omits the `localRepository` element and Maven's default,
+  `${user.home}/.m2/repository`, names the same private repository. `JAVA_TOOL_OPTIONS` quotes each
+  value for HotSpot, which splits at whitespace outside quotes, expands nothing and refuses an
+  unmatched quote, so a malformed inherited value stops the JVM instead of absorbing the run's
+  options. These settings decide what a build reads and writes by default; the sandbox stays the
+  boundary: a project's `.mvn/maven.config` or `MAVEN_OPTS` naming another `user.home` or local
+  repository still meets the read-only kernel root. The admission line records the cache
+  and wrapper dispositions (`mavenCache`, `mavenWrapper`). An in-repo `.npmrc` stays kernel-denied: no sanitized view is
+  possible without rewriting a workspace read, and registry routing is available through the user
+  config instead. The launch gate that keeps a host secret out of the child compares the
   child env (allowlisted non-secret names plus Keiko's own run projection) against the host values
   whose name says they carry a credential; comparing against every host value refused each
   Full-access run on a host that also exports the deployment ceiling, because the projected mode
@@ -2376,7 +2594,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     the workspace). Run authority and revision checks stay with the callers. The producer's General
     and Explore agents deny `question`, so a child form arises only for an agent whose rules allow
     it; the lane is correct for it either way. Refusing a child's question interrupts the child
-    only, and its parent continues with the failed subagent call. An owned form the lane cannot
+    only, and its parent continues with the failed subagent call. The live signal that prompts
+    the Workbench to read follows the same proof (#4271): a `form.created` frame of the primary
+    signals at once, a frame of another session only once the session tree proves that session an
+    owned child, so a subagent's question appears without waiting for the next unrelated read; an
+    unproven or foreign session signals nothing. An owned form the lane cannot
     show (more than 32 fields or options, a hidden or conditional field, or a field type no answer
     can be given for) is dismissed through the session that asked, as a refusal would be: the
     runtime would otherwise wait for an answer nobody can give, and the validation bound stays.
@@ -2521,12 +2743,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     an unknown schema is refused rather than guessed. Because the whole database crosses this
     boundary, its schema is bound to the producer's persistence contract
     (`opencodePersistenceContract.ts`, #3908 AC4): exactly the tables and columns each admitted
-    runtime's own migrations create for the session's runtime version, derived from genuine 2.1.4
-    and 2.0.10 databases and proven against real settled runs
+    runtime's own migrations create for the session's runtime version, derived from genuine
+    databases of the admitted producers and proven against real settled runs
     (`opencodeNativeSessionResume.real.test.ts`, with `KEIKO_OPENCODE_REAL_VERSION` selecting the
-    admitted producer). The still-published 2.0.10 runtime lacks only the two newer project columns
-    `time_active` and `time_archived`; its own schema is admitted without relaxing any state audit
-    or allowing a different runtime version to resume the session. An
+    admitted producer). The pin, schema and history layouts of 2.0.10 were retired once the 2.1.4
+    runtime packages had replaced its published packages (#4271); a different runtime version
+    still cannot resume a session. An
     added table or column (even an empty one), a view, a trigger, a missing one, or a version with no
     contract is refused as `schema-unknown` with the audit check `schema-drift`, so a producer
     upgrade cannot carry unexamined persisted state forward. A new runtime version needs its own
@@ -2534,6 +2756,19 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     entries in all, 14 days, 3,000 messages; the store prunes on startup and on every retain, and an
     entry whose task Coding History no longer holds is removed. `KEIKO_CODING_SESSION_RETENTION=off`
     retains, resumes and forks nothing; any other unknown value fails closed to off.
+    Every retain, checkout, prune and remove validates the configured retention root as an actual
+    directory, rejecting a symbolic link or Windows junction before traversing its entries. A root
+    replaced between operations is not trusted because a prior retention succeeded. Invalid roots
+    propagate through the existing `coding-runtime.session-continuity` failed/copy-failed event;
+    startup pruning leaves their targets untouched. Each retained entry must also be an actual
+    directory before its manifest is read. Stored manifests and databases must be regular files
+    with a single hard link; final symbolic links and multiply linked files are refused before
+    reading or copying them. A redirected entry or linked stored file is an integrity refusal,
+    and removal unlinks the store entry without changing external file contents. Startup pruning
+    reports removed invalid entries through the existing count-only continuity event. The
+    runtime-owned source database keeps its existing read-only input semantics. These pathname
+    checks do not attest Windows ACL privacy, ancestor containment or atomic protection against
+    replacement during an operation.
   - **Resume.** The orchestrator declares the intent before it launches; the composition's prepare
     step checks the entry out into the new run's own state root (exclusive copy, then the digest and
     the audit again, workspace, runtime version and window checked against the new run), so the
@@ -2589,8 +2824,172 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   - **Not done.** The mapped (non-native) profile retains nothing; `session.update` (rename) stays
     refused; a fork inside the run the timeline shows is offered only as a whole-task fork.
 
+- **OpenCode 2.2.5 (2026-11-05, #4271).** Paragraphs above that name an earlier pinned version record
+  when they were decided; the real-binary suites re-proved their behaviour on this pin.
+  - **New built-in plugins are withheld.** `OPENCODE_WITHHELD_BUILT_IN_PLUGINS` removes the browser,
+    goal, Claude Agent provider, artifact and image generation plugins through the producer's own
+    `plugins` setting, on both profiles, and the Ollama, LM Studio and vLLM providers, which would
+    ask their default loopback ports every 30 s. The schedule plugin is removed on the direct
+    profile only (see Scheduled continuations below). Their `experimental` switches stay off, and
+    `location_idle_timeout` is `false` so an hour of quiet does not unload a directory under a run. A
+    filter behind the producer cannot do this: the browser plugin appends an agent rule after Keiko's
+    and so keeps a denied native tool advertised. `/goal` starts model turns on its own and stays out
+    by owner decision (2026-11-06).
+  - **Changed producer contracts.** The producer repairs a model's `bash` call into `shell`, which
+    the policy decides as `shell`. `GET /api/agent` waits for
+    plugins and answers 503 after five seconds: Keiko reads it again within the existing location
+    bound, and `coding-runtime.location.activation-wait` records the outcome and the number of those
+    answers, never a name.
+  - **Persistence.** The retained-session contract binds this version's schema. `job` and `blob` rows
+    refuse retention as unknown state. A `schedule` row is retained only as described below.
+  - **Scheduled continuations (owner decision 2026-11-06, "Keiko weckt die Aufgabe").** The native
+    profile admits the producer's schedule plugin and `experimental.schedules`; the direct profile
+    keeps both off.
+    - *Creation.* Creating, changing or removing a schedule is the policy action `native-schedule`
+      (risk high): asked in Ask for approval and Supervised workspace, allowed in Full access. A
+      schedule with an `if` or `until` check is refused, because a shell check runs with the runtime
+      server's whole environment outside the shell scrub, and a Code Mode check boots a runtime per
+      poll (both measured on the pinned runtime).
+    - *No fire inside a human's run.* The producer elects one scheduler per database through the
+      `kv` row `schedule:leader` and never takes over a lease of another owner that has not lapsed.
+      Keiko writes an unexpiring lease of its own into every native run's database when the run's
+      session is bound and into every checked-out copy before the runtime opens it, so the runtime
+      never leads in a run a person started. A database whose lease Keiko cannot write fails the
+      run's readiness or falls back to a fresh session. A fork removes its source's schedules.
+    - *Retention.* A retained copy carries only rows of its own session, of a status the producer
+      writes (`active`, `paused`, `done`), without check or check state, with an id of the
+      producer's alphabet, an action of at most 16384 and a name of at most 256 characters, and at
+      most 64 rows; anything else refuses the retain as `schema-unknown` (`schedule-rows`). The
+      lease row is dropped from the copy; every other `kv` row still refuses it. The manifest's
+      `scheduleModes` ledger records, per schedule id, the narrowest mode any run that held it was
+      in: a retain keeps the narrower of the recorded and the settled run's mode, a new id takes the
+      settled run's mode, and an edit through the store never widens it.
+    - *The wake.* While Keiko runs, `CodingScheduledWakes` looks at the retained schedules every 15
+      seconds. A due schedule waits while any run holds the runtime slot (live, held for undo, or to
+      be recovered), while its task's workspace is not the active one or the task is not the
+      operator's, and for at least a minute after the task's previous wake. Otherwise the server
+      starts a scheduled continuation run: the ordinary start of the task's retained session, in the
+      narrower of the schedule's consent and the requested mode of the task's latest run, clamped by
+      the deployment ceiling like every start. This is the one start the server originates; it uses
+      exactly the authority a person already accepted for the task and widens nothing. The wake run
+      posts no prompt: it re-checks the live database for rows Keiko never admits, releases its
+      lease after the turn is armed, and holds it again as soon as a schedule's run count grows, so
+      the runtime fires what was due and nothing after it. A schedule that has not fired within two
+      minutes cancels the turn; the next attempt backs off (one minute, doubling, at most an hour)
+      and three misses in a row pause the schedule.
+    - *The Workbench.* A task's schedules are listed by `GET /api/coding-workbench/runtime/schedules`
+      and paused, resumed or deleted by `POST .../schedules/:scheduleId/:action`, both on the app
+      session; the prompt never leaves the server, and no change is made while the task's run or
+      wake holds its entry. Coding History marks the wake run's message as a scheduled continuation.
+    - *Evidence.* `coding-runtime.schedule.wake`, `coding-runtime.schedule.control` and
+      `coding-runtime.schedule.lease` record closed outcomes, counts, durations and digests of the
+      task and the schedule; never an id, a name, a cadence or a prompt.
+    - *Limits.* Nothing fires while Keiko is not running. A schedule due during a person's run fires
+      after it, as its own wake run. A passed repeating slot fires once, late. A wake carries no Jira
+      Pod or MCP selection of the run that created the schedule, and it keeps the delivery authority
+      of the task it continues.
+
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation
 with signed commits and bounded refs (ADR-0135, ADR-0087), evidence redaction (D7) and the one
 attested loopback origin for gateway and facade (D4).
 
+**Launch secrets leave the exec environment (#4271).** macOS answers `sysctl(KERN_PROCARGS2)` for
+any process of the same user, reading its argument and environment strings from its stack, and no
+Seatbelt rule gates the call: a default-deny profile, `process-info*` and `sysctl-read` name filters
+were each proved not to stop it on the pinned runtime. The runtime can only receive its API password
+and the server-owned binding through that environment, and the password opens routes of its API that
+`permission.evaluate` never sees. A generated plugin, required for readiness, therefore overwrites
+those values and the run's two capabilities in place before any shell exists, then reads the same
+kernel answer back and fails the run's readiness if one survived. The runtime keeps its own copy, so
+nothing else changes. A port denial was tried first and rejected: Seatbelt resolves a `localhost:*`
+allow against a `*:<port>` denial nondeterministically (about half of the ports, measured over 72
+connections per form), `require-not` does not apply to network filters, and macOS refuses a second
+`sandbox_apply` with another profile. The MCP bindings, which carry relay capabilities, stay out of
+the configuration file the shell can read. This boundary does not extend to other processes of the
+same user: a shell child can read the exec environment of any non-platform process, so an operator
+must not export credentials into the environment that starts Keiko.
+
+The runtime's own children never held these values either: a formatter (the repository's code at
+Full access) or a local MCP server is started by spreading `process.env`, so the same plugin makes
+every shell-denied binding non-enumerable on a plain object that replaces `process.env`. Named reads
+keep working, and a spread omits them; the plugin fails readiness if one survives.
+
+**Host services that answer with the person's data are closed (#4271).** The native profile denies
+the lookup of the clipboard and keychain daemons by name, in every mode, because the daemon reads
+the files the path rules deny and answers a tool its entry trusts. A shell therefore cannot use a
+credential stored in the keychain, and governed delivery runs outside the sandbox with the
+person's own credentials. Other lookups stay open, since toolchains need them (TLS verification goes
+through `trustd`). A toolchain's `var` directory, where its services keep their state, is denied
+too. Full access keeps the internet but not foreign unix sockets: `ssh-agent` would use the keys the
+path rules deny, and a container daemon would start a container mounting anything. The resolver and
+the sockets a run creates in its own roots stay reachable, and loopback TCP is unaffected.
+
+**The run cannot decide what Keiko's own Git executes (#4271).** Keiko runs Git outside the sandbox
+on the run's workspace, so repository configuration a shell child writes would run or read with
+Keiko's authority: filter drivers, `core.worktree`, `commondir`, `gitdir`, alternates. The native
+profile therefore denies writes to that metadata (`opencodeNativeGitMetadata.ts`). Refs, objects, the
+index and hooks stay writable, because Keiko's Git never runs hooks in a run's repository and the
+ordinary `git add` must keep working; Keiko's delivery tools change configuration from outside the
+sandbox. In a folder without a repository the whole `.git` name at the workspace root is denied, so
+a run cannot make its folder a repository: `git init` there exits with an error, and a person can do
+it before the run. A repository in a subfolder stays the run's own. Two read-lane rules cover what a
+person later opens, where the kernel rule does not reach: the local reads override every
+repository-local filter driver with nothing, reading the driver names through the same `-C`, and a
+folder whose configuration names a work tree that does not contain it counts as no repository
+(`keiko-git`). The mutation lane keeps filter drivers because `git-crypt` must run on commit; it
+relies on the kernel rule for the run's repository, and a person who commits in a subfolder
+repository a run created accepts its configuration as they would in a terminal.
+
+**The native shell and path policy reads options and physical locations (#4271).** A shell command
+is vetted by its program, its subcommand and its options (`opencodeNativeShellPolicy.ts`), never by
+its first operand alone. An option that executes another command or writes a file is never vetted:
+`find -exec/-ok/-delete/-fprint*`, `rg --pre`, `sort -o/--output/--compress-program`, a second
+`uniq` operand, `tree -o`, `git -c` outside a small display-only key list, `git --config-env`,
+`--exec-path`, `git diff --output`, `--ext-diff`, `--textconv` and `git grep -O`. `npm exec`/`x`,
+`pnpm exec`/`dlx`, `yarn exec`/`dlx` and `bun x` are not vetted, like `npx` with a package or a
+command option. A value option never reads as the subcommand (`mvn -pl api -am verify`,
+`mvn -f svc/pom.xml test`, `npm -w pkg run test`, `npm --prefix web test`, `pnpm --filter web test`,
+`pnpm -C web test`, `yarn workspace web test`, Gradle task paths such as `:app:test`), and a
+path-valued option (`-f`, `-s`, `--prefix`, `-C`, `--dir`, `--cwd`, `-p`, `-b`, `--manifest-path`) must
+name a place inside the workspace, lexically and after resolving links; `cd` is vetted only into one.
+Paths are read against the workspace root, never a directory a `cd` may have moved to, so a `..` that
+leaves the root asks. The repository's own wrapper scripts (`./mvnw`, `svc/gradlew`, also through
+`bash`/`sh`) are vetted like `mvn`/`gradle`; a wrapper outside the workspace is not. A quote, escape,
+parameter or command expansion, redirection other than to `/dev/null` or a descriptor duplication,
+subshell, newline or single `&` that the reader does not interpret leaves the command unvetted
+(it asks; Full access allows it). Environment assignments are vetted only from a short display and
+locale list (`CI`, `NODE_ENV`, `TZ`, `LANG`, ...), never `PATH`, `NODE_OPTIONS`, `LD_PRELOAD` or a
+`*_OPTS` variable. Plugin goals of the Maven exec family and `-Dexec.*` properties ask.
+
+Delivery stays reserved when a runner carries it: `find -exec git push`, `xargs git push`,
+`timeout 5 git push`, `npx`/`npm exec`/`pnpm dlx git push` classify the inner command like a plain
+segment and are refused as `delivery-reserved` in every mode. The reservation reads both the
+whitespace tokens and the words a shell reads, so `git 'push'` and `g''it push` are `git push`.
+
+A read or edit path is checked where it physically resolves as well as lexically. The deepest
+existing ancestor is resolved with `realpath`, the containment and sensitive-path rules run again on
+the result, and a symbolic link whose target leaves the workspace or is a protected file (a committed
+`docs/notes.md -> ../../.ssh/id_rsa`, a link to `.env`, `.github/workflows` or `.git/hooks`, a
+dangling link whose write would create the target elsewhere, an `AGENTS.md` link the read tool would
+load) is refused as `workspace-escape`, `sensitive-path` or `linked-file`. The same check covers an
+accepted external reference. A filesystem error the policy cannot answer for (a link loop, a name that
+is too long, no permission) is the closed refusal `path-unresolvable` on
+`coding-runtime.native-policy.decided` instead of a rejected hook request. An ask that names no
+command, path, program or address (a Code Mode `execute` sent without its `code`) is refused at once
+as `nothing-to-review`, with a message naming the missing input: the Workbench cannot approve such an
+ask, so it used to wait for a human Deny (lab T37, #4271). After a human approves an
+ask, the policy runs again and a hard denial found then wins; the remaining window between that last
+check and the runtime's own use of the file is closed by the kernel sandbox, not by this policy. The
+model-facing message of an authority refusal names the cause (`patch-too-large` asks the model to
+split the edit; budget, expiry, revocation, an unauthorized class and a drifted binding each have
+their own sentence) instead of one catch-all, and the logged `authorityReason` is unchanged.
+
+**Invocation identity capacity (audit 2026-11-06).** The governed invocation registry holds at most
+2,048 identities per run. A settled or expired identity keeps its replay protection after it is
+evicted: when a run reaches the bound, identities that settled and whose life elapsed move into a
+fixed-size per-run replay filter (no false negatives), so a replay of an evicted call is still
+refused `replayed`, a reuse of only its action id or idempotency key is a `conflict`, and a false
+positive can only refuse a brand-new identity. Live and claimed identities always keep counting
+against the bound, and a run that is revoked drops its filter. A long run therefore no longer turns
+`busy` for good after its 2,048th governed edit.

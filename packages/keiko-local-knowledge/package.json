@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-local-knowledge",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal local-knowledge package: on-disk capsule store (node:sqlite + WAL) and capsule/source/CapsuleSet lifecycle CRUD for the Local Knowledge Connector (Epic #189, Issue #193). Not published independently.",
@@ -26,18 +26,18 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=24.18.0 <25 || >=26.3.0 <27"
+    "node": ">=26.13.1 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "1.4.0",
-    "@oscharko-dev/keiko-model-gateway": "1.4.0",
-    "@oscharko-dev/keiko-security": "1.4.0",
-    "@oscharko-dev/keiko-workspace": "1.4.0",
+    "@oscharko-dev/keiko-contracts": "1.5.0",
+    "@oscharko-dev/keiko-model-gateway": "1.5.0",
+    "@oscharko-dev/keiko-security": "1.5.0",
+    "@oscharko-dev/keiko-workspace": "1.5.0",
     "pdfjs-dist": "^6.2.108",
     "yauzl": "^3.4.0"
   },
   "optionalDependencies": {
-    "@napi-rs/canvas": "^1.0.11"
+    "@napi-rs/canvas": "^1.1.0"
   },
   "private": true
 }

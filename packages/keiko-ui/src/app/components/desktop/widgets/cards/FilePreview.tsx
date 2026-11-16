@@ -13,7 +13,10 @@ import { ApiError, fetchFilesPreview } from "../../../../../lib/api";
 import { copyTextToClipboard } from "../../../../../lib/clipboard";
 import { formatBytesPrecise as formatBytes } from "../../../../../lib/format";
 import type { FilesPreviewResponse } from "../../../../../lib/types";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
 import { highlightLines, langOf, type Token } from "./shared/syntaxHighlight";

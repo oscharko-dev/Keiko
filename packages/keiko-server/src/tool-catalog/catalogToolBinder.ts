@@ -12,7 +12,7 @@ import type {
 } from "./catalogToolPorts.js";
 import {
   assertCompatibilityTime,
-  captureCatalogJson,
+  captureCatalogEnvelope,
   compileToolProjection,
   computeHandlerSetDigest as computeCanonicalHandlerSetDigest,
   lookupCatalogTool,
@@ -156,7 +156,9 @@ function buildCatalogPreparation<Consumer extends CatalogConsumer = CodingCatalo
 ): CatalogBindingPreparation<Consumer> {
   const catalog = verifyToolCatalogSnapshot(sourceCatalog);
   const projection = compileToolProjection(catalog, input.projection.profile);
-  requireBinding(canonicalise(captureCatalogJson(input.projection)) === canonicalise(projection));
+  requireBinding(
+    canonicalise(captureCatalogEnvelope(input.projection)) === canonicalise(projection),
+  );
   const profile = catalog.profiles.find(
     (entry) =>
       entry.profile.id === projection.profile.id &&
@@ -529,7 +531,13 @@ function buildCatalogOfferForTool<Consumer extends CatalogConsumer = CodingCatal
     expiresAt: new Date(expiry).toISOString(),
   });
   const identity = lifecycleIdentity<Consumer>(state, context);
-  emitBindingReadiness<Consumer>(state, identity, binding);
+  // The line describes the handler this call selected. The offer's own binding keeps the
+  // catalog-wide readiness, so another unavailable handler cannot turn a ready call into a false
+  // "handler unavailable" line.
+  emitBindingReadiness<Consumer>(state, identity, {
+    ...binding,
+    readiness: ready ? "ready" : "unavailable",
+  });
   emitToolLifecycleEvent(state.input.logPort, {
     ...identity,
     op: "tool-catalog.projection",

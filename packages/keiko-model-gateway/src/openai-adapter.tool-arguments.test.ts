@@ -418,13 +418,15 @@ describe("native executable arguments reach the original runtime byte for byte (
 });
 
 it.each(["buffered", "streamed"] as const)(
-  "keeps heuristic and configured-secret tool protection on a preserving %s Chat call",
+  // Owner decision 2026-11-04: a Jira draft or a question is what a person reads. Under the preserving
+  // policy it keeps a telephone number, a date and a standard name and loses the credential floor.
+  "keeps content and removes the credential floor from a displayed tool on a preserving %s Chat call",
   async (transport) => {
     const args = {
       questions: [
         {
           header: "Synthetic contact",
-          question: `Contact +49 30 12345678 with Authorization: Bearer fixture-token-value and ${PROVIDER.apiKey}`,
+          question: `Stand 12.03.2026 pacs.008.001.08 contact +49 30 12345678 with Authorization: Bearer fixture-token-value and ${PROVIDER.apiKey}`,
           options: [{ label: "Continue", description: "Synthetic review" }],
         },
       ],
@@ -441,8 +443,21 @@ it.each(["buffered", "streamed"] as const)(
     const serialized = JSON.stringify(response.toolCalls[0]?.arguments);
     expect(serialized).toContain("Synthetic review");
     expect(serialized).toContain("[REDACTED]");
-    expect(serialized).not.toContain("+49 30 12345678");
+    expect(serialized).toContain("+49 30 12345678");
+    expect(serialized).toContain("12.03.2026");
+    expect(serialized).toContain("pacs.008.001.08");
     expect(serialized).not.toContain("fixture-token-value");
     expect(serialized).not.toContain(PROVIDER.apiKey);
   },
 );
+
+it("keeps the full heuristic redaction on arguments that leave for the public internet", async () => {
+  const args = { target: "https://example.org/DE89370400440532013000/report" };
+  const request: GatewayCallRequest = { ...REQUEST, contentRedaction: "preserve" };
+  const response = await adapter(() => wholeBody(args, "keiko_research_fetch")).call(
+    request,
+    PROVIDER,
+  );
+  expect(response.toolCalls[0]?.name).toBe("keiko_research_fetch");
+  expect(JSON.stringify(response.toolCalls[0]?.arguments)).not.toContain("DE89370400440532013000");
+});

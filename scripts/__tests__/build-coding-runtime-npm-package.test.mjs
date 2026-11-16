@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, relative } from "node:path";
+import { delimiter, dirname, join, relative, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import * as builder from "../build-coding-runtime-npm-package.mjs";
@@ -27,6 +27,7 @@ import {
   main,
   NPM_RUNTIME_PACKAGE_TARGETS,
   packCodingRuntimeNpmCandidate,
+  packRuntimeCandidate,
   verifyCodingRuntimeNpmCandidate,
 } from "../build-coding-runtime-npm-package.mjs";
 import { computePortableSidecarPayloadTreeDigest } from "../../packages/keiko-server/dist/coding-runtime/devLanePortableCodingRuntime.js";
@@ -60,21 +61,49 @@ const RIPGREP = "pinned-upstream-ripgrep";
 const RIPGREP_MIT = "MIT license text shipped with ripgrep";
 const sha256Of = (value) => createHash("sha256").update(value).digest("hex");
 
+it("packs a local candidate with literal host paths and without executing package scripts", () => {
+  const root = scratch();
+  const packageDir = join(root, "package space & %PATH% ü");
+  const artifacts = join(root, "artifacts space & %PATH% ü");
+  mkdirSync(artifacts);
+  write(
+    join(packageDir, "package.json"),
+    JSON.stringify({
+      name: "keiko-windows-pack-fixture",
+      version: "1.0.0",
+      files: ["index.js"],
+      scripts: { prepack: 'node -e "process.exit(99)"' },
+    }),
+  );
+  write(join(packageDir, "index.js"), "export const fixture = true;\n");
+
+  const packed = packRuntimeCandidate(packageDir, artifacts);
+
+  expect(packed.filename).toBe("keiko-windows-pack-fixture-1.0.0.tgz");
+  expect(packed.files.map(({ path }) => path).sort()).toEqual(["index.js", "package.json"]);
+  expect(statSync(join(artifacts, packed.filename)).size).toBe(packed.size);
+  expect(packed.integrity).toBe(
+    `sha512-${createHash("sha512")
+      .update(readFileSync(join(artifacts, packed.filename)))
+      .digest("base64")}`,
+  );
+});
+
 // The pinned ripgrep release is data the server owns (ripgrepRuntime.ts); the builder stages and
 // verifies against it. These tests substitute a manifest whose digests bind their own fixture bytes.
-function fixtureRipgrepApproval() {
-  return ripgrepRuntimeApproval("darwin-arm64", {
+function fixtureRipgrepApproval(targetKey = "darwin-arm64") {
+  return ripgrepRuntimeApproval(targetKey, {
     version: "0.0.0-test",
     sourceCommit: "a".repeat(40),
     licenseExpression: "Unlicense OR MIT",
     licenseFileName: "LICENSE-MIT",
     targets: {
-      "darwin-arm64": {
+      [targetKey]: {
         archiveKind: "tar.gz",
         archiveUrl: "https://example.test/ripgrep-0.0.0-test.tar.gz",
         archiveSha256: "b".repeat(64),
         archiveSizeBytes: 10,
-        binaryMember: "ripgrep/rg",
+        binaryMember: targetKey === "win32-x64" ? "ripgrep/rg.exe" : "ripgrep/rg",
         binarySha256: sha256Of(RIPGREP),
         binarySizeBytes: RIPGREP.length,
         licenseMember: "ripgrep/LICENSE-MIT",
@@ -92,21 +121,50 @@ function catalogUpstreamVersion() {
     .version;
 }
 
-async function releaseFixture() {
+/** The Windows build: `.exe` names, the pinned supervisor and the win32 ripgrep (#4068). */
+function windowsDeps() {
+  const { deps } = fakeDeps();
+  return {
+    ...deps,
+    prepareSidecars: async (argv) => {
+      const payload = join(argv[3], argv[1], "opencode-compatible", "payload");
+      write(join(payload, "bin", "opencode.exe"), "approved-executable");
+      write(join(payload, "evidence", "LICENSE"), "MIT");
+      write(join(payload, "evidence", "sbom.cdx.json"), "{}");
+    },
+    runSupervisorBuild: async ({ argv }) => {
+      write(argv[3], "built-supervisor");
+      return 0;
+    },
+    stageRipgrep: async (_target, packageRoot) => {
+      write(join(packageRoot, "runtime/native/rg.exe"), RIPGREP);
+      write(join(packageRoot, "runtime/licenses/ripgrep/LICENSE-MIT"), RIPGREP_MIT);
+      return fixtureRipgrepApproval("win32-x64");
+    },
+  };
+}
+
+async function releaseFixture(target = "macos-arm64") {
   const root = scratch();
   const packageDir = join(root, "package");
   const artifactDir = join(root, "artifacts");
-  const target = "macos-arm64";
+  const windows = target === "windows-x64";
   const built = await buildCodingRuntimeNpmPackage({
     target,
     version: "1.2.3",
     outDir: packageDir,
-    deps: fakeDeps().deps,
+    deps: windows ? windowsDeps() : fakeDeps().deps,
   });
+  const layout = builder.runtimePackageLayout(target);
   const payload = join(packageDir, "runtime/opencode-compatible/payload");
-  chmodSync(join(payload, "bin/opencode"), 0o755);
-  chmodSync(join(packageDir, "runtime/native/keiko-secure-workspace-read"), 0o755);
-  chmodSync(join(packageDir, "runtime/native/rg"), 0o755);
+  // A Windows package carries no executable bit; the macOS package must keep its bits.
+  const executableMode = windows ? 0o644 : 0o755;
+  chmodSync(join(packageDir, layout.executablePath), executableMode);
+  chmodSync(join(packageDir, layout.helperPath), executableMode);
+  chmodSync(
+    join(packageDir, windows ? "runtime/native/rg.exe" : "runtime/native/rg"),
+    executableMode,
+  );
   const digest = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
   const approval = {
     packageName: built.name,
@@ -121,11 +179,17 @@ async function releaseFixture() {
     ),
     helperMaxBytes: 1_048_576,
     executableTreeSha256: computePortableSidecarPayloadTreeDigest([
-      { relativePath: "bin/opencode", sha256: digest(join(payload, "bin/opencode")) },
+      {
+        relativePath: layout.executableRelativePath,
+        sha256: digest(join(packageDir, layout.executablePath)),
+      },
     ]),
     licenseSha256: digest(join(payload, "evidence/LICENSE")),
     sbomSha256: digest(join(payload, "evidence/sbom.cdx.json")),
-    ripgrep: fixtureRipgrepApproval(),
+    ripgrep: fixtureRipgrepApproval(windows ? "win32-x64" : "darwin-arm64"),
+    ...(built.runtimeSupervisor === undefined
+      ? {}
+      : { runtimeSupervisor: built.runtimeSupervisor }),
   };
   const calls = [];
   const deps = {
@@ -143,7 +207,7 @@ async function releaseFixture() {
           return {
             path: relative(packageDir, full).split("\\").join("/"),
             size: status.size,
-            mode: status.mode & 0o777,
+            mode: builder.packedFileMode(status.mode),
           };
         })
         .sort((left, right) => left.path.localeCompare(right.path));
@@ -478,6 +542,108 @@ describe("coding runtime npm package", () => {
     expect(existsSync(calls.prepare[0][3])).toBe(false);
   });
 
+  // #4068: a Windows host reports 0o666 for every writable file, but `npm pack` records 0o644, so
+  // the candidate inventory compared against npm's must state the mode the tarball carries.
+  it.each([
+    ["win32", 0o100666, 0o644],
+    ["win32", 0o100444, 0o444],
+    ["darwin", 0o100755, 0o755],
+    ["linux", 0o100644, 0o644],
+  ])("records the %s mode %o as the packed mode %o", (platform, mode, packed) => {
+    expect(builder.packedFileMode(mode, platform)).toBe(packed);
+  });
+
+  // #4068 (owner decision 2026-11-09): a Windows package names its executables with `.exe` and
+  // carries the Job Object supervisor its runs launch through; the server pins that supervisor.
+  it("stages a Windows package with its supervisor and reports the supervisor pin", async () => {
+    const outDir = join(scratch(), "package");
+    const { calls, deps } = fakeDeps();
+    const supervisorBuilds = [];
+    const windowsDeps = {
+      ...deps,
+      prepareSidecars: async (argv) => {
+        const payload = join(argv[3], argv[1], "opencode-compatible", "payload");
+        write(join(payload, "bin", "opencode.exe"), "approved-executable");
+        write(join(payload, "evidence", "LICENSE"), "MIT");
+        write(join(payload, "evidence", "sbom.cdx.json"), "{}");
+      },
+      runSupervisorBuild: async ({ argv }) => {
+        supervisorBuilds.push(argv);
+        write(argv[3], "built-supervisor");
+        return 0;
+      },
+    };
+
+    const result = await buildCodingRuntimeNpmPackage({
+      target: "windows-x64",
+      version: "1.2.3",
+      outDir,
+      deps: windowsDeps,
+    });
+
+    const native = join(outDir, "runtime", "native");
+    expect(calls.build[0][3]).toBe(join(native, "keiko-secure-workspace-read.exe"));
+    expect(supervisorBuilds[0].slice(2)).toStrictEqual([
+      "windows-x64",
+      join(native, "keiko-runtime-supervisor.exe"),
+    ]);
+    expect(existsSync(join(outDir, "runtime/opencode-compatible/payload/bin/opencode.exe"))).toBe(
+      true,
+    );
+    expect(result).toMatchObject({
+      name: "@oscharko-dev/keiko-coding-runtime-win32-x64",
+      runtimeSupervisor: {
+        sha256: sha256Of("built-supervisor"),
+        sizeBytes: "built-supervisor".length,
+        sourceTreeSha256: hashHelperSourceTree(
+          join(process.cwd(), "native/runtime-supervisor/windows"),
+        ),
+      },
+    });
+    const manifest = JSON.parse(readFileSync(join(outDir, "package.json"), "utf8"));
+    expect(manifest).toMatchObject({ os: ["win32"], cpu: ["x64"] });
+    expect(readFileSync(join(outDir, "LICENSE.md"), "utf8")).toContain(
+      "`runtime/native/keiko-runtime-supervisor.exe`",
+    );
+  });
+
+  // The publisher verifies every target on Linux, so a Windows candidate without POSIX executable
+  // bits must seal there; its supervisor pin travels into the receipt.
+  it("seals a Windows candidate that carries no executable bit, with its supervisor pin", async () => {
+    const fixture = await releaseFixture("windows-x64");
+    const { receipt } = await packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps);
+    expect(receipt.files).toHaveLength(10);
+    expect(receipt.runtimeSupervisor).toStrictEqual(fixture.approval.runtimeSupervisor);
+    expect(receipt.files.map(({ path }) => path)).toContain(
+      "runtime/native/keiko-runtime-supervisor.exe",
+    );
+  });
+
+  it("refuses a Windows candidate whose supervisor is not the pinned binary", async () => {
+    const fixture = await releaseFixture("windows-x64");
+    write(
+      join(fixture.packageDir, "runtime/native/keiko-runtime-supervisor.exe"),
+      "built-supervisoR",
+    );
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
+    ).rejects.toThrow("runtime candidate digest mismatch");
+    expect(existsSync(fixture.artifactDir)).toBe(false);
+  });
+
+  it("fails when the Windows supervisor build fails", async () => {
+    const outDir = join(scratch(), "package");
+    const { deps } = fakeDeps();
+    await expect(
+      buildCodingRuntimeNpmPackage({
+        target: "windows-x64",
+        version: "1.2.3",
+        outDir,
+        deps: { ...deps, runSupervisorBuild: async () => 1 },
+      }),
+    ).rejects.toThrow("runtime supervisor build failed with status 1");
+  });
+
   describe("pinned ripgrep (#4064)", () => {
     const RG = "runtime/native/rg";
     const RG_LICENSE = "runtime/licenses/ripgrep/LICENSE-MIT";
@@ -545,7 +711,8 @@ describe("coding runtime npm package", () => {
       expect(receipt.files.find(({ path }) => path === RG)).toMatchObject({
         sha256: sha256Of(RIPGREP),
         sizeBytes: RIPGREP.length,
-        mode: 0o755,
+        // A Windows host has no POSIX executable bit to record (#4068); the packing host is macOS.
+        ...(process.platform === "win32" ? {} : { mode: 0o755 }),
       });
       expect(receipt.ripgrep).toStrictEqual({
         version: "0.0.0-test",
@@ -561,7 +728,7 @@ describe("coding runtime npm package", () => {
       rmSync(join(fixture.packageDir, RG));
       await expect(
         packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
-      ).rejects.toThrow("exactly the nine approved package files");
+      ).rejects.toThrow("exactly the approved package files");
       expect(existsSync(fixture.artifactDir)).toBe(false);
     });
 
@@ -669,8 +836,9 @@ describe("coding runtime npm package", () => {
     expect(lines.error[0]).toContain("usage:");
     expect(built).toHaveLength(0);
 
-    await expect(main(["macos-arm64", "1.2.3", "/abs/out"], { build, write })).resolves.toBe(0);
-    expect(built).toStrictEqual([{ target: "macos-arm64", version: "1.2.3", outDir: "/abs/out" }]);
+    const outDir = resolve("/abs/out");
+    await expect(main(["macos-arm64", "1.2.3", outDir], { build, write })).resolves.toBe(0);
+    expect(built).toStrictEqual([{ target: "macos-arm64", version: "1.2.3", outDir }]);
     expect(JSON.parse(lines.log[0])).toMatchObject({ target: "macos-arm64" });
   });
 });

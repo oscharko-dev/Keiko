@@ -1,14 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type {
-  MemoryId,
-  MemoryProposalId,
-  UserId,
-  WorkflowRunId,
-} from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryId, MemoryProposalId, UserId } from "@oscharko-dev/keiko-contracts/memory";
 
-import { extractCandidatesFromUserText, extractCandidatesFromWorkflowOutcome } from "./capture.js";
-import type { CaptureContext, WorkflowOutcomeInput } from "./types.js";
+import { extractCandidatesFromUserText } from "./capture.js";
+import type { CaptureContext } from "./types.js";
 
 function ctx(overrides: Partial<CaptureContext> = {}): CaptureContext {
   let memCounter = 0;
@@ -32,7 +27,7 @@ describe("extractCandidatesFromUserText", () => {
   it("returns exceeds-length-limit on oversize input", () => {
     const huge = "remember that " + "x".repeat(5000);
     expect(extractCandidatesFromUserText(huge, ctx())).toEqual([
-      { kind: "rejected", reason: "exceeds-length-limit" },
+      { kind: "rejected", reason: "exceeds-length-limit", statement: "remember" },
     ]);
   });
 
@@ -41,7 +36,7 @@ describe("extractCandidatesFromUserText", () => {
       extractCandidatesFromUserText("remember dark mode", ctx(), {
         defaultSensitivity: "restricted",
       }),
-    ).toEqual([{ kind: "rejected", reason: "restricted-sensitivity" }]);
+    ).toEqual([{ kind: "rejected", reason: "restricted-sensitivity", statement: "remember" }]);
   });
 
   it("emits a remember candidate for a 'remember that' phrase", () => {
@@ -105,7 +100,11 @@ describe("extractCandidatesFromUserText", () => {
   it("rejects with credential-shape for credential bodies", () => {
     const shape = "AKIA" + "ABCDEFGHIJKLMNOP";
     const result = extractCandidatesFromUserText(`remember that ${shape}`, ctx());
-    expect(result[0]).toEqual({ kind: "rejected", reason: "credential-shape" });
+    expect(result[0]).toEqual({
+      kind: "rejected",
+      reason: "credential-shape",
+      statement: "remember",
+    });
   });
 
   it("rejects provider base URLs before creating a candidate", () => {
@@ -113,14 +112,22 @@ describe("extractCandidatesFromUserText", () => {
       "remember that our provider base URL is https://llm.internal.example.com/v1",
       ctx(),
     );
-    expect(result[0]).toEqual({ kind: "rejected", reason: "provider-base-url" });
+    expect(result[0]).toEqual({
+      kind: "rejected",
+      reason: "provider-base-url",
+      statement: "remember",
+    });
   });
 
   it("rejects a configured category before creating an explicit candidate", () => {
     const result = extractCandidatesFromUserText("remember that my medical record changed", ctx(), {
       deniedCategoryMatchers: [{ category: "health-data", matchers: [/\bmedical record\b/iu] }],
     });
-    expect(result[0]).toEqual({ kind: "rejected", reason: "denied-category" });
+    expect(result[0]).toEqual({
+      kind: "rejected",
+      reason: "denied-category",
+      statement: "remember",
+    });
   });
 
   it("priority: forget wins over remember when both could match", () => {
@@ -133,53 +140,24 @@ describe("extractCandidatesFromUserText", () => {
   });
 });
 
-describe("extractCandidatesFromWorkflowOutcome", () => {
-  it("delegates to the workflow extractor", () => {
-    const outcome: WorkflowOutcomeInput = {
-      runId: "wr-1" as WorkflowRunId,
-      outcomeKind: "success",
-      structuredReport: "the test runner is vitest",
-      capturedAt: 1_700_000_000_000,
-    };
-    const result = extractCandidatesFromWorkflowOutcome(outcome, ctx());
-    expect(result).toHaveLength(1);
-    expect(result[0]?.kind).toBe("candidate");
-  });
-
-  it("returns restricted-sensitivity when policy default is restricted", () => {
-    const outcome: WorkflowOutcomeInput = {
-      runId: "wr-1" as WorkflowRunId,
-      outcomeKind: "success",
-      structuredReport: "anything",
-      capturedAt: 0,
-    };
-    expect(
-      extractCandidatesFromWorkflowOutcome(outcome, ctx(), { defaultSensitivity: "restricted" }),
-    ).toEqual([{ kind: "rejected", reason: "restricted-sensitivity" }]);
-  });
-
-  it("rejects an oversize workflow report before secret scanning", () => {
-    const outcome: WorkflowOutcomeInput = {
-      runId: "wr-1" as WorkflowRunId,
-      outcomeKind: "success",
-      structuredReport: "x".repeat(5000),
-      capturedAt: 0,
-    };
-    expect(extractCandidatesFromWorkflowOutcome(outcome, ctx())).toEqual([
-      { kind: "rejected", reason: "exceeds-length-limit" },
+describe("extractCandidatesFromUserText attributes a rejection to its statement (#4211)", () => {
+  it("names the statement that was refused", () => {
+    expect(extractCandidatesFromUserText("Merke dir: Passwort: hunter2", ctx())).toEqual([
+      { kind: "rejected", reason: "credential-shape", statement: "remember" },
     ]);
   });
 
-  it("rejects raw log workflow reports before they become candidates", () => {
-    const outcome: WorkflowOutcomeInput = {
-      runId: "wr-1" as WorkflowRunId,
-      outcomeKind: "success",
-      structuredReport:
-        "ERROR 2026-06-08T06:00:00Z worker failed at module X with stack trace line 1 at foo() line 2 at bar()",
-      capturedAt: 0,
-    };
-    expect(extractCandidatesFromWorkflowOutcome(outcome, ctx())).toEqual([
-      { kind: "rejected", reason: "raw-log-content" },
+  it("names a clear statement refused before any extractor ran", () => {
+    const text = `Merke dir: ${"x".repeat(5000)}`;
+    expect(extractCandidatesFromUserText(text, ctx())).toEqual([
+      { kind: "rejected", reason: "exceeds-length-limit", statement: "remember" },
+    ]);
+  });
+
+  it("names no statement for an ordinary long message", () => {
+    const text = `Bitte fasse das zusammen: ${"x".repeat(5000)}`;
+    expect(extractCandidatesFromUserText(text, ctx())).toEqual([
+      { kind: "rejected", reason: "exceeds-length-limit" },
     ]);
   });
 });

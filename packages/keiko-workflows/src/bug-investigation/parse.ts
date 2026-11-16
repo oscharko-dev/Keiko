@@ -6,9 +6,9 @@
 // plain string ops (line splitting, startsWith, trim, toLowerCase) — ZERO regex, so there is no
 // ReDoS surface. Redaction happens at the report boundary, not here.
 
+import { closingFenceIndex, openingFenceLength } from "../markdown-fence.js";
 import type { ParsedBugOutput } from "./types.js";
 
-const FENCE = "```";
 const ROOT_CAUSE_HEADING = "## root cause";
 const REGRESSION_HEADING = "## regression test";
 const UNCERTAINTY_HEADING = "## uncertainty";
@@ -21,17 +21,12 @@ interface FenceExtraction {
 }
 
 function isFence(line: string): boolean {
-  return line.trimStart().startsWith(FENCE);
+  return openingFenceLength(line) > 0;
 }
 
 function isDiffFence(line: string): boolean {
   const trimmed = line.trimStart();
   return trimmed.startsWith("```diff") || trimmed.startsWith("```patch");
-}
-
-function closeFenceIndex(lines: readonly string[], openIndex: number): number | undefined {
-  const closeIndex = lines.findIndex((line, idx) => idx > openIndex && isFence(line));
-  return closeIndex === -1 ? undefined : closeIndex;
 }
 
 function fenceBody(
@@ -75,7 +70,7 @@ function extractFencedDiffs(content: string): FenceExtraction {
       openIndex += 1;
       continue;
     }
-    const closeIndex = closeFenceIndex(lines, openIndex);
+    const closeIndex = closingFenceIndex(lines, openIndex);
     const body = fenceBody(lines, openIndex, closeIndex);
     if (isDiffFence(lines[openIndex] ?? "") || looksLikeDiff(body)) {
       diffs.push(body);
@@ -129,8 +124,24 @@ function parseConfidence(rest: string): "low" | "medium" | "high" | undefined {
   if (body === undefined) {
     return undefined;
   }
-  const lower = body.toLowerCase();
-  return CONFIDENCE_LEVELS.find((level) => lower.includes(level));
+  return firstConfidenceWord(body);
+}
+
+// The first whole word of the body that names a level. A level inside another word ("Highly",
+// "follow", "below") is not a level, and the model's own first statement wins over a later mention
+// ("medium, not high").
+function firstConfidenceWord(body: string): "low" | "medium" | "high" | undefined {
+  let word = "";
+  for (const char of `${body.toLowerCase()} `) {
+    if (char >= "a" && char <= "z") {
+      word += char;
+      continue;
+    }
+    const level = CONFIDENCE_LEVELS.find((candidate) => candidate === word);
+    if (level !== undefined) return level;
+    word = "";
+  }
+  return undefined;
 }
 
 export function parseBugModelOutput(content: string): ParsedBugOutput {

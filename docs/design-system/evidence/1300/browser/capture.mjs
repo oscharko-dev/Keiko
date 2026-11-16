@@ -108,6 +108,7 @@ const VIEWPORTS = [
   { id: "mobile", width: 420, height: 820 },
 ];
 const DEMO_ROOT = "/keiko/evidence/issue-1300-static-workspace";
+const WORKSPACE_STORAGE_ID = "0123456789abcdef".repeat(4);
 const DEMO_WORKSPACE_ID = "issue-1300-static-workspace";
 const DEMO_WORKSPACE_AT = "2026-06-22T00:00:00.000Z";
 const DEMO_WORKSPACE_INSTANCE = {
@@ -555,6 +556,11 @@ const STATIC_API_BODIES = {
   "/api/atlassian-connectors/credentials": { credentials: [] },
   // The Chat Connectors menu reads the central MCP owner's servers; this fixture configures none.
   "/api/mcp/servers": { revision: "static-evidence", servers: [] },
+  // The desktop boot boundary resolves the layout owner before mounting persisted windows; the
+  // fixture owns one fixed storage identity and no server-side layout, so the seeded windows apply.
+  "/api/workspace/state": {
+    workspace: { storageId: WORKSPACE_STORAGE_ID, revision: 0, windows: [], connections: [] },
+  },
   "/api/local-knowledge/capsules": { capsules: [] },
   "/api/local-knowledge/capsule-sets": { capsuleSets: [] },
   "/api/editor/language/capabilities": {
@@ -1011,19 +1017,19 @@ for (const vp of VIEWPORTS) {
         );
       });
       await page.addInitScript(
-        ({ theme, windows }) => {
+        ({ theme, windows, storageId }) => {
           try {
             localStorage.setItem("keiko.theme", theme);
-            localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+            localStorage.setItem(`keiko.view:${storageId}`, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
             if (windows.length > 0) {
-              localStorage.setItem("keiko.workspace.v4", JSON.stringify(windows));
+              localStorage.setItem(`keiko.workspace.v4:${storageId}`, JSON.stringify(windows));
             } else {
-              localStorage.removeItem("keiko.workspace.v4");
+              localStorage.removeItem(`keiko.workspace.v4:${storageId}`);
             }
-            localStorage.removeItem("keiko.conns.v1");
+            localStorage.removeItem(`keiko.conns.v1:${storageId}`);
           } catch {}
         },
-        { theme: mode.theme, windows: scenario.windows },
+        { theme: mode.theme, windows: scenario.windows, storageId: WORKSPACE_STORAGE_ID },
       );
       await loadThemedUiFixture(page, BASE + "/", mode);
       const name = `${vp.id}__${scenario.id}__${mode.id}.png`;

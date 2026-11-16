@@ -1,7 +1,11 @@
+import { CHAT_HISTORY_SEARCH_SCHEMA, DROP_CHAT_HISTORY_SEARCH } from "./chatHistorySearchSchema.js";
 import type { DatabaseSync } from "node:sqlite";
 import { MIGRATIONS, SCHEMA_VERSION } from "./schema.js";
 
 const V13_SCHEMA_VERSION = 13;
+const RELATIONSHIP_ENDPOINT_KINDS = `'memory','capsule','capsule-set','workflow-run','evidence-run',
+  'workspace-path','chat','tool','patch-proposal','agent','connector','data-source','skill','mcp-tool'`;
+const RELATIONSHIP_LIFECYCLES = `'draft','active','archived','superseded','revoked','blocked','stale'`;
 
 function userVersion(db: DatabaseSync): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
@@ -23,7 +27,10 @@ interface VersionRollback {
 // migration is covered the moment its own rollback fragment is appended here.
 //
 // V48 only conservatively repairs mutation outcomes; no structural rollback applies. V57 only
-// widens the journal operation CHECK (no column added), so a rewind keeps the wider table.
+// widens the journal operation CHECK (no column added), as does V62 for project/Agile writes;
+// V63 admits component/version metadata writes, V64 comment updates, and V65 worklog/watch/vote
+// operations without a structural change. A rewind keeps
+// the wider table; these rebuilds preserve the existing V58 batch digest.
 // V20/V30/V33/V37/V40 have no fragments: they only widen a `failure_code` CHECK on
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
@@ -35,6 +42,18 @@ const ROLLBACKS: readonly VersionRollback[] = [
     sql: `DROP TABLE review_findings;
     DROP TABLE review_coverage;
     DROP TABLE review_runs;`,
+  },
+  {
+    version: 62,
+    sql: `DROP TABLE chat_memory_learning; DROP INDEX idx_messages_memory_learning;
+    ALTER TABLE chat_messages DROP COLUMN memory_learning_mode;
+    ALTER TABLE chat_messages DROP COLUMN memory_learning;`,
+  },
+  { version: 61, sql: "DROP INDEX idx_coding_runtime_predecessor;" },
+  { version: 60, sql: "DROP TABLE coding_workbench_drafts;" },
+  {
+    version: 59,
+    sql: `${DROP_CHAT_HISTORY_SEARCH} DROP VIEW chat_history_search_source; ALTER TABLE chat_messages DROP COLUMN document_context_json; ${CHAT_HISTORY_SEARCH_SCHEMA}`,
   },
   {
     version: 56,
@@ -149,20 +168,10 @@ const ROLLBACKS: readonly VersionRollback[] = [
             'reads-context','proposes-patch','uses-tool','starts-workflow',
             'produces-evidence','references-document','depends-on'
           )
-          AND lifecycle IN (
-            'draft','active','archived','superseded','revoked','blocked','stale'
-          )
+          AND lifecycle IN (${RELATIONSHIP_LIFECYCLES})
           AND scope_kind IN ('user','workspace','project','workflow','global')
-          AND source_kind IN (
-            'memory','capsule','capsule-set','workflow-run','evidence-run',
-            'workspace-path','chat','tool','patch-proposal',
-            'agent','connector','data-source','skill','mcp-tool'
-          )
-          AND target_kind IN (
-            'memory','capsule','capsule-set','workflow-run','evidence-run',
-            'workspace-path','chat','tool','patch-proposal',
-            'agent','connector','data-source','skill','mcp-tool'
-          )
+          AND source_kind IN (${RELATIONSHIP_ENDPOINT_KINDS})
+          AND target_kind IN (${RELATIONSHIP_ENDPOINT_KINDS})
           AND created_at >= 0
           AND updated_at >= created_at
           AND (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0))
@@ -201,8 +210,8 @@ const ROLLBACKS: readonly VersionRollback[] = [
         occurred_at     INTEGER NOT NULL,
         summary         TEXT,
         CHECK (
-          from_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
-          AND to_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
+          from_state IN (${RELATIONSHIP_LIFECYCLES})
+          AND to_state IN (${RELATIONSHIP_LIFECYCLES})
           AND occurred_at >= 0
           AND (summary IS NULL OR length(summary) <= 240)
         )

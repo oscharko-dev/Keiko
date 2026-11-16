@@ -1,9 +1,18 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, type TestContext } from "vitest";
 import {
   createPortableHandoffPlan,
   encodePortableHandoffPlan,
@@ -15,6 +24,28 @@ import {
 } from "./update-portable-handoff-plan.js";
 
 const roots: string[] = [];
+const WINDOWS = process.platform === "win32";
+
+function fixtureLink(
+  source: string,
+  target: string,
+  type: "file" | "dir" | "junction",
+  context: TestContext,
+): void {
+  try {
+    symlinkSync(source, target, type);
+  } catch (error) {
+    if (
+      WINDOWS &&
+      type !== "junction" &&
+      error instanceof Error &&
+      Reflect.get(error, "code") === "EPERM"
+    )
+      context.skip("Windows symlink privilege unavailable; junction controls run separately");
+    throw error;
+  }
+  expect(realpathSync(target)).toBe(realpathSync(source));
+}
 
 afterEach(async () => {
   const { rm } = await import("node:fs/promises");
@@ -436,17 +467,21 @@ describe("portable handoff plan", () => {
     );
   });
 
-  it("rejects a symlink in the handoff publication path", () => {
-    const root = fixtureRoot();
-    const stateDir = join(root, "state");
-    mkdirSync(stateDir, { recursive: true });
-    mkdirSync(join(root, "foreign"));
-    symlinkSync(join(root, "foreign"), join(stateDir, "updates"));
+  it.for(WINDOWS ? (["dir", "junction"] as const) : (["dir"] as const))(
+    "rejects a %s redirect in the handoff publication path",
+    (kind, context) => {
+      const root = fixtureRoot();
+      const stateDir = join(root, "state");
+      mkdirSync(stateDir, { recursive: true });
+      mkdirSync(join(root, "foreign"));
+      fixtureLink(join(root, "foreign"), join(stateDir, "updates"), kind, context);
 
-    expect(() =>
-      writePortableHandoffPlan({ stateDir, plan: createPortableHandoffPlan(planInput(root)) }),
-    ).toThrow(/unsafe/u);
-  });
+      expect(() =>
+        writePortableHandoffPlan({ stateDir, plan: createPortableHandoffPlan(planInput(root)) }),
+      ).toThrow(/unsafe/u);
+      expect(readdirSync(join(root, "foreign"))).toEqual([]);
+    },
+  );
 
   it("rejects tampering when the persisted digest no longer matches", () => {
     const root = fixtureRoot();
@@ -471,22 +506,37 @@ describe("portable handoff plan", () => {
     expect(() => readPortableHandoffPlan(stateDir, plan.activationId)).toThrow(/digest/u);
   });
 
-  it("rejects oversized and symlink-rebound plan files before reading them", () => {
+  it("rejects oversized plan files before reading them", () => {
     const root = fixtureRoot();
     const firstStateDir = join(root, "oversized-state");
     const plan = createPortableHandoffPlan(planInput(root));
     const oversized = writePortableHandoffPlan({ stateDir: firstStateDir, plan });
     writeFileSync(oversized.path, Buffer.alloc(64 * 1024 + 1));
     expect(() => readPortableHandoffPlan(firstStateDir, plan.activationId)).toThrow(/unsafe/u);
-
-    const secondStateDir = join(root, "symlink-state");
-    const rebound = writePortableHandoffPlan({ stateDir: secondStateDir, plan });
-    const foreign = join(root, "foreign-plan.khp");
-    writeFileSync(foreign, readFileSync(rebound.path));
-    rmSync(rebound.path);
-    symlinkSync(foreign, rebound.path);
-    expect(() => readPortableHandoffPlan(secondStateDir, plan.activationId)).toThrow(/unsafe/u);
   });
+
+  it.for(WINDOWS ? (["file", "junction"] as const) : (["file"] as const))(
+    "rejects %s-rebound plan files before reading them",
+    (kind, context) => {
+      const root = fixtureRoot();
+      const plan = createPortableHandoffPlan(planInput(root));
+      const secondStateDir = join(root, "symlink-state");
+      const rebound = writePortableHandoffPlan({ stateDir: secondStateDir, plan });
+      const foreignDirectory = join(root, "foreign");
+      mkdirSync(foreignDirectory);
+      const foreign = join(foreignDirectory, "plan.khp");
+      const bytes = readFileSync(rebound.path);
+      writeFileSync(foreign, bytes);
+      rmSync(rebound.path);
+      fixtureLink(kind === "junction" ? foreignDirectory : foreign, rebound.path, kind, context);
+      expect(
+        readFileSync(kind === "junction" ? join(rebound.path, "plan.khp") : rebound.path),
+      ).toEqual(bytes);
+      expect(() => readPortableHandoffPlan(secondStateDir, plan.activationId)).toThrow(/unsafe/u);
+      expect(readFileSync(foreign)).toEqual(bytes);
+      expect(readdirSync(foreignDirectory)).toEqual(["plan.khp"]);
+    },
+  );
 
   it.each([
     [7, "0"],

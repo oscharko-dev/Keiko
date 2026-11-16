@@ -6,6 +6,7 @@ import {
 } from "./catalogToolBinder.js";
 import { codingCatalogConsumer } from "./catalogCodingConsumer.js";
 import { randomUUID } from "node:crypto";
+import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   CHANGESET_EDIT_ARGUMENT_LIMITS,
   GOVERNED_CHANGESET_EDIT_TOOL_ID,
@@ -308,6 +309,18 @@ export function openCodeCatalogSettlementBudgetMs(
     : OPENCODE_DESCRIPTOR_BY_ID.get(toolId)?.bounds.maxDurationMs;
 }
 
+/**
+ * Whether the tool a request dispatches to may park on a human decision: exactly the tools whose
+ * settlement budget exceeds the sandbox default (verification at its derived budget and the
+ * proposal tools, which add the operator's approval wait). Those calls hold their admission slot
+ * for minutes, so the facade and the tool bridge count them in a lane of their own and a read or
+ * search is never refused `busy` because eight approvals are pending (audit 2026-11-06, finding 9).
+ */
+export function openCodeToolMayAwaitOperator(request: CodingToolActionRequest): boolean {
+  const budgetMs = openCodeCatalogSettlementBudgetMs(request);
+  return budgetMs !== undefined && budgetMs > DEFAULT_SANDBOX_POLICY.defaultTimeoutMs;
+}
+
 function gitCatalogAction(
   request: Extract<CodingToolActionRequest, { readonly action: "git" }>,
 ): CatalogAction | undefined {
@@ -545,7 +558,7 @@ function bindingFor(
     ): Promise<CatalogHandlerResult> => {
       const result = await run(context.signal, context.mutationGuard);
       recordResult(result);
-      if (result.status === "failed" && !isExecutedVerificationFailure(request, result))
+      if (result.status === "failed" && !isExecutedVerificationOutcome(request, result))
         throw handlerFault(result);
       return {
         data: captureCatalogJson(result),
@@ -583,7 +596,7 @@ function executionOverride(
     execute: async (_argumentsValue, context): Promise<CatalogHandlerResult> => {
       const result = await run(context.signal, context.mutationGuard, context.invocationId);
       recordResult(result);
-      if (result.status === "failed" && !isExecutedVerificationFailure(request, result))
+      if (result.status === "failed" && !isExecutedVerificationOutcome(request, result))
         throw handlerFault(result);
       return {
         data: captureCatalogJson(result),
@@ -606,14 +619,26 @@ type CatalogDispatchOutcome = Awaited<
 // which opens a support incident (#3615).
 type HandlerRefusal = readonly [Exclude<ToolResultStatus, "completed">, ToolResultReason];
 
-// A red test run is a completed verification effect, not a broken catalog handler. Preserve the
-// governed failed result for the model while the catalog records that its handler ran successfully.
-// Refusals and infrastructure failures still take the fault path below.
-function isExecutedVerificationFailure(
+// The two outcomes of a verification the runner EXECUTED and reported on: a red test run
+// (VERIFICATION_FAILED) and a report whose steps were skipped, denied or cancelled
+// (VERIFICATION_NOT_RUN, which the facade guides the model to act on, never a check failing). Both
+// are completed verification effects, not a broken catalog handler. Preserve the governed failed
+// result for the model while the catalog records that its handler ran successfully. Refusals before
+// the runner and infrastructure failures still take the fault path below.
+const EXECUTED_VERIFICATION_OUTCOME_CODES: ReadonlySet<string> = new Set([
+  "VERIFICATION_FAILED",
+  "VERIFICATION_NOT_RUN",
+]);
+function isExecutedVerificationOutcome(
   request: CodingToolActionRequest,
   result: Extract<CodingToolResult, { readonly status: "failed" }>,
 ): boolean {
-  return request.action === "verification" && result.evidence[0]?.code === "VERIFICATION_FAILED";
+  const code = result.evidence[0]?.code;
+  return (
+    request.action === "verification" &&
+    code !== undefined &&
+    EXECUTED_VERIFICATION_OUTCOME_CODES.has(code)
+  );
 }
 // Every editor-agent conflict and failure code is classified here, so a code added to the contract
 // fails the build until it is (PR #3617 review). `undefined` keeps a code a handler fault. An

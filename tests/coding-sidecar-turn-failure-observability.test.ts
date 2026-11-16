@@ -93,7 +93,7 @@ function refusingRouteDeps(eventHub: CodingRuntimeEventHub): UiHandlerDeps {
         capability === CAPABILITY && audience === "model-gateway"
           ? { ok: true, binding: { runId: RUN_ID } }
           : { ok: false },
-      reservePromptTokens: () => ({ ok: true, runId: RUN_ID }),
+      admitModelCall: () => ({ ok: true, runId: RUN_ID }),
     },
     codingRuntimeEventHub: eventHub,
     codingRuntimeOrchestrator: {

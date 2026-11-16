@@ -11,9 +11,10 @@ import type {
   ManagedMcpLogPort,
   ManagedMcpTool,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
+import { deepFreeze, isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createManagedMcpHost, ManagedMcpError } from "./index.js";
+import { toolDefinition } from "./definitions.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -87,6 +88,7 @@ afterEach(async () => {
   await Promise.all(hosts.splice(0).map((host) => host.close()));
   exchanges.length = 0;
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function fixture(
@@ -270,6 +272,24 @@ it("serves an unchanged frozen descriptor and still refuses a replaced one", asy
     host.call("fixture.echo", { text: "two" }, context("frozen-drift")),
   ).rejects.toMatchObject({ reason: "descriptor-drift" });
   expect(execute).toHaveBeenCalledTimes(1);
+});
+
+it("admits a deeply frozen provider descriptor by identity instead of a clone", async () => {
+  // A clone loses the tool catalog's issued identity, so every admission was verified again.
+  const source = { descriptor: deepFreeze(structuredClone(descriptor)) };
+  const { host } = sourceHost(source);
+  await host.admit("frozen-identity");
+  expect(host.catalog()[0]?.descriptor).toBe(source.descriptor);
+});
+
+it("admits a private frozen clone of a descriptor that is not deeply frozen", async () => {
+  const mutable = structuredClone(descriptor);
+  const { host } = sourceHost({ descriptor: mutable });
+  await host.admit("clone-identity");
+  const admitted = host.catalog()[0]?.descriptor;
+  expect(admitted).not.toBe(mutable);
+  expect(admitted).toEqual(mutable);
+  expect(isDeepFrozen(admitted)).toBe(true);
 });
 
 it("refuses an in-place change of a descriptor that was not deeply frozen", async () => {
@@ -664,4 +684,119 @@ it("executes an external open schema with a local reference and optional union w
   await f.host.call("fixture.echo", { text: "synthetic", extra: 7 }, context("external"));
   expect(run).toHaveBeenCalledOnce();
   expect(run.mock.calls[0]?.[0]).toEqual({ text: "synthetic", extra: 7 });
+});
+
+describe("managed MCP invocation durations", () => {
+  it.each([90_000, Number.MAX_SAFE_INTEGER])(
+    "completes through the actual SDK beyond former defaults at declared duration %s",
+    async (durationMs) => {
+      const entered = deferred();
+      const release = deferred();
+      let allowed = false;
+      let settled = false;
+      const { host } = fixture(
+        async (args, ctx) => {
+          entered.resolve();
+          await release.promise;
+          allowed = ctx.beforeEffect();
+          return { data: { text: args.text ?? "", binding: ctx.binding } };
+        },
+        undefined,
+        { durationMs },
+      );
+      await host.admit("admission-fixture");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const outcome = host.call("fixture.echo", { text: "one" }, context("first"));
+      void outcome.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(75_000);
+      expect(settled).toBe(false);
+      release.resolve();
+      await expect(outcome).resolves.toEqual({ text: "one", binding: "first" });
+      expect(allowed).toBe(true);
+      expect(exchanges.filter(({ method }) => method === "tools/call")).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    { label: "declared tool duration", durationMs: 90_000, abortAtMs: undefined },
+    { label: "earlier caller cancellation", durationMs: 180_000, abortAtMs: 15_000 },
+  ])("revokes delayed effects at the $label", async ({ durationMs, abortAtMs }) => {
+    const entered = deferred();
+    const release = deferred();
+    const finished = deferred();
+    const controller = new AbortController();
+    let allowed = true;
+    const { host } = fixture(
+      async (args, ctx) => {
+        entered.resolve();
+        await release.promise;
+        allowed = ctx.beforeEffect();
+        finished.resolve();
+        return { data: { text: args.text ?? "", binding: ctx.binding } };
+      },
+      undefined,
+      { durationMs, risk: "write" },
+    );
+    await host.admit("admission-fixture");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const caller = { ...context("first", controller.signal), maxDurationMs: 3_600_000 };
+    const outcome = host.call("fixture.echo", { text: "one" }, caller).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await entered.promise;
+    if (abortAtMs !== undefined)
+      setTimeout(() => {
+        controller.abort();
+      }, abortAtMs);
+    await vi.advanceTimersByTimeAsync((abortAtMs ?? durationMs) + 1);
+    expect(await outcome).toMatchObject({
+      reason: abortAtMs === undefined ? "deadline-exceeded" : "aborted",
+    });
+    release.resolve();
+    await finished.promise;
+    expect(allowed).toBe(false);
+  });
+});
+
+it("preserves closed-world tool metadata through actual MCP discovery and refuses hint drift", async () => {
+  const execute = vi.fn<ManagedMcpTool<Context>["execute"]>(() =>
+    Promise.resolve({ data: { text: "x", binding: "test" } }),
+  );
+  const metadata = { openWorldHint: false, idempotentHint: false };
+  const tool: ManagedMcpTool<Context> = {
+    name: "fixture.echo",
+    title: "Local semantic review",
+    risk: "read",
+    descriptor: deepFreeze(descriptor),
+    annotations: metadata,
+    execute,
+  };
+  const host = createManagedMcpHost<Context>({
+    providers: [{ id: "fixture", tools: (): readonly ManagedMcpTool<Context>[] => [tool] }],
+    log: { write: () => undefined },
+  });
+  hosts.push(host);
+  expect(toolDefinition(tool)).toMatchObject({
+    title: "Local semantic review",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+      idempotentHint: false,
+    },
+  });
+  await host.admit("metadata-proof");
+  expect(host.catalog()).toMatchObject([{ title: "Local semantic review", annotations: metadata }]);
+  metadata.openWorldHint = true;
+  expect(() => host.catalog()).toThrow(new ManagedMcpError("descriptor-drift"));
+  expect(execute).not.toHaveBeenCalled();
 });

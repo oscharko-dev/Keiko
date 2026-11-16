@@ -43,7 +43,11 @@ import {
 } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpath.js";
+import {
+  containedRealPathInfo,
+  isCanonicalAllowedContainedPath,
+  workspaceFsWithOperationRootIdentity,
+} from "./realpath.js";
 import {
   buildMatcher,
   compileGlob,
@@ -2218,9 +2222,12 @@ function searchTextRunner(
   deps: FacadeDeps,
 ): SearchTextRunner {
   const runner = buildSearchTextRunner(scope, query, limits, buildSearchTextDeps(deps));
+  // One search admits its root once; every per-file read then reuses that identity (#4068 W14).
   return {
     ...runner,
-    fs: executionControlledWorkspaceFs(runner.fs, runnerExecutionControl(runner)),
+    fs: workspaceFsWithOperationRootIdentity(
+      executionControlledWorkspaceFs(runner.fs, runnerExecutionControl(runner)),
+    ),
   };
 }
 

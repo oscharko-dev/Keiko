@@ -92,6 +92,14 @@ defined in ADR-0124 and corrected by ADR-0125 and ADR-0138, displayed as **Ask f
 (`autonomous-delivery`). No surface may introduce an additional user-facing autonomy mode, a
 surface-local approval envelope, or a parallel authority stack.
 
+**Owner amendment, 2026-11-06 (scheduled continuations, #4271):** a Coding task whose run created a
+schedule is continued at its due time by a run the server starts (ADR-0137, "Scheduled
+continuations"). That run is not a new mode or a background authority: it resumes the task a person
+accepted, in the narrower of the mode every run that held the schedule was in and the mode of the
+task's latest run, under the same deployment ceiling and hard denials. Creating a schedule maps onto
+the existing risky contained-work disposition (asked in Ask for approval and Supervised workspace,
+allowed in Full access), and the person can pause or delete it in the Workbench.
+
 ### D2 — One policy vocabulary, mapped through action classes
 
 A surface expresses its operations as action or effect classes that map onto the shared workbench
@@ -248,6 +256,14 @@ bounded by the issuing authority and existing approval TTL. The private ordinary
 consumer uses the shared catalog binder and MCP routes without a Coding session. Its admission
 ports require that grant in every mode, re-resolve current authority before reservation and
 recheck grant/authority at each HTTP effect and again before publishing the read result.
+A server-accepted read grant, in every mode, is the connection's consent, not a human decision: while
+a running invocation's effect guard proves the current authority, binding generations, subject and
+mode, a granted grant restarts its time on every passing check once 30 s have elapsed since its last start (sliding
+window), forward only, capped by the envelope expiry of the invocation's current authority, to which the
+grant is re-bound (a grant issued under the previous turn's authority follows the running turn;
+the subject never changes) (`renewRunningReadGrant`). A long tool such as a requirements batch therefore
+outlives the ten-minute approval lifetime. A pending, rejected, revoked or expired grant is never
+renewed, and every hard denial still ends the invocation.
 A successful response arriving after access loss is discarded without exposing its data; its
 already-performed effect retains the shared budget charge and one terminal settlement. A completed UI notification is not approval; the
 existing approval owner must contain the accepted record. Catalog offers create no read-grant
@@ -264,7 +280,8 @@ same turn deadline bounds `expiresAt` and runtime. The envelope budget is the tu
 (#4175, owner decision 2026-10-31): the shared Chat tool loop derives its iteration and model-call
 ceilings from it rather than from the coding-harness defaults, and the stored tool transcript holds
 one exchange per admitted tool call. The default (`CHAT_TOOL_TURN_BUDGET`) is sized for backlog
-work — 60 minutes, 250 tool calls and 5,000,000 cumulative prompt tokens — and a composition may
+work — 60 minutes and 250 tool calls, with no prompt-token bound (owner decision 2026-11-11,
+ADR-0137 D2; the earlier 5,000,000-token allowance is removed) — and a composition may
 narrow it; a request cannot. A composed value above the default is clamped to it field by field,
 because the default is also the stored transcript's exchange bound. Jira and MCP sources of one turn
 share it. A round past the tool-call budget is refused before any model call. Before a call starts,
@@ -277,8 +294,8 @@ the acknowledged writes with their issue keys, unconfirmed writes separately, ca
 but never settled (one may have reached Jira before bookkeeping failed), and the counts of reads and
 refused calls; a human stop is not replaced. `chat.tool-turn.ended` records the closed reason, those
 counts (including `unsettledCount`) and the envelope bounds. A backlog draft contributes each
-item's key and state. An attempt refusal by the turn's own envelope (for example its cumulative
-prompt tokens) ends the turn as `budget-exhausted` with that answer; a cap the caller supplied keeps
+item's key and state. An attempt refusal by the turn's own envelope (for example exhaustion of its
+tool-call budget) ends the turn as `budget-exhausted` with that answer; a cap the caller supplied keeps
 its nonretryable 403. A deadline answer is delivered on the streamed and the grounded path too: it is already built
 from the stored transcript and admits no further tool or model work. The grounded route cancels on a human stop or an
 authority revocation at once, and on the deadline only while no exchange has settled; once one has, the deadline stops

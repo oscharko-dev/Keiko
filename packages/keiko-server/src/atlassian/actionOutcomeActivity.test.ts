@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -5,6 +6,7 @@ import {
 import { expect, it } from "vitest";
 import type {
   AtlassianConnectorActivityRecord,
+  AtlassianConnectorActionType,
   AtlassianConnectorActivityReasonCode,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
@@ -51,6 +53,8 @@ it.each([
   { reason: "scope-exceeded", expected: "other" },
   { reason: "mode-approval-required", expected: "none" },
   { reason: "malformed-payload", expected: "malformed-payload" },
+  { reason: "effect-denied", expected: "effect-denied" },
+  { reason: "cancelled", expected: "cancelled" },
 ] as const)("preserves partial-sync classification for $reason", ({ reason, expected }) => {
   const logs = createBufferedServerLogSink();
   recordAtlassianActionOutcome({ activityLog: logs }, partial(reason), "autonomous-delivery");
@@ -67,39 +71,69 @@ it.each([
   expect(line).not.toContain("private-connector");
   expect(analyzeLogText(line).timelines).toHaveLength(1);
 });
-it.each([...JIRA_MANAGED_READ_TOOLS, "assign-issue"] as const)(
+// These are the exact inputs whose terminal identity the dev proof already preserved.
+const LEGACY_OUTCOME_ACTIONS = [
+  "jira.projects",
+  "jira.issue-types",
+  "jira.create-fields",
+  "jira.edit-fields",
+  "jira.search",
+  "jira.issue",
+  "jira.comments",
+  "jira.transitions",
+  "jira.assignable-users",
+  "jira.report",
+  "jira.draft-stage",
+  "jira.draft-batch",
+  "assign-issue",
+] as const;
+const LEGACY_OUTCOME_INPUTS: ReadonlySet<string> = new Set(LEGACY_OUTCOME_ACTIONS);
+
+function governedOutcome(
+  actionType: AtlassianConnectorActionType,
+): ReturnType<typeof expectActivityLogProof> {
+  const logs = createBufferedServerLogSink();
+  recordAtlassianActionOutcome(
+    { activityLog: logs },
+    {
+      schemaVersion: "1",
+      activityId: "synthetic-activity",
+      occurredAt: 0,
+      connectorId: "private-connector",
+      provider: "jira",
+      actionType,
+      actionClass: ATLASSIAN_CONNECTOR_ACTION_CLASS[actionType],
+      disposition: "review-required",
+      outcome: "pending-review",
+      reasonCode: "mode-approval-required",
+      correlationId: "synthetic-correlation",
+      durationMs: 1,
+    },
+    "governed-assist",
+  );
+  const event = logs.events[0];
+  if (event === undefined) throw new TypeError("Missing activity event");
+  const line = formatActivityLogProofLine(event);
+  const proof = expectActivityLogProof("atlassian.action.outcome.line", line);
+  expect(proof).toMatchObject({
+    actionTypeDigest: createHash("sha256").update(actionType).digest("hex"),
+    provider: "jira",
+    outcome: "pending-review",
+    failureReason: "none",
+  });
+  expect(analyzeLogText(line).timelines).toHaveLength(1);
+  expect(line).not.toContain("private-connector");
+  return proof;
+}
+it.each(LEGACY_OUTCOME_ACTIONS)(
   "reconstructs governed %s outcomes without content",
   (actionType) => {
-    const logs = createBufferedServerLogSink();
-    recordAtlassianActionOutcome(
-      { activityLog: logs },
-      {
-        schemaVersion: "1",
-        activityId: "synthetic-activity",
-        occurredAt: 0,
-        connectorId: "private-connector",
-        provider: "jira",
-        actionType,
-        actionClass: ATLASSIAN_CONNECTOR_ACTION_CLASS[actionType],
-        disposition: "review-required",
-        outcome: "pending-review",
-        reasonCode: "mode-approval-required",
-        correlationId: "synthetic-correlation",
-        durationMs: 1,
-      },
-      "governed-assist",
-    );
-    const event = logs.events[0];
-    if (event === undefined) throw new Error("Missing activity event");
-    const line = formatActivityLogProofLine(event);
-    expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
-      actionType,
-      provider: "jira",
-      outcome: "pending-review",
-      failureReason: "none",
-    });
-    const analysis = analyzeLogText(line);
-    expect(analysis.timelines).toHaveLength(1);
-    expect(line).not.toContain("private-connector");
+    expect(governedOutcome(actionType)).toMatchObject({ actionType });
+  },
+);
+it.each(JIRA_MANAGED_READ_TOOLS.filter((action) => !LEGACY_OUTCOME_INPUTS.has(action)))(
+  "reconstructs new governed %s outcomes in the bounded read class without content",
+  (actionType) => {
+    expect(governedOutcome(actionType)).toMatchObject({ actionType: "jira-read" });
   },
 );

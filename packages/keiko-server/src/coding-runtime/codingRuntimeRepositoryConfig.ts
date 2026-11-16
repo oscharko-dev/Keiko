@@ -52,7 +52,7 @@ interface SectionShape {
 }
 
 /**
- * The 2.1.4 producer reads both configuration shapes: the current `agents` (prompt in `system`)
+ * The pinned producer reads both configuration shapes: the current `agents` (prompt in `system`)
  * and `commands`, and the earlier `agent` (prompt in `prompt`) and `command` it still migrates.
  */
 const SECTIONS: ReadonlyMap<string, SectionShape> = new Map([

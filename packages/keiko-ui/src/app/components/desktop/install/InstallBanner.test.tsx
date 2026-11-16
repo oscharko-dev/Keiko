@@ -271,9 +271,11 @@ describe("InstallBanner", () => {
   // moment this banner is mounted, and the dismissal write has the same exposure in a handler.
 
   it("renders instead of throwing when reading persisted install state is blocked", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new DOMException("blocked", "SecurityError");
-    });
+    vi.spyOn(Object.getPrototypeOf(window.localStorage) as Storage, "getItem").mockImplementation(
+      () => {
+        throw new DOMException("blocked", "SecurityError");
+      },
+    );
     render(<InstallBanner />);
     act(() => {
       window.dispatchEvent(makePromptEvent());
@@ -283,9 +285,11 @@ describe("InstallBanner", () => {
   });
 
   it("dismisses for the session instead of throwing when the dismissal cannot be persisted", () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("quota", "QuotaExceededError");
-    });
+    vi.spyOn(Object.getPrototypeOf(window.localStorage) as Storage, "setItem").mockImplementation(
+      () => {
+        throw new DOMException("quota", "QuotaExceededError");
+      },
+    );
     render(<InstallBanner />);
     act(() => {
       window.dispatchEvent(makePromptEvent());

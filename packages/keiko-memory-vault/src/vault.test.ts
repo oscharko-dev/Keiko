@@ -577,6 +577,98 @@ describe("atomic graph mutations", () => {
     vault.close();
   });
 
+  it("inserts a replacing memory in the one transaction or not at all (#4212)", () => {
+    const dir = freshDir();
+    const vault = openVault(dir, []);
+    const older = vault.insertMemory(makeMemory({ id: "m-older" as MemoryId, status: "accepted" }));
+    const newer = makeMemory({ id: "m-newer" as MemoryId, status: "accepted" });
+    const replace = (expectedUpdatedAt: number): void => {
+      vault.applyGraphMutation({
+        preconditions: [{ id: older.id, expectedStatus: older.status, expectedUpdatedAt }],
+        inserts: [newer],
+        updates: [
+          {
+            id: older.id,
+            patch: { status: "superseded" },
+            nowMs: older.updatedAt + 1,
+            expectedStatus: older.status,
+            expectedUpdatedAt,
+          },
+        ],
+        edges: [
+          {
+            id: "e-replaces" as MemoryEdgeId,
+            schemaVersion: "1",
+            fromMemoryId: older.id,
+            toMemoryId: newer.id,
+            kind: "supersedes",
+            createdAt: older.updatedAt + 1,
+          },
+        ],
+      });
+    };
+
+    expect(() => {
+      replace(older.updatedAt - 1);
+    }).toThrow();
+    expect(vault.getMemory(newer.id)).toBeUndefined();
+    expect(vault.getMemory(older.id)?.status).toBe("accepted");
+
+    replace(older.updatedAt);
+    expect(vault.getMemory(newer.id)?.status).toBe("accepted");
+    expect(vault.getMemory(older.id)?.status).toBe("superseded");
+    expect(vault.listOutgoingEdges(older.id).map((edge) => edge.kind)).toEqual(["supersedes"]);
+    vault.close();
+  });
+
+  it("remembers an answer's use without counting it as a reinforcement (#4212)", () => {
+    const dir = freshDir();
+    const vault = openVault(dir, []);
+    const memory = vault.insertMemory(makeMemory({ id: "m-used" as MemoryId, status: "accepted" }));
+
+    vault.recordUse([memory.id], 1_700_000_000_500, "chat-a");
+    expect(vault.getAccessStats([memory.id]).get(memory.id)).toMatchObject({
+      accessCount: 0,
+      lastUsedAt: 1_700_000_000_500,
+    });
+
+    vault.recordAccess([memory.id], 1_700_000_000_600, "chat-b");
+    vault.recordUse([memory.id], 1_700_000_000_700, "chat-c");
+    expect(vault.getAccessStats([memory.id]).get(memory.id)).toMatchObject({
+      accessCount: 1,
+      lastAccessedAt: 1_700_000_000_600,
+      lastUsedAt: 1_700_000_000_700,
+    });
+    // Each chat keeps its own touch: the later chats erase nothing of chat-a's.
+    expect(vault.getConversationTouches("chat-a").get(memory.id)).toEqual({
+      usedAt: 1_700_000_000_500,
+    });
+    expect(vault.getConversationTouches("chat-b").get(memory.id)).toEqual({
+      confirmedAt: 1_700_000_000_600,
+    });
+    expect(vault.getConversationTouches("chat-c").get(memory.id)).toEqual({
+      usedAt: 1_700_000_000_700,
+    });
+    vault.close();
+  });
+
+  it("touches nobody for a memory that no longer exists (#4212)", () => {
+    const dir = freshDir();
+    const vault = openVault(dir, []);
+    const kept = vault.insertMemory(makeMemory({ id: "m-kept" as MemoryId, status: "accepted" }));
+    const gone = "m-gone" as MemoryId;
+
+    expect(() => {
+      vault.recordAccess([gone, kept.id], 1_700_000_000_500, "chat-a");
+      vault.recordUse([gone], 1_700_000_000_600, "chat-a");
+      vault.recordOutcome([gone], 1, 1_700_000_000_700);
+    }).not.toThrow();
+    expect([...vault.getAccessStats().keys()]).toEqual([kept.id]);
+    expect([...vault.getConversationTouches("chat-a").keys()]).toEqual([kept.id]);
+    expect(vault.getAccessStats([kept.id]).get(kept.id)?.accessCount).toBe(1);
+    vault.close();
+  });
+
   it("rejects a stale graph status precondition before mutation", () => {
     const dir = freshDir();
     const events: MemoryEvent[] = [];
@@ -716,6 +808,18 @@ describe("close() releases the file lock", () => {
     const v2 = openVault(dir);
     expect(v2.getMemory("m1" as MemoryId)?.id).toBe("m1");
     v2.close();
+  });
+
+  // #4068: a composition that owns the vault closes it on every dispose, and a process may dispose
+  // twice (signal handler plus its own finally block). The second close is a no-op, while the
+  // vault itself stays closed: no operation runs against a released handle.
+  it("is idempotent and leaves the vault closed", () => {
+    const vault = openVault(freshDir());
+    vault.close();
+    expect(() => {
+      vault.close();
+    }).not.toThrow();
+    expect(() => vault.listMemoryScopes()).toThrow();
   });
 });
 
@@ -1395,5 +1499,9 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
 
     const opened = events.filter((event) => event.op === "memory-vault.store.opened");
     expect(opened).toHaveLength(0);
+    // #4068: the failed vault released its handle. Windows refuses to remove an open database.
+    expect(() => {
+      rmSync(dir, { recursive: true, force: true });
+    }).not.toThrow();
   });
 });

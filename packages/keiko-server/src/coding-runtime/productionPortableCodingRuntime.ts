@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
-import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
+import { spawn, spawnSync } from "node:child_process";
+import {
+  assertWindowsLocalVolume,
+  windowsLocalVolumeVerdict,
+} from "@oscharko-dev/keiko-security/windows-local-volume";
 import {
   closeSync,
   constants,
@@ -21,7 +24,8 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import { processServerLogSink } from "../process-log-sink.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink, processServerLogSinkFor } from "../process-log-sink.js";
 import type {
   LongLivedRuntimeQualification,
   RuntimeQualificationComponentDigest,
@@ -47,6 +51,10 @@ import {
   macosReleaseTeamIdentifier,
   macosTeamIdentifierFromOutput,
 } from "./macosPortableCodeIdentity.js";
+import {
+  verifiedHelperExecutionCopy,
+  type VerifiedHelperExecutionCopy,
+} from "./nativeRuntimeProcessBackend.js";
 import { safeRealDirectory, safeRealFile } from "./nativeRuntimeProcessPaths.js";
 import { declaredPortableRuntimeLane, type PortableRuntimeLane } from "./portableRuntimeLane.js";
 import { verifyLinuxQualificationBundle } from "./linuxPortableSigstore.js";
@@ -178,15 +186,131 @@ interface CandidateRuntimeBindings {
  * (unreadable or malformed manifests, partial tree, attestation errors) emits the redacted
  * discovery diagnostic (audit finding F-12c).
  */
+export function releasedWindowsGatewayHelperPin(runtime: {
+  readonly target: UpdatePortableTarget;
+  readonly platformAssurance: PortableRuntimeLane;
+  readonly nativeHelperSha256?: string;
+}): string | undefined {
+  return runtime.target === "windows-x64" && runtime.platformAssurance === "release-qualified"
+    ? runtime.nativeHelperSha256
+    : undefined;
+}
+
+// A status read that could not run the verified helper, or could not remove its private copy,
+// leaves one body-free diagnostic; the read itself still answers null, the unknown state (#4068).
+function recordGatewayStatusFailure(operation: string, error: unknown): void {
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId: randomUUID(),
+      operation,
+      source: "coding.runtime.windows-gateway-service",
+      error,
+      redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    }),
+  );
+}
+
+function verifiedStatusHelper(
+  helperPath: string,
+  helperSha256: string,
+): VerifiedHelperExecutionCopy | undefined {
+  try {
+    return verifiedHelperExecutionCopy(helperPath, helperSha256);
+  } catch (error) {
+    recordGatewayStatusFailure("coding.runtime.windows-gateway-service.verify", error);
+    return undefined;
+  }
+}
+
+/**
+ * Asks the attested helper for the broker state without blocking the event loop; resolves to null
+ * when it did not run to an exit, including a refused digest, a spawn failure or the 2 s timeout
+ * (#4068). It never rejects, and the private copy is removed on every path.
+ */
+export function readWindowsGatewayServiceStatus(
+  helperPath: string,
+  helperSha256: string,
+): Promise<number | null> {
+  return new Promise((resolve) => {
+    // The same digest check a launch applies: bytes that do not match the pin never execute, and the
+    // helper that runs is a private copy of the verified bytes, not the path that could be swapped.
+    const copy = verifiedStatusHelper(helperPath, helperSha256);
+    if (copy === undefined) {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    const finish = (code: number | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(code);
+      try {
+        copy.cleanup();
+      } catch (error) {
+        recordGatewayStatusFailure("coding.runtime.windows-gateway-service.cleanup", error);
+      }
+    };
+    try {
+      const child = spawn(copy.path, ["--gateway-service-status", helperSha256], {
+        stdio: "ignore",
+        windowsHide: true,
+        shell: false,
+        timeout: 2_000,
+      });
+      child.once("error", (error) => {
+        recordGatewayStatusFailure("coding.runtime.windows-gateway-service.spawn", error);
+        finish(null);
+      });
+      child.once("close", finish);
+    } catch (error) {
+      recordGatewayStatusFailure("coding.runtime.windows-gateway-service.spawn", error);
+      finish(null);
+    }
+  });
+}
+
+/** The helper `keiko gateway-service` may install: only the bytes a launch would accept (#4068). */
+export function discoverReleasedWindowsGatewayHelper(
+  input: PortableOpenCodeDiscoveryInput,
+): { readonly helperPath: string; readonly helperSha256: string } | undefined {
+  const runtime = discoverQualifiedPortableOpenCode(input);
+  const helperSha256 = runtime === undefined ? undefined : releasedWindowsGatewayHelperPin(runtime);
+  return runtime === undefined || helperSha256 === undefined
+    ? undefined
+    : { helperPath: runtime.nativeHelperPath, helperSha256 };
+}
+
+/** Why a Windows portable install cannot offer its bundled runtime although it is one (#4358). */
+export type PortableInstallVolumeRefusal = "install-volume-not-local" | "install-volume-unverified";
+
+interface PortableVolumeRefused {
+  readonly volumeRefusal: PortableInstallVolumeRefusal;
+}
+
+/** The bundled runtime, the closed reason its install folder forbids it, or nothing to offer. */
+export type PortableOpenCodeDiscovery =
+  | { readonly runtime: QualifiedPortableOpenCodeRuntime }
+  | { readonly unavailableReason: PortableInstallVolumeRefusal }
+  | undefined;
+
 export function discoverQualifiedPortableOpenCode(
   input: PortableOpenCodeDiscoveryInput,
 ): QualifiedPortableOpenCodeRuntime | undefined {
+  const discovery = discoverPortableOpenCode(input);
+  return discovery !== undefined && "runtime" in discovery ? discovery.runtime : undefined;
+}
+
+export function discoverPortableOpenCode(
+  input: PortableOpenCodeDiscoveryInput,
+): PortableOpenCodeDiscovery {
   try {
     const candidate = portableRuntimeCandidate(input);
     if (candidate === undefined) return undefined;
+    if ("volumeRefusal" in candidate) return { unavailableReason: candidate.volumeRefusal };
     const runtime = qualifiedRuntime(candidate, input.attestation);
     if (runtime !== undefined) recordNativeLinuxHelper(input, candidate, runtime);
-    return runtime;
+    return runtime === undefined ? undefined : { runtime };
   } catch (error) {
     emitServerDiagnostic(
       input.diagnostics,
@@ -247,11 +371,11 @@ function recordNativeLinuxHelper(
 
 function portableRuntimeCandidate(
   input: PortableOpenCodeDiscoveryInput,
-): PortableRuntimeCandidate | undefined {
+): PortableRuntimeCandidate | PortableVolumeRefused | undefined {
   const target = runtimeTarget(input.platform ?? process.platform, input.arch ?? process.arch);
   if (target === undefined) return undefined;
   const roots = trustedPortableRoots(input, target);
-  if (roots === undefined) return undefined;
+  if (roots === undefined || "volumeRefusal" in roots) return roots;
   const selectedRoots = setupBoundRoots(roots, target);
   if (selectedRoots === undefined) return undefined;
   const bound = boundActivation(selectedRoots.resourceRoot, target);
@@ -732,7 +856,7 @@ function runPortableRuntimeCommand(
 function trustedPortableRoots(
   input: PortableOpenCodeDiscoveryInput,
   target: UpdatePortableTarget,
-): TrustedPortableRoots | undefined {
+): TrustedPortableRoots | PortableVolumeRefused | undefined {
   const packageLayout =
     input.installRoot === undefined
       ? portablePackageLayout(target, productionUpdateFacts(input.env).packageRoot)
@@ -742,9 +866,19 @@ function trustedPortableRoots(
     if (lexicalInstallRoot === undefined) return undefined;
     try {
       // This must precede realpathSync: a canonical path is evidence, not locality authority.
-      assertWindowsLocalVolume(lexicalInstallRoot);
-    } catch {
-      return undefined;
+      // The runtime is started from these roots, so the check runs fresh every time: a pass that a
+      // passive read remembers is never consulted here.
+      assertWindowsLocalVolume(lexicalInstallRoot, {
+        securityLogSink: processServerLogSinkFor(UNKNOWN_CORRELATION_ID),
+      });
+    } catch (error) {
+      // The check wrote its refusal line; its verdict becomes the reason the Workbench shows.
+      return {
+        volumeRefusal:
+          windowsLocalVolumeVerdict(error) === "not-local"
+            ? "install-volume-not-local"
+            : "install-volume-unverified",
+      };
     }
   }
   return realPortableRoots(input.installRoot, packageLayout);
@@ -773,8 +907,20 @@ function realPortableRoots(
 // ONLY a genuinely missing path is an expected absence. ENOTDIR deliberately does NOT belong here:
 // it means a path component exists but is the wrong kind (e.g. `.portable` is a regular file), which
 // is a malformed installation and must keep reaching the corruption diagnostic (#2843 review).
+// Windows reports that same case as ENOENT, so an ENOENT whose nearest existing ancestor is not a
+// directory is classified as malformed too (#4068).
 function isAbsentPathError(error: unknown): boolean {
-  return error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
+  if (!(error instanceof Error)) return false;
+  const { code, path } = error as NodeJS.ErrnoException;
+  return code === "ENOENT" && (path === undefined || !blockedByNonDirectoryAncestor(path));
+}
+
+function blockedByNonDirectoryAncestor(path: string): boolean {
+  for (let current = dirname(path); ; current = dirname(current)) {
+    const entry = lstatSync(current, { throwIfNoEntry: false });
+    if (entry !== undefined) return !entry.isDirectory() && !entry.isSymbolicLink();
+    if (dirname(current) === current) return false;
+  }
 }
 
 function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableTarget | undefined {

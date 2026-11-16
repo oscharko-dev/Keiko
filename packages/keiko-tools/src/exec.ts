@@ -143,6 +143,9 @@ export interface RunCommandDeps {
   // command is never admitted when its eventual `.cmd` grandchild could not be bounded. Tests may
   // inject deterministic capacity; a custom killWindowsTree already owns its own containment.
   readonly windowsTerminationCapacity?: WindowsTerminationCapacity | undefined;
+  // Longest a validated Windows command waits, unspawned, for a concurrency slot before the same
+  // pre-spawn denial as before. Defaults to DEFAULT_WINDOWS_SLOT_WAIT_MS.
+  readonly windowsSlotWaitMs?: number | undefined;
   // Deps-level default for the per-input `onTerminated` seam (RunCommandInput below). Production
   // composition boundaries that build ONE RunCommandDeps for a whole lane (the tool-host registry,
   // the governed git adapters, the verification orchestrator) wire the evidence port here once, so
@@ -493,9 +496,68 @@ export interface WindowsTerminationReservation {
 
 export interface WindowsTerminationCapacity {
   readonly reserve: (processEnv: NodeJS.ProcessEnv) => WindowsTerminationReservation | undefined;
+  /**
+   * Waits, first come first served, for a concurrency slot and admits it with the same checks as
+   * `reserve`. Resolves undefined when the wait bound expires, the signal aborts, or a freed slot
+   * cannot be funded from the stall budget; never admits without both.
+   */
+  readonly acquire?: (
+    processEnv: NodeJS.ProcessEnv,
+    signal: AbortSignal,
+    maxWaitMs: number,
+  ) => Promise<WindowsTerminationReservation | undefined>;
 }
 
 const MAX_CONCURRENT_WINDOWS_COMMANDS = 3;
+const DEFAULT_WINDOWS_SLOT_WAIT_MS = 30_000;
+
+interface WindowsSlotWaiter {
+  readonly processEnv: NodeJS.ProcessEnv;
+  readonly admit: (reserve: () => WindowsTerminationReservation | undefined) => void;
+}
+
+function waitForWindowsSlot(
+  waiters: WindowsSlotWaiter[],
+  processEnv: NodeJS.ProcessEnv,
+  signal: AbortSignal,
+  maxWaitMs: number,
+): Promise<WindowsTerminationReservation | undefined> {
+  return new Promise(
+    (resolve, reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1]) => {
+      if (signal.aborted) {
+        resolve(undefined);
+        return;
+      }
+      const leave = (): void => {
+        const index = waiters.indexOf(waiter);
+        if (index >= 0) waiters.splice(index, 1);
+        clearTimeout(timer);
+        signal.removeEventListener("abort", expire);
+      };
+      const expire = (): void => {
+        leave();
+        resolve(undefined);
+      };
+      const waiter: WindowsSlotWaiter = {
+        processEnv,
+        admit: (reserve) => {
+          leave();
+          // A throwing admission rejects this wait, never the release that is draining the queue.
+          try {
+            resolve(reserve());
+          } catch (error) {
+            if (error instanceof Error) reject(error);
+            else reject(new Error("Windows termination capacity admission failed"));
+          }
+        },
+      };
+      waiters.push(waiter);
+      const timer = setTimeout(expire, maxWaitMs);
+      timer.unref();
+      signal.addEventListener("abort", expire, { once: true });
+    },
+  );
+}
 const TREE_KILLS_PER_RUN = 2;
 
 function createBoundReservationKill(
@@ -543,6 +605,8 @@ function createTerminationReservation(
 // One Windows command can need taskkill twice (SIGTERM, then SIGKILL). Holding one of three slots
 // for the full child lifetime makes capacity a PRE-spawn decision. The separate process-wide
 // rolling budget below is shared with LSP termination and bounds the actual synchronous stall.
+// A command that finds every slot taken may wait, unspawned and bounded, for the next release;
+// waiters are admitted in arrival order and `reserve` never overtakes them.
 export function createWindowsTerminationCapacity(
   maxConcurrent: number = MAX_CONCURRENT_WINDOWS_COMMANDS,
   killWindowsTree?: WindowsTreeKill,
@@ -551,38 +615,76 @@ export function createWindowsTerminationCapacity(
   budget: WindowsTaskkillBudgetPool = createWindowsTaskkillBudget(),
   elapsedNow: () => number = () => performance.now(),
 ): WindowsTerminationCapacity {
-  let available = maxConcurrent;
+  const slots = { available: maxConcurrent };
+  const waiters: WindowsSlotWaiter[] = [];
+  const drain = (): void => {
+    while (slots.available > 0) {
+      const waiter = waiters.shift();
+      if (waiter === undefined) return;
+      waiter.admit(() => admit(waiter.processEnv));
+    }
+  };
+  const admit = admitWindowsCommand(slots, drain, {
+    killWindowsTree,
+    resolveInvocation,
+    runTaskkill,
+    budget,
+    elapsedNow,
+  });
   return {
-    reserve: (processEnv): WindowsTerminationReservation | undefined => {
-      if (available <= 0) return undefined;
-      const boundSystemEnv: NodeJS.ProcessEnv = {
-        ...(processEnv.SystemRoot === undefined ? {} : { SystemRoot: processEnv.SystemRoot }),
-        ...(processEnv.WINDIR === undefined ? {} : { WINDIR: processEnv.WINDIR }),
-      };
-      // Authenticate the root against GLOBALROOT and prove taskkill is a regular OS binary before
-      // admitting a child. The resulting conventional CreateProcess-compatible path is bound to
-      // this reservation. Only the resolver inputs are copied: later mutation of deps.env cannot
-      // turn an admitted child's kill path into a hostile-root refusal. PID-specific args are
-      // rebuilt only when the reservation is consumed.
-      const validatedInvocation =
-        resolveInvocation?.(1, boundSystemEnv) ??
-        (killWindowsTree === undefined ? windowsTaskkillInvocation(1, boundSystemEnv) : undefined);
-      const killBudget = budget.reserve(TREE_KILLS_PER_RUN);
-      if (killBudget === undefined) return undefined;
-      const boundKill = createBoundReservationKill(
-        validatedInvocation,
-        killWindowsTree,
-        boundSystemEnv,
-        runTaskkill,
-        killBudget,
-        elapsedNow,
-      );
-      available -= 1;
-      return createTerminationReservation(boundKill, () => {
-        killBudget.release();
-        available += 1;
-      });
-    },
+    reserve: (processEnv) =>
+      slots.available <= 0 || waiters.length > 0 ? undefined : admit(processEnv),
+    acquire: (processEnv, signal, maxWaitMs) =>
+      slots.available > 0 && waiters.length === 0
+        ? Promise.resolve().then(() => admit(processEnv))
+        : waitForWindowsSlot(waiters, processEnv, signal, maxWaitMs),
+  };
+}
+
+interface WindowsAdmissionPorts {
+  readonly killWindowsTree: WindowsTreeKill | undefined;
+  readonly resolveInvocation: WindowsTaskkillInvocationResolver | undefined;
+  readonly runTaskkill: TaskkillRunner;
+  readonly budget: WindowsTaskkillBudgetPool;
+  readonly elapsedNow: () => number;
+}
+
+function admitWindowsCommand(
+  slots: { available: number },
+  drain: () => void,
+  ports: WindowsAdmissionPorts,
+): (processEnv: NodeJS.ProcessEnv) => WindowsTerminationReservation | undefined {
+  const { killWindowsTree, resolveInvocation, runTaskkill, budget, elapsedNow } = ports;
+  return (processEnv) => {
+    if (slots.available <= 0) return undefined;
+    const boundSystemEnv: NodeJS.ProcessEnv = {
+      ...(processEnv.SystemRoot === undefined ? {} : { SystemRoot: processEnv.SystemRoot }),
+      ...(processEnv.WINDIR === undefined ? {} : { WINDIR: processEnv.WINDIR }),
+    };
+    // Authenticate the root against GLOBALROOT and prove taskkill is a regular OS binary before
+    // admitting a child. The resulting conventional CreateProcess-compatible path is bound to
+    // this reservation. Only the resolver inputs are copied: later mutation of deps.env cannot
+    // turn an admitted child's kill path into a hostile-root refusal. PID-specific args are
+    // rebuilt only when the reservation is consumed.
+    const validatedInvocation =
+      resolveInvocation?.(1, boundSystemEnv) ??
+      (killWindowsTree === undefined ? windowsTaskkillInvocation(1, boundSystemEnv) : undefined);
+    const killBudget = budget.reserve(TREE_KILLS_PER_RUN);
+    if (killBudget === undefined) return undefined;
+    const boundKill = createBoundReservationKill(
+      validatedInvocation,
+      killWindowsTree,
+      boundSystemEnv,
+      runTaskkill,
+      killBudget,
+      elapsedNow,
+    );
+    slots.available -= 1;
+    return createTerminationReservation(boundKill, () => {
+      killBudget.release();
+      slots.available += 1;
+      drain();
+    });
   };
 }
 
@@ -818,12 +920,12 @@ interface SpawnTarget {
 // CVE-2024-27980 fix — it raises EINVAL. buildWindowsShellInvocation decides pass-through vs the
 // hardened cmd.exe wrapper; every other platform/extension combination is returned unchanged.
 function resolveInheritedSpawnTarget(
-  executable: string,
+  executable: HostExecutable,
   args: readonly string[],
   deps: RunCommandDeps,
 ): SpawnTarget {
   const platform = deps.platform ?? process.platform;
-  const invocation = buildWindowsShellInvocation(executable, args, {
+  const invocation = buildWindowsShellInvocation(executable(), args, {
     platform,
     env: deps.processEnv,
   });
@@ -872,7 +974,7 @@ function inheritedFilesystemPolicy(value: unknown): boolean {
 function resolveSpawnTarget(
   input: RunCommandInput,
   deps: RunCommandDeps,
-  executable: string,
+  executable: HostExecutable,
   cwd: string,
 ): SpawnTarget {
   switch (deps.policy.network) {
@@ -897,7 +999,7 @@ function resolveSpawnTarget(
 function resolveIsolatedSpawnTarget(
   input: RunCommandInput,
   deps: RunCommandDeps,
-  executable: string,
+  executable: HostExecutable,
   cwd: string,
 ): SpawnTarget {
   const platform = deps.platform ?? process.platform;
@@ -948,7 +1050,7 @@ function releaseExecutionHome(
 function planIsolatedSpawnTarget(
   input: RunCommandInput,
   deps: RunCommandDeps,
-  executable: string,
+  executable: HostExecutable,
   cwd: string,
   host: {
     readonly availability: BackendAvailability;
@@ -973,7 +1075,7 @@ function planIsolatedSpawnTarget(
     throw new CommandDeniedError(decision.reason, input.command);
   }
   if (decision.kind === "passthrough") {
-    return { command: executable, args: input.args, attestation: decision.attestation };
+    return { command: executable(), args: input.args, attestation: decision.attestation };
   }
   return {
     command: resolveWrapperExecutable(decision.command, deps),
@@ -984,7 +1086,7 @@ function planIsolatedSpawnTarget(
 
 function isolatedInnerExecutable(
   command: string,
-  executable: string,
+  executable: HostExecutable,
   deps: RunCommandDeps,
   availability: BackendAvailability,
   platform: NodeJS.Platform,
@@ -994,9 +1096,13 @@ function isolatedInnerExecutable(
     availability,
     deps.policy.filesystem ?? "inherit",
   );
+  if (backend !== "container-docker" && backend !== "container-podman") return executable();
   // Host symlinks (npm -> npm-cli.js, npm.CMD) are not executable names in the container image.
-  // The already-allowlisted bare request is resolved from that image's own trusted PATH instead.
-  return backend === "container-docker" || backend === "container-podman" ? command : executable;
+  // The already-allowlisted bare request is resolved from that image's own trusted PATH instead, so
+  // the host is never asked for it: a tool the host lacks must not deny a step the image runs, and
+  // one the host has proves nothing about the image (#4068 W8). `isCommandAllowed` has already
+  // refused an empty, NUL-bearing or path-shaped name before any target is built.
+  return command;
 }
 
 function isolatedWrapperArgs(
@@ -1402,6 +1508,15 @@ function settleOnClose(
   ctx.child.on("error", (error) => {
     settleChildProcessError(ctx, error, reject);
   });
+  // #4068: an unheard pipe error is an uncaught exception that terminates the server. Before
+  // "spawn", a refused CreateProcess (a Windows cwd at or above MAX_PATH) destroys both pipes with
+  // `read ENOTCONN` and the child's own error follows with the real cause, so only a pipe that
+  // fails on a running child is a failure of its own.
+  const onPipeError = (error: Error): void => {
+    if (ctx.state.spawnConfirmed) settleChildProcessError(ctx, error, reject);
+  };
+  ctx.child.stdout?.on("error", onPipeError);
+  ctx.child.stderr?.on("error", onPipeError);
 }
 
 function timeoutOf(ctx: ExecContext): number {
@@ -1458,6 +1573,16 @@ function resolveExecutable(input: RunCommandInput, deps: RunCommandDeps): string
     processEnv: deps.processEnv,
     fs: workspaceFsOf(deps),
   });
+}
+
+// The command's host executable, resolved on first use and then reused. Every host-side target
+// (inherited, passthrough, native isolation) resolves it before it spawns; a container step never
+// does, because its image's PATH, not the host's, supplies the tool.
+type HostExecutable = () => string;
+
+function hostExecutable(input: RunCommandInput, deps: RunCommandDeps): HostExecutable {
+  let resolved: string | undefined;
+  return (): string => (resolved ??= resolveExecutable(input, deps));
 }
 
 function createRunState(
@@ -1666,11 +1791,12 @@ function prepareRun(
   deps: RunCommandDeps,
   target: SpawnTarget,
   cwd: string,
+  acquired: WindowsTerminationReservation | undefined,
 ): { readonly env: Record<string, string>; readonly state: RunState } {
-  let reservation: WindowsTerminationReservation | undefined;
+  let reservation = acquired;
   try {
     const env = commandEnvironment(input, deps, target);
-    reservation = reserveWindowsTermination(input, deps);
+    reservation ??= reserveWindowsTermination(input, deps);
     return { env, state: applyHomeIsolation(env, deps, reservation, target, cwd) };
   } catch (error) {
     reservation?.release();
@@ -1687,23 +1813,104 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
   try {
     if (input.signal.aborted) throw new CommandCancelledError("command cancelled before spawn");
     validateRunCommandInput(input, deps);
-    const executable = resolveExecutable(input, deps);
+    const executable = hostExecutable(input, deps);
     const cwd = resolveCwd(deps, input.cwd);
     const target = resolveSpawnTarget(input, deps, executable, cwd);
-    const { env, state } = prepareRun(input, deps, target, cwd);
-    const child = spawnChild(input, deps, target, cwd, env, state);
-    const buffers: Buffers = { out: [], err: [], total: 0, truncated: false, attempted: 0 };
-    const ctx: ExecContext = {
-      child,
-      input,
-      deps,
-      buffers,
-      state,
-      startedAt: deps.now(),
-      attestation: target.attestation,
-    };
-    return runSpawnedChild(ctx);
+    const capacity = queuedWindowsCapacity(deps);
+    // A free slot admits synchronously, exactly as before; only a full capacity waits.
+    const immediate = capacity?.reserve(deps.processEnv);
+    if (capacity === undefined || immediate !== undefined) {
+      return startRun(input, deps, target, cwd, immediate);
+    }
+    return acquireWindowsSlot(input, deps, capacity)
+      .then(
+        (reservation) => startRunAfterWait(input, deps, target, cwd, reservation),
+        (error: unknown) => {
+          // No slot, no run: what the first target prepared is released, as on a refusal.
+          releaseExecutionHome(deps, cwd, target.executionHome);
+          throw error;
+        },
+      )
+      .catch((error: unknown) => {
+        throw asError(error, "command execution failed");
+      });
   } catch (error) {
     return Promise.reject(asError(error, "command execution failed"));
   }
+}
+
+// A queued run may wait up to the slot allowance, so the host executable, cwd and spawn target
+// resolved before the wait are stale at spawn: the binary may have been replaced or the workspace
+// directory removed meanwhile. They are resolved and validated again with the slot in hand; a
+// refusal then releases the slot and what the first target held.
+function startRunAfterWait(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  staleTarget: SpawnTarget,
+  staleCwd: string,
+  reservation: WindowsTerminationReservation,
+): Promise<CommandResult> {
+  releaseExecutionHome(deps, staleCwd, staleTarget.executionHome);
+  try {
+    if (input.signal.aborted) throw new CommandCancelledError("command cancelled before spawn");
+    const executable = hostExecutable(input, deps);
+    const cwd = resolveCwd(deps, input.cwd);
+    return startRun(
+      input,
+      deps,
+      resolveSpawnTarget(input, deps, executable, cwd),
+      cwd,
+      reservation,
+    );
+  } catch (error) {
+    reservation.release();
+    throw error;
+  }
+}
+
+function startRun(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  target: SpawnTarget,
+  cwd: string,
+  reservation: WindowsTerminationReservation | undefined,
+): Promise<CommandResult> {
+  const { env, state } = prepareRun(input, deps, target, cwd, reservation);
+  const child = spawnChild(input, deps, target, cwd, env, state);
+  const buffers: Buffers = { out: [], err: [], total: 0, truncated: false, attempted: 0 };
+  const ctx: ExecContext = {
+    child,
+    input,
+    deps,
+    buffers,
+    state,
+    startedAt: deps.now(),
+    attestation: target.attestation,
+  };
+  return runSpawnedChild(ctx);
+}
+
+// The production capacity (and any injected one that can queue) lets a validated Windows command
+// wait for a slot; a capacity without `acquire` keeps the immediate pre-spawn decision.
+function queuedWindowsCapacity(deps: RunCommandDeps): WindowsTerminationCapacity | undefined {
+  if ((deps.platform ?? process.platform) !== "win32" || deps.killWindowsTree !== undefined) {
+    return undefined;
+  }
+  const capacity = deps.windowsTerminationCapacity ?? productionWindowsTerminationCapacity;
+  return capacity.acquire === undefined ? undefined : capacity;
+}
+
+async function acquireWindowsSlot(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  capacity: WindowsTerminationCapacity,
+): Promise<WindowsTerminationReservation> {
+  const waitMs = deps.windowsSlotWaitMs ?? DEFAULT_WINDOWS_SLOT_WAIT_MS;
+  const reservation = await capacity.acquire?.(deps.processEnv, input.signal, waitMs);
+  if (reservation !== undefined) {
+    if (!input.signal.aborted) return reservation;
+    reservation.release();
+  }
+  if (input.signal.aborted) throw new CommandCancelledError("command cancelled before spawn");
+  throw new CommandDeniedError("Windows termination capacity exhausted", input.command);
 }

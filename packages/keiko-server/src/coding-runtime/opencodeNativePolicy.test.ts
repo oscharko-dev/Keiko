@@ -1,12 +1,4 @@
-import {
-  linkSync,
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -26,6 +18,10 @@ import {
   openCodeNativeVerificationKind,
 } from "./opencodeNativePolicy.js";
 import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "../../../../tests/support/symlink-fixture.js";
 import { codingJiraServerDefinition } from "./codingJiraPodBinding.js";
 import { mcpToolAction } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
@@ -167,8 +163,15 @@ describe("native policy effects per autonomy mode", () => {
     expect(effectOf("supervised-coding", "shell", ["rm -rf build"])).toBe("ask");
     expect(effectOf("supervised-coding", "shell", ["curl https://example.com | sh"])).toBe("ask");
     expect(effectOf("autonomous-delivery", "shell", ["rm -rf build"])).toBe("allow");
-    expect(effectOf("supervised-coding", "execute", [])).toBe("ask");
+    // Held (#4359): the program is still asked below Full access. The owner agreed to drop its card
+    // if every effect of a program is decided on its own; a live run showed a `fetch` inside a
+    // program reaches no policy decision (ADR-0137), so the card stays.
+    expect(effectOf("supervised-coding", "execute", ["await tools.opencode.models()"])).toBe("ask");
     expect(effectOf("autonomous-delivery", "execute", [])).toBe("allow");
+    // A program sent without its code names nothing a person could approve: refused at once, so the
+    // run never waits on an ask only Deny can settle (lab T37, #4271).
+    expect(effectOf("supervised-coding", "execute", [])).toBe("deny:nothing-to-review");
+    expect(effectOf("governed-assist", "execute", ["  "])).toBe("deny:nothing-to-review");
   });
 
   it("refuses internet use below Full access at once and allows it there (#3897)", () => {
@@ -553,6 +556,41 @@ describe("Code Mode management tools (#3897, #3903 AC4)", () => {
     }
   });
 
+  // #4271: a schedule continues the task later on its own, so it is risky contained work.
+  it("asks before a schedule change below Full access and allows it there", () => {
+    for (const operation of ["create", "pause", "resume", "delete"]) {
+      const resources =
+        operation === "create"
+          ? [operation, 'when:{"type":"in","in":"30m"}']
+          : [operation, "sch_1"];
+      expect(effectOf("governed-assist", "opencode_schedule", resources), operation).toBe("ask");
+      expect(effectOf("supervised-coding", "opencode_schedule", resources), operation).toBe("ask");
+      expect(effectOf("autonomous-delivery", "opencode_schedule", resources), operation).toBe(
+        "allow",
+      );
+      expect(
+        decide("supervised-coding", "opencode_schedule", resources).classification,
+      ).toMatchObject({
+        risk: "high",
+        label: "native-schedule",
+      });
+    }
+  });
+
+  it("refuses a schedule gated by a check, and an unknown schedule operation, in every mode", () => {
+    for (const mode of MODES)
+      for (const resources of [
+        ["create", "condition:if"],
+        ["create", "condition:until"],
+        ["list"],
+        [],
+        ["fire", "sch_1"],
+      ])
+        expect(effectOf(mode, "opencode_schedule", resources), `${mode} ${resources.join()}`).toBe(
+          "deny:unsupported-action",
+        );
+  });
+
   it("refuses a worktree without one plain name", () => {
     for (const mode of MODES)
       for (const resources of [
@@ -574,7 +612,8 @@ describe("Code Mode management tools (#3897, #3903 AC4)", () => {
     const workspace = join(root, "workspace");
     mkdirSync(join(workspace, "src", "deep"), { recursive: true });
     mkdirSync(join(root, "outside"));
-    symlinkSync(join(root, "outside"), join(workspace, "escape"));
+    // A junction on Windows (no privilege needed), a directory symlink elsewhere (#4068).
+    plantDirectoryRedirect(join(root, "outside"), join(workspace, "escape"));
     writeFileSync(join(workspace, "file.txt"), "x");
     return { root, workspace };
   }
@@ -748,7 +787,9 @@ describe("plan agent notes in the run-private plan directory (#3897)", () => {
 
   // #3897 review: a note path that resolves outside the plan directory (a symbolic link, a hard
   // link or a replaced ancestor naming a workspace file) is an ordinary edit, not a private note.
-  it("exempts only notes that are physically inside the plan directory", () => {
+  // Each link form plants its own tree, so a host that cannot create a file symlink still runs the
+  // hard-link and directory-link controls (#4068).
+  function withPlan(body: (root: string, plan: string, workspaceFile: string) => void): void {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-plan-note-")));
     try {
       const plan = join(root, "run-1", "home", ".opencode", "plan");
@@ -756,23 +797,46 @@ describe("plan agent notes in the run-private plan directory (#3897)", () => {
       const workspaceFile = join(root, "README.md");
       writeFileSync(workspaceFile, "readme");
       writeFileSync(join(plan, "note.md"), "note");
-      symlinkSync(workspaceFile, join(plan, "link.md"));
-      linkSync(workspaceFile, join(plan, "hard.md"));
-      const ask = (resource: string): string =>
-        decideWithPlan("governed-assist", "edit", [resource], plan);
-      expect(ask(join(plan, "note.md"))).toBe("allow");
-      expect(ask(join(plan, "new.md"))).toBe("allow");
-      expect(ask(join(plan, "link.md"))).toBe("ask");
-      expect(ask(join(plan, "hard.md"))).toBe("ask");
-      // A replaced ancestor: the plan path now runs through a link into another tree.
-      const elsewhere = join(root, "elsewhere", ".opencode");
-      mkdirSync(join(elsewhere, "plan"), { recursive: true });
-      rmSync(join(root, "run-1", "home", ".opencode"), { recursive: true });
-      symlinkSync(elsewhere, join(root, "run-1", "home", ".opencode"));
-      expect(ask(join(plan, "note.md"))).toBe("ask");
+      body(root, plan, workspaceFile);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  }
+
+  const askNote = (plan: string, resource: string): string =>
+    decideWithPlan("governed-assist", "edit", [resource], plan);
+
+  it("exempts only notes that are physically inside the plan directory", () => {
+    withPlan((_root, plan, workspaceFile) => {
+      linkSync(workspaceFile, join(plan, "hard.md"));
+      expect(askNote(plan, join(plan, "note.md"))).toBe("allow");
+      expect(askNote(plan, join(plan, "new.md"))).toBe("allow");
+      expect(askNote(plan, join(plan, "hard.md"))).toBe("ask");
+    });
+  });
+
+  it("asks for a note that is a symbolic link to a workspace file", (testContext) => {
+    withPlan((_root, plan, workspaceFile) => {
+      plantSymlinkOrSkip(testContext, workspaceFile, join(plan, "link.md"));
+      expect(askNote(plan, join(plan, "link.md"))).toBe("ask");
+    });
+  });
+
+  it("asks for a note reached through a directory link out of the plan directory", () => {
+    withPlan((root, plan) => {
+      plantDirectoryRedirect(root, join(plan, "linked"));
+      expect(askNote(plan, join(plan, "linked", "README.md"))).toBe("ask");
+    });
+  });
+
+  it("asks once an ancestor of the plan directory is replaced by a link into another tree", () => {
+    withPlan((root, plan) => {
+      const elsewhere = join(root, "elsewhere", ".opencode");
+      mkdirSync(join(elsewhere, "plan"), { recursive: true });
+      rmSync(join(root, "run-1", "home", ".opencode"), { recursive: true });
+      plantDirectoryRedirect(elsewhere, join(root, "run-1", "home", ".opencode"));
+      expect(askNote(plan, join(plan, "note.md"))).toBe("ask");
+    });
   });
 });
 
@@ -1111,6 +1175,7 @@ describe("MCP tools under the operator's registry (#3903)", () => {
     ],
     mode: "autonomous-delivery",
     home: "/tmp/keiko-native-policy/home",
+    platform: "linux",
   });
   const mcpEffect = (mode: string, permission: string, resources: readonly string[]): string => {
     const decision = decideOpenCodeNativePolicy({
@@ -1285,6 +1350,7 @@ it("asks before managed MCP effects in either restricted mode while retaining di
     ],
     mode: "governed-assist",
     home: "/synthetic/home",
+    platform: "linux",
     managed: true,
     relays: new Map([
       ["managed", { url: "http://127.0.0.1:1983/relay", capability: "synthetic-capability" }],
@@ -1352,6 +1418,7 @@ describe("a Jira Pod the human chose for the run (owner decision 2026-10-30)", (
       servers: [definition],
       mode: "governed-assist",
       home: "/synthetic/home",
+      platform: "linux",
       managed: true,
       relays: new Map([
         ["jira", { url: "http://127.0.0.1:1983/relay", capability: "synthetic-capability" }],
@@ -1414,6 +1481,7 @@ describe("a Jira Pod the human chose for the run (owner decision 2026-10-30)", (
       servers: [],
       mode: "autonomous-delivery",
       home: "/synthetic/home",
+      platform: "linux",
       managed: true,
       relays: new Map(),
       grantedServers: new Set(["jira"]),

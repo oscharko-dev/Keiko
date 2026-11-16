@@ -4,7 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts";
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { CodingWorkbenchCommitBinding } from "./CodingWorkbenchCommitReview";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -24,13 +24,15 @@ export function CodingWorkbenchCommitResult({
     result.status !== "approval-required"
       ? result
       : null;
-  const note =
-    receipt === null
-      ? null
-      : `[keiko] verified commit result displayed: ${receipt.status} tree ${receipt.stagedTreeDigest.slice(0, 12)}`;
+  const shown = receipt?.status;
   useEffect(() => {
-    if (note !== null) reportClientDiagnostic(note);
-  }, [note, runId]);
+    if (shown === undefined || shown === "approval-required") return;
+    reportCodingWorkbenchInteraction({
+      interaction: "delivery-step-shown",
+      deliveryStep: "commit-result",
+      deliveryState: shown,
+    });
+  }, [shown, runId]);
   if (receipt === null) return null;
   return (
     <section className={styles.card} aria-label={t("codingWorkbench.commitResult.title")}>

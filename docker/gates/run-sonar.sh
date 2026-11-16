@@ -6,6 +6,7 @@
 #   ./docker/gates/run-sonar.sh --all        # every finding in the project
 #   ./docker/gates/run-sonar.sh --base main  # diff against a different base
 #   ./docker/gates/run-sonar.sh --stop       # stop this repository/port's server
+#   ./docker/gates/run-sonar.sh --check-types  # only verify the scanner can resolve types (exit 0 or 2)
 #
 # Exit status is 1 when a finding lands on a changed file, so this is usable as a pre-push guard.
 set -euo pipefail
@@ -39,6 +40,7 @@ let s = "";
 process.stdin.on("data", (d) => (s += d)).on("end", () => {
   process.stdout.write(createHash("sha256").update(s).digest("hex").slice(0, 12));
 });')"
+original_compose_project="${COMPOSE_PROJECT_NAME:-}"
 compose_project="${COMPOSE_PROJECT_NAME:-keiko-sonar-${repository_id}-${sonar_port}}"
 export COMPOSE_PROJECT_NAME="${compose_project}"
 compose=(docker compose -f "${repo_root}/docker/gates/sonar-compose.yml")
@@ -68,6 +70,7 @@ while [[ $# -gt 0 ]]; do
       report_scope="all"
       ;;
     --stop) action="stop" ;;
+    --check-types) action="check-types" ;;
     --base)
       base="${2:?--base needs a ref}"
       shift
@@ -82,6 +85,55 @@ done
 
 if [[ "${action}" == "stop" ]]; then
   "${compose[@]}" stop
+  exit 0
+fi
+
+# SonarJS resolves types through TypeScript. Several rules (S2871 and S4043 on an array typed by a
+# Node API, among others) are silent when the type of an expression cannot be resolved, so a scan
+# without installed dependencies and built workspace packages passes on defects the CI analysis (and
+# a checkout that has them) reports. A git worktree has an empty node_modules (the gates container's
+# dependencies live in a named volume), which is exactly that case. The runner therefore refuses to
+# scan until the scanner can see them, and mounts a populated gates volume when one is available.
+# Incident: a vault-prune sort passed here from a worktree and was flagged for the same commit from
+# a checkout with node_modules (#4351).
+gates_project_requested="${KEIKO_GATES_COMPOSE_PROJECT:-${original_compose_project:-keiko-gates}}"
+node_modules_volume=""
+if [[ ! -f "${repo_root}/node_modules/@types/node/package.json" ]]; then
+  candidates=()
+  [[ -n "${KEIKO_LOCAL_SONAR_NODE_MODULES_VOLUME:-}" ]] &&
+    candidates+=("${KEIKO_LOCAL_SONAR_NODE_MODULES_VOLUME}")
+  candidates+=("${gates_project_requested}_gates-node-modules" "keiko-gates_gates-node-modules")
+  for candidate in "${candidates[@]}"; do
+    if docker volume inspect "${candidate}" >/dev/null 2>&1 &&
+      "${compose[@]}" run --rm --no-deps -v "${candidate}:/nm:ro" --entrypoint sh scanner \
+        -c 'test -f /nm/@types/node/package.json && test -L /nm/@oscharko-dev/keiko-contracts' \
+        >/dev/null 2>&1; then
+      node_modules_volume="${candidate}"
+      break
+    fi
+  done
+  if [[ -z "${node_modules_volume}" ]]; then
+    printf 'local-sonar: FAIL - no installed dependencies are visible to the scanner.\n' >&2
+    printf '  SonarJS cannot resolve types without node_modules, so type-dependent rules (S2871, S4043, ...)\n' >&2
+    printf '  would stay silent and this run could PASS on code CI reports. Not scanning.\n' >&2
+    printf '  Fix one of: (1) npm ci && npm run build:packages in this checkout, or (2) run the gates\n' >&2
+    printf '  container once (npm run gates:local) and set KEIKO_LOCAL_SONAR_NODE_MODULES_VOLUME to its\n' >&2
+    printf '  <compose project>_gates-node-modules volume. See docs/qa/local-sonar.md.\n' >&2
+    exit 2
+  fi
+  printf 'local-sonar: node_modules not in the checkout; mounting volume %s for type resolution\n' \
+    "${node_modules_volume}" >&2
+fi
+if [[ ! -f "${repo_root}/packages/keiko-contracts/dist/index.d.ts" ]]; then
+  printf 'local-sonar: FAIL - workspace packages are not built (packages/keiko-contracts/dist is missing).\n' >&2
+  printf '  Cross-package types would not resolve and type-dependent rules would stay silent.\n' >&2
+  printf '  Run: npm run build:packages (inside the gates container when node_modules is a volume).\n' >&2
+  exit 2
+fi
+
+if [[ "${action}" == "check-types" ]]; then
+  printf 'local-sonar: types resolve (node_modules %s, packages built).\n' \
+    "${node_modules_volume:-in the checkout}"
   exit 0
 fi
 
@@ -101,11 +153,26 @@ say "Starting the local SonarQube (first run pulls the image and takes a few min
 
 # Waiting from the host rather than with a container healthcheck: the SonarQube image carries no
 # wget, curl, bash or python, so nothing inside it can probe its own port.
+# A newer pinned image finds the previous version's schema in the persisted data volume and halts at
+# DB_MIGRATION_NEEDED. The embedded H2 database cannot be migrated ("Upgrade is not supported on
+# embedded database"), and that volume holds only this disposable local analysis cache, so the runner
+# recreates it once for the pinned version instead of failing as "not ready". The admin credential
+# file survives and is re-provisioned below against the fresh server.
 printf '  waiting for the server'
+data_recreated=false
 for _ in $(seq 1 120); do
-  if [[ "$(ask "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z]*\)".*/\1/p')" == "UP" ]]; then
+  server_status="$(ask "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p')"
+  if [[ "${server_status}" == "UP" ]]; then
     printf ' up\n'
     break
+  fi
+  if [[ "${server_status}" == "DB_MIGRATION_NEEDED" && "${data_recreated}" == false ]]; then
+    printf '\n  the analysis cache belongs to an older SonarQube; recreating it for the pinned version\n'
+    "${compose[@]}" rm --stop --force sonarqube
+    docker volume rm "${compose_project}_sonar-data"
+    "${compose[@]}" up -d sonarqube
+    data_recreated=true
+    printf '  waiting for the server'
   fi
   printf '.'
   sleep 5
@@ -153,6 +220,20 @@ else
       ;;
   esac
 fi
+
+# SonarCloud analyses this repository with the built-in "Sonar way comprehensive" profile for every
+# language below, while a fresh SonarQube defaults to the smaller "Sonar way core". Left at core, the
+# local gate silently skips rules SonarCloud enforces (S9381 and S9382 among them, PR #4288), so the
+# runner selects the same built-in profile and fails closed when the pinned image lacks it.
+readonly cloud_profile="Sonar way comprehensive"
+for language in js ts css json yaml; do
+  if ! ask -o /dev/null -u "admin:${password}" -X POST --data-urlencode "language=${language}" \
+    --data-urlencode "qualityProfile=${cloud_profile}" "${host}/api/qualityprofiles/set_default"; then
+    printf '\033[31m✘ could not select the %s profile "%s" on %s\033[0m\n' \
+      "${language}" "${cloud_profile}" "${host}" >&2
+    exit 1
+  fi
+done
 
 # One named token, revoked before it is re-issued. A fresh timestamped token per run would pile up
 # credentials in the persisted volume forever.
@@ -270,7 +351,11 @@ fi
 # scanner from the exact server instance whose token it carries. A whole-project scan leaves
 # scanner_args empty, and macOS's bash 3.2 treats an empty array as unbound under `set -u`, so the
 # expansion is guarded (PR #3678: the full-scan path aborted with "scanner_args[@]: unbound").
-KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm --no-deps scanner \
+scanner_volume_args=()
+[[ -n "${node_modules_volume}" ]] &&
+  scanner_volume_args+=(-v "${node_modules_volume}:/usr/src/node_modules:ro")
+KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm --no-deps \
+  ${scanner_volume_args[@]+"${scanner_volume_args[@]}"} scanner \
   ${scanner_args[@]+"${scanner_args[@]}"} \
   -Dsonar.javascript.node.maxspace="${node_maxspace}" \
   -Dsonar.javascript.lcov.reportPaths="" \

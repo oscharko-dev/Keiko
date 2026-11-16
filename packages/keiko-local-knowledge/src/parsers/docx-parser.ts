@@ -7,7 +7,6 @@ import type {
 import { LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 
 import {
-  decodeXmlEntities as decodeXmlEntitiesShared,
   diagnostic,
   emptyResult,
   encryptedOoxmlRefusal,
@@ -16,8 +15,18 @@ import {
   parserIdentity,
   shouldStop,
 } from "./_internal.js";
+import { joinBlocks, layoutOfBlocks } from "./block-text.js";
+import { projectBody, unreferencedNotes, type Paragraph } from "./docx-blocks.js";
+import {
+  createNumberingTracker,
+  parseNumberingCatalog,
+  type NumberingCatalog,
+} from "./docx-numbering.js";
+import { parseStyleCatalog, type StyleCatalog } from "./docx-styles.js";
+import { countWordElements, readWordPart, type WordPartRead } from "./docx-xml.js";
 import {
   classifyOoxmlZipError,
+  isOoxmlEntryOversized,
   ooxmlEntryInflatedLimit,
   readOoxmlZipEntries,
   type OoxmlZipReadPlan,
@@ -32,13 +41,28 @@ import type {
 } from "./types.js";
 
 const PARSER_ID = "docx";
-const PARSER_VERSION = "1";
+// v2: tabs, soft breaks and non-breaking hyphens are read in run order; headings resolve through
+// styles.xml and nest by level; lists carry real markers; table headers, spans and merges follow
+// the grid; text boxes, notes and hidden or placeholder text are placed or excluded explicitly.
+const PARSER_VERSION = "2";
 const DEPENDENCY_VERSIONS = Object.freeze([
   Object.freeze({ packageName: "yauzl", version: "3.4.0" }),
 ]);
 const DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const DOCUMENT_XML_ENTRY = "word/document.xml";
 const FOOTNOTES_XML_ENTRY = "word/footnotes.xml";
+const ENDNOTES_XML_ENTRY = "word/endnotes.xml";
+const STYLES_XML_ENTRY = "word/styles.xml";
+const NUMBERING_XML_ENTRY = "word/numbering.xml";
+const COMMENTS_XML_ENTRY = "word/comments.xml";
+const DOCX_XML_ENTRIES: ReadonlySet<string> = new Set([
+  DOCUMENT_XML_ENTRY,
+  FOOTNOTES_XML_ENTRY,
+  ENDNOTES_XML_ENTRY,
+  STYLES_XML_ENTRY,
+  NUMBERING_XML_ENTRY,
+  COMMENTS_XML_ENTRY,
+]);
 const MAX_DOCUMENT_XML_INFLATED_BYTES = 16 * 1024 * 1024;
 // KEIKO-0428: cap the number of central-directory entries the zip scan is willing to walk before
 // aborting. A real .docx has on the order of a few dozen entries (`word/document.xml`,
@@ -47,10 +71,6 @@ const MAX_DOCUMENT_XML_INFLATED_BYTES = 16 * 1024 * 1024;
 // hundreds of thousands of tiny non-matching entries (each entry costs ~46 bytes of central
 // directory + filename, so a maxBytes budget in the tens of MB comfortably admits that regime).
 const MAX_DOCX_ZIP_ENTRIES = 4_096;
-const HEADING_STYLE_PATTERN = /<w:pStyle\b[^>]*w:val="Heading([1-6])"/i;
-const PARAGRAPH_PATTERN = /<w:p\b[\s\S]*?<\/w:p>/gi;
-const TEXT_RUN_PATTERN = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gi;
-const WORD_STRUCTURE_TAG_PATTERN = /<(\/?)w:(p|tbl|tr|tc)\b[^>]*>/giu;
 const DOCX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS);
 
 function isDocx(input: ParserSelectionInput): boolean {
@@ -89,56 +109,16 @@ function syncFallback(capability: ParserCapability): ParserAdapter["parse"] {
   };
 }
 
-interface DocxXmlParts {
-  readonly documentXml: string;
-  readonly footnotesXml?: string;
-}
-
-function isDocxXmlEntry(name: string): boolean {
-  return name === DOCUMENT_XML_ENTRY || name === FOOTNOTES_XML_ENTRY;
-}
-
 function docxZipPlan(options: ParserOptions): OoxmlZipReadPlan {
   return {
     format: "docx",
-    isWanted: isDocxXmlEntry,
+    isWanted: (name) => DOCX_XML_ENTRIES.has(name),
     maxEntries: MAX_DOCX_ZIP_ENTRIES,
     maxEntryInflatedBytes: ooxmlEntryInflatedLimit(
       options.maxBytes,
       MAX_DOCUMENT_XML_INFLATED_BYTES,
     ),
-    duplicateParts: "replace",
   };
-}
-
-async function readDocxXmlParts(
-  bytes: Uint8Array,
-  options: ParserOptions,
-  startedAt: number,
-): Promise<DocxXmlParts> {
-  const parts = await readOoxmlZipEntries(bytes, options, startedAt, docxZipPlan(options));
-  const documentXml = parts.get(DOCUMENT_XML_ENTRY);
-  if (documentXml === undefined) {
-    throw new Error("docx missing word/document.xml");
-  }
-  const footnotesXml = parts.get(FOOTNOTES_XML_ENTRY);
-  return { documentXml, ...(footnotesXml ? { footnotesXml } : {}) };
-}
-
-// GRD-027: delegate to the shared decoder so docx text runs also resolve numeric character
-// references (smart quotes, accented letters) instead of surfacing literal `&#8217;`.
-function decodeXmlEntities(value: string): string {
-  return decodeXmlEntitiesShared(value);
-}
-
-interface Paragraph {
-  readonly text: string;
-  readonly headingLevel?: number;
-}
-
-interface ParagraphParseResult {
-  readonly paragraphs: readonly Paragraph[];
-  readonly diagnostics: readonly ParserDiagnostic[];
 }
 
 interface SectionBuildResult {
@@ -147,6 +127,7 @@ interface SectionBuildResult {
   readonly diagnostics: readonly ParserDiagnostic[];
 }
 
+/** A section cut leaves text without a section path, so it is a warning, not a note. */
 function limitDiagnostic(
   input: ParserSelectionInput,
   limit: ReturnType<typeof shouldStop>,
@@ -154,384 +135,186 @@ function limitDiagnostic(
   if (!limit.stop || limit.code === undefined || limit.message === undefined) {
     return undefined;
   }
-  return diagnostic(limit.code, limit.message, input.documentId, "info");
+  const severity = limit.code === "UNIT_LIMIT_REACHED" ? "warning" : "info";
+  return diagnostic(limit.code, limit.message, input.documentId, severity);
 }
 
-function headingLevelOf(paragraphXml: string): number | undefined {
-  const match = HEADING_STYLE_PATTERN.exec(paragraphXml);
-  return match?.[1] === undefined ? undefined : Number(match[1]);
+// ─── Reading the parts ───────────────────────────────────────────────────────
+
+interface DocxCatalogs {
+  readonly styles: StyleCatalog | undefined;
+  readonly numbering: NumberingCatalog | undefined;
 }
 
-function isListParagraph(paragraphXml: string): boolean {
-  return /<w:numPr\b/i.test(paragraphXml);
+interface ReadContext {
+  readonly input: ParserSelectionInput;
+  readonly options: ParserOptions;
+  readonly startedAt: number;
+  readonly diagnostics: ParserDiagnostic[];
 }
 
-function paragraphText(paragraphXml: string): string {
-  // #2906 KEIKO-0759 — OOXML break tags may carry attributes: `<w:br w:type="page"/>`,
-  // `<w:br w:type="column"/>`, `<w:tab w:val="…"/>`. The previous patterns required a
-  // bare self-closing tag and silently merged adjacent text runs when the break was
-  // attributed. `\b[^>]*` tolerates any attribute list before `/>` while keeping the
-  // match anchored to self-closing form (never a stray `<w:br>` opener).
-  const withBreaks = paragraphXml
-    .replaceAll(/<w:tab\b[^>]*\/>/gi, "\t")
-    .replaceAll(/<w:br\b[^>]*\/>/gi, "\n")
-    .replaceAll(/<w:cr\b[^>]*\/>/gi, "\n");
-  const parts = Array.from(withBreaks.matchAll(TEXT_RUN_PATTERN))
-    .map((match) => decodeXmlEntities(match[1] ?? ""))
-    .filter((part) => part.length > 0);
-  return parts.join("").trim();
-}
-
-function parseParagraphXml(paragraphXml: string): Paragraph | undefined {
-  const text = paragraphText(paragraphXml);
-  if (text.length === 0) return undefined;
-  const headingLevel = headingLevelOf(paragraphXml);
-  const projected =
-    headingLevel === undefined && isListParagraph(paragraphXml) ? `- ${text}` : text;
-  return headingLevel === undefined ? { text: projected } : { text: projected, headingLevel };
-}
-
-function bodyXml(xml: string): string {
-  return /<w:body\b[^>]*>([\s\S]*?)<\/w:body>/iu.exec(xml)?.[1] ?? xml;
-}
-
-function normalizeTableHeaders(cells: readonly string[]): readonly string[] {
-  const seen = new Map<string, number>();
-  return cells.map((cell, index) => {
-    const base = cell.trim().length > 0 ? cell.trim() : `Column ${String(index + 1)}`;
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    return count === 0 ? base : `${base} ${String(count + 1)}`;
-  });
-}
-
-type WordElementName = "p" | "tbl" | "tr" | "tc";
-
-interface WordXmlTag {
-  readonly name: WordElementName;
-  readonly closing: boolean;
-  readonly selfClosing: boolean;
-  readonly start: number;
-  readonly end: number;
-}
-
-interface WordXmlElement {
-  readonly name: WordElementName;
-  readonly xml: string;
-  readonly innerXml: string;
-  readonly start: number;
-  readonly end: number;
-}
-
-function wordElementName(value: string | undefined): WordElementName | undefined {
-  if (value === "p" || value === "tbl" || value === "tr" || value === "tc") return value;
-  return undefined;
-}
-
-function nextWordXmlTag(xml: string, from: number): WordXmlTag | undefined {
-  WORD_STRUCTURE_TAG_PATTERN.lastIndex = from;
-  const match = WORD_STRUCTURE_TAG_PATTERN.exec(xml);
-  if (match === null) return undefined;
-  const name = wordElementName(match[2]?.toLowerCase());
-  if (name === undefined) return undefined;
-  const raw = match[0];
-  return {
-    name,
-    closing: match[1] === "/",
-    selfClosing: raw.slice(0, -1).trimEnd().endsWith("/"),
-    start: match.index,
-    end: match.index + raw.length,
-  };
-}
-
-function matchingWordElementEnd(xml: string, opening: WordXmlTag): WordXmlTag {
-  let depth = 1;
-  let cursor = opening.end;
-  while (cursor < xml.length) {
-    const tag = nextWordXmlTag(xml, cursor);
-    if (tag === undefined) break;
-    cursor = tag.end;
-    if (tag.name !== opening.name || tag.selfClosing) continue;
-    depth += tag.closing ? -1 : 1;
-    if (depth === 0) return tag;
-  }
-  throw new Error(`unterminated w:${opening.name} element`);
-}
-
-function extractWordElements(
-  xml: string,
-  names: ReadonlySet<WordElementName>,
-): readonly WordXmlElement[] {
-  const elements: WordXmlElement[] = [];
-  let cursor = 0;
-  while (cursor < xml.length) {
-    const opening = nextWordXmlTag(xml, cursor);
-    if (opening === undefined) break;
-    cursor = opening.end;
-    if (opening.closing || opening.selfClosing || !names.has(opening.name)) continue;
-    const closing = matchingWordElementEnd(xml, opening);
-    elements.push({
-      name: opening.name,
-      xml: xml.slice(opening.start, closing.end),
-      innerXml: xml.slice(opening.end, closing.start),
-      start: opening.start,
-      end: closing.end,
-    });
-    cursor = closing.end;
-  }
-  return elements;
-}
-
-const PARAGRAPH_ELEMENTS: ReadonlySet<WordElementName> = new Set(["p"]);
-const TABLE_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tbl"]);
-const ROW_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tr"]);
-const CELL_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tc"]);
-const DOCUMENT_BLOCK_ELEMENTS: ReadonlySet<WordElementName> = new Set(["p", "tbl"]);
-const TABLE_HEADER_ENABLED_VALUES: ReadonlySet<string> = new Set(["1", "on", "true"]);
-
-function removeNestedTables(cellXml: string): string {
-  const parts: string[] = [];
-  let cursor = 0;
-  for (const table of extractWordElements(cellXml, TABLE_ELEMENTS)) {
-    parts.push(cellXml.slice(cursor, table.start));
-    cursor = table.end;
-  }
-  parts.push(cellXml.slice(cursor));
-  return parts.join("");
-}
-
-function cellText(cellXml: string): string {
-  return extractWordElements(removeNestedTables(cellXml), PARAGRAPH_ELEMENTS)
-    .map((paragraph) => paragraphText(paragraph.xml))
-    .filter((part) => part.length > 0)
-    .join(" ")
-    .trim();
-}
-
-function projectTableRow(
-  cells: readonly string[],
-  rowIndex: number,
-  headers: readonly string[],
-): Paragraph {
-  return projectTableCells(
-    cells.map((text, cellIndex) => ({ cellIndex, text })),
-    rowIndex,
-    headers,
+function recordUnreadablePart(context: ReadContext, entry: string): void {
+  context.diagnostics.push(
+    diagnostic(
+      "PART_SKIPPED",
+      `docx ${entry} could not be read and was skipped`,
+      context.input.documentId,
+      "warning",
+    ),
   );
 }
 
-interface ProjectedTableCell {
-  readonly cellIndex: number;
-  readonly text: string;
-}
-
-function projectTableCells(
-  cells: readonly ProjectedTableCell[],
-  rowIndex: number,
-  headers: readonly string[],
-): Paragraph {
-  const projected = cells
-    .map(({ cellIndex, text }) => {
-      const fallbackLabel = `Column ${String(cellIndex + 1)}`;
-      return `${headers[cellIndex] ?? fallbackLabel}=${text}`;
-    })
-    .join(" | ");
-  return { text: `Table row ${String(rowIndex + 1)}: ${projected}` };
-}
-
-type TableTraversalItem =
-  | { readonly kind: "paragraph"; readonly paragraph: Paragraph }
-  | { readonly kind: "table"; readonly tableXml: string };
-
-function nestedTableItems(cells: readonly WordXmlElement[]): readonly TableTraversalItem[] {
-  const items: TableTraversalItem[] = [];
-  for (const cell of cells) {
-    for (const nested of extractWordElements(cell.innerXml, TABLE_ELEMENTS)) {
-      items.push({ kind: "table", tableXml: nested.innerXml });
-    }
+/** An auxiliary part that cannot be read degrades the result; it never fails the document. */
+function readAuxiliary<T>(
+  context: ReadContext,
+  entry: string,
+  xml: string | undefined,
+  read: (xml: string) => T,
+): T | undefined {
+  if (xml === undefined) return undefined;
+  try {
+    return read(xml);
+  } catch {
+    recordUnreadablePart(context, entry);
+    return undefined;
   }
-  return items;
 }
 
-function flushProjectedCells(
-  items: TableTraversalItem[],
-  cells: ProjectedTableCell[],
-  rowIndex: number,
-  headers: readonly string[],
-): void {
-  if (cells.length === 0) return;
-  items.push({ kind: "paragraph", paragraph: projectTableCells(cells, rowIndex, headers) });
-  cells.length = 0;
+function readCatalogs(context: ReadContext, parts: ReadonlyMap<string, string>): DocxCatalogs {
+  const maxDepth = context.options.maxNestingDepth;
+  return {
+    styles: readAuxiliary(context, STYLES_XML_ENTRY, parts.get(STYLES_XML_ENTRY), (xml) =>
+      parseStyleCatalog(xml, maxDepth),
+    ),
+    numbering: readAuxiliary(context, NUMBERING_XML_ENTRY, parts.get(NUMBERING_XML_ENTRY), (xml) =>
+      parseNumberingCatalog(xml, maxDepth),
+    ),
+  };
 }
 
-function nestedTableRowItems(
-  cells: readonly WordXmlElement[],
-  rowIndex: number,
-  headers: readonly string[],
-): readonly TableTraversalItem[] {
-  const items: TableTraversalItem[] = [];
-  const projected: ProjectedTableCell[] = [];
-  for (const [cellIndex, cell] of cells.entries()) {
-    const textParts: string[] = [];
-    for (const block of extractWordElements(cell.innerXml, DOCUMENT_BLOCK_ELEMENTS)) {
-      if (block.name === "p") {
-        const text = paragraphText(block.xml);
-        if (text.length > 0) textParts.push(text);
-        continue;
-      }
-      if (textParts.length > 0) projected.push({ cellIndex, text: textParts.splice(0).join(" ") });
-      flushProjectedCells(items, projected, rowIndex, headers);
-      items.push({ kind: "table", tableXml: block.innerXml });
-    }
-    if (textParts.length > 0) projected.push({ cellIndex, text: textParts.join(" ") });
+function wordLimits(context: ReadContext): Parameters<typeof readWordPart>[1] {
+  const { options, startedAt } = context;
+  return {
+    maxDepth: options.maxNestingDepth,
+    maxObjects: options.maxObjectsPerDocument,
+    interrupt: () => shouldStop(startedAt, options, 0).stop,
+  };
+}
+
+/** The notes of a footnotes or endnotes part; what it excludes is counted with the body's. */
+function readNotes(
+  context: ReadContext,
+  entry: string,
+  xml: string | undefined,
+): Pick<WordPartRead, "notes" | "hiddenCount" | "placeholderCount"> {
+  const read = readAuxiliary(context, entry, xml, (part) =>
+    readWordPart(part, wordLimits(context)),
+  );
+  return {
+    notes: read?.notes ?? new Map(),
+    hiddenCount: read?.hiddenCount ?? 0,
+    placeholderCount: read?.placeholderCount ?? 0,
+  };
+}
+
+function countComments(context: ReadContext, xml: string | undefined): number {
+  return (
+    readAuxiliary(context, COMMENTS_XML_ENTRY, xml, (part) =>
+      countWordElements(part, "comment", context.options.maxNestingDepth),
+    ) ?? 0
+  );
+}
+
+function exclusionDiagnostics(
+  input: ParserSelectionInput,
+  counts: { readonly hidden: number; readonly placeholders: number; readonly comments: number },
+): readonly ParserDiagnostic[] {
+  const out: ParserDiagnostic[] = [];
+  if (counts.hidden > 0) {
+    out.push(
+      diagnostic(
+        "HIDDEN_CONTENT_EXCLUDED",
+        `excluded ${String(counts.hidden)} hidden text run(s) that a reader cannot see`,
+        input.documentId,
+        "info",
+      ),
+    );
   }
-  flushProjectedCells(items, projected, rowIndex, headers);
-  return items;
-}
-
-function tableRowItems(
-  cells: readonly WordXmlElement[],
-  values: readonly string[],
-  rowIndex: number,
-  headers: readonly string[],
-): readonly TableTraversalItem[] {
-  const nested = nestedTableItems(cells);
-  return nested.length === 0
-    ? [{ kind: "paragraph", paragraph: projectTableRow(values, rowIndex, headers) }]
-    : nestedTableRowItems(cells, rowIndex, headers);
-}
-
-interface AppendTableRowInput {
-  readonly cells: readonly WordXmlElement[];
-  readonly values: readonly string[];
-  readonly sourceRowIndex: number;
-  readonly dataRowIndex: number;
-  readonly headerIsSchema: boolean;
-  readonly headers: readonly string[];
-}
-
-function appendTableRow(items: TableTraversalItem[], input: AppendTableRowInput): number {
-  if (input.headerIsSchema && input.sourceRowIndex === 0) {
-    items.push(...nestedTableItems(input.cells));
-    return input.dataRowIndex;
+  if (counts.placeholders > 0) {
+    out.push(
+      diagnostic(
+        "PLACEHOLDER_CONTENT_EXCLUDED",
+        `excluded ${String(counts.placeholders)} content-control placeholder(s)`,
+        input.documentId,
+        "info",
+      ),
+    );
   }
-  items.push(...tableRowItems(input.cells, input.values, input.dataRowIndex, input.headers));
-  return input.dataRowIndex + 1;
-}
-
-function isMarkedTableHeaderRow(row: WordXmlElement): boolean {
-  const firstCellStart = row.innerXml.search(/<w:tc\b/iu);
-  const rowProperties =
-    firstCellStart === -1 ? row.innerXml : row.innerXml.slice(0, firstCellStart);
-  const markerStart = rowProperties.search(/<w:tblHeader(?=[\s/>])/iu);
-  if (markerStart === -1) return false;
-  const markerEnd = rowProperties.indexOf(">", markerStart);
-  if (markerEnd === -1) return false;
-  const marker = rowProperties.slice(markerStart, markerEnd + 1);
-  const value = /\bw:val\s*=\s*["']([^"']+)["']/iu.exec(marker)?.[1];
-  return value === undefined || TABLE_HEADER_ENABLED_VALUES.has(value.toLowerCase());
-}
-
-function tableTraversalItems(tableXml: string): readonly TableTraversalItem[] {
-  const rows = extractWordElements(tableXml, ROW_ELEMENTS);
-  const cellRows = rows.map((row) => extractWordElements(row.innerXml, CELL_ELEMENTS));
-  const values = cellRows.map((cells) => cells.map((cell) => cellText(cell.innerXml)));
-  const firstRow = rows[0];
-  const headerIsSchema =
-    values.length > 1 && firstRow !== undefined && isMarkedTableHeaderRow(firstRow);
-  const headers = headerIsSchema ? normalizeTableHeaders(values[0] ?? []) : [];
-  const items: TableTraversalItem[] = [];
-  let dataRowIndex = 0;
-  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-    dataRowIndex = appendTableRow(items, {
-      cells: cellRows[rowIndex] ?? [],
-      values: values[rowIndex] ?? [],
-      sourceRowIndex: rowIndex,
-      dataRowIndex,
-      headerIsSchema,
-      headers,
-    });
-  }
-  return items;
-}
-
-function tableTreeRows(tableXml: string): readonly Paragraph[] {
-  const pending: TableTraversalItem[] = [{ kind: "table", tableXml }];
-  const paragraphs: Paragraph[] = [];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (current === undefined) break;
-    if (current.kind === "paragraph") {
-      paragraphs.push(current.paragraph);
-      continue;
-    }
-    const items = tableTraversalItems(current.tableXml);
-    for (let index = items.length - 1; index >= 0; index -= 1) {
-      const item = items[index];
-      if (item !== undefined) pending.push(item);
-    }
-  }
-  return paragraphs;
-}
-
-function parseDocumentBlocks(xml: string): readonly Paragraph[] {
-  const body = bodyXml(xml);
-  const blocks: Paragraph[] = [];
-  for (const block of extractWordElements(body, DOCUMENT_BLOCK_ELEMENTS)) {
-    if (block.name === "tbl") {
-      blocks.push(...tableTreeRows(block.innerXml));
-      continue;
-    }
-    const paragraph = parseParagraphXml(block.xml);
-    if (paragraph !== undefined) blocks.push(paragraph);
-  }
-  return blocks;
-}
-
-function parseFootnotes(xml: string | undefined): readonly Paragraph[] {
-  if (xml === undefined) return [];
-  const out: Paragraph[] = [];
-  for (const match of xml.matchAll(/<w:footnote\b[^>]*>[\s\S]*?<\/w:footnote>/gi)) {
-    const footnoteXml = match[0];
-    const tag = /^<w:footnote\b[^>]*>/iu.exec(footnoteXml)?.[0] ?? "";
-    const id = /w:id="([^"]+)"/iu.exec(tag)?.[1];
-    if (id === "-1" || id === "0") continue;
-    const text = Array.from(footnoteXml.matchAll(PARAGRAPH_PATTERN))
-      .map((paragraph) => paragraphText(paragraph[0]))
-      .filter((part) => part.length > 0)
-      .join(" ");
-    if (text.length > 0) out.push({ text: `Footnote ${id ?? "?"}: ${text}` });
+  if (counts.comments > 0) {
+    out.push(
+      diagnostic(
+        "COMMENTS_NOT_INDEXED",
+        `${String(counts.comments)} review comment(s) are not indexed`,
+        input.documentId,
+        "info",
+      ),
+    );
   }
   return out;
 }
 
+function readStopDiagnostic(context: ReadContext, main: WordPartRead): ParserDiagnostic[] {
+  const { input, options, startedAt } = context;
+  if (main.limitReached)
+    return [objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument)];
+  if (!main.interrupted) return [];
+  const stopped = limitDiagnostic(input, shouldStop(startedAt, options, 0));
+  return stopped === undefined ? [] : [stopped];
+}
+
+interface ParagraphParseResult {
+  readonly paragraphs: readonly Paragraph[];
+  readonly diagnostics: readonly ParserDiagnostic[];
+}
+
 function parseParagraphs(
-  xml: string,
-  footnotesXml: string | undefined,
+  parts: ReadonlyMap<string, string>,
   input: ParserSelectionInput,
   options: ParserOptions,
   startedAt: number,
 ): ParagraphParseResult {
-  const out: Paragraph[] = [];
-  const diagnostics: ParserDiagnostic[] = [];
-  let scannedParagraphs = 0;
-  const paragraphs = [...parseDocumentBlocks(xml), ...parseFootnotes(footnotesXml)];
-  for (const paragraph of paragraphs) {
-    if (scannedParagraphs >= options.maxObjectsPerDocument) {
-      diagnostics.push(objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument));
-      break;
-    }
-    const limit = shouldStop(startedAt, options, scannedParagraphs);
-    const stopped = limitDiagnostic(input, limit);
-    if (stopped !== undefined) {
-      diagnostics.push(stopped);
-      break;
-    }
-    scannedParagraphs += 1;
-    out.push(paragraph);
-  }
-  return { paragraphs: out, diagnostics };
+  const context: ReadContext = { input, options, startedAt, diagnostics: [] };
+  const catalogs = readCatalogs(context, parts);
+  const documentXml = parts.get(DOCUMENT_XML_ENTRY);
+  if (documentXml === undefined) throw new Error("docx missing word/document.xml");
+  const main = readWordPart(documentXml, wordLimits(context));
+  const footnotes = readNotes(context, FOOTNOTES_XML_ENTRY, parts.get(FOOTNOTES_XML_ENTRY));
+  const endnotes = readNotes(context, ENDNOTES_XML_ENTRY, parts.get(ENDNOTES_XML_ENTRY));
+  const projection = {
+    styles: catalogs.styles,
+    numbering: createNumberingTracker(catalogs.numbering, catalogs.styles),
+    footnotes: footnotes.notes,
+    endnotes: endnotes.notes,
+    placed: new Set<string>(),
+  };
+  const body = projectBody(main.blocks, projection);
+  const comments = countComments(context, parts.get(COMMENTS_XML_ENTRY));
+  return {
+    paragraphs: [...body, ...unreferencedNotes(projection)],
+    diagnostics: [
+      ...context.diagnostics,
+      ...readStopDiagnostic(context, main),
+      ...exclusionDiagnostics(input, {
+        hidden: main.hiddenCount + footnotes.hiddenCount + endnotes.hiddenCount,
+        placeholders:
+          main.placeholderCount + footnotes.placeholderCount + endnotes.placeholderCount,
+        comments,
+      }),
+    ],
+  };
 }
+
+// ─── Sections ────────────────────────────────────────────────────────────────
 
 interface HeadingParagraph extends Paragraph {
   readonly headingLevel: number;
@@ -540,19 +323,6 @@ interface HeadingParagraph extends Paragraph {
 interface HeadingEntry {
   readonly paragraph: HeadingParagraph;
   readonly index: number;
-}
-
-function paragraphStarts(paragraphs: readonly Paragraph[]): {
-  readonly starts: readonly number[];
-  readonly end: number;
-} {
-  const starts: number[] = [];
-  let cursor = 0;
-  for (const paragraph of paragraphs) {
-    starts.push(cursor);
-    cursor += paragraph.text.length + 1;
-  }
-  return { starts, end: Math.max(0, cursor - 1) };
 }
 
 function isHeadingEntry(entry: {
@@ -687,6 +457,11 @@ function appendLeadingPreambleSection(args: AppendLeadingPreambleSectionArgs): b
   return true;
 }
 
+interface OpenHeading {
+  readonly level: number;
+  readonly text: string;
+}
+
 interface HeadingSectionState {
   readonly sections: SectionRecord[];
   readonly units: ParsedUnit[];
@@ -695,7 +470,8 @@ interface HeadingSectionState {
   readonly options: ParserOptions;
   readonly startedAt: number;
   readonly offsets: { readonly starts: readonly number[]; readonly end: number };
-  readonly stack: string[];
+  /** Enclosing headings of the current one, shallowest first. */
+  readonly stack: OpenHeading[];
 }
 
 function appendHeadingSection(
@@ -703,9 +479,11 @@ function appendHeadingSection(
   current: HeadingEntry,
   next: HeadingEntry | undefined,
 ): boolean {
+  // A heading closes every open heading of its own or a deeper level, whatever levels were
+  // skipped in between: after H1, H3, H3 the second H3 sits under the H1, not under the first H3.
   const level = current.paragraph.headingLevel;
-  while (state.stack.length >= level) state.stack.pop();
-  state.stack.push(current.paragraph.text);
+  while ((state.stack.at(-1)?.level ?? -1) >= level) state.stack.pop();
+  state.stack.push({ level, text: current.paragraph.text });
   const start = state.offsets.starts[current.index] ?? 0;
   const end =
     next === undefined
@@ -716,7 +494,7 @@ function appendHeadingSection(
     end,
     input: state.input,
     options: state.options,
-    sectionPath: [...state.stack],
+    sectionPath: state.stack.map((heading) => heading.text),
     sections: state.sections,
     start,
     startedAt: state.startedAt,
@@ -741,11 +519,11 @@ function buildSections(
   options: ParserOptions,
   startedAt: number,
 ): SectionBuildResult {
-  const stack: string[] = [];
+  const stack: OpenHeading[] = [];
   const sections: SectionRecord[] = [];
   const units: ParsedUnit[] = [];
   const diagnostics: ParserDiagnostic[] = [];
-  const offsets = paragraphStarts(paragraphs);
+  const offsets = layoutOfBlocks(paragraphs);
   const headings = collectHeadings(paragraphs);
 
   if (headings.length === 0) {
@@ -777,6 +555,7 @@ function docxNoTextResult(
   capability: ParserCapability,
   input: ParserSelectionInput,
   options: ParserOptions,
+  notes: readonly ParserDiagnostic[],
 ): ParserResult {
   return emptyResult(
     capability,
@@ -789,6 +568,7 @@ function docxNoTextResult(
         input.documentId,
         "info",
       ),
+      ...notes,
     ],
     [unsupportedMediaUnit(input.documentId, "docx-no-text")],
   );
@@ -803,7 +583,7 @@ function docxParseResult(
   startedAt: number,
 ): InternalParserResult {
   const built = buildSections(paragraphs, input, options, startedAt);
-  const normalizedText = paragraphs.map((paragraph) => paragraph.text).join("\n");
+  const normalizedText = joinBlocks(paragraphs);
   return {
     documentId: input.documentId,
     parser: parserIdentity(capability),
@@ -814,6 +594,17 @@ function docxParseResult(
     extractedAt: options.now(),
     normalizedText,
   };
+}
+
+// ─── Failures ────────────────────────────────────────────────────────────────
+
+function oversizedPartDiagnostic(input: ParserSelectionInput): ParserDiagnostic {
+  return diagnostic(
+    "OVERSIZED_FILE",
+    "docx part exceeds the inflated size limit of the parser",
+    input.documentId,
+    "info",
+  );
 }
 
 // KEIKO-0428: the catch surface distinguishes the scan-budget stop from every other reject
@@ -840,6 +631,9 @@ function docxAsyncParseError(
         "info",
       ),
     ]);
+  }
+  if (isOoxmlEntryOversized(error)) {
+    return emptyResult(capability, input.documentId, options, [oversizedPartDiagnostic(input)]);
   }
   return emptyResult(capability, input.documentId, options, [
     diagnostic(
@@ -877,25 +671,19 @@ async function asyncParse(
 
   const startedAt = options.now();
   try {
-    const xmlParts = await readDocxXmlParts(input.bytes, options, startedAt);
+    const parts = await readOoxmlZipEntries(input.bytes, options, startedAt, docxZipPlan(options));
     const limit = shouldStop(startedAt, options, 0);
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
       return emptyResult(capability, input.documentId, options, [
         diagnostic(limit.code, limit.message, input.documentId, "info"),
       ]);
     }
-    const parsed = parseParagraphs(
-      xmlParts.documentXml,
-      xmlParts.footnotesXml,
-      input,
-      options,
-      startedAt,
-    );
+    const parsed = parseParagraphs(parts, input, options, startedAt);
     if (parsed.paragraphs.length === 0) {
-      if (parsed.diagnostics.length > 0) {
+      if (parsed.diagnostics.some((entry) => entry.severity !== "info")) {
         return emptyResult(capability, input.documentId, options, parsed.diagnostics);
       }
-      return docxNoTextResult(capability, input, options);
+      return docxNoTextResult(capability, input, options, parsed.diagnostics);
     }
     return docxParseResult(
       capability,

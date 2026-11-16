@@ -186,6 +186,15 @@ function browserSourceDigestException() {
   return table;
 }
 
+function jiraIssueKeyDigestException() {
+  const table = allowlistTables(repositoryConfig).find((entry) =>
+    entry.get("description")?.includes("verified Jira issue-key array digests"),
+  );
+  expect(table).toBeDefined();
+  if (table === undefined) throw new TypeError("Missing Jira issue-key digest exception");
+  return table;
+}
+
 function literalArrayPattern(table, key) {
   const pattern = table.get(key)?.match(/'''(.*)'''/u)?.[1];
   expect(pattern).toBeDefined();
@@ -288,6 +297,50 @@ describe(".gitleaks.toml allowlists", () => {
       false,
     );
     expect(linePattern.test(`${line} "privateKey": "unrelated"`)).toBe(false);
+  });
+
+  it("limits the two verified Jira issue-key digests to complete evidence lines and one rule", () => {
+    const table = jiraIssueKeyDigestException();
+    expect(table.get("condition")).toBe('"AND"');
+    expect(table.get("targetrules")).toBe('["generic-api-key"]');
+    expect(table.get("regextarget")).toBe('"line"');
+    expect([...table.keys()].sort()).toEqual([
+      "condition",
+      "description",
+      "paths",
+      "regexes",
+      "regextarget",
+      "targetrules",
+    ]);
+    const path = "docs/qa/4390-release-evidence.json";
+    const pathPattern = literalArrayPattern(table, "paths");
+    expect(pathPattern.test(path)).toBe(true);
+    for (const other of [`other/${path}`, `${path}.bak`, "docs/qa/4398-release-evidence.json"])
+      expect(pathPattern.test(other)).toBe(false);
+    const record = JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"));
+    const digests = [record.AC1.ask.keysSha256, record.AC1.full.keysSha256];
+    expect(new Set(digests).size).toBe(2);
+    const linePattern = literalArrayPattern(table, "regexes");
+    for (const digest of digests) {
+      expect(digest).toMatch(/^[0-9a-f]{64}$/u);
+      const line = `    "keysSha256": "${digest}",`;
+      expect(linePattern.test(line)).toBe(true);
+      expect(linePattern.test(`\n${line}`)).toBe(true);
+      expect(linePattern.test(line.slice(0, -1))).toBe(true);
+      const otherDigest = `${digest[0] === "a" ? "b" : "a"}${digest.slice(1)}`;
+      for (const other of [
+        line.replace(digest, otherDigest),
+        line.replace("keysSha256", "apiKey"),
+        line.replace("keysSha256", "privateKey"),
+        line.replace("keysSha256", "otherKeysSha256"),
+        `other\n${line}`,
+        `${line}\nother`,
+        `${line} "privateKey": "unrelated"`,
+      ])
+        expect(linePattern.test(other)).toBe(false);
+    }
+    const unrelatedDigest = createHash("sha256").update("unrelated evidence").digest("hex");
+    expect(linePattern.test(`    "keysSha256": "${unrelatedDigest}",`)).toBe(false);
   });
 });
 

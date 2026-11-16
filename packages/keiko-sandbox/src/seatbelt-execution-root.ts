@@ -1,7 +1,12 @@
-import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { posix } from "node:path";
 import { NATIVE_LINKED_FILES_MAX } from "./native-linked-files.js";
-import { CREDENTIAL_PATH_SEATBELT_RULE } from "./seatbelt-credential-paths.js";
+import { credentialPathSeatbeltRule } from "./seatbelt-credential-paths.js";
 import type { IsolatedRunPlan, RuntimeGatewayFilesystem } from "./types.js";
+
+// This filesystem capability describes the POSIX native backends even when its policy is
+// inspected on Windows. Windows' mapped profile carries no filesystem block; accepting a policy
+// here never establishes host support or authorizes the native backend to launch it.
+const { basename, dirname, isAbsolute, relative, resolve } = posix;
 
 const MACOS_RUNTIME_READ_ROOTS = [
   "/System/Library",
@@ -99,6 +104,8 @@ const NATIVE_PROTECTED_WRITE_ROOTS_MAX = 64;
 const NATIVE_LINK_FREE_WRITE_ROOTS_MAX = 8;
 const NATIVE_GIT_METADATA_READ_ROOTS_MAX = 4;
 const NATIVE_EXTERNAL_READ_ROOTS_MAX = 8;
+// Two certificate variables, each named at its spelled and its real location.
+const NATIVE_CERTIFICATE_READ_FILES_MAX = 4;
 
 const GATEWAY_FILESYSTEM_KEYS = new Set([
   "workspaceRoot",
@@ -114,6 +121,7 @@ const OPTIONAL_GATEWAY_FILESYSTEM_KEYS = new Set([
   "protectedWriteRoots",
   "linkFreeWriteRoots",
   "linkedFiles",
+  "certificateReadFiles",
 ]);
 
 function validRoot(value: unknown): value is string {
@@ -188,7 +196,21 @@ function validOptionalRoots(value: Record<string, unknown>): boolean {
     validExternalReadRoots(value) &&
     validProtectedWriteRoots(value) &&
     validLinkFreeWriteRoots(value) &&
-    validLinkedFiles(value)
+    validLinkedFiles(value) &&
+    validCertificateReadFiles(value)
+  );
+}
+
+/** An operator-named certificate file is an exact absolute file of the writable native profile. */
+function validCertificateReadFiles(value: Record<string, unknown>): boolean {
+  if (value.certificateReadFiles === undefined) return true;
+  return (
+    value.workspaceAccess === "read-write" &&
+    validRootList(
+      value.certificateReadFiles,
+      NATIVE_CERTIFICATE_READ_FILES_MAX,
+      (file) => file.split("/").length > 2,
+    )
   );
 }
 
@@ -320,6 +342,13 @@ export function gatewayFilesystemSeatbeltRules(
   );
 }
 
+// A toolchain's install prefix also holds the state of the services it runs (a Homebrew Postgres
+// keeps its databases in `var`), which no toolchain reads to build or run (#4271). `/usr/local` is
+// inside the system root, so it is named whether or not PATH does.
+function nativeServiceStateRoots(closed: RuntimeGatewayFilesystem): readonly string[] {
+  return ["/usr/local/var", ...(closed.toolchainReadRoots ?? []).map((root) => `${root}/var`)];
+}
+
 function nativeReadRoots(closed: RuntimeGatewayFilesystem): readonly string[] {
   return [
     ...NATIVE_SYSTEM_READ_ROOTS,
@@ -343,7 +372,8 @@ function nativeReadRoots(closed: RuntimeGatewayFilesystem): readonly string[] {
  * keiko-contracts) are unreadable and unwritable wherever they sit, including inside the workspace.
  * Rule order matters: the last matching Seatbelt rule wins, so the workspace and private state are
  * re-allowed after the denied roots that may contain them, and the credential names are denied last
- * of all.
+ * of all, except the public trust bundles and the operator-named certificate files, which the
+ * earlier rules decide (`credentialPathSeatbeltRule`).
  */
 export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesystem): string {
   const closed = copyRuntimeGatewayFilesystem(filesystem);
@@ -363,6 +393,7 @@ export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesyste
     `(allow file-write* ${pathFilters("subpath", own)} ` +
     '(literal "/dev/null") (regex #"^/dev/tty") (literal "/dev/stdout") (literal "/dev/stderr"))' +
     (denied.length === 0 ? "" : `(deny file-read* file-write* ${pathFilters("subpath", denied)})`) +
+    `(deny file-read* file-write* ${pathFilters("subpath", nativeServiceStateRoots(closed))})` +
     // Keiko's managed task workspaces live inside its own state directory, which is a denied
     // root; the workspace is re-allowed after the denial like the private state (#3897 lab:
     // OpenCode 2.0.10 could not even realpath its workspace in the customer shape).
@@ -379,7 +410,7 @@ export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesyste
     protectedWriteSeatbeltRules(closed) +
     linkFreeWriteSeatbeltRules(closed) +
     linkedFileSeatbeltRules(closed) +
-    CREDENTIAL_PATH_SEATBELT_RULE
+    credentialPathSeatbeltRule(closed.certificateReadFiles ?? [])
   );
 }
 

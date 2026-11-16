@@ -30,7 +30,7 @@ import {
   type SecurityLogSink,
 } from "./log-port.js";
 
-const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
+export const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
 
 const SECURITY_KEYCHAIN_FALLBACK_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -56,12 +56,74 @@ const SECURITY_KEYCHAIN_FALLBACK_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const SECURITY_KEYCHAIN_WITHHELD_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.keychain.withheld",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "macos-keychain.emitKeychainWithheld",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["test-process", "operator-off"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["security-keychain-access"],
+  proofIds: ["security.keychain.withheld.line"],
+  releaseImpact: "patch",
+});
+
 /**
  * Generous next to a healthy `security` call, which answers in tens of milliseconds, and short next
  * to a person deciding whether to unlock a keychain. The tier is an optimisation over the keyfile
  * tier, never a requirement, so waiting longer buys nothing.
  */
 export const KEYCHAIN_SPAWN_TIMEOUT_MS = 2_000;
+
+/**
+ * The login keychain is machine-wide state shared with every real Keiko on the machine. A test that
+ * opens a vault without an injected key would read that installation's key or store another, and a
+ * home without a keychain makes macOS raise a modal on the person's desktop. No test needs it, so a
+ * process under vitest never gets it, whatever its configuration. A lane that starts a whole product
+ * process says so with `KEIKO_OS_KEYCHAIN=off`, in the process environment or in the environment it
+ * hands a vault. The tier then answers like a platform without one and the keyfile tier takes over,
+ * which is weaker custody and cannot open data sealed under a keychain key, so the choice is logged.
+ * A fake `executable` is unaffected.
+ */
+export type KeychainWithheldReason = "test-process" | "operator-off";
+
+type EnvironmentView = Readonly<Record<string, string | undefined>>;
+
+function withheldBy(env: EnvironmentView): KeychainWithheldReason | undefined {
+  if (env.VITEST !== undefined) return "test-process";
+  return env.KEIKO_OS_KEYCHAIN === "off" ? "operator-off" : undefined;
+}
+
+export function keychainWithheldReason(
+  env: EnvironmentView = process.env,
+): KeychainWithheldReason | undefined {
+  return withheldBy(process.env) ?? withheldBy(env);
+}
+
+export function realKeychainWithheld(env: EnvironmentView = process.env): boolean {
+  return keychainWithheldReason(env) !== undefined;
+}
+
+export function emitKeychainWithheld(
+  sink: SecurityLogSink | undefined,
+  reason: KeychainWithheldReason,
+): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(SECURITY_KEYCHAIN_WITHHELD_OPERATION, {}, { reason }),
+  );
+}
 
 export interface MacosKeychainOptions {
   /** Test seam. Production always uses the fixed system path. */
@@ -70,14 +132,66 @@ export interface MacosKeychainOptions {
   readonly timeoutMs?: number | undefined;
   /** Test seam, so the tier's behaviour is assertable on a non-darwin host. */
   readonly platform?: NodeJS.Platform | undefined;
+  /** The environment the vault was handed, which can withhold the real keychain. */
+  readonly env?: Readonly<Record<string, string | undefined>> | undefined;
   /**
-   * Optional activity-log seam (ADR-0019; see `log-port.ts`). When wired, a spawn failure that
+   * Activity-log seam (ADR-0019; see `log-port.ts`). A spawn failure that
    * collapses to `{ kind: "unavailable" }` emits one `security.keychain.fallback` event instead of
    * discarding the OS error silently — the gap the 0.3.0 boot-hang incident (see file header)
    * exposed: the tier now returns in time, but still logged nothing about WHY it fell back.
-   * Omitted or `undefined` keeps this tier exactly as silent as before.
+   * Required: a caller names where the line goes (a seam passes the null sink), so a locked,
+   * unavailable or withheld keychain can never be lost as an unwired port.
    */
-  readonly sink?: SecurityLogSink | undefined;
+  readonly sink: SecurityLogSink;
+  /**
+   * Test seam. Production reads of the real `security` binary use the process memo below; a fake
+   * `executable` gets no memo unless a test hands one in.
+   */
+  readonly memo?: KeychainSecretMemo | undefined;
+}
+
+/**
+ * Secrets this process has already read from the keychain, by service and account.
+ *
+ * A key item in the login keychain does not change while Keiko runs: Keiko writes one only when
+ * none exists or the stored value cannot be decoded, and a person does not rotate it underneath a
+ * running process. Yet every vault open resolved its key again, so one Chat window or one setup
+ * step spawned `security` for the same item several times, each a fresh keychain access request.
+ * The memo answers repeats from memory. It holds only values a read actually returned: a write
+ * forgets the item instead of remembering what it wrote, so two processes racing to create the
+ * first key both read the stored winner on their next open, and a replaced undecodable value is
+ * never served again. Failures are never remembered, and the withheld check runs before the memo,
+ * so `KEIKO_OS_KEYCHAIN=off` still takes effect.
+ */
+export interface KeychainSecretMemo {
+  readonly get: (service: string, account: string) => string | undefined;
+  readonly remember: (service: string, account: string, secret: string) => void;
+  readonly forget: (service: string, account: string) => void;
+}
+
+export function createKeychainSecretMemo(): KeychainSecretMemo {
+  const secrets = new Map<string, string>();
+  const keyOf = (service: string, account: string): string => `${service}\u0000${account}`;
+  return {
+    get: (service, account) => secrets.get(keyOf(service, account)),
+    remember: (service, account, secret): void => {
+      secrets.set(keyOf(service, account), secret);
+    },
+    forget: (service, account): void => {
+      secrets.delete(keyOf(service, account));
+    },
+  };
+}
+
+/** The memo every read of the real login keychain in this process shares. */
+export const processKeychainSecretMemo: KeychainSecretMemo = createKeychainSecretMemo();
+
+function memoFor(
+  spawn: ResolvedSpawn,
+  options: MacosKeychainOptions,
+): KeychainSecretMemo | undefined {
+  if (options.memo !== undefined) return options.memo;
+  return spawn.executable === MACOS_SECURITY_EXECUTABLE ? processKeychainSecretMemo : undefined;
 }
 
 /**
@@ -96,6 +210,7 @@ function positiveTimeout(value: number | undefined): number | undefined {
 
 interface ResolvedSpawn {
   readonly darwin: boolean;
+  readonly withheld: KeychainWithheldReason | undefined;
   readonly executable: string;
   readonly timeout: number;
   readonly killSignal: "SIGKILL";
@@ -104,9 +219,12 @@ interface ResolvedSpawn {
 // One place resolves every default, so the read and the write cannot drift apart and a caller
 // supplying no options is exercising exactly the production configuration.
 function resolveSpawn(options: MacosKeychainOptions): ResolvedSpawn {
+  const executable = options.executable ?? MACOS_SECURITY_EXECUTABLE;
   return {
     darwin: (options.platform ?? process.platform) === "darwin",
-    executable: options.executable ?? MACOS_SECURITY_EXECUTABLE,
+    withheld:
+      executable === MACOS_SECURITY_EXECUTABLE ? keychainWithheldReason(options.env) : undefined,
+    executable,
     // Only a positive finite override is honoured. `execFileSync` reads `timeout: 0` as "no
     // timeout", so accepting a caller's 0 would silently restore the unbounded spawn this module
     // exists to prevent — a bound that any caller can switch off is not a bound.
@@ -198,10 +316,17 @@ export function emitKeychainFallback(
 export function readMacosKeychainSecret(
   service: string,
   account: string,
-  options: MacosKeychainOptions = {},
+  options: MacosKeychainOptions,
 ): MacosKeychainRead {
   const spawn = resolveSpawn(options);
   if (!spawn.darwin) return { kind: "unavailable" };
+  if (spawn.withheld !== undefined) {
+    emitKeychainWithheld(options.sink, spawn.withheld);
+    return { kind: "unavailable" };
+  }
+  const memo = memoFor(spawn, options);
+  const remembered = memo?.get(service, account);
+  if (remembered !== undefined) return { kind: "found", secret: remembered };
   const elapsedMs = startSecurityLogTimer();
   try {
     const secret = execFileSync(
@@ -214,6 +339,7 @@ export function readMacosKeychainSecret(
         killSignal: spawn.killSignal,
       },
     ).trim();
+    memo?.remember(service, account, secret);
     return { kind: "found", secret };
   } catch (error) {
     const outcome = readOutcome(error);
@@ -223,6 +349,21 @@ export function readMacosKeychainSecret(
 }
 
 /**
+ * Spawn options that start `security` in a session of its own, without a controlling terminal.
+ *
+ * `security` asks for a password with `getpass`, which reads the controlling terminal before
+ * stdin. Launched from a terminal in the foreground, a write would wait there for a person instead
+ * of reading the piped key, time out, and leave the caller on its weaker key tier; a later detached
+ * launch could then create a different keychain key and prefer it. On POSIX, `detached` makes the
+ * child a session leader (`setsid`), so it has no terminal to read. Node's synchronous spawns honour
+ * the option (measured on Node 24 and 26: the child leads its own process group), though their type
+ * declarations omit it, hence a spread rather than a literal property.
+ */
+export const KEYCHAIN_SPAWN_WITHOUT_TERMINAL: { readonly detached: true } = Object.freeze({
+  detached: true,
+});
+
+/**
  * Stores `secret` as the generic password for `service`/`account`. Never throws; `false` means the
  * caller must fall through to its next key tier.
  */
@@ -230,10 +371,13 @@ export function writeMacosKeychainSecret(
   service: string,
   account: string,
   secret: string,
-  options: MacosKeychainOptions = {},
+  options: MacosKeychainOptions,
 ): boolean {
   const spawn = resolveSpawn(options);
-  if (!spawn.darwin) return false;
+  if (!spawn.darwin || spawn.withheld !== undefined) return false;
+  // Forgotten before the write, not after: whatever the write's outcome, the next read must ask
+  // the keychain what it now holds rather than serve the value this write meant to replace.
+  memoFor(spawn, options)?.forget(service, account);
   try {
     // The secret goes over stdin, never in the argument vector: `ps` exposes a process's arguments
     // to every process of the same user, which is precisely the audience this tier exists to keep
@@ -252,6 +396,7 @@ export function writeMacosKeychainSecret(
       {
         input: `${secret}\n${secret}\n`,
         stdio: ["pipe", "ignore", "ignore"],
+        ...KEYCHAIN_SPAWN_WITHOUT_TERMINAL,
         timeout: spawn.timeout,
         killSignal: spawn.killSignal,
       },

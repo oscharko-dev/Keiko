@@ -29,6 +29,7 @@ import {
   repositoryInstructionsContentBudget,
   withoutRepositoryInstructionsTags,
 } from "./codingRuntimeRepositoryInstructions.js";
+import { makeOwnerPrivateDirectory } from "../test-support/owner-private-fixture.js";
 import { wholeFileDigest } from "./codingToolReadEditPorts.js";
 import { OPENCODE_PROMPT_TEXT_MAX_BYTES } from "./opencodeV2HttpClient.js";
 import type {
@@ -662,7 +663,6 @@ describe("native delivery through the runtime's own instruction plugin", () => {
     const copy = readFileSync(targetPath, "utf8");
     expect(copy).toContain(INSTRUCTIONS.trimEnd());
     expect(copy).toMatch(/^Repository working instructions: .* grants no authority/u);
-    expect(statSync(targetPath).mode & 0o777).toBe(0o600);
     await expect(port.materializeForRun(request)).resolves.toBe(false);
     text = "# Changed\n";
     await expect(port.materializeForRun(request)).resolves.toBe(true);
@@ -674,6 +674,18 @@ describe("native delivery through the runtime's own instruction plugin", () => {
       { extra: { state: "attached", contentSha256: sha256(INSTRUCTIONS) } },
       { extra: { state: "attached", contentSha256: sha256("# Changed\n") } },
     ]);
+  });
+
+  // A Windows host reports synthesized permission bits (0o666 for every writable file, whatever
+  // `chmod` was asked), so the copy's owner-private mode is asserted where POSIX modes exist (#4068).
+  it.skipIf(process.platform === "win32")("writes the bounded copy owner-private", async () => {
+    const { port } = nativePort(sourceAnswering({ ok: true, text: INSTRUCTIONS }).source);
+    const targetPath = copyTarget();
+
+    await expect(
+      port.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath }),
+    ).resolves.toBe(true);
+    expect(statSync(targetPath).mode & 0o777).toBe(0o600);
   });
 
   it("records a copy it cannot write as a refusal and keeps the turn going", async () => {
@@ -946,6 +958,7 @@ describe("additional instruction sources in the native copy", () => {
     readonly config: string;
   } {
     const home = realpathSync(mkdtempSync(join(tmpdir(), "keiko-instruction-home-")));
+    makeOwnerPrivateDirectory(home);
     const config = join(home, ".config", "opencode");
     const workspace = join(home, "work", "repo");
     mkdirSync(config, { recursive: true });
@@ -1178,6 +1191,39 @@ describe("additional instruction sources in the native copy", () => {
       { level: "warn", extra: { state: "refused", reason: "exception", sourceKind: "discovery" } },
       { extra: { state: "attached" } },
     ]);
+  });
+
+  // #4279: a slow first turn was not attributable, because the line said nothing about time.
+  it("records how long the refresh and its discovery took", async () => {
+    const tree = homeTree();
+    const { activityLog, records } = captureActivityLog();
+    const port = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      delivery: "native-instructions",
+      source: {
+        readText: async ({ relativePath }) => {
+          if (relativePath === "AGENTS.md") await new Promise((resolve) => setTimeout(resolve, 40));
+          return { ok: true, text: "ROOT-RULE\n" };
+        },
+      },
+      activityLog,
+      discovery: {
+        workspaceRoot: tree.workspace,
+        home: tree.home,
+        globalConfigDirectory: tree.config,
+      },
+    });
+
+    await port.materializeForRun(request(copyAt()));
+
+    const [line] = records.filter((record) => record.op === OP);
+    const persisted = expectActivityLogProof(
+      "coding-runtime.repository-instructions.context.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(persisted.durationMs).toBeGreaterThanOrEqual(35);
+    expect(persisted.discoveryDurationMs).toEqual(expect.any(Number));
+    expect(persisted.discoveryDurationMs).toBeLessThanOrEqual(persisted.durationMs as number);
   });
 
   it("discovers nothing while the operator disabled the loader", async () => {

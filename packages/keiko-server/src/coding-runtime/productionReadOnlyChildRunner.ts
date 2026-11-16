@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 
-import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   createLegacyPortCatalogFactory,
   createSession,
@@ -33,7 +32,8 @@ import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 export interface ProductionReadOnlyChildRunnerDeps {
   readonly modelPortFactory: (modelId: string) => ModelPort | undefined;
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
-  readonly reservePromptTokens: (promptTokens: number) => boolean;
+  /** Admits one child model call (the run's authority and repair limits); books no tokens. */
+  readonly admitModelCall: () => boolean;
 }
 
 // #3407: `keiko.child.workspace.read@1` is the reserved canonical identity (ADR-0175 D2) for the
@@ -151,7 +151,8 @@ export interface ReadOnlyHarnessToolset {
 /** One bounded read-only harness session (#2387; generalized for the #4136 counter-check). */
 export interface ReadOnlyHarnessSessionSpec {
   readonly model: ModelPort;
-  readonly reservePromptTokens: (promptTokens: number) => boolean;
+  /** Admits one model call of the session; books no tokens (#4346). */
+  readonly admitModelCall: () => boolean;
   readonly sessionId: string;
   readonly objective: string;
   readonly modelId: string;
@@ -197,7 +198,7 @@ function buildHarnessSession(
       limits: childLimits(spec.maxToolCalls, spec.maxWallTimeMs ?? CHILD_DEFAULT_WALL_TIME_MS),
     },
     {
-      model: budgetedChildModel(spec.model, spec.reservePromptTokens, spec.onUsage),
+      model: admittedChildModel(spec.model, spec.admitModelCall, spec.onUsage),
       tools: toolset.tools,
       // #3407: dispatch through the mandatory catalog path, bound to the session's reserved
       // profile. Every call still runs through the toolset's execute() -- the same
@@ -257,7 +258,7 @@ async function runChildSession(
   let successfulReads = 0;
   const finished = await runReadOnlyHarnessSession({
     model,
-    reservePromptTokens: deps.reservePromptTokens,
+    admitModelCall: deps.admitModelCall,
     sessionId: input.envelope.childRunId,
     objective: input.objective,
     modelId: input.modelId,
@@ -283,15 +284,15 @@ async function runChildSession(
   };
 }
 
-function budgetedChildModel(
+function admittedChildModel(
   model: ModelPort,
-  reservePromptTokens: (promptTokens: number) => boolean,
+  admitModelCall: () => boolean,
   onUsage: ReadOnlyHarnessSessionSpec["onUsage"],
 ): ModelPort {
   const stream = model.callStream;
   return {
     call: async (request, signal): Promise<Awaited<ReturnType<ModelPort["call"]>>> => {
-      reserveChildPrompt(request, reservePromptTokens);
+      admitChildCall(admitModelCall);
       const response = await model.call(request, signal);
       reportUsage(onUsage, response);
       return response;
@@ -300,19 +301,21 @@ function budgetedChildModel(
       ? {}
       : {
           callStream: (request: GatewayRequest, signal: AbortSignal) =>
-            budgetedChildStream(stream, request, signal, reservePromptTokens, onUsage),
+            admittedChildStream(stream, request, signal, admitModelCall, onUsage),
         }),
   };
 }
 
-async function* budgetedChildStream(
+// Admission runs when the stream is iterated, as before the call is dispatched. The chunks pass
+// through unchanged; the closing chunk's usage is reported (counts only).
+async function* admittedChildStream(
   stream: NonNullable<ModelPort["callStream"]>,
   request: GatewayRequest,
   signal: AbortSignal,
-  reservePromptTokens: (promptTokens: number) => boolean,
+  admitModelCall: () => boolean,
   onUsage: ReadOnlyHarnessSessionSpec["onUsage"],
 ): AsyncIterable<GatewayStreamChunk> {
-  reserveChildPrompt(request, reservePromptTokens);
+  admitChildCall(admitModelCall);
   for await (const chunk of stream(request, signal)) {
     if (chunk.type === "done") reportUsage(onUsage, chunk.response);
     yield chunk;
@@ -331,38 +334,8 @@ function reportUsage(
   });
 }
 
-function reserveChildPrompt(
-  request: GatewayRequest,
-  reservePromptTokens: (promptTokens: number) => boolean,
-): void {
-  if (!reservePromptTokens(childPromptTokenEstimate(request))) {
-    throw new Error("child-prompt-budget-exhausted");
-  }
-}
-
-function childPromptTokenEstimate(request: GatewayRequest): number {
-  const messages = request.messages.map((message) =>
-    JSON.stringify({
-      role: message.role,
-      content: message.content,
-      contentParts: message.contentParts,
-      toolCallId: message.toolCallId,
-      toolCalls: message.toolCalls,
-    }),
-  );
-  const tools =
-    request.toolCatalog === undefined
-      ? []
-      : [
-          JSON.stringify(
-            request.toolCatalog.kind === "native"
-              ? request.toolCatalog.tools
-              : request.toolCatalog.projection.tools,
-          ),
-        ];
-  const responseFormat =
-    request.responseFormat === undefined ? [] : [JSON.stringify(request.responseFormat)];
-  return Math.max(1, estimateTokensForSegments([...messages, ...tools, ...responseFormat]));
+function admitChildCall(admitModelCall: () => boolean): void {
+  if (!admitModelCall()) throw new Error("child-model-call-denied");
 }
 
 function readOnlyTools(

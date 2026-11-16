@@ -22,6 +22,8 @@ export const CORRELATION_RESPONSE_HEADER = "X-Keiko-Correlation-Id";
 // so a client can neither inject response headers nor bloat the diagnostic log. A shape-valid
 // value must also survive the existing label policy unchanged: otherwise later redaction would
 // replace a request/parent identity with a marker that the canonical reader cannot authenticate.
+const requestCorrelations = new WeakMap<IncomingMessage, string>();
+
 const SAFE_CORRELATION_ID = /^[A-Za-z0-9._-]{8,128}$/;
 
 export function isValidCorrelationId(value: string): boolean {
@@ -53,10 +55,15 @@ export function correlationIdOrUnknown(value: string | undefined): string {
 // Resolves the correlation id for a request: reuse a well-formed client-supplied id (UI -> server
 // continuity) or mint a fresh one. Never throws.
 export function resolveCorrelationId(req: IncomingMessage): string {
+  const existing = requestCorrelations.get(req);
+  if (existing !== undefined) return existing;
   const header = req.headers[CORRELATION_HEADER];
   const candidate = Array.isArray(header) ? header[0] : header;
   if (typeof candidate === "string" && isValidCorrelationId(candidate)) {
+    requestCorrelations.set(req, candidate);
     return candidate;
   }
-  return newCorrelationId();
+  const correlation = newCorrelationId();
+  requestCorrelations.set(req, correlation);
+  return correlation;
 }

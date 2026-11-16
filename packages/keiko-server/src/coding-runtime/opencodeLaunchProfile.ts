@@ -76,6 +76,8 @@ export interface OpenCodeAgentModelsInput {
 }
 
 export interface OpenCodeContextGeometry {
+  readonly reasoningContinuation?: "required-with-tools" | undefined;
+  readonly continuationRouteDigest?: string | undefined;
   readonly contextWindowTokens: number;
   readonly maxInputTokens: number;
   readonly maxOutputTokens: number;
@@ -153,7 +155,7 @@ export const OPENCODE_RUNTIME_PROVIDER_ID = "keiko-runtime";
 
 /**
  * The producer's own provider policy, fixed on every V2 profile: only the gateway-bound provider may
- * be used. Without it the pinned 2.1.4 runtime lists OpenCode's hosted free models and discovers
+ * be used. Without it the pinned runtime lists OpenCode's hosted free models and discovers
  * local servers such as Ollama on their default loopback ports (original executable), each a model
  * route that bypasses the Model Gateway. Statements are ordered; the last match wins.
  */
@@ -165,17 +167,73 @@ export const OPENCODE_GATEWAY_PROVIDER_POLICIES = Object.freeze([
     effect: "allow",
   }),
 ]);
+/**
+ * Built-in plugins no run loads, each a refused disposition of the service inventory. Removing a
+ * plugin at its source keeps its command, tool and permission rules out of the run. The browser
+ * plugin matters for more than its tools: its `skill` rule for one resource follows Keiko's whole
+ * `skill` denial, and the producer only hides a tool whose last matching rule denies everything.
+ */
+export const OPENCODE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze([
+  "opencode.browser",
+  // It reads and watches `.claude` and `.agents` skill directories, also under the run's private
+  // home, where a shell can write. Keiko admits those skills itself as sanitized copies.
+  "opencode.config.compatibility",
+  "opencode.goal",
+  "opencode.provider.claude-agent",
+  // A local provider asks its default loopback port every 30 s whether a model server runs there,
+  // and reloads the catalog when one does. The provider policy would refuse the models anyway.
+  "opencode.provider.lmstudio",
+  "opencode.provider.ollama",
+  "opencode.provider.vllm",
+  "opencode.tool.artifact",
+  "opencode.tool.image-generate",
+  "opencode.tool.schedule",
+]);
+
+/**
+ * The built-in plugins only the native profile loads (ADR-0137 D10, #4271): scheduled wakes of a
+ * session. Keiko holds the producer's scheduler lease in every native run and releases it only in
+ * the wake run it starts at a schedule's due time (`opencodeScheduleLease.ts`).
+ */
+export const OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS = Object.freeze(["opencode.tool.schedule"]);
+
+/** What a native run withholds: every withheld plugin except the ones it admits. */
+export const OPENCODE_NATIVE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze(
+  OPENCODE_WITHHELD_BUILT_IN_PLUGINS.filter(
+    (plugin) => !OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS.includes(plugin),
+  ),
+);
+
+const OPENCODE_PLUGIN_REMOVALS = Object.freeze(
+  OPENCODE_WITHHELD_BUILT_IN_PLUGINS.map((plugin) => `-${plugin}`),
+);
+
+const OPENCODE_NATIVE_PLUGIN_REMOVALS = Object.freeze(
+  OPENCODE_NATIVE_WITHHELD_BUILT_IN_PLUGINS.map((plugin) => `-${plugin}`),
+);
+
+/** Experimental switches stated explicitly, so a changed producer default cannot open one. */
+const OPENCODE_CLOSED_EXPERIMENTS = Object.freeze({
+  artifacts: false,
+  image_generate: false,
+  // A session idle for an hour would otherwise unload the directory's plugins and tools under a
+  // run Keiko still holds; Keiko alone bounds the runtime's lifetime.
+  location_idle_timeout: false,
+  media_blob: false,
+  schedules: false,
+});
+
 export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 
 export const OPENCODE_GOVERNED_COMPACTION_PROMPT = `Preserve the exact accepted coding task and enough verified state to continue it correctly. Retain acceptance criteria, constraints, current plan, relevant files and symbols, completed edits, observed failing-before evidence, later verification results, unresolved failures, and immediate next actions. Distinguish verified facts from assumptions. Never report an unrun check as passed, weaken or remove regression coverage, redo a completed failing-before step solely because of compaction, or lose the current user task.`;
 
 /**
- * Replaces the pinned child's model-family default system prompt (v1.18.30 resolves the unknown
+ * Replaces the pinned child's model-family default system prompt (the pinned runtime resolves the unknown
  * model id "coding" to its built-in-tool coding prompt). That default teaches bash/grep/glob/edit
  * workflows and "fewer than 4 lines" text answers while this config removes every built-in tool,
  * which live models followed into text-only turns that never reached a keiko_* tool (#2680
- * follow-up). The v1.18.30 child uses `agent.build.prompt` verbatim INSTEAD of that default and
+ * follow-up). The pinned child uses `agent.build.prompt` verbatim INSTEAD of that default and
  * still appends its environment block after it. Every OPENCODE_MODEL_VISIBLE_TOOL_NAMES entry
  * must stay documented here; the launch-profile test enforces that coupling.
  */
@@ -248,7 +306,7 @@ export function buildOpenCodeLaunchProfile(
     executable: input.executable,
     args: ["serve", "--hostname", "127.0.0.1", "--port", "0"],
     env: launchEnvironment(input, formatter, configValue, secret),
-    config: JSON.stringify(configValue),
+    config: JSON.stringify(materializedConfiguration(input, configValue)),
     configValue,
     ...nativeFormatterFacts(input, formatter),
   };
@@ -284,7 +342,9 @@ function launchEnvironment(
     OPENCODE_DISABLE_PROJECT_CONFIG: "true",
     // The native and review profiles pin the fields no layer below Keiko may change (the review
     // agent and its system prompt among them, ADR-0182 D2) as the runtime's last configuration word.
-    ...(input.toolProfile === "native" || input.toolProfile === "review"
+    ...(input.toolProfile === "native" ||
+    input.toolProfile === "review" ||
+    input.contextGeometry?.reasoningContinuation === "required-with-tools"
       ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(nativeServerOwnedBinding(configValue)) }
       : {}),
     ...packageManagerEnvironment(input, formatter),
@@ -332,9 +392,33 @@ function nativeFormatterFacts(
   };
 }
 
+function validContinuationMetadata(metadata: {
+  readonly continuationRouteDigest?: unknown;
+  readonly reasoningContinuation?: unknown;
+}): boolean {
+  const { continuationRouteDigest: digest, reasoningContinuation: policy } = metadata;
+  if (digest !== undefined && (typeof digest !== "string" || !/^[a-f0-9]{64}$/u.test(digest)))
+    return false;
+  return policy === undefined || (policy === "required-with-tools" && digest !== undefined);
+}
+
+function continuationGeometryFields(
+  metadata: CodingWorkbenchSidecarGatewayRunMetadata,
+): Pick<OpenCodeContextGeometry, "reasoningContinuation" | "continuationRouteDigest"> {
+  return {
+    ...(metadata.reasoningContinuation === undefined
+      ? {}
+      : { reasoningContinuation: metadata.reasoningContinuation }),
+    ...(metadata.continuationRouteDigest === undefined
+      ? {}
+      : { continuationRouteDigest: metadata.continuationRouteDigest }),
+  };
+}
+
 export function resolveOpenCodeContextGeometry(
   metadata: CodingWorkbenchSidecarGatewayRunMetadata,
 ): OpenCodeContextGeometry | undefined {
+  if (!validContinuationMetadata(metadata)) return undefined;
   const { maxPromptTokens, maxOutputTokens, maxRequestBytes } = metadata;
   if (
     ![maxPromptTokens, maxOutputTokens, maxRequestBytes, metadata.maxInputMessages].every(
@@ -357,6 +441,7 @@ export function resolveOpenCodeContextGeometry(
   if (!Number.isSafeInteger(maxInputTokens)) return undefined;
   if (maxInputTokens <= 0) return undefined;
   return {
+    ...continuationGeometryFields(metadata),
     contextWindowTokens: maxInputTokens + maxOutputTokens,
     maxInputTokens,
     maxOutputTokens,
@@ -395,7 +480,7 @@ function fixedOpenCodeProvider(
       },
       options: {
         baseURL: "{env:KEIKO_MODEL_GATEWAY_URL}",
-        // The pinned v1.18.30 child defaults provider chunks to 10 seconds. Coding turns can
+        // The pinned child (`OPENCODE_PINNED_VERSION`) defaults provider chunks to 10 seconds. Coding turns can
         // legitimately reason longer while Keiko's gateway still enforces its shorter provider
         // deadline; align the child watchdog with the outer hard turn/authority ceiling.
         chunkTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,
@@ -618,8 +703,10 @@ function createGovernedOpenCodeV2Config(
     default_agent: "build",
     providers: fixedOpenCodeV2Provider(contextGeometry, { image: false, pdf: false }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
+    plugins: OPENCODE_PLUGIN_REMOVALS,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    experimental: OPENCODE_CLOSED_EXPERIMENTS,
     permissions,
   };
 }
@@ -687,12 +774,14 @@ function createNativeOpenCodeV2Config(
       ? {}
       : { agents: agentModels.agents }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
+    plugins: OPENCODE_NATIVE_PLUGIN_REMOVALS,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     // The producer offers its plan tool (`todowrite`) only under this switch; Keiko classifies the
     // update as a read in every mode and projects it as the plan card (parity row T19, owner
     // decision of 2026-10-24).
-    experimental: { todo: true },
+    // Its schedule tools need their switch; a schedule wakes the session only in Keiko's wake run.
+    experimental: { ...OPENCODE_CLOSED_EXPERIMENTS, todo: true, schedules: true },
     // The operator's admitted MCP servers, and nothing else (#3903, `opencodeNativeMcp.ts`).
     mcp,
     // The operator's accepted external references, as the producer's own local references
@@ -751,6 +840,20 @@ function openCodeNativeReferences(
 }
 
 /**
+ * The configuration file sits in the run's private state, which a shell child can read, and a
+ * relayed MCP server's binding carries that run's capability. The native profile therefore keeps
+ * the MCP servers in the server-owned binding alone, whose copy in the exec environment the
+ * launch-secrets plugin overwrites; the runtime merges that binding after this file.
+ */
+function materializedConfiguration(
+  input: OpenCodeLaunchProfileInput,
+  config: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  if (input.toolProfile !== "native") return config;
+  return Object.fromEntries(Object.entries(config).filter(([key]) => key !== "mcp"));
+}
+
+/**
  * The fields no layer below Keiko may change: the single gateway-bound provider and model, the
  * provider policy that admits no other provider, the mode-independent permission floor, the self-update and sharing switches, and the built-in
  * formatter setting (a child process the permission hook never sees, so no layer may turn it on
@@ -797,6 +900,9 @@ function providerModel(
 ): Readonly<Record<string, unknown>> {
   return {
     name,
+    ...(geometry.reasoningContinuation === "required-with-tools"
+      ? { compatibility: { reasoningField: "reasoning_content", requireReasoning: true } }
+      : {}),
     capabilities: {
       tools: true,
       input: ["text", ...(media.image ? ["image"] : []), ...(media.pdf ? ["pdf"] : [])],

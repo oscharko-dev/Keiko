@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -30,7 +31,12 @@ import {
   type CodingToolReadEditPortDeps,
   type CodingToolReadEditPorts,
 } from "./codingToolReadEditPorts.js";
-import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
+import {
+  secureWorkspaceTextDigest,
+  type SecureWorkspaceTextReadPort,
+  type SecureWorkspaceTextReadResult,
+} from "./secureWorkspaceTextRead.js";
+import { decodeSecureWorkspaceText } from "./secureWorkspaceTextReadProtocol.js";
 import type {
   RuntimeChangesetApplyInput,
   RuntimeChangesetApplyPort,
@@ -220,7 +226,8 @@ function createFixturePorts({
       },
     },
     activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
-    secureWorkspaceTextRead: { readText: vi.fn() },
+    secureWorkspaceTextRead: diskTextRead(fixture.root),
+    resolveRepositoryReadContext: (): ProducerBinding => binding,
     editorAgentClient: { action: vi.fn(), listSessions },
     resolveEditorActionContext: (): ReturnType<
       CodingToolReadEditPortDeps["resolveEditorActionContext"]
@@ -247,6 +254,19 @@ function createFixturePorts({
     mutationLeaseCoordinator: coordinator,
     serverRuntimeChangeset: apply,
   });
+}
+
+// The secure read's own decoding of the file's real bytes (the helper process only carries them),
+// so the read tool's digest and the materializer's precondition see what production reads see.
+function diskTextRead(root: string): SecureWorkspaceTextReadPort {
+  return {
+    readText: ({ relativePath }): Promise<SecureWorkspaceTextReadResult> => {
+      const path = join(root, relativePath);
+      if (!existsSync(path)) return Promise.resolve({ ok: false, reason: "not-found" });
+      const decoded = decodeSecureWorkspaceText(readFileSync(path));
+      return Promise.resolve(decoded.ok ? { ok: true, text: decoded.text } : decoded);
+    },
+  };
 }
 
 function editRequest(): Parameters<CodingToolReadEditPorts["editorChangeset"]["execute"]>[0] {
@@ -602,6 +622,102 @@ describe("Coding Workbench allowed edits without a browser bridge", () => {
     expect(readFileSync(join(fixture.root, "component.tsx"), "utf8")).toBe("before\n");
     expect(await fixture.coordinator.waitForIdle(new AbortController().signal)).toBe(
       "idle-succeeded",
+    );
+  });
+});
+
+// 2026-11-06: every keiko_changeset_edit of a file that starts with a UTF-8 byte order mark was
+// refused CONTENT_HASH_MISMATCH (a BOM + CRLF file as Windows PowerShell 5 writes it). The read
+// tool and the materializer see the secure read's decoded text, which has no mark; the patch
+// inspection hashed the raw text with it. Each file goes from the model's read through the
+// replacement edit to the route's inspection and write, every step on its production code.
+describe("files with and without a UTF-8 byte order mark from the read to the write", () => {
+  const BOM = "﻿";
+  const guard = (fixture: PortFixture): CodingToolMutationGuard => ({
+    check: (): true => true,
+    binding: fixture.binding,
+  });
+
+  async function readDigest(fixture: PortFixture): Promise<string> {
+    const read = await fixture.ports.repositoryRead.execute(
+      {
+        action: "read",
+        actionId: "read-greet",
+        idempotencyKey: "read-greet-key",
+        relativePath: "greet.js",
+      },
+      undefined,
+      guard(fixture),
+    );
+    if (read.status !== "completed" || read.read === undefined) {
+      throw new Error("expected a completed read");
+    }
+    return read.read.digest;
+  }
+
+  function editGreet(
+    fixture: PortFixture,
+    digest: string,
+    oldString: string,
+    newString: string,
+  ): ReturnType<CodingToolReadEditPorts["editorChangeset"]["execute"]> {
+    return fixture.ports.editorChangeset.execute(
+      {
+        action: "edit",
+        actionId: "edit-greet",
+        idempotencyKey: "edit-greet-key",
+        changeset: {
+          edits: [{ file: "greet.js", oldString, newString }],
+          files: [{ file: "greet.js", expectedContentHash: digest }],
+        },
+      },
+      undefined,
+      guard(fixture),
+    );
+  }
+
+  function refusals(fixture: PortFixture): readonly ServerLogEvent[] {
+    return fixture.events.filter((event) => event.op === "coding-runtime.edit.refused");
+  }
+
+  it.each([
+    ["a mark and LF", `${BOM}const greeting = "hi";\nconsole.log(greeting);\n`],
+    ["a mark and CRLF", `${BOM}const greeting = "hi";\r\nconsole.log(greeting);\r\n`],
+    ["no mark and CRLF", `const greeting = "hi";\r\nconsole.log(greeting);\r\n`],
+  ])("edits the first line of a file with %s and keeps every other byte", async (_name, source) => {
+    const fixture = portFixture();
+    writeFileSync(join(fixture.root, "greet.js"), source, "utf8");
+
+    const digest = await readDigest(fixture);
+    const outcome = await editGreet(
+      fixture,
+      digest,
+      'const greeting = "hi";',
+      'const greeting = "hello";',
+    );
+
+    expect(refusals(fixture)).toEqual([]);
+    expect(outcome).toEqual({ status: "completed" });
+    expect(readFileSync(join(fixture.root, "greet.js"))).toEqual(
+      Buffer.from(source.replace('"hi"', '"hello"'), "utf8"),
+    );
+  });
+
+  it.each([
+    ["an empty file", ""],
+    ["a file that holds only a mark", BOM],
+  ])("fills %s through the empty-content digest", async (_name, source) => {
+    const fixture = portFixture();
+    writeFileSync(join(fixture.root, "greet.js"), source, "utf8");
+
+    const digest = await readDigest(fixture);
+    const outcome = await editGreet(fixture, digest, "", 'console.log("hi");\n');
+
+    expect(digest).toBe(secureWorkspaceTextDigest(""));
+    expect(refusals(fixture)).toEqual([]);
+    expect(outcome).toEqual({ status: "completed" });
+    expect(readFileSync(join(fixture.root, "greet.js"))).toEqual(
+      Buffer.from(`${source}console.log("hi");\n`, "utf8"),
     );
   });
 });

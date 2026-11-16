@@ -10,10 +10,15 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantOthersWrite,
+  makeOwnerPrivateDirectory,
+} from "../test-support/owner-private-fixture.js";
 import {
   configuredInstructionEntries,
   discoverInstructionSources,
@@ -78,6 +83,7 @@ describe("discoverInstructionSources", () => {
   } {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-instruction-sources-")));
     created.push(root);
+    makeOwnerPrivateDirectory(root);
     const home = join(root, "home");
     const config = join(home, ".config", "opencode");
     const repository = join(home, "projects", "repo");
@@ -145,7 +151,8 @@ describe("discoverInstructionSources", () => {
     writeFileSync(join(home, "outside.txt"), "ALIASED\n");
     linkSync(join(home, "outside.txt"), join(repository, "AGENTS.md"));
     writeFileSync(join(config, "AGENTS.md"), "WORLD-WRITABLE\n");
-    chmodSync(join(config, "AGENTS.md"), 0o666);
+    if (process.platform === "win32") grantOthersWrite(join(config, "AGENTS.md"));
+    else chmodSync(join(config, "AGENTS.md"), 0o666);
     writeFileSync(join(home, "AGENTS.md"), Buffer.from([0xff, 0xfe, 0x00]));
     const found = await discoverInstructionSources({
       workspaceRoot: workspace,
@@ -156,6 +163,52 @@ describe("discoverInstructionSources", () => {
     expect(found.sources).toEqual([]);
     expect([...found.refused].sort()).toEqual(["linked-file", "not-owner-private", "not-text"]);
   });
+
+  // #4068 W7: a global entry may name the user's own file anywhere, but only on a local drive. A
+  // pipe, a UNC share or a stream of a real file is refused before any lstat could reach it.
+  it.runIf(process.platform === "win32")(
+    "refuses a global pipe, UNC and stream entry on Windows without touching the pipe",
+    async () => {
+      const { home, config, workspace } = tree();
+      writeFileSync(join(home, "notes.md"), "VISIBLE\n");
+      writeFileSync(`${join(home, "notes.md")}:hidden`, "STREAM-RULE\n");
+      const pipe = String.raw`\\.\pipe\keiko-instruction-sources-` + String(process.pid);
+      let connections = 0;
+      const server = createServer((socket) => {
+        connections += 1;
+        socket.destroy();
+      });
+      await new Promise<void>((resolve) => server.listen(pipe, resolve));
+      try {
+        writeFileSync(
+          join(config, "opencode.json"),
+          JSON.stringify({
+            instructions: [
+              pipe,
+              String.raw`\\keiko-unreachable.invalid\share\AGENTS.md`,
+              `${join(home, "notes.md")}:hidden`,
+            ],
+          }),
+        );
+        const found = await discoverInstructionSources({
+          workspaceRoot: workspace,
+          home,
+          globalConfigDirectory: config,
+          workspace: workspacePort(workspace),
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(found.sources).toEqual([]);
+        expect(found.refused).toEqual(["not-regular-file", "not-regular-file", "not-regular-file"]);
+        expect(connections).toBe(0);
+      } finally {
+        await new Promise<void>((resolve) =>
+          server.close(() => {
+            resolve();
+          }),
+        );
+      }
+    },
+  );
 
   it("refuses a pattern the walker cannot express instead of approximating it", async () => {
     const { home, config, workspace } = tree();
@@ -181,12 +234,14 @@ describe("instruction discovery bounds", () => {
   });
 
   it("resolves the global configuration directory as the producer does", () => {
-    expect(globalOpenCodeConfigDirectory({}, "/Users/me")).toBe("/Users/me/.config/opencode");
+    expect(globalOpenCodeConfigDirectory({}, "/Users/me")).toBe(
+      join("/Users/me", ".config", "opencode"),
+    );
     expect(globalOpenCodeConfigDirectory({ XDG_CONFIG_HOME: "/x/config" }, "/Users/me")).toBe(
-      "/x/config/opencode",
+      join("/x/config", "opencode"),
     );
     expect(globalOpenCodeConfigDirectory({ XDG_CONFIG_HOME: "relative" }, "/Users/me")).toBe(
-      "/Users/me/.config/opencode",
+      join("/Users/me", ".config", "opencode"),
     );
   });
 

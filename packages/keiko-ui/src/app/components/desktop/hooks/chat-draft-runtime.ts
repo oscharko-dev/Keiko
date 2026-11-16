@@ -1,6 +1,12 @@
-import type { ChatDraft } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatDraft, ChatDraftUpdate } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError } from "@/lib/api";
-import { readChatDraft, writeChatDraft } from "@/lib/chat-draft-api";
+import {
+  readChatDraft,
+  readCodingWorkbenchDraft,
+  writeChatDraft,
+  writeCodingWorkbenchDraft,
+  type PrivateDraftSurface,
+} from "@/lib/chat-draft-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
@@ -8,22 +14,44 @@ import { bffRequestErrorKind } from "@/lib/http";
 
 import { dirty, type DraftEntry, type DraftPhase } from "./chat-draft-state";
 
-function reportFailure(error: unknown): void {
-  reportClientDiagnostic("Private chat draft request failed.", {
+// A read refused as an access decision (a browser not yet paired, or a session that has not reached
+// this request yet) settles as the designed `unavailable` phase and is read again once the session
+// changes. The server's `chat.draft.operation` line already records that refusal, so it is no client
+// failure (#4068). A refused save still is: the typed text was not kept.
+function reportFailure(error: unknown, action: "read" | "save", phase: DraftPhase): void {
+  if (action === "read" && phase === "unavailable") return;
+  reportClientDiagnostic(`Private chat draft ${action} failed.`, {
     correlationId: correlationIdOf(error),
     errorKind: bffRequestErrorKind(error),
     errorEvidence: clientErrorEvidence(error),
   });
 }
-function failurePhase(error: unknown): DraftPhase {
+function failurePhase(error: unknown, action: "read" | "save"): DraftPhase {
   if (error instanceof ApiError && error.status === 409) return "conflict";
-  if (error instanceof ApiError && error.status === 404) return "unavailable";
-  return "failed";
+  if (error instanceof ApiError && [401, 403, 404].includes(error.status)) return "unavailable";
+  return action === "read" ? "load-failed" : "failed";
 }
 
 function canSave(chatId: string, entry: DraftEntry): boolean {
   return chatId !== "" && !entry.pending && !entry.conflict && entry.phase === "unsaved";
 }
+
+interface DraftTransport {
+  readonly read: (key: string) => Promise<ChatDraft>;
+  readonly write: (key: string, update: ChatDraftUpdate) => Promise<ChatDraft>;
+}
+
+// Bound at call time, so each surface reaches only its own endpoint.
+const DRAFT_TRANSPORTS: Readonly<Record<PrivateDraftSurface, DraftTransport>> = {
+  chat: {
+    read: (key) => readChatDraft(key),
+    write: (key, update) => writeChatDraft(key, update),
+  },
+  "coding-workbench": {
+    read: (key) => readCodingWorkbenchDraft(key),
+    write: (key, update) => writeCodingWorkbenchDraft(key, update),
+  },
+};
 
 export interface DraftRuntimeState {
   readonly entries: ReadonlyMap<string, DraftEntry>;
@@ -32,10 +60,14 @@ export interface DraftRuntimeState {
   readonly replaced: () => void;
   readonly schedule: (chatId: string, entry: DraftEntry) => void;
   readonly hasUnsaved: () => boolean;
+  readonly surface: PrivateDraftSurface;
 }
 
 export class ChatDraftActions {
-  constructor(private readonly state: DraftRuntimeState) {}
+  private readonly transport: DraftTransport;
+  constructor(private readonly state: DraftRuntimeState) {
+    this.transport = DRAFT_TRANSPORTS[state.surface];
+  }
   private applyRead(entry: DraftEntry, remote: ChatDraft): void {
     const previousText = entry.text;
     if (!dirty(entry)) {
@@ -66,13 +98,13 @@ export class ChatDraftActions {
     entry.pending = true;
     this.state.changed();
     try {
-      const remote = await readChatDraft(chatId);
+      const remote = await this.transport.read(chatId);
       if (!entry.disposed) this.applyRead(entry, remote);
     } catch (error) {
       if (entry.disposed) return;
-      entry.phase = failurePhase(error);
+      entry.phase = failurePhase(error, "read");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error);
+      reportFailure(error, "read", entry.phase);
     } finally {
       this.settled(chatId, entry);
     }
@@ -107,7 +139,7 @@ export class ChatDraftActions {
     entry.phase = "saving";
     this.state.changed();
     try {
-      const saved = await writeChatDraft(chatId, {
+      const saved = await this.transport.write(chatId, {
         text: entry.text,
         expectedRevision: entry.base.revision,
       });
@@ -116,9 +148,9 @@ export class ChatDraftActions {
       entry.phase = dirty(entry) ? "unsaved" : "saved";
     } catch (error) {
       if (entry.disposed) return;
-      entry.phase = failurePhase(error);
+      entry.phase = failurePhase(error, "save");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error);
+      reportFailure(error, "save", entry.phase);
     } finally {
       this.settled(chatId, entry);
     }
@@ -131,16 +163,16 @@ export class ChatDraftActions {
     entry.pending = true;
     this.state.changed();
     try {
-      const remote = await readChatDraft(chatId);
+      const remote = await this.transport.read(chatId);
       if (entry.disposed) return;
       entry.base = remote;
       entry.conflict = false;
       entry.phase = "unsaved";
     } catch (error) {
       if (entry.disposed) return;
-      entry.phase = failurePhase(error);
+      entry.phase = failurePhase(error, "read");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error);
+      reportFailure(error, "read", entry.phase);
     } finally {
       this.settled(chatId, entry);
     }
@@ -153,7 +185,7 @@ export class ChatDraftActions {
     entry.pending = true;
     this.state.changed();
     try {
-      const remote = await readChatDraft(chatId);
+      const remote = await this.transport.read(chatId);
       if (entry.disposed) return;
       // Do not erase typing that happened after the explicit replacement click.
       if (entry.editVersion === editVersion) {
@@ -169,9 +201,9 @@ export class ChatDraftActions {
       entry.base = remote;
     } catch (error) {
       if (entry.disposed) return;
-      entry.phase = failurePhase(error);
+      entry.phase = failurePhase(error, "read");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error);
+      reportFailure(error, "read", entry.phase);
     } finally {
       this.settled(chatId, entry);
     }

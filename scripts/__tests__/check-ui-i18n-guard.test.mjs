@@ -1208,6 +1208,51 @@ test("passes when an existing translation key moves into a different JSX element
   expect(result.problems).toEqual([]);
 });
 
+// A split-file feature catalog pair (the Coding Workbench boundary) is a catalog like the shared
+// ones: a control reusing a key both of its halves already hold adds no text, while a key only one
+// half holds still demands the catalog update (#4271).
+const PAIR_EN_CATALOG = "packages/keiko-ui/src/app/components/feature/feature-i18n.en.ts";
+const PAIR_DE_CATALOG = "packages/keiko-ui/src/app/components/feature/feature-i18n.de.ts";
+
+async function reuseFeatureKey(deKeys) {
+  return withGitFixture(async (repoRoot, run) => {
+    await writeRepoFile(
+      repoRoot,
+      PAIR_EN_CATALOG,
+      'export const FEATURE_EN_MESSAGES = {\n  "feature.controls.stop": "Stop",\n} as const;\n',
+    );
+    const deEntries = deKeys.map((key) => `  "${key}": "Anhalten",\n`).join("");
+    await writeRepoFile(
+      repoRoot,
+      PAIR_DE_CATALOG,
+      `export const FEATURE_DE_MESSAGES = {\n${deEntries}};\n`,
+    );
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "feature catalog"]);
+    process.env.KEIKO_I18N_GUARD_BASE_SHA = run(["rev-parse", "HEAD"]).stdout.trim();
+    await writeRepoFile(
+      repoRoot,
+      UI_FILE,
+      'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() {\n  const t = useTranslate();\n  return (\n    <p>\n      {t("feature.title")}\n      <button aria-label={t("feature.controls.stop")} />\n    </p>\n  );\n}\n',
+    );
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "reuse"]);
+    return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
+  });
+}
+
+test("passes a control that reuses a key both halves of a feature catalog pair hold", async () => {
+  const result = await reuseFeatureKey(["feature.controls.stop"]);
+  expect(result.problems).toEqual([]);
+  expect(result.ok).toBe(true);
+});
+
+test("still demands a catalog update when only one half of a feature pair holds the key", async () => {
+  const result = await reuseFeatureKey([]);
+  expect(result.ok).toBe(false);
+  expect(result.problems.join("\n")).toContain(EN_CATALOG);
+});
+
 test("fails a change that adds a genuinely new translation key without updating catalogs", async () => {
   const result = await withGitFixture(async (repoRoot, run) => {
     await writeRepoFile(

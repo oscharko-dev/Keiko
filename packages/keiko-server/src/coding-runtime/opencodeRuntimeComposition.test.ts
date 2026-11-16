@@ -16,11 +16,11 @@ import {
   constants,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +31,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type Mock } f
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+  WINDOWS_HOST,
+} from "../../../../tests/support/symlink-fixture.js";
 import {
   createCodingSessionContinuity,
   type CodingSessionContinuity,
@@ -101,6 +106,7 @@ import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
+import { withJiraWriteReview } from "./opencodeRuntimeComposition.js";
 import type {
   McpOAuthIssuerPort,
   OpenCodeRuntimeCompositionInput,
@@ -162,6 +168,10 @@ import {
 } from "./opencodeRuntimeAdapter.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import {
+  OPENCODE_PINNED_VERSION,
+  OPENCODE_RUNTIME_VERSION_PINS,
+} from "./opencodeRuntimeVersions.js";
+import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
@@ -189,6 +199,21 @@ import {
 import { openCodePlanDirectory } from "./opencodeLaunchProfile.js";
 
 const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
+// #4359: a test can take the nested-effects fact off the pin the run is verified against.
+const pinFlag = vi.hoisted(() => ({ stripNestedEffects: false }));
+
+vi.mock("./opencodeRuntimeVersions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./opencodeRuntimeVersions.js")>();
+  return {
+    ...actual,
+    openCodeRuntimeVersionPin: (version: unknown): unknown => {
+      const pin = actual.openCodeRuntimeVersionPin(version);
+      return pin !== undefined && pinFlag.stripNestedEffects
+        ? { ...pin, decidesNestedEffects: false }
+        : pin;
+    },
+  };
+});
 
 // Observe the real source producer without replacing its generated tools or source definitions.
 vi.mock("./opencodeToolSchemas.js", async (importOriginal) => {
@@ -223,13 +248,16 @@ const TOOL_CAPABILITY = "t".repeat(43);
 // `toolFacadeUrl` from in production, fixed here since this suite never binds a real BFF port.
 const TOOL_FACADE_ORIGIN = "http://127.0.0.1:4391/api/coding-sidecar/tool";
 const FIXTURE_RUN_ID = "run-2254";
-const OPENCODE_VERSION = "2.1.4";
+const OPENCODE_VERSION = OPENCODE_PINNED_VERSION;
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
-const OPENCODE_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
-// Captured structural projection from OpenCode 2.1.4's actual OpenAPI document.
+const OPENCODE_SCHEMA_SHA256 = OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "";
+// Captured structural projection from the pinned OpenCode's actual OpenAPI document.
 const OPENAPI: unknown = JSON.parse(
   readFileSync(
-    new URL("./opencodeProtocolSurface.opencode-2.1.4.fixture.json", import.meta.url),
+    new URL(
+      `./opencodeProtocolSurface.opencode-${OPENCODE_PINNED_VERSION}.fixture.json`,
+      import.meta.url,
+    ),
     "utf8",
   ),
 );
@@ -343,6 +371,7 @@ interface OpenCodeRuntimeComposition {
         >)
       | undefined;
     readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
+    readonly turnWaitExpired?: (runId: string) => boolean;
     readonly listQuestions: (runId: string) => Promise<readonly TestQuestionRequest[]>;
     readonly answerQuestion: (
       runId: string,
@@ -385,6 +414,7 @@ interface OpenCodeRuntimeCompositionModule {
     readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
     readonly toolProfile?: OpenCodeToolProfile | undefined;
     readonly ripgrepVerified?: boolean | undefined;
+    readonly maxTurnWaitMs?: number | undefined;
     readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
@@ -697,7 +727,15 @@ type FixtureSafeActivity = NonNullable<
 type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
+  readonly buildSettingsHome?: string;
   readonly ripgrepVerified?: boolean;
+  /** #4068: observes the run state directory protection instead of changing a real ACL. */
+  readonly runStateAccess?:
+    | {
+        readonly protectRoot: (runRoot: string) => void;
+        readonly adoptCopy: (path: string) => void;
+      }
+    | undefined;
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   /** Extra sessions the runtime's session list reports (native child sessions, #3897). */
   readonly childSessions?: readonly Record<string, unknown>[];
@@ -736,6 +774,9 @@ interface StartBridgeControl {
   /** The managed MCP relay and the servers the human chose for the run (a Jira Pod). */
   readonly mcpRelay?: NonNullable<OpenCodeRuntimeCompositionInput["mcpRelay"]>;
   readonly mcpGrantedServers?: ReadonlySet<string>;
+  /** The dry run of the run's Jira writes before the human is asked (#4354 L4). */
+  readonly jiraWritePreflight?: OpenCodeRuntimeCompositionInput["jiraWritePreflight"];
+  readonly mcpPlatform?: NodeJS.Platform;
   /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
   readonly repositoryInstructions?: InstructionsCopyPort;
   /** The managed owner for an approved Code Mode `worktree_create` (#3903 AC4). */
@@ -758,12 +799,16 @@ interface StartBridgeControl {
   readonly questionObservations?: string[];
   readonly safeActivity?: FixtureSafeActivity;
   readonly diagnostics?: ServerDiagnosticSink;
+  /** The run's envelope duration, which bounds each turn's wait. */
+  readonly maxTurnWaitMs?: number;
   /** Records each delivered tool result's rendering under this run id, on `activityLog`. */
   readonly toolResultCorrelationId?: string;
   readonly runtimeEvents?: CodingWorkbenchRuntimeEvent[];
   readonly mode?: "governed-assist" | "supervised-coding" | "autonomous-delivery";
   /** The gateway route refused the readiness challenge's model request (#3603). */
   readonly gatewayRefused?: boolean;
+  /** The runtime answers the readiness challenge's prompt with this HTTP status (#4068). */
+  readonly readinessPromptStatus?: number;
   /** Native session continuity (S02/S03, #3904): the shared service and what the runtime holds. */
   readonly continuity?: FixtureContinuity;
   readonly runControl?: {
@@ -864,6 +909,7 @@ interface StartBridgeControl {
 interface FixtureContinuity {
   readonly service: CodingSessionContinuity;
   readonly workspaceId: string;
+  readonly freshReasoningHistory?: boolean;
   /** False leaves every session route to the fixture's own. */
   readonly serveSessions: boolean;
   readonly sessions: string[];
@@ -879,6 +925,7 @@ function optionalSessionContinuity(control: StartBridgeControl | undefined): {
   readonly sessionContinuity?: {
     readonly service: CodingSessionContinuity;
     readonly workspaceId: string;
+    readonly freshReasoningHistory?: boolean | undefined;
   };
 } {
   return control?.continuity === undefined
@@ -887,6 +934,7 @@ function optionalSessionContinuity(control: StartBridgeControl | undefined): {
         sessionContinuity: {
           service: control.continuity.service,
           workspaceId: control.continuity.workspaceId,
+          freshReasoningHistory: control.continuity.freshReasoningHistory,
         },
       };
 }
@@ -1020,6 +1068,12 @@ function optionalDiagnostics(control: StartBridgeControl | undefined): {
   return control?.diagnostics === undefined ? {} : { diagnostics: control.diagnostics };
 }
 
+function optionalMaxTurnWait(control: StartBridgeControl | undefined): {
+  readonly maxTurnWaitMs?: number;
+} {
+  return control?.maxTurnWaitMs === undefined ? {} : { maxTurnWaitMs: control.maxTurnWaitMs };
+}
+
 function optionalRuntimeEvents(control: StartBridgeControl | undefined): {
   readonly onRuntimeEvent?: (event: CodingWorkbenchRuntimeEvent) => void;
 } {
@@ -1041,8 +1095,12 @@ function runtimeMode(
 
 function optionalRipgrepVerified(control: StartBridgeControl | undefined): {
   readonly ripgrepVerified?: boolean;
+  readonly runStateAccess?: NonNullable<StartBridgeControl["runStateAccess"]>;
 } {
-  return control?.ripgrepVerified === undefined ? {} : { ripgrepVerified: control.ripgrepVerified };
+  return {
+    ...(control?.ripgrepVerified === undefined ? {} : { ripgrepVerified: control.ripgrepVerified }),
+    ...(control?.runStateAccess === undefined ? {} : { runStateAccess: control.runStateAccess }),
+  };
 }
 
 function optionalActivityLog(control: StartBridgeControl | undefined): {
@@ -1066,6 +1124,14 @@ function optionalRepositoryItems(control: StartBridgeControl | undefined): {
   return control?.repositoryItems === undefined ? {} : { repositoryItems: control.repositoryItems };
 }
 
+function optionalJiraPreflight(control: StartBridgeControl | undefined): {
+  readonly jiraWritePreflight?: OpenCodeRuntimeCompositionInput["jiraWritePreflight"];
+} {
+  return control?.jiraWritePreflight === undefined
+    ? {}
+    : { jiraWritePreflight: control.jiraWritePreflight };
+}
+
 function optionalMcp(control: StartBridgeControl | undefined): {
   readonly mcpServers?: () => readonly McpServerDefinition[];
   readonly mcpOAuthIssuer?: McpOAuthIssuerPort;
@@ -1080,6 +1146,12 @@ function optionalMcp(control: StartBridgeControl | undefined): {
       ? {}
       : { mcpGrantedServers: control.mcpGrantedServers }),
   };
+}
+
+function optionalMcpPlatform(control: StartBridgeControl | undefined): {
+  readonly mcpPlatform?: NodeJS.Platform;
+} {
+  return control?.mcpPlatform === undefined ? {} : { mcpPlatform: control.mcpPlatform };
 }
 
 function optionalOperatorPlugins(control: StartBridgeControl | undefined): {
@@ -1263,6 +1335,25 @@ function fixtureContextGeometry(control: StartBridgeControl | undefined): Fixtur
   };
 }
 
+/**
+ * The pinned runtime creates its database when it starts, before a session is bound; a native run
+ * holds its scheduler there and fails readiness without it (#4271). An inherited database is kept.
+ */
+function createRuntimeDatabase(runRoot: string): void {
+  const database = join(runRoot, "state", "opencode.db");
+  if (existsSync(database)) return;
+  mkdirSync(join(runRoot, "state"), { recursive: true });
+  new DatabaseSync(database).close();
+}
+
+function buildSettingsHomeOption(control: StartBridgeControl | undefined): {
+  readonly buildSettingsHome?: string;
+} {
+  return control?.buildSettingsHome === undefined
+    ? {}
+    : { buildSettingsHome: control.buildSettingsHome };
+}
+
 async function startBridgeFixture(
   facade: CodingToolFacade,
   toolBridge: { readonly requestDeadlineMs: number; readonly maxInFlight: number } = {
@@ -1290,6 +1381,7 @@ async function startBridgeFixture(
       spawnOwnedTree: (request): RuntimeProcessTree => {
         capturedLaunch = request;
         control?.onSpawn?.();
+        createRuntimeDatabase(join(root, "state", FIXTURE_RUN_ID));
         stdout.end(fixtureStartupLine(request, control));
         return {
           treeId: "tool-bridge-tree",
@@ -1424,6 +1516,8 @@ async function startBridgeFixture(
     if (path.endsWith("/prompt")) {
       control?.sessionLocation?.stages?.push("prompt");
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
+        if (control?.readinessPromptStatus !== undefined)
+          return Promise.resolve(new Response(null, { status: control.readinessPromptStatus }));
         readinessChallengePhase = "prompt-pending";
       } else if (typeof init?.body === "string" && control?.runControl !== undefined) {
         return storedTurnPrompt(control.runControl, path, init.body);
@@ -1511,6 +1605,7 @@ async function startBridgeFixture(
     get toolProfile(): OpenCodeToolProfile | undefined {
       return control?.readToolProfile?.();
     },
+    ...buildSettingsHomeOption(control),
     // #3897: the host environment is offered to every profile; only the native profile's
     // allowlist copies anything from it, so a mapped launch must still carry no PATH.
     processEnv: { PATH: "/host/toolchain/bin", HOME: "/host/home" },
@@ -1534,11 +1629,14 @@ async function startBridgeFixture(
     ...optionalSafeActivity(control),
     ...optionalQuestionObservations(control),
     ...optionalDiagnostics(control),
+    ...optionalMaxTurnWait(control),
     ...optionalActivityLog(control),
     ...optionalRipgrepVerified(control),
     ...optionalRepositoryItems(control),
     ...optionalOperatorPlugins(control),
     ...optionalMcp(control),
+    ...optionalJiraPreflight(control),
+    ...optionalMcpPlatform(control),
     ...optionalRepositoryInstructions(control),
     ...optionalNativeWorktrees(control),
     ...optionalToolResultCorrelation(control),
@@ -1642,6 +1740,36 @@ it.each([
     }
   },
 );
+
+// #4068: Windows mode bits keep nobody out, so the run root is made private before anything is
+// written below it; everything the runtime and Keiko write there then inherits that protection.
+it("protects the run state directory before anything is written below it", async () => {
+  const observed: { path: string; entries: readonly string[] }[] = [];
+  const adopted: string[] = [];
+  const fixture = await startBridgeFixture(
+    { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+    undefined,
+    {
+      runStateAccess: {
+        protectRoot: (path): void => {
+          observed.push({ path, entries: readdirSync(path) });
+        },
+        adoptCopy: (path): void => {
+          adopted.push(path);
+        },
+      },
+    },
+  );
+  try {
+    expect(observed).toEqual([
+      { path: join(fixture.stateBaseRoot, fixture.preparation.runId), entries: [] },
+    ]);
+    // A fresh run has no retained copy to hand over.
+    expect(adopted).toEqual([]);
+  } finally {
+    await fixture.stop();
+  }
+});
 
 it("selects native stdin ownership only after the production V2 prepare and keeps it open", async () => {
   const pipe = new PassThrough();
@@ -1799,7 +1927,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "941a87888e62c1b22bc9b4c6a8b7fbc6baacaa1c52dd47aa384248fc4fe8c857",
+      OPENCODE_RUNTIME_VERSION_PINS[0]?.protocolSurfaceSha256,
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -2549,6 +2677,47 @@ describe("private OpenCode run control", () => {
     }
   });
 
+  // #4271: a subagent's question is the run's too. Its live frame signals the Workbench once the run's
+  // session tree proves the session a child of the run; an unproven or foreign session still signals
+  // nothing (the pin above).
+  it("observes a proven child session's live question frame and no unproven session's", async () => {
+    const questionObservations: string[] = [];
+    const childSessions: Record<string, unknown>[] = [];
+    let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const fixture = await startBridgeFixture(facade, undefined, {
+      childSessions,
+      questionObservations,
+      onSseStart: (controller) => {
+        stream = controller;
+      },
+    });
+    try {
+      const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+      childSessions.push(
+        { id: "ses_child", parentID: "ses_tool", location: { directory: workspaceRoot } },
+        { id: "ses_elsewhere", parentID: "ses_tool", location: { directory: "/elsewhere" } },
+        { id: "ses_foreign", location: { directory: workspaceRoot } },
+      );
+      await vi.waitFor(() => {
+        expect(stream).toBeDefined();
+      });
+      const frame = (id: string, sessionID: string): Uint8Array =>
+        new TextEncoder().encode(
+          `data: {"id":"${id}","type":"form.created","data":{"form":{"id":"frm_${id}","sessionID":"${sessionID}"}}}\n\n`,
+        );
+      stream?.enqueue(frame("evt_elsewhere", "ses_elsewhere"));
+      stream?.enqueue(frame("evt_foreign", "ses_foreign"));
+      stream?.enqueue(frame("evt_unknown", "ses_unknown"));
+      stream?.enqueue(frame("evt_child", "ses_child"));
+      await vi.waitFor(() => {
+        expect(questionObservations).toContain("evt_child");
+      });
+      expect(questionObservations).toEqual(["evt_child"]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   // The ask as the generated V2 plugin sends it for one keiko_verification call (#3612). A file edit
   // asks no one: its change review is its one approval (ADR-0124 D6).
   const governedAsk = (callId: string): Promise<Record<string, unknown>> =>
@@ -2917,12 +3086,59 @@ describe("private OpenCode run control", () => {
           source: "opencode.turn",
           errorClass: "OpenCodeTurnFailure",
           message: "runtime-turn-failed",
-          code: "stage=terminal:db=missing",
+          // The fixture runtime creates its database without message tables, as at a fresh start.
+          code: "stage=terminal:db=unavailable",
         }),
       ]);
       const serialized = JSON.stringify(records);
       expect(serialized).not.toContain("bounded failing task");
       expect(serialized).not.toContain("SENTINEL_PROVIDER_DETAIL");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // W9 (#4068): on Windows a run whose Authority Envelope ran out of time first wrote this line as
+  // an `internal` failure and opened a support incident, before the run settled with the correct
+  // `envelope-duration-exhausted`. The turn wait counts the same duration, so its expiry is the
+  // run's bound: it stays on the timeline as a routine observation, and the settlement names it.
+  it("records a turn whose wait ran out of time as a routine observation, not a failure", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      runControl,
+      maxTurnWaitMs: 300,
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+      historyResponseFactory: () =>
+        Promise.resolve(v2Envelope(completedTurnHistory().slice(0, 1).reverse())),
+    });
+    try {
+      await expect(
+        fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "a turn that never ends"),
+      ).resolves.toBe(true);
+      await expect(
+        fixture.runtime.runPort.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(5_000)),
+      ).resolves.toBe(false);
+      expect(fixture.runtime.runPort.turnWaitExpired?.(FIXTURE_RUN_ID)).toBe(true);
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: FIXTURE_RUN_ID,
+          operation: "coding-runtime.opencode-composition",
+          source: "opencode.turn",
+          errorClass: "OpenCodeTurnWaitExpired",
+          message: "runtime-turn-expired",
+          diagnosticOutcome: "routine",
+          code: "stage=terminal-expired:db=unavailable",
+        }),
+      ]);
     } finally {
       await fixture.stop();
     }
@@ -3414,6 +3630,47 @@ describe("private OpenCode run control", () => {
   });
 });
 
+/** The Jira Pods service with the custody graph attached for one bound, verified Pod. */
+function attachedJiraPods(binding: {
+  readonly podId: string;
+  readonly authenticationGeneration: number;
+  readonly verificationRevision: number;
+}): ReturnType<typeof createCodingJiraPods> {
+  const pods = createCodingJiraPods(undefined);
+  pods.attach({
+    store: templateFreeStore(),
+    serverPrincipal: () => "operator-principal",
+    atlassianConnectorCredentials: {
+      custody: {
+        list: () => [
+          {
+            schemaVersion: "1",
+            authRef: "synthetic-credential",
+            displayName: "Synthetic Jira",
+            baseUrl: "https://jira.example.invalid",
+            createdAt: 1,
+            generation: binding.authenticationGeneration,
+            provider: "jira",
+            deployment: "data-center",
+            authScheme: "bearer-pat",
+            livePod: {
+              podId: binding.podId,
+              ownerDigest: createHash("sha256").update("operator-principal").digest("hex"),
+              creationRequestId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019",
+              verificationRevision: binding.verificationRevision,
+              verificationInProgress: false,
+              verificationStatus: "ok",
+            },
+          },
+        ],
+      } as unknown as NonNullable<CodingJiraPodDeps["atlassianConnectorCredentials"]>["custody"],
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+        Promise.resolve({ kind: "network-error" }),
+    },
+  });
+  return pods;
+}
+
 describe("native policy asks on the tool bridge (#3897 review)", () => {
   const completed = {
     status: "completed" as const,
@@ -3779,6 +4036,94 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       expect(JSON.parse(response.body)).toMatchObject({ effect: "deny" });
     } finally {
       await unwired.stop();
+    }
+  });
+
+  // #4271 A4: every admission reason used to read as "authority no longer valid or budget exhausted",
+  // so a model whose edit was merely too large could not tell it should split the edit.
+  it.each([
+    ["patch-too-large", /smaller edits/u],
+    ["authority-budget-exceeded", /budget/u],
+    ["authority-expired", /expired/u],
+    ["revoked", /revoked/u],
+    ["action-not-authorized", /Authority Envelope/u],
+    ["workspace-drift", /changed after its authority/u],
+  ] as const)(
+    "tells the model what to do next when the authority refuses with %s",
+    async (reason, expected) => {
+      const fixture = await startBridgeFixture(
+        facadeWith(admitWith({ ok: false, reason })),
+        undefined,
+        { mode: "supervised-coding" },
+      );
+      try {
+        const response = await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: nativeAsk("ses_tool", "edit", { messageID: "msg_1", id: "call_1" }),
+        });
+        const answer = JSON.parse(response.body) as {
+          readonly effect: string;
+          readonly message: string;
+        };
+        expect(answer.effect).toBe("deny");
+        expect(answer.message).toMatch(expected);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  // #4271 A2: the human may take minutes; a link swapped in meanwhile must not ride the approval.
+  it("re-checks the paths after the human approved, so a link swapped in while waiting is refused", async (testContext) => {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const admit = admitWith(CHARGED);
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      activityLog,
+    });
+    const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+    const outside = mkdtempSync(join(tmpdir(), "keiko-recheck-outside-"));
+    try {
+      const ask = JSON.parse(
+        nativeAsk("ses_tool", "edit", { messageID: "msg_1", id: "call_1" }),
+      ) as Record<string, unknown>;
+      const answer = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({ ...ask, resources: ["swapped.md"] }),
+      });
+      await vi.waitFor(() => {
+        expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(true);
+      });
+      const permission = runtimeEvents.find(
+        (event) => event.kind === "permission-requested",
+      )?.permissionRequest;
+      if (permission === undefined || Array.isArray(permission)) throw new Error("expected ask");
+      writeFileSync(join(outside, "target.md"), "outside\n");
+      plantSymlinkOrSkip(
+        testContext,
+        join(outside, "target.md"),
+        join(workspaceRoot, "swapped.md"),
+      );
+      await expect(
+        fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, permission.requestId, "once"),
+      ).resolves.toBe(true);
+      const response = await answer;
+      expect(JSON.parse(response.body)).toMatchObject({
+        effect: "deny",
+        message: expect.stringContaining("symbolic link") as string,
+      });
+      expect(admit).not.toHaveBeenCalled();
+      const decided = activityLog.events.find(
+        (event) => event.op === "coding-runtime.native-policy.decided",
+      )?.extra;
+      expect(decided).toMatchObject({ effect: "ask", outcome: "workspace-escape" });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+      await fixture.stop();
     }
   });
 
@@ -4238,7 +4583,10 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
         relay: createMcpCredentialRelay(),
         origin: "http://127.0.0.1:1983",
         secrets: {},
-        managed: pods.connections(undefined, binding),
+        managed: pods.connections(undefined, binding, {
+          runId: FIXTURE_RUN_ID,
+          currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+        }),
       },
       mcpGrantedServers: new Set(["jira"]),
     });
@@ -4271,6 +4619,104 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     }
   });
 
+  // #4354 L4: a managed Jira write the human would be asked about is dry-run first, so a write that
+  // breaks the customer's templates ends as the model's refusal and no approval card is raised.
+  it.each([
+    {
+      mode: "governed-assist",
+      refusal: "Nothing was changed: this breaks the issue template.",
+      expected: "deny",
+    },
+    { mode: "governed-assist", refusal: undefined, expected: "ask" },
+    {
+      mode: "supervised-coding",
+      refusal: "Nothing was changed: this breaks the issue template.",
+      expected: "deny",
+    },
+    { mode: "supervised-coding", refusal: undefined, expected: "ask" },
+    // Full access never asks, so the executor gate is the authority and the dry run is not run.
+    {
+      mode: "autonomous-delivery",
+      refusal: "Nothing was changed: this breaks the issue template.",
+      expected: "allow",
+    },
+  ] as const)(
+    "dry-runs a managed Jira write before the card: $mode with $refusal is $expected",
+    async ({ mode, refusal, expected }) => {
+      const binding = {
+        podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+        authenticationGeneration: 3,
+        verificationRevision: 1,
+      };
+      const pods = attachedJiraPods(binding);
+      const preflight = vi.fn(() => Promise.resolve(refusal));
+      const policyLog = createBufferedServerLogSink();
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode,
+        readToolProfile: () => "native",
+        mcpServers: () => withCodingJiraServer([], binding),
+        mcpRelay: {
+          relay: createMcpCredentialRelay(),
+          origin: "http://127.0.0.1:1983",
+          secrets: {},
+          managed: pods.connections(undefined, binding, {
+            runId: FIXTURE_RUN_ID,
+            currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+          }),
+        },
+        mcpGrantedServers: new Set(["jira"]),
+        activityLog: policyLog,
+        jiraWritePreflight: preflight,
+      });
+      try {
+        const pending = fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: JSON.stringify({
+            action: "native-policy",
+            runId: FIXTURE_RUN_ID,
+            sessionID: "ses_tool",
+            permission: "jira_jira_edit",
+            resources: ["*"],
+            mcpInput: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+            source: { type: "tool", messageID: "msg_1", id: "call_jira_edit" },
+            configured: "ask",
+          }),
+        });
+        if (expected === "ask") {
+          // The card is raised: the call stays open until a human decides, so it is not awaited.
+          await vi.waitFor(() => {
+            expect(preflight).toHaveBeenCalledOnce();
+          });
+          return;
+        }
+        const answer = await pending;
+        expect(answer.status).toBe(200);
+        if (expected === "allow") {
+          // Full access asks nobody: the dry run is not run, and the executor gate decides.
+          expect(preflight).not.toHaveBeenCalled();
+          return;
+        }
+        // The remaining case: the dry run refused, the runtime is told why and no card was raised.
+        expect(answer.body).toContain('"effect":"deny"');
+        expect(answer.body).toContain("this breaks the issue template");
+        expect(preflight).toHaveBeenCalledOnce();
+        expect(preflight).toHaveBeenCalledWith({
+          tool: "jira.edit",
+          arguments: { issueKey: "SYN-1", fields: { summary: "Too short" } },
+        });
+        // The decision is on the log as its own closed outcome, never as an approval or a denial of mode.
+        const decided = policyLog.events.find(
+          (event) => event.op === "coding-runtime.native-policy.decided",
+        );
+        expect(decided?.extra).toMatchObject({ mode, outcome: "template-refused" });
+      } finally {
+        await fixture.stop();
+        await pods.close();
+      }
+    },
+  );
+
   it("leaves the run's Jira tools out entirely when the Pod is no longer the one chosen at launch", async () => {
     const binding = {
       podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
@@ -4287,7 +4733,10 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
         relay: createMcpCredentialRelay(),
         origin: "http://127.0.0.1:1983",
         secrets: {},
-        managed: pods.connections(undefined, binding),
+        managed: pods.connections(undefined, binding, {
+          runId: FIXTURE_RUN_ID,
+          currentScopes: () => ["issue-tracker.read", "issue-tracker.write"],
+        }),
       },
       mcpGrantedServers: new Set(["jira"]),
     });
@@ -4357,6 +4806,122 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       }
     },
   );
+
+  // #4068 W10: a platform without an env-scrubbing launcher admits no local MCP server, and the
+  // refusal is recorded as a count only. This is a static refusal, not a Windows pass.
+  it("leaves local MCP servers out without an env-scrubbing launcher and records the count", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "native",
+      activityLog,
+      mcpPlatform: "win32",
+      mcpServers: () => [
+        {
+          name: "docs",
+          description: undefined,
+          enabled: true,
+          transport: { kind: "local", command: ["docs-mcp"], environment: {} },
+          tools: { search: "read" },
+        },
+      ],
+    });
+    try {
+      const raw = fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null";
+      expect(raw).not.toContain("/usr/bin/env");
+      const config = JSON.parse(raw) as {
+        readonly mcp?: { readonly servers?: Readonly<Record<string, unknown>> };
+      };
+      expect(config.mcp?.servers).toEqual({});
+      const refused = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.native-mcp-local.refused",
+      );
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({ correlationId: FIXTURE_RUN_ID });
+      expect(refused[0]?.extra).toMatchObject({
+        runId: FIXTURE_RUN_ID,
+        reason: "no-env-scrubbing-launcher",
+        refusedServerCount: 1,
+      });
+      expectActivityLogProof(
+        "coding-runtime.native-mcp-local.refused.emitted-line",
+        formatActivityLogProofLine(refused[0] ?? {}),
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #4271: a native launch carries the user's mirror and registry as sanitized copies in its private
+  // home, never a credential, and records the admission body-free. The mapped profiles carry none.
+  it("admits sanitized build settings into a native run's private home and not a mapped one", async () => {
+    const realHome = tempDir("keiko-build-settings-home-");
+    mkdirSync(join(realHome, ".m2", "repository"), { recursive: true });
+    writeFileSync(
+      join(realHome, ".m2", "settings.xml"),
+      "<settings><servers><server><id>c</id><password>PLANTED-SECRET</password></server></servers>" +
+        "<mirrors><mirror><id>c</id><mirrorOf>*</mirrorOf><url>https://nexus.corp/m</url></mirror></mirrors></settings>",
+    );
+    writeFileSync(
+      join(realHome, ".npmrc"),
+      "registry=https://registry.corp/\n_authToken=PLANTED\n",
+    );
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "supervised-coding",
+      readToolProfile: () => "native",
+      buildSettingsHome: realHome,
+      activityLog,
+    });
+    try {
+      const userConfig = fixture.preparation.env.NPM_CONFIG_USERCONFIG ?? "";
+      expect(readFileSync(userConfig, "utf8")).toBe("registry=https://registry.corp/\n");
+      const settings = readFileSync(
+        join(dirname(dirname(userConfig)), "home", ".m2", "settings.xml"),
+        "utf8",
+      );
+      expect(settings).toContain("https://nexus.corp/m");
+      expect(JSON.stringify([settings, fixture.preparation.env])).not.toContain("PLANTED");
+      // Java ignores HOME: every JVM of the run gets the private user.home, Gradle its private
+      // user home, and Maven the user's read-only cache only as the tail of its own repository.
+      const home = join(dirname(dirname(userConfig)), "home");
+      const javaOptions = fixture.preparation.env.JAVA_TOOL_OPTIONS ?? "";
+      expect(javaOptions).toContain(`'-Duser.home=${home}'`);
+      expect(javaOptions).toContain(
+        `'-Dmaven.repo.local.tail=${realpathSync(join(realHome, ".m2", "repository"))}'`,
+      );
+      expect(fixture.preparation.env.GRADLE_USER_HOME).toBe(join(home, ".gradle"));
+      const admitted = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.native-build-settings.admitted",
+      );
+      expect(admitted).toHaveLength(1);
+      expect(admitted[0]).toMatchObject({ correlationId: FIXTURE_RUN_ID });
+      expect(admitted[0]?.extra).toMatchObject({
+        launchMode: "supervised-coding",
+        mavenSettings: "sanitized",
+        npmConfig: "sanitized",
+      });
+    } finally {
+      await fixture.stop();
+    }
+    const mapped = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      readToolProfile: () => "direct",
+      buildSettingsHome: realHome,
+      activityLog,
+    });
+    try {
+      expect(mapped.preparation.env).not.toHaveProperty("NPM_CONFIG_USERCONFIG");
+      expect(mapped.preparation.env).not.toHaveProperty("GRADLE_USER_HOME");
+      expect(mapped.preparation.env.JAVA_TOOL_OPTIONS).not.toContain("user.home");
+      expect(
+        activityLog.events.filter(
+          (event) => event.op === "coding-runtime.native-build-settings.admitted",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await mapped.stop();
+    }
+  });
 
   // #3903 AC1: the further gateway models and the configured per-agent overrides reach the binding,
   // and one body-free line records their counts.
@@ -5532,6 +6097,64 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  // Audit 2026-11-06 (#4271): a failed preparation ended the start with no trace of its cause on
+  // the Activity Log, so the defect behind it could not be located from the log.
+  it("records why a native run's preparation failed, body-free", async () => {
+    const diagnostics = persistedDiagnostics();
+    const failure = new Error("PRIVATE_PREPARE", { cause: new TypeError("PRIVATE_CAUSE") });
+    failure.stack =
+      "Error: PRIVATE_PREPARE\n    at read (/private/packages/keiko-server/dist/coding-runtime/opencodeRuntimeComposition.js:12:3)";
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        readToolProfile: () => "native",
+        configDocuments: () => Promise.reject(failure),
+        expectedStart: expect.objectContaining({ ok: false }) as Readonly<Record<string, unknown>>,
+      },
+    );
+    try {
+      expect(
+        expectPersistedDiagnostic(diagnostics.read(), "opencode-runtime-composition.prepare"),
+      ).toMatchObject({
+        diagnosticSummary: "runtime-start-failed",
+        code: "config-materialization-failed",
+        frames: ["packages/keiko-server/dist/coding-runtime/opencodeRuntimeComposition.js:12:3"],
+        causeChain: ["TypeError"],
+      });
+      expect(diagnostics.read()).not.toContain("PRIVATE_");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("records no preparation failure for a start its caller abandoned", async () => {
+    const diagnostics = persistedDiagnostics();
+    const controller = new AbortController();
+    const configDocuments = vi.fn((): Promise<readonly Readonly<Record<string, unknown>>[]> => {
+      controller.abort();
+      return Promise.reject(new Error("PRIVATE_ABANDONED"));
+    });
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        readToolProfile: () => "native",
+        signal: controller.signal,
+        configDocuments,
+        expectedStart: expect.objectContaining({ ok: false }) as Readonly<Record<string, unknown>>,
+      },
+    );
+    try {
+      expect(configDocuments).toHaveBeenCalledTimes(1);
+      expect(diagnostics.read()).not.toContain("opencode-runtime-composition.prepare");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("does not diagnose a history read cancelled by normal run disposal", async () => {
     const diagnostics = persistedDiagnostics();
     const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
@@ -5596,6 +6219,33 @@ describe("private OpenCode tool bridge", () => {
       ).toMatchObject({
         diagnosticOperation: "coding-runtime.handshake",
         code: "stage=gateway-challenge:reason=gateway-refused",
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #4068: on Windows a confined run's challenge prompt failed within milliseconds, and the log held
+  // only the closed reason. The runtime's HTTP status and the error's frames now travel with it.
+  it("records the runtime's HTTP status when its challenge prompt is refused", async () => {
+    const diagnostics = persistedDiagnostics();
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        readinessPromptStatus: 500,
+        startTimeoutMs: 60_000,
+        expectedStart: { ok: false, failureCode: "gateway-challenge-failed", retryable: false },
+      },
+    );
+    try {
+      expect(
+        expectPersistedDiagnostic(diagnostics.read(), "opencode.gateway-challenge"),
+      ).toMatchObject({
+        diagnosticOperation: "coding-runtime.handshake",
+        code: "stage=gateway-challenge:reason=live-verification-failed",
+        httpStatus: 500,
       });
     } finally {
       await fixture.stop();
@@ -6044,6 +6694,110 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  // Audit 2026-11-06 finding 9: a request that may park on an operator decision is admitted in a lane
+  // of its own, so pending approvals never turn a read away.
+  it("admits a read while the lane of operator-awaiting requests is full", async () => {
+    const releases: (() => void)[] = [];
+    const facade: CodingToolFacade = {
+      execute: vi.fn(
+        () =>
+          new Promise<typeof completed>((resolve) => {
+            releases.push((): void => {
+              resolve(completed);
+            });
+          }),
+      ),
+    };
+    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 1_000, maxInFlight: 1 });
+    const handle = (body: string): Promise<{ readonly status: number }> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body,
+      });
+    const verification = JSON.stringify({
+      action: "verification",
+      verifierId: "test",
+      targetPath: "",
+      actionId: "tool:call_verify",
+      idempotencyKey: "idempotency-verify",
+    });
+    try {
+      const parked = handle(verification);
+      await vi.waitFor(() => {
+        expect(facade.execute).toHaveBeenCalledOnce();
+      });
+      await expect(handle(verification)).resolves.toMatchObject({ status: 429 });
+      const read = handle('{"action":"read"}');
+      await vi.waitFor(() => {
+        expect(facade.execute).toHaveBeenCalledTimes(2);
+      });
+      for (const release of releases) release();
+      await expect(read).resolves.toMatchObject({ status: 200 });
+      await expect(parked).resolves.toMatchObject({ status: 200 });
+    } finally {
+      for (const release of releases) release();
+      await fixture.stop();
+    }
+  });
+
+  // Audit 2026-11-06 finding 12: every transport recognizer parsed the same body again (twice each).
+  it("parses a governed tool request body once for all transport recognizers", async () => {
+    const facade: CodingToolFacade = {
+      execute: vi.fn(() => Promise.resolve(completed)),
+    };
+    const fixture = await startBridgeFixture(facade);
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      const bodyText = toolBody("call_parse_once");
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: bodyText,
+        }),
+      ).resolves.toMatchObject({ status: 200 });
+      const bodyParses = parse.mock.calls.filter(([text]) => text === bodyText).length;
+      // One generic parse, the request parse of the admission deadline and of the dispatch.
+      expect(bodyParses).toBeLessThanOrEqual(1 + 2);
+    } finally {
+      parse.mockRestore();
+      await fixture.stop();
+    }
+  });
+
+  it("answers a body that is not JSON with 400 and records only that it happened", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+    });
+    try {
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: "{not json PRIVATE_BODY_CANARY",
+        }),
+      ).resolves.toMatchObject({ status: 400 });
+      expect(facade.execute).not.toHaveBeenCalled();
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: "tool-bridge-unparsed-action",
+          operation: "coding-runtime.tool-bridge",
+          message: "tool-bridge-request-body-invalid",
+        }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("PRIVATE_BODY_CANARY");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("settles facade busy and rejected calls as failed", async () => {
     const activity = activityRecorder();
     const facade: CodingToolFacade = {
@@ -6427,6 +7181,76 @@ describe("private OpenCode tool bridge", () => {
         await fixture.stop();
       }
     });
+  });
+
+  // Lab T37 (2026-11-07, #4271): the facade answers a refused commit as a completed call that carries
+  // the refusal, so the card read "Succeeded" although nothing was committed. The bridge settles the
+  // call with the closed Git outcome, and the same word reaches the activity log, body-free.
+  describe("a Git step's closed outcome", () => {
+    const RENDER_OP = "coding-runtime.tool-result-rendered";
+    const commitBody = (callId: string): string =>
+      JSON.stringify({
+        action: "delivery",
+        actionId: `tool:${callId}`,
+        idempotencyKey: `idempotency-${callId}`,
+        intent: "commit",
+        phase: "propose",
+        message: "m",
+      });
+    const commitResult = (status: string, reason: string): CodingToolResult =>
+      ({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: status }],
+        verifiedCommit: { status, reason },
+      }) as unknown as CodingToolResult;
+
+    it.each([
+      ["verification-failed", "verification-failed", "verification-failed"],
+      ["verification-failed", "verification-missing", "verification-missing"],
+      ["succeeded", "completed", "completed"],
+    ] as const)(
+      "settles a commit answered %s/%s with the outcome %s and records it body-free",
+      async (status, reason, gitOutcome) => {
+        const activity = activityRecorder();
+        const log = createBufferedServerLogSink();
+        const facade: CodingToolFacade = {
+          execute: vi.fn(() => Promise.resolve(commitResult(status, reason))),
+        };
+        const fixture = await startBridgeFixture(facade, undefined, {
+          safeActivity: activity.safeActivity,
+          activityLog: log,
+          toolResultCorrelationId: FIXTURE_RUN_ID,
+        });
+        try {
+          await expect(
+            fixture.runtime.toolBridge.handle({
+              method: "POST",
+              headers: new Headers(authorized),
+              body: commitBody("call_commit"),
+            }),
+          ).resolves.toMatchObject({ status: 200 });
+
+          expect(activity.settlements).toEqual([
+            expect.objectContaining({
+              state: "succeeded",
+              presentation: { gitOutcome, bridgeDurationMs: expect.any(Number) as number },
+            }),
+          ]);
+          const rendered = log.events.filter(
+            (event) => event.op === RENDER_OP && event.extra?.gitOutcome !== undefined,
+          );
+          expect(rendered).toHaveLength(1);
+          expect(
+            expectActivityLogProof(
+              "coding-runtime.tool-result-rendered.emitted-line",
+              formatActivityLogProofLine(rendered[0] ?? {}),
+            ),
+          ).toMatchObject({ correlationId: FIXTURE_RUN_ID, resultStatus: "completed", gitOutcome });
+        } finally {
+          await fixture.stop();
+        }
+      },
+    );
   });
 
   it("degrades an overridden Error.name to a content-free class in the diagnostic", async () => {
@@ -9621,14 +10445,12 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
   });
 
   it("refuses a hostile reference before anything is sent and logs the closed reason, not the path", async () => {
-    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    const { fixture, port, promptBodies, activityLog } = await inputsFixture();
     try {
-      symlinkSync("/etc/hosts", join(workspace, "hosts-link"));
       for (const [path, reason] of [
         ["../outside.txt", "reference-invalid"],
         ["/etc/hosts", "reference-invalid"],
         [".env", "reference-sensitive"],
-        ["hosts-link", "reference-outside-workspace"],
         ["missing.md", "reference-unreadable"],
       ] as const) {
         expect(port.admitPromptInputs?.(FIXTURE_RUN_ID, { references: [{ path }] })).toEqual({
@@ -9637,9 +10459,55 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
         });
       }
       expect(promptBodies).toEqual([]);
-      expect(inputLines(activityLog)).toHaveLength(5);
+      expect(inputLines(activityLog)).toHaveLength(4);
       expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
         /\/etc\/hosts|hosts-link|\.env|outside\.txt|missing\.md|SENSITIVE/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // The link case needs a file symlink, which a Windows host without the privilege cannot plant;
+  // the junction case below proves the same containment there. A Windows host that may link files
+  // has no `/etc/hosts`, so it points the link at a real file outside the workspace instead.
+  it("refuses a file symlink that leaves the workspace and logs the closed reason, not the path", async (testContext) => {
+    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    try {
+      const outside = WINDOWS_HOST
+        ? join(tempDir("keiko-prompt-inputs-outside-"), "hosts")
+        : "/etc/hosts";
+      if (WINDOWS_HOST) writeFileSync(outside, "OUTSIDE-CANARY\n");
+      plantSymlinkOrSkip(testContext, outside, join(workspace, "hosts-link"));
+      expect(
+        port.admitPromptInputs?.(FIXTURE_RUN_ID, { references: [{ path: "hosts-link" }] }),
+      ).toEqual({ ok: false, reason: "reference-outside-workspace" });
+      expect(promptBodies).toEqual([]);
+      expect(inputLines(activityLog)).toHaveLength(1);
+      expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
+        /\/etc\/hosts|hosts-link|OUTSIDE-CANARY/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses a reference through a directory redirection that leaves the workspace", async () => {
+    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    try {
+      const outside = tempDir("keiko-prompt-inputs-outside-");
+      writeFileSync(join(outside, "secret.txt"), "OUTSIDE-CANARY\n");
+      // A junction on Windows (no symlink privilege), a directory symlink elsewhere.
+      plantDirectoryRedirect(outside, join(workspace, "outside-dir"));
+      expect(
+        port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+          references: [{ path: "outside-dir/secret.txt" }],
+        }),
+      ).toEqual({ ok: false, reason: "reference-outside-workspace" });
+      expect(promptBodies).toEqual([]);
+      expect(inputLines(activityLog)).toHaveLength(1);
+      expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
+        /outside-dir|secret\.txt|OUTSIDE-CANARY/u,
       );
     } finally {
       await fixture.stop();
@@ -11125,13 +11993,17 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
             messageCount: 6,
             entryCount: 1,
             prunedCount: 0,
+            blockedCount: 0,
           }
         );
       },
       remove: (taskId) => {
         calls.removed.push(taskId);
       },
-      prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, entryCount: 0 }),
+      prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, blocked: 0, entryCount: 0 }),
+      readEntry: () => undefined,
+      editEntry: () => ({ ok: false, reason: "no-retained-state" }),
+      listTaskIds: () => [],
     };
     const service = createCodingSessionContinuity({
       store,
@@ -11170,6 +12042,55 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
   const tools = { readToolProfile: (): typeof profile => profile } as const;
   const facade = (): CodingToolFacade => ({
     execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  });
+
+  it("keeps a synthetic readiness answer outside a fresh full-history provider session", async () => {
+    const world = continuedWorld({ sessions: [], messages: [] });
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: { ...world.continuity, freshReasoningHistory: true },
+    });
+    try {
+      expect(world.calls.checkouts).toHaveLength(0);
+      expect(world.continuity.requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "POST /api/session",
+        "POST /api/session",
+        "DELETE /api/session/ses_scratch_2",
+      ]);
+      expect(world.continuity.sessions).toEqual(["ses_scratch_1"]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #4068: the retained store's owner-only copy would keep the confined tree's inherited grant out,
+  // so the copy is handed to the run root's private, inherited DACL right after the checkout.
+  it("hands a resumed run's database copy to its private run state before the runtime starts", async () => {
+    const world = continuedWorld();
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+    const order: string[] = [];
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: world.continuity,
+      runStateAccess: {
+        protectRoot: (path): void => {
+          order.push(`protect ${path}`);
+        },
+        adoptCopy: (path): void => {
+          order.push(`adopt ${path} ${String(world.calls.checkouts.length)}`);
+        },
+      },
+    });
+    try {
+      const destination = world.calls.checkouts[0]?.destinationDatabase;
+      expect(order).toEqual([
+        `protect ${join(fixture.stateBaseRoot, FIXTURE_RUN_ID)}`,
+        `adopt ${String(destination)} 1`,
+      ]);
+      expect(world.continuity.service.outcome(FIXTURE_RUN_ID)).toEqual({ kind: "resumed" });
+    } finally {
+      await fixture.stop();
+    }
   });
 
   it("resumes the retained session: seeded before the start, proved in a scratch session, shown from what the run adds", async () => {
@@ -11417,4 +12338,131 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
       { binding: { taskId: TASK }, sessionId: "ses_tool" },
     ]);
   });
+});
+
+// #4359 F27: the ask of a managed Jira write carries the call and the names its ids were given, so
+// the card reads like Chat's approval of the same write; every other ask stays as it is.
+describe("the plain approval of a managed Jira write", () => {
+  const ask = {
+    effect: "ask",
+    event: {
+      type: "permission-request",
+      requestId: "per_1",
+      nativeAction: { permission: "jira_jira_create", resources: ["*"] },
+    },
+  } as unknown as Parameters<typeof withJiraWriteReview>[0];
+  const request = {
+    permission: "jira_jira_create",
+    mcpInput: { projectId: "10002", issueTypeId: "10003", fields: { summary: "Probe" } },
+  } as unknown as Parameters<typeof withJiraWriteReview>[2];
+  const run = (serverName: string): Parameters<typeof withJiraWriteReview>[1] =>
+    ({
+      mcp: {
+        actions: new Map([
+          [
+            "jira_jira_create",
+            { risk: "write", remote: true, mutation: { serverName, toolName: "jira.create" } },
+          ],
+        ]),
+      },
+    }) as unknown as Parameters<typeof withJiraWriteReview>[1];
+  const review = vi.fn((call: { readonly tool: string }) => ({
+    tool: call.tool,
+    input: {},
+    names: { projects: [], issueTypes: [], fields: [] },
+  }));
+  const deps = { jiraWriteReview: review } as unknown as Parameters<typeof withJiraWriteReview>[3];
+
+  it("adds the call and the names to the Pod's write", () => {
+    const decided = withJiraWriteReview(ask, run("jira"), request, deps);
+    expect(review).toHaveBeenCalledWith({
+      tool: "jira.create",
+      arguments: { projectId: "10002", issueTypeId: "10003", fields: { summary: "Probe" } },
+    });
+    expect(decided.event.nativeAction).toMatchObject({
+      permission: "jira_jira_create",
+      resources: ["*"],
+      jira: { tool: "jira.create" },
+    });
+    // What the card shows is the very input the approval is prepared for and dispatched with.
+    expect(review.mock.calls.at(-1)?.[0]).toMatchObject({
+      arguments: request.mcpInput,
+    });
+  });
+
+  it("leaves a write of any other server, and a run without a review, as asked", () => {
+    expect(withJiraWriteReview(ask, run("other"), request, deps)).toBe(ask);
+    expect(withJiraWriteReview(ask, run("jira"), request, {} as typeof deps)).toBe(ask);
+  });
+});
+
+// #4359: whether a Code Mode program asks is decided by the pin of the version the run was verified
+// against, through the real composition (the policy and the generator are pinned in
+// opencodeCodeModeProgram.test.ts).
+describe("the program card follows the verified runtime's pin (#4359)", () => {
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const completed = { status: "completed" as const, evidence: [] };
+  const programAsk = JSON.stringify({
+    action: "native-policy",
+    runId: FIXTURE_RUN_ID,
+    sessionID: "ses_tool",
+    permission: "execute",
+    resources: ["const r = await fetch('https://example.com'); return r.status;"],
+    configured: "ask",
+    source: { type: "tool", messageID: "msg_program", id: "call_program" },
+  });
+
+  async function runProgram(
+    mode: "governed-assist" | "supervised-coding",
+    stripNestedEffects: boolean,
+  ): Promise<{ readonly answered: boolean; readonly asked: boolean }> {
+    pinFlag.stripNestedEffects = stripNestedEffects;
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+      },
+      undefined,
+      { mode, runtimeEvents, activityLog },
+    );
+    try {
+      const state = { answered: false };
+      const pending = fixture.runtime.toolBridge
+        .handle({ method: "POST", headers: new Headers(authorized), body: programAsk })
+        .then((response) => {
+          state.answered = true;
+          return response;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const asked = runtimeEvents.some((event) => event.kind === "permission-requested");
+      if (state.answered) {
+        const response = await pending;
+        expect(response.body).toBe('{"effect":"allow"}');
+        const decided = activityLog.events.find(
+          (event) => event.op === "coding-runtime.native-policy.decided",
+        )?.extra;
+        expect(decided).toMatchObject({ permission: "execute", effect: "allow", risk: "low" });
+      }
+      return { answered: state.answered, asked };
+    } finally {
+      pinFlag.stripNestedEffects = false;
+      await fixture.stop();
+    }
+  }
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "lets a program of a verified 2.2.5 run pass without a card in %s",
+    async (mode) => {
+      await expect(runProgram(mode, false)).resolves.toEqual({ answered: true, asked: false });
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "keeps the card in %s when the verified version's pin does not say nested effects are decided",
+    async (mode) => {
+      await expect(runProgram(mode, true)).resolves.toEqual({ answered: false, asked: true });
+    },
+  );
 });

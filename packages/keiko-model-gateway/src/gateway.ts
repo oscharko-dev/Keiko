@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  isActivityLogCorrelationId,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
@@ -21,6 +22,7 @@ import {
   ContextOverflowError,
   GatewayError,
   ProviderEmptyAnswerError,
+  ProviderError,
   ProviderOutputExhaustedError,
   TransportError,
   UnknownModelError,
@@ -32,7 +34,8 @@ import {
 import type { GatewayOutputRepairOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
 import { findConfiguredCapability } from "./model-selection.js";
-import { carriedReasoning } from "./normalize.js";
+import { carriedReasoning, SYNTHESIZED_TOOL_CALL_ID_PREFIX } from "./normalize.js";
+import { GatewayReasoningHistory } from "./reasoning-history.js";
 import {
   activityLogErrorKind,
   logEndpointHost,
@@ -41,10 +44,14 @@ import {
   logTimer,
   resolveLogSink,
   withCorrelationId,
+  withParentCorrelationLookup,
   type ModelGatewayLogContext,
   type ModelGatewayLogSink,
 } from "./observability.js";
-import { toolCallingConfigurationFingerprint } from "./config.js";
+import {
+  assertReasoningPolicyOwner,
+  toolCallingConfigurationFingerprint,
+} from "./provider-identity.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
@@ -62,6 +69,7 @@ import {
   type RetryLogLabels,
   type RetryPolicy,
   type RetryRepairReason,
+  type SteeredAnswerRepairReason,
   type RetryResume,
   codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
@@ -128,6 +136,8 @@ function completeTransportUsage(
 }
 
 export interface GatewayDeps {
+  /** Same server-owned configuration generation only; provider bindings are still checked. */
+  readonly reasoningHistorySource?: Gateway | undefined;
   readonly spendBudget?: GatewaySpendBudget | undefined;
   readonly adapter?: ProviderAdapter | undefined;
   readonly clock?: Clock | undefined;
@@ -228,11 +238,13 @@ export interface GatewayCallRequest extends GatewayRequest {
    * The explicit reasoning delivery of a call whose surface displays the model's reasoning (#3878,
    * #3873 F23); local, never serialized into a provider request body. `forward` hands the model's
    * reasoning to the caller beside its answer (as `reasoning` chunks and `NormalizedResponse.reasoning`),
-   * while the configuration's `codingReasoningDisplay` is not `"off"`. Only the coding sidecar route
-   * sets it; every other call, whatever latency profile it borrows, receives its answer without the
+   * while display is enabled, or privately for a provider requiring exact continuation state.
+   * Only the coding sidecar route sets it; every other call, whatever latency profile it borrows, receives its answer without the
    * reasoning, which the gateway still parses and counts.
    */
   readonly reasoningDelivery?: "forward" | undefined;
+  /** Server-private credential floor for opaque continuation; never serialized or logged. */
+  readonly reasoningStateSecrets?: readonly string[];
   /**
    * The explicit answer repair of an autonomous coding turn (#3873, F17, F23); local, never
    * serialized into a provider request body. `steered` gives an answer the model could not use (it
@@ -282,10 +294,29 @@ export interface GatewayCallRequest extends GatewayRequest {
 interface CallIds {
   readonly requestId: string;
   readonly correlationId: string;
+  readonly parentCorrelationId?: string;
 }
 
 function callIds(requestId: string, request: GatewayCallRequest): CallIds {
-  return { requestId, correlationId: request.logContext?.correlationId ?? requestId };
+  const parent = request.logContext?.parentCorrelationId;
+  return {
+    requestId,
+    correlationId: request.logContext?.correlationId ?? requestId,
+    // A parent the log contract would refuse must not turn every line of the call into a rejection.
+    ...(isActivityLogCorrelationId(parent) ? { parentCorrelationId: parent } : {}),
+  };
+}
+
+// Calls with an enclosing run, by the correlation id their lines carry: bounded, oldest evicted.
+const MAX_BOUND_PARENT_CORRELATIONS = 1_024;
+function bindParentCorrelation(parents: Map<string, string>, ids: CallIds): void {
+  if (ids.parentCorrelationId === undefined) return;
+  parents.delete(ids.correlationId);
+  parents.set(ids.correlationId, ids.parentCorrelationId);
+  if (parents.size > MAX_BOUND_PARENT_CORRELATIONS) {
+    const oldest = parents.keys().next().value;
+    if (oldest !== undefined) parents.delete(oldest);
+  }
 }
 
 function callIdFields(ids: CallIds): { readonly requestId?: string } {
@@ -448,6 +479,8 @@ const REASONING_COMPLETION_FIELDS = {
     required: false,
     values: ["none", "forwarded", "discarded"],
   },
+  // Calls whose provider id was missing, unusable or repeated and which got a minted id instead.
+  toolCallIdsNormalized: { type: "integer", dataClass: "count", required: false },
 } as const;
 
 const GATEWAY_CHAT_STARTED_OPERATION = defineActivityLogOperation({
@@ -530,7 +563,15 @@ const GATEWAY_STREAM_COMPLETED_OPERATION = defineActivityLogOperation({
       values: ["low", "medium", "high"],
     },
     chunkCount: { type: "integer", dataClass: "count", required: true },
+    // The first output of ANY kind the caller saw, and which kind it was: answer text, forwarded
+    // reasoning, or a tool call (assembled whole, so it arrives with the terminal answer).
     firstTokenMs: { type: "number", dataClass: "duration", required: false },
+    firstTokenKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["content", "tool-call", "reasoning"],
+    },
     promptTokens: { type: "integer", dataClass: "count", required: false },
     completionTokens: { type: "integer", dataClass: "count", required: false },
     ...REASONING_COMPLETION_FIELDS,
@@ -745,13 +786,42 @@ function callRetryConfig(
   outageWindowMs: number,
   elapsedMs = 0,
   answerRepair?: GatewayCallRequest["answerRepair"],
+  reasoningRepair?: (error: Error) => RetryRepairReason | undefined,
 ): RetryConfig {
   const windowMs = outageWindowMs > 0 ? Math.max(1, outageWindowMs - elapsedMs) : 0;
   return {
     ...codingWorkbenchRetryConfig(provider, windowMs),
     jitterProviderCooldown: true,
-    ...(answerRepair === "steered" ? { repair: steeredAnswerRepair } : {}),
+    ...(answerRepair === "steered"
+      ? {
+          repair: (error: Error): RetryRepairReason | undefined =>
+            steeredAnswerRepair(error) ?? reasoningRepair?.(error),
+        }
+      : {}),
   };
+}
+
+// The error a failed call surfaces: after a reasoning retry (restore or withhold), a second HTTP 400
+// surfaces the ORIGINAL rejection, not the retried attempt's (#4351). Any other failure surfaces as
+// itself.
+function surfacedFailure(state: OutputRepairState, error: unknown): unknown {
+  return state.reasoningRepair !== undefined &&
+    error instanceof Error &&
+    isUnattributedRejection(error)
+    ? state.reasoningRepair.failure
+    : error;
+}
+
+// A request rejection the gateway attributes to no other known cause: a plain HTTP 400 that is not a
+// context overflow, an admission refusal, an exhausted output budget, an empty answer or a rejected
+// tool-call shape (each of those is its own error class with its own handling).
+function isUnattributedRejection(error: Error): boolean {
+  return (
+    error instanceof ProviderError &&
+    error.httpStatus === 400 &&
+    !(error instanceof ProviderOutputExhaustedError) &&
+    !(error instanceof ProviderEmptyAnswerError)
+  );
 }
 
 // The call's conversation with its observer (#3873 review): one per call, shared by its admission
@@ -906,6 +976,14 @@ function noteDelivered(state: PreparedStream, chunk: GatewayStreamChunk): void {
 
 function resumableAfterReasoning(state: PreparedStream, error: unknown): error is GatewayError {
   if (!(error instanceof GatewayError)) return false;
+  // Opaque continuation state belongs to one physical attempt. A second passage cannot replace
+  // bytes already delivered into the native assistant record.
+  if (
+    state.attempts.reasoningDelivered &&
+    state.prepared.reasoningDelivery === "forward" &&
+    state.route.provider.reasoningContinuation === "required-with-tools"
+  )
+    return false;
   const repairable =
     state.prepared.answerRepair === "steered" &&
     state.outputRepair.steered === undefined &&
@@ -920,7 +998,11 @@ function streamStartupBudget(
   now: number,
 ): { readonly remainingMs: number; readonly elapsedMs: number } {
   const elapsedMs = now - state.start;
-  const budgetMs = streamedCallBudgetMs(state.route.provider, state.outageWindowMs);
+  const budgetMs = streamedCallBudgetMs(
+    state.route.provider,
+    state.outageWindowMs,
+    state.prepared.maxOutputTokens,
+  );
   return { remainingMs: Math.max(0, budgetMs - elapsedMs), elapsedMs };
 }
 
@@ -932,12 +1014,14 @@ function streamStartupRetryConfig(
   state: PreparedStream,
   admission: () => CircuitBreakerAdmission,
   budget: { readonly remainingMs: number; readonly elapsedMs: number },
+  reasoningRepair?: (error: Error) => RetryRepairReason | undefined,
 ): RetryConfig {
   const config = callRetryConfig(
     state.route.provider,
     state.outageWindowMs,
     budget.elapsedMs,
     state.prepared.answerRepair,
+    reasoningRepair,
   );
   const probeEndsCall = config.retryWindowMs === undefined;
   return {
@@ -952,7 +1036,7 @@ function streamStartupRetryConfig(
 // The one steered repair of an answer the model could not use (#3873, F17, F23): the correction the
 // retry loop granted and the failure the repaired attempt corrects.
 interface SteeredRepair {
-  readonly reason: RetryRepairReason;
+  readonly reason: SteeredCorrectionReason;
   readonly failure: Error;
 }
 
@@ -971,8 +1055,14 @@ function claimCorrectionAdmission(state: CorrectionAdmission): boolean {
 
 // The steered repair of a call, set the moment the repaired attempt starts and absent until then.
 // Shared by the buffered attempt state and the prepared stream, and read once the call settles.
+type ReasoningRepairKind = "restore" | "withhold";
+
 interface OutputRepairState {
   steered?: SteeredRepair | undefined;
+  // The rejection a reasoning retry answers (#4351) and which way it went: the retried attempt's own
+  // failure never replaces it, so a second rejection surfaces this original error, and a success
+  // teaches (restore) or unteaches (withhold) the deployment.
+  reasoningRepair?: { readonly kind: ReasoningRepairKind; readonly failure: Error } | undefined;
 }
 
 interface BufferedChatAttempt {
@@ -1011,8 +1101,11 @@ export const OUTPUT_EXHAUSTED_REPAIR_MESSAGE =
 export const EMPTY_ANSWER_REPAIR_MESSAGE =
   "Your previous answer ended after reasoning without a tool call or a final answer. Call the next tool now, or give the final answer; keep any reasoning to a few sentences.";
 
+// The repairs that send a correction; the reasoning restore (#4351) sends the same request again.
+type SteeredCorrectionReason = SteeredAnswerRepairReason;
+
 // The one correction each steered repair sends.
-const REPAIR_MESSAGES: Readonly<Record<RetryRepairReason, string>> = {
+const REPAIR_MESSAGES: Readonly<Record<SteeredCorrectionReason, string>> = {
   "output-exhausted-repair": OUTPUT_EXHAUSTED_REPAIR_MESSAGE,
   "empty-answer-repair": EMPTY_ANSWER_REPAIR_MESSAGE,
 };
@@ -1044,7 +1137,7 @@ export function withSystemCorrection(
 // one correction at a time, and never the failed answer's reasoning quoted back.
 function steeredRepairRequest(
   original: GatewayCallRequest,
-  reason: RetryRepairReason,
+  reason: SteeredCorrectionReason,
 ): GatewayCallRequest {
   return {
     ...original,
@@ -1182,8 +1275,14 @@ function effectiveBufferedAttemptMs(provider: ModelProviderConfig): number {
 // Coding-Workbench-raised) `timeoutMs`: the silence bound floored to the silence floor, the budget
 // through `streamRequestBudgetMs` — the one derivation the route deadline behind a streamed call
 // shares (PR #3602 review).
-function chatStreamBounds(provider: ModelProviderConfig): StreamReadBounds {
-  return { silenceMs: effectiveSilenceMs(provider), budgetMs: streamRequestBudgetMs(provider) };
+function chatStreamBounds(
+  provider: ModelProviderConfig,
+  maxOutputTokens?: number,
+): StreamReadBounds {
+  return {
+    silenceMs: effectiveSilenceMs(provider),
+    budgetMs: streamRequestBudgetMs(provider, maxOutputTokens),
+  };
 }
 
 // One attempt's answer: over the provider's stream when the attempt has read bounds, whole
@@ -1253,11 +1352,18 @@ function providerEndpointHost(baseUrl: string): string | undefined {
 // whole answer, and a provider's own stream can open with a role-only or empty delta before real
 // content arrives. Called on every chunk; returns undefined once a non-empty one has already fired
 // so the caller's `??=` never re-times a later chunk.
-function firstNonEmptyDeltaMs(
-  chunk: GatewayStreamChunk,
-  elapsed: () => number,
-): number | undefined {
-  return chunk.type === "delta" && chunk.token.length > 0 ? elapsed() : undefined;
+type FirstTokenKind = "content" | "tool-call" | "reasoning";
+interface FirstOutput {
+  readonly ms: number;
+  readonly kind: FirstTokenKind;
+}
+
+function firstOutputOf(chunk: GatewayStreamChunk, elapsed: () => number): FirstOutput | undefined {
+  if (chunk.type === "done") {
+    return chunk.response.toolCalls.length > 0 ? { ms: elapsed(), kind: "tool-call" } : undefined;
+  }
+  if (chunk.token.length === 0) return undefined;
+  return { ms: elapsed(), kind: chunk.type === "delta" ? "content" : "reasoning" };
 }
 
 // A minimal usage projection carried on the stream-completed line — never the full UsageMetadata,
@@ -1282,6 +1388,7 @@ function streamUsageIfSupplied(usage: UsageMetadata | undefined): StreamTerminal
 type ReasoningDisposition = "none" | "forwarded" | "discarded";
 
 interface ReasoningCompletion {
+  readonly toolCallIdsNormalized?: number;
   readonly reasoningBytes: number;
   readonly reasoningTokens?: number;
   readonly reasoningDisposition: ReasoningDisposition;
@@ -1298,7 +1405,11 @@ function reasoningDisposition(
 // The body-free reasoning share a completion line records (#3878).
 function reasoningCompletion(response: NormalizedResponse, forwards: boolean): ReasoningCompletion {
   const { reasoningBytes, reasoningTokens } = response.usage;
+  const normalized = response.toolCalls.filter((call) =>
+    call.id.startsWith(SYNTHESIZED_TOOL_CALL_ID_PREFIX),
+  ).length;
   return {
+    ...(normalized === 0 ? {} : { toolCallIdsNormalized: normalized }),
     reasoningBytes: reasoningBytes ?? 0,
     ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
     reasoningDisposition: reasoningDisposition(response, forwards),
@@ -1332,8 +1443,12 @@ export class Gateway {
   private readonly adapter: ProviderAdapter | undefined;
   private readonly fetchImpl: typeof fetch | undefined;
   private readonly providers: ReadonlyMap<string, ModelProviderConfig>;
+  private readonly reasoningHistory: GatewayReasoningHistory;
+  // Rejections a reasoning retry was granted for (#4351); read as the retried attempt prepares.
+  private readonly reasoningGrants = new WeakMap<Error, ReasoningRepairKind>();
   private readonly breakers = new Map<string, CircuitBreaker>();
   private readonly log: ModelGatewayLogSink;
+  private readonly parentCorrelations = new Map<string, string>();
   private readonly configurationCorrelationId: string | undefined;
   private readonly onContextWindowReported: GatewayDeps["onContextWindowReported"];
 
@@ -1347,11 +1462,103 @@ export class Gateway {
     this.random = deps.random ?? Math.random;
     this.adapter = deps.adapter;
     this.fetchImpl = deps.fetchImpl;
-    this.log = resolveLogSink(deps.log);
+    this.log = withParentCorrelationLookup(resolveLogSink(deps.log), (id) =>
+      this.parentCorrelations.get(id),
+    );
+    this.reasoningHistory =
+      deps.reasoningHistorySource?.reasoningHistory ??
+      new GatewayReasoningHistory(this.log, () => this.clock.now());
     this.configurationCorrelationId = deps.configurationCorrelationId;
     this.onContextWindowReported = deps.onContextWindowReported;
     this.providers = new Map(config.providers.map((p) => [p.modelId, p]));
     this.logConfigResolved();
+  }
+
+  // The retry's eligibility is decided where the rejection is seen (#4351): a plain, unattributed
+  // HTTP 400 on a deployment with no reasoning setting. Anything else keeps its own handling.
+  private reasoningRepair(
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+  ): (error: Error) => RetryRepairReason | undefined {
+    return (error): RetryRepairReason | undefined => {
+      if (!isUnattributedRejection(error)) return undefined;
+      const kind = this.reasoningRepairKind(request, provider);
+      if (kind === undefined) return undefined;
+      this.reasoningGrants.set(error, kind);
+      return kind === "restore" ? "reasoning-restore-repair" : "reasoning-withhold-repair";
+    };
+  }
+
+  // One retry per call, in one of two directions: a deployment nothing is known about gets the current
+  // turn's reasoning restored; a deployment Keiko learned wants it, and which just rejected a request
+  // that carried it, gets the same request without it.
+  private reasoningRepairKind(
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+  ): ReasoningRepairKind | undefined {
+    if (this.reasoningHistory.canRestoreCurrentTurn(request, provider)) return "restore";
+    return this.reasoningHistory.canWithholdCurrentTurn(request, provider) ? "withhold" : undefined;
+  }
+
+  private reasoningRetryRequest(
+    kind: ReasoningRepairKind,
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+  ): GatewayCallRequest {
+    return kind === "restore"
+      ? this.reasoningHistory.restoreCurrentTurn(request, provider)
+      : this.reasoningHistory.withholdReasoning(request);
+  }
+
+  // Only a retry that succeeded teaches anything: the deployment rejected the continuation in one
+  // form and accepted the other. A failed retry changes nothing.
+  private settleReasoningRepair(
+    state: OutputRepairState,
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+  ): void {
+    if (state.reasoningRepair?.kind === "restore") this.reasoningHistory.learn(request, provider);
+    else if (state.reasoningRepair?.kind === "withhold")
+      this.reasoningHistory.unlearn(request, provider);
+  }
+
+  // What a completed call leaves behind: what its reasoning retry taught, the response's reasoning when
+  // the deployment keeps it, the end of a turn a final answer closes, and the fact that the deployment
+  // served an actual call (#4351). Teaching comes first: a learned or unlearned deployment decides what
+  // the response keeps.
+  private settleCompletedCall(
+    state: OutputRepairState,
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+    response: NormalizedResponse,
+  ): void {
+    this.settleReasoningRepair(state, request, provider);
+    this.reasoningHistory.remember(request, provider, response);
+    this.endTurnUnless(request, provider, response);
+    this.reasoningHistory.noteServed(provider);
+  }
+
+  // The turn of a request has ended once its call produced a final answer, failed or was cancelled:
+  // what was kept for that turn alone goes with it (#4351). A tool-calling response continues the turn.
+  private endTurnUnless(
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+    response?: NormalizedResponse,
+  ): void {
+    if (response?.finishReason === "tool_calls") return;
+    this.reasoningHistory.endTurn(request, provider);
+  }
+
+  /** Whether an actual model call to this model's deployment completed through this generation (#4351). */
+  hasServedModel(modelId: string): boolean {
+    const provider = this.providers.get(modelId);
+    return provider !== undefined && this.reasoningHistory.hasServed(provider);
+  }
+
+  /** Whether Keiko learned that this deployment returns its reasoning on tool turns (#4351). */
+  learnedReasoningOnToolTurns(modelId: string): boolean {
+    const provider = this.providers.get(modelId);
+    return provider !== undefined && this.reasoningHistory.isLearned(provider);
   }
 
   private prepareRequest(
@@ -1359,11 +1566,24 @@ export class Gateway {
     capability: ModelCapability,
   ): GatewayCallRequest {
     assertValidGatewaySamplingParameters(request);
+    const provider = this.providers.get(request.modelId);
+    if (provider !== undefined) {
+      assertReasoningPolicyOwner(provider);
+      // Authenticated native continuation already belongs to its retained session. It must not
+      // enter the transient history owner, which intentionally strips unproven runtime echoes.
+      if (provider.reasoningContinuation !== "required-with-tools")
+        request = this.reasoningHistory.prepare(request, provider);
+    }
     if (request.maxOutputTokens !== undefined || this.spendBudget === undefined) return request;
     return {
       ...request,
       maxOutputTokens: deriveContextProfileFromCapability(capability).reservedOutputTokens,
     };
+  }
+
+  /** Server-owned same-generation refinements only. This never changes provider bindings. */
+  joinReasoningHistory(source: Gateway): void {
+    this.reasoningHistory.join(source.reasoningHistory);
   }
 
   private promptAdmission(route: RoutedCall, ids: CallIds): GatewayPromptAdmission {
@@ -1435,6 +1655,7 @@ export class Gateway {
     request = this.prepareRequest(request, route.capability);
     const requestId = randomUUID();
     const ids = callIds(requestId, request);
+    bindParentCorrelation(this.parentCorrelations, ids);
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(requestId, route, ids.correlationId);
@@ -1452,18 +1673,23 @@ export class Gateway {
     try {
       result = await executeWithRetry(
         this.invokeBufferedAttempt.bind(this, attempt),
-        callRetryConfig(route.provider, this.outageWindowMs(request), 0, request.answerRepair),
+        callRetryConfig(
+          route.provider,
+          this.outageWindowMs(request),
+          0,
+          request.answerRepair,
+          this.reasoningRepair(request, route.provider),
+        ),
         this.clock,
         request.cancellationSignal,
         this.random,
         this.retryLogContext(route, ids, attempt.announcer),
       );
     } catch (error) {
-      attachOutputRepair(error, attempt.state);
-      this.settleFailedCall(ids, route, elapsed(), error);
-      throw error;
+      throw this.settleBufferedFailure(attempt.state, ids, route, elapsed(), error, request);
     }
     const forwardsReasoning = this.forwardsReasoning(request);
+    this.settleCompletedCall(attempt.state, request, route.provider, result);
     this.logCallCompleted(ids, route, result, elapsed(), forwardsReasoning);
     return withDiscardedUsage(
       recoveredResponse(
@@ -1472,6 +1698,23 @@ export class Gateway {
       ),
       attempt.state.discarded,
     );
+  }
+
+  // A failed buffered call settles its evidence and returns the error the caller should see: after a
+  // reasoning-restore retry, a second rejection is the ORIGINAL one (#4351).
+  private settleBufferedFailure(
+    state: OutputRepairState,
+    ids: CallIds,
+    route: RoutedCall,
+    durationMs: number,
+    error: unknown,
+    request: GatewayCallRequest,
+  ): unknown {
+    this.endTurnUnless(request, route.provider);
+    const surfaced = surfacedFailure(state, error);
+    attachOutputRepair(surfaced, state);
+    this.settleFailedCall(ids, route, durationMs, surfaced);
+    return surfaced;
   }
 
   private async invokeBufferedAttempt(
@@ -1508,6 +1751,18 @@ export class Gateway {
   private prepareBufferedAttempt(attempt: BufferedChatAttempt, previousError?: Error): void {
     attempt.state.repair = undefined;
     attempt.state.correctionPending = false;
+    const reasoningKind =
+      previousError === undefined ? undefined : this.reasoningGrants.get(previousError);
+    if (previousError !== undefined && reasoningKind !== undefined) {
+      attempt.state.request = this.reasoningRetryRequest(
+        reasoningKind,
+        attempt.originalRequest,
+        attempt.route.provider,
+      );
+      attempt.state.reasoningRepair = { kind: reasoningKind, failure: previousError };
+      attempt.state.correctionPending = true;
+      return;
+    }
     const granted = grantedRepair(attempt.originalRequest, previousError);
     if (granted !== undefined) {
       attempt.state.request = steeredRepairRequest(attempt.originalRequest, granted.reason);
@@ -1539,7 +1794,17 @@ export class Gateway {
     attempts.correctionPending = false;
     tallyDiscardedAttempt(attempts.discarded, previousError);
     const granted = grantedRepair(state.prepared, previousError);
-    if (granted !== undefined) {
+    const reasoningKind =
+      previousError === undefined ? undefined : this.reasoningGrants.get(previousError);
+    if (previousError !== undefined && reasoningKind !== undefined) {
+      state.outputRepair.reasoningRepair = { kind: reasoningKind, failure: previousError };
+      attempts.request = this.reasoningRetryRequest(
+        reasoningKind,
+        state.prepared,
+        state.route.provider,
+      );
+      attempts.correctionPending = true;
+    } else if (granted !== undefined) {
       state.outputRepair.steered = granted;
       attempts.request = steeredRepairRequest(state.prepared, granted.reason);
       attempts.correctionPending = true;
@@ -1608,6 +1873,7 @@ export class Gateway {
     this.logToolSchemaRepair(correlationId, repair, state, {
       promptTokens: countGatewayPromptTokens({ ...request, tools }, profile.tokenAccounting, {
         contextWindow: profile.maxInputTokens,
+        reasoningHistoryField: this.providers.get(request.modelId)?.reasoningHistoryField,
       }),
       maxOutputTokens,
       safetyMarginTokens: profile.safetyMarginTokens,
@@ -1665,7 +1931,7 @@ export class Gateway {
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
     // other stream outcome. `??=` locks it in on the first non-empty delta and leaves it alone.
-    let firstTokenMs: number | undefined;
+    let firstOutput: FirstOutput | undefined;
     let terminalResponse: NormalizedResponse | undefined;
     // EVERY started stream needs exactly one outcome line. Set the moment an outcome is written,
     // so the `finally` can tell "the consumer walked away" from the two paths that already spoke.
@@ -1673,7 +1939,7 @@ export class Gateway {
     try {
       for await (const chunk of this.streamFrom(state)) {
         chunkCount += 1;
-        firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
+        firstOutput ??= firstOutputOf(chunk, elapsed);
         if (chunk.type === "done") {
           terminalResponse = chunk.response;
           break;
@@ -1684,8 +1950,10 @@ export class Gateway {
       settled = true;
     } catch (error) {
       settled = true;
-      attachOutputRepair(error, state.outputRepair);
-      this.failStream(ids, route, chunkCount, elapsed(), error);
+      this.endTurnUnless(state.prepared, route.provider);
+      const surfaced = surfacedFailure(state.outputRepair, error);
+      attachOutputRepair(surfaced, state.outputRepair);
+      this.failStream(ids, route, chunkCount, elapsed(), surfaced);
     } finally {
       admission.settle("non-provider-fault");
       // A consumer that stops iterating (client disconnect, request abort, `break`) closes this
@@ -1693,6 +1961,7 @@ export class Gateway {
       // without this line the log keeps `gateway.stream.started` with nothing after it — the exact
       // shape of a wedged provider. Not a failure and not a fault, so it is an outcome of its own.
       if (!settled) {
+        this.endTurnUnless(state.prepared, route.provider);
         this.logStreamAbandoned(ids, route, chunkCount, elapsed());
       }
     }
@@ -1700,7 +1969,7 @@ export class Gateway {
     // Outside the try on purpose: a sink that throws here must not be caught above and reported as
     // a mid-stream provider failure — which would also trip the circuit breaker on a logging fault.
     this.logStreamCompleted(ids, route, chunkCount, elapsed(), {
-      firstTokenMs,
+      firstOutput,
       usage: streamUsageIfSupplied(terminalResponse?.usage),
       reasoning:
         terminalResponse === undefined
@@ -1722,6 +1991,7 @@ export class Gateway {
     forwardsReasoning: boolean,
     start: number,
   ): GatewayStreamChunk {
+    this.settleCompletedCall(state.outputRepair, state.prepared, state.route.provider, response);
     return this.enrichDone(
       withDiscardedUsage(
         recoveredResponse(withReasoningPolicy(response, forwardsReasoning), state.outputRepair),
@@ -1735,18 +2005,23 @@ export class Gateway {
 
   // #3878: only a call that asks for reasoning delivery (`reasoningDelivery: "forward"`, set by the
   // coding sidecar route alone) forwards the model's reasoning, so the Coding Workbench can show it,
-  // and only while the operator has not switched `codingReasoningDisplay` off. Every other surface
+  // or privately for required provider continuation even when live presentation is hidden. Every other surface
   // keeps today's answer: the reasoning is parsed and discarded — including a surface that borrows
   // the coding-workbench latency profile for its timeout floors, which selects timeouts only (the
   // commit draft received the reasoning with it until #3873, F23).
   private forwardsReasoning(request: GatewayCallRequest): boolean {
-    return request.reasoningDelivery === "forward" && this.config.codingReasoningDisplay !== "off";
+    return (
+      request.reasoningDelivery === "forward" &&
+      (this.config.codingReasoningDisplay !== "off" ||
+        this.providers.get(request.modelId)?.reasoningContinuation === "required-with-tools")
+    );
   }
 
   private async prepareStream(request: GatewayCallRequest): Promise<PreparedStream> {
     const route = this.routeForCall(request);
     const prepared = this.prepareRequest(request, route.capability);
     const ids = callIds(randomUUID(), prepared);
+    bindParentCorrelation(this.parentCorrelations, ids);
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
@@ -1758,7 +2033,7 @@ export class Gateway {
     // and the window, not the stream budget, is what bounds that wait (#3873 review).
     const admissionBudgetMs = admissionBudgetFor(
       callRetryConfig(route.provider, outageWindowMs),
-      streamedCallBudgetMs(route.provider, outageWindowMs),
+      streamedCallBudgetMs(route.provider, outageWindowMs, prepared.maxOutputTokens),
       (): number => this.clock.now() - start,
     );
     const { admission } = await this.initialStreamAdmission(
@@ -1942,7 +2217,7 @@ export class Gateway {
     chunkCount: number,
     durationMs: number,
     terminal: {
-      readonly firstTokenMs: number | undefined;
+      readonly firstOutput: FirstOutput | undefined;
       readonly usage: StreamTerminalUsage | undefined;
       readonly reasoning: ReasoningCompletion | undefined;
     },
@@ -1956,7 +2231,9 @@ export class Gateway {
           modelId: logModelId(route.provider.modelId),
           costClass: route.capability.costClass,
           chunkCount,
-          ...(terminal.firstTokenMs === undefined ? {} : { firstTokenMs: terminal.firstTokenMs }),
+          ...(terminal.firstOutput === undefined
+            ? {}
+            : { firstTokenMs: terminal.firstOutput.ms, firstTokenKind: terminal.firstOutput.kind }),
           ...terminal.usage,
           ...terminal.reasoning,
         },
@@ -2084,7 +2361,12 @@ export class Gateway {
         return this.openStreamAttempt(state, current, remainingMs, admission);
       },
       // A catalog rejection is retried only with its schema correction, never replayed as it was.
-      streamStartupRetryConfig(state, () => admission, budget),
+      streamStartupRetryConfig(
+        state,
+        () => admission,
+        budget,
+        this.reasoningRepair(state.prepared, state.route.provider),
+      ),
       this.clock,
       request.cancellationSignal,
       this.random,
@@ -2146,7 +2428,7 @@ export class Gateway {
     remainingMs: number | undefined,
     admission: CircuitBreakerAdmission,
   ): Promise<{ first: GatewayStreamChunk; iterator: AsyncGenerator<GatewayStreamChunk> }> {
-    const bounds = chatStreamBounds(state.route.provider);
+    const bounds = chatStreamBounds(state.route.provider, request.maxOutputTokens);
     const budgetMs = Math.min(bounds.budgetMs, remainingMs ?? bounds.budgetMs);
     const iterator = this.reservedStreamAttempt(
       state,
@@ -2432,14 +2714,19 @@ export class Gateway {
     request: GatewayCallRequest,
     capability: ModelCapability,
     correctsUnusableAttempt = false,
+    transportPromptTokens?: number,
   ): ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>> {
     const admit = request.attemptAdmission;
     if (admit === undefined) return undefined;
     const profile = deriveContextProfileFromCapability(capability);
     const reservation = admit({
-      promptTokens: countGatewayPromptTokens(request, profile.tokenAccounting, {
-        contextWindow: profile.maxInputTokens,
-      }),
+      promptTokens: Math.max(
+        countGatewayPromptTokens(request, profile.tokenAccounting, {
+          contextWindow: profile.maxInputTokens,
+          reasoningHistoryField: this.providers.get(request.modelId)?.reasoningHistoryField,
+        }),
+        transportPromptTokens ?? 0,
+      ),
       maxOutputTokens: request.maxOutputTokens ?? profile.reservedOutputTokens,
       ...(correctsUnusableAttempt ? { correctsUnusableAttempt: true as const } : {}),
     });
@@ -2517,6 +2804,7 @@ export class Gateway {
               dispatched ||= observed;
             },
             announced,
+            input.promptTokens,
           );
         },
       },
@@ -2532,8 +2820,16 @@ export class Gateway {
     correlationId: string,
     observeDispatch: (dispatched: boolean) => void,
     correctsUnusableAttempt: boolean,
+    promptTokens: number,
   ): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> {
-    const caller = this.callerAttemptReservation(request, capability, correctsUnusableAttempt);
+    if (!Number.isSafeInteger(promptTokens) || promptTokens < 0)
+      throw new CallerAttemptAdmissionError("Invalid transport prompt token count before dispatch");
+    const caller = this.callerAttemptReservation(
+      request,
+      capability,
+      correctsUnusableAttempt,
+      promptTokens,
+    );
     let spend: GatewaySpendReservation | undefined;
     try {
       request = callerAdmittedRequest(request, caller);

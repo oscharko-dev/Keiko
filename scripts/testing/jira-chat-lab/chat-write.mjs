@@ -66,7 +66,7 @@ async function approve(context, exchange, intent, signal) {
   assert.equal(exchange.call.name, toolName(intent));
   assert.deepEqual(exchange.call.arguments, toolArguments(intent));
   assert.equal(exchange.approval.operation, intent.operation ?? "jira.comment");
-  const path = `/api/atlassian-connectors/action-approvals/${encodeURIComponent(exchange.approval.approvalId)}/chat-write-approval`;
+  const path = `/api/atlassian-connectors/chat-write-approval/${encodeURIComponent(exchange.approval.approvalId)}`;
   const current = await jsonRequest(
     context.origin,
     context.cookie,

@@ -20,6 +20,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -1193,6 +1194,64 @@ describe("workspace watch service", () => {
     });
   });
 
+  // #4068 W7: a Windows directory watch holds the directory handle, not its path. Moving the
+  // watched root therefore raises no watcher error; the watch keeps reporting changes made in the
+  // moved tree, relative to the old root. Reconciling those events against the old path must
+  // name the root as replaced, not report every touched file as deleted.
+  it("signals a root-replaced rescan when the watcher keeps reporting after the root moved", async () => {
+    await writeFile(join(root, "known.txt"), "known", "utf8");
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({
+      adapter,
+      coalesceMs: 0,
+      fallbackPollMs: 5,
+      idleTearDownMs: 0,
+      maxQueueDepth: 16,
+      replayCapacity: 8,
+    });
+    const events: EditorM7WatchEvent[] = [];
+    manager.subscribe({ root, onEvent: (event) => events.push(event) });
+    await drainInitialBaseline(manager, adapter);
+
+    await rename(root, join(outside, "relocated-root"));
+    adapter.emit({ eventType: "change", filename: "known.txt" });
+
+    await waitForCondition(() => events.some((event) => event.kind === "rescan"));
+    expect(events.find((event) => event.kind === "rescan")).toMatchObject({
+      reason: "root-replaced",
+      health: "rescanRequired",
+      relativePath: "",
+    });
+    expect(events.some((event) => event.kind === "deleted")).toBe(false);
+    expect(manager.snapshot(root).degradedReasons).toContain("root-replaced");
+    manager.disposeAll();
+  });
+
+  it("signals a root-replaced rescan for a rename reported after the root moved", async () => {
+    await writeFile(join(root, "before.txt"), "before", "utf8");
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({
+      adapter,
+      coalesceMs: 0,
+      fallbackPollMs: 5,
+      idleTearDownMs: 0,
+      maxQueueDepth: 16,
+      replayCapacity: 8,
+    });
+    const events: EditorM7WatchEvent[] = [];
+    manager.subscribe({ root, onEvent: (event) => events.push(event) });
+    await drainInitialBaseline(manager, adapter);
+
+    await rename(root, join(outside, "relocated-root"));
+    adapter.emit({ eventType: "rename", oldFilename: "before.txt", filename: "after.txt" });
+
+    await waitForCondition(() => events.some((event) => event.kind === "rescan"));
+    expect(events.find((event) => event.kind === "rescan")).toMatchObject({
+      reason: "root-replaced",
+    });
+    manager.disposeAll();
+  });
+
   it("signals a root-replaced rescan when the watched root is replaced by a non-directory", async () => {
     const adapter = new FakeAdapter();
     const manager = createWorkspaceWatchService({
@@ -1489,4 +1548,144 @@ describe("workspace watch service", () => {
     expect(retained).toStrictEqual(roots.slice(2));
     manager.disposeAll();
   });
+});
+
+// #4068 W7: the Files watcher on a real Git linked worktree, through the production Node adapter.
+// Windows `fs.watch` holds the watched directory's handle, so the session must keep delivering
+// events for a worktree whose path carries spaces and non-ASCII letters, and a worktree Git moves
+// away must read as a replaced root, never as the deletion of every file it held.
+describe.runIf(process.platform === "win32")("Windows Git worktree watch", () => {
+  let scratch = "";
+  let repository = "";
+
+  function git(cwd: string, ...args: readonly string[]): void {
+    execFileSync("git", ["-c", "worktree.useRelativePaths=false", ...args], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
+
+  beforeEach(async () => {
+    scratch = await realpath(await mkdtemp(join(tmpdir(), "keiko-watch-worktree-")));
+    repository = join(scratch, "repo");
+    execFileSync("git", ["init", "-q", "-b", "main", repository], { encoding: "utf8" });
+    git(repository, "config", "user.email", "test@keiko.example");
+    git(repository, "config", "user.name", "Keiko Test");
+    git(repository, "config", "commit.gpgsign", "false");
+    await writeFile(join(repository, "README.md"), "# demo\n");
+    git(repository, "add", "README.md");
+    git(repository, "commit", "-q", "-m", "initial");
+  });
+
+  afterEach(async () => {
+    await rm(scratch, { recursive: true, force: true });
+  });
+
+  async function linkedWorktree(name: string): Promise<string> {
+    const worktree = join(scratch, name);
+    git(repository, "worktree", "add", "-q", "-b", "keiko/watched", worktree);
+    return realpath(worktree);
+  }
+
+  interface NodeWatch {
+    readonly manager: ReturnType<typeof createWorkspaceWatchService>;
+    readonly settled: () => number;
+  }
+
+  // The production Node adapter. `onScanSettled` lets a test wait for the baseline scan, so a
+  // file written afterwards is classified against a complete baseline.
+  function watchNode(): NodeWatch {
+    let settled = 0;
+    const manager = createWorkspaceWatchService({
+      coalesceMs: 0,
+      fallbackPollMs: 5_000,
+      idleTearDownMs: 0,
+      onScanSettled: (): void => {
+        settled += 1;
+      },
+    });
+    return { manager, settled: (): number => settled };
+  }
+
+  // Native events can arrive in more than one burst; rewrite until the session reports the change.
+  async function writeUntil(
+    path: string,
+    events: readonly EditorM7WatchEvent[],
+    observed: (event: EditorM7WatchEvent) => boolean,
+  ): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    for (let attempt = 0; Date.now() < deadline; attempt += 1) {
+      await writeFile(path, `revision ${String(attempt)}\n`);
+      for (let turn = 0; turn < 50; turn += 1) {
+        if (events.some(observed)) return;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10);
+        });
+      }
+    }
+    throw new Error(`unobserved write; events: ${JSON.stringify(events.map((e) => e.kind))}`);
+  }
+
+  it("reports created and changed files in a Git worktree with spaces and Unicode", async () => {
+    const worktree = await linkedWorktree("linked wt ä");
+    await mkdir(join(worktree, "docs ß"));
+    const { manager, settled } = watchNode();
+    const events: EditorM7WatchEvent[] = [];
+    try {
+      const subscription = manager.subscribe({ root: worktree, onEvent: (e) => events.push(e) });
+      expect(subscription.kind).toBe("ok");
+      await waitForCondition(() => settled() >= 1);
+      const relativePath = "docs ß/notes ä ö.txt";
+      await writeUntil(
+        join(worktree, relativePath),
+        events,
+        (event) => event.kind === "created" && event.relativePath === relativePath,
+      );
+      await writeUntil(
+        join(worktree, "README.md"),
+        events,
+        (event) => event.kind === "changed" && event.relativePath === "README.md",
+      );
+      expect(events.filter((event) => event.kind === "deleted")).toEqual([]);
+      expect(manager.snapshot(worktree).health).toBe("healthy");
+    } finally {
+      manager.disposeAll();
+    }
+  }, 30_000);
+
+  it("names a worktree Git moves away as a replaced root and keeps watching its new path", async () => {
+    const worktree = await linkedWorktree("linked wt ä");
+    const moved = join(scratch, "moved wt ö");
+    const { manager, settled } = watchNode();
+    const before: EditorM7WatchEvent[] = [];
+    const after: EditorM7WatchEvent[] = [];
+    try {
+      manager.subscribe({ root: worktree, onEvent: (e) => before.push(e) });
+      await waitForCondition(() => settled() >= 1);
+
+      // The open watch handle does not stop Git from moving the worktree on Windows.
+      git(repository, "worktree", "move", worktree, moved);
+      await writeUntil(
+        join(moved, "README.md"),
+        before,
+        (event) => event.kind === "rescan" && event.reason === "root-replaced",
+      );
+      expect(before.filter((event) => event.kind === "deleted")).toEqual([]);
+      expect(manager.snapshot(worktree).health).toBe("rescanRequired");
+
+      const settledBefore = settled();
+      manager.subscribe({ root: moved, onEvent: (e) => after.push(e) });
+      await waitForCondition(() => settled() > settledBefore);
+      const relativePath = "after move ü.txt";
+      await writeUntil(
+        join(moved, relativePath),
+        after,
+        (event) => event.kind === "created" && event.relativePath === relativePath,
+      );
+      expect(after.filter((event) => event.kind === "deleted")).toEqual([]);
+    } finally {
+      manager.disposeAll();
+    }
+  }, 30_000);
 });

@@ -1,3 +1,13 @@
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  expectRegisteredActivityLogLine,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
+import {
+  largestBindingSelection,
+  selectionBinds,
+} from "../../../tests/support/jira-binding-probe.js";
 import type { MemoryId, ProjectId, UserId } from "@oscharko-dev/keiko-contracts/memory";
 import { randomBytes, randomUUID } from "node:crypto";
 import { handleUpdateChat } from "./store-handlers.js";
@@ -12,6 +22,8 @@ import {
 import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import { createJiraChatCatalogRuntime } from "./atlassian/jiraChatCatalogRuntime.js";
+import { jiraOperationDefinitions } from "./atlassian/jiraOperationRegistry.js";
+import { jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
 import { projectChatReadGrant } from "./atlassian/chatReadGrantState.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -23,8 +35,14 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { handleSendDesktopChat } from "./chat-handlers.js";
+import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
-import { handleDecideChatWriteApproval } from "./atlassian/chatWriteApprovalRoutes.js";
+import {
+  handleDecideChatWriteApproval,
+  handleGetChatWriteApproval,
+} from "./atlassian/chatWriteApprovalRoutes.js";
+import * as appSessionAuthority from "./coding-app-session/appSessionReadAuthority.js";
+import { continuations } from "./chat-approval-continuation-state.js";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -34,29 +52,39 @@ import {
   parseGatewayConfig,
   toolCallingConfigurationFingerprint,
 } from "@oscharko-dev/keiko-model-gateway";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type {
   AtlassianHttpBodyPort,
   AtlassianCredentialMetadata,
 } from "@oscharko-dev/keiko-connectors";
 import type { ChatToolExchange, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import { buildUiHandlerDeps, currentContextProfileForModel, type UiHandlerDeps } from "./deps.js";
 import { handleGroundedAsk, modelWindowAwareBudget } from "./grounded-qa.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import type { RouteContext, RouteResult } from "./routes.js";
+import type { ChatMessage } from "./store/index.js";
 import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import * as groundedOrchestrator from "./grounded-orchestrator.js";
+import * as groundedSynthesis from "./grounded-answer.js";
+import * as gatewayWindow from "./gateway-context-window.js";
+import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
 
 const MODEL = "mixed-chat-proof";
+// The current complete tool prompt exceeds the 8192 fixture's input capacity after adoption.
+// Positive physical-retry journeys use this smaller-than-initial window; tight refusal stays 8192.
+const RETRY_CONTEXT_WINDOW = 16384;
 // The former fixed coding-harness caps (30 calls, 300 s), now supplied as the turn's Authority
 // Envelope budget (#4175). These pins keep their invariants against an explicit envelope.
 const THIRTY_CALL_BUDGET = {
   maxRuntimeMs: 300_000,
   maxToolCalls: 30,
-  maxPromptTokens: 100_000,
   maxPatchBytes: 0,
 } as const;
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
@@ -279,7 +307,45 @@ function restartConsentGraph(deps: UiHandlerDeps): UiHandlerDeps {
     diagnostics: defaultServerDiagnosticSink,
   });
   cleanup.push(() => catalog.close());
+  preselectKnownFixtureTools(catalog);
   return { ...next, jiraChatCatalog: catalog };
+}
+
+/** These existing regressions isolate scope, approval and budget behavior with known tools. */
+function preselectKnownFixtureTools(
+  catalog: UiHandlerDeps["jiraChatCatalog"],
+  tool?: string,
+  additionalTools: readonly string[] = [],
+): void {
+  if (catalog === undefined) throw new TypeError("Missing Jira catalog");
+  if (tool === undefined && additionalTools.length === 0) return;
+  vi.spyOn(catalog, "get").mockImplementation(async (scope) => {
+    const base = new Set(catalog.toolDefinitions(scope).map((entry) => entry.name));
+    const operations = jiraOperationDefinitions();
+    const selected = await catalog.select(
+      operations
+        .filter((entry) =>
+          tool === undefined
+            ? base.has(entry.tool.replace(/[.-]/gu, "_")) || additionalTools.includes(entry.tool)
+            : entry.tool === tool,
+        )
+        .map((entry) => entry.identity),
+      scope,
+    );
+    if (tool === undefined) return selected;
+    if (selected.omitting === undefined) throw new TypeError("Missing fixture catalog projection");
+    const retained = new Set([tool]);
+    if (scope?.knowledgeScoped ?? true) {
+      retained.add("jira.draft-batch");
+      retained.add("jira.draft");
+    }
+    return {
+      ...selected.omitting(
+        operations.filter((entry) => !retained.has(entry.tool)).map((entry) => entry.tool),
+      ),
+      close: selected.close,
+    };
+  });
 }
 
 function context(body: Record<string, unknown>, approvalId?: string): RouteContext {
@@ -317,11 +383,15 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
 function runtime(
   mutation = false,
   deployment: Readonly<Record<string, string>> = {},
+  demandDiscovery = false,
+  selectedTool?: string,
 ): {
   deps: UiHandlerDeps;
   chatId: string;
   root: string;
   jiraRequests: string[];
+  /** The serialized body of every Jira POST, as it left Keiko. */
+  jiraBodies: string[];
   /** Grant ids the server accepted itself, in order; no human ever decides a read grant. */
   acceptedReadGrants: string[];
 } {
@@ -349,6 +419,7 @@ function runtime(
     rmSync(state, { recursive: true, force: true });
   });
   configure(deps);
+  if (!demandDiscovery) preselectKnownFixtureTools(deps.jiraChatCatalog, selectedTool);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Mixed Chat", MODEL);
   // Ask for approval is pinned so the concrete write approvals under test stay required; an
@@ -367,11 +438,13 @@ function runtime(
   if (credentials === undefined || approvals === undefined) throw new Error("Missing owners");
   vi.spyOn(credentials.custody, "list").mockReturnValue([metadata(deps)]);
   const jiraRequests: string[] = [];
+  const jiraBodies: string[] = [];
   vi.spyOn(credentials, "httpBodyPortFactory").mockImplementation(
     (_metadata, _correlation, lifecycle) =>
       (request): ReturnType<AtlassianHttpBodyPort> => {
         expect(lifecycle?.beforeDispatch?.(request)).toBe(true);
         jiraRequests.push(request.method);
+        if (request.bodyJson !== undefined) jiraBodies.push(request.bodyJson);
         const status = request.method === "GET" ? 200 : 201;
         lifecycle?.onResponse?.(request, status);
         const bodyText = JSON.stringify(
@@ -403,7 +476,7 @@ function runtime(
     );
     expect(result.status).toBe(200);
   });
-  return { deps, chatId: chat.id, root, jiraRequests, acceptedReadGrants };
+  return { deps, chatId: chat.id, root, jiraRequests, jiraBodies, acceptedReadGrants };
 }
 
 function credentialContext(authRef: string, body: Record<string, unknown> = {}): RouteContext {
@@ -525,6 +598,11 @@ function ownedExchange(f: ReturnType<typeof runtime>, chatId: string): ChatToolE
   if (exchange === undefined) throw new Error("Missing normal Chat exchange");
   return exchange;
 }
+// A turn reaches its model round or approval through several awaited steps; on a loaded CI shard
+// that can take longer than vi.waitFor's 1 s default, so these waits use the bound the file's
+// other barrier wait already uses. The condition itself is unchanged.
+const TURN_PROGRESS_WAIT = { timeout: 5000 } as const;
+
 function startOwnedTurn(f: ReturnType<typeof runtime>, chatId: string): Promise<RouteResult> {
   const pending = handleSendDesktopChat(
     context({
@@ -545,7 +623,7 @@ async function waitPendingWrite(
 ): Promise<NonNullable<ChatToolExchange["approval"]>> {
   await vi.waitFor(() => {
     expect(ownedExchange(f, chatId).approval?.state).toBe("pending");
-  });
+  }, TURN_PROGRESS_WAIT);
   const approval = ownedExchange(f, chatId).approval;
   if (approval === undefined) throw new Error("Missing concrete approval");
   return approval;
@@ -596,7 +674,8 @@ it("rotates real custody during pending normal Chat writes and preserves the oth
     for (const id of f.chats) interruptChatGenerations(f.deps, id);
     await Promise.allSettled(pending);
   }
-});
+  // Four turn-progress waits in sequence: the test's own bound must cover all of them.
+}, 30_000);
 
 function holdOwnedResponse(
   f: ReturnType<typeof runtime>,
@@ -643,7 +722,7 @@ it("discards a delayed normal Chat read after the real disconnect route while an
   try {
     await vi.waitFor(() => {
       expect(barrier.reached()).toBe(true);
-    });
+    }, TURN_PROGRESS_WAIT);
     expect((await startOwnedTurn(f, other)).status).toBe(200);
     await patchOwnedChat(f, f.chatId, null);
     await pending;
@@ -670,7 +749,7 @@ it("retains acknowledged mutation uncertainty after deletion through the real cu
   try {
     await vi.waitFor(() => {
       expect(barrier.reached()).toBe(true);
-    });
+    }, TURN_PROGRESS_WAIT);
     const deleted = await handleDeleteAtlassianConnectorCredential(
       credentialContext(credential.authRef),
       f.deps,
@@ -684,7 +763,7 @@ it("retains acknowledged mutation uncertainty after deletion through the real cu
   }
   await vi.waitFor(() => {
     expect(ownedExchange(f, f.chatId).mutationOutcome).toBe("succeeded-unconfirmed");
-  });
+  }, TURN_PROGRESS_WAIT);
   expect(ownedExchange(f, f.chatId).result?.status).toBe("cancelled");
   expect(f.jiraRequests.filter((method) => method === "POST")).toHaveLength(1);
   expect(realCustodyOwner(f).custody.getMetadata(credential.authRef)).toBeUndefined();
@@ -738,7 +817,7 @@ it("names the writes of a turn that a change of the Chat's mode ended", async ()
   const pending = startOwnedTurn(f, f.chatId);
   await vi.waitFor(() => {
     expect(reached()).toBe(true);
-  });
+  }, TURN_PROGRESS_WAIT);
   await changeOwnedMode(f, f.chatId);
   const result = await pending;
   expect(result.status).toBe(200);
@@ -758,7 +837,7 @@ it("keeps the cancellation of a read-only turn that a change of the Chat's mode 
   const pending = startOwnedTurn(f, f.chatId);
   await vi.waitFor(() => {
     expect(reached()).toBe(true);
-  });
+  }, TURN_PROGRESS_WAIT);
   await changeOwnedMode(f, f.chatId);
   expect((await pending).status).toBe(499);
   expect(f.deps.store.listMessages(f.chatId).some(({ role }) => role === "assistant")).toBe(false);
@@ -815,6 +894,7 @@ function isProductiveRequest(body: string): boolean {
   return (
     body.includes("File: src/Feature.ts") ||
     body.includes("Citations:") ||
+    body.includes("only insert supported markers") ||
     body.includes('"tools":') ||
     body.includes('"role":"tool"')
   );
@@ -823,9 +903,24 @@ function providerBody(init: RequestInit | undefined): string {
   return typeof init?.body === "string" ? init.body : "";
 }
 function isToolStep(body: string, step: ProviderStep): boolean {
-  return body.includes('"tools":') && (step === "tool" || step === "write" || step === "malformed");
+  return (
+    step === "repair-write" ||
+    (body.includes('"tools":') &&
+      (step === "describe" ||
+        step === "describe-many" ||
+        step === "tool" ||
+        step === "write" ||
+        step === "malformed"))
+  );
 }
+/** The identities the "describe-many" step selects: set by the test that walks the selection. */
+let describeManyIdentities: readonly string[] = [];
 function toolArguments(step: ProviderStep, commentBody: string): string {
+  if (step === "describe-many") return JSON.stringify({ identities: describeManyIdentities });
+  if (step === "describe")
+    return JSON.stringify({ identities: ["GET /rest/agile/1.0/board/{boardId}/configuration"] });
+  if (step === "repair-write")
+    return JSON.stringify({ issueKey: "KEIKO-1", body: "Changed citation repair comment" });
   if (step === "write") return JSON.stringify({ issueKey: "KEIKO-1", body: commentBody });
   return step === "malformed" ? '{"maxResults":0}' : "{}";
 }
@@ -836,6 +931,7 @@ function responseContent(
   answerContent?: string,
 ): string {
   if (answerContent !== undefined) return answerContent;
+  if (step === "uncited") return "Feature returns true.";
   return body.includes("Citations:")
     ? "Feature returns true [1]. Jira tool result: project SYN is visible."
     : finalContent(step, steps);
@@ -845,8 +941,11 @@ function finalContent(step: ProviderStep, steps: readonly ProviderStep[]): strin
   return steps.includes("uncited") ? "Feature returns true [src/Feature.ts:1]." : CITED;
 }
 type ProviderStep =
+  | "describe"
+  | "describe-many"
   | "tool"
   | "write"
+  | "repair-write"
   | "malformed"
   | "answer"
   | "uncited"
@@ -856,6 +955,7 @@ type ProviderStep =
   | "empty-after-reasoning";
 interface ProviderOptions {
   readonly toolCount?: number;
+  readonly overflowContextWindow?: number;
   readonly usage?: { readonly prompt_tokens: number; readonly completion_tokens: number };
   readonly onRequest?: (body: string, index: number) => void;
 }
@@ -898,7 +998,7 @@ function emptyAnswerResponse(reasoning?: string): Response {
     usage: reportedProviderUsage(),
   });
 }
-function failedStepResponse(step: ProviderStep): Response | undefined {
+function failedStepResponse(step: ProviderStep, contextWindow = 8192): Response | undefined {
   if (step === "exhausted") return exhaustedOutputResponse();
   if (step === "empty") return emptyAnswerResponse();
   if (step === "empty-after-reasoning") return emptyAnswerResponse("thinking");
@@ -906,7 +1006,7 @@ function failedStepResponse(step: ProviderStep): Response | undefined {
   return Response.json(
     {
       error: {
-        message: "max_tokens=1000000000 cannot be greater than max_model_len=8192.",
+        message: `max_tokens=1000000000 cannot be greater than max_model_len=${String(contextWindow)}.`,
         code: "400",
       },
     },
@@ -930,7 +1030,7 @@ function provider(
         requests.push(body);
         options.onRequest?.(body, requests.length);
       }
-      const failure = failedStepResponse(step);
+      const failure = failedStepResponse(step, options.overflowContextWindow);
       if (failure !== undefined) return Promise.resolve(failure);
       const tools = isToolStep(body, step);
       return Promise.resolve(
@@ -948,7 +1048,7 @@ function provider(
                       id: `mixed-call-${String(requests.length)}${index === 0 ? "" : `-${String(index)}`}`,
                       type: "function",
                       function: {
-                        name: step === "write" ? "jira_comment" : "jira_projects",
+                        name: providerToolName(step),
                         arguments: toolArguments(step, commentBody),
                       },
                     })),
@@ -967,6 +1067,109 @@ function provider(
   );
   return requests;
 }
+
+function providerToolName(step: ProviderStep): string {
+  if (step === "describe" || step === "describe-many") return "jira_describe";
+  return step === "write" || step === "repair-write" ? "jira_comment" : "jira_projects";
+}
+
+// #4355: the base round holds the draft run beside staging. The bridge captures the whole advertisement
+// of a round (catalog, projection and offer, of every provider the turn merges) under one byte ceiling,
+// and a mixed turn (a connected folder beside Jira) carries more tools than a Jira-only Chat. A real
+// describe that selects more natives than the merged round can carry must be refused at the selecting
+// tool with the closed reason and keep the earlier selection, and the turn goes on: never
+// GATEWAY_MALFORMED_TOOL_CALL or a 502 reaching the person. Walked here with real identities, one
+// size after the other, through the real describe round.
+/** One turn that selects `count` natives through a real describe, as one closed outcome string. */
+async function walkedMixedOutcome(natives: readonly string[], count: number): Promise<string> {
+  const f = runtime(false, {}, true);
+  describeManyIdentities = natives.slice(0, count);
+  const requests = provider(["describe-many", "tool", "answer"]);
+  const result = await askFeatureAndProjects(f);
+  const exchange = f.deps.store
+    .listMessages(f.chatId)[0]
+    ?.toolTranscript?.exchanges.find((entry) => entry.call.name === "jira_describe");
+  const refused = JSON.stringify(exchange?.result?.data ?? {}).includes("selection-too-large");
+  return `${String(count)}:${String(result.status)}:${String(exchange?.result?.status)}:${refused ? "too-large" : "-"}:${String(requests.length)}`;
+}
+
+it("walks a real describe in a mixed turn to the ceiling: every size ends the turn, a size that does not fit is refused, no 502", async () => {
+  const probe = runtime(false, {}, true);
+  const curated = new Set(
+    (probe.deps.jiraChatCatalog?.toolDefinitions({ knowledgeScoped: false }) ?? []).map(
+      (tool) => tool.name,
+    ),
+  );
+  const natives = jiraOperationDefinitions()
+    .filter(
+      (definition) =>
+        definition.kind === "native" &&
+        definition.method === "GET" &&
+        definition.apiRoot === "/rest/api/2" &&
+        !curated.has(definition.tool.replace(/[.-]/gu, "_")),
+    )
+    // The heaviest first: the walk reaches the ceiling with the fewest natives, the worst case.
+    .sort(
+      (left, right) =>
+        JSON.stringify(jiraOperationForTool(right.tool)?.declaration.descriptor).length -
+        JSON.stringify(jiraOperationForTool(left.tool)?.declaration.descriptor).length,
+    )
+    .slice(0, 60)
+    .map((definition) => definition.identity);
+  if (probe.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
+  // The boundary is not written here: it is found with the production capture the gateway binds
+  // with and the selection is admitted with, so a change to the base, a descriptor or the bound
+  // moves the test with it. At every size the turn reaches all three provider rounds: an admitted
+  // selection always binds. While the gateway bounded the three parts together, selections past the
+  // real bound were admitted and the round after them died with a 502 the stream carried after its
+  // 200, so only one provider request was seen.
+  const lastFitting = await largestBindingSelection(probe.deps.jiraChatCatalog, natives, {
+    knowledgeScoped: false,
+  });
+  expect(lastFitting, "the walk needs natives that fit").toBeGreaterThan(0);
+  const counts = [0, lastFitting - 1, lastFitting, lastFitting + 1, natives.length];
+  for (const count of counts) {
+    expect(await walkedMixedOutcome(natives, count), `${String(count)} natives`).toBe(
+      count <= lastFitting
+        ? `${String(count)}:200:completed:-:3`
+        : `${String(count)}:200:failed:too-large:3`,
+    );
+  }
+  // Five whole mixed turns over the complete catalog: the same budget as the selection walk in
+  // jiraChatToolTurn.test.ts, because under coverage on a hosted runner it passes the default.
+}, 180_000);
+
+it("offers curated Jira projects and discovers an additional schema while retaining mixed grounding and its read grant", async () => {
+  const f = runtime(false, {}, true);
+  const requests = provider(["describe", "tool", "answer"]);
+  const result = await askFeatureAndProjects(f);
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  const offered = requests.map(
+    (body) =>
+      (
+        JSON.parse(body) as {
+          tools?: { function: { name: string } }[];
+        }
+      ).tools?.map((tool) => tool.function.name) ?? [],
+  );
+  expect(requests).toHaveLength(3);
+  expect(offered[0]).toContain("jira_describe");
+  expect(offered[0]).toContain("jira_projects");
+  expect(offered[1]).toContain("jira_projects");
+  expect(offered[0]).not.toContain("jira_board_configuration");
+  expect(offered[1]).toContain("jira_board_configuration");
+  expect(f.jiraRequests).toEqual(["GET"]);
+  expect(f.acceptedReadGrants).toHaveLength(1);
+  expect(requests.every((request) => request.includes("File: src/Feature.ts"))).toBe(true);
+  expect((result.body as GroundedAnswer).content).toContain(
+    "Jira tool result: project SYN is visible.",
+  );
+  expect(
+    (result.body as GroundedAnswer).citations.some(
+      (citation) => "scopePath" in citation && citation.scopePath === "src/Feature.ts",
+    ),
+  ).toBe(true);
+});
 
 // #4175: a confirmed Jira tool round is charged to and bounded by the turn's Authority Envelope,
 // so it no longer spends the grounded answer's own token grant; the envelope still ends the turn.
@@ -1009,24 +1212,6 @@ it.each(["input", "output"] as const)(
   },
 );
 
-it("answers from the transcript when tool rounds spend the envelope's prompt budget", async () => {
-  const f = runtime();
-  const budget = modelWindowAwareBudget(f.deps, MODEL);
-  Object.assign(f.deps, {
-    chatToolTurnBudget: { ...THIRTY_CALL_BUDGET, maxPromptTokens: budget.modelInputTokensMax + 10 },
-  });
-  const requests = fullWindowToolRound(f, "input");
-  const result = await askFeatureAndProjects(f);
-  // The envelope refuses the next model round itself; no further provider or Jira work happens.
-  expect(requests).toHaveLength(1);
-  expect(f.jiraRequests).toEqual(["GET"]);
-  expect(result.status).toBe(200);
-  expect(JSON.stringify(result.body)).toContain("used up its tool-call or prompt budget");
-  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
-    { result: { status: "completed" } },
-  ]);
-});
-
 it("retains the thirty-call envelope Jira allowance across mixed model rounds and rejects the next batch", async () => {
   const f = runtime();
   Object.assign(f.deps, { chatToolTurnBudget: THIRTY_CALL_BUDGET });
@@ -1053,7 +1238,7 @@ it("retains the thirty-call envelope Jira allowance across mixed model rounds an
   expect(f.jiraRequests).toHaveLength(30);
   expect(f.jiraRequests.every((method) => method === "GET")).toBe(true);
   expect(result.status).toBe(200);
-  expect(JSON.stringify(result.body)).toContain("used up its tool-call or prompt budget");
+  expect(JSON.stringify(result.body)).toContain("used up its tool-call budget");
   const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges;
   expect(exchanges).toHaveLength(30);
   expect(exchanges?.every((exchange) => exchange.result?.status === "completed")).toBe(true);
@@ -1120,6 +1305,7 @@ async function startDeadlineMixedTurn(): Promise<{
   readonly requests: string[];
   readonly pending: Promise<RouteResult>;
   readonly startedAt: number;
+  readonly request: RouteContext;
 }> {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
@@ -1163,14 +1349,12 @@ async function startDeadlineMixedTurn(): Promise<{
       );
     });
   });
-  const pending = handleGroundedAsk(
-    context({
-      chatId: f.chatId,
-      modelId: MODEL,
-      content: "Explain src/Feature.ts and list the Jira projects.",
-    }),
-    f.deps,
-  );
+  const request = context({
+    chatId: f.chatId,
+    modelId: MODEL,
+    content: "Explain src/Feature.ts and list the Jira projects.",
+  });
+  const pending = handleGroundedAsk(request, f.deps);
   void pending.catch(() => undefined);
   await vi.waitFor(
     () => {
@@ -1184,7 +1368,7 @@ async function startDeadlineMixedTurn(): Promise<{
   expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
     { result: { status: "timeout" } },
   ]);
-  return { f, requests, pending, startedAt };
+  return { f, requests, pending, startedAt, request };
 }
 
 it("answers mixed synthesis from its transcript at the accepted turn deadline after time spent before its first tool dispatch", async () => {
@@ -1201,6 +1385,123 @@ it("answers mixed synthesis from its transcript at the accepted turn deadline af
     expect(f.jiraRequests).toEqual([]);
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300000);
     expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
+
+// #4355: CI run 43596154016 told the person "Request failed ... CANCELLED" for a turn whose write Jira
+// had accepted. Which signal fired decides, never the wall clock re-read inside the timer's callback.
+it("answers from its transcript when the deadline signal fires 1 ms before the wall clock reaches it", async () => {
+  const { f, requests, pending } = await startDeadlineMixedTurn();
+  try {
+    // The clock reads a millisecond short at the instant the deadline's timer fires.
+    vi.setSystemTime(Date.now() - 1);
+    await vi.advanceTimersByTimeAsync(1001);
+    const result = await pending;
+    expect(result.status).toBe(200);
+    expect(JSON.stringify(result.body)).toContain("this turn reached its time limit");
+    expect(requests).toHaveLength(2);
+    expect(f.jiraRequests).toEqual([]);
+    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
+      { result: { status: "timeout" } },
+    ]);
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
+
+it("answers from its transcript when the stored transcript cannot be read inside the deadline listener", async () => {
+  const { f, pending } = await startDeadlineMixedTurn();
+  try {
+    // The abort listeners run synchronously inside the timer advance: a turn that holds a settled
+    // exchange in memory needs no store read to know it answers at the deadline.
+    const read = vi.spyOn(f.deps.store, "findMessageById").mockImplementation(() => {
+      throw new Error("database is not open");
+    });
+    try {
+      vi.advanceTimersByTime(1001);
+    } finally {
+      read.mockRestore();
+    }
+    const result = await pending;
+    expect(result.status).toBe(200);
+    expect(JSON.stringify(result.body)).toContain("this turn reached its time limit");
+    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
+
+it.each(["deadline-first", "abort-first"] as const)(
+  "keeps the settled exchange and repeats nothing when the deadline and a request abort share a tick (%s)",
+  async (order) => {
+    const { f, requests, pending, request } = await startDeadlineMixedTurn();
+    try {
+      if (order === "deadline-first") {
+        vi.advanceTimersByTime(1001);
+        request.req.emit("aborted");
+      } else {
+        request.req.emit("aborted");
+        vi.advanceTimersByTime(1001);
+      }
+      const result = await pending;
+      // The request is gone either way; what the person kept is the receipt of what settled.
+      expect(result).toMatchObject({ status: 499, body: { error: { code: "CANCELLED" } } });
+      expect(requests).toHaveLength(2);
+      expect(f.jiraRequests).toEqual([]);
+      expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
+        { result: { status: "timeout" } },
+      ]);
+    } finally {
+      interruptChatGenerations(f.deps, f.chatId);
+      await pending;
+    }
+  },
+);
+
+// One chat.tool-turn.ended line per turn, whichever of the deadline and the request abort came first.
+it.each(["deadline-first", "abort-first"] as const)(
+  "records exactly one ending when the deadline and a request abort share a tick (%s)",
+  async (order) => {
+    const sink = createBufferedServerLogSink();
+    const { f, pending, request } = await startDeadlineMixedTurn();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      if (order === "deadline-first") {
+        vi.advanceTimersByTime(1001);
+        request.req.emit("aborted");
+      } else {
+        request.req.emit("aborted");
+        vi.advanceTimersByTime(1001);
+      }
+      await pending;
+      const endings = sink.events.filter((event) => event.op === "chat.tool-turn.ended");
+      // The request is gone, so no deadline answer was delivered: the one line names the request abort.
+      expect(endings.map((event) => event.extra?.reason)).toEqual(["request-aborted"]);
+    } finally {
+      interruptChatGenerations(f.deps, f.chatId);
+      await pending;
+    }
+  },
+);
+
+it("records no ending for a request abort that arrives after the turn completed normally", async () => {
+  const sink = createBufferedServerLogSink();
+  const { f, pending, request } = await startDeadlineMixedTurn();
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  try {
+    await vi.advanceTimersByTimeAsync(1001);
+    const result = await pending;
+    expect(result.status).toBe(200);
+    const before = sink.events.filter((event) => event.op === "chat.tool-turn.ended").length;
+    request.req.emit("aborted");
+    expect(sink.events.filter((event) => event.op === "chat.tool-turn.ended")).toHaveLength(before);
+    expect(sink.events.some((event) => event.extra?.reason === "request-aborted")).toBe(false);
   } finally {
     interruptChatGenerations(f.deps, f.chatId);
     await pending;
@@ -1345,6 +1646,101 @@ it("keeps tool orchestration outside the one answer plus one repair synthesis ce
   expect((response.body as GroundedAnswer).content).toContain("[src/Feature.ts:1]");
 });
 
+function assertFailedCitationRepairActivity(deps: UiHandlerDeps): void {
+  const raw = readPersistedActivityLog(dirname(deps.uiDbPath ?? ""));
+  const line = persistedActivityLogLines(raw, "search.connected-context.answer-details").at(-1);
+  expect(line).toBeDefined();
+  expect(
+    expectRegisteredActivityLogLine("search.connected-context.answer-details", line ?? ""),
+  ).toMatchObject({ citationRepairDisposition: "failed" });
+  expect(line).not.toContain("Changed citation repair comment");
+  expect(line).not.toContain("Feature");
+  expect(analyzeLogText(raw).evidence.classification).toBe("supported");
+}
+
+async function prepareCitationRepairSource(
+  f: ReturnType<typeof runtime>,
+  source: "folder" | "multi-source" | "hybrid",
+): Promise<void> {
+  if (source === "hybrid")
+    await connectDataPod(f, "Feature returns true. Feature is a function.", true);
+  if (source !== "multi-source") return;
+  writeFileSync(join(f.root, "src", "Second.ts"), "export const second = true;\n");
+  f.deps.store.updateChat(f.chatId, {
+    connectedScopes: ["Feature.ts", "Second.ts"].map((file) => ({
+      kind: "files" as const,
+      root: f.root,
+      relativePaths: [`src/${file}`],
+      connectedAtMs: 1,
+    })),
+  });
+}
+function citationRepairDisposition(deps: UiHandlerDeps): unknown {
+  const raw = readPersistedActivityLog(dirname(deps.uiDbPath ?? ""));
+  const line = persistedActivityLogLines(raw, "search.connected-context.answer-details").at(-1);
+  return expectRegisteredActivityLogLine("search.connected-context.answer-details", line ?? "")
+    .citationRepairDisposition;
+}
+
+// The pin of a citation repair that offers no tool and refuses a write in its response, kept on
+// the turn shape that still repairs: a tool round that sent no change (#4173).
+it.each(["folder", "multi-source", "hybrid"] as const)(
+  "keeps %s citation repair tool-free after a read round and refuses a write in its response",
+  async (source) => {
+    const f = runtime(true);
+    await prepareCitationRepairSource(f, source);
+    const requests = provider(["tool", "uncited", "repair-write", "answer"]);
+    const result = await handleGroundedAsk(
+      context({
+        chatId: f.chatId,
+        content: "Explain Feature and list the Jira projects.",
+        modelId: MODEL,
+      }),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect.soft(requests[2]?.includes('"tools":')).toBe(false);
+    expect(requests).toHaveLength(3);
+    expect(requests[0]).toContain('"tools":');
+    expect(requests[1]).toContain('"tools":');
+    expect(requests[2]).not.toContain('"tools":');
+    expect(requests[2]).not.toContain('"role":"tool"');
+    expect(outputCap(requests[2] ?? "{}")).toBeLessThan(outputCap(requests[1] ?? "{}"));
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual([]);
+    expect((result.body as GroundedAnswer).content).toContain("Feature returns true.");
+    const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges ?? [];
+    expect(exchanges.filter((exchange) => exchange.call.name === "jira_comment")).toHaveLength(0);
+    assertFailedCitationRepairActivity(f.deps);
+  },
+);
+
+// Stronger than a tool-free repair: after a committed write no repair call exists at all, so a
+// changed write can never be offered again and the answer reporting the change stays as written.
+it.each(["folder", "multi-source", "hybrid"] as const)(
+  "never repairs %s citations after a committed write, so the write reaches Jira once",
+  async (source) => {
+    const f = runtime(true);
+    await prepareCitationRepairSource(f, source);
+    const requests = provider(["write", "uncited", "repair-write", "answer"]);
+    const result = await handleGroundedAsk(
+      context({
+        chatId: f.chatId,
+        content: "Explain Feature and add the requested Jira comment.",
+        modelId: MODEL,
+      }),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(requests).toHaveLength(2);
+    expect(requests.join("\n")).not.toContain("Changed citation repair comment");
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+    expect((result.body as GroundedAnswer).content).toContain("Feature returns true.");
+    const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges ?? [];
+    expect(exchanges.filter((exchange) => exchange.call.name === "jira_comment")).toHaveLength(1);
+    expect(citationRepairDisposition(f.deps)).toBe("skipped-tool-action");
+  },
+);
+
 it("dispatches the one steered repair of a tool round that exhausted its output budget", async () => {
   const f = runtime();
   const requests = provider(["tool", "exhausted", "tool", "answer"]);
@@ -1450,11 +1846,10 @@ it("ends a tool turn whose corrected round is rejected again without progress", 
   );
   expect(response.status, JSON.stringify(response.body)).toBe(200);
   // Five tool-turn attempts: the gateway corrects each streak once and the turn carries one
-  // correction round; the sixth is the grounded answer's own later synthesis pass, which must not
-  // inherit the ended turn's correction.
-  expect(requests).toHaveLength(6);
+  // correction round. The ended turn must not dispatch a sixth request for citation repair.
+  expect(requests).toHaveLength(5);
   expect(requests[3]).toContain("rejected before execution");
-  expect(requests[5]).not.toContain("rejected before execution");
+  expect(requests[5]).toBeUndefined();
   expect(f.jiraRequests).toEqual(["GET"]);
   expect((response.body as GroundedAnswer).content).toContain("the model request failed");
 });
@@ -1497,10 +1892,10 @@ it("ends a tool turn whose corrected round is empty again without progress", asy
     f.deps,
   );
   expect(response.status, JSON.stringify(response.body)).toBe(200);
-  // The fourth is the grounded answer's own later synthesis pass, which inherits no correction.
-  expect(requests).toHaveLength(4);
+  // The third attempt carries the correction; the ended turn must not dispatch a fourth request.
+  expect(requests).toHaveLength(3);
   expect(requests[2]).toContain(EMPTY_ANSWER_CORRECTED);
-  expect(requests[3]).not.toContain(EMPTY_ANSWER_CORRECTED);
+  expect(requests[3]).toBeUndefined();
   expect(f.jiraRequests).toEqual(["GET"]);
   expect((response.body as GroundedAnswer).content).toContain("the model request failed");
 });
@@ -1518,7 +1913,9 @@ it("adds no round after the gateway's own repair of an empty answer failed", asy
     f.deps,
   );
   expect(response.status, JSON.stringify(response.body)).toBe(200);
-  expect(requests).toHaveLength(4);
+  expect(requests).toHaveLength(3);
+  expect(requests[3]).toBeUndefined();
+  expect(f.jiraRequests).toEqual(["GET"]);
   expect(requests[2]).toContain("ended after reasoning");
   for (const request of requests) expect(request).not.toContain(EMPTY_ANSWER_CORRECTED);
   expect((response.body as GroundedAnswer).content).toContain("the model request failed");
@@ -1526,7 +1923,9 @@ it("adds no round after the gateway's own repair of an empty answer failed", asy
 
 it("charges physical overflow before a tool response and denies a third synthesis attempt", async () => {
   const f = runtime();
-  const requests = provider(["overflow", "tool", "uncited", "answer"]);
+  const requests = provider(["overflow", "tool", "uncited", "answer"], undefined, undefined, {
+    overflowContextWindow: RETRY_CONTEXT_WINDOW,
+  });
   const response = await handleGroundedAsk(
     context({
       chatId: f.chatId,
@@ -1552,11 +1951,209 @@ function assertPreservedWriteContinuation(requests: readonly string[]): void {
   expect(outputCap(requests[2] ?? "{}")).toBeLessThanOrEqual(outputCap(requests[1] ?? "{}"));
 }
 
+function boundCallerSynthesisInput(grant: number): void {
+  // The caller's per-request window applies to both the answer and citation repair.
+  // Physical usage remains accounted; a prior prompt does not shrink the next context window.
+  const run = groundedOrchestrator.runGroundedExploration;
+  vi.spyOn(groundedOrchestrator, "runGroundedExploration").mockImplementation((input, deps) =>
+    run(input, {
+      ...deps,
+      answerer: {
+        ...deps.answerer,
+        answer: (question, pack, options) =>
+          deps.answerer.answer(question, pack, {
+            ...options,
+            modelInputTokensMax: grant,
+          }),
+        repair: (question, pack, original, options) => {
+          if (deps.answerer.repair === undefined) throw new Error("Missing gateway repair");
+          return deps.answerer.repair(question, pack, original, {
+            ...options,
+            modelInputTokensMax: grant,
+          });
+        },
+      },
+    }),
+  );
+}
+
+function beforeAdoptedGroundedRetry(beforeRetry: () => Promise<void>): void {
+  const run = gatewayWindow.withAdoptedContextWindowRetry;
+  vi.spyOn(gatewayWindow, "withAdoptedContextWindowRetry").mockImplementation(
+    <T>(
+      deps: UiHandlerDeps,
+      input: gatewayWindow.ContextWindowRetryInput<T>,
+      attempt: (context: gatewayWindow.ContextWindowAttempt) => Promise<T>,
+    ): Promise<T> =>
+      run(deps, input, async (context) => {
+        if (context.retrying && input.surface === "grounded") await beforeRetry();
+        return attempt(context);
+      }),
+  );
+}
+
+function gatewayPromptAdmissions(deps: UiHandlerDeps): readonly Record<string, unknown>[] {
+  const raw = readPersistedActivityLog(dirname(deps.uiDbPath ?? ""));
+  return persistedActivityLogLines(raw, "gateway.prompt.admission").map((line) =>
+    expectRegisteredActivityLogLine("gateway.prompt.admission", line),
+  );
+}
+
+function activitySequence(record: Record<string, unknown>): number {
+  if (typeof record.seq !== "number") throw new TypeError("Expected a registered event sequence");
+  return record.seq;
+}
+
+function physicallyDispatchedPromptCosts(
+  deps: UiHandlerDeps,
+  requests: readonly string[],
+): readonly number[] {
+  const raw = readPersistedActivityLog(dirname(deps.uiDbPath ?? ""));
+  const admissions = gatewayPromptAdmissions(deps);
+  const dispatches = persistedActivityLogLines(raw, "chat.request.dispatch").map((line) =>
+    expectRegisteredActivityLogLine("chat.request.dispatch", line),
+  );
+  expect(dispatches).toHaveLength(requests.length);
+  const used = new Set<Record<string, unknown>>();
+  return dispatches.map((dispatch, index) => {
+    expect(dispatch.bodyBytes).toBe(Buffer.byteLength(requests[index] ?? "", "utf8"));
+    const admission = admissions
+      .filter(
+        (entry) =>
+          entry.pid === dispatch.pid &&
+          entry.instanceId === dispatch.instanceId &&
+          entry.correlationId === dispatch.correlationId &&
+          activitySequence(entry) < activitySequence(dispatch),
+      )
+      .at(-1);
+    expect(admission).toMatchObject({ state: "admitted" });
+    if (admission === undefined || typeof admission.promptTokens !== "number")
+      throw new TypeError("Expected the registered complete prompt cost before dispatch");
+    expect(used.has(admission)).toBe(false);
+    used.add(admission);
+    return admission.promptTokens;
+  });
+}
+
+function assertOriginalMutationRetryGrant(
+  deps: UiHandlerDeps,
+  requests: readonly string[],
+  grant: number,
+): readonly number[] {
+  const costs = physicallyDispatchedPromptCosts(deps, requests);
+  expect(costs).toHaveLength(requests.length);
+  for (const cost of costs) expect(cost).toBeLessThanOrEqual(grant);
+  const synthesisCost = costs.slice(1).reduce((total, cost) => total + cost, 0);
+  if (grant < 8192) expect(synthesisCost).toBeGreaterThan(grant);
+  return costs;
+}
+
+function observeToolRoundAndTwoSynthesisAttempts(
+  deps: UiHandlerDeps,
+  completionTokens: readonly number[] = [1, 0, 1],
+  reportedPromptTokens = 0,
+): (costs: readonly number[]) => void {
+  const budgets: groundedSynthesis.GroundedSynthesisCallBudget[] = [];
+  const create = groundedSynthesis.createGroundedSynthesisCallBudget;
+  vi.spyOn(groundedSynthesis, "createGroundedSynthesisCallBudget").mockImplementation(() => {
+    const budget = create();
+    vi.spyOn(budget, "recordUsage");
+    vi.spyOn(budget, "recordToolRoundUsage");
+    budgets.push(budget);
+    return budget;
+  });
+  const spend = deps.gatewayConfig?.spendBudget;
+  if (spend === undefined) throw new TypeError("Expected the real durable spend budget");
+  const reserve = vi.spyOn(spend, "reserve");
+  return (costs): void => {
+    expect(reserve).toHaveBeenCalledTimes(3);
+    expect(budgets).toHaveLength(1);
+    const budget = budgets[0];
+    if (budget === undefined) throw new TypeError("Expected the shared synthesis budget");
+    const charges = vi.mocked(budget.recordUsage).mock.calls.map(([usage]) => usage);
+    expect(charges.map((usage) => usage.promptTokens)).toEqual(
+      costs.map((cost) => Math.max(cost, reportedPromptTokens)),
+    );
+    expect(charges.map((usage) => usage.completionTokens)).toEqual(completionTokens);
+    // Only the completed tool round releases a synthesis slot; its physical charge stays.
+    expect(vi.mocked(budget.recordToolRoundUsage).mock.calls).toEqual([[charges[0]]]);
+    expect(budget.remaining()).toBe(0);
+    expect(budget.reservedOutputTokens()).toBe(0);
+  };
+}
+
+// Each complete provider prompt, including tool schemas, must fit the caller's window.
+// The first three windows deliberately cannot fit the two synthesis prompts cumulatively.
+it.each([4096, 4500, 4600, 8192, 10000])(
+  "settles an adopted retry inside each request's positive input window %i",
+  async (grant) => {
+    const f = runtime(true, {}, false, "jira.comment");
+    boundCallerSynthesisInput(grant);
+    const assertAccounting = observeToolRoundAndTwoSynthesisAttempts(f.deps);
+    const requests = provider(["write", "overflow", "answer", "answer"], undefined, undefined, {
+      overflowContextWindow: RETRY_CONTEXT_WINDOW,
+    });
+    const body = {
+      chatId: f.chatId,
+      projectPath: f.root,
+      content: "Explain src/Feature.ts and add the Jira comment.",
+      modelId: MODEL,
+      clientTurnId: `mixed-positive-input-${String(grant)}`,
+    };
+    const response = await handleSendDesktopChat(context(body), f.deps);
+    expect(response.status).toBe(200);
+    expect(requests).toHaveLength(3);
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+    const messages = f.deps.store.listMessages(f.chatId);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.turnState).toBe("completed");
+    expect(messages[0]?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe("succeeded");
+    const costs = assertOriginalMutationRetryGrant(f.deps, requests, grant);
+    assertAccounting(costs);
+    expect((await handleSendDesktopChat(context(body), f.deps)).status).toBe(200);
+    expect(requests).toHaveLength(3);
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+    expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
+    assertAccounting(costs);
+  },
+);
+
+it.each(["cancel", "scope"] as const)(
+  "keeps a %s interruption before the adopted retry's preflight terminal",
+  async (kind) => {
+    const f = runtime(true, {}, false, "jira.comment");
+    boundCallerSynthesisInput(8192);
+    beforeAdoptedGroundedRetry(async () => {
+      if (kind === "scope") await changeOwnedMode(f, f.chatId);
+      else interruptChatGenerations(f.deps, f.chatId);
+    });
+    const requests = provider(["write", "overflow", "answer"]);
+    const response = await handleSendDesktopChat(
+      context({
+        chatId: f.chatId,
+        projectPath: f.root,
+        content: "Explain src/Feature.ts and add the Jira comment.",
+        modelId: MODEL,
+        clientTurnId: `mixed-preflight-${kind}`,
+      }),
+      f.deps,
+    );
+    expect(response.status).toBe(499);
+    expect(requests).toHaveLength(2);
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+    const messages = f.deps.store.listMessages(f.chatId);
+    expect(messages.some(({ role }) => role === "assistant")).toBe(false);
+    expect(messages[0]?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe("succeeded");
+  },
+);
+
 it.each(["answer", "uncited"] as const)(
   "retains a committed mutation across context overflow and bounded %s synthesis",
   async (answer) => {
     const f = runtime(true);
-    const requests = provider(["write", "overflow", answer, "answer"]);
+    const requests = provider(["write", "overflow", answer, "answer"], undefined, undefined, {
+      overflowContextWindow: RETRY_CONTEXT_WINDOW,
+    });
     const body = {
       chatId: f.chatId,
       projectPath: f.root,
@@ -1586,6 +2183,184 @@ it.each(["answer", "uncited"] as const)(
     expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
   },
 );
+
+/**
+ * The most of `candidates`, taken from the front, that the production capture the gateway binds with
+ * accepts beside the Knowledge-scoped base, and proof that this selection binds. The base grows with
+ * the tools every Chat offers, so the count follows the bound and is never written in a test.
+ */
+async function bindableFixtureNatives(
+  catalog: NonNullable<UiHandlerDeps["jiraChatCatalog"]>,
+  candidates: readonly string[],
+): Promise<string[]> {
+  const operations = jiraOperationDefinitions();
+  const identitiesOf = (tools: readonly string[]): string[] =>
+    operations.filter((entry) => tools.includes(entry.tool)).map((entry) => entry.identity);
+  const scope = { knowledgeScoped: true };
+  const baseNames = new Set(catalog.toolDefinitions(scope).map((entry) => entry.name));
+  const base = operations
+    .filter((entry) => baseNames.has(entry.tool.replace(/[.-]/gu, "_")))
+    .map((entry) => entry.identity);
+  const chosen = (await selectionBinds(catalog, [...base, ...identitiesOf(candidates)], scope))
+    ? [...candidates]
+    : candidates.slice(
+        0,
+        await largestBindingSelection(catalog, identitiesOf(candidates), scope, base),
+      );
+  expect(chosen.length, "the pin needs at least one preselected native").toBeGreaterThan(0);
+  expect(
+    await selectionBinds(catalog, [...base, ...identitiesOf(chosen)], scope),
+    "the preselected natives must bind",
+  ).toBe(true);
+  return chosen;
+}
+
+it("settles a committed mutation when the adopted window cannot fit the current tool catalog", async () => {
+  const f = runtime(true);
+  // A bounded native selection still fits the gateway's binding bound while its full physical prompt
+  // exceeds the adopted window (the base alone already does; see below). This fixture preselects
+  // around the selection admission, so it proves its own premise instead of restating a count.
+  if (f.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
+  const chosen = await bindableFixtureNatives(f.deps.jiraChatCatalog, [
+    "jira.project",
+    "jira.project-permissions",
+    "jira.project-statuses",
+    "jira.project-types",
+    "jira.project-type",
+    "jira.project-categories",
+    "jira.project-category",
+    "jira.project-version-page",
+  ]);
+  preselectKnownFixtureTools(f.deps.jiraChatCatalog, undefined, chosen);
+  const requests = provider(["write", "overflow", "answer"]);
+  const body = {
+    chatId: f.chatId,
+    projectPath: f.root,
+    content: "Explain src/Feature.ts and add the Jira comment.",
+    modelId: MODEL,
+    clientTurnId: "mixed-write-tight-window",
+  };
+  const response = await handleSendDesktopChat(context(body), f.deps);
+  expect(response.status).toBe(200);
+  expect(requests).toHaveLength(2);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  for (const cost of physicallyDispatchedPromptCosts(f.deps, requests))
+    expect(cost).toBeGreaterThan(8192);
+  expect(JSON.stringify(response.body)).toContain("context window");
+  const refused = gatewayPromptAdmissions(f.deps).at(-1);
+  expect(refused).toMatchObject({ contextWindow: 8192, errorKind: "invalid-request" });
+  if (typeof refused?.promptTokens !== "number" || typeof refused.inputBudget !== "number")
+    throw new TypeError("Expected complete adopted-window admission bounds");
+  expect(refused.promptTokens).toBeGreaterThan(refused.inputBudget);
+  // Measured, and the reverse of what this test's earlier comment said: the curated base's tool
+  // definitions alone, counted by the gateway's own counter, already exceed this window's input
+  // budget. The refusal therefore never depended on the selection; the selection only has to fit the
+  // catalog's byte ceiling for the turn to reach it (#4357).
+  const baseFloor = countGatewayPromptTokens({
+    messages: [],
+    tools: f.deps.jiraChatCatalog.toolDefinitions({ knowledgeScoped: true }),
+  });
+  expect(baseFloor).toBeGreaterThan(refused.inputBudget);
+  const messages = f.deps.store.listMessages(f.chatId);
+  expect(messages[0]?.turnState).toBe("completed");
+  expect(messages[0]?.toolTranscript?.exchanges[0]).toMatchObject({
+    call: { id: "mixed-call-1", name: "jira_comment" },
+    mutationOutcome: "succeeded",
+    result: { status: "completed" },
+  });
+  expect((await handleSendDesktopChat(context(body), f.deps)).status).toBe(200);
+  expect(requests).toHaveLength(2);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
+});
+
+it("keeps a committed mutation's deadline answer when an overflow arrives after authority expires", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const f = runtime(true);
+  Object.assign(f.deps, { chatToolTurnBudget: THIRTY_CALL_BUDGET });
+  const startedAt = Date.now();
+  const requests = provider(["write", "overflow", "answer"], undefined, undefined, {
+    onRequest: (_body, index) => {
+      if (index === 2) vi.setSystemTime(startedAt + THIRTY_CALL_BUDGET.maxRuntimeMs + 1);
+    },
+  });
+  const response = await handleSendDesktopChat(
+    context({
+      chatId: f.chatId,
+      projectPath: f.root,
+      content: "Explain src/Feature.ts and add the Jira comment.",
+      modelId: MODEL,
+      clientTurnId: "mixed-write-expired-overflow",
+    }),
+    f.deps,
+  );
+  expect(response.status).toBe(200);
+  expect(requests).toHaveLength(2);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(JSON.stringify(response.body)).toContain("this turn reached its time limit");
+  expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+});
+
+it("keeps the already sent empty-answer correction on its existing adopted-window retry", async () => {
+  const f = runtime(false, {}, false, "jira.projects");
+  f.deps.store.updateChat(f.chatId, { connectedScope: null });
+  const requests = provider(["tool", "empty", "overflow", "answer"]);
+  const response = await startOwnedTurn(f, f.chatId);
+  expect(response.status).toBe(200);
+  expect(requests).toHaveLength(4);
+  expect(requests[2]).toContain(EMPTY_ANSWER_CORRECTED);
+  expect(requests[3]).toContain(EMPTY_ANSWER_CORRECTED);
+  expect(f.jiraRequests).toEqual(["GET"]);
+});
+
+it("keeps the first grounded answer when its fixed correction overflows after the synthesis grant ends", async () => {
+  const f = runtime();
+  const original = "Feature returns true [src/Feature.ts:1]. Jira tool result: SYN-99 is ready.";
+  const requests = provider(["tool", "answer", "overflow", "answer"], original);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status).toBe(200);
+  expect(requests).toHaveLength(3);
+  expect(requests[2]).toContain("Your answer names 1 issue key(s)");
+  expect((response.body as GroundedAnswer).content).toContain(original);
+  expect(f.jiraRequests).toEqual(["GET"]);
+});
+
+it("settles a second context overflow from its committed mutation without another retry or write", async () => {
+  const f = runtime(true);
+  const requests = provider(["write", "overflow", "overflow", "answer"], undefined, undefined, {
+    overflowContextWindow: RETRY_CONTEXT_WINDOW,
+  });
+  const body = {
+    chatId: f.chatId,
+    projectPath: f.root,
+    content: "Explain src/Feature.ts and add the Jira comment.",
+    modelId: MODEL,
+    clientTurnId: "mixed-write-second-overflow",
+  };
+  const response = await handleSendDesktopChat(context(body), f.deps);
+  expect(response.status).toBe(200);
+  expect(requests).toHaveLength(3);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(JSON.stringify(response.body)).toContain("context window");
+  const messages = f.deps.store.listMessages(f.chatId);
+  expect(messages[0]?.toolTranscript?.exchanges[0]).toMatchObject({
+    call: { id: "mixed-call-1", name: "jira_comment" },
+    mutationOutcome: "succeeded",
+    result: { status: "completed" },
+  });
+  assertPreservedWriteContinuation(requests);
+  expect((await handleSendDesktopChat(context(body), f.deps)).status).toBe(200);
+  expect(requests).toHaveLength(3);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
+});
 
 it("falls back before admission and replays the same mixed canonical turn without a second write", async () => {
   const f = runtime(true);
@@ -1635,6 +2410,84 @@ async function connectDataPod(
   }
 }
 
+function assertRuntimeInventoryRequest(request: string | undefined, content: string): void {
+  const firstRequest = JSON.parse(request ?? "{}") as {
+    messages: {
+      role: string;
+      content: string;
+      tool_call_id?: string;
+      tool_calls?: { id: string; function: { name: string } }[];
+    }[];
+  };
+  const inventory = firstRequest.messages.find(
+    (message) => message.role === "tool" && message.content.includes('"documentCount":9'),
+  );
+  expect(inventory).toBeDefined();
+  expect(inventory?.role).toBe("tool");
+  const lastUser = firstRequest.messages.filter((message) => message.role === "user").at(-1);
+  expect(lastUser?.content).toContain(content);
+  expect(lastUser?.content).not.toContain('"kind":"runtime-tool-observation"');
+  expect(inventory?.content).toContain('"documentCount":9');
+  expect(inventory?.content).toContain('"inventoryComplete":true');
+  for (let index = 1; index < 9; index++)
+    expect(inventory?.content).toContain(`inventory-document-${String(index)}.md`);
+  expect(
+    firstRequest.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.tool_calls?.some(
+          (call) =>
+            call.id === inventory?.tool_call_id && call.function.name === "knowledge_documents",
+        ),
+    ),
+  ).toBe(true);
+}
+
+it.each(["grounded", "desktop-mixed"] as const)(
+  "sends the runtime corpus inventory before the first %s synthesis call even when the model uses no tools",
+  async (surface) => {
+    const f = runtime();
+    await connectDataPod(f, "Feature returns true. Feature is a function.");
+    if (surface === "grounded") f.deps.store.updateChat(f.chatId, { jiraPodId: null });
+    const store = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: dirname(f.deps.uiDbPath ?? "") }),
+    });
+    try {
+      const insert = store._internal.db.prepare(
+        "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) SELECT ?, capsule_id, source_id, ?, size_bytes, ?, content_hash, parser_id, parser_version, last_extracted_at, status, ? FROM documents LIMIT 1",
+      );
+      for (let index = 1; index < 9; index++) {
+        const id = `inventory-document-${String(index)}`;
+        insert.run(id, id, "text/markdown", `${id}.md`);
+      }
+    } finally {
+      store.close();
+    }
+    const requests = provider(["answer"], "Feature returns true [1].");
+    const body = {
+      chatId: f.chatId,
+      projectPath: f.root,
+      content: "List the attached documents.",
+      modelId: MODEL,
+      clientTurnId: `runtime-inventory-${surface}`,
+    };
+    const result = await (surface === "grounded" ? handleGroundedAsk : handleSendDesktopChat)(
+      context(body),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(requests).toHaveLength(1);
+    assertRuntimeInventoryRequest(requests[0], body.content);
+    const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges;
+    expect(exchanges).toHaveLength(1);
+    expect(exchanges?.[0]).toMatchObject({
+      call: { name: "knowledge_documents", arguments: { view: "inventory" } },
+      result: { status: "completed" },
+    });
+    expect(f.jiraRequests).toHaveLength(0);
+  },
+);
+
 it("uses the existing local Data-Pod evidence pack with Jira and keeps its numeric citations", async () => {
   const f = runtime();
   await connectDataPod(f, "Feature returns true. Feature is a function.");
@@ -1657,8 +2510,136 @@ it("uses the existing local Data-Pod evidence pack with Jira and keeps its numer
   expect(JSON.stringify(answer.citations)).not.toContain("jira");
 });
 
+function dataPodInputGrant(deps: UiHandlerDeps): number {
+  const profile = currentContextProfileForModel(deps, MODEL);
+  if (profile === undefined) throw new Error("Expected the Data-Pod model context profile");
+  return profile.effectiveInputBudget;
+}
+
+function assertDataPodSynthesisGrant(
+  deps: UiHandlerDeps,
+  requests: readonly string[],
+  originalGrant: number,
+): {
+  readonly charged: number;
+  readonly adoptedGrant: number;
+  readonly costs: readonly number[];
+} {
+  const adoptedGrant = dataPodInputGrant(deps);
+  expect(adoptedGrant).toBeLessThan(originalGrant);
+  const costs = physicallyDispatchedPromptCosts(deps, requests);
+  for (const cost of costs.slice(0, -1)) expect(cost).toBeLessThanOrEqual(originalGrant);
+  expect(costs.at(-1)).toBeLessThanOrEqual(adoptedGrant);
+  // The exact confirmed write is the Envelope's; overflow and answer retain physical usage.
+  const charged = costs.slice(1).reduce((total, cost) => total + cost, 0);
+  return { charged, adoptedGrant, costs };
+}
+
 // S12 and S17 of epic #4173: a citation repair after the turn ended, or one its grant cannot fund,
 // must not cost the answer. It answered with HTTP 403 after the turn had already done its work.
+it("retains a Data-Pod turn's committed write across the existing adopted-window retry", async () => {
+  const f = runtime(true);
+  await connectDataPod(f, "Feature returns true. Feature is a function.");
+  const originalGrant = dataPodInputGrant(f.deps);
+  const requests = provider(
+    ["write", "overflow", "answer", "answer"],
+    "Feature returns true [1]. Jira tool result: the comment was added.",
+    undefined,
+    // Data-Pod retries adopt the smaller per-request context window.
+    { overflowContextWindow: 24576 },
+  );
+  const body = {
+    chatId: f.chatId,
+    content: "What does Feature return? Also add the Jira comment.",
+    modelId: MODEL,
+    clientTurnId: "pod-write-window-retry",
+  };
+  const response = await handleGroundedAsk(context(body), f.deps);
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  expect((response.body as GroundedAnswer).groundingKind).toBe("local-knowledge");
+  expect(requests).toHaveLength(3);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  assertPreservedWriteContinuation(requests);
+  const messages = f.deps.store.listMessages(f.chatId);
+  const exchanges = messages[0]?.toolTranscript?.exchanges;
+  expect(
+    exchanges?.find(
+      (exchange) =>
+        exchange.result?.toolRef?.canonicalId === "keiko.knowledge.documents" &&
+        exchange.call.arguments.view === "inventory",
+    ),
+  ).toMatchObject({
+    call: { name: "knowledge_documents" },
+    result: { status: "completed" },
+  });
+  expect(exchanges?.find((exchange) => exchange.call.id === "mixed-call-1")).toMatchObject({
+    call: { id: "mixed-call-1", name: "jira_comment" },
+    mutationOutcome: "succeeded",
+    result: { status: "completed" },
+  });
+  assertDataPodSynthesisGrant(f.deps, requests, originalGrant);
+  expect((await handleGroundedAsk(context(body), f.deps)).status).toBe(200);
+  expect(requests).toHaveLength(3);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
+});
+
+it("retries a Data-Pod answer when each prompt fits the adopted window but their sum does not", async () => {
+  const f = runtime(true);
+  await connectDataPod(f, "Feature returns true. Feature is a function.");
+  const originalGrant = dataPodInputGrant(f.deps);
+  const assertAccounting = observeToolRoundAndTwoSynthesisAttempts(f.deps);
+  const requests = provider(
+    ["write", "overflow", "answer"],
+    "Feature returns true [1]. Jira tool result: the comment was added.",
+    undefined,
+    { overflowContextWindow: RETRY_CONTEXT_WINDOW },
+  );
+  const body = {
+    chatId: f.chatId,
+    content: "What does Feature return? Also add the Jira comment.",
+    modelId: MODEL,
+    clientTurnId: "pod-write-tight-request-window",
+  };
+  const response = await handleGroundedAsk(context(body), f.deps);
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  expect(requests).toHaveLength(3);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect((response.body as GroundedAnswer).content).toContain("the comment was added");
+  const { charged, adoptedGrant, costs } = assertDataPodSynthesisGrant(
+    f.deps,
+    requests,
+    originalGrant,
+  );
+  expect(charged).toBeGreaterThan(adoptedGrant);
+  assertAccounting(costs);
+  const admissions = gatewayPromptAdmissions(f.deps);
+  expect(admissions).toHaveLength(requests.length);
+  const retried = admissions.at(-1);
+  expect(retried).toMatchObject({
+    state: "admitted",
+    contextWindow: RETRY_CONTEXT_WINDOW,
+    inputBudget: adoptedGrant,
+  });
+  if (typeof retried?.promptTokens !== "number")
+    throw new TypeError("Expected the complete prompt cost of the admitted physical retry");
+  expect(retried.promptTokens).toBeLessThanOrEqual(adoptedGrant);
+  const messages = f.deps.store.listMessages(f.chatId);
+  expect(messages[0]?.turnState).toBe("completed");
+  expect(
+    messages[0]?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === "mixed-call-1"),
+  ).toMatchObject({
+    call: { id: "mixed-call-1", name: "jira_comment" },
+    mutationOutcome: "succeeded",
+    result: { status: "completed" },
+  });
+  expect((await handleGroundedAsk(context(body), f.deps)).status).toBe(200);
+  expect(requests).toHaveLength(3);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
+  assertAccounting(costs);
+});
+
 it("keeps a Data-Pod turn's transcript answer without another model call after the model failed", async () => {
   const f = runtime();
   await connectDataPod(f, "Feature returns true. Feature is a function.");
@@ -1675,9 +2656,10 @@ it("keeps a Data-Pod turn's transcript answer without another model call after t
   expect((result.body as GroundedAnswer).citations).toEqual([]);
 });
 
-it("keeps a complete Data-Pod answer when the input grant cannot fund its citation repair", async () => {
+it("admits a fitting Data-Pod citation repair after a large reported prompt usage", async () => {
   const f = runtime();
   await connectDataPod(f, "Feature returns true. Feature is a function.");
+  const assertAccounting = observeToolRoundAndTwoSynthesisAttempts(f.deps, [1, 1, 1], 32_000);
   const uncited = "Jira tool result: project SYN is visible, and Feature is a plain function.";
   const requests = provider(["tool", "answer"], uncited, undefined, {
     usage: { prompt_tokens: 32_000, completion_tokens: 1 },
@@ -1687,16 +2669,24 @@ it("keeps a complete Data-Pod answer when the input grant cannot fund its citati
     f.deps,
   );
   expect(result.status, JSON.stringify(result.body)).toBe(200);
-  expect(requests).toHaveLength(2);
+  expect(requests).toHaveLength(3);
   expect((result.body as GroundedAnswer).content).toContain("project SYN is visible");
+  const costs = physicallyDispatchedPromptCosts(f.deps, requests);
+  for (const cost of costs) expect(cost).toBeLessThanOrEqual(dataPodInputGrant(f.deps));
+  assertAccounting(costs);
 });
 
-// S11: the repair sends the tool results again, so a grant that fits its bare prompt cannot fund it.
+// S11: the repair repeats the tool results; its complete current prompt owns the window check.
 it.each([29_000, 29_500, 30_000, 30_500, 31_000])(
-  "keeps a complete Data-Pod answer when the tool results leave no grant for a repair (%i)",
+  "admits a fitting Data-Pod repair independently of prior reported prompt usage (%i)",
   async (promptTokens) => {
     const f = runtime();
     await connectDataPod(f, "Feature returns true. Feature is a function.");
+    const assertAccounting = observeToolRoundAndTwoSynthesisAttempts(
+      f.deps,
+      [1, 1, 1],
+      promptTokens,
+    );
     const uncited = "Jira tool result: project SYN is visible, and Feature is a plain function.";
     const requests = provider(["tool", "answer"], uncited, undefined, {
       usage: { prompt_tokens: promptTokens, completion_tokens: 1 },
@@ -1706,8 +2696,11 @@ it.each([29_000, 29_500, 30_000, 30_500, 31_000])(
       f.deps,
     );
     expect(result.status, JSON.stringify(result.body)).toBe(200);
-    expect(requests).toHaveLength(2);
+    expect(requests).toHaveLength(3);
     expect((result.body as GroundedAnswer).content).toContain("project SYN is visible");
+    const costs = physicallyDispatchedPromptCosts(f.deps, requests);
+    for (const cost of costs) expect(cost).toBeLessThanOrEqual(dataPodInputGrant(f.deps));
+    assertAccounting(costs);
   },
 );
 
@@ -1802,9 +2795,10 @@ it.each([false, true])(
   },
 );
 
-it("abstains when a tool-only empty-pack model invents an answer without invoking Jira", async () => {
+it.each([false, true])("abstains without evidence after runtime metadata=%s", async (metadata) => {
   const f = runtime();
   rmSync(join(f.root, "src"), { recursive: true });
+  if (metadata) await connectDataPod(f, "Orchids grow in violet garden beds.");
   const requests = provider(["answer"], "Invented Jira source fact.");
   const result = await handleGroundedAsk(
     context({ chatId: f.chatId, content: "List Jira projects.", modelId: MODEL }),
@@ -1939,9 +2933,9 @@ it("rejects a bound mixed model without verified tool capability before any prov
   );
   expect(result).toMatchObject({
     status: 400,
-    body: { error: { code: "CONVERSATION_UNAVAILABLE_MODEL" } },
+    body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
   });
-  expect(JSON.stringify(result.body)).toContain("verified tool calling");
+  expect(result).toMatchObject(conversationModelNotReadyResult("tool-calling", "unverified"));
   expect(requests).toEqual([]);
   expect(f.jiraRequests).toEqual([]);
   expect(fetch).not.toHaveBeenCalled();
@@ -1955,7 +2949,10 @@ it("keeps Memory capture governed when an empty-pack Jira turn has Full access",
   const result = await handleGroundedAsk(
     context({
       chatId: f.chatId,
-      content: "remember that release checks use vitest. Add the Jira comment.",
+      // Learned from natural conversation, so the operator's configured Memory ceiling holds it (#4206:
+      // only that restriction holds a private fact). A clear "remember" would
+      // be the person's own decision and act at once (ADR-0146 D4b).
+      content: "My name is Ada Lovelace",
       modelId: MODEL,
       memory: {
         enabled: true,
@@ -1969,7 +2966,11 @@ it("keeps Memory capture governed when an empty-pack Jira turn has Full access",
         },
       },
     }),
-    { ...f.deps, memoryDeploymentCeiling: "governed-assist" },
+    {
+      ...f.deps,
+      memoryDeploymentCeiling: "governed-assist",
+      memoryDeploymentCeilingConfigured: true,
+    },
   );
   expect(result.status, JSON.stringify(result.body)).toBe(200);
   expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
@@ -2074,14 +3075,16 @@ it.each(["disabled", "outside-scope"] as const)(
   },
 );
 
-it.each(["default", "preserve"] as const)(
+// Owner decision 2026-11-04: the default keeps what the model and the reader need; only the
+// credential floor goes. `KEIKO_CONTENT_REDACTION=on` is the lowered threshold.
+it.each(["default", "off", "on"] as const)(
   "keeps %s document policy and the credential floor across real mixed Jira rounds",
   async (policy) => {
     const secret = "synthetic-configured-infrastructure-value";
     const phone = "+49 30 12345678";
     const f = runtime(false, {
       KEIKO_DEFAULT_API_KEY: secret,
-      ...(policy === "preserve" ? { KEIKO_CONTENT_REDACTION: "off" } : {}),
+      ...(policy === "default" ? {} : { KEIKO_CONTENT_REDACTION: policy }),
     });
     writeFileSync(
       join(f.root, "src", "Feature.ts"),
@@ -2107,14 +3110,14 @@ it.each(["default", "preserve"] as const)(
     expect(result.status).toBe(200);
     expect(f.jiraRequests).toEqual(["GET"]);
     expect(requests).toHaveLength(2);
-    expect(requests.every((request) => request.includes(phone))).toBe(policy === "preserve");
+    expect(requests.every((request) => request.includes(phone))).toBe(policy !== "on");
     expect(requests.every((request) => !request.includes(secret))).toBe(true);
     const answer = result.body as GroundedAnswer;
-    expect(answer.content.includes(phone)).toBe(policy === "preserve");
+    expect(answer.content.includes(phone)).toBe(policy !== "on");
     expect(answer.content).not.toContain(secret);
     const stored = f.deps.store.listMessages(f.chatId);
     expect(stored.find((message) => message.role === "assistant")?.content.includes(phone)).toBe(
-      policy === "preserve",
+      policy !== "on",
     );
     expect(JSON.stringify(stored)).not.toContain(secret);
     expect(JSON.stringify(answer.citations)).not.toContain("jira");
@@ -2152,4 +3155,236 @@ it("still names untraceable statements when no Jira result backs the answer", as
   expect(result.status, JSON.stringify(result.body)).toBe(200);
   const answer = result.body as GroundedAnswer;
   expect(answer.uncertainty.map((marker) => marker.kind)).toContain("uncited-answer");
+});
+
+// F8: a `[n]` marker in Jira text designates a source of the evidence pack the turn's synthesis
+// actually sent, never the same numeral of an earlier answer.
+async function connectNamedDataPod(
+  f: ReturnType<typeof runtime>,
+  name: string,
+  text: string,
+): Promise<void> {
+  const session = openKnowledgeStoreForDeps(f.deps);
+  try {
+    const pod = await seedCapsuleWithVectors(session.store, {
+      displayName: name,
+      safeDisplayName: `${name}.pdf`,
+      capsuleId: `cap-${name}`,
+      sourceId: `src-${name}`,
+      documentId: `doc-${name}`,
+      text,
+    });
+    updateCapsuleState(session.store, pod.capsuleId, "ready");
+    f.deps.store.updateChat(f.chatId, {
+      connectedScope: null,
+      localKnowledgeScopes: [{ kind: "capsule", capsuleId: pod.capsuleId, connectedAtMs: 1 }],
+    });
+  } finally {
+    session.close();
+  }
+}
+
+/** The comment Jira received; it must be the one the recorded, approved call carried. */
+function postedComment(f: ReturnType<typeof runtime>): string {
+  expect(f.jiraBodies).toHaveLength(1);
+  const posted = (JSON.parse(f.jiraBodies[0] ?? "{}") as { readonly body: string }).body;
+  const approved = f.deps.store
+    .listMessages(f.chatId)
+    .flatMap((message) => message.toolTranscript?.exchanges ?? [])
+    .filter((exchange) => exchange.call.name === "jira_comment");
+  expect(approved).toHaveLength(1);
+  expect(approved[0]?.call.arguments.body).toBe(posted);
+  expect(approved[0]?.approval?.state).toBe("claimed");
+  return posted;
+}
+
+describe("Jira text cites the evidence pack of its own turn (F8)", () => {
+  const ASK = "What does Feature return? Also add the Jira comment.";
+  const COMMENT = "Feature returns true [1].";
+
+  function firstLabel(answer: GroundedAnswer): string {
+    const first = answer.citations[0] as { readonly label?: string } | undefined;
+    return first?.label ?? "";
+  }
+
+  async function ask(f: ReturnType<typeof runtime>, turn: string): Promise<GroundedAnswer> {
+    const result = await handleGroundedAsk(
+      context({ chatId: f.chatId, content: ASK, modelId: MODEL, clientTurnId: turn }),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return result.body as GroundedAnswer;
+  }
+
+  it("names the current pack's source when no earlier answer exists", async () => {
+    const f = runtime(true);
+    await connectNamedDataPod(f, "Current specification", "Feature returns true.");
+    provider(["write", "answer"], "Feature returns true [1]. The comment was added.", COMMENT);
+    const answer = await ask(f, "f8-no-prior");
+    const label = firstLabel(answer);
+    expect(label).toContain("Current specification");
+    expect(postedComment(f)).toBe(`Feature returns true (${label}).`);
+  });
+
+  it("names the current pack's source, not an earlier answer's colliding [1]", async () => {
+    const f = runtime(true);
+    await connectNamedDataPod(f, "Old archived specification", "Feature returns true.");
+    provider(["answer"], "Feature returns true [1].");
+    const earlier = await ask(f, "f8-earlier");
+    expect(firstLabel(earlier)).toContain("Old archived specification");
+    await connectNamedDataPod(f, "Current specification", "Feature returns true.");
+    provider(["write", "answer"], "Feature returns true [1]. The comment was added.", COMMENT);
+    const current = await ask(f, "f8-current");
+    const label = firstLabel(current);
+    expect(label).toContain("Current specification");
+    expect(postedComment(f)).toBe(`Feature returns true (${label}).`);
+    expect(postedComment(f)).not.toContain("Old archived specification");
+  });
+
+  it("still resolves a follow-up that refers to an earlier answer when no new pack is sent", async () => {
+    const f = runtime(true);
+    await connectNamedDataPod(f, "Old archived specification", "Feature returns true.");
+    provider(["answer"], "Feature returns true [1].");
+    const earlier = await ask(f, "f8-reference");
+    const label = firstLabel(earlier);
+    f.deps.store.updateChat(f.chatId, { localKnowledgeScopes: [] });
+    provider(["write", "answer"], "The comment was added.", COMMENT);
+    const result = await handleSendDesktopChat(
+      context({
+        chatId: f.chatId,
+        projectPath: f.root,
+        content: "Add your last answer as a Jira comment.",
+        modelId: MODEL,
+        clientTurnId: "f8-follow-up",
+      }),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(postedComment(f)).toBe(`Feature returns true (${label}).`);
+  });
+});
+
+async function pendingGroundedWrite(f: ReturnType<typeof runtime>): Promise<{
+  readonly user: ChatMessage;
+  readonly approval: NonNullable<ChatToolExchange["approval"]>;
+  readonly canonicalTurnRef: string;
+}> {
+  await vi.waitFor(
+    () => {
+      expect(
+        f.deps.store
+          .listMessages(f.chatId)[0]
+          ?.toolTranscript?.exchanges.find((exchange) => exchange.approval !== undefined)?.approval
+          ?.state,
+      ).toBe("pending");
+    },
+    { timeout: 10_000 },
+  );
+  const user = f.deps.store.listMessages(f.chatId)[0];
+  const approval = user?.toolTranscript?.exchanges.find(
+    (exchange) => exchange.approval !== undefined,
+  )?.approval;
+  if (approval === undefined || user?.canonicalTurnRef === undefined)
+    throw new Error("Missing admitted grounded approval");
+  return { user, approval, canonicalTurnRef: user.canonicalTurnRef };
+}
+
+function expectGroundedCancellation(f: ReturnType<typeof runtime>, userId: string): void {
+  const user = f.deps.store.findMessageById(userId);
+  expect(user?.turnState).toBe("cancelled");
+  expect(
+    user?.toolTranscript?.exchanges.find((exchange) => exchange.approval !== undefined)?.approval
+      ?.state,
+  ).toBe("revoked");
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual([]);
+}
+
+describe("grounded Jira approval continuation", () => {
+  it.each([
+    ["grounded", true],
+    ["grounded", false],
+    ["buffered", true],
+    ["buffered", false],
+  ] as const)(
+    "preserves only an observed bounded grounded approval on close: transport=%s leased=%s",
+    async (transport, leased) => {
+      const f = runtime(true);
+      await connectNamedDataPod(f, "Grounded continuation specification", "Feature returns true.");
+      const registry = approvalOwner(f.deps);
+      vi.spyOn(registry, "waitForChatWriteApproval").mockRestore();
+      vi.spyOn(appSessionAuthority, "resolveAppSessionReadAuthority").mockReturnValue({
+        sessionId: "sess_012345678901234567890123",
+        principalLabel: "local",
+        issuedAtMs: 1,
+        lastSeenAtMs: 1,
+        rotationCount: 0,
+      });
+      Object.assign(f.deps, {
+        codingAppSessionChannel: {
+          ...f.deps.codingAppSessionChannel,
+          isSessionLive: (): boolean => true,
+          beginOperation: (): undefined => undefined,
+        },
+      });
+      provider(["write", "answer"], "The comment was added.");
+      const ctx = context({
+        ...(transport === "buffered" ? { projectPath: f.root } : {}),
+        chatId: f.chatId,
+        content: "Add the Jira comment from the connected specification.",
+        modelId: MODEL,
+        clientTurnId: `grounded-continuation-${String(leased)}`,
+      });
+      if (leased) ctx.req.headers["x-keiko-chat-pending-lease"] = "bounded";
+      const outcome =
+        transport === "grounded"
+          ? handleGroundedAsk(ctx, f.deps)
+          : handleSendDesktopChat(ctx, f.deps);
+      try {
+        const { user, approval, canonicalTurnRef } = await pendingGroundedWrite(f);
+        expect(handleGetChatWriteApproval(context({}, approval.approvalId), f.deps)).toMatchObject({
+          status: 200,
+        });
+        ctx.res.destroy();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        if (!leased) {
+          await outcome;
+          expectGroundedCancellation(f, user.id);
+          return;
+        }
+        expect(
+          continuations.get(f.deps.store)?.get(canonicalTurnRef)?.controller.signal.aborted,
+        ).toBe(false);
+        expect(f.deps.store.findMessageById(user.id)).toMatchObject({
+          turnState: "pending",
+          toolTranscript: user.toolTranscript,
+        });
+        expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual([]);
+        const decision = context(
+          { decision: "approve", actionDigest: approval.actionDigest },
+          approval.approvalId,
+        );
+        expect((await handleDecideChatWriteApproval(decision, f.deps)).status).toBe(200);
+        expect((await outcome).status).toBe(200);
+        expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+        expect(f.deps.store.findMessageById(user.id)).toMatchObject({ turnState: "completed" });
+        expect(
+          (
+            await handleDecideChatWriteApproval(
+              context(
+                { decision: "approve", actionDigest: approval.actionDigest },
+                approval.approvalId,
+              ),
+              f.deps,
+            )
+          ).status,
+        ).toBe(409);
+        expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+      } finally {
+        ctx.res.destroy();
+        for (const entry of continuations.get(f.deps.store)?.values() ?? [])
+          entry.controller.abort();
+        await outcome;
+      }
+    },
+  );
 });

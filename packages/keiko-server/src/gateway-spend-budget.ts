@@ -347,6 +347,13 @@ class PersistentGatewaySpendBudget implements GatewaySpendBudget {
     private readonly log: ServerLogSink,
   ) {}
 
+  /** Releases the ledger file; the next reservation reopens the same ledger with its charges. */
+  close(): void {
+    const store = this.store;
+    this.store = undefined;
+    store?.close();
+  }
+
   private ledger(correlationId: string): ModelSpendStore {
     if (!Number.isSafeInteger(this.ceiling) || this.ceiling < 0)
       reject(this.log, correlationId, "spend-budget-invalid");
@@ -425,7 +432,21 @@ export function createGatewaySpendBudget(
   return new PersistentGatewaySpendBudget(ceiling, env[QUALIFICATION_SPEND_LEDGER_PATH_ENV], log);
 }
 
+/**
+ * Closes a ledger this server opened (#4068). A disposed dependency graph calls it, so the SQLite
+ * file no longer keeps its state directory from being removed on Windows. A reservation still in
+ * flight then fails its settlement closed as `spend-ledger-unavailable` and keeps its charge.
+ */
+export function closeGatewaySpendBudget(budget: GatewaySpendBudget | undefined): void {
+  if (budget instanceof PersistentGatewaySpendBudget) budget.close();
+}
+
 const budgetsByEnvironment = new WeakMap<object, GatewaySpendBudget | undefined>();
+// How many dependency graphs hold the cached budget of one environment. Only a graph that acquired
+// a budget may release it, and the ledger file closes with its last holder: a budget another graph
+// still uses, or one injected from outside, is never closed. The budget object itself stays cached,
+// so every caller of one environment keeps sharing one ledger, which reopens on its next use.
+const leasesByBudget = new WeakMap<GatewaySpendBudget, { holders: number }>();
 
 export function gatewaySpendBudgetForEnv(
   env: Readonly<Record<string, string | undefined>> | undefined,
@@ -433,6 +454,33 @@ export function gatewaySpendBudgetForEnv(
   if (env === undefined) return undefined;
   if (!budgetsByEnvironment.has(env)) budgetsByEnvironment.set(env, createGatewaySpendBudget(env));
   return budgetsByEnvironment.get(env);
+}
+
+/**
+ * The environment's shared budget, held by the caller until the returned `release` runs (#4068).
+ * `release` is idempotent; the ledger file is closed once every holder has released. The cached
+ * budget object stays the environment's only one and reopens the same ledger on its next use.
+ */
+export function acquireGatewaySpendBudgetForEnv(
+  env: Readonly<Record<string, string | undefined>> | undefined,
+): { readonly budget: GatewaySpendBudget | undefined; readonly release: () => void } {
+  const budget = gatewaySpendBudgetForEnv(env);
+  if (budget === undefined || env === undefined) return { budget, release: () => undefined };
+  const lease = leasesByBudget.get(budget) ?? { holders: 0 };
+  lease.holders += 1;
+  leasesByBudget.set(budget, lease);
+  let released = false;
+  return {
+    budget,
+    release: (): void => {
+      if (released) return;
+      released = true;
+      lease.holders -= 1;
+      if (lease.holders > 0) return;
+      leasesByBudget.delete(budget);
+      closeGatewaySpendBudget(budget);
+    },
+  };
 }
 
 export function reserveGatewaySpendForAttempt(

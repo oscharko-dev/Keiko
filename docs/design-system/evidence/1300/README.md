@@ -44,7 +44,7 @@ ghost text, agent prompts) is proven by
 
 ## Environment
 
-- Headless Chromium via Playwright 1.64.1 (`chromium`), Node 24.18.0 and npm 11.16.0.
+- Headless Chromium via Playwright 1.64.1 (`chromium`), Node 26.13.1 and npm 11.20.0.
 - Fidelity gates use `page.setContent` / `file://` (no server — CodeQL-safe); the running-app capture serves
   `packages/keiko-ui/out` over a realpath-confined loopback server and stubs same-origin API responses with
   deterministic `keiko.workspace.v4` workspace-window state.
@@ -123,6 +123,14 @@ differences and all 14 reference captures, the seven-mode accessibility proof wi
 serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
 captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
 unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## Coding runtime pin 1.1.5 — 2026-11-15
+
+The pin of the optional coding-runtime packages to 1.1.5 (OpenCode 2.2.5, #4359) changes
+`package.json` and `package-lock.json`, whose digests these four proofs bind. Only those two input
+digests were updated in the proofs; the producers were not rerun, because no stylesheet, fixture,
+token or component changed and the captures bind nothing but those source bytes. No gate, fixture or
+rule was changed.
 
 ## Release 1.3.0 — 2026-10-26
 
@@ -275,3 +283,99 @@ selectors; all 14 editor references and 108 running-app captures completed witho
 seven-mode accessibility proof has zero serious/critical violations and zero unresolved incomplete
 findings. No producer assertion, tolerance, budget or source stylesheet changed. These remain
 synthetic historical fixtures; they do not qualify model behavior.
+
+## PR #4292 PDF citation frame input refresh — 2026-11-07
+
+The PDF citation preview gained two prefixed classes (`.cmpPageLayer`, `.cmpCitationBox`) in
+`PdfCitationPreviewWindow.module.css`, a declared producer input. All four original producers were
+rerun on macOS arm64, Node 24.22.0, npm 11.19.1 and Playwright 1.64.1. Since #4260 the desktop boot
+boundary reads `GET /api/workspace/state` and scopes the persisted layout keys by its `storageId`, so
+the running-app capture fixture now answers that one path with a fixed storage identity and no
+server-side layout and seeds its windows under the scoped keys; every other path and method still
+fails closed. Component fidelity passed with 427 probes and zero gated or recorded differences and no
+missing selectors; editor fidelity passed with zero gated differences and all 14 reference captures;
+the seven-mode accessibility proof has zero serious/critical violations and zero unresolved
+incomplete findings; all 108 running-app captures have zero page errors, unexpected API requests,
+missing selectors, crashed windows or unavailable workspace-trust states. No producer assertion,
+tolerance or budget changed.
+
+## Jira UI regression closeout — 2026-11-08
+
+The four original producers were rerun in the isolated Linux arm64 container with Node 24.18.0
+for PR #4288. The inherited `package.json` fingerprint was stale; no source-input list, fixture,
+assertion or threshold was relaxed. Component fidelity retains 427 probes with zero gated or
+recorded differences. Editor fidelity retains all 14 reference captures and zero gated differences;
+its previously documented accent and reference-only differences remain recorded. Accessibility
+retains zero serious/critical violations and zero unresolved incomplete findings. All 108 browser
+captures retain zero page errors, unexpected API requests, missing selectors, crashed windows,
+visible error notices and unavailable workspace-trust states. Representative browser and editor
+captures were visually inspected. These historical design fixtures do not qualify live Jira effects.
+
+## PR #4288 lab script input refresh — 2026-11-09
+
+The Jira lab role-journey scripts added six entries to `package.json`, a declared producer input. The
+four original producers were rerun in the isolated Linux arm64 container with Node 24.18.0 and the
+Playwright Chromium revision the lockfile pins. Component fidelity retains 427 probes with zero gated
+or recorded differences and no missing selectors. Editor fidelity retains all 14 reference captures
+and zero gated differences; its previously documented accent and reference-only differences remain
+recorded. Accessibility retains zero serious/critical violations and zero unresolved incomplete
+findings across the seven modes. All 108 browser captures retain zero page errors, unexpected API
+requests, missing selectors, crashed windows, visible error notices and unavailable workspace-trust
+states. No producer assertion, tolerance, fixture or budget changed.
+
+## PR #4288 production build type-check input — 2026-11-10
+
+`packages/keiko-ui/next.config.mjs`, a declared producer input, now points the production build's
+type check at `tsconfig.build.json`, so the build fits a 2 GB V8 heap. The four original producers
+were rerun in the isolated Linux arm64 container with Node 24.18.0 and the Playwright Chromium
+revision the lockfile pins. Component fidelity retains 427 probes with zero gated or recorded
+differences and no missing selectors. Editor fidelity retains all 14 reference captures and zero gated
+differences. Accessibility retains zero serious/critical violations and zero unresolved incomplete
+findings across the seven modes. All 108 browser captures retain zero page errors, unexpected API
+requests, missing selectors, crashed windows, visible error notices and unavailable workspace-trust
+states. The records rebind only the `next.config.mjs` digest; the committed captures are kept. No
+producer assertion, tolerance, fixture or budget changed.
+
+## PR #4375 dependency input refresh — 2026-11-12
+
+Dependabot #4350 and #4326, taken within the seven-day cooldown, change the root and `keiko-ui`
+manifests and the lockfile (Next.js 16.4.5, Vite 8.3.5, PostCSS 8.5.32, KaTeX 0.19.1 and the
+ProseMirror patches among them), all declared producer inputs. The four original producers were
+rerun in the isolated Linux arm64 container with Node 24.18.0 and the Playwright Chromium revision
+the lockfile pins. Component fidelity retains 427 probes with zero gated or recorded differences and
+no missing selectors. Editor fidelity retains all 14 reference captures and zero gated differences;
+its previously documented accent and reference-only differences remain recorded. Accessibility
+retains zero serious/critical violations and zero unresolved incomplete findings across the seven
+modes. All 108 browser captures retain zero page errors, unexpected API requests, missing selectors,
+crashed windows, visible error notices and unavailable workspace-trust states. The captures are
+committed as recaptured: the memory-relationships workspace now shows the current Memory autonomy
+copy (the kept 2026-11-10 captures predated it), and the editor references move by a few pixels of
+line height with unchanged content. Representative captures were visually inspected. No producer
+assertion, tolerance, fixture or budget changed.
+
+## Release 1.5.0 and Node 26 — 2026-11-15
+
+All four original producers were rerun from `860edf47877a205feab6aa18e0db4154d60b885a`
+in the isolated Linux arm64 gate container with Node 26.13.1, npm 11.20.0 and the locked
+Playwright 1.64.1 browsers. All 133 PNGs and four JSON records were regenerated and imported;
+their 29 declared source fingerprints match the release inputs.
+
+Component fidelity passed all 427 probes with zero gated or recorded differences and no missing
+selectors. Editor fidelity passed 160 gated probes and all 14 reference captures; the existing
+non-gated dark high-contrast bracket-color difference remains recorded. The seven-mode axe proof
+has zero serious/critical violations and zero unresolved incomplete findings. All 108 browser
+captures have zero page errors, unexpected API requests, missing selectors, crashed windows,
+visible error notices or unavailable workspace-trust states. No producer, tolerance, disposition,
+fixture or budget changed.
+
+Representative desktop, mobile, constrained Git, high-contrast and editor-reference captures were
+independently inspected. The fixed fixture windows retain their existing clipping on narrow
+viewports, and the browser's historical health mock retains its fixture version; these captures
+are neither complete responsive interaction qualification nor evidence of the product version.
+The editor references remain historical design pages. Existing non-gated differences and the
+accessibility disposition are unchanged.
+
+Editor bundle-size and B1/B2/B3 release-evidence checks remain separate gates, as does D12 performance
+qualification. These are synthetic fixture proofs; the independently audited Jira AC1/AC3
+measurements and the fresh 1.5.0 build/reload supplement are recorded separately in
+[`4390-release-evidence.json`](../../../qa/4390-release-evidence.json).
