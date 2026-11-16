@@ -1,7 +1,9 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { SANDBOX_BACKENDS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { detectWorkspace } from "@oscharko-dev/keiko-workspace";
 import * as verification from "@oscharko-dev/keiko-verification";
 import * as tools from "@oscharko-dev/keiko-tools";
@@ -129,6 +131,154 @@ function requiredAttestation(
   if (result.attestation === undefined) throw new TypeError("Missing producer attestation");
   return result.attestation;
 }
+
+const probeBackends: ReadonlySet<string> = new Set(SANDBOX_BACKENDS);
+const probeStderrPatterns = [
+  [
+    /image operating system [^\r\n]+ cannot be used on this platform|no matching manifest for/iu,
+    "image-platform-mismatch",
+  ],
+  [/manifest unknown|pull access denied for/iu, "image-unavailable"],
+  [/invalid mount config for type|invalid volume specification|mounts denied:/iu, "mount-refused"],
+  [/invalid option: Windows does not support/iu, "engine-option-unsupported"],
+  [/cannot connect to the Docker daemon|error during connect:/iu, "daemon-connection-failed"],
+  [/unable to find image [^\r\n]+ locally/iu, "image-not-cached"],
+] as const;
+
+// A diagnostic hint from known CLI wording, never a capability or admission decision. The closed
+// label is all that leaves this function; unknown text remains "other" with only its byte/hash proof.
+function closedProbeStderr(stderr: string): string {
+  if (stderr.length === 0) return "empty";
+  return probeStderrPatterns.find(([pattern]) => pattern.test(stderr))?.[1] ?? "other";
+}
+
+function closedProbeResult(
+  output: tools.CommandResult | undefined,
+): Record<string, unknown> | null {
+  if (output === undefined) return null;
+  const backend = output.attestation?.backend;
+  return {
+    backend: backend !== undefined && probeBackends.has(backend) ? backend : "unknown",
+    exitCode: output.exitCode,
+    signalPresent: output.signal !== null,
+    timedOut: output.timedOut,
+    truncated: output.truncated,
+    outputRedacted: output.outputRedacted === true,
+    networkEnforced: output.attestation?.networkEnforced === true,
+    filesystemEnforced: output.attestation?.filesystemEnforced === true,
+    stdoutBytes: Buffer.byteLength(output.stdout),
+    stdoutSha256: createHash("sha256").update(output.stdout).digest("hex"),
+    stderrClass: closedProbeStderr(output.stderr),
+    stderrBytes: Buffer.byteLength(output.stderr),
+    stderrSha256: createHash("sha256").update(output.stderr).digest("hex"),
+  };
+}
+
+// Preserve the real command and all admission assertions. A failed live probe must identify which
+// closed output guard refused it without printing command arguments, paths, environment or bodies.
+async function resolveObservedRuntimeTarget(
+  input: Parameters<typeof resolveVerificationRuntimeTarget>[0],
+  observed: readonly tools.CommandResult[],
+): ReturnType<typeof resolveVerificationRuntimeTarget> {
+  try {
+    return await resolveVerificationRuntimeTarget(input);
+  } catch (error) {
+    if (
+      !(error instanceof TypeError) ||
+      error.message !== "VERIFICATION_RUNTIME_TARGET_UNAVAILABLE"
+    )
+      throw error;
+  }
+  // Only the exact closed refusal reaches this boundary. Do not carry a foreign cause into CI logs.
+  throw new TypeError(
+    `VERIFICATION_RUNTIME_TARGET_UNAVAILABLE ${JSON.stringify({
+      resultCount: observed.length,
+      lastResult: closedProbeResult(observed.at(-1)),
+    })}`,
+  );
+}
+
+it("reports a refused real probe through closed metadata without command or output bodies", async () => {
+  const workspace = fixture();
+  const privateValue = "PRIVATE_PROBE_CONTENT";
+  const output: tools.CommandResult = {
+    ...result(workspace),
+    command: privateValue,
+    args: [privateValue],
+    exitCode: 125,
+    signal: privateValue,
+    stdout: privateValue,
+    stderr: privateValue,
+    timedOut: true,
+    truncated: true,
+    outputRedacted: true,
+    attestation: { ...requiredAttestation(result(workspace)), platform: privateValue },
+  };
+  vi.spyOn(tools, "runCommand").mockResolvedValue(output);
+  const pending = resolveObservedRuntimeTarget(
+    { workspace, signal: new AbortController().signal },
+    [output],
+  );
+  const digest = createHash("sha256").update(privateValue).digest("hex");
+  await expect(pending).rejects.toMatchObject({
+    message: `VERIFICATION_RUNTIME_TARGET_UNAVAILABLE ${JSON.stringify({
+      resultCount: 1,
+      lastResult: {
+        backend: "container-docker",
+        exitCode: 125,
+        signalPresent: true,
+        timedOut: true,
+        truncated: true,
+        outputRedacted: true,
+        networkEnforced: true,
+        filesystemEnforced: true,
+        stdoutBytes: Buffer.byteLength(privateValue),
+        stdoutSha256: digest,
+        stderrClass: "other",
+        stderrBytes: Buffer.byteLength(privateValue),
+        stderrSha256: digest,
+      },
+    })}`,
+  });
+  await expect(pending).rejects.not.toHaveProperty("cause");
+  await expect(pending).rejects.not.toHaveProperty("command");
+  await expect(pending).rejects.toSatisfy(
+    (error: Error) =>
+      !error.message.includes(privateValue) && !error.message.includes(workspace.root),
+  );
+});
+
+it.each([
+  [
+    "Unable to find image 'PRIVATE_PROBE_CONTENT' locally\nno matching manifest for windows(10.0.26100)/amd64 in the manifest list entries",
+    "image-platform-mismatch",
+  ],
+  [
+    "Unable to find image 'PRIVATE_PROBE_CONTENT' locally\npull access denied for PRIVATE_PROBE_CONTENT",
+    "image-unavailable",
+  ],
+  ['image operating system "linux" cannot be used on this platform', "image-platform-mismatch"],
+  [
+    "no matching manifest for windows(10.0.26100)/amd64 in the manifest list entries",
+    "image-platform-mismatch",
+  ],
+  ["manifest unknown: manifest unknown", "image-unavailable"],
+  ["pull access denied for PRIVATE_PROBE_CONTENT", "image-unavailable"],
+  ["Unable to find image 'PRIVATE_PROBE_CONTENT' locally", "image-not-cached"],
+  ['invalid mount config for type "bind": PRIVATE_PROBE_CONTENT', "mount-refused"],
+  ["invalid volume specification: PRIVATE_PROBE_CONTENT", "mount-refused"],
+  ["Mounts denied: PRIVATE_PROBE_CONTENT", "mount-refused"],
+  ["invalid option: Windows does not support PRIVATE_PROBE_CONTENT", "engine-option-unsupported"],
+  ["Cannot connect to the Docker daemon at PRIVATE_PROBE_CONTENT", "daemon-connection-failed"],
+  ["error during connect: PRIVATE_PROBE_CONTENT", "daemon-connection-failed"],
+  ["PRIVATE_PROBE_CONTENT", "other"],
+  ["", "empty"],
+])("classifies probe stderr case %# without retaining its body", (stderr, stderrClass) => {
+  const details = closedProbeResult({ ...result(fixture()), stderr });
+  expect(details).toMatchObject({ stderrClass, stderrBytes: Buffer.byteLength(stderr) });
+  expect(JSON.stringify(details)).not.toContain("PRIVATE_PROBE_CONTENT");
+  expect(details).not.toHaveProperty("stderr");
+});
 
 it("binds the child metadata and actual selected backend without assuming host CPU", async () => {
   const workspace = fixture();
@@ -290,10 +440,10 @@ it("measures the real selected isolated Node runtime through the original comman
     return output;
   });
   const probe = probeNetworkIsolation(workspace.root);
-  const pending = resolveVerificationRuntimeTarget({
-    workspace,
-    signal: new AbortController().signal,
-  });
+  const pending = resolveObservedRuntimeTarget(
+    { workspace, signal: new AbortController().signal },
+    observed,
+  );
   if (!probe.available) {
     await expect(pending).rejects.toBeInstanceOf(tools.CommandDeniedError);
     expect(spawns).not.toHaveBeenCalled();
@@ -451,10 +601,11 @@ it("narrows only this probe's output scrub to credentials", async () => {
 
 // Substitutes the probe's script with one that prints a chosen metadata document, keeping the real
 // command owner, scrub and attestation in the path.
-function probeWith(nodeVersion: string | undefined): void {
+function probeWith(nodeVersion: string | undefined): readonly tools.CommandResult[] {
   const original = tools.runCommand;
-  vi.spyOn(tools, "runCommand").mockImplementation((input, deps) =>
-    original(input, {
+  const observed: tools.CommandResult[] = [];
+  vi.spyOn(tools, "runCommand").mockImplementation(async (input, deps) => {
+    const output = await original(input, {
       ...deps,
       spawn: (command, args, options) =>
         nodeSpawnFn(
@@ -466,23 +617,26 @@ function probeWith(nodeVersion: string | undefined): void {
           ),
           options,
         ),
-    }),
-  );
+    });
+    observed.push(output);
+    return output;
+  });
+  return observed;
 }
 
 it("resolves the real runtime when the parent environment exports NODE_VERSION", async () => {
   const workspace = fixture();
   if (!probeNetworkIsolation(workspace.root).available) return;
-  probeWith(undefined);
+  const observed = probeWith(undefined);
   const input = {
     workspace,
     signal: new AbortController().signal,
   };
   // The isolated backend can use a different runtime from this host. Its actual fingerprint
   // must survive an ordinary environment value equal to its version, including in a container.
-  const before = await resolveVerificationRuntimeTarget(input);
+  const before = await resolveObservedRuntimeTarget(input, observed);
   vi.stubEnv("NODE_VERSION", before.nodeVersion.slice(1));
-  expect(await resolveVerificationRuntimeTarget(input)).toEqual(before);
+  expect(await resolveObservedRuntimeTarget(input, observed)).toEqual(before);
 }, 20_000);
 
 it("still scrubs a credential-named value and then refuses the target", async () => {

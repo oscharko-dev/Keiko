@@ -6455,6 +6455,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "workspace-layout-locked",
           "workspace-layout-unlocked",
           "workspace-window-content-zoomed",
+          "workspace-ownership-started",
           "workspace-layout-restored",
           "workspace-layout-empty",
           "workspace-layout-unowned",

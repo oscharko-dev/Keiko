@@ -1,10 +1,12 @@
 import vm from "node:vm";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APP_BOOT_RECOVERY_BOOTSTRAP, LOCALE_BOOTSTRAP } from "./layout";
 import { WorkspacePersistenceBoundary } from "./components/desktop/WorkspacePersistenceBoundary";
+import { AppBootPlaceholder } from "./components/desktop/AppBootPlaceholder";
 
 const RECOVERY_KEY = "keiko.app-boot-recovery-reload-count";
 
@@ -79,6 +81,7 @@ function runBootRecoveryScript(options: {
   readonly locale?: "de" | "en";
   readonly storage?: ScriptStorage;
   readonly prerenderedBody?: string;
+  readonly recoveryWindow?: EventTarget;
 }): {
   readonly document: Document;
   readonly reload: ReturnType<typeof vi.fn>;
@@ -86,7 +89,7 @@ function runBootRecoveryScript(options: {
 } {
   const recoveryDocument = bootDocument(options);
   const reload = vi.fn();
-  const recoveryWindow = new EventTarget();
+  const recoveryWindow = options.recoveryWindow ?? new EventTarget();
 
   vm.runInNewContext(APP_BOOT_RECOVERY_BOOTSTRAP, {
     document: recoveryDocument,
@@ -106,6 +109,8 @@ describe("APP_BOOT_RECOVERY_BOOTSTRAP", () => {
   });
 
   afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
     document.body.replaceChildren();
     document.documentElement.lang = "en";
     vi.useRealTimers();
@@ -150,6 +155,111 @@ describe("APP_BOOT_RECOVERY_BOOTSTRAP", () => {
 
     expect(reload).toHaveBeenCalledOnce();
     expect(storage.getItem(RECOVERY_KEY)).toBe("1");
+  });
+
+  it.each(["0", "2"])(
+    "hands a queued boot deadline to the real ownership lifecycle before loading commits (retries=%s)",
+    async (retries) => {
+      const boundary = createElement(
+        WorkspacePersistenceBoundary,
+        null,
+        createElement("main", { className: "workspace" }, "Owned workspace"),
+      );
+      const storage = makeStorage({ [RECOVERY_KEY]: retries });
+      const { reload } = runBootRecoveryScript({
+        hasWorkspace: false,
+        hasBootShell: false,
+        prerenderedBody: renderToStaticMarkup(boundary),
+        recoveryWindow: window,
+        storage,
+      });
+      window.localStorage.setItem("keiko.workspace.v4", "[]");
+      let placeholderAtReadStart = false;
+      let fallbackBeforeLoadingCommit = false;
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockImplementationOnce(
+            (_url: string, init: RequestInit) =>
+              new Promise<Response>((_resolve, reject) => {
+                init.signal?.addEventListener("abort", () =>
+                  reject(new DOMException("Aborted", "AbortError")),
+                );
+                // The ownership effect has started, but React has not committed loading yet.
+                // Deliver the already queued boot deadline while that old DOM still exists.
+                placeholderAtReadStart =
+                  document.querySelector(".app[aria-hidden='true'] .app-boot") !== null;
+                vi.advanceTimersByTime(8000);
+                fallbackBeforeLoadingCommit =
+                  document.querySelector(".app-boot [role='alert']") !== null;
+              }),
+          )
+          .mockResolvedValueOnce(
+            new Response(JSON.stringify({ workspace: { storageId: "a".repeat(64) } })),
+          ),
+      );
+
+      render(boundary, { container: document.body, hydrate: true });
+
+      expect(placeholderAtReadStart).toBe(true);
+      expect(fallbackBeforeLoadingCommit).toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+      expect(storage.getItem(RECOVERY_KEY)).toBe(retries);
+      expect(document.querySelector("main.workspace")).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(screen.getByRole("alert")).toHaveTextContent("Your workspace could not be opened");
+      expect(window.localStorage.getItem("keiko.workspace.v4")).toBe("[]");
+      expect(document.querySelector("main.workspace")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByRole("main")).toHaveTextContent("Owned workspace");
+      expect(reload).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not confuse a pending child mount with failed pre-hydration after ownership resolves", async () => {
+    const shell = (mounted: boolean): ReturnType<typeof createElement> =>
+      createElement(
+        WorkspacePersistenceBoundary,
+        null,
+        mounted
+          ? createElement("main", { className: "workspace" }, "Owned workspace")
+          : createElement(AppBootPlaceholder),
+      );
+    const storage = makeStorage({ [RECOVERY_KEY]: "1" });
+    const { reload } = runBootRecoveryScript({
+      hasWorkspace: false,
+      hasBootShell: false,
+      prerenderedBody: renderToStaticMarkup(shell(false)),
+      recoveryWindow: window,
+      storage,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ workspace: { storageId: "a".repeat(64) } })),
+        ),
+    );
+    const view = render(shell(false), { container: document.body, hydrate: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(document.querySelector(".app-boot")).not.toBeNull();
+    expect(document.querySelector("main.workspace")).toBeNull();
+    vi.advanceTimersByTime(60_000);
+    expect(reload).not.toHaveBeenCalled();
+    expect(storage.getItem(RECOVERY_KEY)).toBe("1");
+    expect(vi.getTimerCount()).toBe(0);
+    view.rerender(shell(true));
+    expect(screen.getByRole("main")).toHaveTextContent("Owned workspace");
   });
 
   it("does not spend recovery retries while initial resources are still progressing", () => {

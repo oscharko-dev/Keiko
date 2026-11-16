@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+export const APP_BOOT_RECOVERY_HANDOFF_EVENT = "keiko:workspace-ownership-started";
+
 /** Static first paint shared by both boot boundaries and the pre-hydration recovery watchdog. */
 export function AppBootPlaceholder(): ReactNode {
   return (

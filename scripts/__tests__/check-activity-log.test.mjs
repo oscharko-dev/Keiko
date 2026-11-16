@@ -386,12 +386,20 @@ function withScripts(wiring, change) {
 }
 
 function replaced(text, search, replacement) {
-  expect(text).toContain(search);
-  return text.replace(search, () => replacement);
+  const normalized = text.replaceAll("\r\n", "\n");
+  expect(normalized).toContain(search);
+  return normalized.replace(search, () => replacement);
 }
 
-describe("required wiring of the Activity Log gate", () => {
-  const current = currentWiring();
+describe.each([
+  { name: "LF", ending: "\n" },
+  { name: "CRLF", ending: "\r\n" },
+])("required wiring of the Activity Log gate ($name)", ({ ending }) => {
+  const original = currentWiring();
+  const current = {
+    ...original,
+    workflow: original.workflow.replaceAll(/\r?\n/gu, ending),
+  };
   const gateRun = `        run: ${GATE_COMMAND}\n`;
 
   it("is complete in the repository today", () => {

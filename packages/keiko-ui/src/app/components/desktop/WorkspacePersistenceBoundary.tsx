@@ -6,7 +6,7 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { WorkspaceStorageScopeContext } from "./hooks/workspace-storage";
-import { AppBootPlaceholder } from "./AppBootPlaceholder";
+import { AppBootPlaceholder, APP_BOOT_RECOVERY_HANDOFF_EVENT } from "./AppBootPlaceholder";
 import styles from "./AppShellBoundary.module.css";
 
 type RestoreState =
@@ -43,6 +43,14 @@ function useWorkspaceRestoration(): { readonly state: RestoreState; readonly ret
     const controller = new AbortController();
     let stopped = false;
     const timer = setTimeout(() => controller.abort(), 10_000);
+    const correlationId = newClientCorrelationId();
+    // This effect owns the real, bounded read now. Its loading state has not necessarily
+    // committed, so the pre-hydration watchdog must stop inspecting the old placeholder.
+    window.dispatchEvent(new Event(APP_BOOT_RECOVERY_HANDOFF_EVENT));
+    reportClientDiagnostic("Workspace layout ownership lifecycle started.", {
+      correlationId,
+      composerActivity: "workspace-ownership-started",
+    });
     void readWorkspaceStorageId(controller.signal).then(
       (storageId) => {
         if (!stopped) setState({ kind: "ready", storageId });
@@ -52,7 +60,7 @@ function useWorkspaceRestoration(): { readonly state: RestoreState; readonly ret
         clearTimeout(timer);
         if (stopped) return;
         reportClientDiagnostic("Workspace layout ownership could not be resolved.", {
-          correlationId: newClientCorrelationId(),
+          correlationId,
           kind: "other",
           errorKind: "unavailable",
           errorEvidence: clientErrorEvidence(error),

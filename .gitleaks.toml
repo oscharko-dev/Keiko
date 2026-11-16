@@ -103,6 +103,14 @@ regexTarget = "line"
 regexes = ['''^\n?[ \t]*"browser-approval-key-store\.ts": "139d0f8d1da0fb501ef15abf96f63922df368bcf1fac891a61c226d47ad38a31",?[ \t]*$''']
 
 [[allowlists]]
+description = "PR #4398: two verified Jira issue-key array digests in the body-free AC1 release evidence. Independently recomputed SHA-256 over JSON.stringify of each sorted three-issue-key array from the completed Ask/Full draft transcripts; these are issue identities, not authentication keys. Only the two exact digests, complete keysSha256 field line, evidence path and generic rule are excepted in history and squash-equivalent scans. Other values, fields, paths and rules remain scanned; no commit or whole-file exemption."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^docs/qa/4390-release-evidence\.json$''']
+regexTarget = "line"
+regexes = ['''^\n?[ \t]*"keysSha256": "(?:94cb04e945cc8f89fdd8b2f680b0ee19ca0a675892ad9da719a846099b3b847f|0c917f8c0fdc85342c349e682b3a5f4cf24d9e9f4459445cbe8035d02544f9f2)",?[ \t]*$''']
+
+[[allowlists]]
 description = "PR #3452: the synthetic key fixture the stream-read test copied from openai-adapter.test.ts (#855, on dev before every scanned range) in one immutable history commit. The generic-api-key rule reads `token-\", \"1234567890abcd` as a key whose value has entropy 3.81, above the rule's 3.5. No real credential was involved; the file uses a literal the rule cannot read as a key afterwards, and `dev` branch protection forbids rewriting the commit. Scoped to that one line of that file in that commit; every other commit is scanned unchanged."
 condition = "AND"
 commits = [
