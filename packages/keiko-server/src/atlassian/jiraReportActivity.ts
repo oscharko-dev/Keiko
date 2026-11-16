@@ -41,7 +41,7 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["read", "section", "refused", "export"],
+      values: ["read", "section", "refused", "export", "retain"],
     },
     status: {
       type: "string",
@@ -137,6 +137,13 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
     hierarchyRejectedFieldCount: OPTIONAL_COUNT,
     hierarchyInferredFieldCount: OPTIONAL_COUNT,
     byteCount: OPTIONAL_COUNT,
+    retainedReportCount: OPTIONAL_COUNT,
+    exportSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["memory", "retained"],
+    },
     invalidArgumentCount: OPTIONAL_COUNT,
     sectionItemCount: OPTIONAL_COUNT,
     sectionItemTotal: OPTIONAL_COUNT,
@@ -162,10 +169,12 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
 
 /** One report export; the file text never enters the line. */
 export interface JiraReportExportActivity {
-  readonly phase: "export";
+  readonly phase: "export" | "retain";
   readonly format?: JiraReportExportFormat;
   readonly refusal?: JiraReportRefusalKind;
   readonly byteCount?: number;
+  readonly retainedReportCount?: number;
+  readonly exportSource?: "memory" | "retained";
   readonly durationMs: number;
 }
 export type JiraReportLogInput = JiraReportActivity | JiraReportExportActivity;
@@ -194,7 +203,7 @@ function errorKindOf(input: JiraReportLogInput): ActivityLogErrorKind | undefine
   return reason === undefined ? undefined : INCOMPLETE_KIND[reason];
 }
 interface JiraReportLine {
-  readonly phase: "read" | "section" | "refused" | "export";
+  readonly phase: "read" | "section" | "refused" | "export" | "retain";
   readonly scopeKind: "project" | "jql" | "project-jql" | "epic" | "report";
   readonly continued: boolean;
   readonly durationMs: number;
@@ -217,6 +226,8 @@ interface JiraReportLine {
   readonly hierarchyRejectedFieldCount?: number;
   readonly hierarchyInferredFieldCount?: number;
   readonly byteCount?: number;
+  readonly retainedReportCount?: number;
+  readonly exportSource?: "memory" | "retained";
   readonly invalidArgumentCount?: number;
   readonly sectionItemCount?: number;
   readonly sectionItemTotal?: number;
@@ -280,16 +291,7 @@ function sectionPageOf(
 }
 
 function lineOf(input: JiraReportLogInput): JiraReportLine {
-  if (input.phase === "export")
-    return {
-      phase: "export",
-      scopeKind: "report",
-      continued: false,
-      durationMs: input.durationMs,
-      ...(input.format === undefined ? {} : { format: input.format }),
-      ...(input.refusal === undefined ? {} : { refusal: input.refusal }),
-      ...(input.byteCount === undefined ? {} : { byteCount: input.byteCount }),
-    };
+  if (!("scopeKind" in input)) return exportLine(input);
   return {
     phase: input.phase,
     scopeKind: input.scopeKind,
@@ -310,6 +312,22 @@ function lineOf(input: JiraReportLogInput): JiraReportLine {
     ...invalidArguments(input),
     ...sectionPageOf(input),
     ruleIds: input.ruleIds,
+  };
+}
+
+function exportLine(input: JiraReportExportActivity): JiraReportLine {
+  return {
+    phase: input.phase,
+    scopeKind: "report",
+    continued: false,
+    durationMs: input.durationMs,
+    ...(input.format === undefined ? {} : { format: input.format }),
+    ...(input.refusal === undefined ? {} : { refusal: input.refusal }),
+    ...(input.byteCount === undefined ? {} : { byteCount: input.byteCount }),
+    ...(input.retainedReportCount === undefined
+      ? {}
+      : { retainedReportCount: input.retainedReportCount }),
+    ...(input.exportSource === undefined ? {} : { exportSource: input.exportSource }),
   };
 }
 

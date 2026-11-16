@@ -23,6 +23,22 @@ function legacyConversation(version = 54): DatabaseSync {
   return db;
 }
 
+it("adds report exports to v78 without changing conversations and reapplies idempotently (#4390)", () => {
+  const db = legacyConversation(78);
+  try {
+    runMigrations(db);
+    runMigrations(db);
+    expect(db.prepare("SELECT content FROM chat_messages ORDER BY timestamp").all()).toEqual([
+      { content: "Preserve the original request." },
+      { content: "Acknowledged." },
+    ]);
+    expect(db.prepare("SELECT count(*) AS count FROM jira_report_exports").get()?.count).toBe(0);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
+
 it("backfills both v56 indexes from v55 originals and preserves index integrity", () => {
   const db = legacyConversation(55);
   try {

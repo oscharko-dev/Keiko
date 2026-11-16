@@ -1716,7 +1716,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["read", "section", "refused", "export"],
+        values: ["read", "section", "refused", "export", "retain"],
       },
       status: {
         type: "string",
@@ -1872,6 +1872,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      retainedReportCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      exportSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["memory", "retained"],
       },
       invalidArgumentCount: {
         type: "integer",

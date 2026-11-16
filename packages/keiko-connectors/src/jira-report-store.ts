@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
+  JIRA_REPORT_IDLE_TTL_MS,
+  JIRA_REPORT_STORE_MAX_BYTES,
+  JIRA_REPORT_OWNER_SESSIONS_MAX,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
   createJiraReportSession,
   type JiraReportRequest,
   type JiraReportSession,
@@ -37,10 +42,7 @@ export interface JiraReportStoreOptions {
   readonly maxSessionsPerOwner?: number;
 }
 
-export const JIRA_REPORT_IDLE_TTL_MS = 4 * 60 * 60 * 1000;
-/** Retained size of all reports together; a safety bound on memory, never a limit on a scope. */
-export const JIRA_REPORT_STORE_MAX_BYTES = 768 * 1024 * 1024;
-export const JIRA_REPORT_OWNER_SESSIONS_MAX = 4;
+export { JIRA_REPORT_IDLE_TTL_MS, JIRA_REPORT_STORE_MAX_BYTES, JIRA_REPORT_OWNER_SESSIONS_MAX };
 
 type Sessions = Map<string, JiraReportSession>;
 

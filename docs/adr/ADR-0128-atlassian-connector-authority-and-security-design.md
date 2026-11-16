@@ -2174,12 +2174,24 @@ cannot be read the next call asks again and a second failure ends the report as 
 word (`invalid-jql`, `auth`, `permission`, `not-found`, `rate-limited`, `timeout`, `unavailable`,
 `malformed-payload`, `bounds-exceeded`) beside the reason. A caller clause must have balanced
 parentheses outside quoted strings and, without a `projectKey`, must contain more than ordering, so
-it can neither escape the project scope nor read the whole instance. Reports live in memory only,
+it can neither escape the project scope nor read the whole instance. Report reading sessions live in memory,
 bound to the Chat (or, for a Coding run, the Pod binding) that started them and to the Jira
 instance and credential identity they were started with (a resume against another is refused as
 `connection-changed`). They expire after four idle hours (an export does not renew that), one owner
 keeps at most four and the owner holding the most is trimmed first beyond the shared byte budget, so
-one Chat cannot push out another's reports. One report may hold 192 MiB of derived records, charged
+one Chat cannot push out another's reports. Finished Chat reports also retain their server-rendered
+Markdown and CSV files in the existing UI SQLite store (#4390, 2026-11-16). Their original Chat
+foreign key, report identity and content digest bind the files; deleting the Chat or project
+cascades to them. The existing content policy projects them before storage and again on download,
+so a newly configured credential cannot leak through an older file. The artifact store uses the
+same four-per-Chat and 768 MiB total bounds, charging UTF-8 bytes and trimming the largest owner
+first. Its four-hour expiry follows the report's last tool use; downloads and restarts never renew
+it. Only finished download files survive a restart, not partial reads, Jira connections, grants,
+approvals or remote execution authority. The card's downloads therefore survive a same-store
+restart within their lifetime without reopening Jira. The existing `atlassian.jira-report` line
+records `phase=retain`, a retained report count and a closed failure on storage refusal; exports
+state only the closed source `memory` or `retained`, never file text, scope or issue keys.
+One report may hold 192 MiB of derived records, charged
 at a realistic per-issue cost that includes the build peak; beyond it the read ends as
 `memory-budget`. Tool results cap every per-requirement and per-epic list at 25 entries with its
 true total beside it; the exports carry everything. The CSV starts with a byte order mark so a

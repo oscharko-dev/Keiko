@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e7fdd5d595a17a59b3e7e82a736855a96d926f28c23531a921460e96b7d3195b",
+    "catalogDigest": "4e5399bbd0cf5c8c1b0cec734cdf701bd6f8710eaaed8773e490865729e7bd86",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1781,7 +1781,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["read", "section", "refused", "export"]
+            "values": ["read", "section", "refused", "export", "retain"]
           },
           "status": {
             "type": "string",
@@ -1938,6 +1938,17 @@
             "dataClass": "count",
             "required": false
           },
+          "retainedReportCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "exportSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["memory", "retained"]
+          },
           "invalidArgumentCount": {
             "type": "integer",
             "dataClass": "count",
@@ -1978,7 +1989,7 @@
         "proofIds": ["atlassian.jira-report.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:32",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:325"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:343"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -47201,8 +47212,8 @@
         "failureClasses": ["ui-store-open"],
         "proofIds": ["store.opened.identity"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store/db.ts:152",
-        "emitterSites": ["packages/keiko-server/src/store/db.ts:1015"]
+        "registrationSite": "packages/keiko-server/src/store/db.ts:153",
+        "emitterSites": ["packages/keiko-server/src/store/db.ts:1017"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -65551,6 +65562,12 @@
                   "required": false
                 },
                 {
+                  "name": "exportSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "failure",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -65642,6 +65659,12 @@
                 },
                 {
                   "name": "requirementCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "retainedReportCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -124719,7 +124742,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:155",
+      "site": "packages/keiko-server/src/store/db.ts:156",
       "package": "keiko-server"
     },
     {

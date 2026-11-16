@@ -1,7 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
-import { createJiraReportStore, type JiraReportStore } from "@oscharko-dev/keiko-connectors";
-import type { JiraReportExportResponse } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  createJiraReportStore,
+  exportJiraReport,
+  type JiraReportStore,
+} from "@oscharko-dev/keiko-connectors";
+import { createInMemoryUiStore, createNodeUiStore } from "../store/index.js";
+import {
+  JIRA_REPORT_IDLE_TTL_MS,
+  type JiraReportExportResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -12,13 +23,14 @@ import type { RouteContext } from "../routes.js";
 import { matchRoute } from "../routes.js";
 import { exportJiraReportRoute } from "./jiraReportRoutes.js";
 import { recordJiraReportActivity } from "./jiraReportActivity.js";
+import { retainJiraReportExports } from "./jiraReportPersistence.js";
 
 const REPORT_ID = "11111111-2222-4333-8444-555555555555";
 const DIGEST = "d".repeat(64);
 
-function seeded(): JiraReportStore {
-  const store = createJiraReportStore({ newId: () => REPORT_ID });
-  const session = store.start("chat-1", {
+function seeded(owner = "chat-1", now = Date.now): JiraReportStore {
+  const store = createJiraReportStore({ newId: () => REPORT_ID, now });
+  const session = store.start(owner, {
     projectKey: "REP",
     jql: undefined,
     estimateFieldId: undefined,
@@ -122,7 +134,11 @@ function deps(
   store: JiraReportStore | undefined,
   logs = createBufferedServerLogSink(),
 ): UiHandlerDeps {
-  return { jiraReportStore: store, activityLog: logs } as unknown as UiHandlerDeps;
+  return {
+    jiraReportStore: store,
+    activityLog: logs,
+    store: { findChatById: (id: string) => ({ id }) },
+  } as unknown as UiHandlerDeps;
 }
 function onlyLine(logs: ReturnType<typeof createBufferedServerLogSink>): string {
   const [event] = logs.events;
@@ -131,6 +147,88 @@ function onlyLine(logs: ReturnType<typeof createBufferedServerLogSink>): string 
 }
 
 describe("Jira report export route", () => {
+  it("retains finished exports once and records retention failures without report text (#4390)", () => {
+    const store = createInMemoryUiStore();
+    try {
+      const project = store.createProject(process.cwd());
+      const chat = store.createChat(project.path, "Report fixture", "synthetic");
+      const reports = seeded(chat.id);
+      const port = store.jiraReportExports;
+      if (port === undefined) throw new TypeError("Missing export port");
+      const put = vi.spyOn(port, "put");
+      const logs = createBufferedServerLogSink();
+      retainJiraReportExports({ store, activityLog: logs }, reports, chat.id, "retention-fixture");
+      retainJiraReportExports({ store, activityLog: logs }, reports, chat.id, "retention-fixture");
+      expect(put).toHaveBeenCalledTimes(1);
+      expect(logs.events.at(-1)).toMatchObject({
+        op: "atlassian.jira-report",
+        extra: { phase: "retain", retainedReportCount: 1 },
+      });
+      vi.spyOn(port, "touch").mockImplementation(() => {
+        throw new Error("SYN-99 private-report-body");
+      });
+      retainJiraReportExports({ store, activityLog: logs }, reports, chat.id, "retention-fixture");
+      expect(logs.events.at(-1)).toMatchObject({
+        extra: { phase: "retain", retainedReportCount: 0, refusal: "export-unavailable" },
+        level: "warn",
+      });
+      const line = formatActivityLogProofLine(logs.events.at(-1) ?? {});
+      expectActivityLogProof("atlassian.jira-report.line", line);
+      expect(JSON.stringify(logs.events)).not.toMatch(
+        /SYN-99|private-report-body|Only task|REP-1/u,
+      );
+    } finally {
+      vi.restoreAllMocks();
+      store.close();
+    }
+  });
+
+  it.each(["markdown", "csv"] as const)(
+    "keeps an unexpired %s download after closing and reopening the UI database (#4390)",
+    (format) => {
+      const root = mkdtempSync(join(realpathSync(tmpdir()), "keiko-report-restart-"));
+      const path = join(root, "ui.db");
+      let now = Date.now();
+      const options = { now: (): number => now };
+      let store = createNodeUiStore(path, options);
+      try {
+        const project = store.createProject(root);
+        const chat = store.createChat(project.path, "Report fixture", "synthetic");
+        const reports = seeded(chat.id, options.now);
+        const session = reports.peek(REPORT_ID, chat.id);
+        if (session?.report === undefined) throw new TypeError("Missing report fixture");
+        const expected = exportJiraReport(session.report, format);
+        retainJiraReportExports({ store }, reports, chat.id, "restart-fixture");
+        store.close();
+        now += JIRA_REPORT_IDLE_TTL_MS - 1;
+        store = createNodeUiStore(path, options);
+        const result = exportJiraReportRoute(context(`chatId=${chat.id}&format=${format}`), {
+          ...deps(createJiraReportStore()),
+          store,
+        });
+        expect(result.status).toBe(200);
+        expect(result.body).toEqual(expected);
+        now += 2;
+        expect(
+          exportJiraReportRoute(context(`chatId=${chat.id}&format=${format}`), {
+            ...deps(createJiraReportStore()),
+            store,
+          }).status,
+        ).toBe(404);
+        store.deleteChat(chat.id);
+        expect(
+          exportJiraReportRoute(context(`chatId=${chat.id}&format=${format}`), {
+            ...deps(reports),
+            store,
+          }).status,
+        ).toBe(404);
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("is mounted on the documented path", () => {
     const match = matchRoute("GET", `/api/atlassian-connectors/jira-reports/${REPORT_ID}/export`);
     expect(match).toMatchObject({ params: { reportId: REPORT_ID } });
