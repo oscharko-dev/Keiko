@@ -1846,6 +1846,22 @@ it.each([undefined, null, { unknown: 1 }, { postsFailed: -1 }, { postsFailed: 1_
 );
 
 describe("closed diagnostic navigation and render context", () => {
+  it.each(["started", "settled"])(
+    "accepts git sync outcome %s without repository content",
+    (phase) => {
+      const report = {
+        kind: "stage",
+        stage: "git sync outcome",
+        phase,
+        ordinal: 1,
+        ...(phase === "settled" ? { durationMs: 0 } : {}),
+      };
+      expect(isClientStageIngestRequest(report)).toBe(true);
+      expect(isClientStageIngestRequest({ ...report, repositoryRoot: "/private/repository" })).toBe(
+        false,
+      );
+    },
+  );
   it.each(["applied", "unavailable", "failed", "dropped", "stale", "cancelled", "deferred"])(
     "accepts settled navigation outcome %s only on a navigation stage",
     (navigationOutcome) => {

@@ -2407,9 +2407,8 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(alert).not.toHaveTextContent("raw path");
   });
 
-  // GEN-PERF-WIDGET-006 — the sync outcome must carry a duration and an ahead/behind
-  // repository-state delta, not just a bare status string.
-  it("surfaces sync duration and ahead/behind delta in the outcome", async () => {
+  // GEN-PERF-WIDGET-006: duration and state must describe the settled operation (#4414).
+  it("surfaces sync duration and post-pull counts in the outcome", async () => {
     const user = userEvent.setup();
     const client = makeClient({
       getSummary: vi.fn(async () => makeSummary({ behind: 2 })),
@@ -2429,7 +2428,87 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     const label = pill.textContent ?? "";
     // Duration segment "in <n>s" and the ahead/behind delta must both be present.
     expect(label).toMatch(/in \d+(\.\d+)?s/);
-    expect(label).toMatch(/behind 2/);
+    expect(label).toMatch(/behind 0/);
+    expect(label).not.toMatch(/behind 2/);
+  });
+
+  it.each([
+    [{ ahead: 0, behind: 1 }, ["ahead 0", "behind 1"], []],
+    [{ ahead: 2, behind: 3 }, ["ahead 2", "behind 3"], []],
+    [{ ahead: 0 }, ["ahead 0"], ["behind"]],
+    [{ behind: 0 }, ["behind 0"], ["ahead"]],
+    [{}, [], ["ahead", "behind"]],
+    [{ ahead: -1, behind: Number.NaN }, [], ["ahead", "behind"]],
+    [{ ahead: 1.5, behind: Number.POSITIVE_INFINITY }, [], ["ahead", "behind"]],
+  ])("presents only returned post-fetch counts: %j", async (counts, present, absent) => {
+    const user = userEvent.setup();
+    const diagnostics: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) diagnostics.push(meta);
+    });
+    const client = makeClient({
+      syncExecute: vi.fn<GitClientSeam["syncExecute"]>(async (input) => ({
+        schemaVersion: "1",
+        operation: input.operation,
+        status: "succeeded",
+        available: true,
+        truncated: false,
+        ...counts,
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Run sync: Fetch" }));
+    const pill = await screen.findByRole("status", { name: /Fetch: succeeded/ });
+    expect(pill).toHaveTextContent(/in \d+(\.\d+)?s/);
+    for (const text of present) expect(pill).toHaveTextContent(text);
+    for (const text of absent) expect(pill).not.toHaveTextContent(text);
+    expect(client.syncExecute).toHaveBeenCalledTimes(1);
+    const stages = diagnostics.filter((meta) => meta.stageReport?.stage === "git sync outcome");
+    expect(stages.map((meta) => meta.stageReport?.phase)).toEqual(["started", "settled"]);
+    expect(stages[0]?.correlationId).toBe(stages[1]?.correlationId);
+    expect(JSON.stringify(stages)).not.toContain(REPO_A.path);
+  });
+
+  it("does not present pre-push counts as post-push state", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({ getSummary: vi.fn(async () => makeSummary({ ahead: 2 })) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Run sync: Push" }));
+    const pill = await screen.findByRole("status", { name: /Push: succeeded/ });
+    expect(pill).toHaveTextContent(/in \d+(\.\d+)?s/);
+    expect(pill).not.toHaveTextContent(/ahead|behind/);
+  });
+
+  it("does not present an old sync result after switching repositories", async () => {
+    let resolveSync!: (value: Awaited<ReturnType<GitClientSeam["syncExecute"]>>) => void;
+    const pending = new Promise<Awaited<ReturnType<GitClientSeam["syncExecute"]>>>((resolve) => {
+      resolveSync = resolve;
+    });
+    const diagnostics: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) diagnostics.push(meta);
+    });
+    const client = makeClient({ syncExecute: vi.fn(() => pending) });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Run sync: Fetch" }));
+    await waitFor(() => expect(client.syncExecute).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: /beta/ }));
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+    await act(async () => {
+      resolveSync({
+        schemaVersion: "1",
+        operation: "fetch",
+        status: "succeeded",
+        available: true,
+        truncated: false,
+        ahead: 0,
+        behind: 7,
+      });
+    });
+    expect(screen.queryByRole("status", { name: /Fetch: succeeded/ })).not.toBeInTheDocument();
+    expect(diagnostics.some((meta) => meta.stageReport?.stage === "git sync outcome")).toBe(false);
   });
 
   it("does not execute network sync when preview blocks", async () => {

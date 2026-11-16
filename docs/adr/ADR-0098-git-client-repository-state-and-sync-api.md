@@ -168,6 +168,15 @@ the extra NUL-separated original-path field that rename records carry. Both `git
 re-read) consume this one parser, so the ahead/behind/dirty semantics are audited in one place and
 cannot diverge between the read and sync surfaces.
 
+The Git window's settled Fetch/Pull result uses only the execute response's post-operation counts
+(#4414, 2026-11-16). It shows each known ahead/behind count and omits unknown counts; the cached
+summary from before the operation never supplies these values. Push has no post-operation counts
+in its response, so its result carries status and duration alone. No extra read is added for these
+metrics. Existing repository invalidation, scope sequencing and Pull's editor-buffer reconciliation
+remain unchanged. The existing client stage lifecycle records `git-sync-outcome` when the current
+scope accepts a result presentation, with no repository or text content; this immediate presentation
+decision has duration zero, independently of the operation duration shown in the window.
+
 ### D4 — Fetch/pull deliberately do NOT enter `GitDeliveryActionKind` / `runGitMutation`
 
 This is the load-bearing reuse-vs-new boundary. `gitDelivery/syncExecution.ts` runs fetch/pull

@@ -4183,6 +4183,8 @@ describe("actual source reveal lifecycle", () => {
 });
 
 it.each([
+  ["git sync outcome", "started", "git-sync-outcome"],
+  ["git sync outcome", "settled", "git-sync-outcome"],
   ["markdown copy feedback", "started", "markdown-copy-feedback"],
   ["markdown copy feedback", "settled", "markdown-copy-feedback"],
   ["transcript navigation", "started", "transcript-navigation"],
