@@ -6536,6 +6536,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "send-cancel-requested",
           "send-refused-while-running",
           "skill-connection-unavailable",
+          "chat-navigation-superseded",
+          "chat-catalog-reconciled",
           "equivalent-edit-ignored",
           "stale-draft-echo-ignored",
           "non-text-paste-ignored",

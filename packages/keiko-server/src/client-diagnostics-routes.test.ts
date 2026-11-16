@@ -318,6 +318,8 @@ describe("POST /api/diagnostics/client", () => {
     "send-cancel-requested",
     "send-refused-while-running",
     "skill-connection-unavailable",
+    "chat-navigation-superseded",
+    "chat-catalog-reconciled",
   ])("records %s as correlated body-free composer evidence", async (composerActivity) => {
     const sink = captureServerLog();
     await handleClientDiagnosticIngest(

@@ -449,6 +449,8 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "send-cancel-requested",
   "send-refused-while-running",
   "skill-connection-unavailable",
+  "chat-navigation-superseded",
+  "chat-catalog-reconciled",
   "equivalent-edit-ignored",
   "stale-draft-echo-ignored",
   "non-text-paste-ignored",

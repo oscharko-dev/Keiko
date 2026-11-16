@@ -2486,20 +2486,23 @@ it.each(["workspace-sync-idle", "workspace-sync-active", "workspace-sync-pull-pe
   },
 );
 
-it("accepts only the closed skill connection activity (#4407)", () => {
-  const report = {
-    message: "Chat skill refresh requires a browser connection.",
-    clientTs: "2026-11-16T00:00:00.000Z",
-    composerActivity: "skill-connection-unavailable",
-  };
-  expect(isClientDiagnosticIngestRequest(report)).toBe(true);
-  expect(
-    isClientDiagnosticIngestRequest({
-      ...report,
-      composerActivity: "skill-connection-unavailable-private",
-    }),
-  ).toBe(false);
-});
+it.each(["skill-connection-unavailable", "chat-navigation-superseded", "chat-catalog-reconciled"])(
+  "accepts only the closed Chat activity %s",
+  (composerActivity) => {
+    const report = {
+      message: "Chat activity.",
+      clientTs: "2026-11-16T00:00:00.000Z",
+      composerActivity,
+    };
+    expect(isClientDiagnosticIngestRequest(report)).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...report,
+        composerActivity: `${composerActivity}-private`,
+      }),
+    ).toBe(false);
+  },
+);
 
 describe("coding task composer submission evidence (#3877)", () => {
   const submission = {

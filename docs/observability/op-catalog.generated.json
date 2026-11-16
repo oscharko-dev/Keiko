@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9d76dd91a264292649f4da314b21d5719ce384dac8927452a7b71915d63c41d9",
+    "catalogDigest": "277c49fc4a558c67b62262956aa754294160269c96abe8b3dfb945ef82caa793",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6779,6 +6779,8 @@
               "send-cancel-requested",
               "send-refused-while-running",
               "skill-connection-unavailable",
+              "chat-navigation-superseded",
+              "chat-catalog-reconciled",
               "equivalent-edit-ignored",
               "stale-draft-echo-ignored",
               "non-text-paste-ignored",

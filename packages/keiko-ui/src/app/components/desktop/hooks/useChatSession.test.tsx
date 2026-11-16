@@ -47,6 +47,7 @@ import {
   clearChatSessionBootstrapCacheForTests,
   canonicalTurnReferenceForClient,
   chatListCorrelationId,
+  sharedFetchChatsWithEvidence,
   isInFlight,
   notifyChatDeleted,
   notifyChatUpsert,
@@ -2526,15 +2527,16 @@ describe("useChatSession conversation switch — composer isolation", () => {
 });
 
 describe("useChatSession stale async landing guards", () => {
-  async function setupSwitchSession(): Promise<
-    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
-  > {
+  afterEach(resetClientDiagnosticWriter);
+  async function setupSwitchSession(
+    existing: readonly Chat[] = [chat({ id: "chat-current", selectedModel: "chat-a" })],
+  ): Promise<ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>> {
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-a", streaming: false })],
     });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
     vi.mocked(fetchChats).mockResolvedValue({
-      chats: [chat({ id: "chat-current", selectedModel: "chat-a" })],
+      chats: existing,
     });
     vi.mocked(fetchChatMessages).mockResolvedValueOnce({
       messages: [message({ id: "msg-current", chatId: "chat-current" })],
@@ -2544,6 +2546,197 @@ describe("useChatSession stale async landing guards", () => {
     await waitFor(() => expect(rendered.result.current.loading).toBe(false));
     return rendered;
   }
+
+  it.each([false, true])(
+    "retains a superseded creation across a current project snapshot (empty: %s)",
+    async (empty) => {
+      const previous = chat({ id: "chat-current" });
+      const rendered = await setupSwitchSession(empty ? [] : [previous]);
+      const diagnostics = vi.fn();
+      setClientDiagnosticWriter(diagnostics);
+      const created = chat({ id: "persisted-created", updatedAt: 20 });
+      const creation = deferred<Awaited<ReturnType<typeof createDesktopChat>>>();
+      const list = deferred<{ chats: readonly Chat[] }>();
+      const messages = deferred<{ messages: readonly ChatMessage[] }>();
+      vi.mocked(createDesktopChat).mockReturnValue(creation.promise);
+      vi.mocked(fetchChats).mockReturnValue(list.promise);
+      vi.mocked(fetchChatMessages).mockClear().mockReturnValue(messages.promise);
+      let creating!: Promise<Chat | undefined>;
+      let opening!: Promise<void>;
+      act(() => {
+        creating = rendered.result.current.openNewChat();
+      });
+      act(() => {
+        opening = rendered.result.current.openProject(project());
+      });
+      if (!empty) {
+        await act(async () => list.resolve({ chats: [previous] }));
+        await waitFor(() => expect(fetchChatMessages).toHaveBeenCalled());
+      }
+      await act(async () => {
+        creation.resolve({
+          chat: created,
+          project: project(),
+          projects: [project()],
+          chats: [created],
+          messages: [],
+        });
+        expect((await creating)?.id).toBe(created.id);
+      });
+      expect(rendered.result.current.chats.map((entry) => entry.id)).toContain(created.id);
+      await act(async () => {
+        list.resolve({ chats: [] });
+        messages.resolve({ messages: [message({ chatId: previous.id })] });
+        await opening;
+      });
+      expect(rendered.result.current.chats.map((entry) => entry.id)).toContain(created.id);
+      expect(rendered.result.current.activeChat?.id).toBe(empty ? undefined : previous.id);
+      expect(rendered.result.current.messages.map((entry) => entry.chatId)).toEqual(
+        empty ? [] : [previous.id],
+      );
+      expect(diagnostics).toHaveBeenCalledWith("Chat catalog reconciled.", {
+        correlationId: vi.mocked(fetchChats).mock.calls.at(-1)?.[1],
+        composerActivity: "chat-catalog-reconciled",
+      });
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain(created.id);
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain(project().path);
+    },
+  );
+
+  it("releases a pending project catalog observer when the session unmounts", async () => {
+    const rendered = await setupSwitchSession();
+    const pending = deferred<{ messages: readonly ChatMessage[] }>();
+    vi.mocked(fetchChatMessages).mockClear().mockReturnValue(pending.promise);
+    let opening!: Promise<void>;
+    act(() => {
+      opening = rendered.result.current.openProject(project());
+    });
+    await waitFor(() => expect(fetchChatMessages).toHaveBeenCalled());
+    const removeListener = vi.spyOn(window, "removeEventListener");
+    try {
+      rendered.unmount();
+      expect(
+        removeListener.mock.calls.filter(([type]) => type === "keiko:chat-upsert"),
+      ).toHaveLength(1);
+    } finally {
+      pending.resolve({ messages: [] });
+      await opening;
+      removeListener.mockRestore();
+    }
+  });
+
+  it("keeps deleted and foreign rows out of a reconciled project catalog", async () => {
+    const rendered = await setupSwitchSession();
+    const pending = deferred<{ messages: readonly ChatMessage[] }>();
+    vi.mocked(fetchChatMessages).mockClear().mockReturnValue(pending.promise);
+    let opening!: Promise<void>;
+    act(() => {
+      opening = rendered.result.current.openProject(project());
+    });
+    await waitFor(() => expect(fetchChatMessages).toHaveBeenCalled());
+    act(() => {
+      notifyChatUpsert(chat({ id: "created-then-deleted" }));
+      notifyChatDeleted("created-then-deleted");
+      notifyChatUpsert(chat({ id: "foreign-chat", projectPath: "/foreign" }));
+      notifyChatDeleted("chat-current");
+    });
+    await act(async () => {
+      pending.resolve({ messages: [message({ chatId: "chat-current" })] });
+      await opening;
+    });
+    expect(rendered.result.current.chats).toEqual([]);
+    expect(rendered.result.current.activeChat).toBeUndefined();
+    expect(rendered.result.current.messages).toEqual([]);
+  });
+
+  it.each(["upsert", "delete"] as const)(
+    "does not reuse a list started before an acknowledged %s for a newer project load",
+    async (mutation) => {
+      const rendered = await setupSwitchSession();
+      const previous = chat({ id: "chat-current" });
+      const created = chat({ id: "newly-acknowledged", updatedAt: 20 });
+      const oldList = deferred<{ chats: readonly Chat[] }>();
+      const current = mutation === "upsert" ? [previous, created] : [];
+      vi.mocked(fetchChats)
+        .mockClear()
+        .mockReturnValueOnce(oldList.promise)
+        .mockResolvedValue({ chats: current });
+      vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+      const oldReader = sharedFetchChatsWithEvidence(project().path);
+      act(() => {
+        if (mutation === "upsert") notifyChatUpsert(created);
+        else notifyChatDeleted(previous.id);
+      });
+      let opening!: Promise<void>;
+      act(() => {
+        opening = rendered.result.current.openProject(project());
+      });
+      await act(async () => {
+        oldList.resolve({ chats: [previous] });
+        await Promise.all([oldReader, opening]);
+      });
+      expect(rendered.result.current.chats.map((entry) => entry.id).sort()).toEqual(
+        current.map((entry) => entry.id).sort(),
+      );
+      expect(fetchChats).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    ["list", false],
+    ["messages", false],
+    ["list", true],
+    ["messages", true],
+  ] as const)(
+    "keeps a newly created chat when an older same-project %s load settles (failure: %s)",
+    async (pendingStage, failure) => {
+      const rendered = await setupSwitchSession();
+      const diagnostics = vi.fn();
+      setClientDiagnosticWriter(diagnostics);
+      const previous = chat({ id: "chat-current" });
+      const created = chat({ id: "chat-created", updatedAt: 20 });
+      const list = deferred<{ chats: readonly Chat[] }>();
+      const messages = deferred<{ messages: readonly ChatMessage[] }>();
+      vi.mocked(fetchChats).mockClear().mockReturnValue(list.promise);
+      vi.mocked(fetchChatMessages).mockClear().mockReturnValue(messages.promise);
+      vi.mocked(createDesktopChat).mockResolvedValue({
+        chat: created,
+        project: project(),
+        projects: [project()],
+        chats: [created, previous],
+        messages: [],
+      });
+      let opening!: Promise<void>;
+      act(() => {
+        opening = rendered.result.current.openProject(project());
+      });
+      if (pendingStage === "messages") {
+        await act(async () => list.resolve({ chats: [previous] }));
+        await waitFor(() => expect(fetchChatMessages).toHaveBeenCalled());
+      }
+      await act(async () => {
+        await rendered.result.current.openNewChat();
+      });
+      expect(rendered.result.current.activeChat?.id).toBe(created.id);
+      await act(async () => {
+        if (failure && pendingStage === "list") list.reject(new TypeError("stale list"));
+        else list.resolve({ chats: [previous] });
+        if (failure && pendingStage === "messages") messages.reject(new TypeError("stale read"));
+        else messages.resolve({ messages: [message({ chatId: previous.id })] });
+        await opening;
+      });
+      expect(rendered.result.current.activeChat?.id).toBe(created.id);
+      expect(rendered.result.current.chats.map((entry) => entry.id)).toContain(created.id);
+      expect(rendered.result.current.messages).toEqual([]);
+      expect(rendered.result.current.error).toBeUndefined();
+      expect(diagnostics).toHaveBeenCalledWith("Chat navigation superseded.", {
+        correlationId: vi.mocked(fetchChats).mock.calls.at(-1)?.[1],
+        composerActivity: "chat-navigation-superseded",
+      });
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain(created.id);
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain(project().path);
+    },
+  );
 
   it("keeps the last selected chat when an earlier openChat resolves late", async () => {
     const rendered = await setupSwitchSession();
@@ -2577,6 +2770,180 @@ describe("useChatSession stale async landing guards", () => {
     });
     expect(rendered.result.current.activeChat?.id).toBe("chat-b");
     expect(rendered.result.current.messages.map((entry) => entry.id)).toEqual(["msg-b"]);
+  });
+
+  it("keeps an intentional chat selection after an older project read", async () => {
+    const rendered = await setupSwitchSession();
+    const selected = chat({ id: "chat-selected" });
+    const oldMessages = deferred<{ messages: readonly ChatMessage[] }>();
+    vi.mocked(fetchChatMessages).mockImplementation((id) =>
+      id === selected.id
+        ? Promise.resolve({ messages: [message({ id: "selected-message", chatId: selected.id })] })
+        : oldMessages.promise,
+    );
+    let opening!: Promise<void>;
+    act(() => {
+      opening = rendered.result.current.openProject(project());
+    });
+    await waitFor(() => expect(fetchChatMessages).toHaveBeenCalledTimes(2));
+    await act(async () => rendered.result.current.openChat(selected));
+    await act(async () => {
+      oldMessages.resolve({ messages: [] });
+      await opening;
+    });
+    expect(rendered.result.current.activeChat?.id).toBe(selected.id);
+    expect(rendered.result.current.messages.map((entry) => entry.id)).toEqual(["selected-message"]);
+  });
+
+  it.each([false, true])(
+    "keeps a newer project intent when an older chat read settles (failure: %s)",
+    async (failure) => {
+      const rendered = await setupSwitchSession();
+      const oldChat = chat({ id: "chat-old-selection" });
+      const target = chat({ id: "chat-project-target", projectPath: "/target" });
+      const oldMessages = deferred<{ messages: readonly ChatMessage[] }>();
+      const targetList = deferred<{ chats: readonly Chat[] }>();
+      vi.mocked(fetchChatMessages).mockImplementation((id) =>
+        id === oldChat.id
+          ? oldMessages.promise
+          : Promise.resolve({ messages: [message({ chatId: target.id })] }),
+      );
+      vi.mocked(fetchChats).mockReturnValue(targetList.promise);
+      let oldOpening!: Promise<void>;
+      let switching!: Promise<void>;
+      act(() => {
+        oldOpening = rendered.result.current.openChat(oldChat);
+      });
+      act(() => {
+        switching = rendered.result.current.openProject(project(target.projectPath));
+      });
+      await act(async () => {
+        if (failure) oldMessages.reject(new TypeError("stale chat read"));
+        else oldMessages.resolve({ messages: [message({ chatId: oldChat.id })] });
+        await oldOpening;
+      });
+      expect(rendered.result.current.activeProject?.path).toBe(target.projectPath);
+      expect(rendered.result.current.activeChat?.id).not.toBe(oldChat.id);
+      expect(rendered.result.current.error).toBeUndefined();
+      await act(async () => {
+        targetList.resolve({ chats: [target] });
+        await switching;
+      });
+      expect(rendered.result.current.activeProject?.path).toBe(target.projectPath);
+      expect(rendered.result.current.activeChat?.id).toBe(target.id);
+      expect(rendered.result.current.messages.map((entry) => entry.chatId)).toEqual([target.id]);
+    },
+  );
+
+  it.each([
+    ["chat-selected", false],
+    ["chat-selected", true],
+    ["chat-current", false],
+    ["chat-current", true],
+  ] as const)(
+    "keeps a newer explicit selection %s when an older create settles (failure: %s)",
+    async (selectedId, failure) => {
+      const rendered = await setupSwitchSession();
+      const selected = chat({ id: selectedId });
+      const created = chat({ id: "chat-created-late", updatedAt: 20 });
+      const creation = deferred<Awaited<ReturnType<typeof createDesktopChat>>>();
+      vi.mocked(createDesktopChat).mockReturnValue(creation.promise);
+      vi.mocked(fetchChatMessages).mockResolvedValue({
+        messages: [message({ chatId: selected.id })],
+      });
+      let creating!: Promise<Chat | undefined>;
+      act(() => {
+        creating = rendered.result.current.openNewChat();
+      });
+      await act(async () => rendered.result.current.openChat(selected));
+      await waitFor(() => expect(rendered.result.current.draftPersistence?.phase).toBe("saved"));
+      act(() => rendered.result.current.setDraft("Newer selected draft"));
+      let persisted: Chat | undefined;
+      await act(async () => {
+        if (failure) creation.reject(new TypeError("stale creation"));
+        else
+          creation.resolve({
+            chat: created,
+            project: project(),
+            projects: [project()],
+            chats: [created],
+            messages: [],
+          });
+        persisted = await creating;
+      });
+      expect(rendered.result.current.activeChat?.id).toBe(selected.id);
+      expect(rendered.result.current.messages.map((entry) => entry.chatId)).toEqual([selected.id]);
+      expect(rendered.result.current.draft).toBe("Newer selected draft");
+      expect(rendered.result.current.error).toBeUndefined();
+      expect(persisted?.id).toBe(failure ? undefined : created.id);
+      if (!failure)
+        expect(rendered.result.current.chats.map((entry) => entry.id)).toContain(created.id);
+    },
+  );
+
+  it("allows a later intentional project switch after adopting a new chat", async () => {
+    const rendered = await setupSwitchSession();
+    const created = chat({ id: "chat-created", updatedAt: 20 });
+    const target = chat({ id: "chat-target", projectPath: "/target" });
+    const oldMessages = deferred<{ messages: readonly ChatMessage[] }>();
+    const targetMessages = deferred<{ messages: readonly ChatMessage[] }>();
+    vi.mocked(fetchChatMessages).mockImplementation((id) =>
+      id === target.id ? targetMessages.promise : oldMessages.promise,
+    );
+    vi.mocked(createDesktopChat).mockResolvedValue({
+      chat: created,
+      project: project(),
+      projects: [project(), project("/target")],
+      chats: [created],
+      messages: [],
+    });
+    let oldOpening!: Promise<void>;
+    act(() => {
+      oldOpening = rendered.result.current.openProject(project());
+    });
+    await waitFor(() => expect(fetchChatMessages).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      await rendered.result.current.openNewChat();
+    });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [target] });
+    let switching!: Promise<void>;
+    act(() => {
+      switching = rendered.result.current.openProject(project("/target"));
+    });
+    await waitFor(() =>
+      expect(fetchChatMessages).toHaveBeenCalledWith(target.id, target.projectPath),
+    );
+    await act(async () => {
+      oldMessages.resolve({ messages: [] });
+      await oldOpening;
+    });
+    expect(rendered.result.current.activeProject?.path).toBe(target.projectPath);
+    await act(async () => {
+      targetMessages.resolve({ messages: [message({ id: "target-message", chatId: target.id })] });
+      await switching;
+    });
+    expect(rendered.result.current.activeChat?.id).toBe(target.id);
+    expect(rendered.result.current.chats.map((entry) => entry.id)).toEqual([target.id]);
+    expect(rendered.result.current.messages.map((entry) => entry.id)).toEqual(["target-message"]);
+  });
+
+  it("lets selecting the current chat cancel a pending switch to another project", async () => {
+    const rendered = await setupSwitchSession();
+    const selected = chat({ id: "chat-current" });
+    const pending = deferred<{ chats: readonly Chat[] }>();
+    vi.mocked(fetchChats).mockReturnValue(pending.promise);
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    let opening!: Promise<void>;
+    act(() => {
+      opening = rendered.result.current.openProject(project("/target"));
+    });
+    await act(async () => rendered.result.current.openChat(selected));
+    await act(async () => {
+      pending.resolve({ chats: [chat({ id: "chat-target", projectPath: "/target" })] });
+      await opening;
+    });
+    expect(rendered.result.current.activeProject?.path).toBe(selected.projectPath);
+    expect(rendered.result.current.activeChat?.id).toBe(selected.id);
   });
 
   it("keeps project and chat state aligned when an earlier openProject resolves late", async () => {
