@@ -14,7 +14,7 @@ const WORKSPACE: WorkspaceInfo = {
   selectedRoot: "/synthetic-workspace",
   name: "synthetic",
   version: undefined,
-  testFramework: "node",
+  testFramework: "node-test",
   sourceDirs: [],
   testDirs: [],
   languages: [],
