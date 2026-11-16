@@ -123,6 +123,17 @@ describe("layer 1 -- the generated configuration denies everything but the four 
     }
   });
 
+  // R4130-074: the review configuration is a hand-written sibling of the governed one, and the
+  // self-check compares a run with this same generator. A key dev adds to the governed profile
+  // therefore fails here until someone decides whether the review profile carries or replaces it.
+  it("carries every key the governed profile sets, except the agent and its rules", () => {
+    const governed = createFixedOpenCodeV2Config(GEOMETRY, undefined, "direct");
+    for (const [key, value] of Object.entries(governed)) {
+      if (key === "default_agent" || key === "permissions") continue;
+      expect(review[key], key).toEqual(value);
+    }
+  });
+
   it("failure-first: the Coding Workbench's governed configuration allows edits and questions", () => {
     const direct = createFixedOpenCodeV2Config(GEOMETRY, undefined, "direct");
     const directRules = direct.permissions as readonly Rule[];
