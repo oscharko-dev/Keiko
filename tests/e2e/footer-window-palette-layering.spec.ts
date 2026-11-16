@@ -73,6 +73,7 @@ for (const viewport of [
     page,
   }) => {
     await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
     await seedFilesWindow(page, { x: 0, y: 0, w: 2000, h: 1600 });
     await page.goto("/");
     const frame = page.locator('[data-window-id="issue-1426-files"]');
@@ -100,7 +101,14 @@ for (const viewport of [
     await page.getByRole("button", { name: "New window", exact: true }).click();
     const palette = page.getByRole("dialog", { name: "New window", exact: true });
     await expect(palette).toBeVisible();
-    const paletteGeometry = await palette.evaluate((element) => {
+    const paletteGeometry = await palette.evaluate(async (element) => {
+      // The visible entry animation moves the palette before it reaches its layout position.
+      await Promise.allSettled(
+        element
+          .getAnimations()
+          .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+          .map((animation) => animation.finished),
+      );
       const canvas = element.closest("main");
       if (canvas === null) throw new Error("palette is outside its canvas");
       const box = element.getBoundingClientRect();
