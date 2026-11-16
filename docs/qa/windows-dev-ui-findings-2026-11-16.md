@@ -157,5 +157,6 @@ and gate requirements after the whole implementation. Under the owner's explicit
 close a finding once its complete implementation, tests and critical review are evidenced;
 state clearly that its PR is still unmerged and that published 1.5.0 does not yet contain the
 repair. Reopen when a later confirmed finding leaves that scope incomplete. Epics also require
-all acceptance criteria. Release 1.5.0 is already published; another release is outside this
-investigation. PR #4409 is regular, targets `dev`, and has auto-merge disabled.
+all acceptance criteria. Release 1.5.0 is the published baseline for this investigation. The owner
+subsequently authorized the verified fixes in a stable 1.5.1 release through the protected release
+workflow. PR #4409 is regular, targets `dev`, and has auto-merge disabled.
