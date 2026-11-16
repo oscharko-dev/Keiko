@@ -170,6 +170,24 @@ describe("Chat skill recovery after a browser connection ends (#4407)", () => {
     );
   });
 
+  it("shows the reconnect hint before an unpaired Chat can load its selection", async () => {
+    vi.mocked(fetchMarkdownSkillSelection).mockRejectedValue(accessRefused());
+    render(<Harness />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(CONNECTION_HINT);
+  });
+
+  it("keeps the generic request error hidden when a concealed read has an active connection", async () => {
+    vi.mocked(fetchMarkdownSkillSelection).mockRejectedValue(accessRefused());
+    vi.mocked(inspectBrowserApprovals).mockResolvedValue({
+      state: "active",
+      requests: [],
+      approvals: [],
+    });
+    render(<Harness />);
+    await waitFor(() => expect(inspectBrowserApprovals).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("keeps initially unpaired ordinary Chat available with the server-checked no-skill precondition", async () => {
     vi.mocked(fetchMarkdownSkillSelection).mockRejectedValue(accessRefused());
     const hook = renderHook(() => useChatMarkdownSkill("chat-a"));
