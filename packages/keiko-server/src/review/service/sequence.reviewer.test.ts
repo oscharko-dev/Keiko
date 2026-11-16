@@ -343,7 +343,7 @@ describe("a Reviewer session that fails before any report (Issue #4130)", () => 
   });
 
   it("does not start a session again that ran out of budget or time", async () => {
-    for (const failureCode of ["prompt-allowance-exhausted", "envelope-duration-exhausted"]) {
+    for (const failureCode of ["authority-budget-exceeded", "envelope-duration-exhausted"]) {
       const { order } = await runPhase({
         partCount: 1,
         sessions: [[{ failureCode }, "completed"]],

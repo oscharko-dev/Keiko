@@ -340,7 +340,7 @@ describe("review run service: every settlement of the child 1 table (AC1)", () =
 
   it("still presents findings confirmed before an incomplete settlement", async () => {
     const h = setUp({
-      runtime: reviewerFiling([reportAt(3, "high")], "failed", "prompt-allowance-exhausted"),
+      runtime: reviewerFiling([reportAt(3, "high")], "failed", "authority-budget-exceeded"),
       counterCheck: counterCheckBy({ 3: "confirmed" }),
     });
     const view = await settled(h, await start(h));

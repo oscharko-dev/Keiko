@@ -28,20 +28,17 @@ export interface ReviewSettlementFacts {
   readonly coverage?: ReviewDiffSettlementInput | undefined;
   readonly reviewer?: ReviewerSettlementFact | undefined;
   readonly counterChecks: readonly CounterCheckEffect[];
-  /**
-   * Candidates no counter-check settled because the run's prompt allowance or the counter-check
-   * phase's wall-time limit ran out first.
-   */
+  /** Candidates no counter-check settled because the phase's wall-time limit ran out first. */
   readonly uncheckedCandidates: number;
-  /** Which of the two left them unchecked; absent reads as the prompt allowance. */
+  /** What left them unchecked; absent reads as the phase's wall-time limit, the only such stop. */
   readonly uncheckedReason?: UncheckedCandidatesReason | undefined;
 }
 
-/** Why the counter-check phase stopped before every candidate was checked (#4130). */
-export type UncheckedCandidatesReason = Extract<
-  ReviewIncompleteReason,
-  "budget-exhausted" | "deadline-exceeded"
->;
+/**
+ * Why the counter-check phase stopped before every candidate was checked (#4130). Keiko does not
+ * limit tokens (#4346), so the phase's wall-time limit is the only reason.
+ */
+export type UncheckedCandidatesReason = Extract<ReviewIncompleteReason, "deadline-exceeded">;
 
 /** When several incomplete reasons apply, the most consequential one names the run. */
 const INCOMPLETE_PRIORITY: readonly ReviewIncompleteReason[] = [
@@ -74,7 +71,7 @@ function uncheckedCandidatesReason(
   facts: ReviewSettlementFacts,
 ): UncheckedCandidatesReason | undefined {
   if (facts.uncheckedCandidates <= 0) return undefined;
-  return facts.uncheckedReason ?? "budget-exhausted";
+  return facts.uncheckedReason ?? "deadline-exceeded";
 }
 
 function incompleteReasons(facts: ReviewSettlementFacts): Set<ReviewIncompleteReason> {

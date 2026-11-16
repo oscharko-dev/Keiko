@@ -45,9 +45,11 @@ describe("settleReviewRun", () => {
       kind: "incomplete",
       reason: "budget-exhausted",
     });
+    // Keiko does not limit tokens (#4346): the phase's wall-time limit is all that leaves
+    // candidates unchecked, so unchecked candidates without a named reason read as the deadline.
     expect(settle({ uncheckedCandidates: 2 })).toEqual({
       kind: "incomplete",
-      reason: "budget-exhausted",
+      reason: "deadline-exceeded",
     });
     expect(settle({ counterChecks: ["deadline-exceeded"] })).toEqual({
       kind: "incomplete",

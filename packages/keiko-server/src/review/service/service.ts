@@ -22,8 +22,6 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import {
   REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS,
-  REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS,
-  REVIEW_RUN_DEFAULT_PROMPT_TOKENS,
   REVIEW_RUN_HISTORY_MAX,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
@@ -68,9 +66,6 @@ export interface ReviewRunServiceDeps {
   readonly activityLog: ServerLogSink;
   readonly now?: (() => number) | undefined;
   readonly newRunId?: (() => string) | undefined;
-  /** The Reviewer's prompt budget as the review runtime is configured (logged at start). */
-  readonly reviewerPromptBudget?: number | undefined;
-  readonly counterCheckRunPromptTokens?: number | undefined;
   /** Wall time the counter-check phase may take for each diff package part (default 60 minutes). */
   readonly counterCheckPhaseWallTimeMs?: number | undefined;
   readonly counterCheckLimits?: Partial<CounterCheckLimits> | undefined;
@@ -317,8 +312,6 @@ class ReviewRunServiceImpl implements ReviewRunService {
       targetKind: ctx.target.kind,
       reviewerModelId: ctx.reviewerModelId,
       counterCheckerModelId: ctx.counterCheckerModelId,
-      reviewerPromptBudget: this.deps.reviewerPromptBudget ?? REVIEW_RUN_DEFAULT_PROMPT_TOKENS,
-      counterCheckRunPromptBudget: this.counterCheckRunPromptTokens(),
       counterCheckMaxToolCalls: this.limits.maxToolCalls,
       counterCheckMaxReadCalls: this.limits.maxReadCalls,
       counterCheckWallTimeMs: this.limits.wallTimeMs,
@@ -333,10 +326,6 @@ class ReviewRunServiceImpl implements ReviewRunService {
     this.live.set(runId, live);
   }
 
-  private counterCheckRunPromptTokens(): number {
-    return this.deps.counterCheckRunPromptTokens ?? REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS;
-  }
-
   private sequenceDeps(): ReviewSequenceDeps {
     return {
       store: this.deps.store,
@@ -347,7 +336,6 @@ class ReviewRunServiceImpl implements ReviewRunService {
       activityLog: this.deps.activityLog,
       events: this.events,
       now: this.now,
-      counterCheckRunPromptTokens: this.counterCheckRunPromptTokens(),
       counterCheckPhaseWallTimeMs:
         this.deps.counterCheckPhaseWallTimeMs ?? REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS,
     };

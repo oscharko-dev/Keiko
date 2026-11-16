@@ -109,7 +109,6 @@ export interface ReviewRuntimeCompositionInput {
     modelId: string | undefined,
     reasoningEffort: ModelReasoningEffort | undefined,
   ) => { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort };
-  readonly promptTokenBudget: number;
   readonly maxDurationMinutes: number;
   readonly evidenceStore: EvidenceStore;
   /** Records each sidecar gateway outcome as run evidence (`codingSidecarGatewayEvidenceRecorder`). */
@@ -273,7 +272,6 @@ function reviewWorkspaceAuthority(
     workspaceLifecycle: workspace,
     managedTaskWorkspaceRoot: input.reviewWorktreeRoot,
     deploymentCeiling: "governed-assist",
-    promptTokenBudget: input.promptTokenBudget,
     maxDurationMinutes: input.maxDurationMinutes,
     readWorkspaceHead: input.readWorkspaceHead,
     researchEgressEnabled: false,

@@ -63,15 +63,13 @@ describe("review run Activity Log proofs", () => {
     ]);
   });
 
-  it("proves review.run.started with model digests and budgets", () => {
+  it("proves review.run.started with model digests and limits", () => {
     const line = onlyLine((sink) => {
       logReviewRunStarted(sink, CORRELATION, {
         runId: "review-run-1",
         targetKind: "pull-request",
         reviewerModelId: "gemma-secret-model",
         counterCheckerModelId: "qwen-secret-model",
-        reviewerPromptBudget: 600_000,
-        counterCheckRunPromptBudget: 1_200_000,
         counterCheckMaxToolCalls: 32,
         counterCheckMaxReadCalls: 8,
         counterCheckWallTimeMs: 120_000,
@@ -115,21 +113,19 @@ describe("review run Activity Log proofs", () => {
     });
   });
 
-  it("proves the counter-checking line with the run allowance and the phase limit (#4130)", () => {
+  it("proves the counter-checking line with the phase limit (#4130)", () => {
     const line = onlyLine((sink) => {
       logReviewRunPhase(sink, CORRELATION, {
         runId: "review-run-1",
         phase: "counter-checking",
         elapsedMs: 90_000,
         candidateCount: 9,
-        counterCheckRunPromptAllowance: 2_400_000,
         counterCheckPhaseWallTimeMs: 7_200_000,
       });
     });
     expect(expectActivityLogProof("review.run.phase.line", line)).toMatchObject({
       phase: "counter-checking",
       candidateCount: 9,
-      counterCheckRunPromptAllowance: 2_400_000,
       counterCheckPhaseWallTimeMs: 7_200_000,
     });
   });

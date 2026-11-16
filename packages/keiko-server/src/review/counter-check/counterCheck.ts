@@ -3,17 +3,16 @@
 // The session runs on the generalized read-only child machinery: `runGovernedReadOnlySession`
 // owns the governance (read-only gate, per-candidate tool-call ceiling, cancellation, wall-clock
 // deadline) and `runReadOnlyHarnessSession` runs the bounded harness session with the reserved
-// `review-counter-check` profile, the Counter-checker's model and a prompt budget charged against
-// both the candidate's and the run's counter-check allowance. The session starts with fresh context:
-// its only input is the candidate task (`prompt.ts`). Its only output is one verdict through the
-// verdict tool; a missing or invalid verdict is `undecided` with `insufficient-context`.
+// `review-counter-check` profile and the Counter-checker's model. Keiko does not limit tokens
+// (#4346): the session's token use is measured and reported, never capped. The session starts with
+// fresh context: its only input is the candidate task (`prompt.ts`). Its only output is one verdict
+// through the verdict tool; a missing or invalid verdict is `undecided` with `insufficient-context`.
 
 import { randomUUID } from "node:crypto";
 
 import {
   REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS,
   REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS,
-  REVIEW_COUNTER_CHECK_DEFAULT_PROMPT_TOKENS,
   REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS,
   type CounterCheckReasonCode,
   type CounterCheckVerdict,
@@ -71,20 +70,13 @@ export interface CounterCheckLimits {
   /** Read, list and search calls the session's tools answer; the verdict tool is not counted. */
   readonly maxReadCalls: number;
   readonly wallTimeMs: number;
-  readonly promptTokens: number;
 }
 
 export const DEFAULT_COUNTER_CHECK_LIMITS: CounterCheckLimits = {
   maxToolCalls: REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS,
   maxReadCalls: REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS,
   wallTimeMs: REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS,
-  promptTokens: REVIEW_COUNTER_CHECK_DEFAULT_PROMPT_TOKENS,
 };
-
-/** The run's shared counter-check prompt allowance. */
-export interface CounterCheckRunBudget {
-  reserve(promptTokens: number): boolean;
-}
 
 export interface CounterCheckDeps {
   readonly modelPortFactory: (modelId: string) => ModelPort | undefined;
@@ -101,7 +93,6 @@ export interface CounterCheckInput {
   readonly headSha: string;
   /** The run's shared head-commit reader (evidence verification). */
   readonly reader: ReviewHeadFileReader;
-  readonly budget: CounterCheckRunBudget;
   readonly signal: AbortSignal;
   /** The review run's correlation id: every session line points at it. */
   readonly runCorrelationId: string;
@@ -123,30 +114,14 @@ export interface CounterCheckOutcome {
   readonly completionTokens: number;
 }
 
+/** The provider-reported token use of one session; counts only, never a limit (#4346). */
 interface SessionMeter {
   promptTokens: number;
   completionTokens: number;
-  reserved: number;
-  budgetRefused: boolean;
 }
 
 function undecided(fingerprint: string, reasonCode: CounterCheckReasonCode): CounterCheckVerdict {
   return { findingFingerprint: fingerprint, verdict: "undecided", evidence: [], reasonCode };
-}
-
-function reserver(
-  limits: CounterCheckLimits,
-  budget: CounterCheckRunBudget,
-  meter: SessionMeter,
-): (promptTokens: number) => boolean {
-  return (promptTokens) => {
-    if (meter.reserved + promptTokens > limits.promptTokens || !budget.reserve(promptTokens)) {
-      meter.budgetRefused = true;
-      return false;
-    }
-    meter.reserved += promptTokens;
-    return true;
-  };
 }
 
 /** Whether every evidence range names a readable head file and lies inside it. */
@@ -191,10 +166,7 @@ const MODEL_FAILED: Classified = {
 };
 
 /** Maps a session ending to its settlement effect and, when abnormal, its failure class. */
-function classify(
-  session: ReadOnlySessionResult<ReadOnlyHarnessSessionOutcome>,
-  meter: SessionMeter,
-): Classified {
+function classify(session: ReadOnlySessionResult<ReadOnlyHarnessSessionOutcome>): Classified {
   if (session.ok) {
     // The harness's own bounds (tool calls, model calls, context) end it as `limit-exceeded`.
     return session.value.outcome === "limit-exceeded"
@@ -204,7 +176,7 @@ function classify(
   if (session.terminal === "stopped") {
     return session.reasonCode === "timeout" ? DEADLINE_EXCEEDED : CANCELLED;
   }
-  if (session.terminal === "limit-reached" || meter.budgetRefused) return BUDGET_EXHAUSTED;
+  if (session.terminal === "limit-reached") return BUDGET_EXHAUSTED;
   if (session.terminal === "denied") {
     return { effect: "none", failure: "governance-denied", fallbackReason: "insufficient-context" };
   }
@@ -278,14 +250,16 @@ function runSession(
       signal: input.signal,
       reportRunnerFault: (failure, error) => {
         const thrown = { ok: false, ...failure, thrown: true } as const;
-        const failureClass = classify(thrown, meter).failure ?? "model-failed";
+        const failureClass = classify(thrown).failure ?? "model-failed";
         logCounterCheckFailed(deps.activityLog, sessionFacts(session, input), failureClass, error);
       },
     },
     (gate, signal) =>
       runReadOnlyHarnessSession({
         model,
-        reservePromptTokens: reserver(limits, input.budget, meter),
+        // Nothing is left to refuse a model call for: the governed session cancels the harness
+        // on a stop or at its deadline, and no token allowance exists (#4346).
+        admitModelCall: () => true,
         sessionId: session.correlationId,
         objective: renderCounterCheckTask(input.candidate.report, {
           rulesText: input.rulesText,
@@ -320,7 +294,7 @@ export async function counterCheckCandidate(
     limits,
     state: { verdict: undefined, invalidVerdicts: 0, toolCalls: 0 },
     readAllowance: createReviewReadAllowance(limits.maxReadCalls),
-    meter: { promptTokens: 0, completionTokens: 0, reserved: 0, budgetRefused: false },
+    meter: { promptTokens: 0, completionTokens: 0 },
   };
   const fingerprint = input.candidate.fingerprint;
   const model = deps.modelPortFactory(input.modelId);
@@ -335,7 +309,7 @@ export async function counterCheckCandidate(
     return finish(deps, input, session, verdict, "model-failed");
   }
   const ended = await runSession(deps, input, model, session);
-  const classified = classify(ended, session.meter);
+  const classified = classify(ended);
   // A runner that threw was already recorded, with its error, by `reportRunnerFault`.
   if (classified.failure !== undefined && (ended.ok || !ended.thrown)) {
     logCounterCheckFailed(
@@ -376,7 +350,7 @@ async function finish(
     toolCallCount: facts.toolCallCount,
     readCalls: session.readAllowance.counts(),
     durationMs: facts.durationMs,
-    promptTokens: Math.max(meter.promptTokens, meter.reserved),
+    promptTokens: meter.promptTokens,
     completionTokens: meter.completionTokens,
   };
   logCounterCheckCompleted(deps.activityLog, facts, outcome);

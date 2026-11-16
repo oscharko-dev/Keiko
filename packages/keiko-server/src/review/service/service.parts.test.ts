@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { countContextTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS,
-  REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS,
   type ReviewRunView,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
@@ -81,16 +80,6 @@ function parts(h: ReviewRunHarness): readonly ReviewRuntimeRunRequest[] {
   return h.runtimeRequests;
 }
 
-/** A counter-check that reserves `promptTokens` of the run's allowance before it confirms. */
-function reserving(promptTokens: number): NonNullable<HarnessOptions["counterCheck"]> {
-  const confirm = counterCheckBy({ 3: "confirmed", 10: "confirmed" });
-  const refuse = counterCheckBy({}, "budget-exhausted");
-  return (input) => (input.budget.reserve(promptTokens) ? confirm(input) : refuse(input));
-}
-
-/** More than half of one part's counter-check allowance: two such checks exceed it. */
-const OVER_HALF_ALLOWANCE = Math.floor(REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS / 2) + 1;
-
 function counterCheckingLine(h: ReviewRunHarness): Readonly<Record<string, unknown>> | undefined {
   return h.log.withOp("review.run.phase").find((event) => event.extra?.phase === "counter-checking")
     ?.extra;
@@ -143,7 +132,7 @@ describe("a review in several parts (Issue #4130)", () => {
   it("runs the remaining parts after a failed part and settles on its reason", async () => {
     const { h, view } = await review({
       runtime: perPart(
-        reviewerFiling([reportAt(3, "high")], "failed", "prompt-allowance-exhausted"),
+        reviewerFiling([reportAt(3, "high")], "failed", "authority-budget-exceeded"),
         reviewerFiling([reportAt(10, "medium")]),
       ),
       counterCheck: counterCheckBy({ 3: "confirmed", 10: "confirmed" }),
@@ -179,35 +168,35 @@ describe("a review in several parts (Issue #4130)", () => {
     expect(view.settlement).toEqual({ kind: "skipped", reason: "model-unavailable" });
   });
 
-  it("gives the counter-checks the run allowance once for each part", async () => {
+  // Keiko does not limit tokens (#4346): the phase's wall-time limit is the counter-checks' only
+  // shared bound, and the line names no token allowance.
+  it("gives the counter-checks the phase limit once for each part", async () => {
     const { h, view } = await review({
       runtime: perPart(
         reviewerFiling([reportAt(3, "high")]),
         reviewerFiling([reportAt(10, "medium")]),
       ),
-      counterCheck: reserving(OVER_HALF_ALLOWANCE),
+      counterCheck: counterCheckBy({ 3: "confirmed", 10: "confirmed" }),
     });
-    // Both checks together exceed one part's allowance and fit in two.
     expect(h.counterInputs).toHaveLength(2);
     expect(view.settlement).toEqual({ kind: "complete" });
     expect(view.presentedFindings).toHaveLength(2);
     expect(counterCheckingLine(h)).toMatchObject({
       candidateCount: 2,
-      counterCheckRunPromptAllowance: 2 * REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS,
       counterCheckPhaseWallTimeMs: 2 * REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS,
     });
+    expect(counterCheckingLine(h)).not.toHaveProperty("counterCheckRunPromptAllowance");
   });
 
-  it("keeps a single-part review at one run allowance for its counter-checks", async () => {
+  it("keeps a single-part review at one phase limit for its counter-checks", async () => {
     const { h, view } = await review({
       topicFiles: [],
       runtime: reviewerFiling([reportAt(3, "high"), reportAt(10, "medium")]),
-      counterCheck: reserving(OVER_HALF_ALLOWANCE),
+      counterCheck: counterCheckBy({ 3: "confirmed", 10: "confirmed" }),
     });
-    expect(view.settlement).toEqual({ kind: "incomplete", reason: "budget-exhausted" });
-    expect(view.presentedFindings).toHaveLength(1);
+    expect(view.settlement).toEqual({ kind: "complete" });
+    expect(view.presentedFindings).toHaveLength(2);
     expect(counterCheckingLine(h)).toMatchObject({
-      counterCheckRunPromptAllowance: REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS,
       counterCheckPhaseWallTimeMs: REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS,
     });
   });

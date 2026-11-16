@@ -62,7 +62,7 @@ function settledRun(
     if (orchestrator.succeededTurnReapUnproven(runId)) {
       return { outcome: "completed", runtimeCleanup: "unproven" };
     }
-    // #4138: the failed turn's own cause (an exhausted prompt allowance, a deadline), not the
+    // #4138: the failed turn's own cause (a deadline, a failed model call), not the
     // recovery state, names why the Reviewer failed.
     const turnFailureCode = orchestrator.unprovenTurnFailureCode(runId) ?? failureCode;
     return {

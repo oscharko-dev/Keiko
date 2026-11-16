@@ -77,11 +77,8 @@ export function runtimeRefusalSettlement(reason: RuntimeRefusalReason): Preparat
   return RUNTIME_REFUSALS[reason];
 }
 
-const BUDGET_FAILURES: ReadonlySet<string> = new Set([
-  "prompt-allowance-exhausted",
-  "authority-budget-exceeded",
-  "budget-drift",
-]);
+// The envelope's tool-call budget and a drifted budget. No run has a prompt-token allowance (#4346).
+const BUDGET_FAILURES: ReadonlySet<string> = new Set(["authority-budget-exceeded", "budget-drift"]);
 const DEADLINE_FAILURES: ReadonlySet<string> = new Set([
   "envelope-duration-exhausted",
   "authority-expired",

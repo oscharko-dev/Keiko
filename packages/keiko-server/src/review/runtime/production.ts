@@ -4,15 +4,12 @@
 // OpenCode activation, the verification runner, the model admission, the gateway evidence recorder
 // -- and this module composes review instances from the same pieces, with the review instance's
 // state root (`<stateDir>/review-runtime`), its sidecar route prefix, its tool profile and its
-// budgets. It also builds the startup self-check's inputs from the same code paths a review run's
+// time limit. It also builds the startup self-check's inputs from the same code paths a review run's
 // launch uses.
 
 import { isAbsolute, join } from "node:path";
 
-import {
-  REVIEW_RUN_DEFAULT_DURATION_MINUTES,
-  REVIEW_RUN_DEFAULT_PROMPT_TOKENS,
-} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import { REVIEW_RUN_DEFAULT_DURATION_MINUTES } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
 
@@ -31,7 +28,6 @@ import type { ReviewRuntimeLayers } from "./selfCheck.js";
 /** The review instances' state root under the server state directory. */
 const REVIEW_RUNTIME_STATE_DIR_NAME = "review-runtime";
 
-export const KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS_ENV = "KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS";
 export const KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES_ENV = "KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES";
 
 const POSITIVE_DECIMAL_INTEGER = /^[1-9]\d*$/u;
@@ -44,8 +40,8 @@ const SELF_CHECK_GEOMETRY = {
   maxOutputTokens: 4_096,
 } as const;
 
+/** The Reviewer session's time limit. A review run has no token allowance (#4346). */
 export interface ReviewRunBudget {
-  readonly promptTokenBudget: number;
   readonly maxDurationMinutes: number;
 }
 
@@ -63,20 +59,14 @@ function boundedSetting(
 }
 
 /**
- * The Reviewer run's budgets: 1,500,000 prompt tokens and 20 minutes by default, operator-configurable
- * but never above the coding runtime's configured envelope (ADR-0184 D1). Out of range fails closed.
+ * The Reviewer session's time limit: 20 minutes by default, operator-configurable but never above
+ * the coding runtime's configured envelope (ADR-0184 D1). Out of range fails closed.
  */
 export function configuredReviewRunBudget(
   env: NodeJS.ProcessEnv,
   envelope: ReviewRunBudget,
 ): ReviewRunBudget {
   return {
-    promptTokenBudget: boundedSetting(
-      env[KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS_ENV],
-      REVIEW_RUN_DEFAULT_PROMPT_TOKENS,
-      envelope.promptTokenBudget,
-      KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS_ENV,
-    ),
     maxDurationMinutes: boundedSetting(
       env[KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES_ENV],
       REVIEW_RUN_DEFAULT_DURATION_MINUTES,
@@ -123,7 +113,6 @@ export interface ProductionReviewRuntimeInput extends Omit<
   | "evidenceStore"
   | "reviewReportPort"
   | "reviewReadAllowance"
-  | "promptTokenBudget"
   | "maxDurationMinutes"
 > {
   readonly stateDir: string;
@@ -149,7 +138,6 @@ export function createProductionReviewRuntimeService(
         evidenceStore: createInMemoryEvidenceStore(),
         reviewReportPort,
         reviewReadAllowance,
-        promptTokenBudget: input.budget.promptTokenBudget,
         maxDurationMinutes: input.budget.maxDurationMinutes,
       }),
     layersFor: (composition, modelId) =>

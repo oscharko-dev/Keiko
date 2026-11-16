@@ -243,7 +243,6 @@ function harness(options: HarnessOptions = {}): Harness {
         verificationRunner: { runToReport: vi.fn() },
         readWorkspaceHead: () => head,
         resolveManagedModelProfile: () => ({ profileId: "coding-safe-openai-compatible" }),
-        promptTokenBudget: 600_000,
         maxDurationMinutes: 20,
         evidenceStore: createInMemoryEvidenceStore(),
         gatewayEvidenceRecorder: () => ({ record: () => undefined }),
@@ -370,8 +369,9 @@ describe("composeReviewRuntime", () => {
       effectiveMode: "governed-assist",
       networkPolicyMode: "deny-all",
       runtimePurpose: "review",
-      maxPromptTokens: 600_000,
     });
+    // Keiko does not limit tokens (#4346): no authority carries a prompt-token allowance.
+    expect(minted?.extra).not.toHaveProperty("maxPromptTokens");
   });
 
   it("passes the production startup self-check on the composed instance (AC2)", async () => {
@@ -478,7 +478,6 @@ describe("composeReviewRuntime", () => {
       verificationRunner: { runToReport: vi.fn() },
       readWorkspaceHead: () => undefined,
       resolveManagedModelProfile: () => ({ profileId: "p" }),
-      promptTokenBudget: 1,
       maxDurationMinutes: 1,
       evidenceStore: createInMemoryEvidenceStore(),
       gatewayEvidenceRecorder: () => ({ record: () => undefined }),

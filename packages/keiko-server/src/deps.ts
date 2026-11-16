@@ -5522,7 +5522,6 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
       ensureReady: (modelId, correlationId) => ensureReviewModelReady(deps, modelId, correlationId),
     },
     activityLog,
-    reviewerPromptBudget: budget.promptTokenBudget,
   });
   Object.assign(deps, { reviewRunService });
   attachPairQualificationService(args, deps, reviewServices, activityLog);

@@ -28,11 +28,7 @@ import type {
 
 import type { ServerLogSink } from "../../observability/index.js";
 import type { CounterCheckEffect } from "../counter-check/activity-log.js";
-import type {
-  CounterCheckInput,
-  CounterCheckOutcome,
-  CounterCheckRunBudget,
-} from "../counter-check/counterCheck.js";
+import type { CounterCheckInput, CounterCheckOutcome } from "../counter-check/counterCheck.js";
 import type { ReviewDiffPackage, ReviewDiffPackagePart } from "../diff-package/types.js";
 import type { ReviewCandidateFinding } from "../runtime/findingIntake.js";
 import { ReviewHeadFileReader } from "../runtime/findingIntake.js";
@@ -80,7 +76,6 @@ export interface ReviewSequenceDeps {
   readonly activityLog: ServerLogSink;
   readonly events: ReviewRunEventHub;
   readonly now: () => number;
-  readonly counterCheckRunPromptTokens: number;
   /** Wall time the `counter-checking` phase may take for each diff package part (#4130). */
   readonly counterCheckPhaseWallTimeMs: number;
 }
@@ -108,7 +103,7 @@ export interface ReviewRunState {
   runtimeCleanup: ReviewRuntimeCleanup | undefined;
   readonly counterCheckEffects: CounterCheckEffect[];
   uncheckedCandidates: number;
-  /** What left them unchecked: the run's prompt allowance or the phase's wall-time limit (#4130). */
+  /** What left them unchecked: the phase's wall-time limit (#4130); absent after a cancellation. */
   uncheckedReason: UncheckedCandidatesReason | undefined;
   /**
    * Candidates no counter-check ran for because the run already presents as many findings as it
@@ -116,8 +111,8 @@ export interface ReviewRunState {
    */
   surplusCandidates: number;
   /**
-   * The diff package's part count; the counter-check run allowance and the phase's wall-time limit
-   * hold once per part (#4130).
+   * The diff package's part count; the counter-check phase's wall-time limit holds once per part
+   * (#4130).
    */
   partCount: number;
   /** `diffBaseSha` is the merge base the diff starts at; `baseSha` is the base the rules come from. */
@@ -168,7 +163,6 @@ function enterPhase(
   extra: {
     readonly packageCounts?: ReviewRunPackageCounts;
     readonly candidateCount?: number;
-    readonly counterCheckRunPromptAllowance?: number;
     readonly counterCheckPhaseWallTimeMs?: number;
   } = {},
 ): void {
@@ -530,7 +524,7 @@ function partStep(
 
 /**
  * The `reviewing` phase: one Reviewer session per diff package part, in part order, each bounded by
- * the run budgets on its own (#4130). A refusal of the first part settles the run on its own, as
+ * the run limits on its own (#4130). A refusal of the first part settles the run on its own, as
  * before; a later part's refusal (the runtime became unavailable) is a failed Reviewer, and no
  * further part starts. A failed session leaves the next parts to run. A cancellation ends the phase.
  */
@@ -595,55 +589,22 @@ async function reviewParts(
   return facts;
 }
 
-interface RunCounterCheckBudget extends CounterCheckRunBudget {
-  /** The run's allowance refused a reservation: no further counter-check can start. */
-  exhausted(): boolean;
-}
-
-function runBudget(limit: number): RunCounterCheckBudget {
-  let used = 0;
-  let refused = false;
-  return {
-    reserve: (promptTokens): boolean => {
-      if (used + promptTokens > limit) {
-        refused = true;
-        return false;
-      }
-      used += promptTokens;
-      return true;
-    },
-    exhausted: () => refused,
-  };
-}
-
-/**
- * The prompt tokens all counter-checks of one run may spend: the configured allowance once per diff
- * package part. Each part's Reviewer session may file up to `REVIEW_RUN_MAX_CANDIDATE_REPORTS`
- * candidates, so a fixed run allowance left the candidates of a many-part review unchecked (#4130).
- */
-function counterCheckRunAllowance(perPartTokens: number, partCount: number): number {
-  return perPartTokens * Math.max(1, partCount);
-}
-
 /**
  * The wall time the `counter-checking` phase may take before it starts no further check: the
- * configured limit once per diff package part, like the prompt allowance. A twelve-part review may
- * file 96 candidates, and without this limit their checks could run for 16 hours (#4130).
+ * configured limit once per diff package part. Each part's Reviewer session may file up to
+ * `REVIEW_RUN_MAX_CANDIDATE_REPORTS` candidates, so a fixed limit left the candidates of a
+ * many-part review unchecked. A twelve-part review may file 96 candidates, and without this limit
+ * their checks could run for 24 hours (#4130).
  */
 function counterCheckPhaseLimitMs(perPartMs: number, partCount: number): number {
   return perPartMs * Math.max(1, partCount);
 }
 
 /**
- * Why the phase starts no further counter-check, or `undefined` while it may. A refused reservation
- * is checked first: `budget-exhausted` outranks `deadline-exceeded` in the settlement.
+ * Why the phase starts no further counter-check, or `undefined` while it may. The wall-time limit
+ * is the only stop: Keiko does not limit tokens (#4346), so no token allowance ends the phase.
  */
-function counterCheckStop(
-  budget: RunCounterCheckBudget,
-  now: number,
-  deadline: number,
-): UncheckedCandidatesReason | undefined {
-  if (budget.exhausted()) return "budget-exhausted";
+function counterCheckStop(now: number, deadline: number): UncheckedCandidatesReason | undefined {
   return now >= deadline ? "deadline-exceeded" : undefined;
 }
 
@@ -652,7 +613,6 @@ interface CounterCheckPhase {
   readonly worktreeRoot: string;
   readonly headSha: string;
   readonly reader: ReviewHeadFileReader;
-  readonly budget: RunCounterCheckBudget;
   readonly deadline: number;
 }
 
@@ -670,7 +630,6 @@ async function counterCheckCandidate(
     worktreeRoot: phase.worktreeRoot,
     headSha: phase.headSha,
     reader: phase.reader,
-    budget: phase.budget,
     signal: ctx.signal,
     runCorrelationId: ctx.correlationId,
     rulesText: state.rulesText,
@@ -681,7 +640,7 @@ async function counterCheckCandidate(
   deps.events.update(ctx.runId, { counts: { counterChecked: state.outcomes.size } });
 }
 
-/** The candidates in counter-check order, checked until one of the phase's three stops applies. */
+/** The candidates in counter-check order, checked until one of the phase's stops applies. */
 async function counterCheckInOrder(
   deps: ReviewSequenceDeps,
   ctx: ReviewRunContext,
@@ -693,7 +652,7 @@ async function counterCheckInOrder(
     state.candidates.map((candidate, index) => ({ ...candidate, reviewerRank: index + 1 })),
   );
   for (const [index, candidate] of ranked.entries()) {
-    const stop = counterCheckStop(phase.budget, deps.now(), phase.deadline);
+    const stop = counterCheckStop(deps.now(), phase.deadline);
     if (ctx.signal.aborted || stop !== undefined) {
       state.uncheckedCandidates = ranked.length - index;
       state.uncheckedReason = stop;
@@ -710,10 +669,9 @@ async function counterCheckInOrder(
 
 /**
  * The `counter-checking` phase: each candidate in severity order, then Reviewer order, in its own
- * fresh session. Three things end it before every candidate is checked:
- * - The run's allowance is exhausted or the phase's wall-time limit has passed. The remaining
- *   candidates stay unchecked and make the run incomplete. A check in flight is not cut: it ends
- *   at its own limit.
+ * fresh session. Two things end it before every candidate is checked:
+ * - The phase's wall-time limit has passed. The remaining candidates stay unchecked and make the
+ *   run incomplete. A check in flight is not cut: it ends at its own limit.
  * - The run already presents as many findings as it may (#4130). The remaining candidates are
  *   surplus: they rank after the presented ones, so none of them could be presented, and the run
  *   stays complete. `excluded` must be the settlement's exclusion, so both decide alike.
@@ -728,12 +686,10 @@ export async function counterCheckCandidates(
   const worktreeRoot = state.worktreeRoot;
   if (ctx.counterCheck === "off" || state.candidates.length === 0) return;
   if (target === undefined || worktreeRoot === undefined) return;
-  const allowance = counterCheckRunAllowance(deps.counterCheckRunPromptTokens, state.partCount);
   const phaseLimitMs = counterCheckPhaseLimitMs(deps.counterCheckPhaseWallTimeMs, state.partCount);
   const deadline = deps.now() + phaseLimitMs;
   enterPhase(deps, ctx, "counter-checking", {
     candidateCount: state.candidates.length,
-    counterCheckRunPromptAllowance: allowance,
     counterCheckPhaseWallTimeMs: phaseLimitMs,
   });
   const reader = new ReviewHeadFileReader({
@@ -741,8 +697,8 @@ export async function counterCheckCandidates(
     headSha: target.headSha,
     runner: deps.reviewServices.reviewRunner(ctx.correlationId),
   });
-  const phase = { worktreeRoot, headSha: target.headSha, reader, budget: runBudget(allowance) };
-  await counterCheckInOrder(deps, ctx, state, { ...phase, deadline }, excluded);
+  const phase = { worktreeRoot, headSha: target.headSha, reader, deadline };
+  await counterCheckInOrder(deps, ctx, state, phase, excluded);
 }
 
 export { enterPhase as enterReviewRunPhase };

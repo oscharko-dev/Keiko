@@ -754,29 +754,31 @@ export const REVIEW_RULES_FILE_MAX_BYTES = 16 * 1024;
 /** The default repository path of the review-rules file; repositories may configure another. */
 export const REVIEW_RULES_FILE_DEFAULT_PATH = ".keiko/review-rules.md";
 
-/** Reviewer run budgets: defaults, never above the coding envelope maxima (ADR-0184 D1). */
-export const REVIEW_RUN_DEFAULT_PROMPT_TOKENS = 1_500_000;
+/**
+ * The Reviewer session's time limit: a default, never above the coding envelope's duration (ADR-0184
+ * D1). Keiko does not limit tokens (#4346), so a review run has no prompt-token allowance.
+ */
 export const REVIEW_RUN_DEFAULT_DURATION_MINUTES = 20;
 /**
  * The read, search and discover calls one Reviewer session gets answered (ADR-0184 D1, Issue
- * #4130). Every call resends the whole conversation, so a session that keeps reading uses up its
- * prompt allowance before it reports.
+ * #4130). Every call resends the whole conversation, so a session that keeps reading takes its
+ * time limit before it reports.
  *
  * The first value, 24, came from the stored reviews of the 4-bit gate runs, which had one session
  * per review. Development iteration 7 measured it with one session per diff part. Of its 100
  * sessions, 52 used all 24 reads. Those used 444,000 to 1,562,000 prompt tokens, 885,000 at the
- * median, and four of them ran out of the prompt budget of 1,500,000; a fifth session did after
- * 23 reads. The 9 sessions that made 9 to 16 reads used 472,000 at the
- * median and 1,011,000 at most. Half of all sessions read up to whatever the allowance is, so the
- * allowance decides what they cost.
+ * median. At that time a session had a prompt allowance of 1,500,000 tokens, and four of them ran
+ * out of it; a fifth session did after 23 reads. The 9 sessions that made 9 to 16 reads used
+ * 472,000 at the median and 1,011,000 at most. Half of all sessions read up to whatever the read
+ * allowance is, so the read allowance decides what they cost.
  *
  * The Reviewer prompt still plans for about 15 calls.
  */
 export const REVIEW_RUN_DEFAULT_MAX_READ_CALLS = 16;
 /**
  * The most parts one review's diff package is split into (ADR-0184 D1). Each part fits the
- * runtime's first-prompt bound and gets its own Reviewer session, which the run budgets above
- * bound one by one; whatever does not fit these parts is `unprocessed` (`budget`).
+ * runtime's first-prompt bound and gets its own Reviewer session, which the limits above bound
+ * one by one; whatever does not fit these parts is `unprocessed` (`budget`).
  */
 export const REVIEW_RUN_MAX_DIFF_PARTS = 12;
 /** The review instance stops after this long without a run. */
@@ -896,10 +898,11 @@ export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS = 32;
  * Read, list and search calls one counter-check may make before only its verdict tool answers
  * (#4130). In development iteration 7 the number of tool calls a check made predicted how it
  * ended. Of 104 checks with at most 4 tool calls 1 ran out of time or tokens, of 72 with 5 to 8
- * calls 12 did, and of 22 with 9 or more 13 did. Each call resends the session's conversation, so
- * a check that keeps reading uses up its time or its prompt tokens before it decides. The task
- * already asked for at most four calls, and the model did not keep to it. The verdict call counts
- * as a tool call, so 8 read calls cover every check that decided with up to 9 tool calls.
+ * calls 12 did, and of 22 with 9 or more 13 did. A check had a prompt-token allowance at that
+ * time; it has none now (#4346). Each call resends the session's conversation, so a check that
+ * keeps reading uses up its time before it decides. The task already asked for at most four calls,
+ * and the model did not keep to it. The verdict call counts as a tool call, so 8 read calls cover
+ * every check that decided with up to 9 tool calls.
  */
 export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS = 8;
 // #4138, #4130: 900 s, tuned on the development set. A local Gemma 4 31B 4-bit counter-checker
@@ -912,18 +915,12 @@ export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS = 8;
 // D5), which removes more checks than the limit lengthens.
 export const REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS = 900_000;
 /**
- * Prompt tokens one counter-check may spend, and all counter-checks of one run together for each
- * part of its diff package (#4130: each part's Reviewer session may file its own candidates).
- */
-export const REVIEW_COUNTER_CHECK_DEFAULT_PROMPT_TOKENS = 200_000;
-export const REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS = 1_200_000;
-/**
  * Wall time the `counter-checking` phase of one run may take for each part of its diff package
- * (#4130). No counter-check starts after it; a check in flight ends at its own limit, so the phase
- * overruns by at most one check. 60 minutes is four checks at the per-check limit; the run prompt
- * allowance covers six. On the offline gate's sets the longest single-part phase of the local
- * 4-bit pair took 54 minutes for eight candidates; without the limit a twelve-part review could
- * spend 96 checks of 900 s, 24 hours, in this phase.
+ * (#4130: each part's Reviewer session may file its own candidates). No counter-check starts after
+ * it; a check in flight ends at its own limit, so the phase overruns by at most one check. 60
+ * minutes is four checks at the per-check limit. On the offline gate's sets the longest single-part
+ * phase of the local 4-bit pair took 54 minutes for eight candidates; without the limit a
+ * twelve-part review could spend 96 checks of 900 s, 24 hours, in this phase.
  */
 export const REVIEW_COUNTER_CHECK_DEFAULT_PHASE_WALL_TIME_MS = 3_600_000;
 

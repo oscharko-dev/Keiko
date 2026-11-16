@@ -83,8 +83,8 @@ describe("settlement mapping", () => {
   });
 
   it("maps the Reviewer's failure codes and outcomes", () => {
-    expect(reviewerFailureReason("prompt-allowance-exhausted")).toBe("budget-exhausted");
     expect(reviewerFailureReason("authority-budget-exceeded")).toBe("budget-exhausted");
+    expect(reviewerFailureReason("budget-drift")).toBe("budget-exhausted");
     expect(reviewerFailureReason("envelope-duration-exhausted")).toBe("deadline-exceeded");
     expect(reviewerFailureReason("provider-unavailable")).toBe("model-failed");
     expect(reviewerFailureReason(undefined)).toBe("model-failed");

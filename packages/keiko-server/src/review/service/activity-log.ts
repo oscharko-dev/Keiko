@@ -99,10 +99,9 @@ const REVIEW_RUN_STARTED = defineActivityLogOperation({
     },
     reviewerModelDigest: DIGEST,
     counterCheckerModelDigest: DIGEST,
-    reviewerPromptBudget: COUNT,
-    // The configured allowance for one diff package part; the `counter-checking` line of
-    // `review.run.phase` records the run's allowance and phase limit once the part count is known.
-    counterCheckRunPromptBudget: COUNT,
+    // Keiko does not limit tokens (#4346): the line names the bounds a run has, and no token
+    // allowance. The `counter-checking` line of `review.run.phase` records the phase limit once the
+    // part count is known.
     counterCheckMaxToolCalls: COUNT,
     // #4130: the read, list and search calls one counter-check's tools answer.
     counterCheckMaxReadCalls: COUNT,
@@ -141,9 +140,6 @@ const REVIEW_RUN_PHASE = defineActivityLogOperation({
     // #4130: the Git hunks larger than one part that the package shows as consecutive windows.
     windowedHunks: OPTIONAL_COUNT,
     candidateCount: OPTIONAL_COUNT,
-    // #4130: the prompt tokens all counter-checks of the run may spend, the configured allowance
-    // once per diff package part; only on the `counter-checking` line.
-    counterCheckRunPromptAllowance: OPTIONAL_COUNT,
     // #4130: the wall time after which the phase starts no further counter-check, the configured
     // limit once per diff package part; only on the `counter-checking` line.
     counterCheckPhaseWallTimeMs: OPTIONAL_DURATION,
@@ -275,8 +271,6 @@ export interface ReviewRunStartedLine {
   readonly targetKind: ReviewTargetRequest["kind"];
   readonly reviewerModelId: string;
   readonly counterCheckerModelId: string;
-  readonly reviewerPromptBudget: number;
-  readonly counterCheckRunPromptBudget: number;
   readonly counterCheckMaxToolCalls: number;
   readonly counterCheckMaxReadCalls: number;
   readonly counterCheckWallTimeMs: number;
@@ -297,8 +291,6 @@ export function logReviewRunStarted(
         targetKind: line.targetKind,
         reviewerModelDigest: reviewEvidenceDigest("model", line.reviewerModelId),
         counterCheckerModelDigest: reviewEvidenceDigest("model", line.counterCheckerModelId),
-        reviewerPromptBudget: line.reviewerPromptBudget,
-        counterCheckRunPromptBudget: line.counterCheckRunPromptBudget,
         counterCheckMaxToolCalls: line.counterCheckMaxToolCalls,
         counterCheckMaxReadCalls: line.counterCheckMaxReadCalls,
         counterCheckWallTimeMs: line.counterCheckWallTimeMs,
@@ -332,7 +324,6 @@ export function logReviewRunPhase(
     readonly elapsedMs: number;
     readonly packageCounts?: ReviewRunPackageCounts | undefined;
     readonly candidateCount?: number | undefined;
-    readonly counterCheckRunPromptAllowance?: number | undefined;
     readonly counterCheckPhaseWallTimeMs?: number | undefined;
   },
 ): void {
@@ -346,9 +337,6 @@ export function logReviewRunPhase(
         elapsedMs: Math.max(0, Math.round(line.elapsedMs)),
         ...line.packageCounts,
         ...(line.candidateCount === undefined ? {} : { candidateCount: line.candidateCount }),
-        ...(line.counterCheckRunPromptAllowance === undefined
-          ? {}
-          : { counterCheckRunPromptAllowance: line.counterCheckRunPromptAllowance }),
         ...(line.counterCheckPhaseWallTimeMs === undefined
           ? {}
           : { counterCheckPhaseWallTimeMs: Math.round(line.counterCheckPhaseWallTimeMs) }),

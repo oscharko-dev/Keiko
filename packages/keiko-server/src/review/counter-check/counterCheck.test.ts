@@ -185,7 +185,6 @@ function check(
   options: {
     readonly limits?: CounterCheckDeps["limits"];
     readonly signal?: AbortSignal;
-    readonly reserve?: (tokens: number) => boolean;
   } = {},
 ): Promise<CounterCheckOutcome> {
   return counterCheckCandidate(deps(model, options.limits), {
@@ -198,7 +197,6 @@ function check(
       headSha,
       runner: createGitReviewProcessRunner(),
     }),
-    budget: { reserve: options.reserve ?? ((): boolean => true) },
     signal: options.signal ?? new AbortController().signal,
     runCorrelationId: "review-run-correlation",
   });
@@ -412,15 +410,6 @@ describe("counterCheckCandidate", () => {
     });
     expect(log.events.find((event) => event.op === "review.counter-check.failed")).toMatchObject({
       extra: { failureClass: "budget-exhausted" },
-    });
-  });
-
-  it("ends as budget-exhausted when the run's prompt allowance refuses", async () => {
-    const candidate = await candidateOf(report());
-    const outcome = await check(scripted([CONFIRM]), candidate, { reserve: () => false });
-    expect(outcome).toMatchObject({
-      effect: "budget-exhausted",
-      verdict: { verdict: "undecided" },
     });
   });
 

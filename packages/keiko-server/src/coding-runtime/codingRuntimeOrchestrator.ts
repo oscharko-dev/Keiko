@@ -2405,7 +2405,7 @@ export class CodingRuntimeOrchestrator {
 
   /**
    * The failure code a recovery-required run's turn named before its stop failed to prove the
-   * runtime's end (#4138): an exhausted prompt allowance, a deadline or a failed model call. It
+   * runtime's end (#4138): a deadline or a failed model call. It
    * names why the turn failed; the run stays recovery-required and its runtime quarantined.
    */
   unprovenTurnFailureCode(runId: string): string | undefined {

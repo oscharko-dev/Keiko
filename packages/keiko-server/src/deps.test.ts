@@ -1498,7 +1498,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("review-budget-diagnostic-evidence-"),
-      env: { KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS: "999999999999" },
+      env: { KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES: "999999999999" },
       uiDbPath: join(stateDir, "keiko-ui.db"),
       diagnostics,
     });

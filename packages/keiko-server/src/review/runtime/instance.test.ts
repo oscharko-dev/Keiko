@@ -200,12 +200,12 @@ describe("createReviewRuntimeService", () => {
       run({
         reports: [],
         terminal: "recovery-required",
-        turnFailureCode: "prompt-allowance-exhausted",
+        turnFailureCode: "envelope-duration-exhausted",
       }),
     ).resolves.toMatchObject({
       ok: true,
       outcome: "failed",
-      failureCode: "prompt-allowance-exhausted",
+      failureCode: "envelope-duration-exhausted",
       runtimeCleanup: "unproven",
     });
     await expect(run({ reports: [], terminal: "failed" })).resolves.toMatchObject({
@@ -634,7 +634,8 @@ describe("createReviewRuntimeService", () => {
   });
 
   // #4130: a Reviewer that kept reading resent its whole conversation with every call and ran out
-  // of prompt budget before it reported. Each session gets its own read allowance.
+  // of the prompt budget it had at that time before it reported. Each session gets its own read
+  // allowance.
   describe("the session's read allowance", () => {
     it("returns the admitted and the refused read calls of the session", async () => {
       const { repo, base, head } = headRepository();

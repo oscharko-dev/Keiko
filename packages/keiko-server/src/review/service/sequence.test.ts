@@ -25,7 +25,6 @@ import { settleReviewRun } from "./settlement.js";
 import type { ReviewRunStore } from "./store.js";
 
 const PHASE_LIMIT_MS = 60_000;
-const RUN_ALLOWANCE = 1_000;
 const START = 1_000_000;
 
 interface Phase {
@@ -39,7 +38,7 @@ interface Phase {
 interface PhaseOptions {
   readonly reports: readonly ReviewFindingReport[];
   readonly partCount?: number;
-  /** What one counter-check does besides answering: advance the clock, reserve prompt tokens. */
+  /** What one counter-check does besides answering: advance the clock. */
   readonly onCheck?: (input: CounterCheckInput, clock: { now: number }) => void;
   readonly effect?: CounterCheckOutcome["effect"];
   /** A check's effect by the candidate's start line, where it differs from `effect`. */
@@ -77,7 +76,6 @@ function sequenceDeps(
     activityLog: phase.log.sink,
     events: new ReviewRunEventHub(now),
     now,
-    counterCheckRunPromptTokens: RUN_ALLOWANCE,
     counterCheckPhaseWallTimeMs: PHASE_LIMIT_MS,
   };
 }
@@ -186,36 +184,13 @@ describe("the counter-check phase's wall-time limit (Issue #4130)", () => {
     });
     expect(checked).toEqual([3, 7, 10]);
     expect(state.uncheckedCandidates).toBe(0);
-    expect(phaseLine(log)).toMatchObject({
-      counterCheckRunPromptAllowance: 2 * RUN_ALLOWANCE,
-      counterCheckPhaseWallTimeMs: 2 * PHASE_LIMIT_MS,
-    });
+    expect(phaseLine(log)).toMatchObject({ counterCheckPhaseWallTimeMs: 2 * PHASE_LIMIT_MS });
   });
 
-  it("names the prompt allowance when it and the limit both ran out", async () => {
-    const { state, checked } = await runPhase({
-      reports: THREE,
-      effect: "budget-exhausted",
-      onCheck: (input, clock) => {
-        clock.now += 90_000;
-        input.budget.reserve(RUN_ALLOWANCE + 1);
-      },
-    });
-    expect(checked).toEqual([3]);
-    expect(state.uncheckedCandidates).toBe(2);
-    expect(state.uncheckedReason).toBe("budget-exhausted");
-    expect(settlementOf(state)).toEqual({ kind: "incomplete", reason: "budget-exhausted" });
-  });
-
-  it("keeps the prompt allowance as the reason when only it ran out", async () => {
-    const { state } = await runPhase({
-      reports: THREE,
-      onCheck: (input) => {
-        input.budget.reserve(RUN_ALLOWANCE + 1);
-      },
-    });
-    expect(state.uncheckedCandidates).toBe(2);
-    expect(state.uncheckedReason).toBe("budget-exhausted");
+  // Keiko does not limit tokens (#4346): the wall-time limit is the phase's only stop of this kind.
+  it("records no token allowance on the phase line", async () => {
+    const { log } = await runPhase({ reports: THREE, onCheck: taking(19_000) });
+    expect(phaseLine(log)).not.toHaveProperty("counterCheckRunPromptAllowance");
   });
 });
 

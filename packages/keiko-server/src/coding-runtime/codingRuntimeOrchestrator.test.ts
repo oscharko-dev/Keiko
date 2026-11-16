@@ -7888,7 +7888,8 @@ describe("terminal run cause (F9, #3873)", () => {
       expect(f.orchestrator.getSnapshot(RUN_ID)?.state).toBe("recovery-required");
     });
 
-    expect(f.orchestrator.unprovenTurnFailureCode(RUN_ID)).toBe("prompt-allowance-exhausted");
+    // The envelope ran out of time; the refused model call it caused reads only `turn-rejected`.
+    expect(f.orchestrator.unprovenTurnFailureCode(RUN_ID)).toBe("envelope-duration-exhausted");
     expect(f.orchestrator.unprovenTurnFailureCode("run-other")).toBeUndefined();
     expect(f.orchestrator.succeededTurnReapUnproven(RUN_ID)).toBe(false);
 

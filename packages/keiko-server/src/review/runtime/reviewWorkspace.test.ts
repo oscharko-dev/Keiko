@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   configuredReviewRunBudget,
   KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES_ENV,
-  KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS_ENV,
 } from "./production.js";
 import { createReviewWorkspaceLifecycle, reviewWorkspaceId } from "./reviewWorkspace.js";
 
@@ -57,39 +56,34 @@ describe("createReviewWorkspaceLifecycle", () => {
   });
 });
 
+// Keiko does not limit tokens (#4346): the Reviewer session's time limit is the only setting.
 describe("configuredReviewRunBudget", () => {
-  const envelope = { promptTokenBudget: 2_000_000, maxDurationMinutes: 120 };
+  const envelope = { maxDurationMinutes: 120 };
 
-  it("defaults to 1,500,000 prompt tokens and 20 minutes", () => {
-    expect(configuredReviewRunBudget({}, envelope)).toEqual({
-      promptTokenBudget: 1_500_000,
-      maxDurationMinutes: 20,
-    });
+  it("defaults to 20 minutes and carries no token allowance", () => {
+    expect(configuredReviewRunBudget({}, envelope)).toEqual({ maxDurationMinutes: 20 });
   });
 
   it("never exceeds the coding envelope, even by default", () => {
-    expect(
-      configuredReviewRunBudget({}, { promptTokenBudget: 1_000, maxDurationMinutes: 5 }),
-    ).toEqual({ promptTokenBudget: 1_000, maxDurationMinutes: 5 });
+    expect(configuredReviewRunBudget({}, { maxDurationMinutes: 5 })).toEqual({
+      maxDurationMinutes: 5,
+    });
   });
 
   it("admits an operator setting within the envelope and fails closed above it", () => {
     expect(
-      configuredReviewRunBudget(
-        {
-          [KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS_ENV]: "900000",
-          [KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES_ENV]: "30",
-        },
-        envelope,
-      ),
-    ).toEqual({ promptTokenBudget: 900_000, maxDurationMinutes: 30 });
-    for (const value of ["2000001", "0", "-1", "1e6", "abc"]) {
+      configuredReviewRunBudget({ [KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES_ENV]: "30" }, envelope),
+    ).toEqual({ maxDurationMinutes: 30 });
+    for (const value of ["121", "0", "-1", "1e6", "abc"]) {
       expect(() =>
-        configuredReviewRunBudget({ [KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS_ENV]: value }, envelope),
+        configuredReviewRunBudget({ [KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES_ENV]: value }, envelope),
       ).toThrow(RangeError);
     }
-    expect(() =>
-      configuredReviewRunBudget({ [KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES_ENV]: "121" }, envelope),
-    ).toThrow(RangeError);
+  });
+
+  it("ignores the retired prompt-token setting", () => {
+    expect(
+      configuredReviewRunBudget({ KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS: "1" }, envelope),
+    ).toEqual({ maxDurationMinutes: 20 });
   });
 });
