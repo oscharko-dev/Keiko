@@ -1440,16 +1440,22 @@ function runtimeVersionLogFields(runtimeVersion: CodingWorkbenchRuntimeVersion |
     : {};
 }
 
+/** What the start line records about the runtime behind the run; an absent fact adds no field. */
+interface RuntimeRunStartedRuntime {
+  readonly runtimePurpose: CodingRuntimePurpose | undefined;
+  readonly identity: RuntimeRunIdentity | undefined;
+  readonly runtimeVersion: CodingWorkbenchRuntimeVersion | undefined;
+}
+
 function recordRuntimeRunStarted(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
   effectiveMode: CodingWorkbenchMode,
   predecessorSelectionReason: PredecessorSelectionReason,
   taskIntent: string,
-  runtimePurpose: CodingRuntimePurpose | undefined,
-  identity?: RuntimeRunIdentity,
-  runtimeVersion?: CodingWorkbenchRuntimeVersion,
+  runtime: RuntimeRunStartedRuntime,
 ): void {
+  const { runtimePurpose, identity, runtimeVersion } = runtime;
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_RUN_STARTED_OPERATION,
@@ -4309,9 +4315,11 @@ export class CodingRuntimeOrchestrator {
       launch.effectiveMode,
       selection.reason,
       taskIntent,
-      this.deps.runtimePurpose,
-      this.runIdentity,
-      this.deps.runtimeVersion,
+      {
+        runtimePurpose: this.deps.runtimePurpose,
+        identity: this.runIdentity,
+        runtimeVersion: this.deps.runtimeVersion,
+      },
     );
   }
 
