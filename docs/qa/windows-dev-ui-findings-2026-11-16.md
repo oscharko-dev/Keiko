@@ -2,7 +2,7 @@
 
 This record captures functional checks from `dev`
 `1906b6a5f28a4ec51fa93a18a3affade7194a126` and the repair branch in PR #4409.
-The published 1.5.0 package and native platform qualification have their own lifecycles.
+Each issue body records its own verification and acceptance checklist.
 
 ## Environment and setup actually exercised
 
@@ -21,6 +21,9 @@ The published 1.5.0 package and native platform qualification have their own lif
 - The trusted development launcher serves the actual Windows Edge UI. **Connect browser**
   established the browser session. Azure/GPT-5.4 configuration was tested and saved through
   the UI with credentials entered separately from the import file.
+- The Windows VM switched from the source overlay to the signed PR branch at `0141bcb91`.
+  The exact checkout was clean. The ordinary launcher installed from the lockfile, built the app,
+  verified the local runtime and opened a paired browser on port 1983.
 
 The development runtime reports `functional-not-platform-qualified`. A private candidate
 using the independently pinned public Windows runtime completed a real GPT-5.4 Workbench run
@@ -74,36 +77,63 @@ answer and completed in two model steps.
   Both files downloaded. The same Chat card downloaded byte-identical Markdown and CSV after a
   normal Windows Dev restart. The recorded interval held two retained exports and zero new
   gateway or report-read calls. The lab issue field digests were identical.
+- A separate one-turn Gemma check in Windows produced a live approval card for three Task drafts.
+  The first input missed a required field and was corrected before successful staging. Decline left
+  the native issue count unchanged at 38 and the UI reported **Not sent to Jira**.
+- In a private Windows store, the three Jira starters became selectable after normal Pod verification.
+  All three opened and edited as Markdown. Saving with a blank project preserved the draft and
+  was refused. A valid project and Task type saved through the normal template validation and
+  binding. Removing the last Pod disabled the three starters and preserved the saved copy and
+  edited draft even when a switch was waiting for discard confirmation. The native project count
+  remained unchanged. The stale Checking label on the saved template is tracked in #4421.
 - Published macOS 1.5.0 reproduced the cold LiteLLM Chat creation refusal. The repaired app
   opened the composer without starting another readiness call. Real LiteLLM/Gemma responded.
   A single-model 503 recovered on first Send after the existing cooldown. A definitive 401
   left Send disabled. The Windows Dev control opened Chat and returned a one-word GPT-5.4 answer.
+  In a macOS browser comparison with two synthetic deployments, the repaired app kept the
+  configured first model after one 503. The prior candidate elected the second. The browser
+  opened Chat in both builds and sent no inference prompt.
 - The exact installed Windows 1.5.0 setup receipt matched the manifest, canonical root and launcher.
   The corrected detector reported its managed install with in-app updating unavailable. Passing
-  that receipt to a different copy produced a registration refusal. Nine scoped updater browser
-  cases passed with fresh source evidence.
+  that receipt to a different copy produced a registration refusal. Windows Edge showed matching
+  startup and Updates guidance. Nine scoped updater browser cases passed with fresh source evidence.
+- The actual Windows Editor saved the ordinary-folder fixture and showed a **User save** restore
+  point. **Compare with current** read the stored version. The Editor's own **Refresh** cleared a
+  real file-list warning in the same window, with the file open and Saved still visible.
+- The production Linux x64 static export measured 355,895 gzip bytes over 21 initial scripts before
+  the Skills diagnostics import was deferred. The same gate passed at 348,274 bytes over 20 scripts
+  after the change, below the 349,184-byte ceiling. Editor runtime and worker bytes retained their
+  measured totals.
+- In the real browser at 390 pixels wide, dragging the Chat window's lower edge increased its height
+  by 96 pixels. Send remained reachable in free placement, after resize, tiled, cascaded, fullscreen,
+  and after Restore. The restored workspace control was also reachable.
 
 ## Repair and acceptance queue
 
-| Issue                                                      | Current implementation and acceptance                                                    |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| [#4400](https://github.com/oscharko-dev/Keiko/issues/4400) | Bound receipt and release navigation verified. Native Updates view remains to check.     |
-| [#4401](https://github.com/oscharko-dev/Keiko/issues/4401) | Initial Jira repair pushed. Follow-up claim and context regressions are being reviewed.  |
-| [#4402](https://github.com/oscharko-dev/Keiko/issues/4402) | Actual Windows report and both downloads verified. Language coverage follow-up pending.  |
-| [#4403](https://github.com/oscharko-dev/Keiko/issues/4403) | Watch acknowledgements and competing Editor loads repaired. Live recovery check pending. |
-| [#4404](https://github.com/oscharko-dev/Keiko/issues/4404) | Private Windows candidate read succeeded. Native qualification and verifier remain open. |
-| [#4405](https://github.com/oscharko-dev/Keiko/issues/4405) | Closed after the real stale-cursor and restart journey.                                  |
-| [#4406](https://github.com/oscharko-dev/Keiko/issues/4406) | Closed after a real full-filename link and targeted path and prose controls.             |
-| [#4407](https://github.com/oscharko-dev/Keiko/issues/4407) | macOS launcher re-pair verified. Windows empty-selection journey remains open.           |
-| [#4408](https://github.com/oscharko-dev/Keiko/issues/4408) | Closed after the copied-environment repair and real Windows Workbench controls.          |
-| [#4410](https://github.com/oscharko-dev/Keiko/issues/4410) | Confirmed spawn class repaired. The report omits the original flagged paths.             |
-| [#4411](https://github.com/oscharko-dev/Keiko/issues/4411) | Closed after Windows History, Fetch/Pull, and the scoped discovery refusal review.       |
-| [#4412](https://github.com/oscharko-dev/Keiko/issues/4412) | Closed after Windows before/after with the same absent runtime.                          |
-| [#4413](https://github.com/oscharko-dev/Keiko/issues/4413) | Closed after the Windows Workbench showed Not run and zero executed tests.               |
-| [#4414](https://github.com/oscharko-dev/Keiko/issues/4414) | Closed after actual Fetch/Pull and native state readback.                                |
-| [#4415](https://github.com/oscharko-dev/Keiko/issues/4415) | Closed after macOS cold-start repair and Windows control.                                |
-| [#4416](https://github.com/oscharko-dev/Keiko/issues/4416) | Tiled layout blocked Send in a real browser. Focused geometry correction in progress.    |
-| [#4390](https://github.com/oscharko-dev/Keiko/issues/4390) | Report retention verified on Windows. The other criteria are tracked in the task.        |
+| Issue                                                      | Current implementation and acceptance                                                     |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [#4400](https://github.com/oscharko-dev/Keiko/issues/4400) | Closed after the bound receipt and both Windows update surfaces were verified.            |
+| [#4401](https://github.com/oscharko-dev/Keiko/issues/4401) | Closed after the live three-draft approval card, Decline and native count checks.         |
+| [#4402](https://github.com/oscharko-dev/Keiko/issues/4402) | Closed after real Windows downloads, restart retention and the German trigger check.      |
+| [#4403](https://github.com/oscharko-dev/Keiko/issues/4403) | Closed after the actual Windows Editor warning cleared with its own Refresh action.       |
+| [#4404](https://github.com/oscharko-dev/Keiko/issues/4404) | Private Windows candidate read succeeded. Native qualification and verifier remain open.  |
+| [#4405](https://github.com/oscharko-dev/Keiko/issues/4405) | Closed after the real stale-cursor and restart journey.                                   |
+| [#4406](https://github.com/oscharko-dev/Keiko/issues/4406) | Closed after a real full-filename link and targeted path and prose controls.              |
+| [#4407](https://github.com/oscharko-dev/Keiko/issues/4407) | Windows and macOS reconnect journeys passed. Recheck after the lazy import is pending.    |
+| [#4408](https://github.com/oscharko-dev/Keiko/issues/4408) | Closed after the copied-environment repair and real Windows Workbench controls.           |
+| [#4410](https://github.com/oscharko-dev/Keiko/issues/4410) | Confirmed spawn class repaired. The report omits the original flagged paths.              |
+| [#4411](https://github.com/oscharko-dev/Keiko/issues/4411) | Closed after Windows History, Fetch/Pull, and the scoped discovery refusal review.        |
+| [#4412](https://github.com/oscharko-dev/Keiko/issues/4412) | Closed after Windows before/after with the same absent runtime.                           |
+| [#4413](https://github.com/oscharko-dev/Keiko/issues/4413) | Closed after the Windows Workbench showed Not run and zero executed tests.                |
+| [#4414](https://github.com/oscharko-dev/Keiko/issues/4414) | Actual Fetch/Pull passed. The exact two-commit Pull control remains to check.             |
+| [#4415](https://github.com/oscharko-dev/Keiko/issues/4415) | Closed after macOS cold-start repair and Windows control.                                 |
+| [#4416](https://github.com/oscharko-dev/Keiko/issues/4416) | Closed after the tiled and narrow Chat pointer, resize and fullscreen controls.           |
+| [#4417](https://github.com/oscharko-dev/Keiko/issues/4417) | Closed after Windows Editor Save produced a readable local history restore point.         |
+| [#4418](https://github.com/oscharko-dev/Keiko/issues/4418) | Navigation and catalog race regressions passed. Native Windows creation is next.          |
+| [#4419](https://github.com/oscharko-dev/Keiko/issues/4419) | Production first-load size and import failure passed. Exact native reconnect is next.     |
+| [#4420](https://github.com/oscharko-dev/Keiko/issues/4420) | Closed after all five Jira starter criteria, including Windows save and removal.          |
+| [#4421](https://github.com/oscharko-dev/Keiko/issues/4421) | No-Pod status regression passed. The preserved private Windows store is the native check. |
+| [#4390](https://github.com/oscharko-dev/Keiko/issues/4390) | Report retention verified on Windows. The other criteria are tracked in the task.         |
 
 Continue with Coding, Knowledge Pods, Chat, Jira Pod, and Git, including cancellation, retry,
 reload, and restart. Use Azure/GPT-5.4 first and then LiteLLM/Gemma. Model tests use only small
