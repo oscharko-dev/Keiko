@@ -26,6 +26,7 @@
 
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { win32 as win32Path } from "node:path";
+import { environmentVariableValue } from "./process-environment.js";
 
 /** Thrown when `SystemRoot`/`WINDIR` — or a requested binary name — fails canonical validation. */
 export class WindowsSystemDirectoryError extends Error {
@@ -203,7 +204,10 @@ export function resolveWindowsSystemDirectory(
   env: Readonly<Record<string, string | undefined>> = process.env,
   identityCheck: WindowsSystemDirectoryIdentityCheck | undefined = defaultSystemDirectoryIdentity,
 ): string {
-  const candidate = env.SystemRoot ?? env.WINDIR ?? DEFAULT_WINDOWS_SYSTEM_ROOT;
+  const candidate =
+    environmentVariableValue(env, "SystemRoot", "win32") ??
+    environmentVariableValue(env, "WINDIR", "win32") ??
+    DEFAULT_WINDOWS_SYSTEM_ROOT;
   assertCanonicalSystemRoot(candidate);
   assertSystemDirectoryIdentity(candidate, identityCheck);
   return candidate;

@@ -4,6 +4,7 @@
 // pinned down. Only node:path (a pure string utility) is imported here.
 
 import { basename } from "node:path";
+import { environmentVariableNames, environmentVariableValue } from "@oscharko-dev/keiko-security";
 import type { CommandRule, SandboxPolicy } from "./types.js";
 
 // A value shorter than this is too generic to scrub safely — redacting it would over-redact
@@ -17,6 +18,13 @@ function isScrubbableValue(value: string | undefined): value is string {
   return value !== undefined && value.length >= MIN_SCRUBBABLE_VALUE_LENGTH;
 }
 
+function setEnvironmentValue(env: Record<string, string>, name: string, value: string): void {
+  if (process.platform === "win32") {
+    for (const alias of environmentVariableNames(env, name)) Reflect.deleteProperty(env, alias);
+  }
+  env[name] = value;
+}
+
 // Builds the child env by copying ONLY allowlisted names that are present in the parent.
 // NEVER spreads `...processEnv`, so no credential-bearing variable can leak into the child.
 export function buildSandboxEnv(
@@ -25,9 +33,9 @@ export function buildSandboxEnv(
 ): Record<string, string> {
   const env: Record<string, string> = {};
   for (const name of allowlist) {
-    const value = processEnv[name];
+    const value = environmentVariableValue(processEnv, name);
     if (value !== undefined) {
-      env[name] = value;
+      setEnvironmentValue(env, name, value);
     }
   }
   return env;
@@ -49,13 +57,13 @@ export function buildChildEnv(
 ): Record<string, string> {
   const env = buildSandboxEnv(processEnv, policy.envAllowlist);
   for (const name of policy.credentialEnvAllowlist ?? []) {
-    const value = processEnv[name];
+    const value = environmentVariableValue(processEnv, name);
     if (isScrubbableValue(value)) {
-      env[name] = value;
+      setEnvironmentValue(env, name, value);
     }
   }
   for (const [name, value] of Object.entries(policy.pinnedEnv ?? {})) {
-    env[name] = value;
+    setEnvironmentValue(env, name, value);
   }
   return env;
 }
@@ -68,7 +76,9 @@ export function collectSensitiveEnvValues(
   processEnv: NodeJS.ProcessEnv,
   allowlist: readonly string[],
 ): readonly string[] {
-  const allowed = new Set(allowlist);
+  const allowed = new Set(
+    allowlist.flatMap((name) => environmentVariableNames(processEnv, name).slice(0, 1)),
+  );
   const values: string[] = [];
   for (const [name, value] of Object.entries(processEnv)) {
     if (allowed.has(name)) {
@@ -132,9 +142,10 @@ export function collectCredentialEnvValues(
 ): readonly string[] {
   const values: string[] = [];
   for (const name of credentialNames) {
-    const value = processEnv[name];
-    if (isScrubbableValue(value)) {
-      values.push(value);
+    // Scrub shadow aliases too: none of their credential values may escape in command output.
+    for (const alias of environmentVariableNames(processEnv, name)) {
+      const value = processEnv[alias];
+      if (isScrubbableValue(value)) values.push(value);
     }
   }
   return values;
