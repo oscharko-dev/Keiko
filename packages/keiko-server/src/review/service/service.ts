@@ -320,6 +320,7 @@ class ReviewRunServiceImpl implements ReviewRunService {
       reviewerPromptBudget: this.deps.reviewerPromptBudget ?? REVIEW_RUN_DEFAULT_PROMPT_TOKENS,
       counterCheckRunPromptBudget: this.counterCheckRunPromptTokens(),
       counterCheckMaxToolCalls: this.limits.maxToolCalls,
+      counterCheckMaxReadCalls: this.limits.maxReadCalls,
       counterCheckWallTimeMs: this.limits.wallTimeMs,
       counterCheckEnabled: ctx.counterCheck === "on",
     });

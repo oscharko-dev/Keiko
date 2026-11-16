@@ -59,6 +59,7 @@ describe("counter-check Activity Log proofs", () => {
         evidenceInHead: true,
         promptTokens: 900,
         completionTokens: 40,
+        readCalls: { admitted: 8, refused: 3 },
       });
     });
     expect(line).not.toContain("src/secret.ts");
@@ -66,6 +67,9 @@ describe("counter-check Activity Log proofs", () => {
       verdict: "confirmed",
       reasonCode: "defect-reproduced-in-code",
       toolCallCount: 5,
+      // #4130: what the session's read allowance answered and refused.
+      admittedReadCallCount: 8,
+      refusedReadCallCount: 3,
     });
   });
 

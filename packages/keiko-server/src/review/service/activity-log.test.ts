@@ -73,6 +73,7 @@ describe("review run Activity Log proofs", () => {
         reviewerPromptBudget: 600_000,
         counterCheckRunPromptBudget: 1_200_000,
         counterCheckMaxToolCalls: 32,
+        counterCheckMaxReadCalls: 8,
         counterCheckWallTimeMs: 120_000,
         counterCheckEnabled: true,
       });
@@ -80,6 +81,7 @@ describe("review run Activity Log proofs", () => {
     expect(expectActivityLogProof("review.run.started.line", line)).toMatchObject({
       targetKind: "pull-request",
       counterCheckMaxToolCalls: 32,
+      counterCheckMaxReadCalls: 8,
       counterCheckEnabled: true,
     });
   });

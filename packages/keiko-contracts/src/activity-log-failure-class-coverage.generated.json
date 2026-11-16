@@ -40380,6 +40380,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "admittedReadCallCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "completionTokens",
               "type": "integer",
               "dataClass": "count",
@@ -40419,6 +40425,12 @@
               "name": "reasonCode",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "refusedReadCallCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": true
             },
             {
@@ -41912,6 +41924,12 @@
               "name": "counterCheckEnabled",
               "type": "boolean",
               "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "counterCheckMaxReadCalls",
+              "type": "integer",
+              "dataClass": "count",
               "required": true
             },
             {

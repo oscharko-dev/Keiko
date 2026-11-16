@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6ff5ac08ab00d8664aa9337bcc79011ce93c5ef1c6bc88aa9958dfa91773d853",
+    "catalogDigest": "fc3aca1711469fdd1e1d1577af01ed9f691a6185d5d497975ff697390703e206",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -35019,13 +35019,23 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "admittedReadCallCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "refusedReadCallCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
           }
         },
         "lifecycle": "end",
         "analyzerProjection": "timeline",
         "proofIds": ["review.counter-check.completed.line"],
         "registrationSite": "packages/keiko-server/src/review/counter-check/activity-log.ts:66",
-        "emitterSites": ["packages/keiko-server/src/review/counter-check/activity-log.ts:165"]
+        "emitterSites": ["packages/keiko-server/src/review/counter-check/activity-log.ts:169"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35095,8 +35105,8 @@
         "lifecycle": "failure",
         "analyzerProjection": "failure-cluster",
         "proofIds": ["review.counter-check.failed.line"],
-        "registrationSite": "packages/keiko-server/src/review/counter-check/activity-log.ts:100",
-        "emitterSites": ["packages/keiko-server/src/review/counter-check/activity-log.ts:201"]
+        "registrationSite": "packages/keiko-server/src/review/counter-check/activity-log.ts:103",
+        "emitterSites": ["packages/keiko-server/src/review/counter-check/activity-log.ts:207"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36086,8 +36096,8 @@
         "lifecycle": "state",
         "analyzerProjection": "timeline",
         "proofIds": ["review.run.part.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:157",
-        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:382"]
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:159",
+        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:386"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36196,8 +36206,8 @@
         "lifecycle": "state",
         "analyzerProjection": "timeline",
         "proofIds": ["review.run.phase.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:115",
-        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:336"]
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:117",
+        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:340"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36299,8 +36309,8 @@
         "lifecycle": "failure",
         "analyzerProjection": "failure-cluster",
         "proofIds": ["review.run.refused.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:252",
-        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:500"]
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:254",
+        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:504"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36639,8 +36649,8 @@
         "lifecycle": "end",
         "analyzerProjection": "timeline",
         "proofIds": ["review.run.settled.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:198",
-        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:465"]
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:200",
+        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:469"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36702,6 +36712,11 @@
             "dataClass": "count",
             "required": true
           },
+          "counterCheckMaxReadCalls": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
           "counterCheckWallTimeMs": {
             "type": "integer",
             "dataClass": "duration",
@@ -36717,7 +36732,7 @@
         "analyzerProjection": "timeline",
         "proofIds": ["review.run.started.line"],
         "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:87",
-        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:289"]
+        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:292"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -99087,6 +99102,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "admittedReadCallCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
                   "name": "completionTokens",
                   "type": "integer",
                   "dataClass": "count",
@@ -99126,6 +99147,12 @@
                   "name": "reasonCode",
                   "type": "string",
                   "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "refusedReadCallCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": true
                 },
                 {
@@ -100649,6 +100676,12 @@
                   "name": "counterCheckEnabled",
                   "type": "boolean",
                   "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "counterCheckMaxReadCalls",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": true
                 },
                 {
@@ -115552,7 +115585,7 @@
     {
       "op": "review.counter-check.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/review/counter-check/activity-log.ts:102",
+      "site": "packages/keiko-server/src/review/counter-check/activity-log.ts:105",
       "package": "keiko-server"
     },
     {
@@ -115619,13 +115652,13 @@
     {
       "op": "review.run.part",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:159",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:161",
       "package": "keiko-server"
     },
     {
       "op": "review.run.phase",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:117",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:119",
       "package": "keiko-server"
     },
     {
@@ -115637,7 +115670,7 @@
     {
       "op": "review.run.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:254",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:256",
       "package": "keiko-server"
     },
     {
@@ -115661,7 +115694,7 @@
     {
       "op": "review.run.settled",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:200",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:202",
       "package": "keiko-server"
     },
     {

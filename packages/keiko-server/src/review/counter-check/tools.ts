@@ -31,6 +31,7 @@ import type {
   ReadOnlyChildGateDecision,
   ReadOnlyChildToolAttempt,
 } from "../../coding-runtime/readOnlyChildOrchestrator.js";
+import type { ReviewReadAllowance } from "../../coding-runtime/reviewRuntimeGuard.js";
 import { ReviewHeadFileReader } from "../runtime/findingIntake.js";
 
 export const COUNTER_CHECK_CATALOG = createKeikoToolCatalog([reviewCounterCheckRegistrationSet()]);
@@ -62,7 +63,16 @@ export interface CounterCheckToolsetInput {
   readonly gate: (attempt: ReadOnlyChildToolAttempt) => ReadOnlyChildGateDecision;
   readonly stop: (reason: string) => void;
   readonly reader: ReviewHeadFileReader;
+  /**
+   * The session's read allowance (#4130): the read, list and search calls it answers. Once it is
+   * used up, these three tools answer `COUNTER_CHECK_READ_ALLOWANCE_GUIDANCE` and nothing else,
+   * and the verdict tool works as before.
+   */
+  readonly readAllowance: ReviewReadAllowance;
 }
+
+/** What the Counter-checker is told by a read tool once the allowance is used up. */
+export const COUNTER_CHECK_READ_ALLOWANCE_GUIDANCE = `This counter-check's read allowance is used up, so no read, list or search call is answered any more. Do not call these tools again. Record your verdict now with ${ALIASES.verdict}, from what you have read: confirmed only if the code you read proves the defect, refuted if it shows the finding is wrong, and undecided with reasonCode insufficient-context if it settles neither.`;
 
 /** What one session's tools observed; read by the counter-check after the session ends. */
 export interface CounterCheckToolsetState {
@@ -118,10 +128,17 @@ class CounterCheckTools {
   }
 
   private dispatch(request: ToolCallRequest): Promise<ToolCallResult> {
+    if (request.toolName === ALIASES.verdict) return Promise.resolve(this.verdict(request));
+    if (!this.input.readAllowance.admit()) {
+      const refusal = {
+        status: "read-allowance-used",
+        guidance: COUNTER_CHECK_READ_ALLOWANCE_GUIDANCE,
+      };
+      return Promise.resolve(answer(request, JSON.stringify(refusal)));
+    }
     if (request.toolName === ALIASES.read) return this.read(request);
     if (request.toolName === ALIASES.discover) return this.discover(request);
-    if (request.toolName === ALIASES.search) return this.search(request);
-    return Promise.resolve(this.verdict(request));
+    return this.search(request);
   }
 
   private async read(request: ToolCallRequest): Promise<ToolCallResult> {

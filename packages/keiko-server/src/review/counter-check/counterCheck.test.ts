@@ -7,7 +7,10 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { boundGatewayToolCatalog } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
-import type { ReviewFindingReport } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import {
+  REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS,
+  type ReviewFindingReport,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
 import type { GatewayCallRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import {
@@ -35,6 +38,7 @@ import {
   type CounterCheckDeps,
   type CounterCheckOutcome,
 } from "./counterCheck.js";
+import { COUNTER_CHECK_READ_ALLOWANCE_GUIDANCE } from "./tools.js";
 
 const TOOLS = REVIEW_COUNTER_CHECK_TOOL_ALIASES;
 const SENTINELS = {
@@ -209,6 +213,10 @@ const CONFIRM = {
   },
 } as const;
 
+function completedLine(): unknown {
+  return log.events.find((event) => event.op === "review.counter-check.completed");
+}
+
 function allText(model: ScriptedModel): string {
   return JSON.stringify(model.requests.map((request) => request.messages));
 }
@@ -321,6 +329,76 @@ describe("counterCheckCandidate", () => {
     const outcome = await check(model, candidate);
     expect(outcome.verdict.verdict).toBe("undecided");
     expect(outcome.toolCallCount).toBe(0);
+  });
+
+  // #4130: in development iteration 7 a check that kept reading ran out of time or tokens before
+  // it decided (13 of the 22 checks with 9 or more tool calls). The read allowance answers a fixed
+  // number of read, list and search calls and then leaves only the verdict tool.
+  describe("the read allowance", () => {
+    const read = { tool: TOOLS.read, args: { relativePath: "src/total.ts", startLine: 3 } };
+    const search = { tool: TOOLS.search, args: { literal: "GUARD_MARKER" } };
+    const discover = { tool: TOOLS.discover, args: { directory: "src" } };
+
+    it("answers the allowed calls, refuses the rest with the guidance, and still records the verdict", async () => {
+      const candidate = await candidateOf(report());
+      const model = scripted([read, search, discover, read, CONFIRM]);
+      const outcome = await check(model, candidate, { limits: { maxReadCalls: 2 } });
+
+      expect(outcome.readCalls).toEqual({ admitted: 2, refused: 2 });
+      expect(outcome).toMatchObject({ verdict: { verdict: "confirmed" }, effect: "none" });
+      const refusals = model.toolOutputs.filter((output) =>
+        output.includes('"status":"read-allowance-used"'),
+      );
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0]).toContain(COUNTER_CHECK_READ_ALLOWANCE_GUIDANCE);
+      // The refused list call answered nothing of the tree.
+      expect(model.toolOutputs.join("\n")).not.toContain("total.ts\n");
+      expect(completedLine()).toMatchObject({
+        extra: { admittedReadCallCount: 2, refusedReadCallCount: 2, toolCallCount: 5 },
+      });
+    });
+
+    it("does not count the verdict tool, so a session at the allowance can still decide", async () => {
+      const candidate = await candidateOf(report());
+      const model = scripted([read, CONFIRM]);
+      const outcome = await check(model, candidate, { limits: { maxReadCalls: 1 } });
+      expect(outcome.readCalls).toEqual({ admitted: 1, refused: 0 });
+      expect(outcome.verdict.verdict).toBe("confirmed");
+    });
+
+    it("answers no read call at an allowance of zero", async () => {
+      const candidate = await candidateOf(report());
+      const model = scripted([read, CONFIRM]);
+      const outcome = await check(model, candidate, { limits: { maxReadCalls: 0 } });
+      expect(outcome.readCalls).toEqual({ admitted: 0, refused: 1 });
+      expect(model.toolOutputs.join("\n")).not.toContain("3:   for (let i = 0;");
+      expect(outcome.verdict.verdict).toBe("confirmed");
+    });
+
+    it("leaves a session that ignores the guidance to the tool-call ceiling", async () => {
+      const candidate = await candidateOf(report());
+      const model = scripted([read, read, read, read, read, CONFIRM]);
+      const outcome = await check(model, candidate, {
+        limits: { maxReadCalls: 1, maxToolCalls: 3 },
+      });
+      expect(outcome).toMatchObject({
+        verdict: { verdict: "undecided", reasonCode: "out-of-budget" },
+        effect: "budget-exhausted",
+        readCalls: { admitted: 1, refused: 2 },
+      });
+    });
+
+    it("tells the model its allowance in the task, with the default of the contract", async () => {
+      const candidate = await candidateOf(report());
+      const model = scripted([CONFIRM]);
+      await check(model, candidate, { limits: { maxReadCalls: 5 } });
+      expect(allText(model)).toContain("You have 5 read, list and search calls in all.");
+      const byDefault = scripted([CONFIRM]);
+      await check(byDefault, candidate);
+      expect(allText(byDefault)).toContain(
+        `You have ${String(REVIEW_COUNTER_CHECK_DEFAULT_MAX_READ_CALLS)} read, list and search calls in all.`,
+      );
+    });
   });
 
   it("ends at the tool-call ceiling as out-of-budget (budget-exhausted)", async () => {
