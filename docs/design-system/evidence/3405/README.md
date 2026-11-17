@@ -177,6 +177,12 @@ The Knowledge text citation repair (#4443) changed `api.ts` and both optional ca
 arm64 container with Node 26.13.1. The three JSON records now bind the updated source hashes.
 The 14 committed screenshots, updater assertions and harness inputs retain their existing values.
 
+The New chat repair for a remembered project whose folder is gone (#4455, PR #4460) changed
+`api.ts`: chat creation now clears the project-list cache. On 2026-11-17 (UTC) the original nine
+Chromium cases passed in 1.5 minutes in the Linux gates container with an init process and Node
+26.13.1, and `npm run check:update-ui-evidence` passes. Only the three records were kept; the 14
+committed screenshots, updater assertions and harness inputs retain their existing values.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
