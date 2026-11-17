@@ -135,10 +135,22 @@ async function settleModelStartup(page) {
   assert.equal(settled.status(), 200, "The startup model readiness must settle before a Chat");
 }
 
+// ADR-0171 D2 (amended 2026-11-16): a server process checks no chat model at start, and the Chat
+// picker offers only activated models. The person activates the requested model in Settings >
+// Models first; the lab sends the same explicit check that activation sends.
+async function activateWorkflowModel(page, modelId) {
+  const activated = await page.request.post("/api/gateway/readiness", {
+    headers: { "X-Keiko-CSRF": "1" },
+    data: { modelId },
+  });
+  assert.equal(activated.status(), 200, "The requested model must activate before a Chat");
+}
+
 /** The existing ordinary UI creator owns the POST; this owner only observes its identity. */
 export async function openWorkflowChat(page, context, options = {}) {
   if (options.chatId !== undefined) return focusWorkflowChat(page, context, options.chatId);
   await settleModelStartup(page);
+  await activateWorkflowModel(page, context.modelId);
   await options.onPhase?.({ phase: "chat-creation-may-have-started" });
   const [response] = await Promise.all([
     page.waitForResponse(

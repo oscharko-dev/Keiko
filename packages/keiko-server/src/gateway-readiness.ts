@@ -4179,6 +4179,26 @@ async function settledWithinBudget(probe: Promise<void>, budgetMs: number): Prom
   }
 }
 
+// The selection and deactivation routes both take one `{ modelId }` body under the request's own
+// correlation id; a malformed body or a missing model id is reported once through `onBadRequest`.
+async function readModelRequest(
+  ctx: RouteContext,
+  onBadRequest: (correlationId: string) => void,
+): Promise<RouteResult | { readonly correlationId: string; readonly modelId: string }> {
+  const correlationId = ctx.correlationId ?? newCorrelationId();
+  const body = await readJsonBody(ctx.req, correlationId);
+  if ("status" in body) {
+    onBadRequest(correlationId);
+    return body;
+  }
+  const modelId = body.parsed.modelId;
+  if (modelId === undefined) {
+    onBadRequest(correlationId);
+    return error("BAD_REQUEST", "A model id is required.");
+  }
+  return { correlationId, modelId };
+}
+
 /**
  * A person's explicit pick of a chat model (`POST /api/gateway/readiness/selection`, #4351): starts
  * the one check of that model when it has no current observation and answers at once with what the
@@ -4190,17 +4210,11 @@ export async function handleGatewaySelectionCheck(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const correlationId = ctx.correlationId ?? newCorrelationId();
-  const body = await readJsonBody(ctx.req, correlationId);
-  if ("status" in body) {
+  const request = await readModelRequest(ctx, (correlationId) => {
     logSelectionOutcome(deps, correlationId, "bad-request");
-    return body;
-  }
-  const modelId = body.parsed.modelId;
-  if (modelId === undefined) {
-    logSelectionOutcome(deps, correlationId, "bad-request");
-    return error("BAD_REQUEST", "A model id is required.");
-  }
+  });
+  if ("status" in request) return request;
+  const { correlationId, modelId } = request;
   // The returned check settles on its own and reports a failure under this correlation id. The
   // outcome says why nothing may be running: already answered, or withheld by the cooldown.
   const { outcome } = startSelectedConversationCheck(deps, modelId, correlationId);
@@ -4218,17 +4232,11 @@ export async function handleGatewayDeactivation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const correlationId = ctx.correlationId ?? newCorrelationId();
-  const body = await readJsonBody(ctx.req, correlationId);
-  if ("status" in body) {
+  const request = await readModelRequest(ctx, (correlationId) => {
     logDeactivationOutcome(deps, correlationId, "bad-request");
-    return body;
-  }
-  const modelId = body.parsed.modelId;
-  if (modelId === undefined) {
-    logDeactivationOutcome(deps, correlationId, "bad-request");
-    return error("BAD_REQUEST", "A model id is required.");
-  }
+  });
+  if ("status" in request) return request;
+  const { correlationId, modelId } = request;
   const outcome = deactivateConversationModel(deps, modelId);
   logDeactivationOutcome(deps, correlationId, outcome);
   if (outcome === "unknown-model")

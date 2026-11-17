@@ -138,6 +138,7 @@ function uiPage(chats = []) {
     },
     request: {
       get: vi.fn(async () => response("GET", "/api/chats", { chats: [...page.chats.values()] })),
+      post: vi.fn(async (path) => response("POST", path, {})),
     },
     waitForFunction: vi.fn(async (_predicate, argument) => {
       expect(argument.key).toBe("owned-store-workspace");
@@ -488,6 +489,16 @@ describe("one ordinary browser owner for the three limit-run Chats", () => {
     expect(creation(response("POST", "/api/chats", {}, 201))).toBe(false);
     expect(creation(response("GET", "/api/desktop/chats", {}))).toBe(false);
     expect(page.request.get).toHaveBeenCalledWith("/api/models?settleStartup=1");
+  });
+
+  it("activates the requested model the way Settings > Models does before creating a Chat", async () => {
+    const page = uiPage();
+    installOwners(page);
+    await openWorkflowBrowser(CONTEXT);
+    expect(page.request.post).toHaveBeenCalledWith("/api/gateway/readiness", {
+      headers: { "X-Keiko-CSRF": "1" },
+      data: { modelId: CONTEXT.modelId },
+    });
   });
 
   it("selects the requested model through its visible UI rather than an API write", async () => {

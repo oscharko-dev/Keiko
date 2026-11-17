@@ -131,15 +131,17 @@ async function labEnvironment(dir, options, source = process.env) {
   return { project, env, foldedKeys };
 }
 
-// The product checks every configured chat model once at start and refuses a turn until that check
-// has passed. A person waits for the start; the lab does too, through the product's own settling
-// read, so a first turn never races the check. A model whose check failed ends the instance here
-// with a reason instead of failing every turn of the run.
+// The product refuses a turn until the chat model has passed its readiness check. Since ADR-0171
+// D2 (amended 2026-11-16) a server process checks no chat model at start: a person activates it in
+// Settings > Models, and that activation is its check. The lab does what the person does: it waits
+// for the start through the product's own settling read and, while the answer model reports no
+// readiness, activates it through the same explicit check Settings sends. A model whose check
+// failed ends the instance here with a reason instead of failing every turn of the run.
 //
-// A model that reports no readiness yet is still being checked: a subject without the startup fix
-// of ADR-0171 D2 answers the settling read while catalog discovery's renewed check runs (seen on
-// dev 4e1f07ea0, ready two seconds later). A person sees the model become ready a moment later, so
-// the lab reads again for a bounded time; an answer of not ready still ends the instance at once.
+// An older subject still checks at start and may answer the settling read while catalog
+// discovery's renewed check runs (seen on dev 4e1f07ea0, ready two seconds later); the explicit
+// activation is harmless there. A model that still reports no readiness is read again for a
+// bounded time; an answer of not ready still ends the instance at once.
 const STARTUP_SETTLE_MS = 60_000;
 const STARTUP_POLL_MS = 1000;
 
@@ -150,10 +152,20 @@ async function startupModel(bff, modelId, path) {
   return result.json?.models?.find((entry) => entry.id === modelId);
 }
 
+async function activateModel(bff, modelId) {
+  const result = await bff.request("POST", "/api/gateway/readiness", { modelId });
+  if (result.status !== 200)
+    throw new Error(`answer model activation failed with HTTP ${String(result.status)}`);
+}
+
 export async function awaitStartupReadiness(bff, modelId, timing = {}) {
   const { settleMs = STARTUP_SETTLE_MS, pollMs = STARTUP_POLL_MS } = timing;
   const deadline = Date.now() + settleMs;
   let model = await startupModel(bff, modelId, "/api/models?settleStartup=1");
+  if (model !== undefined && model.conversationReady === undefined) {
+    await activateModel(bff, modelId);
+    model = await startupModel(bff, modelId, "/api/models");
+  }
   let rereads = 0;
   while (model !== undefined && model.conversationReady === undefined && Date.now() < deadline) {
     await delay(pollMs);

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { classifyDocumentationTarget } from "./documentation-target.js";
+import {
+  classifyDocumentationTarget,
+  type DocumentationTargetClassificationOk,
+} from "./documentation-target.js";
+
+type DocumentationTargetClass = DocumentationTargetClassificationOk["targetClass"];
 
 describe("classifyDocumentationTarget — accepted", () => {
   it("classifies a file target without exposing the path", () => {

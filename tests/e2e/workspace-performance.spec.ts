@@ -285,7 +285,7 @@ async function installSeededWorkspace(
   connections: readonly SeedConnection[] = seedConnections(),
 ): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 860 });
-  await page.route(/\/api\/runs\/run-perf-\d+$/u, (route) =>
+  await page.route(/\/api\/runs\/(?:run-perf-\d+)$/u, (route) =>
     route.fulfill({ json: { report: { status: "completed" } } }),
   );
   await page.addInitScript(

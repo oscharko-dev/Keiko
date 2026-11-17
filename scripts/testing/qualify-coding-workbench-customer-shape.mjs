@@ -324,6 +324,17 @@ async function pairWorkbench(page, repository, pairingSecret) {
   await expect(page.locator('section[aria-label="Coding Workbench"][data-state]')).toBeVisible();
 }
 
+// ADR-0171 D2 (amended 2026-11-16): a server process checks no chat model at start, and the
+// Workbench refuses a start until the person activates the model in Settings > Models. The lane
+// sends the same explicit check that activation sends, as a customer would before a first run.
+async function activateModel(page) {
+  const activated = await page.request.post("/api/gateway/readiness", {
+    headers: CSRF,
+    data: { modelId: CUSTOMER_SHAPE_MODEL },
+  });
+  if (!activated.ok()) throw new Error(`model activation failed (HTTP ${activated.status()})`);
+}
+
 async function provision(page, repository, taskId) {
   const created = await page.request.post("/api/task-workspaces", {
     headers: CSRF,
@@ -497,6 +508,7 @@ async function expectWorkbenchOnRepository(page, repository, project, phase) {
 async function runTurn(page, repository, scpRepository, project, pairingSecret, phase) {
   const expectToolCall = phase === "tool-proof";
   await pairWorkbench(page, repository, pairingSecret);
+  await activateModel(page);
   const scpBound = await page.request.post("/api/task-workspaces", {
     headers: CSRF,
     data: {

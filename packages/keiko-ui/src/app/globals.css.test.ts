@@ -3049,7 +3049,11 @@ describe("Issue #1293 — global shell + workspace chrome token migration", () =
     expect(cssBlock(".rail {")).toContain("background: var(--nav-surface)");
     expect(cssBlock(".rail {")).not.toContain("background: var(--surface)");
 
-    const ws = cssBlock(".workspace {");
+    // The workspace frame moved into the component-scoped workspace layout (#4448).
+    const ws = cssBlockFrom(
+      readStylesheet(resolve(here, "components/desktop/WorkspaceControls.module.css")),
+      ".cmpWorkspaceLayout {",
+    );
     expect(ws).toContain("border-radius: var(--radius-surface)");
     expect(ws).toContain("var(--background-primary)");
     expect(ws).toContain("var(--border-subtle)");
