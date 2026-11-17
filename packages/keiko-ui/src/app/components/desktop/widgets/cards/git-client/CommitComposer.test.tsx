@@ -565,7 +565,7 @@ describe("CommitComposer — preview and outcomes", () => {
     });
     await user.type(screen.getByLabelText("Summary"), draft);
     expect(screen.getByTestId("git-commit-outcome-headline")).toHaveTextContent(
-      /signing key.*signing program.*click Commit again/u,
+      /signing key.*ssh-keygen.*click Commit again/u,
     );
     expect(screen.getByLabelText("Summary")).toHaveValue(draft);
     expect(onCommit).not.toHaveBeenCalled();

@@ -6632,7 +6632,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.ui.recent": "Zuletzt verwendet",
   "gitClientWindow.ui.error": "Fehler",
   "gitClientWindow.ui.commitSigningRecovery":
-    "Git konnte diesen Commit nicht signieren. Prüfe den Signaturschlüssel (user.signingKey) und das Signaturprogramm für dieses Repository. Klicke danach erneut auf Commit.",
+    "Git konnte diesen Commit nicht signieren. Prüfe den Signaturschlüssel (user.signingKey) und das Signaturformat (gpg.format) des Repositorys. Stelle sicher, dass Keiko das Signaturprogramm ausführen kann (gpg für OpenPGP oder ssh-keygen für SSH). Klicke danach erneut auf Commit.",
   "figmaJson.ui.qiSource": "QI-Quelle",
   "figmaJson.ui.retry": "Erneut versuchen",
   "chatHistoryPanel.ui.conversations": "Konversationen",

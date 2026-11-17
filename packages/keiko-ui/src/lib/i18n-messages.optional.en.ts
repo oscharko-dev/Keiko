@@ -6331,7 +6331,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitClientWindow.ui.recent": "Recent",
   "gitClientWindow.ui.error": "Error",
   "gitClientWindow.ui.commitSigningRecovery":
-    "Git could not sign this commit. Check this repository's signing key (user.signingKey) and signing program, then click Commit again.",
+    "Git could not sign this commit. Check this repository's signing key (user.signingKey) and format (gpg.format). Make sure Keiko can run the signing tool (gpg for OpenPGP or ssh-keygen for SSH). Then click Commit again.",
   "figmaJson.ui.qiSource": "QI source",
   "figmaJson.ui.retry": "Retry",
   "chatHistoryPanel.ui.conversations": "Conversations",

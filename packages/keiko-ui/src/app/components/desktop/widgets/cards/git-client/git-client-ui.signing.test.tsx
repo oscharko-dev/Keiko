@@ -16,22 +16,22 @@ describe("Git commit signing recovery (#4444)", () => {
     [
       "en",
       "recovery-required",
-      /Git could not sign this commit.*signing key \(user\.signingKey\).*signing program.*click Commit again/u,
+      /Git could not sign this commit.*user\.signingKey.*gpg\.format.*gpg for OpenPGP or ssh-keygen for SSH.*click Commit again/u,
     ],
     [
       "de",
       "recovery-required",
-      /Git konnte diesen Commit nicht signieren.*Signaturschlüssel \(user\.signingKey\).*Signaturprogramm.*erneut auf Commit/u,
+      /Git konnte diesen Commit nicht signieren.*user\.signingKey.*gpg\.format.*gpg für OpenPGP oder ssh-keygen für SSH.*erneut auf Commit/u,
     ],
     [
       "en",
       "failed",
-      /Git could not sign this commit.*signing key \(user\.signingKey\).*signing program.*click Commit again/u,
+      /Git could not sign this commit.*user\.signingKey.*gpg\.format.*gpg for OpenPGP or ssh-keygen for SSH.*click Commit again/u,
     ],
     [
       "de",
       "failed",
-      /Git konnte diesen Commit nicht signieren.*Signaturschlüssel \(user\.signingKey\).*Signaturprogramm.*erneut auf Commit/u,
+      /Git konnte diesen Commit nicht signieren.*user\.signingKey.*gpg\.format.*gpg für OpenPGP oder ssh-keygen für SSH.*erneut auf Commit/u,
     ],
   ] as const)(
     "announces signing setup and retry guidance in %s for %s",
