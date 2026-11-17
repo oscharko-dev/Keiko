@@ -250,6 +250,8 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
     const name = screen.getByLabelText("Label");
     await userEvent.clear(name);
     await userEvent.type(name, "Renamed Jira");
+    fireEvent.keyDown(name, { key: "Enter", keyCode: 229, isComposing: false });
+    expect(api.updateConnector).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Save name" }));
     expect(await screen.findByText("Renamed Jira")).toBeVisible();
     expect(api.updateConnector).toHaveBeenCalledExactlyOnceWith(LIVE.authRef, {
@@ -274,9 +276,9 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
     const { container } = render(<AtlassianConnectorsPanel client={api} jiraLive />);
     await podAction("Replace token");
     await userEvent.type(screen.getByLabelText("New API token"), "synthetic-replacement-pat");
-    const form = screen.getByRole("form", { name: "Replace Jira token" });
-    fireEvent.submit(form);
-    fireEvent.submit(form);
+    const save = screen.getByRole("button", { name: "Save token" });
+    fireEvent.click(save);
+    fireEvent.keyDown(screen.getByLabelText("New API token"), { key: "Enter" });
     expect(api.updateConnector).toHaveBeenCalledOnce();
     expect(screen.getByLabelText("New API token")).toHaveValue("");
     expect(container.innerHTML).not.toContain("synthetic-replacement-pat");
@@ -290,6 +292,26 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
       expectedGeneration: 1,
       apiToken: "synthetic-replacement-pat",
     });
+  });
+  it("submits a masked Jira token with Enter outside a native browser form", async () => {
+    const api = client({ updateConnector: vi.fn(async () => rotatedWith("ok")) });
+    const user = userEvent.setup();
+    render(<AtlassianConnectorsPanel client={api} jiraLive />);
+    await podAction("Replace token");
+    const token = screen.getByLabelText("New API token");
+
+    expect(token).toHaveAttribute("type", "password");
+    expect(token.closest("form")).toBeNull();
+    await user.type(token, "synthetic-replacement-pat");
+    fireEvent.keyDown(token, { key: "Enter", isComposing: true });
+    expect(api.updateConnector).not.toHaveBeenCalled();
+
+    await user.keyboard("{Enter}");
+    expect(api.updateConnector).toHaveBeenCalledExactlyOnceWith(LIVE.authRef, {
+      expectedGeneration: 1,
+      apiToken: "synthetic-replacement-pat",
+    });
+    expect(await screen.findByTestId("acx-verify-status")).toHaveTextContent("Connection verified");
   });
   async function submitReplacement(api: AtlassianConnectorsClient): Promise<void> {
     render(<AtlassianConnectorsPanel client={api} jiraLive />);
@@ -477,7 +499,7 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
     expect(container.innerHTML).not.toContain("synthetic-replacement-pat");
     expect(screen.queryByText("Connection verified")).toBeNull();
     expect(screen.getByRole("button", { name: "Save token" })).toBeDisabled();
-    fireEvent.submit(screen.getByRole("form", { name: "Replace Jira token" }));
+    fireEvent.keyDown(screen.getByLabelText("New API token"), { key: "Enter" });
     expect(api.updateConnector).toHaveBeenCalledOnce();
     await userEvent.click(screen.getByRole("button", { name: "Refresh status" }));
     expect(await screen.findByText("Verify the connection before using this Pod.")).toBeVisible();

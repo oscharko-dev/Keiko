@@ -462,8 +462,9 @@ The Windows 11 ARM64 guest used eight vCPUs, 16 GiB, emulated x64 Node 26.13.1 a
   two more launches on `f32c6c167` each exited 0, kept the listener and PID record, and released the lock.
 - **Jira Skills.** Edge saved the edited Task template as revision 2. Removing the sole verified Jira
   Pod in another tab disabled all three starters. The saved template and the open Epic draft remained
-  visible, and Jira received zero write requests. A first reconnection returned an authentication
-  failure while the fixture token passed the direct Jira check. Reconnection remains under test.
+  visible, and Jira received zero write requests. Following an initial authentication failure, the
+  valid fixture token restored the Pod to **Connection verified**. All three starters and the
+  saved Task template were available in the Chat's Skills dialog.
 - **Native Windows handoff.** The published 1.5.1 archive matched its checksum and embedded runtime
   activation digest. It reports `evaluation-unqualified`. The Intel/AMD Workbench and installed Jira
   checks are tracked together in [#4449](https://github.com/oscharko-dev/Keiko/issues/4449).
@@ -486,3 +487,13 @@ The three-citation answer initially displayed **0 citations** beside its three K
 citations and showed folder counters even though no Files source was connected. The focused
 regression exercises the same two-connection answer shape. Its disclosure now uses the
 Knowledge evidence summary, including the reference count and the existing citation actions.
+In Edge on `4f1c29a09`, the stored answer showed **3 citations · 3 / 16 references** and all
+three citation actions. After disconnecting Cedar, the next Gemma answer cited only the two
+remaining Pods. The old answer and Cedar's index remained available.
+
+### Jira token replacement
+
+After the prior password prompt was dismissed, a successful replacement of the synthetic Jira
+PAT in Edge triggered a fresh **Save your password?** prompt. The Pod verified successfully
+and Jira recorded zero writes. The replacement now uses an explicit Save action and supports
+Enter from the masked input, including protection against submitting an IME candidate.

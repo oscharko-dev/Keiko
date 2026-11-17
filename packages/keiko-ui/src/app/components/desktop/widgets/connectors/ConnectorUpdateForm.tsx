@@ -4,9 +4,9 @@ import {
   useId,
   useRef,
   useState,
+  type KeyboardEvent,
   type ReactNode,
   type RefObject,
-  type SubmitEvent,
 } from "react";
 import type { AtlassianLivePodUpdateRequest } from "@oscharko-dev/keiko-contracts";
 import { isSafeAtlassianDisplayName } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -27,22 +27,25 @@ interface Props {
   readonly unconfirmed: boolean;
 }
 interface Entry {
-  readonly form: RefObject<HTMLFormElement | null>;
+  readonly region: RefObject<HTMLDivElement | null>;
   readonly value: string;
   readonly error: WidgetMessageKey | undefined;
   readonly setValue: (value: string) => void;
-  readonly save: (event: SubmitEvent) => void;
+  readonly save: () => void;
+  readonly saveOnEnter: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly cancel: () => void;
 }
+
+const IME_PROCESS_KEY_CODE = 229;
+
 function useUpdateEntry({ connector, mode, busy, submit, close, unconfirmed }: Props): Entry {
-  const form = useRef<HTMLFormElement>(null);
+  const region = useRef<HTMLDivElement>(null);
   const [value, setValue] = useState(mode === "rename" ? connector.displayName : "");
   const [error, setError] = useState<WidgetMessageKey>();
   useEffect(() => {
-    form.current?.querySelector("input")?.focus();
+    region.current?.querySelector("input")?.focus();
   }, []);
-  const save = (event: SubmitEvent): void => {
-    event.preventDefault();
+  const save = (): void => {
     if (busy || unconfirmed) return;
     const valid = mode === "rename" ? isSafeAtlassianDisplayName(value.trim()) : value.length > 0;
     if (!valid) {
@@ -58,11 +61,23 @@ function useUpdateEntry({ connector, mode, busy, submit, close, unconfirmed }: P
     submit({ expectedGeneration: connector.generation ?? 1, ...patch });
   };
   return {
-    form,
+    region,
     value,
     setValue,
     error,
     save,
+    saveOnEnter: (event): void => {
+      // WebKit can dispatch the composition-confirming Enter after compositionend (#324380).
+      if (
+        event.key !== "Enter" ||
+        event.defaultPrevented ||
+        event.nativeEvent.isComposing ||
+        event.nativeEvent.keyCode === IME_PROCESS_KEY_CODE
+      )
+        return;
+      event.preventDefault();
+      save();
+    },
     cancel: (): void => {
       setValue("");
       close();
@@ -72,10 +87,13 @@ function useUpdateEntry({ connector, mode, busy, submit, close, unconfirmed }: P
 function UpdateButtons({
   mode,
   busy,
+  save,
   close,
   refresh,
   unconfirmed,
-}: Pick<Props, "mode" | "busy" | "close" | "refresh" | "unconfirmed">): ReactNode {
+}: Pick<Props, "mode" | "busy" | "close" | "refresh" | "unconfirmed"> & {
+  readonly save: () => void;
+}): ReactNode {
   const t = useTranslate();
   const saveLabel =
     mode === "rename" ? "atlassianConnectors.live.saveName" : "atlassianConnectors.live.saveToken";
@@ -85,7 +103,12 @@ function UpdateButtons({
     mode === "rename" ? "atlassianConnectors.live.saving" : "atlassianConnectors.verify.verifying";
   return (
     <div className="acx-actions">
-      <button type="submit" className="lk-btn lk-btn-primary" disabled={busy || unconfirmed}>
+      <button
+        type="button"
+        className="lk-btn lk-btn-primary"
+        disabled={busy || unconfirmed}
+        onClick={save}
+      >
         {t(busy ? busyLabel : saveLabel)}
       </button>
       {unconfirmed ? (
@@ -104,16 +127,17 @@ export function ConnectorUpdateForm(props: Props): ReactNode {
   const id = useId();
   const { mode, busy } = props;
   const entry = useUpdateEntry(props);
+  // Keep the masked API token outside a native browser password form.
   return (
-    <form
-      ref={entry.form}
+    <div
+      ref={entry.region}
       className="acx-form"
+      role="form"
       aria-label={t(
         mode === "rename"
           ? "atlassianConnectors.live.renameTitle"
           : "atlassianConnectors.live.rotateTitle",
       )}
-      onSubmit={entry.save}
     >
       {mode === "rotate" ? (
         <p className="acx-hint">{t("atlassianConnectors.live.rotateHint")}</p>
@@ -128,6 +152,7 @@ export function ConnectorUpdateForm(props: Props): ReactNode {
         type={mode === "rename" ? "text" : "password"}
         value={entry.value}
         onChange={entry.setValue}
+        onKeyDown={entry.saveOnEnter}
         errorKey={entry.error}
         disabled={busy}
         autoComplete="off"
@@ -135,10 +160,11 @@ export function ConnectorUpdateForm(props: Props): ReactNode {
       <UpdateButtons
         mode={mode}
         busy={busy}
+        save={entry.save}
         close={entry.cancel}
         refresh={props.refresh}
         unconfirmed={props.unconfirmed}
       />
-    </form>
+    </div>
   );
 }
