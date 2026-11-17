@@ -792,6 +792,15 @@ function isUsableConversationModel(model: ModelCapability): boolean {
   return isConversationEligibleModel(model) && model.conversationReady === true;
 }
 
+// A remembered project is sent only while its folder exists; otherwise the server picks an
+// available folder for the new chat (pickProjectPath in the server's chat handlers). Chat History
+// uses the same rule to know which folder its New request actually named.
+export function availableProjectPath(
+  project: ProjectWithAvailability | undefined,
+): string | undefined {
+  return project?.available === true ? project.path : undefined;
+}
+
 // Create-chat inputs preserve WHO chose the model (review finding on #3220): an AUTOMATIC
 // election (bootstrap default, fallback after a stale selection) is sent WITHOUT a modelId so
 // the server can elect from stored readiness when the preferred model is unavailable, while a
@@ -2620,12 +2629,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
     };
   }
   const created = await createDesktopChat(
-    createChatInput(
-      defaultModel,
-      true,
-      DEFAULT_CHAT_TITLE,
-      project?.available === true ? project.path : undefined,
-    ),
+    createChatInput(defaultModel, true, DEFAULT_CHAT_TITLE, availableProjectPath(project)),
   );
   notifyChatUpsert(created.chat);
   return {
@@ -4473,7 +4477,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       resetComposerForConversationSwitch();
       try {
         const trimmedTitle = title?.trim();
-        const targetPath = projectOverride?.path ?? state.activeProject?.path;
+        // A named project is the person's choice and the server refuses it honestly when its folder
+        // is gone. The remembered active project is only a default: once its folder was deleted or
+        // moved, sending it dead-ends every New chat (PATH_NOT_FOUND), so the server picks an
+        // available folder instead, exactly as the automatic first chat does.
+        const targetPath = projectOverride?.path ?? availableProjectPath(state.activeProject);
         const created = await createDesktopChat({
           ...createChatInput(
             modelId,

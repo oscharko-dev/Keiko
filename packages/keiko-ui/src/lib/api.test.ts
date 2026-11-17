@@ -12,6 +12,7 @@ import {
   applyWorkspaceReplace,
   applyGatewayVerifiedCapabilities,
   cloneRepository,
+  createDesktopChat,
   createProject,
   resetConfigRequestCache,
   resetModelRequestCache,
@@ -2639,6 +2640,27 @@ describe("fetchProjects", () => {
     await expect(fetchProjects()).resolves.toEqual({ projects: [{ path: "/repo/b" }] });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes the cached list once a chat was created, since the server may register its folder (#4455)", async (): Promise<void> => {
+    // The window that opens a new chat reads the project list right away; a cached list without
+    // the folder the server picked made that window miss its chat and close.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ projects: [{ path: "/repo/gone" }] }))
+      .mockResolvedValueOnce(jsonResponse({ chat: { id: "chat-new", projectPath: "/home" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ projects: [{ path: "/home" }, { path: "/repo/gone" }] }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchProjects()).resolves.toEqual({ projects: [{ path: "/repo/gone" }] });
+    await createDesktopChat({ title: "New chat" });
+
+    await expect(fetchProjects()).resolves.toEqual({
+      projects: [{ path: "/home" }, { path: "/repo/gone" }],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
 

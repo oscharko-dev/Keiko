@@ -1390,10 +1390,15 @@ export type CreateDesktopChatInput = DesktopChatCreateRequestWire;
 export async function createDesktopChat(
   input: CreateDesktopChatInput = {},
 ): Promise<DesktopChatBootstrapResponse> {
-  return fetchJson("/api/desktop/chats", {
+  const created = await fetchJson<DesktopChatBootstrapResponse>("/api/desktop/chats", {
     method: "POST",
     body: JSON.stringify(input),
   });
+  // The server registers the folder it created the chat in when it picked that folder or saw it for
+  // the first time. A cached list would hide that folder from the window opening the new chat, so
+  // the window could not find its chat and closed (#4455).
+  clearProjectCache();
+  return created;
 }
 
 export type SendDesktopChatInput = DesktopChatSendRequestWire;
