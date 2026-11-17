@@ -137,31 +137,43 @@ export function emitProvisionedConfig(
   );
 }
 
+// Every decision is recorded where it is made, exactly once: a failure leaves its line in the
+// catch that saw it, not one layer up where its cause is no longer in hand.
+function recordOutcome(
+  sink: SecurityLogSink | undefined,
+  outcome: ProvisionedConfigOutcome,
+  error?: unknown,
+): ProvisionedConfigResult {
+  const result: ProvisionedConfigResult = error === undefined ? { outcome } : { outcome, error };
+  emitProvisionedConfig(sink, result);
+  return result;
+}
+
 type ReadResult =
   | { readonly status: "ok"; readonly bytes: Buffer }
-  | { readonly status: "failed"; readonly result: ProvisionedConfigResult };
+  | { readonly status: "settled"; readonly result: ProvisionedConfigResult };
+
+function settledRead(result: ProvisionedConfigResult): ReadResult {
+  return { status: "settled", result };
+}
 
 function errorCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
   return typeof error.code === "string" ? error.code : undefined;
 }
 
-function failedRead(outcome: ProvisionedConfigOutcome, error?: unknown): ReadResult {
-  return { status: "failed", result: error === undefined ? { outcome } : { outcome, error } };
-}
-
-function classifyOpenError(error: unknown): ReadResult {
+function openFailureOutcome(error: unknown): ProvisionedConfigOutcome {
   const code = errorCode(error);
-  if (code === "ENOENT") return failedRead("absent");
+  if (code === "ENOENT") return "absent";
   // ELOOP is what O_NOFOLLOW answers for a link; a link names bytes outside the package folder.
-  if (code === "ELOOP") return failedRead("refused-link", error);
-  return failedRead("read-failed", error);
+  return code === "ELOOP" ? "refused-link" : "read-failed";
 }
 
-function readDescriptor(fd: number): ReadResult {
+function readDescriptor(fd: number, sink: SecurityLogSink | undefined): ReadResult {
   const stat = fstatSync(fd);
-  if (!stat.isFile()) return failedRead("invalid");
-  if (stat.size > PROVISIONED_CONFIG_MAX_BYTES) return failedRead("too-large");
+  if (!stat.isFile()) return settledRead(recordOutcome(sink, "invalid"));
+  if (stat.size > PROVISIONED_CONFIG_MAX_BYTES)
+    return settledRead(recordOutcome(sink, "too-large"));
   const bytes = Buffer.alloc(stat.size);
   let filled = 0;
   while (filled < bytes.byteLength) {
@@ -170,7 +182,9 @@ function readDescriptor(fd: number): ReadResult {
     filled += read;
   }
   // A file that changed size while it was read is not the file that was measured.
-  return filled === bytes.byteLength ? { status: "ok", bytes } : failedRead("read-failed");
+  return filled === bytes.byteLength
+    ? { status: "ok", bytes }
+    : settledRead(recordOutcome(sink, "read-failed"));
 }
 
 // O_NOFOLLOW and O_NONBLOCK do not exist on Windows, where the constant is undefined.
@@ -178,27 +192,40 @@ function openFlag(flag: number | undefined): number {
   return flag ?? 0;
 }
 
-function readProvisionedFile(path: string): ReadResult {
-  let fd: number;
+type OpenResult =
+  | { readonly status: "open"; readonly fd: number }
+  | { readonly status: "settled"; readonly result: ProvisionedConfigResult };
+
+function openProvisionedFile(path: string, sink: SecurityLogSink | undefined): OpenResult {
   try {
     // lstat first: a link must be refused on every platform, and anything that is not a regular
     // file must be refused before it is opened (opening a FIFO would block the start for good).
     const entry = lstatSync(path);
-    if (entry.isSymbolicLink()) return failedRead("refused-link");
-    if (!entry.isFile()) return failedRead("invalid");
-    fd = openSync(
-      path,
-      fsConstants.O_RDONLY | openFlag(fsConstants.O_NOFOLLOW) | openFlag(fsConstants.O_NONBLOCK),
-    );
+    if (entry.isSymbolicLink())
+      return { status: "settled", result: recordOutcome(sink, "refused-link") };
+    if (!entry.isFile()) return { status: "settled", result: recordOutcome(sink, "invalid") };
+    const flags =
+      fsConstants.O_RDONLY | openFlag(fsConstants.O_NOFOLLOW) | openFlag(fsConstants.O_NONBLOCK);
+    return { status: "open", fd: openSync(path, flags) };
   } catch (error) {
-    return classifyOpenError(error);
+    const outcome = openFailureOutcome(error);
+    // An absent file is the ordinary case of a package without a configuration, not a failure.
+    return {
+      status: "settled",
+      result: recordOutcome(sink, outcome, outcome === "absent" ? undefined : error),
+    };
   }
+}
+
+function readProvisionedFile(path: string, sink: SecurityLogSink | undefined): ReadResult {
+  const opened = openProvisionedFile(path, sink);
+  if (opened.status === "settled") return opened;
   try {
-    return readDescriptor(fd);
+    return readDescriptor(opened.fd, sink);
   } catch (error) {
-    return failedRead("read-failed", error);
+    return settledRead(recordOutcome(sink, "read-failed", error));
   } finally {
-    closeSync(fd);
+    closeSync(opened.fd);
   }
 }
 
@@ -213,18 +240,15 @@ function sha256Hex(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+// The marker is one line: the digest of the file adopted last. Anything else in its place (no
+// file, a directory, other text) means "nothing adopted yet", and the file is adopted again,
+// which is idempotent. A marker that exists but cannot be read is a state-directory fault and
+// surfaces as one.
 function adoptedSha256(markerPath: string): string | undefined {
-  try {
-    if (lstatSync(markerPath).size > MARKER_MAX_BYTES) return undefined;
-    const parsed: unknown = JSON.parse(readFileSync(markerPath, "utf8"));
-    if (typeof parsed !== "object" || parsed === null) return undefined;
-    const sha256: unknown = (parsed as { readonly sha256?: unknown }).sha256;
-    return typeof sha256 === "string" && SHA256_PATTERN.test(sha256) ? sha256 : undefined;
-  } catch {
-    // No readable marker means "nothing adopted yet": the file is adopted again, which is
-    // idempotent, and that adoption is the recorded event.
-    return undefined;
-  }
+  const entry = lstatSync(markerPath, { throwIfNoEntry: false });
+  if (entry === undefined || !entry.isFile() || entry.size > MARKER_MAX_BYTES) return undefined;
+  const text = readFileSync(markerPath, "utf8").trim();
+  return SHA256_PATTERN.test(text) ? text : undefined;
 }
 
 // The UI data directory is created private; one that already exists must be a real directory. A
@@ -262,22 +286,6 @@ function publishFile(temporary: string, path: string, sink: SecurityLogSink | un
   }
 }
 
-// The same loader the UI process reads its configuration with, on the exact bytes it will read.
-async function loadsAsGatewayConfig(candidate: string, env: EnvSource): Promise<boolean> {
-  const { loadConfigFromFile } = await loadModelGateway();
-  try {
-    loadConfigFromFile(candidate, env);
-    return true;
-  } catch {
-    // The closed outcome `invalid` is the record; the loader's message would quote file content.
-    return false;
-  }
-}
-
-function markerBytes(sha256: string): Buffer {
-  return Buffer.from(`${JSON.stringify({ schemaVersion: 1, sha256 }, null, 2)}\n`, "utf8");
-}
-
 function hasEnvValue(value: string | undefined): boolean {
   return value !== undefined && value.length > 0;
 }
@@ -291,79 +299,111 @@ export interface ProvisionedConfigInput {
   readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
-// Validates the candidate where it will live and publishes it only when it loads. Config first,
-// marker second: a crash in between adopts the same bytes again on the next start, while the
-// reverse order would record an adoption that never happened.
+// The candidate must load through the loader the UI process reads its configuration with, on the
+// exact bytes it will read. The loader's message would quote file content, so the record is the
+// closed outcome and the error's class.
+async function refusedAsInvalid(
+  candidate: string,
+  input: ProvisionedConfigInput,
+): Promise<ProvisionedConfigResult | undefined> {
+  const { loadConfigFromFile } = await loadModelGateway();
+  try {
+    loadConfigFromFile(candidate, input.env);
+    return undefined;
+  } catch (error) {
+    rmSync(candidate, { force: true });
+    return recordOutcome(input.securityLogSink, "invalid", error);
+  }
+}
+
+function writeCandidate(
+  input: ProvisionedConfigInput,
+  uiDataDir: string,
+  bytes: Buffer,
+): string | ProvisionedConfigResult {
+  try {
+    ensureUiDataDir(uiDataDir);
+    return writeTemporaryFile(join(uiDataDir, GATEWAY_CONFIG_FILENAME), bytes);
+  } catch (error) {
+    return recordOutcome(input.securityLogSink, "write-failed", error);
+  }
+}
+
+// Config first, marker second: a crash in between adopts the same bytes again on the next start,
+// while the reverse order would record an adoption that never happened.
+function publishAdoption(
+  input: ProvisionedConfigInput,
+  candidate: string,
+  uiDataDir: string,
+  sha256: string,
+): ProvisionedConfigResult {
+  const sink = input.securityLogSink;
+  try {
+    publishFile(candidate, join(uiDataDir, GATEWAY_CONFIG_FILENAME), sink);
+  } catch (error) {
+    return recordOutcome(sink, "write-failed", error);
+  }
+  const markerPath = join(uiDataDir, PROVISIONED_CONFIG_MARKER_FILENAME);
+  try {
+    publishFile(
+      writeTemporaryFile(markerPath, Buffer.from(`${sha256}\n`, "utf8")),
+      markerPath,
+      sink,
+    );
+    return recordOutcome(sink, "adopted");
+  } catch (error) {
+    // The configuration is in force; only the record of it is missing, so the next start adopts
+    // the same bytes again.
+    return recordOutcome(sink, "marker-failed", error);
+  }
+}
+
 async function replaceConfiguration(
   input: ProvisionedConfigInput,
   uiDataDir: string,
   bytes: Buffer,
-): Promise<ProvisionedConfigResult | undefined> {
-  let temporary: string;
-  try {
-    ensureUiDataDir(uiDataDir);
-    temporary = writeTemporaryFile(join(uiDataDir, GATEWAY_CONFIG_FILENAME), bytes);
-  } catch (error) {
-    return { outcome: "write-failed", error };
-  }
-  if (!(await loadsAsGatewayConfig(temporary, input.env))) {
-    rmSync(temporary, { force: true });
-    return { outcome: "invalid" };
-  }
-  try {
-    publishFile(temporary, join(uiDataDir, GATEWAY_CONFIG_FILENAME), input.securityLogSink);
-    return undefined;
-  } catch (error) {
-    return { outcome: "write-failed", error };
-  }
-}
-
-function recordAdoption(
-  input: ProvisionedConfigInput,
-  markerPath: string,
   sha256: string,
-): ProvisionedConfigResult {
-  try {
-    publishFile(
-      writeTemporaryFile(markerPath, markerBytes(sha256)),
-      markerPath,
-      input.securityLogSink,
-    );
-    return { outcome: "adopted" };
-  } catch (error) {
-    // The configuration is in force; only the record of it is missing, so the next start adopts
-    // the same bytes again.
-    return { outcome: "marker-failed", error };
-  }
-}
-
-async function decide(input: ProvisionedConfigInput): Promise<ProvisionedConfigResult> {
-  // An explicit config location belongs to whoever set it; the server reads that one, so a file
-  // adopted into the state directory would silently not be the configuration in force.
-  if (hasEnvValue(input.env.KEIKO_CONFIG_FILE) || hasEnvValue(input.env.KEIKO_UI_DATA_DIR)) {
-    return { outcome: "overridden" };
-  }
-  const read = readProvisionedFile(input.sourcePath);
-  if (read.status === "failed") return read.result;
-  const bytes = withoutByteOrderMark(read.bytes);
-  const uiDataDir = defaultUiDataDir(input.stateDir);
-  const markerPath = join(uiDataDir, PROVISIONED_CONFIG_MARKER_FILENAME);
-  const sha256 = sha256Hex(bytes);
-  if (adoptedSha256(markerPath) === sha256) return { outcome: "unchanged" };
-  if (input.running) return { outcome: "deferred-running" };
+): Promise<ProvisionedConfigResult> {
+  const candidate = writeCandidate(input, uiDataDir, bytes);
+  if (typeof candidate !== "string") return candidate;
   return (
-    (await replaceConfiguration(input, uiDataDir, bytes)) ??
-    recordAdoption(input, markerPath, sha256)
+    (await refusedAsInvalid(candidate, input)) ??
+    publishAdoption(input, candidate, uiDataDir, sha256)
   );
 }
 
-/** Adopts the provisioned configuration when it is new or changed, and records the outcome. */
+async function decide(input: ProvisionedConfigInput): Promise<ProvisionedConfigResult> {
+  const sink = input.securityLogSink;
+  // An explicit config location belongs to whoever set it; the server reads that one, so a file
+  // adopted into the state directory would silently not be the configuration in force.
+  if (hasEnvValue(input.env.KEIKO_CONFIG_FILE) || hasEnvValue(input.env.KEIKO_UI_DATA_DIR)) {
+    return recordOutcome(sink, "overridden");
+  }
+  const read = readProvisionedFile(input.sourcePath, sink);
+  if (read.status === "settled") return read.result;
+  const bytes = withoutByteOrderMark(read.bytes);
+  const uiDataDir = defaultUiDataDir(input.stateDir);
+  const sha256 = sha256Hex(bytes);
+  if (adoptedSha256(join(uiDataDir, PROVISIONED_CONFIG_MARKER_FILENAME)) === sha256) {
+    return recordOutcome(sink, "unchanged");
+  }
+  if (input.running) return recordOutcome(sink, "deferred-running");
+  return replaceConfiguration(input, uiDataDir, bytes, sha256);
+}
+
+/**
+ * Adopts the provisioned configuration when it is new or changed. Exactly one activity line
+ * records the outcome. It never throws into the start: a fault of the state directory that no
+ * branch foresaw is recorded as a failed save, and the current configuration stays in force.
+ */
 export async function adoptProvisionedConfig(
   input: ProvisionedConfigInput,
 ): Promise<ProvisionedConfigResult> {
-  const result = await decide(input);
-  emitProvisionedConfig(input.securityLogSink, result);
-  return result;
+  try {
+    return await decide(input);
+  } catch (error) {
+    return recordOutcome(input.securityLogSink, "write-failed", error);
+  }
 }
 
 const OUTCOME_MESSAGES: Readonly<Partial<Record<ProvisionedConfigOutcome, string>>> = {

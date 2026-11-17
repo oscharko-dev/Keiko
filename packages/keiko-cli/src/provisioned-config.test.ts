@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -67,7 +68,7 @@ function fixture(content: string | null = configText()): Fixture {
     source,
     stateDir,
     configPath: join(stateDir, "ui", "keiko.config.json"),
-    markerPath: join(stateDir, "ui", "provisioned-config.json"),
+    markerPath: join(stateDir, "ui", "provisioned-config.sha256"),
     events,
     adopt: async (overrides = {}): Promise<ProvisionedConfigOutcome> =>
       (
@@ -96,17 +97,17 @@ describe("adoption of a provisioned gateway configuration", () => {
     expect(await subject.adopt()).toBe("adopted");
 
     expect(readFileSync(subject.configPath, "utf8")).toBe(configText());
-    expect(JSON.parse(readFileSync(subject.markerPath, "utf8"))).toMatchObject({
-      schemaVersion: 1,
-      sha256: expect.stringMatching(/^[0-9a-f]{64}$/u) as unknown,
-    });
+    // The marker is the digest of the provisioned file and nothing else.
+    expect(readFileSync(subject.markerPath, "utf8")).toBe(
+      `${createHash("sha256").update(configText()).digest("hex")}\n`,
+    );
     if (process.platform !== "win32") {
       expect(statSync(subject.configPath).mode & 0o777).toBe(0o600);
       expect(statSync(subject.markerPath).mode & 0o777).toBe(0o600);
     }
     expect(readdirSync(join(subject.stateDir, "ui")).sort()).toEqual([
       "keiko.config.json",
-      "provisioned-config.json",
+      "provisioned-config.sha256",
     ]);
     expect(subject.events).toHaveLength(1);
     expect(lastLine(subject)).toMatchObject({ level: "info", outcome: "adopted" });
@@ -153,7 +154,7 @@ describe("adoption of a provisioned gateway configuration", () => {
   it("adopts again when the marker is unreadable", async () => {
     const subject = fixture();
     await subject.adopt();
-    writeFileSync(subject.markerPath, "not json");
+    writeFileSync(subject.markerPath, "not a digest");
 
     expect(await subject.adopt()).toBe("adopted");
     expect(await subject.adopt()).toBe("unchanged");

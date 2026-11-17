@@ -1182,7 +1182,7 @@ arrives as a new folder.
 
 **Provisioned configuration.** An administrator may place one `keiko.config.json` beside the start
 files. `keiko start --provisioned-config PATH` adopts it as the gateway configuration whenever its
-bytes differ from the file last adopted (a SHA-256 marker in `ui/provisioned-config.json`), after
+bytes differ from the file last adopted (a SHA-256 marker in `ui/provisioned-config.sha256`), after
 the "already running" check and before the UI process is spawned. A candidate must load through
 the gateway's own config loader before it replaces anything, so a mistyped file, or one that still
 refers to a key sealed on the administrator's computer, leaves the working configuration in place.

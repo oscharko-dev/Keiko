@@ -102,7 +102,7 @@ the state directory with private permissions, after it loaded through the gatewa
 and the D4 migration seals the key into the person's vault and rewrites the adopted copy without
 plaintext on that same start. D4 is best effort by design: when the vault cannot be written the
 plaintext stays in the adopted copy until a later start succeeds, and `keiko repair` reports it. The marker beside it
-(`ui/provisioned-config.json`) holds the SHA-256 of the adopted file and no content. The adoption
+(`ui/provisioned-config.sha256`) holds the SHA-256 of the adopted file and no content. The adoption
 logs the closed outcome and an error class, never the path or the bytes.
 
 The residual risk is the package itself: everyone who can read the file share, or a copy of the
