@@ -680,32 +680,34 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     // Fix source priority when the shared build is first requested; later registrations cannot
     // relabel or rebuild the already memoized graph.
     const preferredSourcePaths = [...this.preferredCodeIntelligenceSourcePaths];
-    this.codeIndexPromise ??= Promise.resolve().then(() => {
-      this.codeIndexBuildCount += 1;
-      const candidates = this.candidateSet();
-      this.codeIndexSourceCapacity = Math.max(
-        0,
-        this.limits.maxFilesScanned ?? candidates.files.length,
-      );
-      return buildCodeIntelligenceIndexFromCandidatesAsync(
-        this.scope,
-        this.limits,
-        this.executionFs,
-        candidates,
-        {
-          preferredSourcePaths,
-          executionControl: this.executionControl,
-          disableCache: true,
-          readSource: (path, maxBytes) => this.codeIntelligenceSource(path, maxBytes),
-          assertSourceAllowed: (path) => {
-            this.assertSourceAllowed(path);
+    this.codeIndexPromise ??= Promise.resolve()
+      .then(() => {
+        this.codeIndexBuildCount += 1;
+        const candidates = this.candidateSet();
+        this.codeIndexSourceCapacity = Math.max(
+          0,
+          this.limits.maxFilesScanned ?? candidates.files.length,
+        );
+        return buildCodeIntelligenceIndexFromCandidatesAsync(
+          this.scope,
+          this.limits,
+          this.executionFs,
+          candidates,
+          {
+            preferredSourcePaths,
+            executionControl: this.executionControl,
+            disableCache: true,
+            readSource: (path, maxBytes) => this.codeIntelligenceSource(path, maxBytes),
+            assertSourceAllowed: (path) => {
+              this.assertSourceAllowed(path);
+            },
           },
-        },
-      ).then((index) => {
+        );
+      })
+      .then((index) => {
         if (index.parsedSourceBudgetReached === true) this.codeIndexSourceBudgetReachedCount += 1;
         return index;
       });
-    });
     return this.codeIndexPromise;
   }
 

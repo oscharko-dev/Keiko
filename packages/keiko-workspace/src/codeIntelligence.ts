@@ -5933,7 +5933,7 @@ function* codeIntelligenceBuildSteps(
     filesPartiallyIndexed: partiallyIndexed,
     candidateLimitReached:
       boundedInputs.truncated || parsedSources.truncated || buildState.truncated,
-    ...(parsedSources.truncated ? { parsedSourceBudgetReached: true } : {}),
+    parsedSourceBudgetReached: parsedSources.truncated,
     parserCoverage: collectParserCoverage(files),
   };
   if (

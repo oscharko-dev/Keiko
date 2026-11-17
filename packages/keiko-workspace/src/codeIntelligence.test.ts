@@ -949,7 +949,7 @@ describe("buildCodeIntelligenceIndex", () => {
 
     expect(index.filesIndexed).toBe(2);
     expect(index.candidateLimitReached).toBe(false);
-    expect(index.parsedSourceBudgetReached).toBeUndefined();
+    expect(index.parsedSourceBudgetReached).toBe(false);
   });
 
   it("reserves resolver metadata inside the structural file ceiling", () => {
