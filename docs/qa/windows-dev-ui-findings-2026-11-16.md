@@ -176,14 +176,14 @@ Record the fixture contents, expected file diff, terminal state, remote SHAs, se
 model and citation target before each applicable journey. Record blocked or partial
 results with the observed reason.
 
-| Surface          | Expected result / native proof                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Jira Pod         | With a verified QA Pod, all three starters are selectable. Disconnecting disables them and verified reconnection enables them again. The saved template revision survives reopening and restart without a stale **Checking against Jira** label. The native Jira issue count is equal before and after the starter and denied-change journeys. The separate approved QA write produces exactly one intended issue or update with matching fields and receipt. |
-| Coding Workbench | An admitted task reaches `succeeded` with exactly the declared fixture diff. The named terminal state and native `git diff` agree with Changes and History. A denied edit preserves the starting bytes. Verify runtime refusal by the exact visible message and Activity Log reason. Refused verification shows **Not run** with zero started test processes (#4404, #4068).                                                                                  |
-| Git              | Local `HEAD` and the upstream tracking ref start at H0, with the controlled remote at H2. Fetch leaves `HEAD` at H0 and advances upstream to H2. Pull advances both to H2 and the local files match H2. Record the actual SHAs before and after each action. The UI ahead/behind counts of 0/2 and 0/0 match `git rev-list --left-right --count HEAD...@{upstream}`.                                                                                          |
-| Chat             | One short response arrives on the explicitly selected model. The same Chat, model and exact saved unsent draft return after reload. The provider or gateway request count is equal before and after transcript restoration.                                                                                                                                                                                                                                   |
-| Knowledge Pod    | The index contains the two declared fixtures, one PDF and one text file, each with a positive chunk count and zero failed documents. The answer matches their known facts and cites the declared fixtures from the selected Pod.                                                                                                                                                                                                                              |
-| Citation         | PDF activation opens the declared file and page in the viewer, with the expected title and content. A locatable passage yields `client.citation.highlighted` with `outcome: framed`. A text-file reference opens its complete filename and exact contents in Editor, with `client.citation.activated` reporting `outcome: opened`.                                                                                                                            |
+| Surface          | Expected result / native proof                                                                                                                                                                                                                                                                                                                                                                                                                                | Verdict                                                                                                                                                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Jira Pod         | With a verified QA Pod, all three starters are selectable. Disconnecting disables them and verified reconnection enables them again. The saved template revision survives reopening and restart without a stale **Checking against Jira** label. The native Jira issue count is equal before and after the starter and denied-change journeys. The separate approved QA write produces exactly one intended issue or update with matching fields and receipt. | Partial. All three starters opened, and report downloads contain the same three issues after a BFF restart. Saved revision and disconnect/reconnect checks are pending. The lab Jira license prevents an approved write.             |
+| Coding Workbench | An admitted task reaches `succeeded` with exactly the declared fixture diff. The named terminal state and native `git diff` agree with Changes and History. A denied edit preserves the starting bytes. Verify runtime refusal by the exact visible message and Activity Log reason. Refused verification shows **Not run** with zero started test processes (#4404, #4068).                                                                                  | Partial. The admitted tiny read tasks completed without changes and the denied edit left no file. Pause, resume, stop and the mapped-runtime notices are verified. The approved write and actual failing-test repair remain pending. |
+| Git              | Local `HEAD` and the upstream tracking ref start at H0, with the controlled remote at H2. Fetch leaves `HEAD` at H0 and advances upstream to H2. Pull advances both to H2 and the local files match H2. Record the actual SHAs before and after each action. The UI ahead/behind counts of 0/2 and 0/0 match `git rev-list --left-right --count HEAD...@{upstream}`.                                                                                          | Passed. Native refs and the displayed 0/2 and 0/0 counts match after Fetch and Pull. The divergent Fetch also preserved both refs.                                                                                                   |
+| Chat             | One short response arrives on the explicitly selected model. The same Chat, model and exact saved unsent draft return after reload. The provider or gateway request count is equal before and after transcript restoration.                                                                                                                                                                                                                                   | Passed. The explicitly selected Gemma model replied, and the same Chat, selection and unsent draft returned. Gateway starts stayed at four across reload.                                                                            |
+| Knowledge Pod    | The index contains the two declared fixtures, one PDF and one text file, each with a positive chunk count and zero failed documents. The answer matches their known facts and cites the declared fixtures from the selected Pod.                                                                                                                                                                                                                              | Passed. Both original fixtures were indexed with four chunks and no failures. Gemma returned the known facts and cited both fixtures.                                                                                                |
+| Citation         | PDF activation opens the declared file and page in the viewer, with the expected title and content. A locatable passage yields `client.citation.highlighted` with `outcome: framed`. A text-file reference opens its complete filename and exact contents in Editor, with `client.citation.activated` reporting `outcome: opened`.                                                                                                                            | Passed. The PDF opened at page 2 with a framed passage. The text citation opened the correct source folder and file contents. A same-length change was refused without opening an Editor.                                            |
 
 ### Coding Workbench
 
@@ -247,8 +247,10 @@ In the released Windows checkout, Verify connection went from **Verifying** to
 **Connection verified**. The bound Chat reported the three expected `Task` issues, all
 `To Do`. Its tool trail showed **Complete: 3 issues read** and offered both exports.
 Both actual files contained exactly the same three issue keys. Downloading again after
-an ordinary Edge reload produced byte-identical Markdown and CSV. All three Jira
-starters opened editable drafts with their own Metadata panel. Discard confirmation
+an ordinary Edge reload produced byte-identical Markdown and CSV. The same report
+also produced byte-identical 1,314-byte Markdown and 549-byte CSV files after a full
+BFF restart on candidate `4ce796de0`. All three Jira starters opened editable drafts
+with their own Metadata panel. Discard confirmation
 protected unsaved drafts on switching. The isolated Jira instance's expired evaluation
 license limits this block to reads and draft presentation.
 
@@ -340,6 +342,14 @@ where the file was absent. The actual source still existed in the selected Pod. 
 Editor showed a read-surface refusal despite the activation event's `opened` outcome.
 This mismatch is tracked in [#4443](https://github.com/oscharko-dev/Keiko/issues/4443).
 
+On Windows candidate `1ae968aea`, the same stored answer offered **Open in editor**
+under Knowledge evidence. Editor showed the original folder, complete filename and
+`Juniper-151-Dawn` from the visible 60-byte file. A same-length source change returned
+the refusal, and the Editor window count and identities were unchanged. The two
+server decisions and their two client results matched by correlation ID. The
+original source was restored. This used the existing answer without another model
+request.
+
 ### UI and UX checks for every surface
 
 Repeat key actions in a normal desktop window and a narrow window. Increase the
@@ -347,8 +357,9 @@ workspace zoom and verify that every affected control and recovery action stays
 reachable. Check keyboard navigation, visible focus and focus return after dialogs,
 and status text during waiting and failure. Inspect German and English labels and
 keep a screenshot for a confirmed visual failure.
-A journey passes when the visible result and its corresponding stored or native effect
-agree. Record runtime, provider and permission restrictions with their observed reason.
+A journey passes only when its visible result matches the expected result recorded in
+the matrix above and its stored or native proof matches that same expectation. Record
+runtime, provider and permission restrictions with their observed reason.
 
 Record reproduced failures as User Findings with the Windows source revision, expected
 behavior, visible outcome and body-free diagnostics. Linked fixes carry their focused
