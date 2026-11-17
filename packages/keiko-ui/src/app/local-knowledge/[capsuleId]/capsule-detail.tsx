@@ -1306,7 +1306,7 @@ function JobRow({
     >
       <span
         className={
-          withFileErrors ? `lkd-job-status ${detailStyles.jobWithFileErrors}` : "lkd-job-status"
+          withFileErrors ? `lkd-job-status ${detailStyles.cmpJobWithFileErrors}` : "lkd-job-status"
         }
         data-status={withFileErrors ? undefined : job.status}
       >

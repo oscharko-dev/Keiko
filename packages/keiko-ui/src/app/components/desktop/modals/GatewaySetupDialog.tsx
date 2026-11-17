@@ -3149,7 +3149,7 @@ export function GatewaySetupDialog({
     };
     dialog.addEventListener("compositionend", onCompositionEnd);
     dialog.addEventListener("keydown", onDialogKeyDown);
-    return () => {
+    return (): void => {
       dialog.removeEventListener("compositionend", onCompositionEnd);
       dialog.removeEventListener("keydown", onDialogKeyDown);
       if (compositionResetFrame !== undefined) window.cancelAnimationFrame(compositionResetFrame);
