@@ -450,3 +450,20 @@ runtime, provider and permission restrictions with their observed reason.
 Record reproduced failures as User Findings with the Windows source revision, expected
 behavior, visible outcome and body-free diagnostics. Linked fixes carry their focused
 test and review evidence. Installed Windows Workbench qualification is tracked in [#4068](https://github.com/oscharko-dev/Keiko/issues/4068).
+
+## Follow-up on 2026-11-17
+
+The Windows 11 ARM64 guest used eight vCPUs, 16 GiB, emulated x64 Node 26.13.1 and Edge
+157.0.4341.60. Its clean `dev` checkout at `d72d6db6` matched the reviewed PR #4427 tree.
+[Post-merge CI](https://github.com/oscharko-dev/Keiko/actions/runs/44026708864) passed.
+
+- **Dev launcher ([#4447](https://github.com/oscharko-dev/Keiko/issues/4447)).** A second ordinary
+  `dev:start` reused the healthy runner and exited 0, leaving an empty startup lock. After the repair,
+  two more launches on `f32c6c167` each exited 0, kept the listener and PID record, and released the lock.
+- **Jira Skills.** Edge saved the edited Task template as revision 2. Removing the sole verified Jira
+  Pod in another tab disabled all three starters. The saved template and the open Epic draft remained
+  visible, and Jira received zero write requests. A first reconnection returned an authentication
+  failure while the fixture token passed the direct Jira check. Reconnection remains under test.
+- **Native Windows handoff.** The published 1.5.1 archive matched its checksum and embedded runtime
+  activation digest. It reports `evaluation-unqualified`. The Intel/AMD Workbench and installed Jira
+  checks are tracked together in [#4449](https://github.com/oscharko-dev/Keiko/issues/4449).
