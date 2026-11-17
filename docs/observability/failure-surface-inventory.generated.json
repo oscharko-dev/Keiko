@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d43836175a06b957433b6be0137efc493f426b2724a4b02910ff30a3919c0cee"
+    "catalogDigest": "95cdb22f17e397bde9de91e9365030ddf440d6ff05b5b27699c972e79c2db35f"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 706,
-    "proofCount": 729,
-    "resolvedProofCount": 729,
-    "failureClassCount": 403,
+    "operationCount": 707,
+    "proofCount": 730,
+    "resolvedProofCount": 730,
+    "failureClassCount": 404,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -611,6 +611,7 @@
         "indexing.source.started",
         "indexing.start.accepted",
         "indexing.start.refused",
+        "knowledge.citation.editor-target",
         "knowledge.documents.operation",
         "knowledge.log.sink-failed",
         "knowledge.requirement-trace.applied",
@@ -900,6 +901,7 @@
     }
   ],
   "failureClassScenarios": {
+    "knowledge-citation-editor-target": ["memory-knowledge.dependency-failure"],
     "mcp-authorization": ["tools-workflows.dependency-failure"],
     "chat-tool-transcript": ["bff.dependency-failure"],
     "chat-tool-authority": ["editor-delivery.dependency-failure"],
@@ -2820,6 +2822,9 @@
     ],
     "jira.template.metadata.line": [
       "packages/keiko-server/src/atlassian/jiraCreateTemplateMetadata.test.ts"
+    ],
+    "knowledge.citation.editor-target.line": [
+      "packages/keiko-server/src/knowledge-citation-editor-activity.test.ts"
     ],
     "knowledge.documents.operation.line": [
       "packages/keiko-server/src/chat-tool-turn-coverage.test.ts",

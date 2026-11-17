@@ -3435,6 +3435,9 @@ export type {
 } from "./local-knowledge-schema-validation.js";
 export type {
   CurrentPdfCitationPreviewSnapshot,
+  KnowledgeCitationEditorTargetRequest,
+  KnowledgeCitationEditorTargetReason,
+  KnowledgeCitationEditorTargetResponse,
   PdfCitationPreviewAnchorQuality,
   PdfCitationPreviewAuthorizationResponse,
   PdfCitationPreviewAuthorized,

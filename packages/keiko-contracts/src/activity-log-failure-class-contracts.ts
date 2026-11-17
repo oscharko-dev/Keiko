@@ -23,6 +23,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "knowledge-citation-editor-target",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: ["knowledge.citation.editor-target"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["knowledge.citation.editor-target"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["knowledge.citation.editor-target"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["knowledge.citation.editor-target"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "mcp-authorization",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

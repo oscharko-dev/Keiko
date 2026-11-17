@@ -496,6 +496,7 @@
   "jira.operation.schemes": "bff",
   "jira.template.admission": "bff",
   "jira.template.metadata": "bff",
+  "knowledge.citation.editor-target": "memory-knowledge",
   "knowledge.documents.operation": "memory-knowledge",
   "knowledge.log.sink-failed": "memory-knowledge",
   "knowledge.requirement-trace.applied": "memory-knowledge",

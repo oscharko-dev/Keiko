@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d43836175a06b957433b6be0137efc493f426b2724a4b02910ff30a3919c0cee",
+    "catalogDigest": "95cdb22f17e397bde9de91e9365030ddf440d6ff05b5b27699c972e79c2db35f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -37048,6 +37048,76 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "knowledge.citation.editor-target",
+        "category": "search",
+        "owner": "keiko-server",
+        "emitter": "knowledge-citation-editor-activity.logKnowledgeCitationEditorTarget",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["authorized", "rejected"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "assistant-message-not-found",
+              "assistant-message-chat-mismatch",
+              "grounded-answer-missing",
+              "not-local-knowledge-citation",
+              "citation-not-found",
+              "stable-id-mismatch",
+              "preview-metadata-missing",
+              "lineage-missing",
+              "lineage-mismatch",
+              "document-not-pdf",
+              "document-not-ready",
+              "document-content-mismatch",
+              "page-provenance-missing",
+              "source-modified",
+              "source-needs-rebind",
+              "source-dehydrated",
+              "source-unavailable",
+              "preview-source-missing",
+              "preview-source-unreadable",
+              "preview-source-oversized",
+              "editor-source-unsupported",
+              "editor-scope-unsupported",
+              "editor-read-refused"
+            ]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "diagnosticWhen": [
+          {
+            "field": "outcome",
+            "values": ["rejected"]
+          }
+        ],
+        "analyzerProjection": "timeline",
+        "failureClasses": ["knowledge-citation-editor-target"],
+        "proofIds": ["knowledge.citation.editor-target.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/knowledge-citation-editor-activity.ts:9",
+        "emitterSites": ["packages/keiko-server/src/knowledge-citation-editor-activity.ts:46"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "knowledge.documents.operation",
         "category": "search",
         "owner": "keiko-server",
@@ -51514,6 +51584,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "knowledge-citation-editor-target",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": ["knowledge.citation.editor-target"],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["knowledge.citation.editor-target"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["knowledge.citation.editor-target"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["knowledge.citation.editor-target"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "mcp-authorization",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -63297,8 +63388,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 403,
-      "completeClassCount": 403,
+      "supportedClassCount": 404,
+      "completeClassCount": 404,
       "completeness": "complete",
       "classes": [
         {
@@ -102856,6 +102947,62 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "knowledge-citation-editor-target",
+          "requirementContract": "knowledge-citation-editor-target",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["end"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": ["knowledge.citation.editor-target"],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "knowledge.citation.editor-target",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["knowledge.citation.editor-target"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "knowledge.citation.editor-target",
+              "owner": "keiko-server",
+              "category": "search",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["knowledge.citation.editor-target.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "knowledge-citation-reconciliation",
           "requirementContract": "knowledge-citation-reconciliation",
           "productSurfaces": ["keiko-server"],
@@ -123992,6 +124139,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "knowledge.citation.editor-target",
+      "category": "search",
+      "site": "packages/keiko-server/src/knowledge-citation-editor-activity.ts:12",
+      "package": "keiko-server"
+    },
+    {
       "op": "knowledge.documents",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/knowledge-tool-execution.ts:105",
@@ -125919,6 +126072,7 @@
     "jira.template.admission",
     "jira.template.metadata",
     "jump",
+    "knowledge.citation.editor-target",
     "knowledge.documents",
     "knowledge.documents.operation",
     "knowledge.log.sink-failed",

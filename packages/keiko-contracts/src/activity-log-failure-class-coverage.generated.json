@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 403,
-  "completeClassCount": 403,
+  "supportedClassCount": 404,
+  "completeClassCount": 404,
   "completeness": "complete",
   "classes": [
     {
@@ -39196,6 +39196,62 @@
             "causeChain": false
           },
           "proofIds": ["process.started.runtime", "process.started.configuration"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "knowledge-citation-editor-target",
+      "requirementContract": "knowledge-citation-editor-target",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["end"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": ["knowledge.citation.editor-target"],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "knowledge.citation.editor-target",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["knowledge.citation.editor-target"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "knowledge.citation.editor-target",
+          "owner": "keiko-server",
+          "category": "search",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["knowledge.citation.editor-target.line"],
           "replayReferences": [],
           "missingObligations": []
         }

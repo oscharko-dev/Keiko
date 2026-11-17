@@ -365,6 +365,7 @@ import {
   handleClosePdfCitationPreviewSession,
   handleGetPdfCitationPreviewDocument,
   handleGetPdfCitationPreviewStatus,
+  handleKnowledgeCitationEditorTarget,
   handleOpenPdfCitationPreviewSession,
 } from "./local-knowledge-preview-handlers.js";
 import {
@@ -1362,6 +1363,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/local-knowledge/citation-preview/authorize",
     handler: handleAuthorizePdfCitationPreview,
+  },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/citation-preview/editor-target",
+    handler: handleKnowledgeCitationEditorTarget,
   },
   {
     method: "POST",
