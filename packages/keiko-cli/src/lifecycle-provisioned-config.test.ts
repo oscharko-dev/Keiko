@@ -41,7 +41,12 @@ async function start(
   const code = await runLifecycleCli(
     "start",
     args,
-    { out: (text) => void (out += text), err: () => undefined },
+    {
+      out: (text): void => {
+        out += text;
+      },
+      err: (): void => undefined,
+    },
     {},
     {
       cwd: root,

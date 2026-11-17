@@ -575,51 +575,63 @@ async function launchInPlace(
   );
 }
 
-async function launchPortable(
+type PortableLaunchDeps = Pick<
+  PortableRuntimeDeps,
+  | "activateMacosRuntimeFn"
+  | "now"
+  | "spawnFn"
+  | "lifecycleFn"
+  | "recoverNormalStartupFn"
+  | "encodeRecoveredLaunchFn"
+  | "platform"
+>;
+
+async function launchThroughManagedInstall(
   options: PortableCliOptions,
   io: CliIo,
   env: EnvSource,
-  deps: Pick<
-    PortableRuntimeDeps,
-    | "activateMacosRuntimeFn"
-    | "now"
-    | "spawnFn"
-    | "lifecycleFn"
-    | "recoverNormalStartupFn"
-    | "encodeRecoveredLaunchFn"
-    | "platform"
-  >,
+  deps: PortableLaunchDeps,
 ): Promise<number> {
-  try {
-    if (options.inPlace) return await launchInPlace(options, io, env, deps);
-    const recovered = await recoverBeforePortableLaunch(options, io, env, deps);
-    if (recovered !== undefined) return recovered;
-    const source = validatePortableRoot(
-      options.target,
-      options.portableRoot,
-      options.securityLogSink,
-    );
-    if (sameRealPath(source.layout.installRoot, options.managedRoot)) {
-      return await setupAndLaunchManaged(options, io, env, deps);
-    }
-    const attestedKnownManaged = attestedKnownManagedInstall(options, env);
-    if (attestedKnownManaged !== undefined) {
-      return await upgradeManagedFromClickedPackage(
-        options,
-        source,
-        attestedKnownManaged,
-        io,
-        env,
-        deps,
-      );
-    }
-    const recoveryRoot = failedPortableRecoveryRoot(options, env);
-    return setupDownloadedPortable(
-      recoveryRoot === undefined ? options : { ...options, managedRoot: recoveryRoot },
+  const recovered = await recoverBeforePortableLaunch(options, io, env, deps);
+  if (recovered !== undefined) return recovered;
+  const source = validatePortableRoot(
+    options.target,
+    options.portableRoot,
+    options.securityLogSink,
+  );
+  if (sameRealPath(source.layout.installRoot, options.managedRoot)) {
+    return await setupAndLaunchManaged(options, io, env, deps);
+  }
+  const attestedKnownManaged = attestedKnownManagedInstall(options, env);
+  if (attestedKnownManaged !== undefined) {
+    return await upgradeManagedFromClickedPackage(
+      options,
+      source,
+      attestedKnownManaged,
       io,
       env,
       deps,
     );
+  }
+  const recoveryRoot = failedPortableRecoveryRoot(options, env);
+  return setupDownloadedPortable(
+    recoveryRoot === undefined ? options : { ...options, managedRoot: recoveryRoot },
+    io,
+    env,
+    deps,
+  );
+}
+
+async function launchPortable(
+  options: PortableCliOptions,
+  io: CliIo,
+  env: EnvSource,
+  deps: PortableLaunchDeps,
+): Promise<number> {
+  try {
+    return options.inPlace
+      ? await launchInPlace(options, io, env, deps)
+      : await launchThroughManagedInstall(options, io, env, deps);
   } catch (error) {
     io.err(`keiko portable launch: ${error instanceof Error ? error.message : "unavailable"}\n`);
     options.launchFailure?.record(failureReasonOf(error, "launch-error"));

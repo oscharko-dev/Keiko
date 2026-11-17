@@ -119,7 +119,14 @@ async function launch(
       stateDir,
       ...extraArgs,
     ],
-    { out: (text) => void (out += text), err: (text) => void (err += text) },
+    {
+      out: (text): void => {
+        out += text;
+      },
+      err: (text): void => {
+        err += text;
+      },
+    },
     env,
     {
       cwd: home,
@@ -186,7 +193,12 @@ describe.each(["macos-arm64", "windows-x64"] as const)(
 
       const code = await runPortableCli(
         ["launch", "--target", target, "--portable-root", payload, "--in-place"],
-        { out: () => undefined, err: (text) => void (err += text) },
+        {
+          out: (): void => undefined,
+          err: (text): void => {
+            err += text;
+          },
+        },
         {},
         {
           cwd: home,
