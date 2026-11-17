@@ -172,6 +172,11 @@ passes. Only the three records were kept; its fallback-font captures were discar
 committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
 changed. This remains updater fixture evidence.
 
+The Knowledge text citation repair (#4443) changed `api.ts` and both optional catalogs. On
+2026-11-17 (UTC) the original nine Chromium cases passed in 1.8 minutes in an isolated Linux
+arm64 container with Node 26.13.1. The three JSON records now bind the updated source hashes.
+The 14 committed screenshots, updater assertions and harness inputs retain their existing values.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -751,3 +756,28 @@ updater cases passed again in the Linux arm64 gates container with the locked de
 Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The freshness gate passed. The three
 producer-generated records bind the updated source digests and generation time. The fourteen
 captures retain the typography of their original renderer.
+
+### Gateway credential guidance (#4441)
+
+The English and German gateway credential guidance changes the optional catalogs. The original
+nine updater cases passed in the Linux arm64 gates container with Node 26.13.1 and
+`KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three records use that run's source digests and generation
+time where recorded. The captures retain their original typography.
+
+### Git signing recovery (#4444)
+
+All nine original updater cases passed again in the Linux arm64 gates container with Node 26.13.1
+and `KEIKO_WRITE_TRACKED_EVIDENCE=1` after the final English and German signing-tool guidance.
+The three records bind those catalog digests. The committed captures retain the typography of their
+original renderer.
+
+### Git conflict recovery (#4445)
+
+The nine original updater cases passed again in the Linux arm64 gates container with Node 26.13.1
+and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three records bind the conflict recovery strings in
+both optional catalogs. The committed captures retain their original renderer's typography.
+
+The review of #4444 and #4445 aligned the German conflict and signing instructions with the
+formal address used by Git Sync. All nine original updater cases passed again in the same Linux
+environment. The three records incorporate the new German catalog digest and the generation time
+where recorded.

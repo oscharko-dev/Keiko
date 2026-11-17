@@ -29,6 +29,7 @@ export interface ComposerShellProps {
   readonly id?: string | undefined;
   readonly ariaLabel?: string | undefined;
   readonly ariaControls?: string | undefined;
+  readonly ariaDescribedBy?: string | undefined;
   readonly disabled?: boolean | undefined;
   readonly maxLength?: number | undefined;
   readonly aboveInput?: ReactNode;
@@ -73,6 +74,7 @@ export function ComposerShell({
   id,
   ariaLabel,
   ariaControls,
+  ariaDescribedBy,
   disabled,
   maxLength,
   aboveInput,
@@ -94,6 +96,7 @@ export function ComposerShell({
               value={value}
               aria-label={ariaLabel}
               aria-controls={ariaControls}
+              aria-describedby={ariaDescribedBy}
               placeholder={placeholder}
               disabled={disabled}
               maxLength={maxLength}

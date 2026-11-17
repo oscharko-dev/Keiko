@@ -53,7 +53,7 @@ import type { WindowCfgValue } from "../../../windows/types";
 import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
-import { MutationOutcome } from "./git-client-ui";
+import { hasRepositoryConflicts, MutationOutcome } from "./git-client-ui";
 import {
   reportGitClientOperationDiagnostic,
   reportGitClientRetryAttempt,
@@ -459,14 +459,16 @@ function blockedOutcome(message: string): SyncOutcomeView {
   return { message, failed: false };
 }
 
-function recordSyncOutcomePresentation(): void {
+function recordGitPresentation(
+  stageName: "git sync outcome" | "git conflict controls blocked",
+): void {
   const correlationId = newClientCorrelationId();
-  const stage = { stage: "git sync outcome", ordinal: 1 } as const;
-  reportClientDiagnostic("Git sync outcome presentation started.", {
+  const stage = { stage: stageName, ordinal: 1 } as const;
+  reportClientDiagnostic("Git presentation started.", {
     correlationId,
     stageReport: { ...stage, phase: "started" },
   });
-  reportClientDiagnostic("Git sync outcome presentation settled.", {
+  reportClientDiagnostic("Git presentation settled.", {
     correlationId,
     stageReport: { ...stage, phase: "settled", durationMs: 0 },
   });
@@ -483,7 +485,7 @@ function completeSync(
   if (context.sequenceRef.current !== context.sequence) return;
   context.setBusy(false);
   context.setOutcome(outcome);
-  recordSyncOutcomePresentation();
+  recordGitPresentation("git sync outcome");
 }
 
 function failSync(context: SyncExecutionContext, error: unknown): void {
@@ -751,8 +753,9 @@ function syncViewForDisplay(
   syncView: SyncView,
   summaryError: string | null,
   t: I18nTranslate,
+  hasActiveConflicts: boolean,
 ): SyncView {
-  if (summaryError === null) return syncView;
+  if (summaryError === null || hasActiveConflicts) return syncView;
   return {
     action: "blocked",
     label: t("gitClientWindow.sync.unavailable"),
@@ -1289,6 +1292,7 @@ export function GitClientWindow({
   const [historyLimitReached, setHistoryLimitReached] = useState(false);
   const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
   const [statusRevision, setStatusRevision] = useState(0);
+  const [commitStatusRevision, setCommitStatusRevision] = useState(0);
   const [tab, setTab] = useState<ChangesTab>("changes");
   const [selectedChangePath, setSelectedChangePath] = useState<string | null>(null);
   const [revealRequestId, setRevealRequestId] = useState(0);
@@ -1342,13 +1346,15 @@ export function GitClientWindow({
   // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
   const redemptions = useCodingAppSessionRedemptions();
-  // A status read prunes a selected change that no longer exists (e.g. after a commit), so the diff
-  // pane returns to its empty state.
-  const pruneSelectedChange = useCallback((response: GitRepositoryStatusResponse): void => {
+  const commitPreviewRevision = statusRevision + redemptions + commitStatusRevision;
+  // A settled status read also invalidates commit evidence. Manual retry or browser re-pair can
+  // bring in or clear a conflict without a local Git mutation.
+  const onStatusLoaded = useCallback((response: GitRepositoryStatusResponse): void => {
+    setCommitStatusRevision((revision): number => revision + 1);
     setSelectedChangePath(selectedChangeResolver(response.changes, setDiffScope));
   }, []);
   const readInput = { client, selectedPath, optionalT, redemptions, statusRevision };
-  const statusRead = useGitRead({ ...readInput, spec: STATUS_READ, onLoaded: pruneSelectedChange });
+  const statusRead = useGitRead({ ...readInput, spec: STATUS_READ, onLoaded: onStatusLoaded });
   // #3651: a failed branch read must not be silently mapped to "no branches" — that disabled both
   // switching and New branch with no explanation and no retry.
   const branchesRead = useGitRead({ ...readInput, spec: BRANCHES_READ });
@@ -1768,6 +1774,15 @@ export function GitClientWindow({
     history,
   });
   const activeStatus = active.status;
+  const hasActiveConflicts = hasRepositoryConflicts(activeStatus);
+  const reportedConflictRoot = useRef<string | null>(null);
+  useEffect((): void => {
+    const conflictRoot = hasActiveConflicts ? selectedPath : null;
+    if (conflictRoot !== null && reportedConflictRoot.current !== conflictRoot) {
+      recordGitPresentation("git conflict controls blocked");
+    }
+    reportedConflictRoot.current = conflictRoot;
+  }, [hasActiveConflicts, selectedPath]);
   const activeBranches = active.branches;
   const activeSummary = active.summary;
   const activeRemotes = active.remotes;
@@ -1817,7 +1832,7 @@ export function GitClientWindow({
 
   const stageFile = useCallback(
     (change: GitChangedFile): void => {
-      if (selectedPath === null) return;
+      if (selectedPath === null || hasActiveConflicts) return;
       staging.runMutation(() =>
         client.stage({
           projectId: selectedPath,
@@ -1826,21 +1841,27 @@ export function GitClientWindow({
         }),
       );
     },
-    [client, selectedPath, staging],
+    [client, hasActiveConflicts, selectedPath, staging],
   );
 
   const unstageFile = useCallback(
     (change: GitChangedFile): void => {
-      if (selectedPath === null) return;
+      if (selectedPath === null || hasActiveConflicts) return;
       staging.runMutation(() =>
         client.unstage({ projectId: selectedPath, pathspecs: [change.path] }),
       );
     },
-    [client, selectedPath, staging],
+    [client, hasActiveConflicts, selectedPath, staging],
   );
 
   const stageAll = useCallback((): void => {
-    if (selectedPath === null || activeStatus === null || activeStatus.truncated) return;
+    if (
+      selectedPath === null ||
+      activeStatus === null ||
+      activeStatus.truncated ||
+      hasActiveConflicts
+    )
+      return;
     const pathspecs = activeStatus.changes
       .filter((c) => c.unstaged || c.untracked)
       .map((c) => c.path);
@@ -1849,28 +1870,35 @@ export function GitClientWindow({
     staging.runMutation(() =>
       client.stage({ projectId: selectedPath, pathspecs, includeUntracked }),
     );
-  }, [activeStatus, client, selectedPath, staging]);
+  }, [activeStatus, client, hasActiveConflicts, selectedPath, staging]);
 
   const unstageAll = useCallback((): void => {
-    if (selectedPath === null || activeStatus === null || activeStatus.truncated) return;
+    if (
+      selectedPath === null ||
+      activeStatus === null ||
+      activeStatus.truncated ||
+      hasActiveConflicts
+    )
+      return;
     const pathspecs = activeStatus.changes.filter((c) => c.staged).map((c) => c.path);
     if (pathspecs.length === 0) return;
     staging.runMutation(() => client.unstage({ projectId: selectedPath, pathspecs }));
-  }, [activeStatus, client, selectedPath, staging]);
+  }, [activeStatus, client, hasActiveConflicts, selectedPath, staging]);
 
   const commitChanges = useCallback(
     (message: string): void => {
-      if (selectedPath === null) return;
+      if (selectedPath === null || hasActiveConflicts) return;
       commit.runMutation(() => client.commitPropose({ projectId: selectedPath, message }));
     },
-    [client, commit, selectedPath],
+    [client, commit, hasActiveConflicts, selectedPath],
   );
 
   const generateCommitDraft = useCallback(async (): Promise<string> => {
     if (selectedPath === null) throw new Error(optionalT("gitClientWindow.error.noRepository"));
+    if (hasActiveConflicts) throw new Error(optionalT("gitClientWindow.ui.resolveConflicts"));
     const result = await client.commitDraft({ projectId: selectedPath });
     return result.suggestedMessage;
-  }, [client, optionalT, selectedPath]);
+  }, [client, hasActiveConflicts, optionalT, selectedPath]);
 
   const switchBranch = useCallback(
     (branchName: string, trigger: HTMLButtonElement): void => {
@@ -1960,7 +1988,7 @@ export function GitClientWindow({
     ],
   );
 
-  const syncView = deriveSyncView(activeSummary, summaryRead.loading, t);
+  const syncView = deriveSyncView(activeSummary, summaryRead.loading, t, hasActiveConflicts);
   const toolbarRepositories = repositoryToolbarList(
     repositories,
     selectedPath,
@@ -2079,8 +2107,11 @@ export function GitClientWindow({
     [resizeSidebar, sidebarWidth],
   );
   const previewCommitDraft = useCallback(
-    (messageDraft: string): void => runCommitPreview(messageDraft, statusRevision),
-    [runCommitPreview, statusRevision],
+    (messageDraft: string): void => {
+      if (hasActiveConflicts) return;
+      runCommitPreview(messageDraft, commitPreviewRevision);
+    },
+    [commitPreviewRevision, hasActiveConflicts, runCommitPreview],
   );
   const commitComposer = (
     <CommitComposer
@@ -2088,6 +2119,7 @@ export function GitClientWindow({
       projectId={selectedPath}
       branchName={currentBranch}
       stagedFileCount={activeStatus?.stagedCount ?? 0}
+      hasConflicts={hasActiveConflicts}
       busy={commit.flow.busy}
       outcome={commit.flow.outcome}
       error={commit.flow.error}
@@ -2095,7 +2127,7 @@ export function GitClientWindow({
       previewDraft={commit.previewDraft}
       previewRequestRevision={commit.previewRequestRevision}
       previewError={commit.previewError}
-      previewRevision={statusRevision}
+      previewRevision={commitPreviewRevision}
       layout={useCommitWorkspace ? "workspace" : "sidebar"}
       summaryValue={commitSummary}
       bodyValue={commitBody}
@@ -2136,7 +2168,7 @@ export function GitClientWindow({
         branchesError={readErrorForDisplay(branchesRead.error, activeStatus)}
         status={activeStatus}
         branchBusy={branchActions.flow.busy}
-        syncView={syncViewForDisplay(syncView, visibleSummaryError, t)}
+        syncView={syncViewForDisplay(syncView, visibleSummaryError, t, hasActiveConflicts)}
         syncBusy={syncBusy}
         syncOutcome={syncOutcome}
         syncError={syncError}

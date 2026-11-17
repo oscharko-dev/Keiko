@@ -83,6 +83,7 @@ export type RepositoryReferenceEvidenceState = "cited" | "read-uncited" | "unrea
 export interface RepositoryReferenceEvidence {
   readonly citations: readonly GroundedEvidenceCitation[];
   readonly readPaths: readonly string[];
+  readonly requireSourceMatch?: boolean;
   readonly readStatusVerified?: boolean | undefined;
   readonly inspectedPaths?:
     | readonly {
@@ -186,6 +187,14 @@ function inspectedReferenceOptions(
   return { ...options, requireRootChoice: options.citationActivation.reason !== "matched" };
 }
 
+function canOpenProseReference(
+  evidence: RepositoryReferenceEvidence | undefined,
+  reason: ClientDiagnosticCitationActivation["reason"],
+  requireRootChoice: boolean,
+): boolean {
+  return evidence?.requireSourceMatch !== true || (reason === "matched" && !requireRootChoice);
+}
+
 export function ProseRepositoryReference({
   evidence,
   ...props
@@ -198,14 +207,16 @@ export function ProseRepositoryReference({
       ? citationRootOptions(citation, props.roots)
       : (inspectedReferenceOptions(props.reference, evidence, props.roots) ??
         citationRootOptions({}, props.roots));
+  const requireRootChoice =
+    options.requireRootChoice || (props.reference.sourceId !== undefined && citation === undefined);
+  if (!canOpenProseReference(evidence, options.citationActivation.reason, requireRootChoice)) {
+    return referenceVisibleLabel(props.reference, props.displayPath);
+  }
   return (
     <RepositoryReferenceInline
       {...props}
       {...options}
-      requireRootChoice={
-        options.requireRootChoice ||
-        (props.reference.sourceId !== undefined && citation === undefined)
-      }
+      requireRootChoice={requireRootChoice}
       rootRelative={citation !== undefined || options.citationActivation.reason === "matched"}
       evidenceState={
         evidence === undefined

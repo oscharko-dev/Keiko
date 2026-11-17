@@ -4187,6 +4187,8 @@ describe("actual source reveal lifecycle", () => {
 it.each([
   ["git sync outcome", "started", "git-sync-outcome"],
   ["git sync outcome", "settled", "git-sync-outcome"],
+  ["git conflict controls blocked", "started", "git-conflict-controls-blocked"],
+  ["git conflict controls blocked", "settled", "git-conflict-controls-blocked"],
   ["markdown copy feedback", "started", "markdown-copy-feedback"],
   ["markdown copy feedback", "settled", "markdown-copy-feedback"],
   ["transcript navigation", "started", "transcript-navigation"],

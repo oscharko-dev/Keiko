@@ -17,7 +17,6 @@ import type {
   ParserDiagnostic,
   IndexingJobRecord,
   ParserDiagnosticSeverity,
-  IndexingJobStatus,
   CapsuleContextualRetrievalSettings,
 } from "@oscharko-dev/keiko-contracts";
 import { INDEXING_EMBEDDING_STOPPED_ERROR_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-records";
@@ -323,26 +322,40 @@ function partialIndexMessage(
   t: I18nTranslate,
 ): string {
   const missingVectors = data.health.chunkCount - data.health.vectorCount;
+  const messages: string[] = [];
+  if (data.health.failedDocuments > 0) {
+    messages.push(
+      t(
+        data.health.failedDocuments === 1
+          ? "localKnowledge.detail.index.failedDocuments.one"
+          : "localKnowledge.detail.index.failedDocuments.many",
+        { count: data.health.failedDocuments },
+      ),
+    );
+  }
   // Circuit-breaker aborts and majority failures are embedding-stopped shapes too: without
   // them here the outage runs — exactly where the "embedding stopped" explanation matters
   // most — fell through to the generic copy. The code list is contract-owned so producer and
   // this consumer cannot drift.
   const embeddingStoppedCodes = new Set<string>(INDEXING_EMBEDDING_STOPPED_ERROR_CODES);
   if (job?.lastError !== undefined && embeddingStoppedCodes.has(job.lastError.code)) {
-    return t("localKnowledge.detail.index.embeddingStopped", {
-      message: job.lastError.message,
-      count: missingVectors,
-    });
-  }
-  if (missingVectors > 0) {
-    return t("localKnowledge.detail.index.missingVectors", { count: missingVectors });
+    messages.push(
+      t("localKnowledge.detail.index.embeddingStopped", {
+        message: job.lastError.message,
+        count: missingVectors,
+      }),
+    );
+  } else if (missingVectors > 0) {
+    messages.push(t("localKnowledge.detail.index.missingVectors", { count: missingVectors }));
   }
   if (data.health.unsupportedDocuments > 0) {
-    return t("localKnowledge.detail.index.unsupportedDocuments", {
-      count: data.health.unsupportedDocuments,
-    });
+    messages.push(
+      t("localKnowledge.detail.index.unsupportedDocuments", {
+        count: data.health.unsupportedDocuments,
+      }),
+    );
   }
-  return t("localKnowledge.detail.index.aligned");
+  return messages.length > 0 ? messages.join(" ") : t("localKnowledge.detail.index.aligned");
 }
 
 function discoveryProgressRatio(total: number, completed: number): number {
@@ -421,12 +434,17 @@ function missingVectorsTone(missingVectors: number): "ok" | "danger" {
 
 function latestJobValueLabel(job: IndexingJobRecord | undefined, t: I18nTranslate): string {
   if (job === undefined) return t("localKnowledge.detail.index.notIndexed");
-  return jobStatusLabel(job.status, t);
+  return jobStatusLabel(job, t);
+}
+
+function completedWithFileErrors(job: IndexingJobRecord): boolean {
+  return job.status === "succeeded" && job.failedDocuments > 0;
 }
 
 function latestJobTone(job: IndexingJobRecord | undefined): "neutral" | "warn" | "danger" {
   if (job?.status === "failed") return "danger";
   if (job?.status === "running") return "warn";
+  if (job !== undefined && completedWithFileErrors(job)) return "warn";
   return "neutral";
 }
 
@@ -1241,7 +1259,10 @@ function HealthDiagnosticsSection({
 // IndexingJobsSection
 // ---------------------------------------------------------------------------
 
-function jobStatusLabel(status: IndexingJobStatus, t: I18nTranslate): string {
+function jobStatusLabel(job: IndexingJobRecord, t: I18nTranslate): string {
+  const { status } = job;
+  if (completedWithFileErrors(job))
+    return t("localKnowledge.detail.jobs.status.completedWithErrors");
   if (status === "queued") return t("localKnowledge.detail.jobs.status.queued");
   if (status === "running") return t("localKnowledge.detail.jobs.status.running");
   if (status === "succeeded") return t("localKnowledge.detail.jobs.status.succeeded");
@@ -1268,6 +1289,8 @@ function JobRow({
   readonly job: IndexingJobRecord;
   readonly t: I18nTranslate;
 }): ReactNode {
+  const withFileErrors = completedWithFileErrors(job);
+  const statusLabel = jobStatusLabel(job, t);
   const duration =
     job.finishedAt !== undefined
       ? formatDuration(job.finishedAt - job.startedAt)
@@ -1278,11 +1301,16 @@ function JobRow({
       title={t("localKnowledge.detail.help.jobRow")}
       aria-label={t("localKnowledge.detail.jobs.rowAria", {
         id: job.id,
-        status: jobStatusLabel(job.status, t),
+        status: statusLabel,
       })}
     >
-      <span className="lkd-job-status" data-status={job.status}>
-        {jobStatusLabel(job.status, t)}
+      <span
+        className={
+          withFileErrors ? `lkd-job-status ${detailStyles.cmpJobWithFileErrors}` : "lkd-job-status"
+        }
+        data-status={withFileErrors ? undefined : job.status}
+      >
+        {statusLabel}
       </span>
       <span className="lkd-job-dates">
         <JobTimestamp epochMs={job.startedAt} />

@@ -3846,7 +3846,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gatewaySetup.ui.testing": "Testing credentials…",
   "gatewaySetup.ui.testAndSave": "Test & save",
   "gatewaySetup.ui.secretsNote":
-    "Stored secrets stay local and are never returned to the browser. Supported API-key headers: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
+    "Stored secrets stay local and are never returned to the browser. If your browser offers to save these credentials as a password, decline that separate prompt. Supported API-key headers: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
   "gatewaySetup.ui.copy.titleUpdate": "Update Keiko credentials",
   "gatewaySetup.ui.copy.titleSetup": "Connect Keiko to your internal LLMs",
   "gatewaySetup.ui.copy.descriptionUpdate":
@@ -4330,6 +4330,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "grounded.knowledge.references": "{used} / {budget} references",
   "grounded.knowledge.hybridAria": "Hybrid source summary",
   "grounded.knowledge.hybridTitle": "Hybrid: {folders} + {pods}",
+  "grounded.knowledge.editorUnavailable":
+    "The cited source could not be opened. Check the source in its Knowledge Pod and try again.",
   "grounded.manual.name": "HTML manual",
   "grounded.manual.evidence": "HTML manual evidence",
   "grounded.manual.openManual": "Open manual",
@@ -6086,7 +6088,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "governedPullRequestCard.description.refreshHint.targetChanged":
     "The repository or Pull Request number changed since the last preview. Preview again before approving or applying.",
   "gitClientWindow.ui.changesAndHistory": "Changes and history",
-  "gitClientWindow.ui.resolveConflicts": "Resolve conflicted files before committing or syncing.",
+  "gitClientWindow.ui.resolveConflicts":
+    "Resolve conflicted files or abort the operation in Git. Staging, unstaging, commit previews, draft generation, commits and sync are unavailable until the conflicts are cleared.",
   "gitClientWindow.ui.stageAll": "Stage all",
   "gitClientWindow.ui.unstageAll": "Unstage all",
   "gitClientWindow.ui.noChanges": "No changes",
@@ -6328,6 +6331,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitClientWindow.ui.new": "New",
   "gitClientWindow.ui.recent": "Recent",
   "gitClientWindow.ui.error": "Error",
+  "gitClientWindow.ui.commitSigningRecovery":
+    "Git could not sign this commit. Check this repository's signing key (user.signingKey) and format (gpg.format). Make sure Keiko can run the signing tool (gpg for OpenPGP or ssh-keygen for SSH). Then click Commit again.",
   "figmaJson.ui.qiSource": "QI source",
   "figmaJson.ui.retry": "Retry",
   "chatHistoryPanel.ui.conversations": "Conversations",

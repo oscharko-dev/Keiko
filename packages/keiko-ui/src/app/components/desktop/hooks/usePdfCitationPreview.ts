@@ -12,6 +12,10 @@ import { fetchPdfCitationPreviewStatus, openPdfCitationPreviewSession } from "@/
 import type { GroundedAnswer, LocalKnowledgeEvidenceCitation } from "@/lib/types";
 import type { WorkspaceApi } from "./useWorkspace.types";
 import {
+  useKnowledgeCitationEditorController,
+  type KnowledgeCitationEditorController,
+} from "./useKnowledgeCitationEditor";
+import {
   showPdfCitationPreviewFailure,
   showPdfCitationPreviewResult,
   type PdfCitationPreviewAnswerContext,
@@ -37,6 +41,7 @@ interface CitationPreviewAffordance {
 }
 
 export interface CitationPreviewController {
+  readonly editor?: KnowledgeCitationEditorController | undefined;
   readonly forCitation: (
     citation: LocalKnowledgeEvidenceCitation,
   ) => CitationPreviewAffordance | undefined;
@@ -208,20 +213,53 @@ function answerLocalPreviewContext(
   });
 }
 
+interface OwnedCitationStatuses {
+  readonly chatId: string;
+  readonly assistantMessageId: string;
+  readonly statuses: readonly PdfCitationPreviewCitationStatus[];
+}
+function ownedStatuses(
+  snapshot: OwnedCitationStatuses | undefined,
+  chatId: string | undefined,
+  assistantMessageId: string | undefined,
+): readonly PdfCitationPreviewCitationStatus[] {
+  return snapshot !== undefined &&
+    snapshot.chatId === chatId &&
+    snapshot.assistantMessageId === assistantMessageId
+    ? snapshot.statuses
+    : [];
+}
+function pdfActions(
+  windows: PdfCitationPreviewWindowApi | undefined,
+  actions: Pick<CitationPreviewController, "forCitation" | "forMarker">,
+): Pick<CitationPreviewController, "forCitation" | "forMarker"> {
+  if (windows !== undefined) return actions;
+  return { forCitation: (): undefined => undefined, forMarker: (): undefined => undefined };
+}
+
 export function usePdfCitationPreviewController({
   answer,
   chatId,
   windowId,
   windows,
+  openEditorFile,
 }: {
   readonly answer: GroundedAnswer | undefined;
   readonly chatId: string | undefined;
   readonly windowId?: string | undefined;
   readonly windows: PdfCitationPreviewWindowApi | undefined;
+  readonly openEditorFile?: WorkspaceApi["openEditorFile"] | undefined;
 }): CitationPreviewController | undefined {
   const assistantMessageId = answer?.assistantMessageId;
   const citations = useMemo(() => knowledgeCitationsForAnswer(answer), [answer]);
   const [affordances, setAffordances] = useState<Record<string, CitationPreviewAffordance>>({});
+  const [statusSnapshot, setStatusSnapshot] = useState<OwnedCitationStatuses>();
+  const editor = useKnowledgeCitationEditorController({
+    answer,
+    chatId,
+    openEditorFile,
+    statuses: ownedStatuses(statusSnapshot, chatId, assistantMessageId),
+  });
   const [openingKeys, setOpeningKeys] = useState<ReadonlySet<string>>(new Set());
   const pendingOpensRef = useRef(new Map<string, Promise<string | null>>());
   const latestSnapshotRef = useRef<CitationPreviewRenderSnapshot>({
@@ -255,6 +293,7 @@ export function usePdfCitationPreviewController({
       (response) => {
         if (cancelled) return;
         setAffordances(buildAffordanceMap(citations, response.citations));
+        setStatusSnapshot({ chatId, assistantMessageId, statuses: response.citations });
       },
       () => {
         if (cancelled) return;
@@ -377,15 +416,15 @@ export function usePdfCitationPreviewController({
     chatId === undefined ||
     answer === undefined ||
     citations.length === 0 ||
-    windows === undefined
+    (windows === undefined && editor === undefined)
   ) {
     return undefined;
   }
 
   return {
-    forCitation,
-    forMarker,
+    ...pdfActions(windows, { forCitation, forMarker }),
     isOpening,
     openCitation,
+    editor,
   };
 }

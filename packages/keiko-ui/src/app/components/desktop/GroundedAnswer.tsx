@@ -7,7 +7,7 @@
 // UI's lib/types re-export. Citations are static evidence references until a future change wires
 // them to the Files-window preview at the cited line range.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   citationFindingTotal,
@@ -49,6 +49,10 @@ import type {
   LocalKnowledgeGroundedAnswerContextSummary,
 } from "@/lib/types";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
+import type {
+  KnowledgeCitationEditorController,
+  KnowledgeCitationEditorState,
+} from "./hooks/useKnowledgeCitationEditor";
 import activityBadgeStyles from "./GroundedAnswer.module.css";
 import {
   ConnectedEvidenceInspection,
@@ -1172,6 +1176,85 @@ function pdfPreviewActionText(
   return { actionLabel: t("grounded.pdf.open"), actionTitle: t("grounded.pdf.openTitle") };
 }
 
+function KnowledgeEditorCitationChip({
+  citation,
+  label,
+  unverified,
+  controller,
+  state,
+}: {
+  readonly citation: LocalKnowledgeEvidenceCitation;
+  readonly label: string;
+  readonly unverified: boolean;
+  readonly controller: KnowledgeCitationEditorController;
+  readonly state: KnowledgeCitationEditorState;
+}): ReactNode {
+  const t = useTranslate();
+  const statusId = useId();
+  const accessibleLabel = useSupportAwareLabel(label, unverified);
+  const displayPath = stripUnsafeFormatChars(citation.label);
+  const opening = state === "opening";
+  const actionLabel = t("filePreview.openInEditor");
+  let status = "";
+  if (opening) status = t("chat.repository.opening", { path: displayPath });
+  if (state === "opened") status = t("chat.repository.opened", { path: displayPath });
+  if (state === "failed") status = t("grounded.knowledge.editorUnavailable");
+  return (
+    <span>
+      <button
+        type="button"
+        className="grounded-citation grounded-citation-action"
+        disabled={opening}
+        aria-busy={opening || undefined}
+        aria-describedby={statusId}
+        aria-label={`${accessibleLabel} · ${actionLabel}`}
+        title={`${knowledgeCitationTitle(citation, t)} · ${actionLabel}`}
+        onClick={() => {
+          void controller.openCitation(citation);
+        }}
+      >
+        <span className="grounded-citation-range">{label}</span>
+        {unverified ? <UnverifiedSupportBadge /> : null}
+        <span className="grounded-citation-action-label">{actionLabel}</span>
+      </button>
+      <output id={statusId}>{status}</output>
+    </span>
+  );
+}
+
+function KnowledgeCitationWithoutPdf({
+  citation,
+  citationPreview,
+  label,
+  unverified,
+}: {
+  readonly citation: LocalKnowledgeEvidenceCitation;
+  readonly citationPreview: CitationPreviewController | undefined;
+  readonly label: string;
+  readonly unverified: boolean;
+}): ReactNode {
+  const t = useTranslate();
+  const editor = citationPreview?.editor;
+  const editorState = editor?.stateFor(citation);
+  if (editor !== undefined && editorState !== undefined) {
+    return (
+      <KnowledgeEditorCitationChip
+        citation={citation}
+        label={label}
+        unverified={unverified}
+        controller={editor}
+        state={editorState}
+      />
+    );
+  }
+  return (
+    <span className="grounded-citation" title={knowledgeCitationTitle(citation, t)}>
+      <span className="grounded-citation-range">{label}</span>
+      {unverified ? <UnverifiedSupportBadge /> : null}
+    </span>
+  );
+}
+
 function KnowledgeCitationChip({
   citation,
   citationPreview,
@@ -1200,10 +1283,12 @@ function KnowledgeCitationChip({
   const affordance = citationPreview?.forCitation(citation);
   if (affordance === undefined) {
     return (
-      <span className="grounded-citation" title={knowledgeCitationTitle(citation, t)}>
-        <span className="grounded-citation-range">{label}</span>
-        {unverified ? <UnverifiedSupportBadge /> : null}
-      </span>
+      <KnowledgeCitationWithoutPdf
+        citation={citation}
+        citationPreview={citationPreview}
+        label={label}
+        unverified={unverified}
+      />
     );
   }
 

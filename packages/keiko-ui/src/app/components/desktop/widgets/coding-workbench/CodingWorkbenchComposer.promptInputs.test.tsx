@@ -100,6 +100,7 @@ describe("Send now and Queue while a turn runs", () => {
         })}
       />,
     );
+    expect(textbox()).not.toHaveAccessibleDescription();
     await user.click(screen.getByRole("button", { name: "Send now" }));
     expect(taskActions.onDeliver).toHaveBeenLastCalledWith("also cover empty", "steer", []);
     await user.click(screen.getByRole("button", { name: "Queue message" }));
@@ -170,13 +171,29 @@ describe("Send now and Queue while a turn runs", () => {
     cleanup();
 
     const plain = actions();
-    render(<TaskStartSection {...props("running", plain, { taskIntent: "a message" })} />);
+    const { rerender } = render(
+      <TaskStartSection {...props("running", plain, { taskIntent: "a message" })} />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Pause the run to send this follow-up. Queuing is unavailable for this run.",
+    );
+    expect(textbox()).toHaveAccessibleDescription(
+      "Pause the run to send this follow-up. Queuing is unavailable for this run.",
+    );
     textbox().focus();
     await user.keyboard("{Enter}");
     expect(plain.onPause).toHaveBeenCalledOnce();
     expect(plain.onDeliver).not.toHaveBeenCalled();
     await user.keyboard("{Control>}{Enter}{/Control}");
     expect(plain.onDeliver).not.toHaveBeenCalled();
+
+    rerender(<TaskStartSection {...props("paused", plain, { taskIntent: "a message" })} />);
+    expect(textbox()).not.toHaveAccessibleDescription();
+    expect(textbox()).toHaveValue("a message");
+    expect(screen.getByRole("button", { name: "Send follow-up" })).toBeEnabled();
+
+    rerender(<TaskStartSection {...props("running", plain)} />);
+    expect(textbox()).not.toHaveAccessibleDescription();
   });
 
   it("disables the message buttons, not just blocks them, while an action is pending", () => {

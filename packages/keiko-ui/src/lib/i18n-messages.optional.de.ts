@@ -4055,7 +4055,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gatewaySetup.ui.testing": "Zugangsdaten werden geprüft…",
   "gatewaySetup.ui.testAndSave": "Prüfen & speichern",
   "gatewaySetup.ui.secretsNote":
-    "Gespeicherte Geheimnisse bleiben lokal und werden nie an den Browser zurückgegeben. Unterstützte API-Key-Header: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
+    "Gespeicherte Geheimnisse bleiben lokal und werden nie an den Browser zurückgegeben. Wenn dein Browser diese Zugangsdaten als Passwort speichern möchte, lehne diese separate Browserabfrage ab. Unterstützte API-Key-Header: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
   "gatewaySetup.ui.copy.titleUpdate": "Keiko-Zugangsdaten aktualisieren",
   "gatewaySetup.ui.copy.titleSetup": "Keiko mit Ihren internen LLMs verbinden",
   "gatewaySetup.ui.copy.descriptionUpdate":
@@ -4556,6 +4556,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "grounded.knowledge.references": "{used} / {budget} Referenzen",
   "grounded.knowledge.hybridAria": "Zusammenfassung kombinierter Quellen",
   "grounded.knowledge.hybridTitle": "Kombiniert: {folders} + {pods}",
+  "grounded.knowledge.editorUnavailable":
+    "Die zitierte Quelle konnte nicht geöffnet werden. Prüfe die Quelle in ihrem Knowledge Pod und versuche es erneut.",
   "grounded.manual.name": "HTML-Handbuch",
   "grounded.manual.evidence": "HTML-Handbuchbeleg",
   "grounded.manual.openManual": "Handbuch öffnen",
@@ -6372,7 +6374,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Das Repository oder die Pull-Request-Nummer hat sich seit der letzten Vorschau geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
   "gitClientWindow.ui.changesAndHistory": "Änderungen und Verlauf",
   "gitClientWindow.ui.resolveConflicts":
-    "Lösen Sie Konfliktdateien, bevor Sie committen oder synchronisieren.",
+    "Lösen Sie die Konflikte oder brechen Sie den Vorgang in Git ab. Vormerken, Zurücknehmen, Commit-Vorschau, Entwurfserstellung, Commit und Sync sind bis dahin nicht verfügbar.",
   "gitClientWindow.ui.stageAll": "Alle vormerken",
   "gitClientWindow.ui.unstageAll": "Alle zurücknehmen",
   "gitClientWindow.ui.noChanges": "Keine Änderungen",
@@ -6629,6 +6631,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.ui.new": "Neu",
   "gitClientWindow.ui.recent": "Zuletzt verwendet",
   "gitClientWindow.ui.error": "Fehler",
+  "gitClientWindow.ui.commitSigningRecovery":
+    "Git konnte diesen Commit nicht signieren. Prüfen Sie den Signaturschlüssel (user.signingKey) und das Signaturformat (gpg.format) des Repositorys. Stellen Sie sicher, dass Keiko das Signaturprogramm ausführen kann (gpg für OpenPGP oder ssh-keygen für SSH). Klicken Sie danach erneut auf Commit.",
   "figmaJson.ui.qiSource": "QI-Quelle",
   "figmaJson.ui.retry": "Erneut versuchen",
   "chatHistoryPanel.ui.conversations": "Konversationen",

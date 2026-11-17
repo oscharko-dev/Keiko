@@ -79,6 +79,18 @@ and source-label-shaped text. Grounded citation removal uses those same code bou
 existing answer-copy Activity Log event records success/failure and removed/retained marker-group
 counts without the copied body; it applies to this projection without a second clipboard or log path.
 
+Knowledge citation Editor targets come only from the server's saved assistant message, marker,
+stable citation identity, source lineage and document hash. An explicit citation click resolves
+the current text file through the Knowledge source containment/deny checks and the ordinary
+Editor read surface, including managed-root session authority, UTF-8 and size limits. Its live
+bytes must match the cited revision. Files-only, filtered and non-recursive scopes cannot grant
+the Editor a whole folder; unsupported media, missing or ambiguous provenance, symlinks and
+modified sources return closed refusals. Passive citation status may advertise a text candidate,
+but carries no host path or reusable authority; the click revalidates after awaited reads.
+The existing PDF preview rules and archived-revision behavior are unchanged. The Activity Log
+records only the closed Editor-target outcome and refusal reason, never the path, document body
+or citation identity.
+
 ### D1.1 — Changing sources cancels the current answer
 
 A validated change to the canonical grounding identity cancels the current generation and any

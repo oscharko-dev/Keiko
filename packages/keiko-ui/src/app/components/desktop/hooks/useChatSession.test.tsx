@@ -8531,6 +8531,7 @@ it.each(["terminal", "read-failure"] as const)(
       );
       await waitFor(() => expect(current?.loading).toBe(false));
       await waitFor(() => expect(current?.activeChat?.id).toBe(selectedChat.id));
+      await waitFor(() => expect(current?.markdownSkill?.view?.availability).toBe("none"));
       let delivery: Promise<SendMessageOutcome> | undefined;
       act(() => {
         delivery = current?.sendMessage({

@@ -71,7 +71,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set(
     "completions config conflicts connect connection consolidation containers content " +
     "context control copy correct correction-predecessors create credentials deactivate " +
     "debug delete dependencies description-draft desktop diagnostics diff directories " +
-    "docs-browser document download draft drafts dryrun-figma dryrun-jira edit editor " +
+    "docs-browser document download draft drafts dryrun-figma dryrun-jira edit editor editor-target " +
     "evaluate events evidence exception-breakpoints execute executions explain export fetch " +
     "figma files focus folder follow-up forget gateway git git-change github-authorization " +
     "git-delivery grounded handoff health health-scan history hot-exit human-inputs image " +
