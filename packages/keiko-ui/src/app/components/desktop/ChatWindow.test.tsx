@@ -5124,7 +5124,7 @@ describe("ChatWindow message copy", () => {
       groundingKind: "hybrid",
       userMessageId: "user-mixed",
       assistantMessageId: "assistant-mixed",
-      content: "Check [src/demo.ts] for the implementation.",
+      content: "The marker in [Companion - Übersicht.txt] is Juniper [1]. See [src/demo.ts].",
       citations: [
         {
           scopePath: "src/demo.ts",
@@ -5146,19 +5146,41 @@ describe("ChatWindow message copy", () => {
         knowledge: knowledge.contextPack,
       },
     };
-    renderWindow(
-      makeSession({
-        activeChat: makeChat({ connectedScopes: [scope] }),
-        messages: [
-          makeMessage({ role: "assistant", content: groundedAnswer.content, groundedAnswer }),
-        ],
-      }),
-      { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
-    );
-    await user.click(
-      screen.getByRole("button", { name: "Open src/demo.ts in editor · Cited evidence" }),
-    );
-    expect(openEditorFile).toHaveBeenCalledWith({ root: scope.root, path: "src/demo.ts" });
+    const reports: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) reports.push(meta);
+    });
+    try {
+      renderWindow(
+        makeSession({
+          activeChat: makeChat({ connectedScopes: [scope] }),
+          messages: [
+            makeMessage({ role: "assistant", content: groundedAnswer.content, groundedAnswer }),
+          ],
+        }),
+        { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+      );
+      expect(document.querySelector('[data-role="assistant"]')).toHaveTextContent(
+        "Companion - Übersicht.txt",
+      );
+      const knowledgeReference = screen.queryByRole("button", {
+        name: /Open Companion - Übersicht\.txt in editor/u,
+      });
+      if (knowledgeReference !== null) await user.click(knowledgeReference);
+      expect(knowledgeReference).toBeNull();
+      expect(openEditorFile).not.toHaveBeenCalled();
+      expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+
+      await user.click(
+        screen.getByRole("button", { name: "Open src/demo.ts in editor · Cited evidence" }),
+      );
+      expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+        root: scope.root,
+        path: "src/demo.ts",
+      });
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 
   it("surfaces a clear status when repository references have no connected root", async () => {
