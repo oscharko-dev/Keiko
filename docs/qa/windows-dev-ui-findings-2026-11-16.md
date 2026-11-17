@@ -498,3 +498,21 @@ PAT in Edge triggered a fresh **Save your password?** prompt. The Pod verified s
 and Jira recorded zero writes. On `ca1c50ae2`, replacing the native form with an explicit Save
 action still triggered a delayed prompt after a successful Enter submission. The experiment was
 reverted. The connector guide explains how to dismiss the separate browser prompt.
+
+### Jira write approval
+
+On `de81d8364`, a Windows Edge Chat used the synthetic Jira Pod with **Ask for approval** and
+Gemma 4 31B through LiteLLM. An initial Task request lacked a required field. Keiko reported
+**Not sent to Jira**, named the missing field, and Jira recorded zero writes. Gemma used the
+specified value on the next turn and opened a concrete approval. Declining it produced
+**Action declined** and zero Jira writes.
+
+Approving a separate Task produced **Jira change confirmed** and the synthetic issue link
+`KEIKO-109`. A native Jira read matched the key, title, description, and required field. Jira
+recorded one successful write. Edge preserved the approval outcomes and issue link through
+reload, and the native write count remained one.
+
+The three-Task batch showed **3 of 3 selected** in a single approval. After approval, Keiko
+confirmed `KEIKO-110`, `KEIKO-111`, and `KEIKO-112`. Each key, title, description, and required
+field matched the native Jira record. The three links remained visible after reload, and Jira
+recorded exactly three successful writes across the batch and reload.
