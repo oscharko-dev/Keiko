@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 
 import { parse as parseToml } from "smol-toml";
 
@@ -400,7 +401,7 @@ function descendantMatchesRustup(
 ): boolean {
   try {
     const descendant = resolveExecutableOutsideWorkspace(name, input.workspace, {
-      PATH: input.env.PATH,
+      PATH: environmentVariableValue(input.env, "PATH"),
     });
     const left = statSync(realpathSync(descendant));
     const right = statSync(realpathSync(rustup));

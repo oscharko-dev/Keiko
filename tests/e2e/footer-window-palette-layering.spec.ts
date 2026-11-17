@@ -51,35 +51,97 @@ async function expectControlOwnsHitPoint(page: Page, name: string): Promise<void
   await expect(control).toBeVisible();
   const hit = await control.evaluate((element) => {
     const box = element.getBoundingClientRect();
-    const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    const top = document.elementFromPoint(x, y);
     return {
       owned: top !== null && element.contains(top),
       windowIntercepts: top?.closest(".window") !== null,
+      windowUnderControl: document
+        .elementsFromPoint(x, y)
+        .some((candidate) => candidate.closest(".window") !== null),
     };
   });
-  expect(hit, name).toEqual({ owned: true, windowIntercepts: false });
+  expect(hit, name).toEqual({ owned: true, windowIntercepts: false, windowUnderControl: false });
 }
 
-test("workspace controls @smoke — ordinary windows cannot cover new-window or zoom controls", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await seedFilesWindow(page, { x: 0, y: 0, w: 2000, h: 1600 });
-  await page.goto("/");
-  const frame = page.locator('[data-window-id="issue-1426-files"]');
-  await expect(frame).toBeVisible();
-  await expect(frame).toHaveAttribute("data-max", "false");
-  for (const name of ["New window", "Zoom out", "Zoom in"]) {
-    await expectControlOwnsHitPoint(page, name);
-  }
-  await page.getByRole("button", { name: "New window", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "New window", exact: true })).toBeVisible();
-  await page.getByRole("dialog", { name: "New window", exact: true }).press("Escape");
-  await expect(page.getByRole("dialog", { name: "New window", exact: true })).toBeHidden();
-  await frame.locator("[data-window-header]").dblclick({ position: { x: 100, y: 20 } });
-  await expect(page.getByRole("button", { name: "New window", exact: true })).toBeHidden();
-  await expect(page.getByRole("button", { name: "Zoom out", exact: true })).toBeHidden();
-});
+for (const viewport of [
+  { width: 1280, height: 430 },
+  { width: 390, height: 860 },
+]) {
+  test(`workspace controls @smoke — controls and window actions never cover each other at ${String(viewport.width)}px (#4416)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await seedFilesWindow(page, { x: 0, y: 0, w: 2000, h: 1600 });
+    await page.goto("/");
+    const frame = page.locator('[data-window-id="issue-1426-files"]');
+    await expect(frame).toBeVisible();
+    await expect(frame).toHaveAttribute("data-max", "false");
+    for (const layout of [null, "Tile all windows", "Cascade windows"]) {
+      if (layout !== null) await page.getByRole("button", { name: layout, exact: true }).click();
+      for (const name of ["New window", "Zoom out", "Zoom in"]) {
+        await expectControlOwnsHitPoint(page, name);
+      }
+    }
+    const lockedControls = await page.evaluate(() => {
+      const root = document.documentElement;
+      root.setAttribute("data-keiko-modal-open", "true");
+      try {
+        return [".ws-fab", ".ws-zoom"].map((selector) => {
+          const element = document.querySelector(selector);
+          return element === null ? null : getComputedStyle(element).pointerEvents;
+        });
+      } finally {
+        root.removeAttribute("data-keiko-modal-open");
+      }
+    });
+    expect(lockedControls).toEqual(["none", "none"]);
+    await page.getByRole("button", { name: "New window", exact: true }).click();
+    const palette = page.getByRole("dialog", { name: "New window", exact: true });
+    await expect(palette).toBeVisible();
+    const paletteGeometry = await palette.evaluate(async (element) => {
+      // The visible entry animation moves the palette before it reaches its layout position.
+      await Promise.allSettled(
+        element
+          .getAnimations()
+          .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+          .map((animation) => animation.finished),
+      );
+      const canvas = element.closest("main");
+      if (canvas === null) throw new Error("palette is outside its canvas");
+      const box = element.getBoundingClientRect();
+      const canvasBox = canvas.getBoundingClientRect();
+      return {
+        bottomGutter: canvasBox.bottom - box.bottom,
+        topGutter: box.top - canvasBox.top,
+        height: box.height,
+        canvasHeight: canvasBox.height,
+      };
+    });
+    expect(paletteGeometry.bottomGutter).toBeGreaterThanOrEqual(14);
+    expect(paletteGeometry.bottomGutter).toBeLessThanOrEqual(16);
+    expect(paletteGeometry.topGutter).toBeGreaterThanOrEqual(14);
+    if (viewport.height <= 430)
+      expect(paletteGeometry.height).toBeGreaterThanOrEqual(paletteGeometry.canvasHeight - 32);
+    await palette.press("Escape");
+    await expect(palette).toBeHidden();
+    const canvas = page.getByRole("main", { name: "Workspace surface" });
+    const normalCanvasHeight = await canvas.evaluate((element) => element.clientHeight);
+    await frame.locator("[data-window-header]").dblclick({ position: { x: 100, y: 20 } });
+    await expect(page.getByRole("button", { name: "New window", exact: true })).toBeHidden();
+    await expect(page.getByRole("button", { name: "Zoom out", exact: true })).toBeHidden();
+    await expect
+      .poll(async () => canvas.evaluate((element) => element.clientHeight))
+      .toBeGreaterThan(normalCanvasHeight);
+    await frame.getByRole("button", { name: "Restore Files window", exact: true }).click();
+    await expectControlOwnsHitPoint(page, "New window");
+    await expect
+      .poll(async () => canvas.evaluate((element) => element.clientHeight))
+      .toBe(normalCanvasHeight);
+  });
+}
 
 // GEN-UI-A11Y-025 turned the right rail from a named <aside> landmark into a plain <div> layout
 // spacer. The old `aside.rail.rail-right` selector kept matching nothing, which made the

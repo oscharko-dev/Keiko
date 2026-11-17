@@ -36,6 +36,21 @@ it("does not probe irrelevant platforms or missing native assets", () => {
   expect(spawnSync).not.toHaveBeenCalled();
   expect(emitServerDiagnostic).not.toHaveBeenCalled();
 });
+
+it.each([
+  [{ systemroot: "D:\\Windows" }, "D:\\Windows"],
+  [{ SystemRoot: "D:\\Windows", SYSTEMROOT: undefined }, ""],
+] as const)("projects only the selected Windows SystemRoot alias (#4408): %j", (env, expected) => {
+  vi.mocked(discoverQualifiedPortableOpenCode).mockReturnValue(
+    binding as ReturnType<typeof discoverQualifiedPortableOpenCode>,
+  );
+  expect(discoverMcpNativeProcessOwner(env, "win32")).toBeDefined();
+  expect(spawnSync).toHaveBeenCalledWith(
+    binding.nativeHelperPath,
+    ["--probe-stdio-owner"],
+    expect.objectContaining({ env: { SYSTEMROOT: expected } }),
+  );
+});
 it.each(["portable", "development"])(
   "admits only a verified %s owner with the current capability",
   (lane) => {

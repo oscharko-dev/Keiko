@@ -13,6 +13,7 @@ import {
   isPortableBootstrapSetupRequired,
   isPortableExternallyManaged,
   isPortableReleaseMetadataUnavailable,
+  isPortableUpdateUnavailable,
 } from "./update-copy";
 
 const InfoIcon = Icons.info;
@@ -28,6 +29,9 @@ function noticeBody(
   }
   if (isPortableExternallyManaged(report)) {
     return t("updates.notice.portableExternallyManagedBody");
+  }
+  if (isPortableUpdateUnavailable(report)) {
+    return t("updates.portableUpdateUnavailable.body");
   }
   if (isPortableBootstrapSetupRequired(report)) {
     return t("updates.notice.portableSetupBody");
@@ -46,6 +50,7 @@ const NOTICE_TITLE_KEYS: Readonly<Record<ClientUpdateNoticeKind, Parameters<I18n
   "update-available": "updates.notice.title",
   "critical-update-available": "updates.notice.criticalTitle",
   "portable-setup-required": "updates.status.portableSetupRequired",
+  "portable-update-unavailable": "updates.status.portableUpdateUnavailable",
   "externally-managed": "updates.status.portableExternallyManaged",
   "check-unavailable": "updates.notice.releaseUnavailableTitle",
   "action-required": "updates.notice.actionTitle",

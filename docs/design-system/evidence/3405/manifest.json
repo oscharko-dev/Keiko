@@ -1,7 +1,7 @@
 {
   "issue": 3405,
   "epic": 3403,
-  "generatedAt": "2026-11-15T06:27:39.318Z",
+  "generatedAt": "2026-11-17T03:24:11.484Z",
   "command": "npm run test:e2e:update-ui-1696",
   "requiredCiCommand": "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "artifacts": [
@@ -89,11 +89,11 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
-      "sha256": "20cc4f1aabe0db16174f7fb1374ef0a6249c7d03cea64f21b0c42ea810e43a19"
+      "sha256": "0410efe9f457242e33f4cb9aa4eee52e79fec2654b6c32160863a91cf16c7d49"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
-      "sha256": "95e2a9890f69cd3187d8b965fe88d12037f79e443a94a7a170422f1353e9e66e"
+      "sha256": "b8265ead438445cf800a328a1a285d5e39ce026ddf62ceea87f8d87c7ccc77bc"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
@@ -101,7 +101,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts",
-      "sha256": "f14230b25fc403a80ce1e13ba3b26aa04657ee4da5d5468fb78c055e0a081410"
+      "sha256": "374ccba53ada964a555f4187dfc32a4cdfe3b86da0cd4ba7d4cc27dfa963db47"
     },
     {
       "path": "packages/keiko-ui/src/app/globals.css",
@@ -109,7 +109,7 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/api.ts",
-      "sha256": "1df844c27a45cdfefe4dc133b9dc59fa0b32be5c7615f61a66ef9ef3919d713e"
+      "sha256": "bede053d6e10873a71827bdb0ec008db864d304e69f6bf84199093ab426dbe2f"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
@@ -121,11 +121,11 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "7f4e568b5c2a4afbb4c198daee4dbc043d109ba2cbdf5c9567f52c094f98d590"
+      "sha256": "270e08c54d735b1f037e1b525d0dc813fa321b04193c4e888f4c1f87af91aadd"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "d8983885561f024e628293d474b698b340b0594a17632366e5cbe4d87a68ff33"
+      "sha256": "4aa992b92f23ae7b581ca000ca8b744c61d9e8b90a8da7528e708671fdccfc30"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",

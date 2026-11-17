@@ -273,7 +273,7 @@ function heldReadinessProbe(): { readonly fetch: typeof fetch; readonly release:
   };
 }
 
-async function pendingCreationRace(input: {
+async function creationDuringPendingReadiness(input: {
   readonly automatic: boolean;
   readonly accepted: boolean;
   readonly conflict: boolean;
@@ -298,7 +298,11 @@ async function pendingCreationRace(input: {
     runtime.store.createProject(projectDir, "Concurrent creation");
     runtime.gatewayConfig?.set(customModelConfig(CHAT_MODEL), true, "corr-creation-initialization");
     await restartWithDeps(runtime);
-    const pending = request(`${base()}/api/desktop/chats`, {
+    await vi.waitFor(() => {
+      expect(probe.fetch).toHaveBeenCalledTimes(1);
+    });
+    if (input.accepted) persistConcurrentCreation(runtime, input.automatic);
+    const init = {
       method: "POST",
       headers: POST_JSON_HEADERS,
       body: JSON.stringify({
@@ -307,17 +311,20 @@ async function pendingCreationRace(input: {
         creationRequestId: "creation-pending-initialization",
         ...(input.automatic ? {} : { modelId: CHAT_MODEL }),
       }),
-    });
-    await vi.waitFor(() => {
-      expect(sink.events.some((event) => event.op === "gateway.readiness.automatic.joined")).toBe(
-        true,
-      );
-    });
-    if (input.accepted) persistConcurrentCreation(runtime, input.automatic);
+    };
+    // Local creation and replay must finish while the real startup proof is still held.
+    const response = await request(`${base()}/api/desktop/chats`, init);
+    const body = (await response.json()) as { chat?: { id: string; selectedModel: string } };
+    expect(runtime.gatewayConfig?.verifiedCapability(CHAT_MODEL)).toBeUndefined();
+    expect(probe.fetch).toHaveBeenCalledTimes(1);
+    expect(sink.events.some((event) => event.op === "gateway.readiness.automatic.joined")).toBe(
+      false,
+    );
     runtime.gatewayConfig?.set(customModelConfig("replacement-chat-model"), true);
-    probe.release();
-    const response = await pending;
-    const body = (await response.json()) as { chat?: { selectedModel: string } };
+    const replay = await request(`${base()}/api/desktop/chats`, init);
+    expect(replay.status).toBe(response.status);
+    const replayBody = (await replay.json()) as { chat?: { id: string; selectedModel: string } };
+    expect(replayBody.chat).toEqual(body.chat);
     return {
       status: response.status,
       chatCount: runtime.store.listChats(projectDir).length,
@@ -948,10 +955,10 @@ describe("desktop chat routes", () => {
     );
 
     it.each([false, true])(
-      "rechecks registered alias identity after actual readiness joins (conflict=%s)",
+      "keeps registered alias identity while readiness is pending (conflict=%s)",
       async (conflict) => {
         const alias = creationAlias(projectDir, "waiting-alias");
-        const result = await pendingCreationRace({
+        const result = await creationDuringPendingReadiness({
           automatic: false,
           accepted: true,
           conflict,
@@ -967,16 +974,16 @@ describe("desktop chat routes", () => {
     { automatic: false, accepted: true, conflict: false, status: 201 },
     { automatic: true, accepted: true, conflict: false, status: 201 },
     { automatic: false, accepted: true, conflict: true, status: 409 },
-    { automatic: false, accepted: false, conflict: false, status: 400 },
-  ])("rechecks a durable creation after a real readiness join: %j", async (input) => {
-    const result = await pendingCreationRace(input);
+    { automatic: false, accepted: false, conflict: false, status: 201 },
+  ])("preserves durable creation while readiness is pending: %j", async (input) => {
+    const result = await creationDuringPendingReadiness(input);
     expect(result.status).toBe(input.status);
-    expect(result.chatCount).toBe(input.accepted ? 1 : 0);
+    expect(result.chatCount).toBe(1);
     if (input.status === 201) expect(result.selectedModel).toBe(CHAT_MODEL);
   });
 
   it.each([true, false])(
-    "recovers accepted creation while new admission has no readiness observation (automatic=%s)",
+    "recovers accepted creation and opens a local Chat without admitting inference (automatic=%s)",
     async (automatic) => {
       const input = {
         projectPath: projectDir,
@@ -1005,15 +1012,34 @@ describe("desktop chat routes", () => {
       expect(await replay.json()).toMatchObject({ chat: { id: created.chat.id } });
       const fresh = await post({
         projectPath: projectDir,
-        modelId: "unavailable-model",
+        ...(automatic ? {} : { modelId: "unavailable-model" }),
         creationRequestId: "new-unready-creation",
       });
+      expect(fresh.status).toBe(201);
+      const freshChat = (await fresh.json()) as { chat: { id: string } };
+      expect(freshChat).toMatchObject({
+        chat: { selectedModel: "unavailable-model" },
+        messages: [],
+      });
+      expect(freshChat.chat.id).not.toBe(created.chat.id);
+      const send = await fetch(`${base()}/api/desktop/chat`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({
+          chatId: freshChat.chat.id,
+          projectPath: projectDir,
+          modelId: "unavailable-model",
+          content: "Keep the unready fixture local",
+          clientTurnId: "unready-local-turn",
+        }),
+      });
       const refused = conversationModelNotReadyResult();
-      expect(fresh.status).toBe(refused.status);
+      expect(send.status).toBe(refused.status);
       if (typeof refused.body !== "object" || refused.body === null)
         throw new TypeError("Expected the canonical model admission error object.");
-      expect(await fresh.json()).toMatchObject(refused.body);
-      expect(store.listChats(projectDir)).toHaveLength(1);
+      expect(await send.json()).toMatchObject(refused.body);
+      expect(store.listChats(projectDir)).toHaveLength(2);
+      expect(seenRequests).toHaveLength(0);
     },
   );
 

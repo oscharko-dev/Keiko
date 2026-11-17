@@ -1,6 +1,7 @@
 import type { ChatToolTranscriptUpdate } from "./chatToolTranscript.js";
 import type { ChatToolMutationStore } from "./chatToolMutationTypes.js";
 import type { ChatReadGrantStore } from "../atlassian/chatReadGrantState.js";
+import type { JiraReportExportStore } from "./jiraReportExports.js";
 // ADR-0013 D4 — UiStore port and entity types. The port is the seam for testing; the concrete
 // `createNodeUiStore` adapter and the `createInMemoryUiStore` test adapter both implement it.
 //
@@ -155,6 +156,7 @@ export type GatewayHistoryVisitor = (
 ) => boolean | undefined;
 
 export interface UiStore {
+  readonly jiraReportExports?: JiraReportExportStore;
   readonly chatToolReadGrants?: ChatReadGrantStore;
   /** #4213: whether memory was on for a message, and how far each Chat has been learned. */
   readonly memoryLearning?: ChatMemoryLearningStore;

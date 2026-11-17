@@ -5,6 +5,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceScope,
+  KnowledgeCitationEditorTargetReason,
   PdfCitationPreviewReasonCode,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -77,6 +78,117 @@ interface ExistingDocumentRow {
   readonly status: string;
 }
 
+export type KnowledgeCitationEditorSource =
+  | {
+      readonly kind: "ok";
+      readonly root: string;
+      readonly path: string;
+      readonly absolutePath: string;
+      readonly contentHash: string;
+      readonly byteLength: number;
+      readonly statSnapshot: ReturnType<typeof nodeWorkspaceFs.stat>;
+    }
+  | { readonly kind: "rejected"; readonly reason: KnowledgeCitationEditorTargetReason };
+
+function unrestrictedFolder(
+  scope: KnowledgeSourceScope,
+): scope is Extract<KnowledgeSourceScope, { kind: "folder" }> {
+  return (
+    scope.kind === "folder" &&
+    scope.recursive &&
+    (scope.includeGlobs?.length ?? 0) === 0 &&
+    (scope.excludeGlobs?.length ?? 0) === 0
+  );
+}
+
+function isLocalTextMedia(mediaType: string): boolean {
+  return mediaType.startsWith("text/") || mediaType === "application/json";
+}
+
+// A text editor exposes folder navigation. Never promote a files-only, filtered or shallow
+// source into that larger scope. PDF archival/session rules deliberately do not participate.
+export function probeKnowledgeCitationEditorSource(
+  store: KnowledgeStore,
+  authority: PdfCitationPreviewAuthority,
+): KnowledgeCitationEditorSource {
+  const citation = authority.citation;
+  const document = store._internal.db
+    .prepare("SELECT * FROM documents WHERE capsule_id = :capsuleId AND id = :documentId")
+    .get({
+      capsuleId: String(citation.lineage.capsuleId),
+      documentId: String(citation.lineage.documentId),
+    }) as ExistingDocumentRow | undefined;
+  if (document?.source_id !== citation.lineage.sourceId)
+    return { kind: "rejected", reason: "lineage-missing" };
+  if (document.status !== "extracted") return { kind: "rejected", reason: "document-not-ready" };
+  if (
+    !isLocalTextMedia(document.media_type) ||
+    document.media_type !== citation.documentMediaType
+  ) {
+    return { kind: "rejected", reason: "editor-source-unsupported" };
+  }
+  if (document.content_hash !== citation.documentContentHash)
+    return { kind: "rejected", reason: "document-content-mismatch" };
+  const source = resolveSource(
+    listCapsuleSources(store, citation.lineage.capsuleId),
+    String(citation.lineage.sourceId),
+  );
+  if (source === undefined) return { kind: "rejected", reason: "preview-source-missing" };
+  if (!unrestrictedFolder(source.scope))
+    return { kind: "rejected", reason: "editor-scope-unsupported" };
+  return resolveEditorSourcePath(source, document);
+}
+
+function resolveEditorSourcePath(
+  source: KnowledgeSource,
+  document: ExistingDocumentRow,
+): KnowledgeCitationEditorSource {
+  const target = verifySourcePath(source, document.document_path);
+  if (target === undefined) return { kind: "rejected", reason: "source-needs-rebind" };
+  const { realBase: root, path: absolutePath } = target;
+  // Do not follow even contained links. Check the saved spelling before using the canonical
+  // target; otherwise realpath would discard the link that must be refused.
+  const segments = safeScopePathSegments(document.document_path);
+  let component = root;
+  if (segments === undefined) return { kind: "rejected", reason: "source-unavailable" };
+  for (const segment of segments.slice(0, -1)) {
+    component = resolve(component, segment);
+    if (statSafeSource(component, "directory") === undefined) {
+      return { kind: "rejected", reason: "source-unavailable" };
+    }
+  }
+  const stat = statSafeSource(resolve(root, ...segments));
+  if (stat === undefined) return { kind: "rejected", reason: "source-unavailable" };
+  if (stat.size !== document.size_bytes) return { kind: "rejected", reason: "source-modified" };
+  return {
+    kind: "ok",
+    root,
+    path: normalizeScopePath(target.realRelative),
+    absolutePath,
+    contentHash: document.content_hash,
+    byteLength: stat.size,
+    statSnapshot: stat,
+  };
+}
+
+export function knowledgeCitationEditorSourceIsCurrent(
+  source: Extract<KnowledgeCitationEditorSource, { kind: "ok" }>,
+): boolean {
+  return isWorkspacePathSnapshotCurrent(
+    nodeWorkspaceFs,
+    source.absolutePath,
+    source.absolutePath,
+    source.statSnapshot,
+  );
+}
+
+export async function verifyKnowledgeCitationEditorSourceBytes(
+  source: Extract<KnowledgeCitationEditorSource, { kind: "ok" }>,
+): Promise<boolean> {
+  const result = await sha256Source(source.absolutePath, source.byteLength);
+  return result.kind === "ok" && result.hash === source.contentHash;
+}
+
 function sourceRoot(scope: KnowledgeSourceScope): string {
   return scope.kind === "folder" || scope.kind === "files" ? scope.rootPath : scope.repositoryRoot;
 }
@@ -135,7 +247,7 @@ function containedSourcePath(
   root: string,
   candidate: string,
   documentPath: string,
-): string | undefined {
+): ReturnType<typeof containedRealPathInfo> | undefined {
   let contained: ReturnType<typeof containedRealPathInfo>;
   try {
     contained = containedRealPathInfo(nodeWorkspaceFs, root, candidate);
@@ -150,10 +262,13 @@ function containedSourcePath(
   if (isDenied(actual)) {
     return undefined;
   }
-  return contained.path;
+  return contained;
 }
 
-function verifySourcePath(source: KnowledgeSource, documentPath: string): string | undefined {
+function verifySourcePath(
+  source: KnowledgeSource,
+  documentPath: string,
+): ReturnType<typeof containedRealPathInfo> | undefined {
   const root = sourceRoot(source.scope);
   if (isDenied(root) || !allowsDocumentPath(source.scope, documentPath)) {
     return undefined;
@@ -167,17 +282,19 @@ function verifySourcePath(source: KnowledgeSource, documentPath: string): string
     : containedSourcePath(root, caseResolved, documentPath);
 }
 
-function statSafeSource(absolutePath: string): ReturnType<typeof nodeWorkspaceFs.stat> | undefined {
+function statSafeSource(
+  absolutePath: string,
+  kind: "file" | "directory" = "file",
+): ReturnType<typeof nodeWorkspaceFs.stat> | undefined {
   let stat: ReturnType<typeof nodeWorkspaceFs.stat>;
   try {
     stat = nodeWorkspaceFs.stat(absolutePath);
   } catch {
     return undefined;
   }
-  if (!stat.isFile || stat.isSymbolicLink) {
-    return undefined;
-  }
-  return stat;
+  if (stat.isSymbolicLink) return undefined;
+  const matchesKind = kind === "file" ? stat.isFile : stat.isDirectory;
+  return matchesKind ? stat : undefined;
 }
 
 async function acquirePreviewVerifySlot(): Promise<boolean> {
@@ -350,7 +467,7 @@ function resolveFilesystemSource(
   if (source === undefined) {
     return { kind: "rejected", reason: "preview-source-missing" };
   }
-  const absolutePath = verifySourcePath(source, document.document_path);
+  const absolutePath = verifySourcePath(source, document.document_path)?.path;
   if (absolutePath === undefined || !nodeWorkspaceFs.exists(absolutePath)) {
     return { kind: "rejected", reason: "source-needs-rebind" };
   }

@@ -3,7 +3,7 @@
 // next/navigation is mocked so useSearchParams() resolves without a real Next.js router.
 // All fetch calls go through the injectable fetchDetailImpl seam.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
@@ -479,6 +479,183 @@ describe("CapsuleDetail — index status section", () => {
 // Embedding compatibility section
 // ---------------------------------------------------------------------------
 
+describe("CapsuleDetail — partial source indexing", () => {
+  function partialDetail(
+    health: Partial<CapsuleHealth> = {},
+    job: Partial<IndexingJobRecord> = {},
+  ): CapsuleDetailData {
+    return {
+      ...FULL_DETAIL,
+      health: {
+        ...BASE_HEALTH,
+        documentCount: 3,
+        failedDocuments: 1,
+        chunkCount: 4,
+        vectorCount: 4,
+        ...health,
+      },
+      indexingJobs: [
+        {
+          ...FULL_DETAIL.indexingJobs[0]!,
+          totalDocuments: 3,
+          processedDocuments: 2,
+          failedDocuments: 1,
+          skippedDocuments: 0,
+          ...job,
+        },
+      ],
+    };
+  }
+
+  it.each([
+    ["en", "Index status", "1 document could not be indexed.", "Repair failed files"],
+    [
+      "de",
+      "Indexstatus",
+      "1 Dokument konnte nicht indexiert werden.",
+      "Fehlgeschlagene Dateien reparieren",
+    ],
+  ] as const)(
+    "explains a failed source and its existing repair action in %s",
+    async (locale, title, failure, action) => {
+      const user = userEvent.setup();
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      await loadLocaleMessages(locale);
+      render(
+        <I18nProvider>
+          <CapsuleDetail fetchDetailImpl={resolveDetail(partialDetail())} />
+        </I18nProvider>,
+      );
+      const status = within(await screen.findByRole("region", { name: title }));
+      expect(status.getByText("2 / 3")).toBeInTheDocument();
+      expect(status.getByText("4 / 4")).toBeInTheDocument();
+      const note = status.getByText((text) => text.startsWith(failure));
+      expect(note).toHaveTextContent(action);
+      expect(note).toHaveTextContent(
+        locale === "en"
+          ? "Successfully indexed documents remain available."
+          : "Erfolgreich indexierte Dokumente bleiben verfügbar.",
+      );
+      expect(
+        status.getByText(
+          locale === "en" ? "Completed with file errors" : "Mit Dateifehlern abgeschlossen",
+        ),
+      ).toBeInTheDocument();
+      expect(note).toHaveAttribute("data-tone", "warn");
+      expect(status.queryByText(/current source set|aktuellen Quellensatz/u)).toBeNull();
+      const t = locale === "en" ? englishT : germanT;
+      await user.click(screen.getByText(t("localKnowledge.detail.actions.maintenance")));
+      expect(
+        screen.getByRole("button", {
+          name: t("localKnowledge.detail.actions.repair.aria", { name: BASE_CAPSULE.displayName }),
+        }),
+      ).toBeEnabled();
+    },
+  );
+
+  it.each([
+    ["en", "2 documents could not be indexed."],
+    ["de", "2 Dokumente konnten nicht indexiert werden."],
+  ] as const)("localizes multiple current file failures in %s", async (locale, failure) => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    await loadLocaleMessages(locale);
+    render(
+      <I18nProvider>
+        <CapsuleDetail fetchDetailImpl={resolveDetail(partialDetail({ failedDocuments: 2 }))} />
+      </I18nProvider>,
+    );
+    expect(await screen.findByText((text) => text.startsWith(failure))).toBeInTheDocument();
+  });
+
+  it.each([
+    ["en", "Indexed chunks with embeddings"],
+    ["de", "Indexierte Chunks mit Embeddings"],
+  ] as const)(
+    "scopes visible and accessible coverage to indexed chunks in %s",
+    async (locale, label) => {
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      await loadLocaleMessages(locale);
+      render(
+        <I18nProvider>
+          <CapsuleDetail fetchDetailImpl={resolveDetail(partialDetail())} />
+        </I18nProvider>,
+      );
+      expect(await screen.findByText(label)).toBeInTheDocument();
+      expect(screen.getByRole("img", { name: `${label}: 100%` })).toBeInTheDocument();
+    },
+  );
+
+  it("labels a succeeded job with its own file errors in the latest metric and history", async () => {
+    const user = userEvent.setup();
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(partialDetail())} />);
+    const status = within(await screen.findByRole("region", { name: "Index status" }));
+    expect(status.getByText("Completed with file errors")).toBeInTheDocument();
+    expect(status.queryByText("Succeeded")).toBeNull();
+    await openAdvanced(user);
+    expect(screen.getAllByText("Completed with file errors")).toHaveLength(2);
+  });
+
+  it("keeps current source failures distinct from a clean latest incremental job", async () => {
+    render(
+      <CapsuleDetail fetchDetailImpl={resolveDetail(partialDetail({}, { failedDocuments: 0 }))} />,
+    );
+    const status = within(await screen.findByRole("region", { name: "Index status" }));
+    expect(status.getByText("Succeeded")).toBeInTheDocument();
+    expect(status.getByText(/1 document could not be indexed\./u)).toBeInTheDocument();
+  });
+
+  it("does not carry an older job's failures into a successfully repaired index", async () => {
+    const user = userEvent.setup();
+    const repaired = partialDetail(
+      { failedDocuments: 0 },
+      { id: "repair", failedDocuments: 0, processedDocuments: 3 },
+    );
+    const detail = {
+      ...repaired,
+      indexingJobs: [...repaired.indexingJobs, ...partialDetail().indexingJobs],
+    };
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+    const status = within(await screen.findByRole("region", { name: "Index status" }));
+    expect(status.getByText("Succeeded")).toBeInTheDocument();
+    expect(status.getByText("3 / 3")).toBeInTheDocument();
+    expect(status.queryByText(/could not be indexed/u)).toBeNull();
+    await openAdvanced(user);
+    expect(screen.getAllByText("Completed with file errors")).toHaveLength(1);
+  });
+
+  it.each([
+    ["queued", "Queued"],
+    ["running", "Running"],
+    ["failed", "Failed"],
+    ["cancelled", "Cancelled"],
+  ] as const)("does not relabel a %s job as completed", async (jobStatus, label) => {
+    render(
+      <CapsuleDetail fetchDetailImpl={resolveDetail(partialDetail({}, { status: jobStatus }))} />,
+    );
+    const status = within(await screen.findByRole("region", { name: "Index status" }));
+    expect(status.getByText(label)).toBeInTheDocument();
+    expect(status.queryByText("Completed with file errors")).toBeNull();
+  });
+
+  it.each([
+    [
+      { vectorCount: 2 },
+      { lastError: { code: "EMBEDDING_GATEWAY_UNAVAILABLE", message: "Provider unavailable" } },
+      /Embedding stopped early/u,
+    ],
+    [{ vectorCount: 2 }, {}, /2 chunks still need vectors/u],
+    [{ unsupportedDocuments: 1 }, {}, /1 documents need a different extraction path/u],
+  ] as const)(
+    "retains the distinct indexing explanation alongside file failures: %j",
+    async (health, job, explanation) => {
+      render(<CapsuleDetail fetchDetailImpl={resolveDetail(partialDetail(health, job))} />);
+      const status = within(await screen.findByRole("region", { name: "Index status" }));
+      expect(status.getByText(explanation)).toBeInTheDocument();
+      expect(status.getByText(/1 document could not be indexed\./u)).toBeInTheDocument();
+    },
+  );
+});
+
 describe("CapsuleDetail — embedding compatibility section", () => {
   it("renders compatible pinned and current embedding models", async () => {
     const user = userEvent.setup();
@@ -849,7 +1026,7 @@ describe("CapsuleDetail — indexing jobs section", () => {
     await openAdvanced(user);
 
     await waitFor(() => {
-      expect(screen.getAllByText("Succeeded").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Completed with file errors")).toHaveLength(2);
     });
 
     // Counts are distinct from source counts (9/2/3 vs 8/1/1) so getByText is unambiguous

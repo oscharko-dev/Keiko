@@ -116,6 +116,8 @@ import type {
   GitDeliveryApprovalClaim,
   EditorHotExitSnapshotV1,
   EditorHotExitWriteResponse,
+  KnowledgeCitationEditorTargetRequest,
+  KnowledgeCitationEditorTargetResponse,
   PdfCitationPreviewOpenResponse,
   PdfCitationPreviewSelection,
   PdfCitationPreviewStatusRequest,
@@ -3077,6 +3079,18 @@ export async function fetchPdfCitationPreviewStatus(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export async function openKnowledgeCitationEditorTarget(
+  input: KnowledgeCitationEditorTargetRequest,
+  correlationId: string,
+): Promise<KnowledgeCitationEditorTargetResponse> {
+  return fetchJson(
+    "/api/local-knowledge/citation-preview/editor-target",
+    { method: "POST", body: JSON.stringify(input) },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function openPdfCitationPreviewSession(

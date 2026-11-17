@@ -1,4 +1,40 @@
-/* The scene owns stacking level 2; canvas controls stay above its ordinary windows. */
+/* The measured canvas excludes these controls. A tiled or freely moved window cannot
+   place its actions under the new-window or zoom buttons (#4416). */
+.cmpWorkspaceLayout {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.cmpWorkspaceViewport {
+  min-height: 0;
+}
+
+.cmpWorkspaceViewport [aria-labelledby="palette-title"] {
+  bottom: 14px;
+  max-height: calc(100% - 28px);
+}
+
+.cmpWorkspaceDock {
+  position: relative;
+  flex: none;
+  height: 76px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cmpWorkspaceLayout[data-canvas-overlays-hidden="true"] .cmpWorkspaceDock {
+  display: none;
+}
+
+html[data-keiko-modal-open="true"] .cmpWorkspaceDock {
+  pointer-events: none;
+}
+
 .cmpWorkspaceControl.cmpWorkspaceControl {
   z-index: 3;
 }
@@ -8,9 +44,8 @@
     container-type: size;
   }
 
-  /* Browser approval can reduce the actual canvas height. Keep its controls below
-     ordinary windows rather than placing them over the window's actions. */
+  /* The actual canvas already excludes the controls and any browser approval notice. */
   .cmpViewportWindow.cmpViewportWindow {
-    max-height: max(180px, calc(100cqh - 76px));
+    max-height: max(180px, 100cqh);
   }
 }

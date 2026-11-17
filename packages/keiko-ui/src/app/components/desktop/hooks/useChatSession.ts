@@ -108,12 +108,7 @@ import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/r
 import { sha256Hex } from "./canonical-voice-hasher-runtime";
 import { bffRequestErrorKind } from "@/lib/http";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import {
-  classifyRunReport,
-  formatRunSummaryFromManifest,
-  type RunSummaryFallbackKind,
-  type TerminalRunSummary,
-} from "@/lib/run-summary";
+import type { RunSummaryFallbackKind, TerminalRunSummary } from "@/lib/run-summary";
 import type {
   Chat,
   ChatMessage,
@@ -731,6 +726,7 @@ function onChatUpsertEvent(event: Event): void {
   const chat = (event as CustomEvent<unknown>).detail;
   if (!isChatPayload(chat)) return;
   invalidateSharedBootstrap();
+  sharedChatListInflight.delete(chat.projectPath);
   emitChatMutation({ type: "upsert", chat });
 }
 
@@ -738,6 +734,7 @@ function onChatDeleteEvent(event: Event): void {
   const payload = (event as CustomEvent<unknown>).detail;
   if (!isChatDeletePayload(payload)) return;
   invalidateSharedBootstrap();
+  sharedChatListInflight.clear();
   emitChatMutation({ type: "delete", chatId: payload.chatId });
 }
 
@@ -1779,6 +1776,70 @@ function applyChatUpsert(previous: SessionState, chat: Chat): SessionState {
   };
 }
 
+interface ChatNavigationOwner {
+  generation: number;
+  release: (() => void) | undefined;
+}
+
+function invalidateChatNavigation(owner: ChatNavigationOwner): void {
+  owner.release?.();
+  owner.release = undefined;
+  owner.generation += 1;
+}
+
+function beginChatNavigation(
+  owner: { readonly current: ChatNavigationOwner },
+  mounted: { readonly current: boolean },
+): () => boolean {
+  invalidateChatNavigation(owner.current);
+  const invocation = owner.current.generation;
+  return (): boolean => mounted.current && owner.current.generation === invocation;
+}
+
+function reportSupersededChatNavigation(correlationId = newClientCorrelationId()): void {
+  reportClientDiagnostic("Chat navigation superseded.", {
+    correlationId,
+    composerActivity: "chat-navigation-superseded",
+  });
+}
+
+function sessionForEmptyProject(
+  previous: SessionState,
+  project: ProjectWithAvailability,
+  chats: Chat[],
+): SessionState {
+  return { ...previous, chats, messages: [], activeProject: project, activeChat: undefined };
+}
+
+function sessionAfterProjectMessages(
+  previous: SessionState,
+  project: ProjectWithAvailability,
+  chats: Chat[],
+  chat: Chat | undefined,
+  messages: readonly ChatMessage[],
+  projections: ReadonlyMap<string, CanonicalVoiceProjection>,
+): SessionState {
+  if (chat === undefined) return sessionForEmptyProject(previous, project, chats);
+  return {
+    ...previous,
+    chats,
+    activeChat: chat,
+    ...selectionForPersistedChat(previous, chat),
+    messages: mergeCanonicalVoiceProjections(messages, chat.id, projections),
+  };
+}
+
+function chatSelectionIsCurrent(
+  chat: Chat,
+  activeChatId: string | undefined,
+  renderedChatId: string | undefined,
+  activeProjectPath: string | undefined,
+): boolean {
+  return (
+    activeChatId === chat.id && renderedChatId === chat.id && activeProjectPath === chat.projectPath
+  );
+}
+
 function projectOptimisticMessage(
   previous: SessionState,
   chatId: string,
@@ -2308,6 +2369,48 @@ function sharedFetchChats(projectPath: string): Promise<ChatListLoad> {
   return startSharedChatListLoad(projectPath).promise.then(cloneChatListPayload);
 }
 
+/** Only acknowledged mutations during this load may override its server snapshot. */
+function trackProjectChatCatalog(
+  projectPath: string,
+  load: InflightChatListLoad,
+  owner: ChatNavigationOwner,
+): {
+  readonly reconcile: (snapshot: readonly Chat[]) => Chat[];
+  readonly close: () => void;
+} {
+  const mutations = new Map<string, Chat | undefined>();
+  const unsubscribe = subscribeChatMutations((mutation) => {
+    if (mutation.type === "delete") mutations.set(mutation.chatId, undefined);
+    else if (mutation.chat.projectPath === projectPath)
+      mutations.set(mutation.chat.id, mutation.chat);
+  });
+  const close = (): void => {
+    unsubscribe();
+    if (owner.release === close) owner.release = undefined;
+  };
+  owner.release = close;
+  return {
+    close,
+    reconcile: (snapshot): Chat[] => {
+      const chats = new Map(snapshot.map((chat) => [chat.id, chat]));
+      let changed = false;
+      for (const [id, chat] of mutations) {
+        if (chat === undefined) changed = chats.delete(id) || changed;
+        else {
+          changed = chats.get(id) !== chat || changed;
+          chats.set(id, chat);
+        }
+      }
+      if (changed)
+        reportClientDiagnostic("Chat catalog reconciled.", {
+          correlationId: load.correlationId,
+          composerActivity: "chat-catalog-reconciled",
+        });
+      return sortChats([...chats.values()]);
+    },
+  };
+}
+
 /**
  * A chat list load that failed (#3557 review). A transport failure rejects before any response
  * could carry an id, so the error keeps the id the load was sent with, and the closed class of its
@@ -2458,13 +2561,32 @@ type RunSummaryAttemptResult =
   | { readonly kind: "retry" }
   | { readonly kind: "abort" };
 
+type RunSummaryFormatters = typeof import("@/lib/run-summary");
+
+async function loadRunSummaryFormatters(): Promise<RunSummaryFormatters | undefined> {
+  try {
+    return await import("@/lib/run-summary");
+  } catch (error) {
+    reportClientDiagnostic("Run summary formatting could not load.", {
+      correlationId: correlationIdOf(error),
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+    return undefined;
+  }
+}
+
 async function runSummaryFromManifestFallback(
   runId: string,
   fallbackKind: RunSummaryFallbackKind,
+  formatters: RunSummaryFormatters,
 ): Promise<RunSummaryAttemptResult> {
   try {
     const response = await fetchEvidenceManifest(runId);
-    const manifestSummary = formatRunSummaryFromManifest(response.manifest, fallbackKind);
+    const manifestSummary = formatters.formatRunSummaryFromManifest(
+      response.manifest,
+      fallbackKind,
+    );
     const workflowStatus =
       manifestSummary.workflowStatus === "failed" || manifestSummary.workflowStatus === "cancelled"
         ? manifestSummary.workflowStatus
@@ -2482,16 +2604,17 @@ async function runSummaryFromManifestFallback(
 async function attemptRunSummaryFetch(
   runId: string,
   fallbackKind: RunSummaryFallbackKind,
+  formatters: RunSummaryFormatters,
 ): Promise<RunSummaryAttemptResult> {
   try {
     const response = await fetchRunReport(runId);
-    const outcome = classifyRunReport(response.report, fallbackKind);
+    const outcome = formatters.classifyRunReport(response.report, fallbackKind);
     return outcome.kind === "terminal"
       ? { kind: "summary", summary: outcome.summary }
       : { kind: "retry" };
   } catch (error_) {
     if (!(error_ instanceof ApiError) || error_.status !== 404) return { kind: "abort" };
-    return runSummaryFromManifestFallback(runId, fallbackKind);
+    return runSummaryFromManifestFallback(runId, fallbackKind, formatters);
   }
 }
 
@@ -2503,6 +2626,8 @@ async function pollRunSummaryPatch(
 ): Promise<RunSummarySyncResult | undefined> {
   const runId = message.runId;
   if (runId === undefined) return undefined;
+  const formatters = await loadRunSummaryFormatters();
+  if (formatters === undefined) return undefined;
   const fallbackKind = runSummaryFallbackKind(message);
 
   for (let attempt = 0; attempt < RUN_SUMMARY_SYNC_MAX_ATTEMPTS; attempt += 1) {
@@ -2510,7 +2635,7 @@ async function pollRunSummaryPatch(
     // network requests instead of running out the remaining attempts.
     if (signal?.aborted === true) return undefined;
 
-    const attemptResult = await attemptRunSummaryFetch(runId, fallbackKind);
+    const attemptResult = await attemptRunSummaryFetch(runId, fallbackKind, formatters);
     if (attemptResult.kind === "abort") return undefined;
 
     if (attemptResult.kind === "summary") {
@@ -2819,6 +2944,94 @@ function refreshSessionModels(
       catalog.models,
       catalog.unreadyConversationModelIds,
     ),
+  };
+}
+
+function hydrateBootstrapChats(
+  previous: SessionState,
+  patch: Partial<SessionState>,
+  projectPath: string | undefined,
+  selected: Chat | undefined,
+): Chat[] {
+  if (
+    previous.chats.length > 0 ||
+    selected === undefined ||
+    selected.status === "closed" ||
+    selected.projectPath !== projectPath
+  )
+    return previous.chats;
+  const snapshot = patch.activeProject?.path === projectPath ? (patch.chats ?? []) : [];
+  return upsertChatIntoList(snapshot, selected);
+}
+
+function hydrateSupersededBootstrap(
+  previous: SessionState,
+  patch: Partial<SessionState>,
+  selectedChatId: string | undefined,
+): SessionState {
+  const projects = previous.projects.length === 0 ? (patch.projects ?? []) : previous.projects;
+  const selected =
+    previous.activeChat?.id === selectedChatId
+      ? previous.activeChat
+      : patch.chats?.find((chat) => chat.id === selectedChatId);
+  const activeProject =
+    previous.activeProject ?? projects.find((project) => project.path === selected?.projectPath);
+  return hydrateBootstrapModels(
+    {
+      ...previous,
+      projects,
+      activeProject,
+      chats: hydrateBootstrapChats(previous, patch, activeProject?.path, selected),
+    },
+    patch,
+  );
+}
+
+function hydrateBootstrapModels(
+  previous: SessionState,
+  patch: Partial<SessionState>,
+): SessionState {
+  if (
+    previous.modelCatalogStatus !== "unknown" ||
+    patch.catalogCapabilities === undefined ||
+    patch.catalogCorrelationId === undefined
+  )
+    return previous;
+  const catalog = sessionCatalogState(
+    patch.catalogCapabilities,
+    "bootstrap",
+    patch.catalogCorrelationId,
+  );
+  const remembered = rememberedSessionSelection(previous);
+  return {
+    ...previous,
+    ...catalog,
+    startupReadinessPending: patch.startupReadinessPending === true,
+    ...selectSessionModel(
+      remembered.id ?? previous.activeChat?.selectedModel,
+      remembered.id !== undefined && remembered.elected,
+      catalog.models,
+      catalog.unreadyConversationModelIds,
+    ),
+  };
+}
+
+function sessionAfterOpenedChat(
+  previous: SessionState,
+  chat: Chat,
+  messages: readonly ChatMessage[],
+  projections: ReadonlyMap<string, CanonicalVoiceProjection>,
+): SessionState {
+  const project = previous.projects.find((item) => item.path === chat.projectPath);
+  const chats = previous.chats.filter((entry) => entry.projectPath === chat.projectPath);
+  const missing = !chats.some((entry) => entry.id === chat.id);
+  return {
+    ...previous,
+    activeProject: project,
+    activeChat: chat,
+    chats: project !== undefined && missing ? upsertChatIntoList(chats, chat) : chats,
+    ...selectionForPersistedChat(previous, chat),
+    messages: mergeCanonicalVoiceProjections(messages, chat.id, projections),
   };
 }
 
@@ -3667,6 +3880,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const isSupersededOrAborted = (id: string, signal: AbortSignal): boolean =>
     signal.aborted || activeChatIdRef.current !== id;
   const activeProjectPathRef = useRef<string | undefined>(renderedProjectIdentity);
+  const navigationOwnerRef = useRef<ChatNavigationOwner>({ generation: 0, release: undefined });
   const renderedProjectPathRef = useRef(renderedProjectIdentity);
   synchronizeRenderedIdentity(
     activeProjectPathRef,
@@ -4155,13 +4369,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   useEffect(() => {
     let cancelled = false;
+    const current = beginChatNavigation(navigationOwnerRef, mountedRef);
     async function run(): Promise<void> {
       setLoading(true);
       setError(undefined);
       try {
         const patch = await sharedBootstrapSession(autoCreate);
         if (!cancelled) {
+          if (!current()) reportSupersededChatNavigation(patch.catalogCorrelationId);
           setState((previous) => {
+            if (!current())
+              return hydrateSupersededBootstrap(previous, patch, activeChatIdRef.current);
             const next = { ...previous, ...patch };
             return next.activeChat === undefined
               ? next
@@ -4176,7 +4394,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           });
         }
       } catch (error_) {
-        if (!cancelled) setError(errorMessage(error_));
+        if (!cancelled) {
+          if (current()) setError(errorMessage(error_));
+          else reportSupersededChatNavigation();
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -4231,6 +4452,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setState((previous) => applyChatUpsert(previous, mutation.chat));
         return;
       }
+      if (activeChatIdRef.current === mutation.chatId) activeChatIdRef.current = undefined;
       chatDraft.controller.forget(mutation.chatId);
       setState((previous) => ({
         ...previous,
@@ -4243,6 +4465,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   useEffect(() => {
     const reconciliationControllers = reconciliationControllersRef.current;
+    const navigationOwner = navigationOwnerRef.current;
     mountedRef.current = true;
     // GEN-PERF-CHAT-011 — install a fresh controller for this mount so a StrictMode remount (which
     // re-runs this effect after the cleanup aborted the previous one) polls with a live signal.
@@ -4254,6 +4477,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     }
     return (): void => {
       mountedRef.current = false;
+      invalidateChatNavigation(navigationOwner);
       sendStatusRef.current = "cancelled";
       sendControllerRef.current?.abort();
       sendControllerRef.current = null;
@@ -4447,6 +4671,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       creationRequestId?: string,
       originalModelChoice?: ChatCreationModelChoice,
     ): Promise<Chat | undefined> => {
+      const current = beginChatNavigation(navigationOwnerRef, mountedRef);
       if (originalModelChoice === undefined && selectedSessionModelId === undefined) {
         if (selectionUnavailable) refuseHeldSelection();
         else setError(NO_CONVERSATION_MODEL_MESSAGE);
@@ -4476,7 +4701,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           ...(creationRequestId === undefined ? {} : { creationRequestId }),
         });
         notifyChatUpsert(created.chat);
-        if (targetPath !== undefined && activeProjectPathRef.current !== targetPath) {
+        if (!current()) {
+          reportSupersededChatNavigation();
           return created.chat;
         }
         activeChatIdRef.current = created.chat.id;
@@ -4484,7 +4710,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setState((previous) => sessionAfterChatCreate(previous, created, preservedSelection));
         return created.chat;
       } catch (error_) {
-        setError(errorMessage(error_));
+        if (current()) setError(errorMessage(error_));
+        else reportSupersededChatNavigation();
         return undefined;
       }
     },
@@ -4508,46 +4735,47 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       resetComposerForConversationSwitch();
       activeProjectPathRef.current = project.path;
       setState((previous) => ({ ...previous, activeProject: project }));
+      const ownsNavigation = beginChatNavigation(navigationOwnerRef, mountedRef);
+      const current = (): boolean =>
+        ownsNavigation() && activeProjectPathRef.current === project.path;
+      const load = startSharedChatListLoad(project.path);
+      const catalog = trackProjectChatCatalog(project.path, load, navigationOwnerRef.current);
       try {
-        const chatPayload = await sharedFetchChats(project.path);
-        if (activeProjectPathRef.current !== project.path) return;
-        const sorted = sortChats(chatPayload.chats);
+        const sorted = sortChats((await load.promise).chats);
+        if (!current()) return reportSupersededChatNavigation(load.correlationId);
         const latest = pickResumableChat(sorted);
         if (latest === undefined) {
-          if (activeProjectPathRef.current !== project.path) return;
           if (autoCreate) {
             await openNewChat(project);
           } else {
             activeChatIdRef.current = undefined;
-            setState((previous) => ({
-              ...previous,
-              chats: sorted,
-              messages: [],
-              activeProject: project,
-              activeChat: undefined,
-            }));
+            const chats = catalog.reconcile(sorted);
+            setState((previous) => sessionForEmptyProject(previous, project, chats));
             clearLatestChatContext(setLatestGrounded, setLatestMemory);
           }
           return;
         }
         const messagePayload = await sharedFetchChatMessages(latest.id, project.path);
-        if (activeProjectPathRef.current !== project.path) return;
-        activeChatIdRef.current = latest.id;
-        setState((previous) => ({
-          ...previous,
-          chats: sorted,
-          activeChat: latest,
-          ...selectionForPersistedChat(previous, latest),
-          messages: mergeCanonicalVoiceProjections(
+        if (!current()) return reportSupersededChatNavigation(load.correlationId);
+        const chats = catalog.reconcile(sorted);
+        const active = chats.find((chat) => chat.id === latest.id && chat.status !== "closed");
+        activeChatIdRef.current = active?.id;
+        setState((previous) =>
+          sessionAfterProjectMessages(
+            previous,
+            project,
+            chats,
+            active,
             messagePayload.messages,
-            latest.id,
             canonicalVoiceProjectionRef.current,
           ),
-        }));
+        );
         setLatestMemory(undefined);
       } catch (error_) {
-        if (activeProjectPathRef.current !== project.path) return;
+        if (!current()) return reportSupersededChatNavigation(load.correlationId);
         setError(errorMessage(error_));
+      } finally {
+        catalog.close();
       }
     },
     [autoCreate, canonicalVoiceProjectionRef, openNewChat, resetComposerForConversationSwitch],
@@ -4555,7 +4783,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const openChat = useCallback(
     async (chat: Chat): Promise<void> => {
-      if (activeChatIdRef.current === chat.id && state.activeChat?.id === chat.id) return;
+      const ownsNavigation = beginChatNavigation(navigationOwnerRef, mountedRef);
+      const current = (): boolean => ownsNavigation() && isStillActiveChat(chat.id);
+      if (
+        chatSelectionIsCurrent(
+          chat,
+          activeChatIdRef.current,
+          state.activeChat?.id,
+          activeProjectPathRef.current,
+        )
+      )
+        return;
       setError(undefined);
       setNotice(undefined);
       setStreamingAssistantMessage(undefined);
@@ -4578,23 +4816,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       resetComposerForConversationSwitch();
       try {
         const messagePayload = await sharedFetchChatMessages(chat.id, chat.projectPath);
-        if (!isStillActiveChat(chat.id)) return;
-        setState((previous) => {
-          const project = previous.projects.find((item) => item.path === chat.projectPath);
-          return {
-            ...previous,
-            activeProject: project,
-            activeChat: chat,
-            ...selectionForPersistedChat(previous, chat),
-            messages: mergeCanonicalVoiceProjections(
-              messagePayload.messages,
-              chat.id,
-              canonicalVoiceProjectionRef.current,
-            ),
-          };
-        });
+        if (!current()) return reportSupersededChatNavigation();
+        setState((previous) =>
+          sessionAfterOpenedChat(
+            previous,
+            chat,
+            messagePayload.messages,
+            canonicalVoiceProjectionRef.current,
+          ),
+        );
       } catch (error_) {
-        if (!isStillActiveChat(chat.id)) return;
+        if (!current()) return reportSupersededChatNavigation();
         setError(errorMessage(error_));
       }
     },

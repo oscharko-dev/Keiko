@@ -1,4 +1,5 @@
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { JIRA_REPORT_ID_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 // Report sections whose pages list findings the human asked to see one by one: a deviation or an
 // issue without an epic is not summarised away. Figure sections (statuses, epics) are not listed.
@@ -353,5 +354,89 @@ export function rawReportKeyCorrection(names: readonly string[]): string {
     `Your answer prints ${String(names.length)} internal result key(s) of the report: ` +
     `${names.join(", ")}. A person reads figures in words. Answer again and state the same ` +
     "figures in plain language, without field names."
+  );
+}
+
+const REPORT_DOWNLOAD_REQUEST =
+  /(?<![\p{L}\p{N}_])(?:reports?|\p{L}*bericht(?:e[ns]?|s)?)(?![\p{L}\p{N}_])/iu;
+const REPORT_DOWNLOAD_ACTION = /\b(?:download\w*|export\w*|herunterladen|herunterladbar)\b/giu;
+const REPORT_DIRECT_DOWNLOAD_NEGATION =
+  /\b(?:not|never|don['’]t|nicht|keinesfalls)(?:\s+(?:to|please|bitte|als|as|in|csv|markdown)){0,3}\s*$/iu;
+const REPORT_DOWNLOAD_PREFIX_LIMIT = 64;
+const REPORT_SEPARATED_DOWNLOAD = /\blad(?:e[nt]?)?\b[^.!?\n]{0,240}\bherunter\b/iu;
+const REPORT_DOWNLOAD_FORMAT = /\b(?:csv|markdown)\b/iu;
+const REPORT_EXAMPLE_REQUEST = /\b(?:example|beispiel|sample|no download|kein(?:en)? download)\b/iu;
+const REPORT_HOWTO_REQUEST = /\b(?:how (?:can|do|to)|wie (?:kann|geht|lad(?:e[nt]?)?))\b/iu;
+// Indentation never consumes a line break: multiline retries must not rescan whole blank runs.
+const EXPORT_CODE_BLOCK = /^[^\S\r\n\u2028\u2029]*```(?:csv|markdown|md)\b/imu;
+const REPORT_ID = new RegExp(JIRA_REPORT_ID_PATTERN, "u");
+const REPORT_DOWNLOAD_LIMITATION =
+  /\b(?:report(?: export)?|export|download|bericht(?:export)?)\b[^.!?\n]{0,60}\b(?:unavailable|not (?:available|possible)|failed|nicht (?:verfügbar|möglich)|fehlgeschlagen)\b/iu;
+
+/** A limitation before an optional copyable alternative is not a claim to supply a download. */
+function explainsDownloadLimitation(answer: string): boolean {
+  const prose = answer.split(/^[^\S\r\n\u2028\u2029]*```/mu, 1)[0] ?? "";
+  return REPORT_DOWNLOAD_LIMITATION.test(prose);
+}
+
+/** A completed managed report is a real export; a search result or a prose code block is not. */
+function completedReportExport(exchange: ChatToolExchange): boolean {
+  const result = exchange.result;
+  return (
+    result?.status === "completed" &&
+    result.toolRef?.canonicalId === REPORT_TOOL &&
+    result.toolRef.contractVersion === 1 &&
+    hasReportExports(record(result.data))
+  );
+}
+
+function hasReportExports(data: Readonly<Record<string, unknown>> | undefined): boolean {
+  return (
+    data?.outcome === "succeeded" &&
+    (data.status === "complete" || data.status === "incomplete") &&
+    typeof data.reportId === "string" &&
+    REPORT_ID.test(data.reportId) &&
+    Array.isArray(data.exports) &&
+    data.exports.includes("markdown") &&
+    data.exports.includes("csv")
+  );
+}
+
+function requestsDownload(request: string): boolean {
+  for (const action of request.matchAll(REPORT_DOWNLOAD_ACTION)) {
+    const prefix = request.slice(
+      Math.max(0, action.index - REPORT_DOWNLOAD_PREFIX_LIMIT),
+      action.index,
+    );
+    if (!REPORT_DIRECT_DOWNLOAD_NEGATION.test(prefix)) return true;
+  }
+  const separated = REPORT_SEPARATED_DOWNLOAD.exec(request);
+  return separated !== null && !/\b(?:nicht|keinesfalls)\b/iu.test(separated[0]);
+}
+
+/** Only an explicit current download request answered with copyable export text needs this repair. */
+export function reportDownloadMissing(
+  exchanges: readonly ChatToolExchange[],
+  currentRequest: string,
+  answer: string,
+): boolean {
+  return (
+    REPORT_DOWNLOAD_REQUEST.test(currentRequest) &&
+    requestsDownload(currentRequest) &&
+    REPORT_DOWNLOAD_FORMAT.test(currentRequest) &&
+    !REPORT_EXAMPLE_REQUEST.test(currentRequest) &&
+    !REPORT_HOWTO_REQUEST.test(currentRequest) &&
+    EXPORT_CODE_BLOCK.test(answer) &&
+    !explainsDownloadLimitation(answer) &&
+    !exchanges.some(completedReportExport)
+  );
+}
+
+export function reportDownloadCorrection(): string {
+  return (
+    "The current user requested a Jira report download, but no report export was generated. " +
+    "Code blocks only provide copyable text. Use the offered jira.report tool for the exact requested issue scope (JQL), " +
+    "continue a reading report by its reportId, and refer to its actual Markdown/CSV export controls. " +
+    "Do not change Jira, widen the requested issue set or invent an export link. If a real limitation prevents the report, explain that limitation plainly."
   );
 }

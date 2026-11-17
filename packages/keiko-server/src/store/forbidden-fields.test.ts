@@ -232,6 +232,7 @@ const EXPECTED_TABLES = new Set([
   "coding_runtime_description_jobs",
   "git_journey_outcomes",
   "github_issue_reader_authorization",
+  "jira_report_exports",
   "memory_autonomy_policy",
   "markdown_skills",
   "markdown_skill_revisions",
@@ -305,6 +306,32 @@ describe("forbidden-fields — chat creation intent metadata", () => {
     try {
       expect(new Set(columnNames(inspector, "chat_creation_intents"))).toEqual(
         new Set(["request_key", "intent_sha256", "chat_id"]),
+      );
+    } finally {
+      inspector.close();
+    }
+  });
+});
+
+describe("forbidden-fields — retained Jira report downloads (ADR-0128 / #4390)", () => {
+  it("V79 retains only completed report files and their bounded ownership metadata", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "jira-report-inventory.db"));
+    try {
+      // Finished, content-projected downloads only; no Jira connection, grant or approval state.
+      expect(new Set(columnNames(inspector, "jira_report_exports"))).toEqual(
+        new Set([
+          "report_id",
+          "chat_id",
+          "last_used_at",
+          "report_digest",
+          "markdown",
+          "csv",
+          "content_digest",
+          "byte_count",
+        ]),
+      );
+      expect(inspector.prepare("PRAGMA foreign_key_list(jira_report_exports)").all()).toMatchObject(
+        [{ table: "chats", from: "chat_id", to: "id", on_delete: "CASCADE" }],
       );
     } finally {
       inspector.close();

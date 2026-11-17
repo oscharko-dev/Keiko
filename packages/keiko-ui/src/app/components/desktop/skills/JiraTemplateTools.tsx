@@ -217,6 +217,7 @@ export interface JiraTemplates {
   readonly tools: Tools;
   readonly pods: readonly { readonly id: string; readonly name: string }[];
   readonly podId: string | undefined;
+  readonly podReady: boolean;
   readonly selectPod: (podId: string) => void;
   /** The stored skills that are templates, once the list was read (empty when it failed). */
   readonly templateIds: ReadonlySet<string> | undefined;
@@ -233,7 +234,14 @@ export function useJiraTemplates(library: MarkdownSkillLibrary): JiraTemplates {
     if (!tools.listed) return undefined;
     return new Set(ids.length === 0 ? [] : ids.split("|"));
   }, [ids, tools.listed]);
-  return { tools, pods: ready, podId, selectPod: setSelected, templateIds };
+  return {
+    tools,
+    pods: ready,
+    podId,
+    podReady: podId !== undefined && !pods.loading && !pods.failed,
+    selectPod: setSelected,
+    templateIds,
+  };
 }
 
 export function PodSelect({ jira }: { readonly jira: JiraTemplates }): ReactNode {
@@ -325,6 +333,7 @@ function TemplateRow({
   item,
   library,
   check,
+  podReady,
   open,
   onOpen,
   chat,
@@ -334,6 +343,7 @@ function TemplateRow({
   readonly item: MarkdownSkillMetadata | undefined;
   readonly library: MarkdownSkillLibrary;
   readonly check: AutomaticTemplateCheck | undefined;
+  readonly podReady: boolean;
   readonly open: boolean;
   readonly onOpen: (skill: MarkdownSkillMetadata) => void;
   readonly chat: { readonly skill: ChatMarkdownSkill; readonly disabled: boolean } | undefined;
@@ -354,7 +364,7 @@ function TemplateRow({
         }}
       >
         <span className={styles.cmpItemName}>{entry.name}</span>
-        <TemplateStatus entry={entry} check={check} />
+        <TemplateStatus entry={entry} check={check} podReady={podReady} />
       </button>
       <BindControl check={check} outcome={bind.outcome} onBind={bind.onBind} />
       {item === undefined || chat === undefined ? null : (
@@ -407,14 +417,13 @@ export function JiraTemplateList({
           item={library.skills.find((skill) => skill.id === entry.id)}
           library={library}
           check={tools.checks.get(templateKey(entry))}
+          podReady={jira.podReady}
           open={openId === entry.id}
           onOpen={onOpen}
           chat={chat}
           bind={{
             outcome: binding.outcomes.get(entry.id),
-            onBind: () => {
-              void binding.bind(entry);
-            },
+            onBind: () => void binding.bind(entry),
           }}
         />
       ))}
@@ -472,34 +481,37 @@ type CheckState = "ok" | "mismatch" | "pending";
 function checkState(
   entry: JiraTemplateEntry,
   check: AutomaticTemplateCheck | undefined,
-): CheckState {
+  podReady: boolean,
+): CheckState | undefined {
   if (!entry.valid) return "mismatch";
-  if (check === undefined) return "pending";
+  if (check === undefined) return podReady ? "pending" : undefined;
   if (check === "failed" || !check.valid || check.findings.length > 0) return "mismatch";
-  return check.binding?.state === "ambiguous" || check.binding?.state === "dead"
-    ? "mismatch"
-    : "ok";
+  const binding = check.binding?.state;
+  return binding === "ambiguous" || binding === "dead" ? "mismatch" : "ok";
 }
 
 /** One short line per template: which Jira project and issue type it governs, and whether it can. */
 export function TemplateStatus({
   entry,
   check,
+  podReady,
 }: {
   readonly entry: JiraTemplateEntry;
   readonly check: AutomaticTemplateCheck | undefined;
+  readonly podReady: boolean;
 }): ReactNode {
   const t = useTranslate();
-  const state = checkState(entry, check);
+  const state = checkState(entry, check, podReady);
   const sentence = entry.valid ? checkSentence(check, t) : t("chat.skills.jira.invalid");
-  const scope = entry.valid ? `${entry.project ?? ""} · ${entry.issueType ?? ""} — ` : "";
+  const scope = entry.valid ? `${entry.project ?? ""} · ${entry.issueType ?? ""}` : "";
+  const description = state === undefined ? scope : [scope, sentence].filter(Boolean).join(" — ");
   const shared = (entry.sharedWith ?? 0) > 0 ? ` ${t("chat.skills.jira.sharedType")}` : "";
+  const status = shared === "" ? state : "mismatch";
   return (
-    <span className={styles.cmpStatus} data-state={shared === "" ? state : "mismatch"}>
-      <span className={styles.cmpDot} aria-hidden="true" />
+    <span className={styles.cmpStatus} data-state={status}>
+      {status === undefined ? null : <span className={styles.cmpDot} aria-hidden="true" />}
       <span>
-        {scope}
-        {sentence}
+        {description}
         {shared}
       </span>
     </span>

@@ -1426,16 +1426,38 @@ type VerificationSummary = NonNullable<
   Extract<CodingWorkbenchRuntimeSseEvent, { kind: "runtime-event" }>["verificationSummary"]
 >;
 
-// A summary in which no check passed and none failed ran nothing: every step was skipped. It is
-// shown as not run rather than as a failure the counts beside it contradict (#3897 UI review:
-// "Tests: Failed · 0 passed, 0 unsuccessful, 1 skipped").
+// The canonical failed count includes denials. Only an explicit denied subset can distinguish
+// those blocked steps from executed failures; historical summaries retain their original facts.
 function shownVerificationStatus(
   summary: VerificationSummary,
 ): VerificationSummary["status"] | "notRun" {
-  if (summary.status !== "passed" && summary.passedCount === 0 && summary.failedCount === 0) {
-    return "notRun";
+  if (summary.status === "passed") return "passed";
+  const deniedCount = summary.deniedCount ?? 0;
+  if (summary.failedCount === deniedCount) {
+    if (summary.passedCount === 0) return "notRun";
+    if (deniedCount > 0) return "partial";
   }
   return summary.status;
+}
+
+function verificationCheckCounts(
+  summary: VerificationSummary,
+  number: Intl.NumberFormat,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (summary.deniedCount === undefined) {
+    return t("codingWorkbench.verification.checks", {
+      passed: number.format(summary.passedCount),
+      failed: number.format(summary.failedCount),
+      skipped: number.format(summary.skippedCount),
+    });
+  }
+  return t("codingWorkbench.verification.checksWithBlocked", {
+    passed: number.format(summary.passedCount),
+    failed: number.format(summary.failedCount - summary.deniedCount),
+    blocked: number.format(summary.deniedCount),
+    skipped: number.format(summary.skippedCount),
+  });
 }
 
 /** A duration as a reader takes it in: milliseconds below a second, seconds with one decimal above. */
@@ -1471,13 +1493,7 @@ function VerificationDetail({
           status: t(`codingWorkbench.verification.status.${shownVerificationStatus(summary)}`),
         })}
       </p>
-      <p>
-        {t("codingWorkbench.verification.checks", {
-          passed: number.format(summary.passedCount),
-          failed: number.format(summary.failedCount),
-          skipped: number.format(summary.skippedCount),
-        })}
-      </p>
+      <p>{verificationCheckCounts(summary, number, t)}</p>
       <p>
         {t("codingWorkbench.verification.duration", {
           duration: formatDurationMs(summary.durationMs, locale),

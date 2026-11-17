@@ -393,6 +393,7 @@ import {
   handleClosePdfCitationPreviewSession,
   handleGetPdfCitationPreviewDocument,
   handleGetPdfCitationPreviewStatus,
+  handleKnowledgeCitationEditorTarget,
   handleOpenPdfCitationPreviewSession,
 } from "./local-knowledge-preview-handlers.js";
 import {
@@ -1864,6 +1865,12 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/gateway/readiness/selection",
     handler: handleGatewaySelectionCheck,
+  },
+  // #4443: an explicit saved text citation can resolve an ordinary Editor target.
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/citation-preview/editor-target",
+    handler: handleKnowledgeCitationEditorTarget,
   },
 ];
 

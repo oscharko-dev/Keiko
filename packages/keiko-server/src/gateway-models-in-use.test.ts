@@ -1,6 +1,6 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
@@ -13,15 +13,22 @@ import {
   type GatewayConfig,
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
+import { electConversationDefault } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
 import {
-  awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
   checkSelectedConversationModel,
   handleGatewayReadiness,
   handleGatewaySelectionCheck,
   initializeConfiguredConversationReadiness,
+  conversationModelForStartupProof,
 } from "./gateway-readiness.js";
+import { handleCreateDesktopChat } from "./chat-handlers.js";
+import {
+  captureConversationReadinessAdmission,
+  ConversationModelNotReadyError,
+  withConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
   codingWorkbenchProbesSettledForTests,
@@ -132,6 +139,7 @@ interface GatewayDouble {
   readonly rejectChat: Set<string>;
   /** Models whose chat requests answer another status: 503 is no verdict, 401 a refused credential. */
   readonly chatStatus: Map<string, number>;
+  readonly chatErrors: Map<string, Error>;
   /** Embedding aliases that cannot embed. */
   readonly rejectEmbedding: Set<string>;
 }
@@ -140,6 +148,7 @@ function gatewayDouble(): GatewayDouble {
   const requests: string[] = [];
   const rejectChat = new Set<string>();
   const chatStatus = new Map<string, number>();
+  const chatErrors = new Map<string, Error>();
   const rejectEmbedding = new Set<string>();
   vi.stubGlobal(
     "fetch",
@@ -157,6 +166,8 @@ function gatewayDouble(): GatewayDouble {
             : Response.json({ data: [{ embedding: [3, 4] }], model }),
         );
       const status = chatStatus.get(model);
+      const error = chatErrors.get(model);
+      if (error !== undefined) return Promise.reject(error);
       if (status !== undefined) return Promise.resolve(new Response("", { status }));
       if (rejectChat.has(model))
         return Promise.resolve(new Response("model rejected", { status: 400 }));
@@ -173,9 +184,157 @@ function gatewayDouble(): GatewayDouble {
       requests.filter((line) => line.endsWith(`:${modelId}`)).length,
     rejectChat,
     chatStatus,
+    chatErrors,
     rejectEmbedding,
   };
 }
+
+function selectedChatConfig(modelIds: readonly string[] = [CHAT_A]): GatewayConfig {
+  const configured = config();
+  if (configured.capabilities === undefined) throw new TypeError("Missing fixture capabilities");
+  return {
+    ...configured,
+    providers: configured.providers.filter((provider) => modelIds.includes(provider.modelId)),
+    capabilities: configured.capabilities.filter((capability) => modelIds.includes(capability.id)),
+  };
+}
+
+async function conversationElections(deps: UiHandlerDeps): Promise<{
+  readonly server: string | undefined;
+  readonly wire: string | undefined;
+  readonly startupProof: string | undefined;
+}> {
+  if (deps.uiDbPath === undefined) throw new TypeError("Missing fixture database path");
+  const created = await handleCreateDesktopChat(
+    selectionRequest({ projectPath: dirname(deps.uiDbPath), title: "Synthetic default election" }),
+    deps,
+  );
+  expect(created.status).toBe(201);
+  const body = created.body as { readonly chat: { readonly selectedModel?: string } };
+  const listed = handleModels({ url: new URL("http://127.0.0.1/api/models") } as RouteContext, deps)
+    .body as { readonly models: readonly ModelCapability[] };
+  return {
+    server: body.chat.selectedModel,
+    wire: electConversationDefault(listed.models, (model) => model.conversationReady)?.id,
+    startupProof: conversationModelForStartupProof(deps),
+  };
+}
+
+it.each(["503", "timeout", "401"] as const)(
+  "keeps two-model elections consistent after a cold %s without admitting inference (#4415)",
+  async (failure) => {
+    const gateway = gatewayDouble();
+    if (failure === "timeout")
+      gateway.chatErrors.set(CHAT_A, new DOMException("synthetic timeout", "TimeoutError"));
+    else gateway.chatStatus.set(CHAT_A, Number(failure));
+    const deps = composition();
+    deps.gatewayConfig?.set(selectedChatConfig([CHAT_A, CHAT_B]), true, "cold-election");
+    await vi.waitFor(() => {
+      expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
+    });
+    await awaitInitializedConversationReadiness(deps, CHAT_A, "cold-election");
+    const expected = failure === "401" ? CHAT_B : CHAT_A;
+    expect(await conversationElections(deps)).toEqual({
+      server: expected,
+      wire: expected,
+      startupProof: failure === "401" ? undefined : CHAT_A,
+    });
+    expect(captureConversationReadinessAdmission(deps, CHAT_A)).toMatchObject({ status: 400 });
+    const call = vi.fn((): Promise<never> =>
+      Promise.reject(new Error("Unexpected inference dispatch")),
+    );
+    const admitted = withConversationReadinessAdmission(
+      { call },
+      CHAT_A,
+      { modelId: CHAT_A, gatewayConfigGeneration: deps.gatewayConfig?.generation() },
+      deps,
+    );
+    await expect(
+      admitted.call({ modelId: CHAT_A, messages: [] }, new AbortController().signal),
+    ).rejects.toBeInstanceOf(ConversationModelNotReadyError);
+    expect(call).not.toHaveBeenCalled();
+    expect(gateway.requestsFor(CHAT_A)).toBe(1);
+    expect(gateway.requestsFor(CHAT_B)).toBe(0);
+  },
+);
+
+function listedConversationReady(deps: UiHandlerDeps): boolean | undefined {
+  const body = handleModels({ url: new URL("http://127.0.0.1/api/models") } as RouteContext, deps)
+    .body as { readonly models: readonly ModelCapability[] };
+  expect(body.models).toHaveLength(1);
+  return body.models[0]?.conversationReady;
+}
+
+it.each(["503", "timeout"])(
+  "keeps a sole cold Chat selectable after transient %s without granting inference",
+  async (failure) => {
+    const gateway = gatewayDouble();
+    if (failure === "503") gateway.chatStatus.set(CHAT_A, 503);
+    else gateway.chatErrors.set(CHAT_A, new DOMException("synthetic timeout", "TimeoutError"));
+    const deps = composition();
+    deps.gatewayConfig?.set(selectedChatConfig(), true, "cold-transient");
+    await vi.waitFor(() => {
+      expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
+    });
+    await awaitInitializedConversationReadiness(deps, CHAT_A, "cold-transient");
+    expect(currentConversationReady(deps, CHAT_A)).toBe(false);
+    expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
+    expect(listedConversationReady(deps)).toBeUndefined();
+    const before = gateway.requestsFor(CHAT_A);
+    const base = Date.now();
+    let offset = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => base + offset);
+    const early = await handleGatewaySelectionCheck(selectionRequest({ modelId: CHAT_A }), deps);
+    expect(early).toMatchObject({ status: 200, body: { outcome: "cooldown" } });
+    for (let read = 0; read < 3; read++) {
+      expect(listedConversationReady(deps)).toBeUndefined();
+      initializeConfiguredConversationReadiness(deps, "cold-passive");
+    }
+    await awaitInitializedConversationReadiness(deps, CHAT_A, "cold-passive");
+    expect(gateway.requestsFor(CHAT_A)).toBe(before);
+    offset = 31_000;
+    gateway.chatStatus.delete(CHAT_A);
+    gateway.chatErrors.delete(CHAT_A);
+    const retry = await handleGatewaySelectionCheck(selectionRequest({ modelId: CHAT_A }), deps);
+    expect(retry).toMatchObject({ status: 200, body: { outcome: "started" } });
+    await awaitInitializedConversationReadiness(deps, CHAT_A, "cold-picked");
+    expect(gateway.requestsFor(CHAT_A)).toBe(before + 1);
+    expect(currentConversationReady(deps, CHAT_A)).toBe(true);
+    expect(listedConversationReady(deps)).toBe(true);
+  },
+);
+
+it.each([400, 401, 403, 404, 501])(
+  "keeps a sole cold Chat's definitive HTTP %s failure visible as not ready",
+  async (status) => {
+    const gateway = gatewayDouble();
+    gateway.chatStatus.set(CHAT_A, status);
+    const deps = composition();
+    deps.gatewayConfig?.set(selectedChatConfig(), true, "cold-definitive");
+    await vi.waitFor(() => {
+      expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
+    });
+    await awaitInitializedConversationReadiness(deps, CHAT_A, "cold-definitive");
+    expect(currentConversationReady(deps, CHAT_A)).toBe(false);
+    expect(listedConversationReady(deps)).toBe(false);
+  },
+);
+
+it("clears transient Chat presentation after a later definitive credential refusal", async () => {
+  const gateway = gatewayDouble();
+  gateway.chatStatus.set(CHAT_A, 503);
+  const deps = composition();
+  deps.gatewayConfig?.set(selectedChatConfig(), true, "cold-transient-then-refused");
+  await vi.waitFor(() => {
+    expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
+  });
+  expect(listedConversationReady(deps)).toBeUndefined();
+  gateway.chatStatus.set(CHAT_A, 403);
+  const verified = await handleGatewayReadiness(selectionRequest({ modelId: CHAT_A }), deps);
+  expect(verified.status).toBe(200);
+  expect(currentConversationReady(deps, CHAT_A)).toBe(false);
+  expect(listedConversationReady(deps)).toBe(false);
+});
 
 async function started(
   deps: UiHandlerDeps,
@@ -272,7 +431,6 @@ it("adds no request when a person sends to or regenerates with an unselected, un
   const before = gateway.requests.length;
   await awaitInitializedConversationReadiness(deps, CHAT_B, "corr-send-b");
   await awaitInitializedConversationReadiness(deps, CHAT_B, "corr-regenerate-b");
-  await awaitAnyInitializedConversationReadyChatModel(deps, CHAT_B, "corr-create-b");
   expect(gateway.requests).toHaveLength(before);
   expect(currentConversationReady(deps, CHAT_B)).toBe(false);
 });

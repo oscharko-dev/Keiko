@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,6 +52,20 @@ describe("existing sealed vault atomic ownership", () => {
     const next = second.acquireLease?.("session-context");
     expect(next).toBeTypeOf("function");
     next?.();
+  });
+  it("retains atomic ownership for a sharded vault with a long Windows guard path", () => {
+    const storeDir = join(location(), "editor-local-history", "w".repeat(120), "checkpoints");
+    const guardPath = secretVaultGuardPath(storeDir, "store-write");
+    const key = Buffer.alloc(32, 19);
+    const first = createShardedLocalSecretVault({ key, storeDir });
+    const second = createShardedLocalSecretVault({ key, storeDir });
+    const reference = `vault-${"a".repeat(48)}`;
+    expect(guardPath.length).toBeGreaterThan(260);
+    first.set(reference, "synthetic pending");
+    expect(existsSync(guardPath)).toBe(true);
+    expect(second.get(reference)).toBe("synthetic pending");
+    expect(second.compareAndSet?.(reference, "synthetic pending", "synthetic consumed")).toBe(true);
+    expect(first.compareAndSet?.(reference, "synthetic pending", "stale")).toBe(false);
   });
   it("refuses writes while another process owns the same kernel guard, then recovers on exit", async () => {
     const storePath = join(location(), "secrets");

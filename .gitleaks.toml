@@ -41,6 +41,15 @@ regexTarget = "line"
 regexes = ['''rootToken: "0123456789abcdef",''']
 
 [[allowlists]]
+description = "PR #4409: the EditorWidget snapshot test copied the deterministic watcher root identity into one immutable checkpoint. The synthetic event uses it only as a test identifier. The current fixture assembles it at runtime."
+condition = "AND"
+commits = ["54fefd4f77b468aff3549e73b9a04522152ec6be"]
+paths = ['''^packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorWidget\.test\.tsx$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\n?[ \t]*rootToken: "0123456789abcdef",[ \t]*$''']
+
+[[allowlists]]
 description = "PR #3876: the edit request fixture idempotency-1 in one immutable checkpoint of the coding runtime resolver test. It is test metadata (the idempotency key of a synthetic edit), not a credential; the generic-api-key rule matches the key name and an entropy of 3.55. Later commits use the non-secret-shaped idem-1. Only this exact historical fixture line in this one commit is exempt."
 condition = "AND"
 commits = ["b489d253239765a97535dfa530609d7db49b3bb3"]

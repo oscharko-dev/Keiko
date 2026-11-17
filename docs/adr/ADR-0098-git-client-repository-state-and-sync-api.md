@@ -168,6 +168,15 @@ the extra NUL-separated original-path field that rename records carry. Both `git
 re-read) consume this one parser, so the ahead/behind/dirty semantics are audited in one place and
 cannot diverge between the read and sync surfaces.
 
+The Git window's settled Fetch/Pull result uses only the execute response's post-operation counts
+(#4414, 2026-11-16). It shows each known ahead/behind count and omits unknown counts; the cached
+summary from before the operation never supplies these values. Push has no post-operation counts
+in its response, so its result carries status and duration alone. No extra read is added for these
+metrics. Existing repository invalidation, scope sequencing and Pull's editor-buffer reconciliation
+remain unchanged. The existing client stage lifecycle records `git-sync-outcome` when the current
+scope accepts a result presentation, with no repository or text content; this immediate presentation
+decision has duration zero, independently of the operation duration shown in the window.
+
 ### D4 — Fetch/pull deliberately do NOT enter `GitDeliveryActionKind` / `runGitMutation`
 
 This is the load-bearing reuse-vs-new boundary. `gitDelivery/syncExecution.ts` runs fetch/pull
@@ -221,9 +230,12 @@ it, because a **local read** and a **network sync** have opposite credential req
   helper, or an SSH identity. This is the correct, unchanged behavior for every read route and for
   the sync preview and the post-op ahead/behind re-read.
 - **`networkGitEnv` (the fetch/pull command only — `defaultGitNetworkProcessRunner`).** A fetch or
-  pull against a private or SSH remote *must* be able to authenticate, so this env inherits the real
-  process environment (the user's global `~/.gitconfig` `credential.helper`, the macOS `osxkeychain`
-  helper, and the real `~/.ssh` identities). It still **never prompts**: `GIT_TERMINAL_PROMPT=0` and
+  pull against a private or SSH remote *must* be able to authenticate, so this env preserves an
+  allowlist of account and SSH-agent state, including Windows credential-store profile paths.
+  The runner admits only direct system/global credential-helper entries after clearing inherited
+  helpers; this restores Git Credential Manager and macOS `osxkeychain` without executing helpers
+  from repository configuration or includes (#4411; ADR-0115). No ambient secrets or caller
+  `GIT_*` overrides are inherited. It still **never prompts**: `GIT_TERMINAL_PROMPT=0` and
   `GIT_SSH_COMMAND="ssh -oBatchMode=yes -oStrictHostKeyChecking=yes"` force the operation to
   **fail closed** when no stored credential satisfies the remote (`auth-failed`) or when SSH cannot
   verify a known host key (`untrusted-host-key`), rather than hang on an interactive prompt or trust

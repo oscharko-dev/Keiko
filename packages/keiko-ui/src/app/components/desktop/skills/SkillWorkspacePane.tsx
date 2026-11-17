@@ -155,7 +155,11 @@ function OpenTemplateStatus({
   if (entry === undefined) return null;
   return (
     <div className={styles.cmpTemplateLine}>
-      <TemplateStatus entry={entry} check={jira.tools.checks.get(templateKey(entry))} />
+      <TemplateStatus
+        entry={entry}
+        check={jira.tools.checks.get(templateKey(entry))}
+        podReady={jira.podReady}
+      />
     </div>
   );
 }

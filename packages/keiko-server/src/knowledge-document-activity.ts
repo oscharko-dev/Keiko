@@ -4,9 +4,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { getServerLogger } from "./observability/index.js";
 
-import type {
-  KnowledgeReviewFailureStage,
-  KnowledgeReviewValidationReason,
+import {
+  KNOWLEDGE_STALE_SOURCE_REASONS,
+  type KnowledgeStaleSourceReason,
+  type KnowledgeReviewFailureStage,
+  type KnowledgeReviewValidationReason,
 } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 export {
   KNOWLEDGE_REVIEW_FAILURE_STAGES,
@@ -51,6 +53,7 @@ export interface KnowledgeDocumentActivity extends KnowledgeReviewObservation {
   readonly sourceChars: number;
   readonly hasNextPage: boolean;
   readonly cached: boolean;
+  readonly sourceRefusal?: KnowledgeStaleSourceReason;
   readonly requirementCount?: number;
   readonly readRequirementCount?: number;
   readonly reviewedDocumentCount?: number;
@@ -84,6 +87,12 @@ const OPERATION = defineActivityLogOperation({
     sourceChars: COUNT,
     hasNextPage: { type: "boolean", dataClass: "closed-enum", required: true },
     cached: { type: "boolean", dataClass: "closed-enum", required: true },
+    sourceRefusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: KNOWLEDGE_STALE_SOURCE_REASONS,
+    },
     requirementCount: { ...COUNT, required: false },
     readRequirementCount: { ...COUNT, required: false },
     reviewedDocumentCount: { ...COUNT, required: false },

@@ -397,7 +397,7 @@ function legacyWindowsSummary(
     return undefined;
   }
   return {
-    status: "bootstrap",
+    status: "managed",
     target: "windows-x64",
     updateEligible: false,
     packageVersion,
@@ -579,8 +579,7 @@ function registrationMatchesManifest(
   if (manifest.binding === undefined) {
     return (
       registration.raw.windowsGeneration === undefined &&
-      (manifest.summary.target === "windows-x64" ||
-        registrationDiskMatches(registration.raw, manifest, fs))
+      registrationDiskMatches(registration.raw, manifest, fs)
     );
   }
 
@@ -612,7 +611,7 @@ function registrationDiskMatches(
   manifest: PortableManifestSummary,
   fs: PortableDetectorFs,
 ): boolean {
-  if (manifest.summary.target !== "windows-x64") {
+  if (manifest.binding === undefined) {
     if (
       hasSymlinkAncestor(manifest.layout.appRoot, fs) ||
       !fs.existsSync(manifest.layout.rootLauncherPath)
@@ -650,6 +649,9 @@ function manualInstructions(reason: UpdateInstallMode["reason"]): string {
   if (reason === "portable-it-managed") {
     return "This Keiko install is managed outside the app and is not eligible for self-update.";
   }
+  if (reason === "portable-update-unavailable") {
+    return "This Windows package cannot update itself. Keep using this version and review the Windows release instructions before updating; repeating setup will not enable in-app updates.";
+  }
   if (reason === "portable-non-stable") {
     return "Only stable portable Keiko releases are eligible for in-app updates.";
   }
@@ -675,7 +677,10 @@ export function resolvePortableUnsupportedInstallKind(
   if (reason === "portable-it-managed") {
     return "portable-it-managed";
   }
-  if (reason === "portable-non-stable" && portable.status === "managed") {
+  if (
+    (reason === "portable-non-stable" || reason === "portable-update-unavailable") &&
+    portable.status === "managed"
+  ) {
     return "portable-managed";
   }
   // A volume refusal says nothing about the setup: a managed install stays a managed install.
@@ -737,6 +742,9 @@ function modeForPortableSummary(
       status: "it-managed",
       updateEligible: false,
     });
+  }
+  if (!summary.updateEligible) {
+    return portableUnsupportedMode(packageName, "portable-update-unavailable", summary);
   }
   return portableSupportedMode(packageName, summary);
 }

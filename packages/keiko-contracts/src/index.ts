@@ -46,6 +46,8 @@ export type { clampUnit } from "./numeric.js";
 // against one math. `tests/architecture/eval-metrics-single-owner.test.ts` proves the invariant.
 export type { binaryNdcgAtK, mean, wilsonInterval, WilsonInterval } from "./eval-metrics.js";
 
+export type { environmentVariableNames, environmentVariableValue } from "./process-environment.js";
+
 // ─── Shared stable ordering helpers ─────────────────────────────────────────────
 export type { sortedStrings } from "./stable-order.js";
 // Deterministic code-unit comparator for `Array#sort` callbacks (epic #2719 W4, issue #2723) —
@@ -3433,6 +3435,9 @@ export type {
 } from "./local-knowledge-schema-validation.js";
 export type {
   CurrentPdfCitationPreviewSnapshot,
+  KnowledgeCitationEditorTargetRequest,
+  KnowledgeCitationEditorTargetReason,
+  KnowledgeCitationEditorTargetResponse,
   PdfCitationPreviewAnchorQuality,
   PdfCitationPreviewAuthorizationResponse,
   PdfCitationPreviewAuthorized,

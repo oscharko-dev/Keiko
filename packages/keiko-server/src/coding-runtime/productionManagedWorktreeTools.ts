@@ -2104,11 +2104,20 @@ const EXECUTED_RED_STATUSES = ["failed", "timed-out", "resource-exceeded"] as co
 function modelFacingStatus(report: VerificationReport): Exclude<VerificationStatus, "passed"> {
   const overall = report.overallStatus as Exclude<VerificationStatus, "passed">;
   if (refusedOnlyForThisHost(report)) return "skipped";
-  if (VERIFICATION_OUTCOME_REASON_CODES[overall] !== "VERIFICATION_NOT_RUN") return overall;
   const executedRed = EXECUTED_RED_STATUSES.find((status) =>
     report.results.some((result) => result.status === status),
   );
-  return executedRed ?? overall;
+  if (executedRed !== undefined) return executedRed;
+  if (
+    report.dependencies !== undefined &&
+    VERIFICATION_DEPENDENCY_FAILURE_STATES.has(report.dependencies.state)
+  ) {
+    return overall;
+  }
+  // The orchestrator deliberately folds denied steps into overall failed for authority. That
+  // refusal is not evidence that a check ran; keep its existing not-run reason for the model/UI.
+  if (report.results.some((result) => result.status === "denied")) return "denied";
+  return overall;
 }
 
 function failedVerificationOutcome(
@@ -2638,6 +2647,7 @@ function publishVerification(
       status: verificationStatus(report.overallStatus),
       passedCount: report.counts.passed,
       failedCount: failedCount(report),
+      ...(report.counts.denied === 0 ? {} : { deniedCount: report.counts.denied }),
       skippedCount: report.counts.skipped,
       durationMs: report.durationMs,
     },

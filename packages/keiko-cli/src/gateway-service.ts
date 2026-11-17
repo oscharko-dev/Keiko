@@ -27,9 +27,9 @@ import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./secu
 //
 // `--dev-lane` installs the same broker from a Windows dev checkout, pinned to the runtime
 // supervisor that checkout built (ADR-0043 D19). It is the human's explicit choice; without it the
-// command accepts a release-qualified package's helper or, where there is none (an npm
-// installation), the supervisor of the npm runtime package installed next to Keiko, admitted at the
-// digest compiled into the server (#4068).
+// command accepts a release-qualified or independently pinned evaluation package's helper, or where
+// there is none (an npm installation), the supervisor of the npm runtime package installed next to
+// Keiko, admitted at the digest compiled into the server (#4068).
 
 const USAGE = `Usage:
   keiko gateway-service status      Report whether the Windows runtime gateway is ready.
@@ -47,7 +47,12 @@ type GatewayServiceAction = (typeof ACTIONS)[number];
 
 const DEV_LANE_FLAG = "--dev-lane";
 
-const LANES = ["release-qualified", "dev-checkout", "npm-runtime-package"] as const;
+const LANES = [
+  "release-qualified",
+  "portable-evaluation",
+  "dev-checkout",
+  "npm-runtime-package",
+] as const;
 type GatewayServiceLane = (typeof LANES)[number];
 
 const ACTION_FIELD = {
@@ -218,7 +223,7 @@ const FAILURES: Readonly<Record<GatewayServiceFailure, GatewayServiceFailureText
   "helper-not-qualified": {
     kind: "validation-failed",
     message:
-      "This installation has no Windows runtime helper to install: it needs a release-qualified Keiko package or the verified @oscharko-dev/keiko-coding-runtime-win32-x64 package. In a Windows dev checkout, add --dev-lane.",
+      "This installation has no approved Windows runtime helper to install: it needs a release-qualified or independently approved Keiko package, or the verified @oscharko-dev/keiko-coding-runtime-win32-x64 package. In a Windows dev checkout, add --dev-lane.",
   },
   "helper-unavailable": {
     kind: "unavailable",
@@ -294,7 +299,7 @@ export function resolveWindowsGatewayHelper(
     lane === "dev-checkout"
       ? sources.discoverDevCheckoutWindowsGatewayHelper({ env })
       : sources.discoverReleasedWindowsGatewayHelper({ env });
-  if (discovered !== undefined) return { ...pinOf(discovered), lane };
+  if (discovered !== undefined) return { ...pinOf(discovered), lane: discovered.lane ?? lane };
   if (lane === "dev-checkout") return undefined;
   const npm = sources.discoverNpmRuntimeWindowsGatewayHelper({ env });
   return npm === undefined ? undefined : { ...pinOf(npm), lane: "npm-runtime-package" };

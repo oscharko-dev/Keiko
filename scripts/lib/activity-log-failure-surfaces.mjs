@@ -161,6 +161,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "knowledge-prompt-window", surface: "memory-knowledge" },
   {
     owner: "keiko-server",
+    emitterPrefix: "knowledge-citation-editor-activity",
+    surface: "memory-knowledge",
+  },
+  {
+    owner: "keiko-server",
     emitterPrefix: "knowledge-document-activity",
     surface: "memory-knowledge",
   },

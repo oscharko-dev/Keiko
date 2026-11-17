@@ -2409,6 +2409,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.documents.tool": "Dokumente",
   "chat.review.tool": "Dokumentenbewertung",
   "chat.knowledge.partial": "Teilergebnis. Nicht alle Dokumentinformationen sind enthalten.",
+  "chat.knowledge.failure.cursorStale":
+    "Keiko kann das Lesen an der bisherigen Stelle nicht fortsetzen.",
+  "chat.knowledge.failure.documentOrCursorStale":
+    "Keiko kann das ausgewählte Dokument nicht weiter lesen oder prüfen.",
+  "chat.knowledge.failure.documentStaleOrOutOfScope":
+    "Das ausgewählte Dokument wurde geändert oder liegt außerhalb der aktuell verbundenen Knowledge Pods.",
+  "chat.knowledge.failure.sourceChanged":
+    "Die verbundenen Quellen wurden während dieser Anfrage geändert.",
+  "chat.knowledge.failure.restartSource":
+    "Bitte Keiko, die Dokumente aus den aktuell verbundenen Knowledge Pods erneut zu lesen.",
   "chat.knowledge.outcome.results": "Wissensergebnisse",
   "chat.knowledge.outcome.detected": "Erkannte Anforderungen",
   "chat.knowledge.outcome.matched": "Passende Anforderungen",
@@ -2759,6 +2769,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die gespeicherte Verbindung wurde aus diesem Browserprofil entfernt. Die aktuelle Sitzung und die Freigabe auf dem Server bleiben bestehen.",
   "updates.notice.aria": "Keiko-Update-Hinweis",
   "updates.status.portableSetupRequired": "Portable Setup erforderlich",
+  "updates.status.portableUpdateUnavailable": "Updates in der App nicht verfügbar",
+  "updates.versionPortableUpdateUnavailable":
+    "Aktuell {current}; diese Installation unterstützt keine Updates in der App.",
+  "updates.portableUpdateUnavailable.body":
+    "Dieses Windows-Paket kann sich nicht selbst aktualisieren. Du kannst Keiko weiter nutzen; eine erneute Einrichtung aktiviert keine Updates in der App.",
+  "updates.portableUpdateUnavailable.guidance":
+    "Nutze diese Version weiter. Lies vor einem Update die Windows-Anleitung der neueren Veröffentlichung.",
+  "updates.portableUpdateUnavailable.releases": "Offizielle Veröffentlichungen ansehen",
+  "updates.check.portableUpdateUnavailable":
+    "Gerade geprüft. Dieses Windows-Paket kann sich weiterhin nicht selbst aktualisieren; eine erneute Einrichtung aktiviert keine Updates in der App.",
   "updates.status.portableExternallyManaged": "Updates werden durch deine Organisation verwaltet",
   "updates.notice.title": "Update verfügbar",
   "updates.notice.criticalTitle": "Kritisches Update verfügbar",
@@ -2819,7 +2839,18 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.pod": "Jira Pod",
   "chat.skills.jira.podRequired":
     "Verbinde einen bereiten Jira Pod, um eine Vorlage zu prüfen oder vorzuschlagen.",
-  "chat.skills.jira.empty": "Noch keine Vorlagen. Erstelle eine aus einem Jira-Projekt.",
+  "chat.skills.jira.empty": "Noch keine Jira-Vorlagen gespeichert.",
+  "chat.skills.jira.starter.title": "Jira-Startvorlagen",
+  "chat.skills.jira.starter.connect":
+    "Aktiviere einen Jira Pod, um die Startvorlagen zu verwenden.",
+  "chat.skills.jira.starter.edit":
+    "Öffne eine Startvorlage und ergänze unter Metadaten (YAML) den Projektschlüssel und den Vorgangstyp.",
+  "chat.skills.jira.starter.epic":
+    "## Ziel\n\nBeschreibe das Ziel des Epics.\n\n## Umfang\n\nListe die enthaltenen Arbeiten auf.\n\n## Akzeptanzkriterien\n\nBeschreibe, wie sich überprüfen lässt, ob das Ziel erreicht wurde.",
+  "chat.skills.jira.starter.issue":
+    "## Beschreibung\n\nBeschreibe, was zu tun ist und warum.\n\n## Akzeptanzkriterien\n\nListe die Bedingungen für den Abschluss auf.",
+  "chat.skills.jira.starter.bug":
+    "## Schritte zur Reproduktion\n\nNenne die Schritte und die betroffene Version oder Umgebung.\n\n## Erwartetes Verhalten\n\nBeschreibe, was passieren sollte.\n\n## Tatsächliches Verhalten\n\nBeschreibe, was passiert.",
   "chat.skills.jira.invalid": "Muss korrigiert werden",
   "chat.skills.jira.checking": "Wird mit Jira abgeglichen …",
   "chat.skills.jira.checkFailed": "Konnte gerade nicht mit Jira abgeglichen werden.",
@@ -2880,6 +2911,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.unavailable": "Ausgewählter Skill nicht verfügbar",
   "chat.skills.requestError":
     "Skills konnten nicht aktualisiert werden. Auswahl neu laden und erneut versuchen.",
+  "chat.skills.connectionRequired":
+    "Wähle „Browser verbinden“, um Skills neu zu laden und fortzufahren. Deine Auswahl bleibt erhalten.",
   "chat.skills.upload": "Markdown hochladen (.md, bis 128 KiB)",
   "chat.skills.retry": "Neu laden",
   "chat.skills.refusal.template-marker-misplaced":
@@ -3257,6 +3290,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.turn.cancelled": "Beitrag abgebrochen",
   "chat.claimNotice.label": "Hinweis von Keiko",
   "chat.claimNotice.noJiraCreate": "In diesem Durchgang wurde kein Jira-Vorgang angelegt.",
+  "chat.claimNotice.noJiraApproval":
+    "In diesem Durchgang wartet keine Jira-Freigabe. Das Lesen von Feldern oder Speichern eines Entwurfs erzeugt keine Freigabekarte.",
+  "chat.claimNotice.jiraReportNotGenerated":
+    "In diesem Durchgang wurde kein Jira-Bericht zum Herunterladen erzeugt. Codeblöcke lassen sich kopieren, sind aber keine Berichtsexporte.",
   "chat.claimNotice.toolCallNotExecuted":
     "Ein als Text geschriebener Tool-Aufruf in dieser Antwort wurde nicht ausgeführt.",
   "chat.turnEnd.lead": "Diese Anfrage wurde nicht abgeschlossen.",
@@ -4018,7 +4055,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gatewaySetup.ui.testing": "Zugangsdaten werden geprüft…",
   "gatewaySetup.ui.testAndSave": "Prüfen & speichern",
   "gatewaySetup.ui.secretsNote":
-    "Gespeicherte Geheimnisse bleiben lokal und werden nie an den Browser zurückgegeben. Unterstützte API-Key-Header: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
+    "Gespeicherte Geheimnisse bleiben lokal und werden nie an den Browser zurückgegeben. Wenn dein Browser diese Zugangsdaten als Passwort speichern möchte, lehne diese separate Browserabfrage ab. Unterstützte API-Key-Header: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
   "gatewaySetup.ui.copy.titleUpdate": "Keiko-Zugangsdaten aktualisieren",
   "gatewaySetup.ui.copy.titleSetup": "Keiko mit Ihren internen LLMs verbinden",
   "gatewaySetup.ui.copy.descriptionUpdate":
@@ -4519,6 +4556,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "grounded.knowledge.references": "{used} / {budget} Referenzen",
   "grounded.knowledge.hybridAria": "Zusammenfassung kombinierter Quellen",
   "grounded.knowledge.hybridTitle": "Kombiniert: {folders} + {pods}",
+  "grounded.knowledge.editorUnavailable":
+    "Die zitierte Quelle konnte nicht geöffnet werden. Prüfe die Quelle in ihrem Knowledge Pod und versuche es erneut.",
   "grounded.manual.name": "HTML-Handbuch",
   "grounded.manual.evidence": "HTML-Handbuchbeleg",
   "grounded.manual.openManual": "Handbuch öffnen",
@@ -6335,7 +6374,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Das Repository oder die Pull-Request-Nummer hat sich seit der letzten Vorschau geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
   "gitClientWindow.ui.changesAndHistory": "Änderungen und Verlauf",
   "gitClientWindow.ui.resolveConflicts":
-    "Lösen Sie Konfliktdateien, bevor Sie committen oder synchronisieren.",
+    "Lösen Sie die Konflikte oder brechen Sie den Vorgang in Git ab. Vormerken, Zurücknehmen, Commit-Vorschau, Entwurfserstellung, Commit und Sync sind bis dahin nicht verfügbar.",
   "gitClientWindow.ui.stageAll": "Alle vormerken",
   "gitClientWindow.ui.unstageAll": "Alle zurücknehmen",
   "gitClientWindow.ui.noChanges": "Keine Änderungen",
@@ -6592,6 +6631,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.ui.new": "Neu",
   "gitClientWindow.ui.recent": "Zuletzt verwendet",
   "gitClientWindow.ui.error": "Fehler",
+  "gitClientWindow.ui.commitSigningRecovery":
+    "Git konnte diesen Commit nicht signieren. Prüfen Sie den Signaturschlüssel (user.signingKey) und das Signaturformat (gpg.format) des Repositorys. Stellen Sie sicher, dass Keiko das Signaturprogramm ausführen kann (gpg für OpenPGP oder ssh-keygen für SSH). Klicken Sie danach erneut auf Commit.",
   "figmaJson.ui.qiSource": "QI-Quelle",
   "figmaJson.ui.retry": "Erneut versuchen",
   "chatHistoryPanel.ui.conversations": "Konversationen",

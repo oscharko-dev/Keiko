@@ -179,7 +179,9 @@ export interface ModelCapability {
    * Transient server observation that this configured chat model passed a basic-chat probe for the
    * current runtime configuration generation. This is never persisted as provider capability
    * metadata. Tri-state on the wire: `true`/`false` only when a current-generation observation
-   * exists; ABSENT when the model was never probed since the configuration was (re)loaded. A
+   * exists; ABSENT when the model was never probed since the configuration was (re)loaded, or its
+   * basic-chat check only timed out or met a transient overload. This presentation keeps explicit
+   * retry reachable and never grants inference without a successful server-owned check. A
    * consumer must not collapse "unknown" into "not ready" — that turned every process restart
    * into a dead model picker until a manual probe (customer field incident, 0.3.11).
    */

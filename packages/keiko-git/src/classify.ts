@@ -49,6 +49,7 @@ export type GitRemoteFailureReason =
   | "cancelled"
   // Keiko's own byte cap cut the output and killed the child. NOT a timeout, NOT a cancellation.
   | "output-truncated"
+  | "credential-discovery-unavailable"
   | "unsafe-repository"
   | "untrusted-host-key"
   // Authentication: the remote did not accept (or could not obtain) an identity.
@@ -67,6 +68,7 @@ export const GIT_REMOTE_FAILURE_REASONS: readonly GitRemoteFailureReason[] = [
   "timeout",
   "cancelled",
   "output-truncated",
+  "credential-discovery-unavailable",
   "unsafe-repository",
   "untrusted-host-key",
   "auth-failed",
@@ -176,6 +178,8 @@ export function classifyGitRemoteFailure(result: GitProcessResult): GitRemoteFai
   // See GitRemoteFailureReason above.
   if (result.aborted === true) return "cancelled";
   if (result.timedOut === true) return "timeout";
+  if (result.refusal === "credential-discovery-unavailable")
+    return "credential-discovery-unavailable";
   const matched = remoteFailurePhraseMatch(`${result.stdout}\n${result.stderr}`.toLowerCase());
   if (matched !== undefined) return matched;
   if (result.truncated) return "output-truncated";

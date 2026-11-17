@@ -193,6 +193,6 @@ describe("repository parsing work", () => {
         openRepositoryReference={vi.fn()}
       />,
     );
-    expect(repositoryReferenceTextParts).toHaveBeenCalledExactlyOnceWith("Look at src/a.ts:12");
+    expect(repositoryReferenceTextParts).toHaveBeenCalledExactlyOnceWith("Look at src/a.ts:12", []);
   });
 });

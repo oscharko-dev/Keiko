@@ -35,18 +35,15 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.setup.runtimeUnavailable",
     "codingWorkbench.alert.runtimeUnqualified",
   ] as const)(
-    "names the Mac runtime package and the Windows gateway, claiming no gap, in %s",
+    "keeps an unknown runtime cause actionable without guessing an OS or installation lane in %s",
     (key) => {
       const en = translateCodingWorkbench("en", key);
       const de = translateCodingWorkbench("de", key);
-      expect(en).toContain("Windows runtime gateway");
-      expect(de).toContain("Windows-Runtime-Gateway");
+      expect(en).toContain("Activity Log");
+      expect(de).toContain("Aktivitätsprotokoll");
       for (const text of [en, de]) {
         expect(text).not.toMatch(/not implemented|nicht implementiert/iu);
-        expect(text).toContain("npm");
-        expect(text).toContain("Mac");
-        expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-arm64");
-        expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-x64");
+        expect(text).not.toMatch(/npm install|darwin|Windows|Mac/u);
       }
     },
   );

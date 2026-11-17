@@ -52,6 +52,7 @@ import {
   fetchUpdateSessionStatus,
   fetchVoiceCapability,
   openPdfCitationPreviewSession,
+  openKnowledgeCitationEditorTarget,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
   postEditorBufferSafetyRequest,
@@ -3604,6 +3605,34 @@ describe("synthesizeAssistantSpeech (Issue #1558)", () => {
 describe("pdf citation preview api helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("resolves a Knowledge editor citation through the same-origin guarded BFF route", async () => {
+    const response = {
+      outcome: "authorized",
+      target: { root: "/synthetic/source", path: "Companion - Übersicht.txt" },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+    const selection = {
+      chatId: "chat-1",
+      assistantMessageId: "message-1",
+      marker: "[1]",
+      stableId: "citation-1",
+    };
+    const correlationId = "ui-knowledge-editor-target";
+    expect(await openKnowledgeCitationEditorTarget(selection, correlationId)).toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/citation-preview/editor-target",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(selection),
+        headers: expect.objectContaining({
+          "X-Keiko-CSRF": "1",
+          "X-Keiko-Correlation-Id": correlationId,
+        }),
+      }),
+    );
   });
 
   it("opens a preview session through the local-knowledge BFF route", async () => {

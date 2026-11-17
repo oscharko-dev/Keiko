@@ -439,7 +439,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.projectMemory.enable": "Enable project memory for this run",
   "codingWorkbench.composer.projectMemory.disable": "Disable project memory for this run",
   "codingWorkbench.composer.help":
-    "Pause the active run to send a follow-up. A drafted follow-up is admitted only while paused and is never queued.",
+    "Pause the run to send this follow-up. Queuing is unavailable for this run.",
   "codingWorkbench.composer.workspaceMismatch":
     "This run keeps the authority of the workspace it started in, which is no longer the active one. The information panel and run status keep describing that run; switch back through the header workspace selector to review or edit its files.",
   "codingWorkbench.composer.blocked.busy": "Keiko is already processing a runtime action.",
@@ -592,10 +592,26 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko could not check its installation folder just now because Windows answered too slowly. Try again in a moment; if it keeps happening, restart Keiko.",
   "codingWorkbench.runtime.outdated":
     "Coding runs cannot start because the coding engine installed with this Keiko is an older version that Keiko no longer approves. Update Keiko to the latest version.",
+  "codingWorkbench.runtime.disabled":
+    "Coding runs are disabled in this installation's configuration. Ask the operator to enable the coding runtime and restart Keiko.",
+  "codingWorkbench.runtime.platformUnqualified":
+    "Keiko could not find a supported coding runtime for this installation. Install the Keiko package for this computer with its matching runtime, then restart Keiko.",
+  "codingWorkbench.runtime.developmentRefused":
+    "The development runtime could not be activated for this checkout. Check the development setup and its refusal reason in the Activity Log, then restart Keiko.",
+  "codingWorkbench.runtime.payloadMissing":
+    "Files required by the coding runtime are missing from this installation. Repair or reinstall Keiko with its matching runtime package, then restart Keiko.",
+  "codingWorkbench.runtime.payloadUnapproved":
+    "The installed coding runtime is not approved for this Keiko version. Update or reinstall Keiko with the runtime supplied for that version, then restart Keiko.",
+  "codingWorkbench.runtime.payloadUnverified":
+    "Keiko could not verify the integrity of its coding runtime files. Repair or reinstall Keiko from a trusted package, then restart Keiko.",
+  "codingWorkbench.runtime.secureReadUnavailable":
+    "The protected workspace reader required by the coding runtime is unavailable. Repair or reinstall Keiko with its matching runtime package, then restart Keiko.",
+  "codingWorkbench.runtime.loopbackUnavailable":
+    "The coding runtime's local connection is not configured correctly. Ask the operator to check Keiko's local server port and restart Keiko.",
   "codingWorkbench.setup.repairAndBind": "Repair and bind",
   "codingWorkbench.setup.repairing": "Repairing…",
   "codingWorkbench.setup.runtimeUnavailable":
-    "Starting a coding run is unavailable on this installation until the coding runtime is active. You can still bind a workspace. On Windows, coding runs also need the Windows runtime gateway. On a Mac, npm normally installs the optional runtime automatically. If it is missing, run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
+    "Starting a coding run is unavailable on this installation until the coding runtime is active. You can still bind a workspace. Check startup diagnostics in the Activity Log before changing this installation.",
   "codingWorkbench.setup.runtimeEvaluation":
     "This installation runs an unverified evaluation runtime. It carries no Apple or Microsoft code signature, and on macOS it runs without the Endpoint Security containment a release build uses. Its payload integrity is still checked byte for byte on every start.",
   "codingWorkbench.readiness.modelSource.label": "Model source",
@@ -1316,6 +1332,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.verification.status.notRun": "Not run",
   "codingWorkbench.verification.checks":
     "Checks: {passed} passed, {failed} unsuccessful, {skipped} skipped",
+  "codingWorkbench.verification.checksWithBlocked":
+    "Checks: {passed} passed, {failed} unsuccessful, {blocked} blocked, {skipped} skipped",
   "codingWorkbench.verification.duration": "Duration: {duration}",
   "codingWorkbench.activity.readBytes": "Read: {bytes} bytes",
   "codingWorkbench.activity.readFacts": "Read: {bytes} bytes · Whole file: {lines} lines",
@@ -1426,7 +1444,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.modelSourceRefreshFailed": "Model source could not be refreshed.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime could not be refreshed.",
   "codingWorkbench.alert.runtimeUnqualified":
-    "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active. On Windows, coding runs also need the Windows runtime gateway. On a Mac, npm normally installs the optional runtime automatically. If it is missing, run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
+    "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active. Check startup diagnostics in the Activity Log before changing this installation.",
   "codingWorkbench.alert.workspaceRefreshFailed": "Workspace could not be refreshed.",
   "codingWorkbench.alert.workspaceBindFailed":
     "The workspace could not be bound. Review the repository path and target branch.",

@@ -100,6 +100,11 @@ export const JIRA_REPORT_RESULT_LIST_MAX = 25;
 /** Serialized bytes of one jira.report tool result (the descriptor's result bound). */
 export const JIRA_REPORT_RESULT_BYTES_MAX = 262_144;
 
+/** Report sessions and retained local export files share the same idle and storage bounds. */
+export const JIRA_REPORT_IDLE_TTL_MS = 4 * 60 * 60 * 1000;
+export const JIRA_REPORT_STORE_MAX_BYTES = 768 * 1024 * 1024;
+export const JIRA_REPORT_OWNER_SESSIONS_MAX = 4;
+
 /** Body of the browser download; the server returns the exact file text it produced. */
 export interface JiraReportExportResponse {
   readonly format: JiraReportExportFormat;

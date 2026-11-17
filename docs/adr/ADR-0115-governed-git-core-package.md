@@ -55,6 +55,26 @@ package-graph allowlist) that owns the shared git core:
    askpass, host-key TOFU). Its runner command-overrides repository-controlled fsmonitor, hooks,
    SSH-command, credential-helper, pager, fetch/pull alias, external-transport, and recursive-
    submodule settings while preserving repository data such as remotes, refspecs, and branch tracking.
+   For authenticated HTTPS operations, it reads only direct system/global `credential.helper`
+   entries in a bounded configuration listing and reapplies those entries after clearing every
+   inherited helper (#4411). Git retains URL matching, helper order and empty resets. Includes,
+   repository/worktree/command-scope helpers and other system configuration are not promoted.
+   Git exchanges credentials directly with the account's configured helper; Keiko receives no
+   credential bytes. Discovery shares the operation's cancellation and deadline, fails closed on
+   truncated or invalid configuration, and records only closed helper provenance on the existing
+   `git.process.failed`/`git.process.refused` activity lines. Local reads remain config-isolated.
+   A failed, malformed or truncated listing returns a synthetic nonzero
+   `credential-discovery-unavailable` refusal; its exit status and text never stand in for a
+   remote command that did not run, and the synthetic refusal does not claim truncated remote
+   output. Spawn, cancellation and deadline causes retain their own classification. Discovery and
+   the remote command share a monotonic deadline; an exhausted budget cannot start the remote
+   command with a fresh minimum timeout. Sync explicitly projects the admission refusal to `git-error`, clone to
+   `GIT_CLONE_FAILED`, and sync success requires the shared classifier's `none` reason, so even a
+   byte-capped process racing to exit zero cannot appear successful. The Activity Log carries the
+   closed refusal and helper provenance, never configuration text.
+   Windows profile/store paths use the same case-insensitive, code-unit-ordered environment
+   lookup as the security boundary, now owned by the contracts leaf and re-exported by security;
+   macOS/POSIX names remain exact. Explicit environment snapshots never borrow an ambient PATH.
 3. **Repository membership by git, not by string math** (`resolveGitMembership`): one bounded
    `rev-parse --show-toplevel --show-prefix` invocation returns both the owning repository root
    and the selected folder's prefix inside it — correct for subfolders at any depth, linked

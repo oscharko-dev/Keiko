@@ -258,17 +258,26 @@ describe("release trust verification activity", () => {
   });
 });
 
-it("records the update.install-mode.detected Activity Log proof without roots or package bodies", () => {
+it.each([
+  { status: "supported", target: "linux-x64", updateEligible: true, reason: undefined },
+  {
+    status: "unsupported",
+    target: "windows-x64",
+    updateEligible: false,
+    reason: "portable-update-unavailable",
+  },
+] as const)("records body-free update.install-mode.detected evidence for $status", (mode) => {
   const { events, sink } = capture();
   recordUpdateInstallMode(
     sink,
     {
       schemaVersion: "1",
-      status: "supported",
+      status: mode.status,
+      reason: mode.reason,
       packageName: "private-package-canary",
       installRoot: "/private/customer-canary",
       installKind: "portable-managed",
-      portable: { target: "linux-x64", status: "managed", updateEligible: true },
+      portable: { target: mode.target, status: "managed", updateEligible: mode.updateEligible },
     },
     "preflight",
     12,
@@ -286,11 +295,12 @@ it("records the update.install-mode.detected Activity Log proof without roots or
     formatActivityLogProofLine(event),
   );
   expect(persisted).toMatchObject({
-    status: "supported",
+    status: mode.status,
     installKind: "portable-managed",
-    target: "linux-x64",
+    target: mode.target,
     durationMs: 12,
   });
+  if (mode.reason !== undefined) expect(persisted).toHaveProperty("reason", mode.reason);
   expect(JSON.stringify(event)).not.toContain("canary");
 });
 

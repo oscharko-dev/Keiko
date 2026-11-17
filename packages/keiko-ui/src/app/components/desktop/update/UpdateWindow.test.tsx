@@ -550,6 +550,91 @@ describe("UpdateWindow", () => {
     },
   );
 
+  it.each([
+    { releaseUrl: undefined, expectedUrl: "https://github.com/oscharko-dev/Keiko/releases" },
+    {
+      releaseUrl: "https://github.com/oscharko-dev/Keiko/releases/tag/v1.5.1",
+      expectedUrl: "https://github.com/oscharko-dev/Keiko/releases/tag/v1.5.1",
+    },
+  ])(
+    "keeps an installed Windows schema-1 package usable without proposing repeated setup (#4400): $expectedUrl",
+    async ({ releaseUrl, expectedUrl }) => {
+      const unavailableReport = preflight({
+        updateAvailable: releaseUrl !== undefined,
+        status: "degraded",
+        availabilityState: "degraded",
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+        ...(releaseUrl === undefined
+          ? {}
+          : {
+              release: {
+                source: "github-release",
+                tag: "v1.5.1",
+                title: "Test release",
+                summary: "",
+                notes: [],
+                url: releaseUrl,
+              },
+            }),
+        portableAsset: {
+          source: "github-release-asset",
+          target: "windows-x64",
+          requiredAssetName: "keiko-windows-x64.zip",
+          status: "install-mode-ineligible",
+        },
+        blockers: [
+          {
+            code: "portable-update-unavailable",
+            severity: "normal",
+            message: "In-app updates unavailable.",
+            userActionRequired: true,
+          },
+        ],
+      });
+      if (releaseUrl === undefined) {
+        Reflect.deleteProperty(unavailableReport, "targetVersion");
+        Reflect.deleteProperty(unavailableReport, "release");
+      }
+      Reflect.deleteProperty(unavailableReport, "candidate");
+      const api = apiFor({
+        report: unavailableReport,
+        status: sessionStatus({
+          installMode: {
+            schemaVersion: "1",
+            status: "unsupported",
+            packageName: "@oscharko-dev/keiko",
+            installKind: "portable-managed",
+            reason: "portable-update-unavailable",
+            recommendedAction: "manual-download",
+            portable: { status: "managed", target: "windows-x64", updateEligible: false },
+          },
+        }),
+      });
+      render(<UpdateWindow api={api} />);
+      expect(
+        await screen.findByRole("heading", { name: "In-app updates unavailable" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "This Windows package cannot update itself. You can keep using Keiko; repeating setup will not enable in-app updates.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Portable setup required")).toBeNull();
+      expect(screen.queryByText(/not managed by the launcher yet/u)).toBeNull();
+      const releaseLink = screen.getByRole("link", { name: "View official releases" });
+      expect(releaseLink).toHaveAttribute("href", expectedUrl);
+      expect(releaseLink).toHaveClass("upd-link");
+      expect(screen.queryByRole("button", { name: /^Update$/u })).toBeNull();
+      if (releaseUrl === undefined) {
+        fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+        await waitFor(() => expect(api.checkPreflight).toHaveBeenCalledTimes(1));
+      }
+      expect(screen.queryByText("Portable setup required")).toBeNull();
+      expect(api.startSession).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses setup-required copy for unmanaged portable bootstrap installs", async () => {
     const api = apiFor({
       report: preflight({

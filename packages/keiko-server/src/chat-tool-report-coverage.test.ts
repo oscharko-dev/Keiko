@@ -10,7 +10,115 @@ import {
   reportFindingCorrection,
   unsupportedIssueKeyCorrection,
   unsupportedIssueKeys,
+  reportDownloadMissing,
+  reportDownloadCorrection,
 } from "./chat-tool-report-coverage.js";
+
+describe("reportDownloadMissing (#4402)", () => {
+  const request =
+    "Erstelle einen Jira-Bericht mit Markdown- und CSV-Download für SYN-1, SYN-2 und SYN-3.";
+  const answer =
+    "Hier der Bericht:\n```markdown\n# Bericht\nGesamt: 3\n```\n```csv\nkey\nSYN-1\nSYN-2\nSYN-3\n```";
+  const result = {
+    outcome: "succeeded",
+    status: "complete",
+    reportId: "00000000-0000-4000-8000-000000000001",
+    exports: ["markdown", "csv"],
+  };
+
+  it("corrects copyable export text after search instead of an actual report", () => {
+    const search = jiraExchange("jira.search", {}, { items: [{ key: "SYN-1" }] });
+    expect(reportDownloadMissing([search], request, answer)).toBe(true);
+    expect(reportDownloadMissing([], "Create a Jira report for download in CSV.", answer)).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    "Lade den Bericht für diese drei Keys als Markdown und CSV herunter.",
+    "Lad den Bericht für diese drei Keys als Markdown und CSV herunter.",
+    "Erstelle einen Statusbericht für diese drei Keys und stelle ihn als Markdown und CSV zum Download bereit.",
+    "Give me downloadable reports for these keys as CSV.",
+    "Bitte den Abschlussbericht als CSV exportieren.",
+    "Erstelle Downloads des Jira-Berichts als Markdown und CSV.",
+    "Lade den Übergabebericht als Markdown herunter.",
+    "Export the Jira report as CSV, but do not change the issues.",
+  ])("recognizes an ordinary localized download request: %s", (currentRequest) => {
+    const search = jiraExchange("jira.search", {}, { items: [{ key: "SYN-1" }] });
+    expect(reportDownloadMissing([search], currentRequest, answer)).toBe(true);
+  });
+
+  it.each([
+    "Zeige ein Beispiel eines Berichts mit CSV-Download.",
+    "How can I export a Jira report as CSV?",
+    "Erstelle einen Jira-Bericht in Markdown, kein Download.",
+    "Fasse die Jira-Vorgänge zusammen.",
+    "Wie lade ich den Statusbericht als CSV herunter?",
+    "Lade den Statusbericht nicht als CSV herunter.",
+    "Lad den Statusbericht nicht als CSV herunter.",
+    "Wie lad ich den Statusbericht als CSV herunter?",
+    "Bitte den Abschlussbericht als CSV nicht exportieren.",
+    "Erstelle den Bericht in Markdown, aber bitte nicht herunterladen.",
+    "Do not export the Jira report as CSV.",
+    "Show an example of downloadable reports as CSV.",
+    "Export the reporter names as CSV.",
+  ])("does not turn an explanation into a report request: %s", (currentRequest) => {
+    expect(reportDownloadMissing([], currentRequest, answer)).toBe(false);
+  });
+
+  it("leaves an explicit limitation alone and accepts completed/incomplete exports", () => {
+    expect(
+      reportDownloadMissing(
+        [],
+        request,
+        "Der Jira-Zugriff ist abgelaufen. Bitte erneut verbinden.",
+      ),
+    ).toBe(false);
+    for (const status of ["complete", "incomplete"]) {
+      expect(
+        reportDownloadMissing(
+          [jiraExchange("jira.report", {}, { ...result, status })],
+          request,
+          answer,
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it.each([
+    "The Jira report export is unavailable. This is only a copyable fallback, not a download.",
+    "Der Jira-Berichtexport ist nicht verfügbar. Der Codeblock lässt sich nur kopieren.",
+  ])(
+    "does not retry an explicit limitation accompanied by a manual alternative: %s",
+    (limitation) => {
+      expect(reportDownloadMissing([], request, `${limitation}\n${answer}`)).toBe(false);
+    },
+  );
+
+  it.each([
+    ["a search impersonating a report", "jira.search", result, "completed"],
+    ["an unfinished report", "jira.report", { ...result, status: "reading" }, "completed"],
+    ["a failed report", "jira.report", result, "failed"],
+    ["no export", "jira.report", { ...result, exports: [] }, "completed"],
+    [
+      "an invalid report identity",
+      "jira.report",
+      { ...result, reportId: "not-a-report" },
+      "completed",
+    ],
+  ])("does not treat %s as a download", (_name, tool, data, status) => {
+    expect(reportDownloadMissing([jiraExchange(tool, {}, data, status)], request, answer)).toBe(
+      true,
+    );
+  });
+
+  it("asks only for the requested scope through the governed read tool", () => {
+    expect(reportDownloadCorrection()).toContain("exact requested issue scope (JQL)");
+    expect(reportDownloadCorrection()).toContain(
+      "Do not change Jira, widen the requested issue set or invent an export link",
+    );
+  });
+});
 
 function reportPage(
   name: string,

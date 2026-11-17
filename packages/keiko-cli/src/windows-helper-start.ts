@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { win32 } from "node:path";
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 import {
   resolveWindowsPowerShellExecutable,
   resolveWindowsSystemDirectory,
@@ -47,7 +48,7 @@ export type WindowsHelperSpawn = (
 // The system directory when the environment names one, else the temporary folder: places no
 // installation of Keiko lies in.
 function helperWorkingDirectory(env: NodeJS.ProcessEnv): string {
-  const systemRoot = env.SystemRoot;
+  const systemRoot = environmentVariableValue(env, "SystemRoot", "win32");
   return systemRoot !== undefined && win32.isAbsolute(systemRoot) ? systemRoot : tmpdir();
 }
 

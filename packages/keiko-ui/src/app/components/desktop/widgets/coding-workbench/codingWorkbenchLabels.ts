@@ -736,8 +736,16 @@ export function gatewayServiceMessageKey(
   return reason === undefined ? undefined : GATEWAY_SERVICE_MESSAGE_KEYS.get(reason);
 }
 
-// #4358: the Windows installation folder stops the bundled runtime: say which of the two it is.
-const INSTALL_VOLUME_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
+// Present the server's first failed prerequisite, without guessing an OS or package lane (#4412).
+const RUNTIME_ACTIVATION_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
+  ["runtime-disabled", "codingWorkbench.runtime.disabled"],
+  ["platform-unqualified", "codingWorkbench.runtime.platformUnqualified"],
+  ["dev-lane-refused", "codingWorkbench.runtime.developmentRefused"],
+  ["payload-missing", "codingWorkbench.runtime.payloadMissing"],
+  ["payload-unapproved", "codingWorkbench.runtime.payloadUnapproved"],
+  ["payload-tampered", "codingWorkbench.runtime.payloadUnverified"],
+  ["secure-read-unavailable", "codingWorkbench.runtime.secureReadUnavailable"],
+  ["loopback-unavailable", "codingWorkbench.runtime.loopbackUnavailable"],
   ["install-volume-not-local", "codingWorkbench.installVolume.notLocal"],
   ["install-volume-unverified", "codingWorkbench.installVolume.unverified"],
   // #4359: the installed runtime is an earlier OpenCode that Keiko no longer approves.
@@ -749,7 +757,7 @@ export function runtimeUnavailableMessageKey(
   reason: string | undefined,
 ): CodingWorkbenchMessageKey | undefined {
   if (reason === undefined) return undefined;
-  return gatewayServiceMessageKey(reason) ?? INSTALL_VOLUME_MESSAGE_KEYS.get(reason);
+  return gatewayServiceMessageKey(reason) ?? RUNTIME_ACTIVATION_MESSAGE_KEYS.get(reason);
 }
 
 // #4068: a start the Windows broker cannot confine names what to change: the work location, or the

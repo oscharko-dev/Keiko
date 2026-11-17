@@ -61,7 +61,10 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { PdfCitationPreviewWindowApi } from "./hooks/usePdfCitationPreview";
+import {
+  clearPdfCitationPreviewStatusCacheForTests,
+  type PdfCitationPreviewWindowApi,
+} from "./hooks/usePdfCitationPreview";
 import type {
   Chat,
   ChatMessage,
@@ -76,6 +79,8 @@ import {
   fetchChats,
   fetchFilesSearch,
   fetchEvidenceManifest,
+  fetchPdfCitationPreviewStatus,
+  openKnowledgeCitationEditorTarget,
   updateChat,
   updateChatConnectedScopes,
 } from "@/lib/api";
@@ -92,6 +97,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     fetchFilesSearch: vi.fn(),
     fetchEvidenceManifest: vi.fn(),
+    fetchPdfCitationPreviewStatus: vi.fn(),
+    openKnowledgeCitationEditorTarget: vi.fn(),
     fetchChats: vi.fn(),
     updateChat: vi.fn(),
     updateChatConnectedScopes: vi.fn(),
@@ -136,6 +143,66 @@ function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
     shortResult: undefined,
     taskType: undefined,
     ...overrides,
+  };
+}
+
+function deferredKnowledgeEditorTarget(): {
+  readonly promise: Promise<Awaited<ReturnType<typeof openKnowledgeCitationEditorTarget>>>;
+  readonly resolve: (value: Awaited<ReturnType<typeof openKnowledgeCitationEditorTarget>>) => void;
+} {
+  let resolve: (
+    value: Awaited<ReturnType<typeof openKnowledgeCitationEditorTarget>>,
+  ) => void = () => undefined;
+  const promise = new Promise<Awaited<ReturnType<typeof openKnowledgeCitationEditorTarget>>>(
+    (settle) => {
+      resolve = settle;
+    },
+  );
+  return { promise, resolve };
+}
+
+function syntheticKnowledgeTextCitation(): LocalKnowledgeEvidenceCitation {
+  return {
+    stableId: "synthetic-citation",
+    marker: "[1]",
+    label: "Companion - Übersicht.txt",
+    source: "Synthetic Quartz Pod",
+    score: 0.9,
+    lexicalSupport: "weak",
+    lineage: {
+      capsuleId: makeCapsuleId("cap-synthetic-quartz"),
+      sourceId: "source-synthetic" as LocalKnowledgeEvidenceCitation["lineage"]["sourceId"],
+      documentId: "document-synthetic" as LocalKnowledgeEvidenceCitation["lineage"]["documentId"],
+      chunkId: "chunk-synthetic" as LocalKnowledgeEvidenceCitation["lineage"]["chunkId"],
+    },
+  };
+}
+
+function syntheticKnowledgeTextAnswer(): Extract<
+  GroundedAnswer,
+  { readonly groundingKind: "local-knowledge" }
+> {
+  return {
+    groundingKind: "local-knowledge",
+    userMessageId: "knowledge-user",
+    assistantMessageId: "knowledge-assistant",
+    content: "The exact current marker in [Companion - Übersicht.txt] is Juniper-151-Dawn [1].",
+    citations: [syntheticKnowledgeTextCitation()],
+    uncertainty: [{ kind: "entailment-unavailable", claim: "Support could not be verified." }],
+    omittedCount: 0,
+    elapsedMs: 1,
+    noEvidence: false,
+    contextPack: {
+      kind: "local-knowledge",
+      scopeKind: "capsule",
+      scopeId: "cap-synthetic-quartz",
+      scopeLabel: "Synthetic Quartz Pod",
+      capsuleCount: 1,
+      sourceCount: 1,
+      citationCount: 1,
+      referenceBudget: 1,
+      referencesUsed: 1,
+    },
   };
 }
 
@@ -256,6 +323,9 @@ const updateChatMock = vi.mocked(updateChat);
 
 beforeEach(() => {
   clearKnowledgeCatalogCacheForTests();
+  clearPdfCitationPreviewStatusCacheForTests();
+  vi.mocked(fetchPdfCitationPreviewStatus).mockReset().mockResolvedValue({ citations: [] });
+  vi.mocked(openKnowledgeCitationEditorTarget).mockReset();
   fetchCapsulesMock.mockReset();
   fetchCapsulesMock.mockResolvedValue({ capsules: [] });
   fetchCapsuleSetsMock.mockReset();
@@ -4016,6 +4086,321 @@ describe("ChatWindow message copy", () => {
       within(prompt as HTMLElement).queryByRole("button", { name: /apply in editor/i }),
     ).toBeNull();
   });
+  it.each([false, true])(
+    "keeps ungrounded streaming Knowledge prose neutral through settlement (assessment=%s)",
+    async (assessment) => {
+      const user = userEvent.setup();
+      const answer = syntheticKnowledgeTextAnswer();
+      const content = assessment
+        ? `${answer.content}\n<assessment>Check [Companion - Übersicht.txt].</assessment>`
+        : answer.content;
+      const message = makeMessage({ role: "assistant", id: answer.assistantMessageId, content });
+      const session = makeSession({
+        activeChat: makeChat({
+          localKnowledgeScope: {
+            kind: "capsule",
+            capsuleId: makeCapsuleId("cap-synthetic-quartz"),
+            connectedAtMs: 1,
+          },
+        }),
+        sending: true,
+        sendStatus: "streaming",
+        streamingAssistantMessage: message,
+      });
+      const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "wrong-root" }));
+      const reports: ClientDiagnosticMeta[] = [];
+      setClientDiagnosticWriter((_text, meta) => {
+        if (meta !== undefined) reports.push(meta);
+      });
+      try {
+        const view = render(
+          <ChatSessionProvider value={session}>
+            <ChatWindow
+              linkedRoot="/synthetic/unrelated-task-worktree"
+              openEditorFile={openEditorFile}
+            />
+          </ChatSessionProvider>,
+        );
+        await waitFor(() =>
+          expect(document.querySelector('[data-role="assistant"]')).toHaveTextContent(
+            "Companion - Übersicht.txt",
+          ),
+        );
+        const controls = screen.queryAllByRole("button", {
+          name: /^Open Companion - Übersicht.txt in editor/u,
+        });
+        for (const button of controls) await user.click(button);
+        expect(controls).toHaveLength(0);
+        expect(openEditorFile).not.toHaveBeenCalled();
+        expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+        view.rerender(
+          <ChatSessionProvider
+            value={{
+              ...session,
+              sending: false,
+              sendStatus: "completed",
+              streamingAssistantMessage: undefined,
+              messages: [{ ...message, groundedAnswer: { ...answer, content } }],
+            }}
+          >
+            <ChatWindow
+              linkedRoot="/synthetic/unrelated-task-worktree"
+              openEditorFile={openEditorFile}
+            />
+          </ChatSessionProvider>,
+        );
+        if (assessment) await screen.findByRole("note", { name: /own assessment/i });
+        expect(document.querySelector('[data-role="assistant"]')).toHaveTextContent(
+          "Companion - Übersicht.txt",
+        );
+        expect(
+          screen.queryAllByRole("button", { name: /^Open Companion - Übersicht.txt in editor/u }),
+        ).toHaveLength(0);
+        expect(openEditorFile).not.toHaveBeenCalled();
+        expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("restores ordinary repository navigation only after an ungrounded stream settles", async () => {
+    const user = userEvent.setup();
+    const message = makeMessage({
+      role: "assistant",
+      id: "stream-repository",
+      content: "Read [src/demo.ts].",
+    });
+    const session = makeSession({
+      activeChat: makeChat({
+        connectedScopes: [
+          {
+            kind: "directory",
+            root: "/synthetic/repository",
+            relativePaths: ["src"],
+            connectedAtMs: 1,
+          },
+        ],
+      }),
+      sending: true,
+      sendStatus: "streaming",
+      streamingAssistantMessage: message,
+    });
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "repository-editor" }));
+    const reports: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_text, meta) => {
+      if (meta !== undefined) reports.push(meta);
+    });
+    try {
+      const view = render(
+        <ChatSessionProvider value={session}>
+          <ChatWindow openEditorFile={openEditorFile} />
+        </ChatSessionProvider>,
+      );
+      const controls = screen.queryAllByRole("button", { name: "Open src/demo.ts in editor" });
+      for (const button of controls) await user.click(button);
+      expect(controls).toHaveLength(0);
+      expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+      expect(openEditorFile).not.toHaveBeenCalled();
+      view.rerender(
+        <ChatSessionProvider
+          value={{
+            ...session,
+            sending: false,
+            sendStatus: "completed",
+            streamingAssistantMessage: undefined,
+            messages: [message],
+          }}
+        >
+          <ChatWindow openEditorFile={openEditorFile} />
+        </ChatSessionProvider>,
+      );
+      expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+      await user.click(screen.getByRole("button", { name: "Open src/demo.ts in editor" }));
+      expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+        root: "/synthetic/repository",
+        path: "src/demo.ts",
+      });
+      expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([
+        { reason: "absent", outcome: "opened", rootCount: 1, matchCount: 0 },
+      ]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("preserves a fingerprint-attributed repository citation during streaming", async () => {
+    const user = userEvent.setup();
+    const scope = {
+      kind: "directory" as const,
+      root: "/synthetic/repository",
+      relativePaths: ["src"],
+      connectedAtMs: 1,
+    };
+    const groundedAnswer: GroundedAnswer = {
+      groundingKind: "connected-context",
+      userMessageId: "u",
+      assistantMessageId: "a",
+      content: "Read [src/demo.ts].",
+      citations: [
+        {
+          scopePath: "src/demo.ts",
+          stableId: "repo-citation",
+          score: 1,
+          lineRange: undefined,
+          sourceScopeFingerprint: connectedScopeFingerprint(scope),
+        },
+      ],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 1,
+      contextPack: repositoryTestContextSummary(),
+    };
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "repository-editor" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({ connectedScopes: [scope] }),
+        sending: true,
+        sendStatus: "streaming",
+        streamingAssistantMessage: makeMessage({
+          role: "assistant",
+          id: "a",
+          content: groundedAnswer.content,
+          groundedAnswer,
+        }),
+      }),
+      { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open src/demo.ts in editor · Cited evidence" }),
+    );
+    expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+      root: scope.root,
+      path: "src/demo.ts",
+    });
+  });
+
+  it.each([false, true])(
+    "keeps persisted ungrounded Knowledge replies neutral (explicit repository=%s)",
+    async (mixed) => {
+      const user = userEvent.setup();
+      const scope = {
+        kind: "directory" as const,
+        root: "/synthetic/repository",
+        relativePaths: ["src"],
+        connectedAtMs: 1,
+      };
+      const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "wrong-root" }));
+      const reports: ClientDiagnosticMeta[] = [];
+      setClientDiagnosticWriter((_text, meta) => {
+        if (meta !== undefined) reports.push(meta);
+      });
+      try {
+        renderWindow(
+          makeSession({
+            activeChat: makeChat({
+              localKnowledgeScopes: [
+                {
+                  kind: "capsule",
+                  capsuleId: makeCapsuleId("cap-synthetic-quartz"),
+                  connectedAtMs: 1,
+                },
+              ],
+              connectedScopes: mixed ? [scope] : [],
+            }),
+            messages: [
+              makeMessage({
+                role: "assistant",
+                content: "Read [Companion - Übersicht.txt] and [src/demo.ts].",
+              }),
+            ],
+          }),
+          { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+        );
+        const controls = screen.queryAllByRole("button", {
+          name: /^Open (Companion - Übersicht.txt|src\/demo.ts).*in editor/u,
+        });
+        for (const button of controls) await user.click(button);
+        expect(controls).toHaveLength(0);
+        expect(document.querySelector('[data-role="assistant"]')).toHaveTextContent(
+          "Companion - Übersicht.txt",
+        );
+        expect(openEditorFile).not.toHaveBeenCalled();
+        expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("preserves a stored repository citation when a Knowledge scope is later added", async () => {
+    const user = userEvent.setup();
+    const scope = {
+      kind: "directory" as const,
+      root: "/synthetic/repository",
+      relativePaths: ["src"],
+      connectedAtMs: 1,
+    };
+    const groundedAnswer: GroundedAnswer = {
+      groundingKind: "connected-context",
+      userMessageId: "u",
+      assistantMessageId: "a",
+      content: "Read [src/demo.ts].",
+      citations: [
+        {
+          scopePath: "src/demo.ts",
+          stableId: "repo-citation",
+          score: 1,
+          lineRange: undefined,
+          sourceScopeFingerprint: connectedScopeFingerprint(scope),
+        },
+      ],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 1,
+      contextPack: repositoryTestContextSummary(),
+    };
+    const session = makeSession({
+      activeChat: makeChat({ connectedScopes: [scope] }),
+      messages: [
+        makeMessage({ role: "assistant", content: groundedAnswer.content, groundedAnswer }),
+      ],
+    });
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "repository-editor" }));
+    const view = render(
+      <ChatSessionProvider value={session}>
+        <ChatWindow openEditorFile={openEditorFile} />
+      </ChatSessionProvider>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Open src/demo.ts in editor · Cited evidence" }),
+    ).toBeVisible();
+    view.rerender(
+      <ChatSessionProvider
+        value={{
+          ...session,
+          activeChat: makeChat({
+            connectedScopes: [scope],
+            localKnowledgeScope: {
+              kind: "capsule",
+              capsuleId: makeCapsuleId("cap-synthetic-quartz"),
+              connectedAtMs: 2,
+            },
+          }),
+        }}
+      >
+        <ChatWindow openEditorFile={openEditorFile} />
+      </ChatSessionProvider>,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open src/demo.ts in editor · Cited evidence" }),
+    );
+    expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+      root: scope.root,
+      path: "src/demo.ts",
+    });
+  });
+
   it("renders the live streaming assistant preview as safe markdown", (): void => {
     renderWindow(
       makeSession({
@@ -5012,6 +5397,245 @@ describe("ChatWindow message copy", () => {
     ).toHaveAttribute("role", "status");
   });
 
+  it.each([false, true])(
+    "keeps Knowledge-only filenames neutral instead of opening an unrelated task root (assessment=%s)",
+    async (assessment) => {
+      const user = userEvent.setup();
+      const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-unrelated" }));
+      const answer = syntheticKnowledgeTextAnswer();
+      const content = assessment
+        ? `${answer.content}\n<assessment>Check [Companion - Übersicht.txt].</assessment>`
+        : answer.content;
+      const reports: ClientDiagnosticMeta[] = [];
+      setClientDiagnosticWriter((_message, meta) => {
+        if (meta !== undefined) reports.push(meta);
+      });
+      try {
+        renderWindow(
+          makeSession({
+            activeChat: makeChat({
+              localKnowledgeScope: {
+                kind: "capsule",
+                capsuleId: makeCapsuleId("cap-synthetic-quartz"),
+                connectedAtMs: 1,
+              },
+            }),
+            messages: [
+              makeMessage({
+                id: "knowledge-assistant",
+                role: "assistant",
+                content,
+                groundedAnswer: { ...answer, content },
+              }),
+            ],
+          }),
+          { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+        );
+        await waitFor(() =>
+          expect(document.querySelector('[data-role="assistant"]')).toHaveTextContent(
+            "Companion - Übersicht.txt",
+          ),
+        );
+        if (assessment) await screen.findByRole("note", { name: /own assessment/i });
+        const reference = screen.queryAllByRole("button", {
+          name: "Open Companion - Übersicht.txt in editor",
+        });
+        for (const button of reference) await user.click(button);
+        expect(openEditorFile).not.toHaveBeenCalled();
+        expect(reference).toHaveLength(0);
+        expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("opens a Knowledge text citation only after canonical target authorization", async () => {
+    const user = userEvent.setup();
+    const answer = syntheticKnowledgeTextAnswer();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-source" }));
+    vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+      citations: [
+        {
+          stableId: "synthetic-citation",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "not-applicable",
+          reason: "document-not-pdf",
+          editorOpenAvailable: true,
+        },
+      ],
+    });
+    const pending = deferredKnowledgeEditorTarget();
+    vi.mocked(openKnowledgeCitationEditorTarget).mockReturnValue(pending.promise);
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          makeMessage({
+            role: "assistant",
+            id: answer.assistantMessageId,
+            content: answer.content,
+            groundedAnswer: answer,
+          }),
+        ],
+      }),
+      { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+    );
+    await user.click(screen.getByText("Knowledge evidence"));
+    const button = await screen.findByRole("button", {
+      name: /Companion - Übersicht.txt.*Open in editor/u,
+    });
+    expect(openKnowledgeCitationEditorTarget).not.toHaveBeenCalled();
+    await user.click(button);
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(openKnowledgeCitationEditorTarget).toHaveBeenCalledWith(
+      {
+        chatId: "chat-1",
+        assistantMessageId: "knowledge-assistant",
+        marker: "[1]",
+        stableId: "synthetic-citation",
+      },
+      expect.any(String),
+    );
+    expect(openEditorFile).not.toHaveBeenCalled();
+    await act(async () =>
+      pending.resolve({
+        outcome: "authorized",
+        target: {
+          root: "/synthetic/knowledge-source",
+          path: "Companion - Übersicht.txt",
+        },
+      }),
+    );
+    expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+      root: "/synthetic/knowledge-source",
+      path: "Companion - Übersicht.txt",
+    });
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveTextContent("unverified");
+  });
+
+  it("keeps a refuted Knowledge editor target visible without repository fallback", async () => {
+    const user = userEvent.setup();
+    const answer = syntheticKnowledgeTextAnswer();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-unrelated" }));
+    vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+      citations: [
+        {
+          stableId: "synthetic-citation",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "not-applicable",
+          reason: "document-not-pdf",
+          editorOpenAvailable: true,
+        },
+      ],
+    });
+    vi.mocked(openKnowledgeCitationEditorTarget).mockResolvedValue({
+      outcome: "rejected",
+      reason: "source-modified",
+    });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          makeMessage({
+            role: "assistant",
+            id: answer.assistantMessageId,
+            content: answer.content,
+            groundedAnswer: answer,
+          }),
+        ],
+      }),
+      { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+    );
+    await user.click(screen.getByText("Knowledge evidence"));
+    await user.click(
+      await screen.findByRole("button", { name: /Companion - Übersicht.txt.*Open in editor/u }),
+    );
+    expect(
+      await screen.findByText(
+        "The cited source could not be opened. Check the source in its Knowledge Pod and try again.",
+      ),
+    ).toBeVisible();
+    expect(openEditorFile).not.toHaveBeenCalled();
+  });
+
+  it("keeps verified repository prose active in a mixed Knowledge and repository answer", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-repository" }));
+    const scope = {
+      kind: "directory" as const,
+      root: "/synthetic/repository",
+      relativePaths: ["src"],
+      connectedAtMs: 1,
+    };
+    const knowledge = syntheticKnowledgeTextAnswer();
+    const groundedAnswer: GroundedAnswer = {
+      groundingKind: "hybrid",
+      userMessageId: "user-mixed",
+      assistantMessageId: "assistant-mixed",
+      content: "The marker in [Companion - Übersicht.txt] is Juniper [1]. See [src/demo.ts].",
+      citations: [
+        {
+          scopePath: "src/demo.ts",
+          stableId: "repository-citation",
+          score: 1,
+          lineRange: undefined,
+          sourceScopeFingerprint: connectedScopeFingerprint(scope),
+        },
+      ],
+      knowledgeCitations: knowledge.citations,
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 1,
+      contextPack: {
+        kind: "hybrid",
+        folderSourceCount: 1,
+        connectorSourceCount: 1,
+        folder: repositoryTestContextSummary(),
+        knowledge: knowledge.contextPack,
+      },
+    };
+    const reports: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) reports.push(meta);
+    });
+    try {
+      renderWindow(
+        makeSession({
+          activeChat: makeChat({ connectedScopes: [scope] }),
+          messages: [
+            makeMessage({ role: "assistant", content: groundedAnswer.content, groundedAnswer }),
+          ],
+        }),
+        { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+      );
+      expect(document.querySelector('[data-role="assistant"]')).toHaveTextContent(
+        "Companion - Übersicht.txt",
+      );
+      const knowledgeReference = screen.queryByRole("button", {
+        name: /Open Companion - Übersicht\.txt in editor/u,
+      });
+      if (knowledgeReference !== null) await user.click(knowledgeReference);
+      expect(knowledgeReference).toBeNull();
+      expect(openEditorFile).not.toHaveBeenCalled();
+      expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+
+      await user.click(
+        screen.getByRole("button", { name: "Open src/demo.ts in editor · Cited evidence" }),
+      );
+      expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+        root: scope.root,
+        path: "src/demo.ts",
+      });
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
   it("surfaces a clear status when repository references have no connected root", async () => {
     const user = userEvent.setup();
     const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
@@ -5904,6 +6528,34 @@ it("acknowledges a missing-file scope before the user explicitly sends the focus
 });
 
 describe("ChatWindow private draft and skill recovery", () => {
+  it("directs a disconnected composer to Connect browser without suggesting a skill change", () => {
+    const session = makeSession({
+      activeChat: makeChat(),
+      draft: "A complete message",
+      markdownSkill: {
+        chatId: makeChat().id,
+        view: { availability: "none", selection: { revision: 0, skill: null } },
+        busy: false,
+        failed: true,
+        connectionRequired: true,
+        refresh: vi.fn(),
+        select: vi.fn(),
+      },
+    });
+    renderWindow(session);
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect(send).toHaveAttribute("aria-disabled", "true");
+    expect(send).toHaveAccessibleDescription(
+      "Choose Connect browser to refresh Skills and continue. Your selection is kept.",
+    );
+    expect(screen.queryByText(/Open Skills and select an available skill/u)).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent(
+      "A complete message",
+    );
+    fireEvent.click(send);
+    expect(session.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("explains a blocked skill selection for a populated composer", () => {
     renderWindow(
       makeSession({
@@ -6008,6 +6660,8 @@ describe("Keiko's note under an answer that claimed an effect its turn did not b
   const SENTENCE_KEYS = {
     "no-jira-create": "chat.claimNotice.noJiraCreate",
     "tool-call-not-executed": "chat.claimNotice.toolCallNotExecuted",
+    "no-jira-approval": "chat.claimNotice.noJiraApproval",
+    "jira-report-not-generated": "chat.claimNotice.jiraReportNotGenerated",
   } as const;
   const CLAIM = "I created the Epic REQ-1 for you.";
   function turn(
@@ -6047,6 +6701,10 @@ describe("Keiko's note under an answer that claimed an effect its turn did not b
     ["de", "no-jira-create"],
     ["en", "tool-call-not-executed"],
     ["de", "tool-call-not-executed"],
+    ["en", "no-jira-approval"],
+    ["de", "no-jira-approval"],
+    ["en", "jira-report-not-generated"],
+    ["de", "jira-report-not-generated"],
   ] as const)(
     "shows the %s sentence for %s from the catalog, after the unchanged answer",
     async (locale, notice) => {

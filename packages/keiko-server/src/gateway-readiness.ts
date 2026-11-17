@@ -50,6 +50,7 @@ import type {
 import {
   conversationReadinessAgeMs,
   currentConversationReadinessObservation,
+  currentConversationReadinessPresentation,
   currentConversationReady,
   currentGatewayConfig,
   recordExplicitModelUse,
@@ -2423,15 +2424,29 @@ function recordFailedReadinessObservation(
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
 ): void {
-  if (preserveUnexecutedCapabilityObservation(deps, report, observedGeneration)) return;
+  const chat = report.probes.find((probe) => probe.name === "chat");
+  const failure =
+    chat?.status === "failed" && busySignal(chat.warning) !== undefined ? "transient" : undefined;
+  if (preserveUnexecutedCapabilityObservation(deps, report, observedGeneration, failure)) return;
   if (preserveVerifiedToolCallingObservation(deps, report, observedGeneration)) return;
   deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration);
+  if (failure !== undefined)
+    deps.gatewayConfig?.recordVerifiedCapability(
+      report.modelId,
+      { conversationReady: false },
+      report.checkedAt,
+      observedGeneration,
+      undefined,
+      undefined,
+      failure,
+    );
 }
 
 function preserveUnexecutedCapabilityObservation(
   deps: UiHandlerDeps,
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
+  conversationReadinessFailure: "transient" | undefined,
 ): boolean {
   if (executedCategoricalFeatureProbe(report.probes)) return false;
   const previous = deps.gatewayConfig?.verifiedCapability(report.modelId);
@@ -2444,6 +2459,8 @@ function preserveUnexecutedCapabilityObservation(
     previous.checkedAt,
     observedGeneration,
     report.checkedAt,
+    undefined,
+    conversationReadinessFailure,
   );
   return true;
 }
@@ -2775,7 +2792,7 @@ export async function initializeLiteLlmCodingReadiness(
 // observations. At startup, after the walk concluded, it is the model that proved ready.
 function inUseConversationModelId(deps: UiHandlerDeps, config: GatewayConfig): string | undefined {
   return electConversationDefault(configuredChatModels(config), (model) =>
-    currentConversationReadinessObservation(deps, model.id),
+    currentConversationReadinessPresentation(deps, model.id),
   )?.id;
 }
 
@@ -2788,10 +2805,10 @@ export function conversationModelForStartupProof(deps: UiHandlerDeps): string | 
   const config = currentGatewayConfig(deps);
   if (config === undefined) return undefined;
   const inUse = inUseConversationModelId(deps, config);
-  if (inUse === undefined || currentConversationReadinessObservation(deps, inUse) !== undefined)
+  if (inUse === undefined || currentConversationReadinessPresentation(deps, inUse) !== undefined)
     return inUse;
   const moved = configuredChatModels(config).some(
-    (model) => currentConversationReadinessObservation(deps, model.id) === false,
+    (model) => currentConversationReadinessPresentation(deps, model.id) === false,
   );
   return moved ? undefined : inUse;
 }
@@ -3734,6 +3751,18 @@ interface SelectionCheck {
   readonly settled: Promise<void>;
 }
 
+function selectionNeedsRecheck(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+): boolean {
+  return (
+    conversationQueue(holder).inconclusive.has(modelId) ||
+    (currentConversationReadinessObservation(deps, modelId) === false &&
+      currentConversationReadinessPresentation(deps, modelId) === undefined)
+  );
+}
+
 /**
  * The start of a person's pick, with its outcome (`started`, `joined`, `already-answered`,
  * `unknown-model`) recorded under the pick's correlation id. A model whose latest check ended
@@ -3758,7 +3787,7 @@ export function startSelectedConversationCheck(
     return settled("unknown-model");
   const key = `${String(holder.generation())}:${modelId}`;
   const joined = readinessProbesFor(holder).has(key);
-  const recheck = conversationQueue(holder).inconclusive.has(modelId);
+  const recheck = selectionNeedsRecheck(deps, holder, modelId);
   const check = startConversationCheck(deps, holder, config, modelId, id, recheck, "selection");
   if (check === undefined) return settled("already-answered");
   // A check was due but the existing not-ready cooldown withheld it: nothing was sent.
@@ -3950,7 +3979,7 @@ async function awaitConversationRequestReadiness(
     probe.correlationId,
     holder.generation(),
   );
-  await settledWithinBudget(probe.promise, CHAT_MODEL_WALK_BUDGET_MS);
+  await settledWithinBudget(probe.promise, CONVERSATION_ADMISSION_WAIT_MS);
 }
 
 // Bound repeated explicit/initialization checks after a failed observation. Conversation
@@ -4166,22 +4195,8 @@ async function runOnDemandReadinessProbe(
   }
 }
 
-// Chat creation without an explicit model must not die on an unsuitable FIRST list entry
-// (customer field incident: an OCR model at position 1 legitimately fails the chat probe;
-// the single-model on-demand check then recorded not-ready and stopped, so every chat
-// create failed until a suitable model was probed MANUALLY). When the requested default is
-// not conversation-ready, walk the remaining configured chat models — mode-declared
-// candidates first (keiko-contracts conversationDefaultRank) — until one verifies; the
-// default-model selection then prefers the verified one.
-//
-// The walk is BOUNDED: probes are serial and each can burn the full provider timeout, so an
-// aggregate budget caps what one interactive create may wait (the unbounded-sum lesson of the
-// 0.3.11 embedding ladder, applied here). A probe that outlives the budget keeps running in
-// the shared in-flight map — its observation lands for the NEXT attempt — but this request
-// stops waiting.
-// Admission must not stop waiting before the supported interactive silence window (#4038).
-// This remains one aggregate budget across all candidates, never a per-model allowance.
-export const CHAT_MODEL_WALK_BUDGET_MS = GATEWAY_SILENCE_FLOOR_MS;
+// Keep the shared startup check alive when a conversation request stops waiting for it (#4038).
+export const CONVERSATION_ADMISSION_WAIT_MS = GATEWAY_SILENCE_FLOOR_MS;
 
 async function settledWithinBudget(probe: Promise<void>, budgetMs: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -4194,54 +4209,6 @@ async function settledWithinBudget(probe: Promise<void>, budgetMs: number): Prom
     return await Promise.race([probe.then(() => true), expired]);
   } finally {
     clearTimeout(timer);
-  }
-}
-
-function conversationWalkCandidates(
-  deps: UiHandlerDeps,
-  requestedModelId: string,
-): readonly ModelCapability[] {
-  const config = currentGatewayConfig(deps);
-  if (config === undefined) return [];
-  return preferredConversationModelOrder(
-    listConfiguredCapabilities(config).filter(
-      (capability) => capability.kind === "chat" && capability.id !== requestedModelId,
-    ),
-  );
-}
-
-export async function awaitAnyInitializedConversationReadyChatModel(
-  deps: UiHandlerDeps,
-  requestedModelId: string,
-  correlationId?: string,
-): Promise<void> {
-  await awaitConversationReadyCandidate(
-    deps,
-    requestedModelId,
-    awaitInitializedConversationReadiness,
-    correlationId,
-  );
-}
-
-async function awaitConversationReadyCandidate(
-  deps: UiHandlerDeps,
-  requestedModelId: string,
-  awaitReadiness: typeof awaitInitializedConversationReadiness,
-  correlationId?: string,
-): Promise<void> {
-  // The budget covers the REQUESTED model's probe too (review finding on the first cut):
-  // computed after it, a hanging gateway burned the full provider timeout before the budget
-  // even started. The interactive create never waits longer than the budget, full stop.
-  const deadlineAt = Date.now() + CHAT_MODEL_WALK_BUDGET_MS;
-  const firstProbe = awaitReadiness(deps, requestedModelId, correlationId);
-  if (!(await settledWithinBudget(firstProbe, CHAT_MODEL_WALK_BUDGET_MS))) return;
-  if (currentConversationReady(deps, requestedModelId)) return;
-  for (const capability of conversationWalkCandidates(deps, requestedModelId)) {
-    const remainingMs = deadlineAt - Date.now();
-    if (remainingMs <= 0) return;
-    const probe = awaitReadiness(deps, capability.id, correlationId);
-    if (!(await settledWithinBudget(probe, remainingMs))) return;
-    if (currentConversationReady(deps, capability.id)) return;
   }
 }
 

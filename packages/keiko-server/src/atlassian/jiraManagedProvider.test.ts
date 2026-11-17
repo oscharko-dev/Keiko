@@ -348,9 +348,10 @@ it("advertises the real paging contract of jira.report: summary first, then sect
   const provider = createJiraProviderForCatalog(vi.fn(), ["jira.report"]);
   const text = provider.tools().find((tool) => tool.name === "jira.report")?.descriptor.description;
   expect(text).not.toMatch(/section on the first call/iu);
-  expect(text).toMatch(/without a section[^.]*summary/iu);
+  expect(text).toContain("While reading, call again with only reportId.");
+  expect(text).toMatch(/No section returns summary and report\.figures/iu);
   expect(text).toContain("startAt");
-  expect(text).toMatch(/names a section[^.]*only that page/iu);
+  expect(text).toMatch(/; section returns that page/iu);
 });
 
 it("builds canonical field metadata descriptors that admit the advertised input schema as data", () => {

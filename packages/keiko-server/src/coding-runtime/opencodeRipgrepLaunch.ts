@@ -1,5 +1,9 @@
 import { statSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
+import {
+  environmentVariableNames,
+  environmentVariableValue,
+} from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -373,14 +377,24 @@ export function ripgrepLaunchEnvironment(
   resolution: OpenCodeRipgrepResolution,
   native: boolean,
 ): NodeJS.ProcessEnv | undefined {
+  const inheritedPath = environmentVariableValue(processEnv ?? {}, "PATH");
   if (resolution.outcome !== "verified") {
-    if (!native || processEnv?.PATH === undefined) return processEnv;
-    return { ...processEnv, PATH: withoutRipgrepProviders(processEnv.PATH) };
+    if (!native || inheritedPath === undefined) return processEnv;
+    return withLaunchPath(processEnv, withoutRipgrepProviders(inheritedPath));
   }
   const path = native
-    ? prependDirectory(resolution.directory, processEnv?.PATH)
+    ? prependDirectory(resolution.directory, inheritedPath)
     : resolution.directory;
-  return { ...processEnv, PATH: path };
+  return withLaunchPath(processEnv, path);
+}
+
+function withLaunchPath(
+  processEnv: NodeJS.ProcessEnv | undefined,
+  path: string | undefined,
+): NodeJS.ProcessEnv {
+  const env = { ...processEnv };
+  for (const alias of environmentVariableNames(env, "PATH")) Reflect.deleteProperty(env, alias);
+  return { ...env, PATH: path };
 }
 
 /** The mapped profiles inherit no names; they inherit PATH only to carry the verified directory. */

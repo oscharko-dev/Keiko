@@ -7,6 +7,7 @@
 import { accessSync, constants, statSync } from "node:fs";
 import { platform as osPlatform } from "node:os";
 import { delimiter, dirname, join, parse } from "node:path";
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 import type { BackendAvailability } from "./types.js";
 
 // The executable suffixes to try for a bare binary name. POSIX has none; Windows uses PATHEXT.
@@ -27,8 +28,11 @@ export function isExecutableOnPath(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  const pathValue = env.PATH ?? "";
-  const extensions = executableExtensions(platform, env.PATHEXT);
+  const pathValue = environmentVariableValue(env, "PATH", platform) ?? "";
+  const extensions = executableExtensions(
+    platform,
+    environmentVariableValue(env, "PATHEXT", platform),
+  );
   for (const dir of pathValue.split(delimiter).filter(Boolean)) {
     for (const ext of extensions) {
       try {

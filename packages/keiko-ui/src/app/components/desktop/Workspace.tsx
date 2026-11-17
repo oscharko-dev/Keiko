@@ -1506,119 +1506,126 @@ export function Workspace({
 
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
-    <main
-      className={`workspace ${selectionStyles.cmpWorkspaceSurface} ${controlStyles.cmpWorkspaceViewport}`}
-      data-layout-locked={layoutLocked ? "true" : undefined}
-      ref={wsRef}
-      aria-label={t("workspace.surface")}
-      tabIndex={0}
-      data-window-maxed={mainDataAttrs.windowMaxed}
+    <div
+      className={controlStyles.cmpWorkspaceLayout}
       data-canvas-overlays-hidden={mainDataAttrs.canvasOverlaysHidden}
-      data-connecting={mainDataAttrs.connecting}
-      data-panning={mainDataAttrs.panning}
-      data-hand-tool={mainDataAttrs.handTool}
-      data-marquee={mainDataAttrs.marquee}
-      onPointerDownCapture={onWorkspacePointerDownCapture}
-      onPointerDown={onBgPointerDown}
-      onKeyDown={onSurfaceKeyDown}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
     >
-      <WorkspaceShader />
-      <div className="ws-grid" style={bgStyle} aria-hidden="true" />
-      <WorkspaceMarqueeOverlay marquee={marquee} />
-      <ConnectAnnouncer
-        wins={visibleWins}
-        connecting={connecting}
-        conns={conns}
-        outcome={ws.connectionOutcome}
-      />
-      <p
-        className="sr-only"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        data-testid="workspace-selection-status"
+      <main
+        className={`workspace ${selectionStyles.cmpWorkspaceSurface} ${controlStyles.cmpWorkspaceViewport}`}
+        data-layout-locked={layoutLocked ? "true" : undefined}
+        ref={wsRef}
+        aria-label={t("workspace.surface")}
+        tabIndex={0}
+        data-window-maxed={mainDataAttrs.windowMaxed}
+        data-canvas-overlays-hidden={mainDataAttrs.canvasOverlaysHidden}
+        data-connecting={mainDataAttrs.connecting}
+        data-panning={mainDataAttrs.panning}
+        data-hand-tool={mainDataAttrs.handTool}
+        data-marquee={mainDataAttrs.marquee}
+        onPointerDownCapture={onWorkspacePointerDownCapture}
+        onPointerDown={onBgPointerDown}
+        onKeyDown={onSurfaceKeyDown}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
       >
-        {selectionStatusText}
-      </p>
-      <WorkspaceClipboardStatusView status={clipboardStatus} />
-      <WorkspaceConnectHint connecting={connecting} t={t} />
-      <WorkspaceEmptyState empty={empty} onNewWindow={openPalette} />
+        <WorkspaceShader />
+        <div className="ws-grid" style={bgStyle} aria-hidden="true" />
+        <WorkspaceMarqueeOverlay marquee={marquee} />
+        <ConnectAnnouncer
+          wins={visibleWins}
+          connecting={connecting}
+          conns={conns}
+          outcome={ws.connectionOutcome}
+        />
+        <p
+          className="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="workspace-selection-status"
+        >
+          {selectionStatusText}
+        </p>
+        <WorkspaceClipboardStatusView status={clipboardStatus} />
+        <WorkspaceConnectHint connecting={connecting} t={t} />
+        <WorkspaceEmptyState empty={empty} onNewWindow={openPalette} />
 
-      <WorkspaceScene
-        layoutLocked={layoutLocked}
-        style={sceneStyle}
-        snapPrev={snapPrev}
-        wins={wins}
-        visibleWins={visibleWins}
-        conns={conns}
-        connecting={connecting}
-        api={api}
-        top={top}
-        connStateById={connStateById}
-        wsRef={wsRef}
-        linkRevision={linkRevision}
-        selectedWindowIds={selectedWindowIds}
-      />
+        <WorkspaceScene
+          layoutLocked={layoutLocked}
+          style={sceneStyle}
+          snapPrev={snapPrev}
+          wins={wins}
+          visibleWins={visibleWins}
+          conns={conns}
+          connecting={connecting}
+          api={api}
+          top={top}
+          connStateById={connStateById}
+          wsRef={wsRef}
+          linkRevision={linkRevision}
+          selectedWindowIds={selectedWindowIds}
+        />
 
-      <div className={`ws-zoom ${controlStyles.cmpWorkspaceControl}`}>
+        {resolvePaletteOverlay(hasMaximizedWindow, palette)}
+        {children}
+      </main>
+
+      <fieldset className={controlStyles.cmpWorkspaceDock} onKeyDown={onSurfaceKeyDown}>
+        <div className={`ws-zoom ${controlStyles.cmpWorkspaceControl}`}>
+          <button
+            type="button"
+            className="ws-zoom-btn ui-tip cmp-tip-start"
+            onClick={() => api.zoomTo(stepViewZoom(view.zoom, -0.2))}
+            disabled={layoutLocked || view.zoom <= MIN_ZOOM}
+            aria-label={t("workspace.zoomOut")}
+            data-tip={t("workspace.zoomOut")}
+          >
+            <ZoomOutIcon size={15} />
+          </button>
+          <button
+            type="button"
+            className="ws-zoom-btn ui-tip cmp-tip-start"
+            onClick={api.fitView}
+            disabled={layoutLocked || visibleWins === null || visibleWins.length === 0}
+            aria-label={t("workspace.fitToWindows")}
+            data-tip={t("workspace.fitToWindows")}
+          >
+            <ExpandIcon size={15} />
+          </button>
+          <button
+            type="button"
+            className="ws-zoom-pct mono ui-tip"
+            onClick={api.resetView}
+            disabled={layoutLocked}
+            aria-label={t("workspace.zoomReset", { percent: Math.round(view.zoom * 100) })}
+            data-tip={t("workspace.reset")}
+          >
+            {Math.round(view.zoom * 100)}%
+          </button>
+          <button
+            type="button"
+            className="ws-zoom-btn ui-tip cmp-tip-end"
+            onClick={() => api.zoomTo(stepViewZoom(view.zoom, 0.2))}
+            disabled={layoutLocked || view.zoom >= MAX_ZOOM}
+            aria-label={t("workspace.zoomIn")}
+            data-tip={t("workspace.zoomIn")}
+          >
+            <ZoomInIcon size={15} />
+          </button>
+        </div>
+
         <button
           type="button"
-          className="ws-zoom-btn ui-tip cmp-tip-start"
-          onClick={() => api.zoomTo(stepViewZoom(view.zoom, -0.2))}
-          disabled={layoutLocked || view.zoom <= MIN_ZOOM}
-          aria-label={t("workspace.zoomOut")}
-          data-tip={t("workspace.zoomOut")}
+          className={`ws-fab ui-tip cmp-tip-end ${controlStyles.cmpWorkspaceControl}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={openPalette}
+          aria-label={t("workspace.newWindow")}
+          data-tip={t("workspace.newWindow")}
         >
-          <ZoomOutIcon size={15} />
+          <AddIcon size={20} />
         </button>
-        <button
-          type="button"
-          className="ws-zoom-btn ui-tip cmp-tip-start"
-          onClick={api.fitView}
-          disabled={layoutLocked || visibleWins === null || visibleWins.length === 0}
-          aria-label={t("workspace.fitToWindows")}
-          data-tip={t("workspace.fitToWindows")}
-        >
-          <ExpandIcon size={15} />
-        </button>
-        <button
-          type="button"
-          className="ws-zoom-pct mono ui-tip"
-          onClick={api.resetView}
-          disabled={layoutLocked}
-          aria-label={t("workspace.zoomReset", { percent: Math.round(view.zoom * 100) })}
-          data-tip={t("workspace.reset")}
-        >
-          {Math.round(view.zoom * 100)}%
-        </button>
-        <button
-          type="button"
-          className="ws-zoom-btn ui-tip cmp-tip-end"
-          onClick={() => api.zoomTo(stepViewZoom(view.zoom, 0.2))}
-          disabled={layoutLocked || view.zoom >= MAX_ZOOM}
-          aria-label={t("workspace.zoomIn")}
-          data-tip={t("workspace.zoomIn")}
-        >
-          <ZoomInIcon size={15} />
-        </button>
-      </div>
-
-      <button
-        type="button"
-        className={`ws-fab ui-tip cmp-tip-end ${controlStyles.cmpWorkspaceControl}`}
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={openPalette}
-        aria-label={t("workspace.newWindow")}
-        data-tip={t("workspace.newWindow")}
-      >
-        <AddIcon size={20} />
-      </button>
-
-      {resolvePaletteOverlay(hasMaximizedWindow, palette)}
-      {children}
-    </main>
+      </fieldset>
+    </div>
   );
   /* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
 }
