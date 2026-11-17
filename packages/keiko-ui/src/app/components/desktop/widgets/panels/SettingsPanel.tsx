@@ -960,7 +960,7 @@ function ModelActivationBar({
   readonly onActivateAll: (modelIds: readonly string[]) => void;
 }): ReactNode {
   const t = useTranslate();
-  if (!models.some(isConversationEligibleModel)) return null;
+  if (!models.some((model) => isConversationEligibleModel(model))) return null;
   const inactive = inactiveChatModelIds(models, readiness);
   return (
     <div className="set-sec-h" data-testid="model-activation-bar">
@@ -2129,12 +2129,20 @@ export function SettingsPanel({
 
   // One model after another: an activation that persists a tool-calling proof advances the server
   // generation, and a check started under the superseded generation would be discarded as stale.
+  // Each check starts only after the previous one settled, as a tail call rather than a loop.
+  async function activateFrom(
+    modelIds: readonly string[],
+    index: number,
+    generation: number,
+  ): Promise<void> {
+    const modelId = modelIds[index];
+    if (modelId === undefined || configGenerationRef.current !== generation) return;
+    await runModelReadinessCheck(modelId, false, generation, setReadinessLedger, t);
+    await activateFrom(modelIds, index + 1, generation);
+  }
+
   async function handleActivateAll(modelIds: readonly string[]): Promise<void> {
-    const generation = configGenerationRef.current;
-    for (const modelId of modelIds) {
-      if (configGenerationRef.current !== generation) return;
-      await runModelReadinessCheck(modelId, false, generation, setReadinessLedger, t);
-    }
+    await activateFrom(modelIds, 0, configGenerationRef.current);
   }
 
   // Deactivation sends nothing to the provider. The remembered activation of this generation is

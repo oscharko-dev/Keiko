@@ -366,7 +366,9 @@ it("sends no chat request at server start, and only to the chat model in use onc
     expect(gateway.requestsFor(EMBEDDING_A)).toBeGreaterThan(0);
   });
   await new Promise<void>((resolve) => setTimeout(resolve, 50));
-  expect([CHAT_A, CHAT_B, CHAT_C].map(gateway.requestsFor)).toEqual([0, 0, 0]);
+  expect([CHAT_A, CHAT_B, CHAT_C].map((modelId) => gateway.requestsFor(modelId))).toEqual([
+    0, 0, 0,
+  ]);
   expect(currentConversationReady(deps, CHAT_A)).toBe(false);
   await started(deps, gateway);
   expect(gateway.requestsFor(CHAT_A)).toBe(1);

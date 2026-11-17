@@ -292,7 +292,9 @@ export function readProvisionedConfig(configPath, apiKeyEnv = undefined, env = p
   }
   const apiKey = teamApiKey(apiKeyEnv, env);
   const providers = config.providers.map((provider) => withTeamApiKey(provider, apiKey));
-  providers.forEach(assertProviderOutline);
+  providers.forEach((provider, index) => {
+    assertProviderOutline(provider, index);
+  });
   // The administrator's own text when nothing was sealed (without a byte order mark).
   const unchanged = providers.every((provider, index) => provider === config.providers[index]);
   return Buffer.from(
