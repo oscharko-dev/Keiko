@@ -495,5 +495,6 @@ remaining Pods. The old answer and Cedar's index remained available.
 
 After the prior password prompt was dismissed, a successful replacement of the synthetic Jira
 PAT in Edge triggered a fresh **Save your password?** prompt. The Pod verified successfully
-and Jira recorded zero writes. The replacement now uses an explicit Save action and supports
-Enter from the masked input, including protection against submitting an IME candidate.
+and Jira recorded zero writes. On `ca1c50ae2`, replacing the native form with an explicit Save
+action still triggered a delayed prompt after a successful Enter submission. The experiment was
+reverted. The connector guide explains how to dismiss the separate browser prompt.

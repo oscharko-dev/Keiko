@@ -2,7 +2,7 @@
 // each form's render short (≤50 lines) and gives every input an associated <label>, inline hint,
 // and role="alert" error wired via aria-describedby.
 
-import type { KeyboardEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type { WidgetMessageKey as MessageKey } from "@/lib/optional-widget-i18n";
 
@@ -11,7 +11,6 @@ export interface TextFieldProps {
   readonly labelKey: MessageKey;
   readonly value: string;
   readonly onChange: (value: string) => void;
-  readonly onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly type?: "text" | "password" | "email";
   readonly placeholderKey?: MessageKey;
   readonly hintKey?: MessageKey;
@@ -38,7 +37,6 @@ export function TextField(props: TextFieldProps): ReactNode {
         value={value}
         disabled={props.disabled ?? false}
         autoComplete={props.autoComplete ?? "off"}
-        onKeyDown={props.onKeyDown}
         aria-invalid={errorKey !== undefined}
         {...(describedBy.length > 0 ? { "aria-describedby": describedBy } : {})}
         {...(props.placeholderKey === undefined ? {} : { placeholder: t(props.placeholderKey) })}
