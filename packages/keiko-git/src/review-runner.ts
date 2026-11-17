@@ -14,6 +14,7 @@ import {
   CONFIG_ENV_JOINED_PREFIX,
   CONFIG_OVERRIDE_FLAGS,
   createGitProcessRunnerWithFixedArgs,
+  createHostCredentialNetworkProcessRunner,
   NETWORK_CONFIG_ARGS,
   refusedOptionResult,
 } from "./runner.js";
@@ -205,8 +206,10 @@ export function createGitReviewProcessRunner(
 }
 
 /**
- * The runner for the pull request fetch: the sync runner's credential-capable environment and
- * network neutralization, plus the review hardening set.
+ * The runner for the pull request fetch: the sync runner's credential-capable environment, network
+ * neutralization and host credential helpers (the user's direct system and global helpers, #4411),
+ * plus the review hardening set. The helpers come from the account, never from the repository, so
+ * a pull request head cannot bring one in (R4130-077).
  */
 export function createGitReviewNetworkProcessRunner(): GitProcessRunner {
   const fixedArgs = [
@@ -215,6 +218,6 @@ export function createGitReviewNetworkProcessRunner(): GitProcessRunner {
     ...GIT_REVIEW_FETCH_FSCK_ARGS,
   ];
   return refusingCallerConfiguration(
-    createGitProcessRunnerWithFixedArgs(() => networkGitReviewEnv(), fixedArgs),
+    createHostCredentialNetworkProcessRunner(() => networkGitReviewEnv(), fixedArgs),
   );
 }

@@ -226,7 +226,12 @@ and the data is otherwise kept as it was.
 
 A review target is an exact pair of commits. A pull request target resolves to an immutable base SHA
 and head SHA; Keiko fetches `refs/pull/<n>/head` with the hardened Git runner and refuses the run
-(`skipped/target-changed`) when the fetched head differs from the head the provider reported. A
+(`skipped/target-changed`) when the fetched head differs from the head the provider reported. The
+fetch admits the account's direct system and global credential helpers by the rule of the Git
+window's Fetch (`createHostCredentialNetworkProcessRunner`, dev #4411; R4130-077): without them
+every review of a private HTTPS repository failed as `skipped/worktree-failed`. A helper set by
+the repository, an include or an ambient `GIT_CONFIG_*` override never applies, and the review
+hardening arguments still precede the admitted helpers. A
 local-range target reviews a local branch against its base without a hosting provider.
 
 The diff starts at the merge base of the two commits, the commit the head branched from, as
