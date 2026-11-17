@@ -12,7 +12,8 @@
 // processes. Such files are reported exactly like any other file that did not fit.
 //
 // A file with a hunk larger than one part is placed after the files that fit (Issue #4130), in the
-// same order, and only when its whole diff fits the windows the unopened parts can hold. Otherwise
+// same order, and only when its whole diff fits the windows the parts can still hold: two per
+// unopened part, and the whole windows that fit what is left of the last open part. Otherwise
 // it is unprocessed for the budget, so it never takes a part from a file that fits. Such a file is
 // held back only while the unopened parts could still show it beside the files already held; one
 // that cannot be shown any more counts as a budget miss like any file that did not fit, so the
@@ -208,7 +209,7 @@ class PackingRun {
   /**
    * The files with a hunk larger than one part, after every file that fits is placed (R4130-064),
    * in the same order. Such a file is shown in windows only when its whole diff fits the windows
-   * the unopened parts can hold, two per part; otherwise it is left out as before this change
+   * the parts can still hold (`windowCapacity`); otherwise it is left out as before this change
    * (`unprocessed`, `budget`) and nothing of it is split (R4130-063). So a file larger than the
    * parts that are left takes no part from a file that fits, and the work of splitting is bounded
    * by the parts, not by the size of the change.
@@ -223,9 +224,13 @@ class PackingRun {
     }
   }
 
-  /** What the unopened parts can hold in windows, two per part. */
+  /**
+   * What the parts can still hold in windows: two per unopened part, and the whole windows that fit
+   * what is left of the last open part, where a windowed file's first windows go.
+   */
   private windowCapacity(): number {
-    return this.packer.unopenedParts() * 2 * this.windowBudget;
+    const lastPartWindows = Math.floor(this.packer.lastPartRoom() / this.windowBudget);
+    return (this.packer.unopenedParts() * 2 + lastPartWindows) * this.windowBudget;
   }
 
   /**

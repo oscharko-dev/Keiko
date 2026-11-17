@@ -176,6 +176,23 @@ describe("pathological hunks", () => {
     for (const path of SMALL) expect(result.parts[0]?.text).toContain(path);
   });
 
+  // #4130, development iteration 9: the window capacity counted only the unopened parts, although
+  // a windowed file's first windows go into what is left of the last open part. Pull request 3037
+  // left a file of about 15,000 tokens out with one part unopened and room left in the last one.
+  it("counts the room left in the last open part toward a windowed file's capacity", async () => {
+    // About 2,500 tokens: three windows of a 2,000-token part. One unopened part holds two windows,
+    // the room the small files left in the first part holds two more.
+    const { base, head } = withSmallFiles(420);
+    const result = await packaged(fixture, base, head, { budgetTokens: 2_000, maxParts: 2 });
+
+    expect(result.coverage.unprocessed).toEqual([]);
+    expect(result.files.map((file) => file.coverage.path)).toEqual([...SMALL, "big.ts"]);
+    expect(result.coverage.included.every((file) => !file.partial)).toBe(true);
+    expect(result.windowedHunks).toBe(1);
+    expect(result.parts).toHaveLength(2);
+    for (const part of result.parts) expect(part.usedTokens).toBeLessThanOrEqual(2_000);
+  });
+
   it("leaves a file larger than all parts out and still shows the files that fit whole", async () => {
     const { base, head } = withSmallFiles(8_000);
     const result = await packaged(fixture, base, head, { budgetTokens: 2_000, maxParts: 12 });
