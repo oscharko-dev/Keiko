@@ -122,6 +122,30 @@ describe("v55 migration — private chat continuity", () => {
       db.close();
     }
   });
+
+  // R4130-078: the review tables' rollbacks kept the numbers 59 to 61 after the 1.5.0 sync moved
+  // the tables to 79 to 81, and no suite noticed, because every other rewind targets 54 or lower.
+  // Each target from 78 on rewinds and migrates forward again; a rollback with a stale number
+  // leaves a table or column behind and the second run fails. It starts at 78 because the
+  // fixture's older rollbacks, which come from dev, fail the same round trip from 57 and from 62
+  // to 77.
+  it("rewinds to every version from 78 on and migrates forward again", () => {
+    const failures: string[] = [];
+    for (let target = 78; target < SCHEMA_VERSION; target += 1) {
+      const db = new DatabaseSync(":memory:");
+      db.exec("PRAGMA foreign_keys = ON");
+      try {
+        runMigrations(db);
+        rewindSchemaFixture(db, target);
+        runMigrations(db);
+      } catch (error) {
+        failures.push(`${String(target)}: ${error instanceof Error ? error.message : "unknown"}`);
+      } finally {
+        db.close();
+      }
+    }
+    expect(failures).toEqual([]);
+  });
 });
 
 // KEIKO-0573: runMigrations filters and applies pending migrations in declaration order (no
