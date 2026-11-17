@@ -350,6 +350,33 @@ server decisions and their two client results matched by correlation ID. The
 original source was restored. This used the existing answer without another model
 request.
 
+### Gateway settings and browser storage
+
+The 1.5.1 password field used by gateway setup was already masked and declared
+`autocomplete=off`. The normal HTML form and success reload produced Edge’s
+**Save your password?** offer. The isolated baseline reproduced it with a synthetic
+token. Keeping the form and removing reload still produced the offer. Removing
+the form without reload avoided the offer but left the rotated workspace's native
+accessibility tree unavailable until reload.
+
+The exact gateway source from `1ff373e02` kept the masked input and replaced the
+form with an explicit Save action. In a fresh Windows Edge profile with the
+default password-manager configuration, a setup failure was corrected and saved
+by Enter. Normal Settings rotation was saved by clicking the button. Native
+browser chrome and screenshots showed no storage offer in two observations after
+each save. The complete application accessibility tree returned after both
+reloads, and the actual Chat picker showed the enabled, selected model without
+a readiness check. The conditional guidance remains available for browser
+profiles that show a separate offer.
+
+Real macOS Chrome verified the same code with its own local fixture. Initial
+Enter saved successfully and the configured model remained selectable after an
+ordinary browser reload. A rejected Settings rotation retained the masked input;
+the corrected save triggered the automatic reload and the model stayed available
+without an additional check. The local config stored credential references and
+the encrypted vault held the replacement. The browser tests used synthetic
+tokens and loopback providers. [#4441](https://github.com/oscharko-dev/Keiko/issues/4441)
+
 ### UI and UX checks for every surface
 
 Repeat key actions in a normal desktop window and a narrow window. Increase the
