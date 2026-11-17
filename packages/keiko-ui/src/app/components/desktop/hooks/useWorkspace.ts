@@ -788,6 +788,55 @@ function viewportAtView(rect: Pick<DOMRect, "width" | "height">, view: View): Vi
   };
 }
 
+function cameraClockNow(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function hasOpenMaximizedWindow(windows: readonly AppWindow[] | null | undefined): boolean {
+  return windows?.some((window) => window.max && window.minimized !== true) === true;
+}
+
+function fitMaximizedWindowsToView(
+  workspace: HTMLElement | null,
+  setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
+  target: View,
+): void {
+  const viewport = workspace?.getBoundingClientRect();
+  if (viewport === undefined || viewport.width <= 0 || viewport.height <= 0) return;
+  const bounds = viewportAtView(viewport, target);
+  setWins((current) => (current === null ? current : fitMaximizedWindows(current, bounds)));
+}
+
+interface CameraJump {
+  readonly target: View;
+  readonly effectiveSmoothness: number;
+  readonly windows: readonly AppWindow[] | null | undefined;
+  readonly workspace: HTMLElement | null;
+  readonly animationFrameRef: { current: number | null };
+  readonly setView: Dispatch<SetStateAction<View>>;
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+}
+
+/**
+ * Moves the camera in one step when it may not animate or a maximized window is open. With a
+ * maximized window the camera and that window move together: this keeps window actions in view and
+ * avoids persisting a different window geometry for every animation frame. False when the caller
+ * animates instead.
+ */
+function jumpCameraWithoutAnimation(jump: CameraJump): boolean {
+  const hasMaximizedWindow = hasOpenMaximizedWindow(jump.windows);
+  if (!hasMaximizedWindow && supportsCameraAnimation(jump.effectiveSmoothness)) return false;
+  if (jump.animationFrameRef.current !== null) {
+    window.cancelAnimationFrame(jump.animationFrameRef.current);
+    jump.animationFrameRef.current = null;
+  }
+  if (hasMaximizedWindow) fitMaximizedWindowsToView(jump.workspace, jump.setWins, jump.target);
+  jump.setView(jump.target);
+  return true;
+}
+
 function usePanZoom({
   storageScope,
   layoutLocked,
@@ -894,31 +943,21 @@ function usePanZoom({
     (target: View, smoothnessScale = 1, minDurationMs = MIN_CAMERA_ANIMATION_DURATION_MS): void => {
       if (isLayoutLocked()) return;
       const effectiveSmoothness = Math.min(100, Math.max(0, cameraSmoothness * smoothnessScale));
-      const hasMaximizedWindow =
-        winsRef.current?.some((window) => window.max && window.minimized !== true) === true;
-      if (hasMaximizedWindow || !supportsCameraAnimation(effectiveSmoothness)) {
-        if (animationFrameRef.current !== null) {
-          window.cancelAnimationFrame(animationFrameRef.current);
-          animationFrameRef.current = null;
-        }
-        // Update the camera and its maximized windows together. This keeps window actions in
-        // view and avoids persisting a different window geometry for every animation frame.
-        const viewport = hasMaximizedWindow ? wsRef.current?.getBoundingClientRect() : undefined;
-        if (viewport !== undefined && viewport.width > 0 && viewport.height > 0) {
-          const bounds = viewportAtView(viewport, target);
-          setWins((current) => (current === null ? current : fitMaximizedWindows(current, bounds)));
-        }
-        setView(target);
-        return;
-      }
+      const jumped = jumpCameraWithoutAnimation({
+        target,
+        effectiveSmoothness,
+        windows: winsRef.current,
+        workspace: wsRef.current,
+        animationFrameRef,
+        setView,
+        setWins,
+      });
+      if (jumped) return;
 
       const durationMs =
         minDurationMs +
         ((MAX_CAMERA_ANIMATION_DURATION_MS - minDurationMs) * effectiveSmoothness) / 100;
-      const now =
-        typeof performance !== "undefined" && typeof performance.now === "function"
-          ? performance.now()
-          : Date.now();
+      const now = cameraClockNow();
       animationStartRef.current =
         animationFrameRef.current === null
           ? renderedViewRef.current
