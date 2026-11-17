@@ -24,11 +24,7 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
-import {
-  gatewayServiceUninstallNotice,
-  runUninstallCli,
-  type UninstallCliDeps,
-} from "./uninstall.js";
+import { runUninstallCli, type UninstallCliDeps } from "./uninstall.js";
 import { runLauncherCli } from "./launcher.js";
 import { runPortableCli } from "./portable.js";
 import { KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT } from "./init.js";
@@ -1409,6 +1405,8 @@ describe("runUninstallCli — portable managed install", () => {
     expect(existsSync(managedRoot)).toBe(false);
     expect(existsSync(shortcut)).toBe(false);
     expect(existsSync(join(root, ".keiko"))).toBe(false);
+    // A desktop install removes its own package: no npm step is suggested for it.
+    expect(c.out()).not.toContain("npm uninstall");
   });
 
   it("refuses a modified Start Menu registration and keeps the managed install", async () => {
@@ -2552,15 +2550,73 @@ describe("runUninstallCli — package guidance", () => {
   });
 });
 
-describe("gatewayServiceUninstallNotice", () => {
-  it("names the service only on Windows when its folder exists", () => {
-    const exists = (): boolean => true;
-    const absent = (): boolean => false;
-    expect(gatewayServiceUninstallNotice("win32", "C:\\PF", exists)).toContain(
-      "keiko gateway-service uninstall",
+// One-step Windows uninstall: a full uninstall removes the gateway service in the same command
+// (the relocated pin of the former notice lives in uninstall-gateway-service.test.ts).
+describe("runUninstallCli — Windows gateway service", () => {
+  function programFilesWithService(root: string): string {
+    const programFiles = join(root, "ProgramFiles");
+    mkdirSync(join(programFiles, "KeikoRuntimeGateway"), { recursive: true });
+    return programFiles;
+  }
+
+  it("removes the service through keiko gateway-service uninstall on a full uninstall", async () => {
+    const root = makeRoot();
+    const calls: (readonly string[])[] = [];
+    const c = makeIo();
+    const code = await runUninstallCli(
+      [],
+      c.io,
+      { ProgramFiles: programFilesWithService(root) },
+      {
+        cwd: root,
+        homedir: () => root,
+        platform: () => "win32",
+        gatewayServiceRemoval: (args) => {
+          calls.push(args);
+          return Promise.resolve(0);
+        },
+      },
     );
-    expect(gatewayServiceUninstallNotice("win32", "C:\\PF", absent)).toBeUndefined();
-    expect(gatewayServiceUninstallNotice("win32", undefined, exists)).toBeUndefined();
-    expect(gatewayServiceUninstallNotice("darwin", "/PF", exists)).toBeUndefined();
+    expect(code).toBe(0);
+    expect(calls).toEqual([["uninstall"]]);
+    expect(c.out()).toContain("Windows asks for approval once");
+    expect(c.out()).not.toContain("stays installed");
+  });
+
+  it("keeps the uninstall going and names the command when the approval is declined", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const code = await runUninstallCli(
+      [],
+      c.io,
+      { ProgramFiles: programFilesWithService(root) },
+      {
+        cwd: root,
+        homedir: () => root,
+        platform: () => "win32",
+        gatewayServiceRemoval: () => Promise.resolve(1),
+      },
+    );
+    expect(code).toBe(0);
+    expect(c.out()).toContain(
+      "stays installed. Remove it later with: keiko gateway-service uninstall",
+    );
+  });
+
+  it("leaves the service alone for a scripts-only uninstall and in a dry run", async () => {
+    const root = makeRoot();
+    const programFiles = programFilesWithService(root);
+    const removal = vi.fn(() => Promise.resolve(0));
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      platform: () => "win32",
+      gatewayServiceRemoval: removal,
+    };
+    await runUninstallCli(["--scripts"], makeIo().io, { ProgramFiles: programFiles }, deps);
+    const dry = makeIo();
+    await runUninstallCli(["--dry-run"], dry.io, { ProgramFiles: programFiles }, deps);
+    expect(removal).not.toHaveBeenCalled();
+    expect(dry.out()).toContain("would-remove: the Windows runtime gateway service");
   });
 });

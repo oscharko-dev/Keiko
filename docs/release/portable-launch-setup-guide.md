@@ -105,6 +105,7 @@ elevated. Nobody runs `keiko gateway-service install` or sets an environment var
 - If no approval dialog appears after **Repair**, look for the shield icon in the taskbar.
 - An organisation that deploys the service itself (MDM, images) can set
   `KEIKO_GATEWAY_SERVICE_SETUP=manual`; Keiko then only reports the service state.
+- `keiko uninstall` removes the service as well, with one more Windows approval.
 - `keiko gateway-service status|repair|uninstall` remains available for operators.
 
 The managed install root is separate from `.keiko` runtime state. Runtime state stores local app

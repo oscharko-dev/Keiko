@@ -108,6 +108,7 @@
     "keiko-cli/ui-process-stop",
     "keiko-cli/ui-startup-progress",
     "keiko-cli/uninstall",
+    "keiko-cli/uninstall-gateway-service",
     "keiko-cli/uninstall-journal",
     "keiko-cli/uninstall-managed-removal",
     "keiko-cli/uninstall-windows-helper",

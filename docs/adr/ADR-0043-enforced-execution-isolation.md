@@ -54,7 +54,8 @@ Windows npm runtime package's own supervisor (proposed 2026-11-09, pending repos
 
 1.10 — One-step Windows setup amends D19 (2026-11-17): a healthy `keiko start` installs or repairs
 the broker itself, at most one UAC prompt per helper pin, so installing and updating Keiko brings
-the service along; the Workbench offers Repair instead of a terminal command.
+the service along; the Workbench offers Repair instead of a terminal command, and a full
+`keiko uninstall` removes the service in the same command.
 
 ## Context
 
@@ -1039,8 +1040,11 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   the paired app session) runs the same native install through a verified private copy of the
   helper, answers a closed outcome (`ready`, `declined`, `failed`, `unavailable`, `busy`; one prompt
   at a time) and re-reads the state. The launch stays fail-closed regardless of the last reading.
-  `keiko uninstall` names the service when its folder exists; it does not remove it, because removal
-  needs an administrator.
+  A full `keiko uninstall` removes the service too, through the same `keiko gateway-service
+  uninstall` (one UAC prompt), before the installation's own helper is deleted. A declined approval
+  or a guard that still protects a live tree keeps the service, names the command that removes it
+  later, and lets the rest of the uninstall continue; `--scripts`/`--launchers` alone and
+  `--dry-run` never touch it.
 - **Standard users.** Status and launch read the running broker's image path from the service
   configuration. The default service DACL lets an interactive user read it, while the LocalSystem
   process itself denies that user `PROCESS_QUERY_LIMITED_INFORMATION`. On 2026-11-06 (#4068) a

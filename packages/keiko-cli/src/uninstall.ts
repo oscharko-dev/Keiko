@@ -76,6 +76,11 @@ import {
 } from "./uninstall-managed-removal.js";
 import { isPortableInstallRegistrationCorrupt } from "./portable-registration.js";
 import {
+  removeWindowsGatewayServiceForUninstall,
+  type GatewayServiceRemovalOutcome,
+  type GatewayServiceRemovalRunner,
+} from "./uninstall-gateway-service.js";
+import {
   classifyPid,
   defaultIsProcessAlive,
   inspectStateRoot,
@@ -148,6 +153,8 @@ export interface UninstallCliDeps {
   readonly pid?: number | undefined;
   /** Test seams of the managed-install removal: the helper start and the entry removal. */
   readonly managedRemoval?: Pick<ManagedRemovalDeps, "helper" | "unlink" | "rmdir"> | undefined;
+  /** Test seam: the Windows gateway service removal (`keiko gateway-service uninstall`). */
+  readonly gatewayServiceRemoval?: GatewayServiceRemovalRunner | undefined;
 }
 
 interface RawUninstallArgs {
@@ -652,7 +659,9 @@ function refuseUnsafeStateRoot(
   return false;
 }
 
-function printPackageGuidance(io: CliIo, deps: ResolvedDeps): void {
+function printPackageGuidance(io: CliIo, deps: ResolvedDeps, desktopInstall: boolean): void {
+  // A desktop (portable-managed) installation removes its own package; npm has nothing to remove.
+  if (desktopInstall) return;
   const localInstalled = existsSync(localPackageRoot(deps.cwd));
   io.out("\nKeiko runtime artifacts processed. To remove the package itself, run:\n");
   if (localInstalled) {
@@ -1317,7 +1326,7 @@ async function executeUninstall(
     return 1;
   }
   const stateOutcome = removeStateStep(opts, io, stateDir, managed.held);
-  printPackageGuidance(io, deps);
+  printPackageGuidance(io, deps, planned.kind === "ready");
   printKeptSummary(io, opts, stateOutcome, stateDir, activity);
   if (launcherRefused > 0) {
     emitUninstallFailure(activity, "LauncherRemovalRefused", "launcher-removal-refused");
@@ -1345,17 +1354,27 @@ function reportUninstallException(
   return 1;
 }
 
-// The LocalSystem broker lies outside the state this command owns, and removing it takes an
-// administrator's approval (ADR-0043 D19). Say so instead of silently leaving a service behind.
-export function gatewayServiceUninstallNotice(
-  platform: NodeJS.Platform,
-  programFiles: string | undefined,
-  exists: (path: string) => boolean,
-): string | undefined {
-  if (platform !== "win32" || programFiles === undefined) return undefined;
-  return exists(join(programFiles, "KeikoRuntimeGateway"))
-    ? "keiko uninstall: the Windows runtime gateway service stays installed. Before removing the Keiko package, run: keiko gateway-service uninstall\n"
-    : undefined;
+// The LocalSystem broker lies outside the state directory, and removing it takes an administrator's
+// approval (ADR-0043 D19). A full uninstall removes it in the same command (one UAC prompt), before
+// the installation's own helper is gone; a scripts- or launchers-only uninstall leaves it alone.
+function removeGatewayServiceStep(
+  opts: UninstallOptions,
+  io: CliIo,
+  env: EnvSource,
+  resolved: ResolvedDeps,
+  stateDir: string,
+  run: GatewayServiceRemovalRunner | undefined,
+): Promise<GatewayServiceRemovalOutcome> {
+  if (!opts.scopes.state) return Promise.resolve("absent");
+  return removeWindowsGatewayServiceForUninstall({
+    platform: resolved.platform,
+    env,
+    stateDir,
+    dryRun: opts.dryRun,
+    io,
+    exists: existsSync,
+    run,
+  });
 }
 
 export async function runUninstallCli(
@@ -1375,12 +1394,7 @@ export async function runUninstallCli(
     return 2;
   }
   const stateDir = resolveStateDir(resolved.cwd, env, opts.stateDirArg);
-  const gatewayNotice = gatewayServiceUninstallNotice(
-    process.platform,
-    env.ProgramFiles,
-    existsSync,
-  );
-  if (gatewayNotice !== undefined) io.out(gatewayNotice);
+  await removeGatewayServiceStep(opts, io, env, resolved, stateDir, deps.gatewayServiceRemoval);
   const activity = prepareUninstallActivity(opts, stateDir, env, io, resolved, {
     activityStateDir: deps.activityStateDir,
     factory: deps.securityLogSinkFactory,
