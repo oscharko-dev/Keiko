@@ -763,3 +763,9 @@ The English and German gateway credential guidance changes the optional catalogs
 nine updater cases passed in the Linux arm64 gates container with Node 26.13.1 and
 `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three records use that run's source digests and generation
 time where recorded. The captures retain their original typography.
+
+### Git signing recovery (#4444)
+
+All nine original updater cases passed in the Linux arm64 gates container with Node 26.13.1
+and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three records bind the updated English and German
+catalog digests. The committed captures retain the typography of their original renderer.

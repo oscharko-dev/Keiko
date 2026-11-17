@@ -550,6 +550,31 @@ describe("CommitComposer — preview and outcomes", () => {
     expect(screen.getByTestId("git-commit-outcome")).toHaveTextContent("Succeeded");
   });
 
+  it("keeps the signed commit draft available for an explicit retry after signing fails (#4444)", async () => {
+    const user = userEvent.setup();
+    const draft = "test: retain signing recovery";
+    const { onCommit } = renderComposer({
+      preview: makePreview({ signatureRequirement: "required" }),
+      previewDraft: draft,
+      outcome: {
+        schemaVersion: "1",
+        status: "recovery-required",
+        actionKind: "commit",
+        executionErrorCode: "signature-failed",
+      },
+    });
+    await user.type(screen.getByLabelText("Summary"), draft);
+    expect(screen.getByTestId("git-commit-outcome-headline")).toHaveTextContent(
+      /signing key.*signing program.*click Commit again/u,
+    );
+    expect(screen.getByLabelText("Summary")).toHaveValue(draft);
+    expect(onCommit).not.toHaveBeenCalled();
+    const retry = screen.getByRole("button", { name: /^Commit/ });
+    expect(retry).toBeEnabled();
+    await user.click(retry);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith(draft);
+  });
+
   it("renders a transport error", () => {
     renderComposer({ error: "network down" });
     expect(screen.getByTestId("git-commit-outcome")).toHaveTextContent("network down");

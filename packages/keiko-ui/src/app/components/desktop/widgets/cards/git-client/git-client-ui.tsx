@@ -166,11 +166,18 @@ export function MutationOutcome({
   }
   if (outcome === null) return null;
   const tone = outcomeTone(outcome.status);
+  // #4444: the existing closed failure code identifies the recovery; never infer it from stderr.
+  const signingFailure =
+    outcome.actionKind === "commit" &&
+    outcome.executionErrorCode === "signature-failed" &&
+    (outcome.status === "recovery-required" || outcome.status === "failed");
   const codes: readonly string[] = [
     ...(outcome.blockReason !== undefined ? [`reason: ${outcome.blockReason}`] : []),
     ...(outcome.preflightFindingCodes ?? []).map((c) => `preflight: ${c}`),
     ...(outcome.requiredApprovers ?? []).map((a) => `approver: ${a}`),
-    ...(outcome.executionErrorCode !== undefined ? [`error: ${outcome.executionErrorCode}`] : []),
+    ...(outcome.executionErrorCode !== undefined && !signingFailure
+      ? [`error: ${outcome.executionErrorCode}`]
+      : []),
     ...(outcome.messageViolations ?? []).map((v) => violationLabel(v)),
   ];
   const ringColor = outcomeRingColor(tone);
@@ -194,6 +201,7 @@ export function MutationOutcome({
         style={{ margin: 0, font: "600 13px var(--font-ui)", color: "var(--fg)" }}
       >
         {outcome.actionKind}: {STATUS_LABEL[outcome.status]}
+        {signingFailure ? ` ${tUi("gitClientWindow.ui.commitSigningRecovery")}` : null}
       </output>
       {codes.length > 0 ? (
         <ul style={{ margin: 0, paddingLeft: 18, font: "400 11px var(--font-ui)" }}>

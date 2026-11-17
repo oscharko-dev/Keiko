@@ -6631,6 +6631,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.ui.new": "Neu",
   "gitClientWindow.ui.recent": "Zuletzt verwendet",
   "gitClientWindow.ui.error": "Fehler",
+  "gitClientWindow.ui.commitSigningRecovery":
+    "Git konnte diesen Commit nicht signieren. Prüfe den Signaturschlüssel (user.signingKey) und das Signaturprogramm für dieses Repository. Klicke danach erneut auf Commit.",
   "figmaJson.ui.qiSource": "QI-Quelle",
   "figmaJson.ui.retry": "Erneut versuchen",
   "chatHistoryPanel.ui.conversations": "Konversationen",
