@@ -70,6 +70,14 @@ Workbench names `keiko-windows-x64-setup.exe`.
 (auto start, delayed) with the pinned supervisor `888130331e49…`, the setup record holds that pin,
 and readiness reports `runtimeAvailable: true`.
 
+## One set of Windows native bytes (re-pin, 2026-11-17)
+
+After the owner re-pinned the npm lane's Windows helper to the portable release build, a new 1.1.5
+runtime candidate (release helper `65cc98c3…` and supervisor `888130…` from the checksum-verified
+1.5.1 archive) passed `--pack` and `--verify`. Installed fresh with a re-packed Keiko, `keiko start`
+logged `coding-runtime.dev-lane.activated` with helper `65cc98c3…`, `cli.gateway-service.setup`
+`ready`, and readiness `runtimeAvailable: true`.
+
 ## Not yet verified on a real host
 
 - Whether the UAC prompt raised from the background server for the Workbench's **Repair** comes to

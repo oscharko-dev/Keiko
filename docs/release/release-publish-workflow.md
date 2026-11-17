@@ -315,25 +315,22 @@ separate step: its first healthy `keiko start` installs the broker for this pack
 D19, one-step Windows setup). Until the package is published, a Windows npm installation reports
 `npm-runtime-package-missing`, and the Workbench points to `keiko-windows-x64-setup.exe`.
 
-**Compiler finding, 2026-11-17 (owner decision required before the first publication).** A
-from-source 1.1.5 build on a Windows host with Visual Studio 2022 BuildTools 17.14 (MSVC 14.44)
-reproduced the pinned secure-read helper (`1318171b…`, 129,024 bytes), the OpenCode tree, its
-license and SBOM, and `rg.exe`, but not the pinned supervisor: it produced `3277f6da…` (235,008
-bytes) instead of `888130331e…` (237,056 bytes). Neither source tree changed since the pins; both
-local builds were deterministic. The PE headers show why: the pinned supervisor is the CI build of
-the portable release (MSVC 14.51, `windows-latest`), while the pinned helper is a 14.44 build, and
-the same 14.51 toolset produces the portable helper `65cc98c3…`. As pinned, no single compiler can
-produce a candidate that passes `--pack`. One of these must be chosen by the owner:
+**One set of Windows native bytes (owner decision 2026-11-17, "Ja, umstellen").** The npm package
+carries exactly the Windows helper and supervisor of the portable release: secure-read helper
+`65cc98c3…` (129,024 bytes) and supervisor `888130331e…` (237,056 bytes), both built by the
+release workflow with MSVC 14.51 (`windows-latest`) and `/Brepro` at `1906b6a5f28a…` from the
+unchanged source trees. `npmLaneRuntimeApprovals.ts` pins the npm lane to those bytes, and
+`npmLaneRuntimeApprovals.test.ts` fails when the npm and portable Windows pins diverge.
 
-1. Re-pin the npm supervisor to the 14.44 build, accepting that it differs from the portable
-   approval.
-2. Re-pin the npm helper to the portable `65cc98c3…` and build the package with MSVC 14.51, so the
-   npm and portable lanes share every native byte (this needs a 14.51 toolset on the build host).
-3. Build with 14.44 and substitute the release's own supervisor bytes (`888130331e…`, copied from
-   a verified portable archive). Such a candidate passed `--pack` and `--verify` locally (10
-   files); it is the approved release binary, not a local rebuild.
-
-Option 2 keeps one set of Windows native bytes for both delivery lanes and is the recommendation.
+Why: a from-source build with Visual Studio 2022 BuildTools 17.14 (MSVC 14.44) reproduces neither
+release binary (it gives helper `1318171b…`, the former npm pin, and supervisor `3277f6da…`,
+235,008 bytes), and the former pins mixed a 14.44 helper with a 14.51 supervisor, so no single
+compiler could produce a candidate. A build host therefore needs MSVC 14.51 to reproduce both from
+source. Without it, build the package directory as usual and replace
+`runtime/native/keiko-secure-workspace-read.exe` and `runtime/native/keiko-runtime-supervisor.exe`
+with the bytes of a release archive whose checksum matches its `windows-x64-SHA256SUMS.txt`; `--pack`
+and `--verify` then check them against the pins. Such a 1.1.5 candidate passed `--pack` and
+`--verify` on 2026-11-17 (10 files; tarball SHA-256 `3f74a03a…`).
 
 ```sh
 node scripts/build-coding-runtime-npm-package.mjs windows-x64 1.2.0 C:\keiko-runtime-1.2.0\windows-x64
@@ -349,8 +346,9 @@ lockfile entry in one change (step 3 below).
 
 The first Windows publication is an owner-only step, in this order:
 
-1. Settle the compiler finding above and build, `--pack` and `--verify` the `windows-x64`
-   candidate on a Windows host at the version recorded for its OpenCode (1.1.5 for OpenCode 2.2.5).
+1. Build, `--pack` and `--verify` the `windows-x64` candidate on a Windows host at the version
+   recorded for its OpenCode (1.1.5 for OpenCode 2.2.5), with MSVC 14.51 or the verified release
+   binaries described above, and attach the tarball and its receipt to the runtime prerelease.
 2. Add the `windows-x64` entry to `docs/release/coding-runtime-npm-packages.json` under that
    version, and run `npm trust github @oscharko-dev/keiko-coding-runtime-win32-x64 …` as for the
    macOS packages.
