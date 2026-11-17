@@ -61,10 +61,17 @@ Without the runtime package (today's published npm state), the same start answer
 `runtimeAvailable: false` with `runtimeUnavailableReason: "npm-runtime-package-missing"`, and the
 Workbench names `keiko-windows-x64-setup.exe`.
 
+## Install with an absent service (verified 2026-11-17, a person at the PC)
+
+`keiko gateway-service uninstall` (one UAC approval) removed the service
+(`cli.gateway-service.completed`: action `uninstall`, state `absent`, 4.4 s). The next
+`keiko start` set it up by itself after one more UAC approval: `cli.gateway-service.setup` outcome
+`installed`, prior state `absent`, lane `npm-runtime-package`, 4.3 s. The service runs again
+(auto start, delayed) with the pinned supervisor `888130331e49…`, the setup record holds that pin,
+and readiness reports `runtimeAvailable: true`.
+
 ## Not yet verified on a real host
 
-- The install path with an absent service: `keiko start` must show one UAC prompt and end `installed`.
-  Needs a person at the PC (remove the service first with `keiko gateway-service uninstall`).
 - Whether the UAC prompt raised from the background server for the Workbench's **Repair** comes to
   the front.
 - The desktop artifact built from this branch: a release-shaped Windows package comes from the
