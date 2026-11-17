@@ -467,6 +467,14 @@ jobs:
         # Same compiled workspace surface as the latency gate; evaluates top-k quality, line-level
         # evidence, and generated-artifact leakage over fixed synthetic enterprise fixtures.
         run: npm run check:retrieval-quality
+      - name: Connected retrieval scale gate (epic #4429)
+        # Writes one deterministic 20,000-file corpus with planted facts and same-wording decoys and
+        # asks every question through the real connected-context pipeline built by `npm run
+        # typecheck` above. Each answer must cite the target file and quote the expected value, and
+        # a removed target MUST fail the regression probe. p95 grows with the file count; measured
+        # ~20s per question on Linux, so 7 questions plus the probe stay far inside this bound.
+        timeout-minutes: 15
+        run: npm run check:retrieval-scale
       - name: Grounded retrieval quality gate (RB-5, GEN-AI-RELEASE-GATE-001)
         # Drives the REAL production semantic-retrieval + RRF fusion + model-reranker path (not the
         # lexical toy corpus) over distractor-dense fixtures with non-tautological (<1) floors, and
