@@ -1366,11 +1366,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   {
     method: "POST",
-    pattern: "/api/local-knowledge/citation-preview/editor-target",
-    handler: handleKnowledgeCitationEditorTarget,
-  },
-  {
-    method: "POST",
     pattern: "/api/local-knowledge/citation-preview/open",
     handler: handleOpenPdfCitationPreviewSession,
   },
@@ -1815,6 +1810,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/gateway/readiness/selection",
     handler: handleGatewaySelectionCheck,
+  },
+  // #4443: an explicit saved text citation can resolve an ordinary Editor target.
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/citation-preview/editor-target",
+    handler: handleKnowledgeCitationEditorTarget,
   },
 ];
 
