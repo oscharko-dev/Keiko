@@ -766,6 +766,7 @@ time where recorded. The captures retain their original typography.
 
 ### Git signing recovery (#4444)
 
-All nine original updater cases passed in the Linux arm64 gates container with Node 26.13.1
-and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three records bind the updated English and German
-catalog digests. The committed captures retain the typography of their original renderer.
+All nine original updater cases passed again in the Linux arm64 gates container with Node 26.13.1
+and `KEIKO_WRITE_TRACKED_EVIDENCE=1` after the final English and German signing-tool guidance.
+The three records bind those catalog digests. The committed captures retain the typography of their
+original renderer.

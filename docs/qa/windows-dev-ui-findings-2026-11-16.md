@@ -280,6 +280,8 @@ and settled at 0 ahead and 0 behind. Switching to a local branch at `700e7e6` di
 The unrelated original repository was restored and the fixture's listener, directory
 and synthetic credential were removed with an exact native cleanup check.
 
+#### Git signing recovery (#4444)
+
 In a separate three-file fixture with two local edits, the native Stage and Unstage controls
 changed only the selected index entry. Protected `main` and an invalid commit summary both
 refused delivery with the staged content held. A valid summary hit an unconfigured signer and
@@ -288,6 +290,21 @@ signing-key, signing-program and retry guidance in English and German. Restoring
 test signer and retrying from the same draft created `40bde0e8a`, whose signature native Git
 verified. The commit contains only `change-two.txt`, the index is empty and the unrelated
 `change-one.txt` edit retains its bytes. [#4444](https://github.com/oscharko-dev/Keiko/issues/4444)
+
+A separate control gave the repository a valid SSH key and pointed its `gpg.ssh.program` at a
+missing executable. The Windows UI still made signed commit `8b2acb99c`. Native Git verified that
+signature after restoring its usual program. Keiko's governed Git mutation adapter sets `gpg`
+and `ssh-keygen` for OpenPGP and SSH, so the recovery tells users to check the repository key and
+format and ensure Keiko can run the corresponding tool.
+
+The exact follow-up `da47dd838` again refused the commit after removing only `user.signingKey`.
+Both native language views named `user.signingKey`, `gpg.format`, `gpg` and `ssh-keygen`, and told
+the user to click Commit again. HEAD, the index and both worktree file hashes matched their
+pre-attempt values. Restoring only the key and retrying the same draft produced `7a64ce4ac`.
+Native Git reported a good signature (`%G? = G`). `git show --stat` reported only
+`change-two.txt | 2 +-`, one insertion and one deletion. `git status --porcelain` reported only
+` M change-one.txt`, whose bytes still matched, and the index was empty. The three acceptance
+criteria passed. The finding remains open for verified integration. [#4444](https://github.com/oscharko-dev/Keiko/issues/4444)
 
 ### Chat
 
