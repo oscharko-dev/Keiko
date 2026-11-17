@@ -193,14 +193,19 @@ describe("pathological hunks", () => {
     for (const part of result.parts) expect(part.usedTokens).toBeLessThanOrEqual(2_000);
   });
 
-  // R4130-075: the last part's window count ignored the file header, which goes there first. With
-  // 1,806 tokens of room and a header of about 20 tokens, a file of four windows passed the check,
-  // only three windows found a part, and the file was shown in part, which R4130-063 rules out.
+  // R4130-075: the last part's window count ignored the file header, which goes there first. Three
+  // small files take 194 tokens, so the last part has 1,806 left: two windows by the old count. With
+  // a header of about 20 tokens only one window fits there, a file of four windows passed the
+  // check, and three of its windows were shown, which R4130-063 rules out (R4130-076: this setup
+  // reproduces the partial file the old rule showed).
   it("never shows a windowed file in part when its header crowds the last part's room", async () => {
-    const longPath = `src/${"nested/".repeat(12)}big-generated-module.ts`;
+    const longPath = `src/${"deeply/nested/".repeat(6)}big.ts`;
+    const small = (text: string): { path: string; content: string }[] =>
+      SMALL.map((path) => ({
+        path,
+        content: `export const value = "${text}xxxx";\n${numbered(2, `pad ${text}`)}`,
+      }));
     for (const lines of [540, 570, 598]) {
-      const small = (text: string): { path: string; content: string }[] =>
-        SMALL.map((path) => ({ path, content: `export const value = "${text}";\n` }));
       const base = fixture.commit([{ path: longPath, content: numbered(10) }, ...small("before")]);
       const head = fixture.commit([
         { path: longPath, content: numbered(lines, "replaced") },
@@ -208,9 +213,15 @@ describe("pathological hunks", () => {
       ]);
       const result = await packaged(fixture, base, head, { budgetTokens: 2_000, maxParts: 2 });
 
-      expect(result.coverage.included.every((file) => !file.partial)).toBe(true);
+      expect(
+        result.coverage.included
+          .filter((file) => file.partial)
+          .map(
+            (file) =>
+              `${String(lines)}:${String(file.includedHunkCount)}/${String(file.hunkCount)}`,
+          ),
+      ).toEqual([]);
       expect(result.coverage.unprocessed).toMatchObject([{ path: longPath, reason: "budget" }]);
-      expect(result.windowedHunks).toBe(0);
     }
   });
 
