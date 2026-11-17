@@ -2989,45 +2989,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.bindDead":
     "Diese Vorlage ist mit einem Vorgangstyp verbunden, den es in diesem Projekt nicht mehr gibt („{subject}“), deshalb gilt sie für nichts und blockiert nichts. Ändere den Vorgangstyp oder lösche die Vorlage.",
   "chat.skills.jira.openProposal": "Im Editor öffnen",
-  "agentLauncher.agent": "Agent",
-  "agentLauncher.agentCount": "{count} Agenten",
-  "agentLauncher.model": "Modell",
-  "agentLauncher.repository": "Repository",
-  "agentLauncher.repositoryPlaceholder": "/absoluter/repository/pfad",
-  "agentLauncher.workflow.unitTest": "Unit Test Agent",
-  "agentLauncher.workflow.bugfix": "Bugfix Agent",
-  "agentLauncher.scope.sourceFile": "Quelldatei",
-  "agentLauncher.scope.bugReport": "Fehlerbericht",
-  "agentLauncher.sourceFilePlaceholder": "src/datei.ts",
-  "agentLauncher.browseSourceFile": "Quelldatei durchsuchen",
-  "agentLauncher.selectRepositoryFirst":
-    "Wähle ein Repository aus, bevor du Quelldateien durchsuchst.",
-  "agentLauncher.skill": "Skill",
-  "agentLauncher.skillNone": "Kein Skill",
-  "agentLauncher.skillNote":
-    "Optional. Ein privater Markdown-Skill leitet jeden Modellaufruf dieses Laufs an. Er gewährt keine zusätzlichen Berechtigungen.",
-  "agentLauncher.skillUnavailable":
-    "Private Skills konnten nicht geladen werden. Der Lauf startet ohne Skill.",
-  "agentLauncher.observedBehavior": "Beobachtetes Verhalten",
-  "agentLauncher.observedBehaviorPlaceholder": "Beschreibe den beobachteten Fehler.",
-  "agentLauncher.failingOutput": "Fehlerhafte Ausgabe",
-  "agentLauncher.stackTrace": "Stacktrace",
-  "agentLauncher.relatedFiles": "Zugehörige Dateien",
-  "agentLauncher.relatedFilesPlaceholder": "src/datei.ts, src/andere.ts",
-  "agentLauncher.notRegistered": "Das Repository ist nicht registriert.",
-  "agentLauncher.registering": "Wird registriert…",
-  "agentLauncher.register": "Repository registrieren",
-  "agentLauncher.useCurrentFile": "Aktuelle Datei verwenden",
-  "agentLauncher.loading": "Modelle und Projekte werden geladen…",
-  "agentLauncher.start": "{label} starten",
-  "agentLauncher.starting": "Wird gestartet…",
-  "agentLauncher.validation.repositoryRequired": "Ein Repository ist erforderlich.",
-  "agentLauncher.validation.noModel": "Kein kompatibles Modell verfügbar.",
-  "agentLauncher.validation.explainFile": "Der Erklärplan benötigt einen Dateipfad.",
-  "agentLauncher.validation.unitSource": "Der Unit Test Agent benötigt eine Quelldatei.",
-  "agentLauncher.validation.bugDescription":
-    "Der Bugfix Agent benötigt ein beobachtetes Verhalten.",
-  "agentLauncher.fileOutsideRepository": "Wähle eine Datei innerhalb des ausgewählten Repositorys.",
   "editor.empty.title": "Projekt öffnen",
   "editor.empty.description":
     "Wählen Sie einen Projektordner aus, um mit der Bearbeitung zu beginnen. Der Editor arbeitet innerhalb des ausgewählten Workspace-Stammverzeichnisses.",
@@ -3118,20 +3079,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "editor.fileHistory.deleteFailed": "Der Wiederherstellungspunkt konnte nicht gelöscht werden.",
   "editor.fileHistory.sizeDelta": "Größenänderung: {delta}",
   "editor.fileHistory.entryLabel": "Wiederherstellungspunkt {sequence}, {origin}, {timestamp}",
-  "agentLauncher.autonomy": "Autonomiemodus",
   "agentLauncher.mode.governedAssist.label": "Um Genehmigung bitten",
-  "agentLauncher.mode.governedAssist.description":
-    "Lesen und Planen sind möglich. Der geprüfte Patch benötigt weiterhin deine ausdrückliche Apply-Bestätigung.",
   "agentLauncher.mode.supervisedCoding.label": "Überwachter Workspace",
-  "agentLauncher.mode.supervisedCoding.description":
-    "Routinemäßige Workspace-Arbeit wird von der Policy zugelassen; die Dry-Run-Prüfung bleibt für diese Agentenoberfläche verpflichtend.",
   "agentLauncher.mode.autonomousDelivery.label": "Vollzugriff",
-  "agentLauncher.mode.autonomousDelivery.description":
-    "Begrenzte Workspace-Arbeit darf ohne einzelne Rückfragen fortfahren. Connector- und Delivery-Ausführung bleiben hier nicht verfügbar.",
-  "agentLauncher.executionUnavailable":
-    "Connector- und Delivery-Ausführung sind für Unit-Test- und Bugfix-Agenten nicht verfügbar.",
-  "agentLauncher.governanceUnavailable":
-    "Der Server hat keinen Authority Envelope bestätigt. Der Agentenlauf wurde nicht geöffnet.",
+
   "agentRunWidget.autonomyMode": "Effektive Autonomie: {mode}",
   "agentRunWidget.executionUnavailable": "Connector- und Delivery-Ausführung nicht verfügbar",
   "attachment.rejection.deliveryRefused":

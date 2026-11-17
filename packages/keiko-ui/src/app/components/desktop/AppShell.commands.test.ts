@@ -69,7 +69,6 @@ function fakeApi(): WorkspaceApi {
     linkedConnectorCapsuleSetIds: vi.fn(() => []),
     linkedFigmaSnapshotRunIds: vi.fn(() => []),
     linkedFilesContext: vi.fn(() => null),
-    currentFilesContext: vi.fn(() => null),
     zoomTo: vi.fn(),
     fitView: vi.fn(),
     resetView: vi.fn(),
@@ -99,7 +98,6 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(opensDirectlyFromPalette("connector")).toBe(true);
     expect(opensDirectlyFromPalette("files")).toBe(false);
     expect(opensDirectlyFromPalette("editor")).toBe(false);
-    expect(opensDirectlyFromPalette("agents")).toBe(false);
     expect(opensDirectlyFromPalette("chat")).toBe(false);
   });
 
@@ -119,7 +117,6 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "new-connector",
       "new-files",
       "new-editor",
-      "new-agents",
       "new-docbrowser",
     ]);
     expect(newCommands.find((c) => c.id === "new-editor")).toBeDefined();
@@ -471,7 +468,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(commands.find((c) => c.id === "new-updates")).toBeUndefined();
   });
 
-  it("exposes Agents through create commands", () => {
+  it("keeps the Agent preset launcher out of create commands", () => {
     const commands = buildAppShellCommands(
       fakeApi(),
       vi.fn(),
@@ -481,10 +478,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       fakeUndoStack(),
       enTranslate,
     );
-    expect(commands.find((c) => c.id === "new-agents")).toMatchObject({
-      label: "New Agents",
-      group: "Create",
-    });
+    expect(commands.find((c) => c.id === "new-agents")).toBeUndefined();
   });
 
   // uiux-fix F008 C141 — shortcut discoverability: the undo/redo rows surface their chords.

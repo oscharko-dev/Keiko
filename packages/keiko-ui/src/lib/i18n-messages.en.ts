@@ -449,7 +449,6 @@ export const EN_MESSAGES = {
   "window.type.governedPullRequest.desc": "Open a review-ready PR under policy",
   "window.type.governedMerge.title": "Merge",
   "window.type.governedMerge.desc": "Merge a review-ready PR under policy",
-  "window.type.agents.cta": "Start agent",
   "window.field.title": "Title",
   "window.field.folder": "Folder",
   "window.field.filePath": "File path",

@@ -463,7 +463,6 @@ export const DE_MESSAGES = {
   "window.type.governedPullRequest.desc": "Review-fähigen PR nach Richtlinie öffnen",
   "window.type.governedMerge.title": "Merge",
   "window.type.governedMerge.desc": "Review-fähigen PR nach Richtlinie mergen",
-  "window.type.agents.cta": "Agent starten",
   "window.field.title": "Titel",
   "window.field.folder": "Ordner",
   "window.field.filePath": "Dateipfad",

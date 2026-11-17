@@ -998,26 +998,6 @@ describe("connected workspace source readers", () => {
     expect(harness.linkedAllFilesRoots("quality")).toContain("/repo-2");
   });
 
-  it("falls back from a missing linked file to the active Files window context", () => {
-    const harness = makeConnectHarness(
-      [
-        win("quality", {}, "quality"),
-        {
-          ...win("files", { resolvedRoot: "/active", activeFilePath: "notes.md" }, "files-a"),
-          z: 9,
-        },
-        { ...win("files", { resolvedRoot: "/other" }, "files-b"), z: 1 },
-      ],
-      [],
-    );
-
-    expect(harness.currentFilesContext()).toEqual({
-      id: "files-a",
-      root: "/active",
-      activeFilePath: "notes.md",
-    });
-  });
-
   it("dedupes and caps connected Figma snapshot run ids", () => {
     const figmas = Array.from({ length: MAX_SCOPES + 3 }, (_unused, i) =>
       win("figma", { snapshotRunId: i === 2 ? "run-1" : `run-${String(i)}` }, `figma-${i}`),

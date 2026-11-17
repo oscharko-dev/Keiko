@@ -581,8 +581,6 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 520,
     h: 560,
     tiny: { w: 250, h: 140 },
-    ctaKey: "window.type.agents.cta",
-    config: [],
   },
   integ: {
     titleKey: "window.type.integ.title",

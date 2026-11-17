@@ -62,7 +62,6 @@ function fakeApi(overrides: Partial<WorkspaceApi> = {}): WorkspaceApi {
     linkedConnectorCapsuleSetIds: vi.fn(() => []),
     linkedFigmaSnapshotRunIds: vi.fn(() => []),
     linkedFilesContext: vi.fn(() => null),
-    currentFilesContext: vi.fn(() => null),
     zoomTo: vi.fn(),
     fitView: vi.fn(),
     resetView: vi.fn(),

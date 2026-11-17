@@ -305,9 +305,8 @@ const LeftRail = dynamic(() => import("./LeftRail").then((mod) => mod.LeftRail),
 
 // Issue #1207 (ADR-0042 D3.6) — the new-window dialog is reached only by an explicit gesture
 // (`pending !== null`), exactly like the command palette and the gateway setup dialog above, so
-// it must not sit in the first-load chunk. Its subtree (KeikoSelect, the native file-dialog client,
-// the workflow-eligibility predicate) is the largest gesture-only surface the shell still pulled in
-// eagerly; loading it behind the same `next/dynamic(..., { ssr: false })` boundary keeps the initial
+// it must not sit in the first-load chunk. Its subtree includes the native file-dialog client. Loading it behind the same
+// `next/dynamic(..., { ssr: false })` boundary keeps the initial
 // desktop paint under the committed initialPageChunkGzipBytesCeiling.
 const NewWindowDialog = dynamic(
   () => import("./modals/NewWindowDialog").then((mod) => mod.NewWindowDialog),
@@ -3018,23 +3017,14 @@ function AppShellInner(): ReactNode {
       setNewWindowOpener(null);
       if (current === null) return;
       const normalizedCfg = current === "editor" ? normalizeEditorWindowCfg(cfg) : cfg;
-      const { __connectFilesId, ...windowCfg } = normalizedCfg;
       const targetWindowCfg = prepareNewWindowCfg(
         current,
-        windowCfg,
+        normalizedCfg,
         undefined,
         session.activeProject?.path,
         session.creationModelChoice,
       );
       const createdId = ws.api.add(current, targetWindowCfg);
-      if (
-        current === "agents" &&
-        createdId !== null &&
-        typeof __connectFilesId === "string" &&
-        __connectFilesId.length > 0
-      ) {
-        ws.api.connect(createdId, __connectFilesId);
-      }
       // Chat windows create and persist their own conversation id inside the window renderer.
       // Clearing the prior binding above makes the existing singleton enter that canonical path.
       // uiux-fix F008 C053 — focus handoff: once the dialog unmounts, move focus into the freshly
@@ -3309,7 +3299,6 @@ function AppShellInner(): ReactNode {
                     <NewWindowDialog
                       type={pending}
                       types={WIN_TYPES}
-                      filesContext={ws.api.currentFilesContext()}
                       opener={newWindowOpener}
                       onConfirm={confirmNew}
                       onClose={closeDialog}

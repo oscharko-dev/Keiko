@@ -1633,7 +1633,6 @@ type ConnectApi = Omit<
     | "linkedFigmaSnapshotSources"
     | "linkedImageSources"
     | "linkedGitChangeComparisons"
-    | "currentFilesContext"
   >,
   "linkedFigmaSnapshotSources" | "linkedImageSources" | "linkedGitChangeComparisons"
 > & {
@@ -2173,23 +2172,6 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     return roots;
   };
 
-  const currentFilesContext: WorkspaceApi["currentFilesContext"] = () => {
-    let onlyContext: FilesWindowContext | null = null;
-    let contextCount = 0;
-    let topFilesWindow: AppWindow | null = null;
-    for (const w of winsRef.current) {
-      if (w.type !== "files") continue;
-      const ctx = filesContextFor(w);
-      if (ctx !== null) {
-        contextCount += 1;
-        onlyContext = ctx;
-      }
-      if (topFilesWindow === null || w.z > topFilesWindow.z) topFilesWindow = w;
-    }
-    if (contextCount === 1) return onlyContext;
-    return topFilesWindow === null ? null : filesContextFor(topFilesWindow);
-  };
-
   // Epic #710 #718 — read the selected id of the given kind ("capsule" or "capsule-set") from
   // every connected Connector window, deduped and capped at MAX_SCOPES. Both QI capsule and
   // capsule-set sources flow through this one reader so the hub can bind either (Issue #716/#718).
@@ -2290,7 +2272,6 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     linkedFigmaSnapshotSources,
     linkedImageSources,
     linkedGitChangeComparisons,
-    currentFilesContext,
   };
 }
 

@@ -159,7 +159,6 @@ import type {
   GitEditorDiffScope,
   GatewayUnsupportedDiscoveredModel,
 } from "@oscharko-dev/keiko-contracts";
-import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   isActivityLogReadinessSnapshot,
   isCredentialCustodyState,
@@ -203,7 +202,6 @@ import {
   type DesktopChatStreamWriteApprovalEvent,
   type GitChangeConnectResponse,
   type GitChangeRefreshResponse,
-  type MarkdownSkillReference,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -944,92 +942,6 @@ export async function applyGatewayVerifiedCapabilities(
 
 export async function fetchWorkflows(): Promise<WorkflowsResponse> {
   return fetchJson("/api/workflows");
-}
-
-// ---------------------------------------------------------------------------
-// Route 5 — start run
-// ---------------------------------------------------------------------------
-
-export interface StartRunInput {
-  workflowId?: string;
-  taskType?: string;
-  input: Record<string, unknown>;
-  modelId: string;
-  requestedMode?: CodingWorkbenchMode;
-  apply?: boolean;
-  limits?: Record<string, unknown>;
-  governedHandoff?: Record<string, unknown>;
-  governedHandoffSourceGroundedRunId?: string;
-  // The private Markdown skill the human selected for a governed workflow run (#4025 AC1).
-  skill?: MarkdownSkillReference;
-  voiceOrigin?: {
-    readonly profile: string;
-    readonly turnIndex: number;
-    readonly source: string;
-    readonly committedSegments: number;
-    readonly committedText: string;
-    readonly confirmationDigest?: string;
-  };
-}
-
-export interface StartRunResponse {
-  readonly runId: string;
-  readonly fingerprint: string;
-  readonly governance?: {
-    readonly requestedMode: CodingWorkbenchMode;
-    readonly effectiveMode: CodingWorkbenchMode;
-    readonly deploymentCeiling: CodingWorkbenchMode;
-    readonly connectorExecution: "unavailable";
-    readonly deliveryExecution: "unavailable";
-  };
-}
-
-function isStartRunGovernance(
-  value: unknown,
-): value is NonNullable<StartRunResponse["governance"]> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  const allowedKeys = new Set([
-    "requestedMode",
-    "effectiveMode",
-    "deploymentCeiling",
-    "connectorExecution",
-    "deliveryExecution",
-  ]);
-  return (
-    Object.keys(record).every((key) => allowedKeys.has(key)) &&
-    isCodingWorkbenchMode(record.requestedMode) &&
-    isCodingWorkbenchMode(record.effectiveMode) &&
-    isCodingWorkbenchMode(record.deploymentCeiling) &&
-    record.connectorExecution === "unavailable" &&
-    record.deliveryExecution === "unavailable"
-  );
-}
-
-function validateStartRunResponse(value: unknown): StartRunResponse {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new ApiError("CONTRACT_VALIDATION_FAILED", "Invalid run-start response.", 502);
-  }
-  const record = value as Record<string, unknown>;
-  if (typeof record.runId !== "string" || typeof record.fingerprint !== "string") {
-    throw new ApiError("CONTRACT_VALIDATION_FAILED", "Invalid run-start response.", 502);
-  }
-  const governance = record.governance;
-  if (governance === undefined) {
-    return { runId: record.runId, fingerprint: record.fingerprint };
-  }
-  if (!isStartRunGovernance(governance)) {
-    throw new ApiError("CONTRACT_VALIDATION_FAILED", "Invalid run-start response.", 502);
-  }
-  return { runId: record.runId, fingerprint: record.fingerprint, governance };
-}
-
-export async function startRun(body: StartRunInput): Promise<StartRunResponse> {
-  const response = await fetchJson<unknown>("/api/runs", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  return validateStartRunResponse(response);
 }
 
 // Epic #1307 / Issue #1314 — generate a governed, reviewable Enhanced Prompt. Deterministic and

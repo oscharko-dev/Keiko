@@ -19,7 +19,6 @@ export const WINDOW_LAUNCHER_TYPES: readonly WindowType[] = [
   "connector",
   "files",
   "editor",
-  "agents",
   "docbrowser",
 ];
 

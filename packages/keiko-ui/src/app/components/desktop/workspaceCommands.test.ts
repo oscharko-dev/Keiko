@@ -119,14 +119,7 @@ describe("workspace command registry", () => {
   });
 
   it("keeps the launcher grid sourced from the window launcher order", () => {
-    expect(WINDOW_LAUNCHER_TYPES).toEqual([
-      "chat",
-      "connector",
-      "files",
-      "editor",
-      "agents",
-      "docbrowser",
-    ]);
+    expect(WINDOW_LAUNCHER_TYPES).toEqual(["chat", "connector", "files", "editor", "docbrowser"]);
   });
 
   it("exposes the Coding Workbench through the palette tool list, not the card grid (#2476)", () => {

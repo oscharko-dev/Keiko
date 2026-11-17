@@ -3310,7 +3310,6 @@ export function useWorkspace(
       linkedFigmaSnapshotSources: connectActions.linkedFigmaSnapshotSources,
       linkedImageSources: connectActions.linkedImageSources,
       linkedGitChangeComparisons: connectActions.linkedGitChangeComparisons,
-      currentFilesContext: connectActions.currentFilesContext,
       zoomTo,
       fitView,
       resetView,

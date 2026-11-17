@@ -2827,43 +2827,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "This template is bound to an issue type that no longer exists in this project (“{subject}”), so it governs nothing and blocks nothing. Change the issue type or delete the template.",
   "chat.skills.jira.openProposal": "Open in editor",
 
-  "agentLauncher.agent": "Agent",
-  "agentLauncher.agentCount": "{count} agents",
-  "agentLauncher.model": "Model",
-  "agentLauncher.repository": "Repository",
-  "agentLauncher.repositoryPlaceholder": "/absolute/repository/path",
-  "agentLauncher.workflow.unitTest": "Unit Test Agent",
-  "agentLauncher.workflow.bugfix": "Bugfix Agent",
-  "agentLauncher.scope.sourceFile": "Source file",
-  "agentLauncher.scope.bugReport": "Bug report",
-  "agentLauncher.sourceFilePlaceholder": "src/file.ts",
-  "agentLauncher.browseSourceFile": "Browse source file",
-  "agentLauncher.selectRepositoryFirst": "Select a repository before browsing source files.",
-  "agentLauncher.skill": "Skill",
-  "agentLauncher.skillNone": "No skill",
-  "agentLauncher.skillNote":
-    "Optional. A private Markdown skill guides every model call of this run. It grants no additional authority.",
-  "agentLauncher.skillUnavailable":
-    "Private skills could not be loaded. The run starts without a skill.",
-  "agentLauncher.observedBehavior": "Observed behavior",
-  "agentLauncher.observedBehaviorPlaceholder": "Describe the observed bug.",
-  "agentLauncher.failingOutput": "Failing output",
-  "agentLauncher.stackTrace": "Stack trace",
-  "agentLauncher.relatedFiles": "Related files",
-  "agentLauncher.relatedFilesPlaceholder": "src/file.ts, src/other.ts",
-  "agentLauncher.notRegistered": "Repository is not registered.",
-  "agentLauncher.registering": "Registering…",
-  "agentLauncher.register": "Register repository",
-  "agentLauncher.useCurrentFile": "Use current file",
-  "agentLauncher.loading": "Loading models and projects…",
-  "agentLauncher.start": "Start {label}",
-  "agentLauncher.starting": "Starting…",
-  "agentLauncher.validation.repositoryRequired": "Repository is required.",
-  "agentLauncher.validation.noModel": "No compatible model is available.",
-  "agentLauncher.validation.explainFile": "Explain plan requires a file path.",
-  "agentLauncher.validation.unitSource": "Unit Test Agent requires a source file.",
-  "agentLauncher.validation.bugDescription": "Bugfix Agent requires an observed behavior.",
-  "agentLauncher.fileOutsideRepository": "Choose a file inside the selected repository.",
   "editor.empty.title": "Open a project",
   "editor.empty.description":
     "Choose a project folder to start editing. The editor works inside the selected workspace root.",
@@ -2952,20 +2915,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "editor.fileHistory.deleteFailed": "The restore point could not be deleted.",
   "editor.fileHistory.sizeDelta": "Size change: {delta}",
   "editor.fileHistory.entryLabel": "Restore point {sequence}, {origin}, {timestamp}",
-  "agentLauncher.autonomy": "Autonomy mode",
   "agentLauncher.mode.governedAssist.label": "Ask for approval",
-  "agentLauncher.mode.governedAssist.description":
-    "Reads and planning proceed. The reviewed patch still requires your explicit Apply confirmation.",
   "agentLauncher.mode.supervisedCoding.label": "Supervised workspace",
-  "agentLauncher.mode.supervisedCoding.description":
-    "Routine workspace work is admitted by policy; the dry-run review remains mandatory for this agent surface.",
   "agentLauncher.mode.autonomousDelivery.label": "Full access",
-  "agentLauncher.mode.autonomousDelivery.description":
-    "Bounded workspace work may proceed without per-action prompts. Connector and delivery execution remain unavailable here.",
-  "agentLauncher.executionUnavailable":
-    "Connector and delivery execution are unavailable for Unit Test and Bugfix agents.",
-  "agentLauncher.governanceUnavailable":
-    "The server did not confirm an Authority Envelope. The agent run was not opened.",
+
   "agentRunWidget.autonomyMode": "Effective autonomy: {mode}",
   "agentRunWidget.executionUnavailable": "Connector and delivery execution unavailable",
   "attachment.rejection.deliveryRefused":

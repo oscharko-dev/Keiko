@@ -517,18 +517,6 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
   });
 });
 
-describe("Issue #1429 — Agents launcher action row and picker scrollbars", () => {
-  it("keeps the Agents dialog actions sticky and unified inside the dialog flow", () => {
-    const block = cssBlock(".dlg-agent-actions {");
-    expect(block).toContain("justify-content: flex-end");
-    expect(block).toContain("position: sticky");
-    expect(block).toContain("bottom: 0");
-    expect(block).toContain("border-top: 1px solid var(--border-subtle)");
-    expect(block).toContain("background: var(--surface-overlay)");
-    expect(cssBlock(".dlg-agent-actions .dlg-note {")).toContain("margin-right: auto");
-  });
-});
-
 // ─── Fix 1: WCAG 2.4.7 — focus-visible ───────────────────────────────────────
 
 describe("Fix 1 — focus-visible (WCAG 2.4.7)", () => {
@@ -3416,7 +3404,6 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
           "fpv-banner",
           "qi-degraded-notice",
           "scope-connect-error",
-          "dlg-agent-warning",
           "wf-dialog-error",
           "mc-dialog-error",
           "dlg-error",
