@@ -349,5 +349,9 @@ differences. The seven-mode accessibility proof has zero serious/critical violat
 unresolved incomplete findings. All 108 running-app captures completed without page errors,
 unexpected API requests, missing selectors, crashed windows, visible error notices or unavailable
 workspace trust. The proof records rebind only the lockfile and `keiko-ui` manifest digests. 69
-captures are committed as recaptured; representative ones were compared with their previous
-versions and show the same content. No producer assertion, tolerance, fixture or budget changed.
+captures are committed as recaptured. A pixel comparison against the previous captures found four
+forced-colors Git window captures in which the "main" and "New" buttons show a different state:
+three change from GrayText to white and the mobile constrained capture changes the other way. The
+browser harness takes each screenshot after a fixed 900 ms wait and checks selectors afterwards, so
+these buttons can be captured before or after their state settles; the Next.js patch does not cause
+it. No producer assertion, tolerance, fixture or budget changed.
