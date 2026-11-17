@@ -131,8 +131,8 @@ This shapes the product _and_ how you work on it:
   identity. Preserve the same-store restart path; never replay unowned browser window references
   into another data store or clear chats and files to hide a broken restoration (ADR-0027).
 - **Standalone folder package (owner decision, 2026-11-17):** for workplaces where nothing may be
-  installed, Keiko ships as one folder: the portable payload, byte for byte, with start and stop
-  files around it (`scripts/build-standalone-package.mjs`, ADR-0121 D9). It starts with
+  installed, Keiko ships as one folder: the portable payload, every file unchanged, with start and
+  stop files around it (`scripts/build-standalone-package.mjs`, ADR-0121 D9). It starts with
   `keiko portable launch --in-place`: no managed setup, no registration, state in
   `~/.keiko-standalone`, nothing downloaded at start. It declares itself managed outside the app
   (`KEIKO_PORTABLE_MANAGEMENT`), so the app reports the existing `portable-it-managed` disposition
@@ -1104,8 +1104,9 @@ administrator's gateway configuration (ADR-0121 D9), under the start's correlati
 or changed since the last adoption; it replaces the configuration as a whole), `unchanged`,
 `deferred-running` (a running Keiko is never written under), `overridden` (an explicit
 `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR` wins), `absent`, or at warn `invalid`, `too-large`,
-`refused-link`, `read-failed` and `write-failed` with the error class. Never the path, a digest of
-the content or the content. `portable launch` hands its sink to `keiko start` on every platform,
+`refused-link`, `read-failed`, `write-failed` and `marker-failed` (the configuration is in force,
+its record is not) with the error class. A candidate must load through the gateway's own config
+loader before it replaces anything. Never the path, a digest of the content or the content. `portable launch` hands its sink to `keiko start` on every platform,
 so a macOS or Linux launch records its health, browser handoff, failure and adoption lines like a
 Windows one.
 

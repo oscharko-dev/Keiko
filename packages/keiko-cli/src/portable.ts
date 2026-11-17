@@ -319,6 +319,12 @@ interface LaunchManagedOptions {
   readonly securityLogSink?: SecurityLogSink | undefined;
   readonly launchFailure?: LaunchFailureRecorder | undefined;
   readonly provisionedConfig?: string | undefined;
+  /**
+   * In place, the start window is read by a person, not an operator: the waiver sentence would
+   * only alarm them, and the Coding Workbench states the runtime's evaluation status where it
+   * matters.
+   */
+  readonly quietActivationWaiver?: boolean | undefined;
   readonly recovered?: {
     readonly descriptor: PortableRecoveredLaunchDescriptor;
     readonly encoded: string;
@@ -356,7 +362,7 @@ async function launchManaged(
       recordLaunchFailure(launchFailure, "macos-activation");
       return 1;
     }
-    if (activation === "waived-unsigned") {
+    if (activation === "waived-unsigned" && options.quietActivationWaiver !== true) {
       io.out(
         "Keiko platform runtime containment is waived: this install carries no release signature.\n",
       );
@@ -567,6 +573,7 @@ async function launchInPlace(
         ...env,
         [PORTABLE_MANAGEMENT_ENV]: "organization-managed",
       }),
+      quietActivationWaiver: true,
       ...(options.provisionedConfig === undefined
         ? {}
         : { provisionedConfig: options.provisionedConfig }),

@@ -70,8 +70,8 @@ remain truthful and cannot become a hidden prerequisite for an unsigned update.
 
 ### Standalone folder package
 
-The standalone folder package (ADR-0121 D9) is the portable payload, byte for byte, with start and
-stop files around it. `scripts/build-standalone-package.mjs` repacks a verified portable archive;
+The standalone folder package (ADR-0121 D9) is the portable payload, every file unchanged, with
+start and stop files around it. `scripts/build-standalone-package.mjs` repacks a verified portable archive;
 the start files live in `scripts/standalone/`. A change here must keep three things true: the
 payload is never modified, the folder form never performs or suggests an installation, and nothing
 is downloaded at start. Run `scripts/__tests__/build-standalone-package.test.mjs` and the

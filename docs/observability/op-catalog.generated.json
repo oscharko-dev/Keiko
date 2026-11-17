@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "cabb4d10e7b04fc83eac2c30ee6d8b317ec189c3258ae31a4e6ad9940d4b7f81",
+    "catalogDigest": "a86c4ed9938d07652b4e27e1680ad20be27aaef0b13ec90a824743090408ef88",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -5298,7 +5298,8 @@
               "too-large",
               "refused-link",
               "read-failed",
-              "write-failed"
+              "write-failed",
+              "marker-failed"
             ]
           },
           "failureKind": {
@@ -5314,14 +5315,21 @@
         "diagnosticWhen": [
           {
             "field": "outcome",
-            "values": ["invalid", "too-large", "refused-link", "read-failed", "write-failed"]
+            "values": [
+              "invalid",
+              "too-large",
+              "refused-link",
+              "read-failed",
+              "write-failed",
+              "marker-failed"
+            ]
           }
         ],
         "failureClasses": ["provisioned-config-adoption"],
         "proofIds": ["cli.lifecycle.provisioned-config.outcome"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-cli/src/provisioned-config.ts:75",
-        "emitterSites": ["packages/keiko-cli/src/provisioned-config.ts:123"]
+        "registrationSite": "packages/keiko-cli/src/provisioned-config.ts:81",
+        "emitterSites": ["packages/keiko-cli/src/provisioned-config.ts:130"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -118947,7 +118955,7 @@
     {
       "op": "cli.lifecycle.provisioned-config",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/provisioned-config.ts:78",
+      "site": "packages/keiko-cli/src/provisioned-config.ts:84",
       "package": "keiko-cli"
     },
     {

@@ -11,7 +11,11 @@ import { runLifecycleCli } from "./lifecycle.js";
 // never be written under a Keiko that is already running with its configuration in memory.
 
 const TEST_LAUNCH_ID = "ab".repeat(16);
-const CONFIG = JSON.stringify({ providers: [{ modelId: "chat-model", apiKey: "sk-test" }] });
+const CONFIG = JSON.stringify({
+  providers: [
+    { modelId: "chat-model", baseUrl: "https://gateway.example.test", apiKey: "sk-test" },
+  ],
+});
 const roots: string[] = [];
 
 afterEach(() => {

@@ -5107,6 +5107,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "refused-link",
           "read-failed",
           "write-failed",
+          "marker-failed",
         ],
       },
       failureKind: {
@@ -5125,7 +5126,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     diagnosticWhen: [
       {
         field: "outcome",
-        values: ["invalid", "too-large", "refused-link", "read-failed", "write-failed"],
+        values: [
+          "invalid",
+          "too-large",
+          "refused-link",
+          "read-failed",
+          "write-failed",
+          "marker-failed",
+        ],
       },
     ],
   },

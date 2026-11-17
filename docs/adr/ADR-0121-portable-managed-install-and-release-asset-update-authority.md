@@ -1148,13 +1148,14 @@ Keiko/
   README.txt  LIESMICH.txt
   keiko.config.json            only in an administrator's package
   system/standalone.json       target, version, source archive name and SHA-256
-  system/Keiko/...             the portable payload of D1, byte for byte
+  system/Keiko/...             the portable payload of D1, every file's content unchanged
 ```
 
 `scripts/build-standalone-package.mjs` builds it from a portable release archive whose SHA-256 the
-caller must supply; an unverified archive is refused. The payload is never modified, so every
-check the product performs on a portable payload keeps passing, and the package needs no build of
-its own: it is a repack of the reviewed archive.
+caller must supply; an unverified archive is refused. No file of the payload is added, removed or
+changed (permissions are normalized to owner-only), so every check the product performs on a
+portable payload keeps passing, and the package needs no build of its own: it is a repack of the
+reviewed archive.
 
 **Launch.** The start files run the bundled Node.js against the bundled CLI:
 `keiko portable launch --in-place`. In place, the launch validates the payload like every portable
@@ -1165,7 +1166,10 @@ folder is not written at runtime. State lives in `~/.keiko-standalone`, delibera
 update-recovery record or a database schema of a different version, and replacing the folder with
 a newer package keeps the person's data. The start files are scripts on purpose. The only programs
 that run at a double-click are the system shell and the Node.js binary, which its publisher signs;
-the payload's own unsigned native launcher is not used.
+the payload's own unsigned native launcher is not used. On macOS the launch still asks the runtime
+activation of D2: a payload without a platform signature is waived as in every unsigned install,
+and a platform-signed payload is refused in place, because its runtime monitor must sit in the
+root-owned application location. The folder form is the unsigned lane's.
 
 **No self-management.** An in-place launch declares `KEIKO_PORTABLE_MANAGEMENT=organization-managed`
 to the UI process. Install-mode detection reads that declaration (closed values `user-local`,
@@ -1179,9 +1183,11 @@ arrives as a new folder.
 **Provisioned configuration.** An administrator may place one `keiko.config.json` beside the start
 files. `keiko start --provisioned-config PATH` adopts it as the gateway configuration whenever its
 bytes differ from the file last adopted (a SHA-256 marker in `ui/provisioned-config.json`), after
-the "already running" check and before the UI process is spawned. The file is authoritative and
-replaces the configuration as a whole, so a rotated key or a changed gateway reaches every person
-with the next package. A running Keiko is never written under; the adoption waits for the next
+the "already running" check and before the UI process is spawned. A candidate must load through
+the gateway's own config loader before it replaces anything, so a mistyped file, or one that still
+refers to a key sealed on the administrator's computer, leaves the working configuration in place.
+The file is authoritative and replaces the configuration as a whole, so a rotated key or a changed
+gateway reaches every person with the next package. A running Keiko is never written under; the adoption waits for the next
 start and says so. An explicit `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR` wins and the file is not
 adopted. Every decision leaves one `cli.lifecycle.provisioned-config` line with the closed outcome
 and an error class, never a path or content. The file may carry a plaintext `apiKey`; ADR-0046

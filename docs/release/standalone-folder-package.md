@@ -7,7 +7,7 @@ corporate IT ([ADR-0121 D9](../adr/ADR-0121-portable-managed-install-and-release
 
 It is a third delivery form beside the npm package and the
 [portable managed install](portable-launch-setup-guide.md). It carries the same reviewed portable
-payload, byte for byte.
+payload: no file is added, removed or changed.
 
 | Delivery form            | Installs                                   | Updates            | For                                 |
 | ------------------------ | ------------------------------------------ | ------------------ | ----------------------------------- |
@@ -86,9 +86,11 @@ sees a setup dialog.
 3. Put the archive on an internal file share and give the team its path.
 
 On every start Keiko compares the `keiko.config.json` beside the start files with the one it
-adopted last. A new or changed file replaces the gateway configuration as a whole; on that same
-start Keiko seals the key into the person's own credential vault and removes it from the adopted
-copy. To rotate the key or change the gateway, distribute a package with the new file. A person
+adopted last. A new or changed file must first load as a gateway configuration; it then replaces
+the gateway configuration as a whole. On that same start Keiko seals the key into the person's own
+credential vault and removes it from the adopted copy. That step is best effort: if the vault
+cannot be written, the key stays in the adopted copy until a later start succeeds, and
+`keiko repair` reports it. To rotate the key or change the gateway, distribute a package with the new file. A person
 who has Keiko running is told to stop and start it again.
 
 ### What The Team Key Costs In Secrecy

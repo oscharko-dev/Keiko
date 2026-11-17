@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -44,7 +45,7 @@ interface Fixture {
   readonly events: SecurityLogEvent[];
   readonly adopt: (
     overrides?: Partial<{ running: boolean; env: Record<string, string>; source: string }>,
-  ) => ProvisionedConfigOutcome;
+  ) => Promise<ProvisionedConfigOutcome>;
 }
 
 function configText(apiKey = SECRET): string {
@@ -68,14 +69,16 @@ function fixture(content: string | null = configText()): Fixture {
     configPath: join(stateDir, "ui", "keiko.config.json"),
     markerPath: join(stateDir, "ui", "provisioned-config.json"),
     events,
-    adopt: (overrides = {}): ProvisionedConfigOutcome =>
-      adoptProvisionedConfig({
-        sourcePath: overrides.source ?? source,
-        stateDir,
-        env: overrides.env ?? {},
-        running: overrides.running ?? false,
-        securityLogSink: { write: (event): void => void events.push(event) },
-      }).outcome,
+    adopt: async (overrides = {}): Promise<ProvisionedConfigOutcome> =>
+      (
+        await adoptProvisionedConfig({
+          sourcePath: overrides.source ?? source,
+          stateDir,
+          env: overrides.env ?? {},
+          running: overrides.running ?? false,
+          securityLogSink: { write: (event): void => void events.push(event) },
+        })
+      ).outcome,
   };
 }
 
@@ -87,10 +90,10 @@ function lastLine(subject: Fixture): Record<string, unknown> {
 }
 
 describe("adoption of a provisioned gateway configuration", () => {
-  it("adopts a new file byte for byte, privately, and records only the outcome", () => {
+  it("adopts a new file byte for byte, privately, and records only the outcome", async () => {
     const subject = fixture();
 
-    expect(subject.adopt()).toBe("adopted");
+    expect(await subject.adopt()).toBe("adopted");
 
     expect(readFileSync(subject.configPath, "utf8")).toBe(configText());
     expect(JSON.parse(readFileSync(subject.markerPath, "utf8"))).toMatchObject({
@@ -110,14 +113,14 @@ describe("adoption of a provisioned gateway configuration", () => {
     expect(lastLine(subject)).not.toHaveProperty("failureKind");
   });
 
-  it("leaves the configuration alone when the same file was adopted before", () => {
+  it("leaves the configuration alone when the same file was adopted before", async () => {
     const subject = fixture();
-    subject.adopt();
+    await subject.adopt();
     // The server rewrites the adopted copy (it seals the key), so the copy no longer equals the
     // provisioned file. "Unchanged" must follow the provisioned file, never the copy.
     writeFileSync(subject.configPath, '{"providers":[{"modelId":"chat-model"}]}');
 
-    expect(subject.adopt()).toBe("unchanged");
+    expect(await subject.adopt()).toBe("unchanged");
 
     expect(readFileSync(subject.configPath, "utf8")).toBe(
       '{"providers":[{"modelId":"chat-model"}]}',
@@ -125,43 +128,43 @@ describe("adoption of a provisioned gateway configuration", () => {
     expect(lastLine(subject)).toMatchObject({ level: "info", outcome: "unchanged" });
   });
 
-  it("adopts again when the administrator ships a changed file", () => {
+  it("adopts again when the administrator ships a changed file", async () => {
     const subject = fixture();
-    subject.adopt();
+    await subject.adopt();
     writeFileSync(subject.source, configText("sk-rotated-key"));
 
-    expect(subject.adopt()).toBe("adopted");
+    expect(await subject.adopt()).toBe("adopted");
 
     expect(readFileSync(subject.configPath, "utf8")).toBe(configText("sk-rotated-key"));
-    expect(subject.adopt()).toBe("unchanged");
+    expect(await subject.adopt()).toBe("unchanged");
   });
 
-  it("does not write under a running Keiko, and adopts on the next start", () => {
+  it("does not write under a running Keiko, and adopts on the next start", async () => {
     const subject = fixture();
 
-    expect(subject.adopt({ running: true })).toBe("deferred-running");
+    expect(await subject.adopt({ running: true })).toBe("deferred-running");
     expect(existsSync(subject.configPath)).toBe(false);
     expect(existsSync(subject.markerPath)).toBe(false);
     expect(lastLine(subject)).toMatchObject({ level: "info", outcome: "deferred-running" });
 
-    expect(subject.adopt()).toBe("adopted");
+    expect(await subject.adopt()).toBe("adopted");
   });
 
-  it("adopts again when the marker is unreadable", () => {
+  it("adopts again when the marker is unreadable", async () => {
     const subject = fixture();
-    subject.adopt();
+    await subject.adopt();
     writeFileSync(subject.markerPath, "not json");
 
-    expect(subject.adopt()).toBe("adopted");
-    expect(subject.adopt()).toBe("unchanged");
+    expect(await subject.adopt()).toBe("adopted");
+    expect(await subject.adopt()).toBe("unchanged");
   });
 
   it.each(["KEIKO_CONFIG_FILE", "KEIKO_UI_DATA_DIR"])(
     "stands back when %s names another configuration location",
-    (name) => {
+    async (name) => {
       const subject = fixture();
 
-      expect(subject.adopt({ env: { [name]: join(subject.stateDir, "elsewhere") } })).toBe(
+      expect(await subject.adopt({ env: { [name]: join(subject.stateDir, "elsewhere") } })).toBe(
         "overridden",
       );
 
@@ -170,10 +173,10 @@ describe("adoption of a provisioned gateway configuration", () => {
     },
   );
 
-  it("reports an absent file without touching the state directory", () => {
+  it("reports an absent file without touching the state directory", async () => {
     const subject = fixture(null);
 
-    expect(subject.adopt()).toBe("absent");
+    expect(await subject.adopt()).toBe("absent");
 
     expect(existsSync(subject.stateDir)).toBe(false);
     expect(lastLine(subject)).toMatchObject({ level: "info", outcome: "absent" });
@@ -181,48 +184,85 @@ describe("adoption of a provisioned gateway configuration", () => {
 });
 
 describe("a provisioned file that cannot be adopted", () => {
+  // Every row would replace a working configuration with one the gateway cannot load. The last
+  // three have the right outline (an object with providers) and are caught only because the
+  // candidate must pass the gateway's own loader before it is published.
   it.each([
     ["text that is not JSON", `{ "providers": [ ${SECRET}`],
     ["a JSON array", "[]"],
     ["a config without providers", "{}"],
     ["a config with an empty provider list", '{"providers":[]}'],
     ["providers that are not a list", '{"providers":{}}'],
-  ])("refuses %s and keeps the current configuration", (_label, content) => {
+    ["a provider that is not an object", '{"providers":[1]}'],
+    ["a provider without a gateway address", '{"providers":[{"modelId":"chat","apiKey":"k"}]}'],
+    [
+      "a reference to a key sealed on another computer",
+      '{"providers":[{"modelId":"chat","baseUrl":"https://g.example.test","apiKeySecretRef":"cred:chat"}]}',
+    ],
+  ])("refuses %s and keeps the current configuration", async (_label, content) => {
     const subject = fixture(content);
     mkdirSync(join(subject.stateDir, "ui"), { recursive: true });
     writeFileSync(subject.configPath, "current");
 
-    expect(subject.adopt()).toBe("invalid");
+    expect(await subject.adopt()).toBe("invalid");
 
     expect(readFileSync(subject.configPath, "utf8")).toBe("current");
-    expect(existsSync(subject.markerPath)).toBe(false);
+    expect(readdirSync(join(subject.stateDir, "ui"))).toEqual(["keiko.config.json"]);
     expect(lastLine(subject)).toMatchObject({ level: "warn", outcome: "invalid" });
   });
 
-  it("refuses a directory in the file's place", () => {
+  it("accepts a config whose key comes from the environment, as the gateway does", async () => {
+    const subject = fixture(
+      '{"providers":[{"modelId":"chat","baseUrl":"https://g.example.test"}]}',
+    );
+
+    expect(await subject.adopt({ env: { KEIKO_DEFAULT_API_KEY: "sk-from-environment" } })).toBe(
+      "adopted",
+    );
+  });
+
+  it("adopts a file saved with a byte order mark, without the mark", async () => {
+    const subject = fixture(`\uFEFF${configText()}`);
+
+    expect(await subject.adopt()).toBe("adopted");
+
+    expect(readFileSync(subject.configPath, "utf8")).toBe(configText());
+    expect(await subject.adopt()).toBe("unchanged");
+  });
+
+  it("refuses a directory in the file's place", async () => {
     const subject = fixture(null);
     mkdirSync(subject.source);
 
-    expect(["invalid", "read-failed"]).toContain(subject.adopt());
+    expect(await subject.adopt()).toBe("invalid");
     expect(existsSync(subject.configPath)).toBe(false);
   });
 
-  it("refuses a file beyond the size bound before parsing it", () => {
+  // Opening a FIFO for reading blocks until a writer appears: the start would hang for good.
+  it.skipIf(process.platform === "win32")("refuses a named pipe without opening it", async () => {
+    const subject = fixture(null);
+    execFileSync("mkfifo", [subject.source]);
+
+    expect(await subject.adopt()).toBe("invalid");
+    expect(existsSync(subject.configPath)).toBe(false);
+  });
+
+  it("refuses a file beyond the size bound before parsing it", async () => {
     const subject = fixture(`{"providers":["${"x".repeat(PROVISIONED_CONFIG_MAX_BYTES)}"]}`);
 
-    expect(subject.adopt()).toBe("too-large");
+    expect(await subject.adopt()).toBe("too-large");
 
     expect(existsSync(subject.configPath)).toBe(false);
     expect(lastLine(subject)).toMatchObject({ level: "warn", outcome: "too-large" });
   });
 
-  it.skipIf(process.platform === "win32")("does not follow a link", () => {
+  it.skipIf(process.platform === "win32")("does not follow a link", async () => {
     const subject = fixture(null);
     const target = join(subject.stateDir, "..", "outside.json");
     writeFileSync(target, configText());
     symlinkSync(target, subject.source);
 
-    expect(subject.adopt()).toBe("refused-link");
+    expect(await subject.adopt()).toBe("refused-link");
 
     expect(existsSync(subject.configPath)).toBe(false);
     expect(lastLine(subject)).toMatchObject({ level: "warn", outcome: "refused-link" });
@@ -230,11 +270,11 @@ describe("a provisioned file that cannot be adopted", () => {
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "reports an unreadable file with its error class",
-    () => {
+    async () => {
       const subject = fixture();
       chmodSync(subject.source, 0o000);
 
-      expect(subject.adopt()).toBe("read-failed");
+      expect(await subject.adopt()).toBe("read-failed");
 
       expect(lastLine(subject)).toMatchObject({
         level: "warn",
@@ -244,13 +284,49 @@ describe("a provisioned file that cannot be adopted", () => {
     },
   );
 
-  it("reports a failed save, leaves no temporary file and records no adoption", () => {
+  it.skipIf(process.platform === "win32")(
+    "does not write through a link in place of the UI data directory",
+    async () => {
+      const subject = fixture();
+      const elsewhere = join(subject.stateDir, "..", "elsewhere");
+      mkdirSync(elsewhere);
+      mkdirSync(subject.stateDir, { recursive: true });
+      symlinkSync(elsewhere, join(subject.stateDir, "ui"));
+
+      expect(await subject.adopt()).toBe("write-failed");
+
+      expect(readdirSync(elsewhere)).toEqual([]);
+      expect(lastLine(subject)).toMatchObject({
+        level: "warn",
+        outcome: "write-failed",
+        failureKind: "ELOOP",
+      });
+    },
+  );
+
+  // The configuration is in force once it is published; a marker that cannot be written must not
+  // be reported as "Keiko keeps its current one".
+  it("says the configuration is in use when only the record of the adoption fails", async () => {
+    const subject = fixture();
+    mkdirSync(subject.markerPath, { recursive: true });
+    writeFileSync(join(subject.markerPath, "in-the-way"), "");
+
+    expect(await subject.adopt()).toBe("marker-failed");
+
+    expect(readFileSync(subject.configPath, "utf8")).toBe(configText());
+    expect(lastLine(subject)).toMatchObject({ level: "warn", outcome: "marker-failed" });
+    expect(provisionedConfigMessage("marker-failed")).toContain("uses the configuration");
+    // The next start converges: the same bytes are adopted again.
+    expect(await subject.adopt()).toBe("marker-failed");
+  });
+
+  it("reports a failed save, leaves no temporary file and records no adoption", async () => {
     const subject = fixture();
     // A file where the UI data directory belongs: the configuration cannot be written.
     mkdirSync(subject.stateDir, { recursive: true });
     writeFileSync(join(subject.stateDir, "ui"), "in the way");
 
-    expect(subject.adopt()).toBe("write-failed");
+    expect(await subject.adopt()).toBe("write-failed");
 
     expect(readdirSync(subject.stateDir)).toEqual(["ui"]);
     expect(lastLine(subject)).toMatchObject({ level: "warn", outcome: "write-failed" });
@@ -273,6 +349,7 @@ describe("what the person reads", () => {
     "refused-link",
     "read-failed",
     "write-failed",
+    "marker-failed",
   ] as const)("names the %s outcome in one sentence", (outcome) => {
     expect(provisionedConfigMessage(outcome)).toMatch(/^[A-Z].+\.$/u);
   });

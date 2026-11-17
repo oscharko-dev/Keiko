@@ -207,7 +207,8 @@ describe("an administrator's package", () => {
 
   it("carries the configuration byte for byte under its own archive name", () => {
     const root = tempRoot();
-    const content = '{"providers":[{"modelId":"chat","apiKey":"sk-team"}]}';
+    const content =
+      '{"providers":[{"modelId":"chat","baseUrl":"https://gateway.example.test","apiKey":"sk-team"}]}';
     const { result } = build("macos-arm64", { options: { config: configFile(root, content) } });
     const built = entriesByName(result.outputPath);
 
@@ -223,8 +224,12 @@ describe("an administrator's package", () => {
       schemaVersion: 2,
       providers: [
         { modelId: "chat", baseUrl: "https://gateway.example.test", apiKeySecretRef: "cred:chat" },
-        { modelId: "embed", apiKeySecretRef: "cred:embed" },
-        { modelId: "own-key", apiKey: "sk-kept" },
+        {
+          modelId: "embed",
+          baseUrl: "https://gateway.example.test",
+          apiKeySecretRef: "cred:embed",
+        },
+        { modelId: "own-key", baseUrl: "https://other.example.test", apiKey: "sk-kept" },
       ],
     });
     const { result } = build("windows-x64", {
@@ -239,15 +244,16 @@ describe("an administrator's package", () => {
       schemaVersion: 2,
       providers: [
         { modelId: "chat", baseUrl: "https://gateway.example.test", apiKey: "sk-team" },
-        { modelId: "embed", apiKey: "sk-team" },
-        { modelId: "own-key", apiKey: "sk-kept" },
+        { modelId: "embed", baseUrl: "https://gateway.example.test", apiKey: "sk-team" },
+        { modelId: "own-key", baseUrl: "https://other.example.test", apiKey: "sk-kept" },
       ],
     });
   });
 
   it("refuses a config that still refers to a key sealed on the administrator's computer", () => {
     const root = tempRoot();
-    const sealed = '{"providers":[{"modelId":"chat","apiKeySecretRef":"cred:chat"}]}';
+    const sealed =
+      '{"providers":[{"modelId":"chat","baseUrl":"https://g.example.test","apiKeySecretRef":"cred:chat"}]}';
 
     expect(() => build("macos-arm64", { options: { config: configFile(root, sealed) } })).toThrow(
       "pass --api-key-env NAME",
@@ -256,7 +262,8 @@ describe("an administrator's package", () => {
 
   it("refuses an unset key variable and a key variable without a config", () => {
     const root = tempRoot();
-    const sealed = '{"providers":[{"modelId":"chat","apiKeySecretRef":"cred:chat"}]}';
+    const sealed =
+      '{"providers":[{"modelId":"chat","baseUrl":"https://g.example.test","apiKeySecretRef":"cred:chat"}]}';
 
     expect(() =>
       build("macos-arm64", {
@@ -268,11 +275,38 @@ describe("an administrator's package", () => {
     );
   });
 
+  it("ships a file saved with a byte order mark without the mark", () => {
+    const root = tempRoot();
+    const content =
+      '{"providers":[{"modelId":"chat","baseUrl":"https://gateway.example.test","apiKey":"sk-team"}]}';
+    const { result } = build("macos-arm64", {
+      options: { config: configFile(root, `\uFEFF${content}`) },
+    });
+
+    expect(entriesByName(result.outputPath).get("Keiko/keiko.config.json")).toBe(content);
+  });
+
   it.each([
     ["text that is not JSON", "not json", "is not valid JSON"],
     ["a config without providers", "{}", "names no providers"],
     ["an empty provider list", '{"providers":[]}', "names no providers"],
     ["a JSON array", "[]", "is not a JSON object"],
+    ["a provider that is not an object", '{"providers":[1]}', "provider 0 is not an object"],
+    [
+      "a provider without a model",
+      '{"providers":[{"baseUrl":"https://g.example.test"}]}',
+      "names no modelId",
+    ],
+    [
+      "a provider without a gateway address",
+      '{"providers":[{"modelId":"chat"}]}',
+      "names no baseUrl",
+    ],
+    [
+      "a provider with an empty key",
+      '{"providers":[{"modelId":"chat","baseUrl":"https://g.example.test","apiKey":""}]}',
+      "carries an empty apiKey",
+    ],
   ])("refuses %s", (_label, content, message) => {
     const root = tempRoot();
 

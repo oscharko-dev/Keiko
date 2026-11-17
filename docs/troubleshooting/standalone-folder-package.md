@@ -40,7 +40,7 @@ One of these, after a double-click on `Start Keiko`:
 4. There is no `keiko.config.json` beside the start files, or it was not adopted. Every start
    records the decision as `cli.lifecycle.provisioned-config` with one closed outcome: `adopted`,
    `unchanged`, `deferred-running`, `overridden`, `absent`, `invalid`, `too-large`, `refused-link`,
-   `read-failed` or `write-failed`.
+   `read-failed`, `write-failed` or `marker-failed`.
 5. The shipped configuration still holds a reference to a key that was sealed on the
    administrator's own computer (`apiKeySecretRef`) instead of the key. The builder refuses such a
    file; a package assembled by hand can carry it.

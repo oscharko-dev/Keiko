@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPortableCli, type PortableSetupDeps } from "./portable.js";
+import { activateMacosPortableRuntime } from "./portable-macos-activation.js";
 
 // `keiko portable launch --in-place` starts a portable payload where it was unpacked (ADR-0121 D9):
 // a standalone folder package must run without the managed setup, which copies Keiko into a system
@@ -216,6 +217,71 @@ describe.each(["macos-arm64", "windows-x64"] as const)(
     });
   },
 );
+
+// The real activation decides here, with only its signature probe replaced: the platform verifier
+// would ask codesign about a fixture that is not signable code.
+describe("macOS runtime activation of an in-place launch", () => {
+  async function launchWithActivation(signed: boolean): Promise<Launch> {
+    const home = tempHome();
+    const payload = join(home, "Keiko", "system", "Keiko");
+    mkdirSync(payload, { recursive: true });
+    const resources = writePayload(payload, "macos-arm64");
+    const stateDir = join(home, ".keiko-standalone");
+    const calls: LifecycleCall[] = [];
+    let out = "";
+    let err = "";
+    const code = await runPortableCli(
+      [
+        "launch",
+        "--target",
+        "macos-arm64",
+        "--portable-root",
+        payload,
+        "--state-dir",
+        stateDir,
+        "--in-place",
+      ],
+      {
+        out: (text): void => {
+          out += text;
+        },
+        err: (text): void => {
+          err += text;
+        },
+      },
+      {},
+      {
+        cwd: home,
+        homedir: () => home,
+        platform: () => "darwin",
+        arch: () => "arm64",
+        activateMacosRuntimeFn: (layout, target) =>
+          activateMacosPortableRuntime(layout, target, { carriesReleaseSignature: () => signed }),
+        lifecycleFn: (...call) => {
+          calls.push(call);
+          return Promise.resolve(0);
+        },
+      },
+    );
+    return { code, out, err, calls, home, payload, resources, stateDir };
+  }
+
+  it("starts an unsigned payload and keeps the waiver out of the person's start window", async () => {
+    const result = await launchWithActivation(false);
+
+    expect(result.code).toBe(0);
+    expect(result.calls).toHaveLength(1);
+    expect(result.out).not.toContain("waived");
+  });
+
+  it("refuses a platform-signed payload: its runtime must sit in the root-owned app location", async () => {
+    const result = await launchWithActivation(true);
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("macOS runtime activation is incomplete");
+    expect(result.calls).toHaveLength(0);
+  });
+});
 
 describe("the in-place flags are part of launch only", () => {
   it("does not let a caller's declaration replace the in-place one", async () => {

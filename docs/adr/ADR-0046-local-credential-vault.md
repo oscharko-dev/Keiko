@@ -98,8 +98,10 @@ they do not govern this file. It is an administrator-owned input outside Keiko's
 key in the environment, and Keiko never writes to it.
 
 What Keiko persists stays under D2 to D4. `keiko start --provisioned-config` copies the file into
-the state directory with private permissions, and the D4 migration seals the key into the person's
-vault and rewrites the adopted copy without plaintext on that same start. The marker beside it
+the state directory with private permissions, after it loaded through the gateway's config loader,
+and the D4 migration seals the key into the person's vault and rewrites the adopted copy without
+plaintext on that same start. D4 is best effort by design: when the vault cannot be written the
+plaintext stays in the adopted copy until a later start succeeds, and `keiko repair` reports it. The marker beside it
 (`ui/provisioned-config.json`) holds the SHA-256 of the adopted file and no content. The adoption
 logs the closed outcome and an error class, never the path or the bytes.
 

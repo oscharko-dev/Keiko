@@ -1278,15 +1278,15 @@ function clearStaleShutdownRequest(stateDir: string, io: CliIo): boolean {
 
 // Adoption never stops a start: a configuration that cannot be adopted leaves the current one in
 // force, the activity line records why, and the person reads one sentence about it.
-function applyProvisionedConfig(
+async function applyProvisionedConfig(
   options: LifecycleOptions,
   io: CliIo,
   env: EnvSource,
   deps: Pick<LifecycleRuntimeDeps, "securityLogSink">,
   running: boolean,
-): void {
+): Promise<void> {
   if (options.provisionedConfig === undefined) return;
-  const { outcome } = adoptProvisionedConfig({
+  const { outcome } = await adoptProvisionedConfig({
     sourcePath: options.provisionedConfig,
     stateDir: options.stateDir,
     env,
@@ -1308,7 +1308,7 @@ async function cmdStart(
   if (running !== undefined) {
     const nextAction = await handleStaleRunning(options, io, deps, running);
     if (nextAction !== "start") {
-      applyProvisionedConfig(options, io, env, deps, true);
+      await applyProvisionedConfig(options, io, env, deps, true);
       return nextAction;
     }
   }
@@ -1319,7 +1319,7 @@ async function cmdStart(
   }
   // After the "already running" and port checks: no Keiko of this state directory holds the
   // configuration in memory now, so the adopted file is the one the UI process reads at boot.
-  applyProvisionedConfig(options, io, env, deps, false);
+  await applyProvisionedConfig(options, io, env, deps, false);
 
   const pairingSecret = resolveLauncherPairingSecret(env);
   const launchId = launchIdForStart(env, io);

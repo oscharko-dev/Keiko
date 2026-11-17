@@ -2,7 +2,7 @@
 //
 // A standalone package is one folder a person unzips and starts by double-click: no installer, no
 // administrator rights, no managed setup, no Node.js on the machine, nothing downloaded at start.
-// It is the reviewed portable payload, byte for byte, with a thin layer around it:
+// It is the reviewed portable payload, every file unchanged, with a thin layer around it:
 //
 //   Keiko/
 //     Start Keiko.command | Start Keiko.cmd     start in place with the bundled Node.js
@@ -198,10 +198,16 @@ function assertWindowsPathBudget(payloadNames, target) {
   }
 }
 
+// An editor may save UTF-8 with a byte order mark; the document is the text after it.
+function readTextWithoutByteOrderMark(path) {
+  const text = readFileSync(path, "utf8");
+  return text.startsWith("\uFEFF") ? text.slice(1) : text;
+}
+
 function readJsonObject(path, label) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    parsed = JSON.parse(readTextWithoutByteOrderMark(path));
   } catch (error) {
     throw new StandaloneBuildError(`${label} is not valid JSON`, { cause: error });
   }
@@ -275,11 +281,34 @@ export function readProvisionedConfig(configPath, apiKeyEnv = undefined, env = p
   }
   const apiKey = teamApiKey(apiKeyEnv, env);
   const providers = config.providers.map((provider) => withTeamApiKey(provider, apiKey));
-  // Untouched bytes when nothing was sealed: the file the administrator reviewed is the file shipped.
+  providers.forEach(assertProviderOutline);
+  // Untouched text when nothing was sealed: the file the administrator reviewed is the file shipped.
   const unchanged = providers.every((provider, index) => provider === config.providers[index]);
-  return unchanged
-    ? readFileSync(configPath)
-    : Buffer.from(`${JSON.stringify({ ...config, providers }, null, 2)}\n`, "utf8");
+  return Buffer.from(
+    unchanged
+      ? readTextWithoutByteOrderMark(configPath)
+      : `${JSON.stringify({ ...config, providers }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+
+// The outline every provider needs wherever it runs. The full check is the gateway's own loader,
+// which Keiko applies before it adopts the file; this catches a mistyped file before it ships.
+function assertProviderOutline(provider, index) {
+  if (!isRecord(provider))
+    refuse(`the provisioned config's provider ${String(index)} is not an object`);
+  for (const field of ["modelId", "baseUrl"]) {
+    if (!isNonEmptyString(provider[field])) {
+      refuse(`the provisioned config's provider ${String(index)} names no ${field}`);
+    }
+  }
+  if (provider.apiKey !== undefined && !isNonEmptyString(provider.apiKey)) {
+    refuse(`the provisioned config's provider ${String(index)} carries an empty apiKey`);
+  }
 }
 
 function templateText(name, layout) {
