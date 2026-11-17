@@ -387,9 +387,9 @@ export const DE_LOCAL_KNOWLEDGE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.detail.help.discoveryProgress":
     "Discovery bedeutet, dass Keiko Dokumente in der Quelle findet und prüft. Das ist die Vorstufe, bevor Inhalte wirklich suchbar sind.",
   "localKnowledge.detail.help.retrievalCoverage":
-    "Die Retrieval-Abdeckung zeigt, wie viel der indexierten Inhalte für die semantische Suche bereit ist. Niedrige Abdeckung kann zu unvollständigen Treffern führen.",
+    "Zeigt den Anteil der indexierten Chunks mit Vektoren. Die Dokumentanzahl weist fehlgeschlagene und übersprungene Dateien separat aus.",
   "localKnowledge.detail.help.indexMessage":
-    "Diese Meldung fasst zusammen, ob Index und Suchdaten zum aktuellen Quellensatz passen.",
+    "Diese Meldung zeigt, bei welchen Dokumenten oder Vektoren Handlungsbedarf besteht.",
   "localKnowledge.detail.help.advanced":
     "Öffnet technische Details zu Quellen, Embeddings, Retrieval und Job-Verlauf. Nützlich, wenn Antworten erwartete Inhalte vermissen lassen.",
   "localKnowledge.detail.help.embeddingSection":
@@ -535,14 +535,19 @@ export const DE_LOCAL_KNOWLEDGE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.detail.index.latestJob": "Letzter Job",
   "localKnowledge.detail.index.notIndexed": "Nicht indexiert",
   "localKnowledge.detail.index.discoveryProgress": "Discovery-Fortschritt",
-  "localKnowledge.detail.index.retrievalCoverage": "Retrieval-Abdeckung",
+  "localKnowledge.detail.index.retrievalCoverage": "Indexierte Chunks mit Embeddings",
+  "localKnowledge.detail.index.failedDocuments.one":
+    "1 Dokument konnte nicht indexiert werden. Erfolgreich indexierte Dokumente bleiben verfügbar. Wiederhole den Versuch mit „Fehlgeschlagene Dateien reparieren“ unter „Wartung und Löschen“.",
+  "localKnowledge.detail.index.failedDocuments.many":
+    "{count} Dokumente konnten nicht indexiert werden. Erfolgreich indexierte Dokumente bleiben verfügbar. Wiederhole den Versuch mit „Fehlgeschlagene Dateien reparieren“ unter „Wartung und Löschen“.",
   "localKnowledge.detail.index.embeddingStopped":
     "Embedding wurde vorzeitig beendet: {message}. Für {count} Chunks fehlen noch Vektoren.",
   "localKnowledge.detail.index.missingVectors":
-    "Für {count} Chunks fehlen noch Vektoren, bevor Retrieval die gesamte Quelle abdecken kann.",
+    "Für {count} Chunks fehlen noch Vektoren für die semantische Suche.",
   "localKnowledge.detail.index.unsupportedDocuments":
     "{count} Dokumente benötigen einen anderen Extraktionspfad, bevor sie indexiert werden können.",
-  "localKnowledge.detail.index.aligned": "Index und Vektoren passen zum aktuellen Quellensatz.",
+  "localKnowledge.detail.index.aligned":
+    "Index und Vektoren passen für die indexierten Dokumente zusammen.",
   "localKnowledge.detail.compatibility.title": "Embedding-Kompatibilität",
   "localKnowledge.detail.compatibility.compatible": "Kompatibel",
   "localKnowledge.detail.compatibility.unknown": "Unbekannt",
@@ -648,6 +653,7 @@ export const DE_LOCAL_KNOWLEDGE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.detail.jobs.status.queued": "In Warteschlange",
   "localKnowledge.detail.jobs.status.running": "Läuft",
   "localKnowledge.detail.jobs.status.succeeded": "Erfolgreich",
+  "localKnowledge.detail.jobs.status.completedWithErrors": "Mit Dateifehlern abgeschlossen",
   "localKnowledge.detail.jobs.status.failed": "Fehlgeschlagen",
   "localKnowledge.detail.jobs.status.cancelled": "Abgebrochen",
   "localKnowledge.detail.large.title": "Große Dokumente",

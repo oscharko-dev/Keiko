@@ -50,6 +50,11 @@ The first release does not add a second app area or a second registry.
   sources, and existing indexed manual pods retain their refresh and citation paths.
 - **Inspect** — the detail page shows pod readiness, connected sources, document
   counts, indexing state, diagnostics, and actions through the current BFF routes.
+  Failed documents remain explicit even when every indexed chunk has an embedding;
+  that percentage describes indexed chunks, not coverage of all source files. The existing
+  **Repair failed files** action retries failures while keeping successfully indexed documents.
+  A completed job with file errors is labelled accordingly using that job's own counts;
+  older errors do not relabel a later successful repair. The underlying lifecycle is unchanged.
 - **Attach** — Conversation Center, the existing source picker, Quality Intelligence, and voice
   grounding surfaces refer to selected local knowledge as Knowledge Pods while keeping
   existing `capsule` and `capsule-set` wire discriminants.
