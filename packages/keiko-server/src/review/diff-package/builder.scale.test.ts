@@ -193,6 +193,27 @@ describe("pathological hunks", () => {
     for (const part of result.parts) expect(part.usedTokens).toBeLessThanOrEqual(2_000);
   });
 
+  // R4130-075: the last part's window count ignored the file header, which goes there first. With
+  // 1,806 tokens of room and a header of about 20 tokens, a file of four windows passed the check,
+  // only three windows found a part, and the file was shown in part, which R4130-063 rules out.
+  it("never shows a windowed file in part when its header crowds the last part's room", async () => {
+    const longPath = `src/${"nested/".repeat(12)}big-generated-module.ts`;
+    for (const lines of [540, 570, 598]) {
+      const small = (text: string): { path: string; content: string }[] =>
+        SMALL.map((path) => ({ path, content: `export const value = "${text}";\n` }));
+      const base = fixture.commit([{ path: longPath, content: numbered(10) }, ...small("before")]);
+      const head = fixture.commit([
+        { path: longPath, content: numbered(lines, "replaced") },
+        ...small("after"),
+      ]);
+      const result = await packaged(fixture, base, head, { budgetTokens: 2_000, maxParts: 2 });
+
+      expect(result.coverage.included.every((file) => !file.partial)).toBe(true);
+      expect(result.coverage.unprocessed).toMatchObject([{ path: longPath, reason: "budget" }]);
+      expect(result.windowedHunks).toBe(0);
+    }
+  });
+
   it("leaves a file larger than all parts out and still shows the files that fit whole", async () => {
     const { base, head } = withSmallFiles(8_000);
     const result = await packaged(fixture, base, head, { budgetTokens: 2_000, maxParts: 12 });

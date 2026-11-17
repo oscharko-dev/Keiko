@@ -594,8 +594,9 @@ more than 12 parts, which this does not change. Two rules bound what a split may
 R4130-064). A file with such a hunk is placed after every file that fits, in the same order
 (language rank, larger change first, path bytes), so it takes no part from a file that fits. And it
 is shown in windows only when its whole diff fits the windows the parts can still hold: two per
-part not yet opened, and the whole windows that fit what is left of the last open part, where its
-first windows go; a larger file is left out whole (`unprocessed`, `budget`) as before the split
+part not yet opened, and one per half part of what is left of the last open part once the file's
+header is placed there, where its first windows go (R4130-075: counting whole windows without the
+header let a file through whose last window then found no part); a larger file is left out whole (`unprocessed`, `budget`) as before the split
 existed, and nothing of it is split. A package of one part therefore never splits a hunk, and the
 rule of #4134 holds there unchanged. A file that the unopened parts can no longer show beside the
 files already held back is not held: it counts as a budget miss when it is read, so the stop of the
