@@ -172,6 +172,11 @@ passes. Only the three records were kept; its fallback-font captures were discar
 committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
 changed. This remains updater fixture evidence.
 
+The Knowledge text citation repair (#4443) changed `api.ts` and both optional catalogs. On
+2026-11-17 (UTC) the original nine Chromium cases passed in 1.8 minutes in an isolated Linux
+arm64 container with Node 26.13.1. The three JSON records now bind the updated source hashes.
+The 14 committed screenshots, updater assertions and harness inputs retain their existing values.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:

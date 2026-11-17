@@ -61,7 +61,10 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { PdfCitationPreviewWindowApi } from "./hooks/usePdfCitationPreview";
+import {
+  clearPdfCitationPreviewStatusCacheForTests,
+  type PdfCitationPreviewWindowApi,
+} from "./hooks/usePdfCitationPreview";
 import type {
   Chat,
   ChatMessage,
@@ -76,6 +79,8 @@ import {
   fetchChats,
   fetchFilesSearch,
   fetchEvidenceManifest,
+  fetchPdfCitationPreviewStatus,
+  openKnowledgeCitationEditorTarget,
   updateChat,
   updateChatConnectedScopes,
 } from "@/lib/api";
@@ -92,6 +97,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     fetchFilesSearch: vi.fn(),
     fetchEvidenceManifest: vi.fn(),
+    fetchPdfCitationPreviewStatus: vi.fn(),
+    openKnowledgeCitationEditorTarget: vi.fn(),
     fetchChats: vi.fn(),
     updateChat: vi.fn(),
     updateChatConnectedScopes: vi.fn(),
@@ -137,6 +144,21 @@ function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
     taskType: undefined,
     ...overrides,
   };
+}
+
+function deferredKnowledgeEditorTarget(): {
+  readonly promise: Promise<Awaited<ReturnType<typeof openKnowledgeCitationEditorTarget>>>;
+  readonly resolve: (value: Awaited<ReturnType<typeof openKnowledgeCitationEditorTarget>>) => void;
+} {
+  let resolve: (
+    value: Awaited<ReturnType<typeof openKnowledgeCitationEditorTarget>>,
+  ) => void = () => undefined;
+  const promise = new Promise<Awaited<ReturnType<typeof openKnowledgeCitationEditorTarget>>>(
+    (settle) => {
+      resolve = settle;
+    },
+  );
+  return { promise, resolve };
 }
 
 function syntheticKnowledgeTextCitation(): LocalKnowledgeEvidenceCitation {
@@ -301,6 +323,9 @@ const updateChatMock = vi.mocked(updateChat);
 
 beforeEach(() => {
   clearKnowledgeCatalogCacheForTests();
+  clearPdfCitationPreviewStatusCacheForTests();
+  vi.mocked(fetchPdfCitationPreviewStatus).mockReset().mockResolvedValue({ citations: [] });
+  vi.mocked(openKnowledgeCitationEditorTarget).mockReset();
   fetchCapsulesMock.mockReset();
   fetchCapsulesMock.mockResolvedValue({ capsules: [] });
   fetchCapsuleSetsMock.mockReset();
@@ -5109,6 +5134,119 @@ describe("ChatWindow message copy", () => {
       }
     },
   );
+
+  it("opens a Knowledge text citation only after canonical target authorization", async () => {
+    const user = userEvent.setup();
+    const answer = syntheticKnowledgeTextAnswer();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-source" }));
+    vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+      citations: [
+        {
+          stableId: "synthetic-citation",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "not-applicable",
+          reason: "document-not-pdf",
+          editorOpenAvailable: true,
+        },
+      ],
+    });
+    const pending = deferredKnowledgeEditorTarget();
+    vi.mocked(openKnowledgeCitationEditorTarget).mockReturnValue(pending.promise);
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          makeMessage({
+            role: "assistant",
+            id: answer.assistantMessageId,
+            content: answer.content,
+            groundedAnswer: answer,
+          }),
+        ],
+      }),
+      { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+    );
+    await user.click(screen.getByText("Knowledge evidence"));
+    const button = await screen.findByRole("button", {
+      name: /Companion - Übersicht.txt.*Open in editor/u,
+    });
+    expect(openKnowledgeCitationEditorTarget).not.toHaveBeenCalled();
+    await user.click(button);
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(openKnowledgeCitationEditorTarget).toHaveBeenCalledWith(
+      {
+        chatId: "chat-1",
+        assistantMessageId: "knowledge-assistant",
+        marker: "[1]",
+        stableId: "synthetic-citation",
+      },
+      expect.any(String),
+    );
+    expect(openEditorFile).not.toHaveBeenCalled();
+    await act(async () =>
+      pending.resolve({
+        outcome: "authorized",
+        target: {
+          root: "/synthetic/knowledge-source",
+          path: "Companion - Übersicht.txt",
+        },
+      }),
+    );
+    expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+      root: "/synthetic/knowledge-source",
+      path: "Companion - Übersicht.txt",
+    });
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveTextContent("unverified");
+  });
+
+  it("keeps a refuted Knowledge editor target visible without repository fallback", async () => {
+    const user = userEvent.setup();
+    const answer = syntheticKnowledgeTextAnswer();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-unrelated" }));
+    vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+      citations: [
+        {
+          stableId: "synthetic-citation",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "not-applicable",
+          reason: "document-not-pdf",
+          editorOpenAvailable: true,
+        },
+      ],
+    });
+    vi.mocked(openKnowledgeCitationEditorTarget).mockResolvedValue({
+      outcome: "rejected",
+      reason: "source-modified",
+    });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          makeMessage({
+            role: "assistant",
+            id: answer.assistantMessageId,
+            content: answer.content,
+            groundedAnswer: answer,
+          }),
+        ],
+      }),
+      { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+    );
+    await user.click(screen.getByText("Knowledge evidence"));
+    await user.click(
+      await screen.findByRole("button", { name: /Companion - Übersicht.txt.*Open in editor/u }),
+    );
+    expect(
+      await screen.findByText(
+        "The cited source could not be opened. Check the source in its Knowledge Pod and try again.",
+      ),
+    ).toBeVisible();
+    expect(openEditorFile).not.toHaveBeenCalled();
+  });
 
   it("keeps verified repository prose active in a mixed Knowledge and repository answer", async () => {
     const user = userEvent.setup();

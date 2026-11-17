@@ -4556,6 +4556,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "grounded.knowledge.references": "{used} / {budget} Referenzen",
   "grounded.knowledge.hybridAria": "Zusammenfassung kombinierter Quellen",
   "grounded.knowledge.hybridTitle": "Kombiniert: {folders} + {pods}",
+  "grounded.knowledge.editorUnavailable":
+    "Die zitierte Quelle konnte nicht geöffnet werden. Prüfe die Quelle in ihrem Knowledge Pod und versuche es erneut.",
   "grounded.manual.name": "HTML-Handbuch",
   "grounded.manual.evidence": "HTML-Handbuchbeleg",
   "grounded.manual.openManual": "Handbuch öffnen",

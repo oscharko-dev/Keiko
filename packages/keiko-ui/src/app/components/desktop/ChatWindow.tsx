@@ -1198,6 +1198,7 @@ function ChatBubbleImpl({
     chatId: activeChat?.id,
     windowId,
     windows: previewWindows,
+    openEditorFile: openRepositoryReference,
   });
   // Epic #1854 (#1881) — opens the target in the existing governed documentation browser widget
   // (ADR-0113) rather than calling navigateDocumentation directly, so the widget's own reason/

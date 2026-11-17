@@ -4330,6 +4330,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "grounded.knowledge.references": "{used} / {budget} references",
   "grounded.knowledge.hybridAria": "Hybrid source summary",
   "grounded.knowledge.hybridTitle": "Hybrid: {folders} + {pods}",
+  "grounded.knowledge.editorUnavailable":
+    "The cited source could not be opened. Check the source in its Knowledge Pod and try again.",
   "grounded.manual.name": "HTML manual",
   "grounded.manual.evidence": "HTML manual evidence",
   "grounded.manual.openManual": "Open manual",
