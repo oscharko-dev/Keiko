@@ -42,6 +42,15 @@ function englishSyncTranslate(
   return template.replace(/\{(\w+)\}/gu, (_m, name: string) => String(values?.[name] ?? ""));
 }
 
+export function conflictedSyncView(t: OptionalWidgetTranslate): GitSyncView {
+  return {
+    action: "blocked",
+    label: t("gitClientWindow.sync.conflicts"),
+    description: t("gitClientWindow.sync.resolveConflicts"),
+    disabled: true,
+  };
+}
+
 export function deriveSyncView(
   summary: GitRepositorySummary | null,
   loading: boolean,
@@ -80,12 +89,7 @@ export function deriveSyncView(
     };
   }
   if (summary.conflictedCount > 0) {
-    return {
-      action: "blocked",
-      label: t("gitClientWindow.sync.conflicts"),
-      description: t("gitClientWindow.sync.resolveConflicts"),
-      disabled: true,
-    };
+    return conflictedSyncView(t);
   }
   const branch = summary.branch ?? "";
   if (branch.length === 0) {

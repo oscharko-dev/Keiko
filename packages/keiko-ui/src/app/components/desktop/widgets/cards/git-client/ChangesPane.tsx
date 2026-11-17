@@ -95,6 +95,7 @@ interface ChangesPaneProps {
   readonly tab: ChangesTab;
   readonly onTabChange: (tab: ChangesTab) => void;
   readonly status: GitRepositoryStatusResponse | null;
+  readonly hasConflicts: boolean;
   readonly statusLoading: boolean;
   readonly statusError: string | null;
   readonly onRetryStatus: () => void;
@@ -131,6 +132,7 @@ export function ChangesPane({
   tab,
   onTabChange,
   status,
+  hasConflicts,
   statusLoading,
   statusError,
   onRetryStatus,
@@ -226,6 +228,7 @@ export function ChangesPane({
       >
         <ChangesList
           status={status}
+          hasConflicts={hasConflicts}
           statusLoading={statusLoading}
           statusError={statusError}
           onRetryStatus={onRetryStatus}
@@ -271,6 +274,7 @@ export function ChangesPane({
 
 function ChangesList({
   status,
+  hasConflicts,
   statusLoading,
   statusError,
   onRetryStatus,
@@ -285,6 +289,7 @@ function ChangesList({
   stagingError,
 }: {
   readonly status: GitRepositoryStatusResponse | null;
+  readonly hasConflicts: boolean;
   readonly statusLoading: boolean;
   readonly statusError: string | null;
   readonly onRetryStatus: () => void;
@@ -311,8 +316,6 @@ function ChangesList({
   if (status === null) return null;
 
   const hasChanges = !status.clean && status.changes.length > 0;
-  const hasConflicts =
-    status.conflictedCount > 0 || status.changes.some((change) => change.conflicted);
   const stagedCount = status.changes.filter((change) => change.staged && !change.conflicted).length;
   const stagingBlocked = stagingBusy || hasConflicts;
   const bulkActionsBlocked = stagingBlocked || status.truncated;

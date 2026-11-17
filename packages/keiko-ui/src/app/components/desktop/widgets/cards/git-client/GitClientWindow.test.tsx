@@ -3547,6 +3547,91 @@ function makeUnmergedStatus(mixed = false): GitRepositoryStatusResponse {
 }
 
 describe("GitClientWindow — unresolved conflict controls (#4445)", () => {
+  it("blocks sync when the current status conflicts with an older clean summary", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeUnmergedStatus(true)),
+      getSummary: vi.fn(async () => makeSummary({ behind: 2 })),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByRole("button", { name: "conflicted.txt, conflicted" });
+    const sync = await screen.findByRole("button", { name: "Run sync: Resolve conflicts" });
+    expect(sync).toBeDisabled();
+    await user.click(sync);
+    expect(client.syncPreview).not.toHaveBeenCalled();
+    expect(client.syncExecute).not.toHaveBeenCalled();
+  });
+
+  it("keeps the human draft when generation settles after a conflicted re-pair", async () => {
+    let status = makeStatusRich();
+    let resolveDraft!: (response: GitDeliveryCommitDraftResponse) => void;
+    const pending = new Promise<GitDeliveryCommitDraftResponse>((resolve) => {
+      resolveDraft = resolve;
+    });
+    const client = makeClient({
+      getStatus: vi.fn(async () => status),
+      commitDraft: vi.fn(() => pending),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByText("index.ts");
+    await user.type(screen.getByLabelText("Summary"), "fix: keep the human draft");
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
+    expect(client.commitDraft).toHaveBeenCalledTimes(1);
+
+    status = makeUnmergedStatus(true);
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+    await screen.findByRole("button", { name: "conflicted.txt, conflicted" });
+    await act(async () => resolveDraft(makeCommitDraft("fix: obsolete generated draft")));
+    expect(screen.getByLabelText("Summary")).toHaveValue("fix: keep the human draft");
+  });
+
+  it("requires a fresh preview after the conflict clears across two re-pairs", async () => {
+    const summary = "fix: retain the prepared draft";
+    let status = makeStatusRich();
+    let resolvePreview!: (response: GitDeliveryCommitPreviewResponse) => void;
+    const pending = new Promise<GitDeliveryCommitPreviewResponse>((resolve) => {
+      resolvePreview = resolve;
+    });
+    const client = makeClient({
+      getStatus: vi.fn(async () => status),
+      commitPreview: vi.fn(async ({ messageDraft }) =>
+        messageDraft === summary ? pending : makeCommitPreview(),
+      ),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByText("index.ts");
+    await user.type(screen.getByLabelText("Summary"), summary);
+    await waitFor(() =>
+      expect(client.commitPreview).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        messageDraft: summary,
+      }),
+    );
+    status = makeUnmergedStatus(true);
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+    await screen.findByRole("button", { name: "conflicted.txt, conflicted" });
+
+    vi.useFakeTimers();
+    try {
+      status = makeStatusRich();
+      await act(async () => {
+        await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+      });
+      expect(screen.queryByRole("button", { name: "conflicted.txt, conflicted" })).toBeNull();
+      await act(async () => resolvePreview(makeCommitPreview()));
+      expect(screen.getByLabelText("Summary")).toHaveValue(summary);
+      expect(screen.getByRole("button", { name: /^Commit to/u })).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([false, true])(
     "blocks all staging while preserving inspection (mixed: %s)",
     async (mixed) => {

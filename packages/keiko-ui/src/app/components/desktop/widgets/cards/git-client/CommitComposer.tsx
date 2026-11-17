@@ -1222,7 +1222,7 @@ function useCommitDraftGeneration(
       (err: unknown) => {
         if (seqRef.current !== seq) return;
         setBusy(false);
-        setError(draftGenerationErrorText(err, t));
+        if (tokenMatches(readToken(), startToken)) setError(draftGenerationErrorText(err, t));
       },
     );
   }, [applyDraft, onGenerateDraft, readToken, t]);

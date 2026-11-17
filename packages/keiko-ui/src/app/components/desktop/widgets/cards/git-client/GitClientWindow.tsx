@@ -74,7 +74,7 @@ import {
   WorktreeMutationConfirmDialog,
   type WorktreeMutationConfirmation,
 } from "./WorktreeMutationConfirmDialog";
-import { deriveSyncView } from "./SyncControl";
+import { conflictedSyncView, deriveSyncView } from "./SyncControl";
 import {
   pushOutcomePresentation,
   syncOutcomePresentation,
@@ -1291,6 +1291,7 @@ export function GitClientWindow({
   const [historyLimitReached, setHistoryLimitReached] = useState(false);
   const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
   const [statusRevision, setStatusRevision] = useState(0);
+  const [commitStatusRevision, setCommitStatusRevision] = useState(0);
   const [tab, setTab] = useState<ChangesTab>("changes");
   const [selectedChangePath, setSelectedChangePath] = useState<string | null>(null);
   const [revealRequestId, setRevealRequestId] = useState(0);
@@ -1344,13 +1345,15 @@ export function GitClientWindow({
   // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
   const redemptions = useCodingAppSessionRedemptions();
-  // A status read prunes a selected change that no longer exists (e.g. after a commit), so the diff
-  // pane returns to its empty state.
-  const pruneSelectedChange = useCallback((response: GitRepositoryStatusResponse): void => {
+  const commitPreviewRevision = statusRevision + redemptions + commitStatusRevision;
+  // A settled status read also invalidates commit evidence. Manual retry or browser re-pair can
+  // bring in or clear a conflict without a local Git mutation.
+  const onStatusLoaded = useCallback((response: GitRepositoryStatusResponse): void => {
+    setCommitStatusRevision((revision): number => revision + 1);
     setSelectedChangePath(selectedChangeResolver(response.changes, setDiffScope));
   }, []);
   const readInput = { client, selectedPath, optionalT, redemptions, statusRevision };
-  const statusRead = useGitRead({ ...readInput, spec: STATUS_READ, onLoaded: pruneSelectedChange });
+  const statusRead = useGitRead({ ...readInput, spec: STATUS_READ, onLoaded: onStatusLoaded });
   // #3651: a failed branch read must not be silently mapped to "no branches" — that disabled both
   // switching and New branch with no explanation and no retry.
   const branchesRead = useGitRead({ ...readInput, spec: BRANCHES_READ });
@@ -1986,7 +1989,9 @@ export function GitClientWindow({
     ],
   );
 
-  const syncView = deriveSyncView(activeSummary, summaryRead.loading, t);
+  const syncView = hasActiveConflicts
+    ? conflictedSyncView(t)
+    : deriveSyncView(activeSummary, summaryRead.loading, t);
   const toolbarRepositories = repositoryToolbarList(
     repositories,
     selectedPath,
@@ -2107,9 +2112,9 @@ export function GitClientWindow({
   const previewCommitDraft = useCallback(
     (messageDraft: string): void => {
       if (hasActiveConflicts) return;
-      runCommitPreview(messageDraft, statusRevision);
+      runCommitPreview(messageDraft, commitPreviewRevision);
     },
-    [hasActiveConflicts, runCommitPreview, statusRevision],
+    [commitPreviewRevision, hasActiveConflicts, runCommitPreview],
   );
   const commitComposer = (
     <CommitComposer
@@ -2124,8 +2129,10 @@ export function GitClientWindow({
       preview={commit.preview}
       previewDraft={commit.previewDraft}
       previewRequestRevision={commit.previewRequestRevision}
-      previewError={commit.previewError}
-      previewRevision={statusRevision}
+      previewError={
+        commit.previewRequestRevision === commitPreviewRevision ? commit.previewError : null
+      }
+      previewRevision={commitPreviewRevision}
       layout={useCommitWorkspace ? "workspace" : "sidebar"}
       summaryValue={commitSummary}
       bodyValue={commitBody}
@@ -2166,7 +2173,7 @@ export function GitClientWindow({
         branchesError={readErrorForDisplay(branchesRead.error, activeStatus)}
         status={activeStatus}
         branchBusy={branchActions.flow.busy}
-        syncView={syncViewForDisplay(syncView, visibleSummaryError, t)}
+        syncView={syncViewForDisplay(syncView, hasActiveConflicts ? null : visibleSummaryError, t)}
         syncBusy={syncBusy}
         syncOutcome={syncOutcome}
         syncError={syncError}
@@ -2211,6 +2218,7 @@ export function GitClientWindow({
                 tab={tab}
                 onTabChange={setTab}
                 status={activeStatus}
+                hasConflicts={hasActiveConflicts}
                 statusLoading={statusRead.loading}
                 statusError={statusRead.error}
                 onRetryStatus={statusRead.retry}
