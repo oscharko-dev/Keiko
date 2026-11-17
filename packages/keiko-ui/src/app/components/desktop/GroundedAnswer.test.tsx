@@ -941,6 +941,36 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText("Knowledge Pod activity")).toBeInTheDocument();
   });
 
+  it("shows Knowledge evidence for multiple Pod connections without a connected folder", () => {
+    const knowledge = localKnowledgeAnswer([
+      knowledgeCitation(),
+      knowledgeCitation({ stableId: "lk-2", marker: "[2]", label: "beta.md" }),
+    ]);
+    const a: GroundedAnswerType = {
+      ...knowledge,
+      groundingKind: "hybrid",
+      citations: [],
+      knowledgeCitations: knowledge.citations,
+      retrievalActivity: retrievalActivity(),
+      contextPack: {
+        kind: "hybrid",
+        folderSourceCount: 0,
+        connectorSourceCount: 2,
+        folder: contextPack({ fileCount: 0, filesInPrompt: 0 }),
+        knowledge: { ...knowledge.contextPack, capsuleCount: 2, sourceCount: 2 },
+      },
+    };
+
+    render(<GroundedAnswer answer={a} busy={false} />);
+
+    expect(screen.getByText("Knowledge evidence")).toBeInTheDocument();
+    expect(screen.getByText("2 citations · 2 / 10 references")).toBeInTheDocument();
+    expect(screen.getByText("[2] beta.md")).toBeInTheDocument();
+    expect(screen.getByText("Knowledge Pod activity")).toBeInTheDocument();
+    expect(screen.queryByText(/files in prompt/)).toBeNull();
+    expect(screen.queryByLabelText("Context inspection summary")).toBeNull();
+  });
+
   it("renders one static evidence reference per citation with the path:start-end label", () => {
     const a = answer({
       citations: [

@@ -467,3 +467,22 @@ The Windows 11 ARM64 guest used eight vCPUs, 16 GiB, emulated x64 Node 26.13.1 a
 - **Native Windows handoff.** The published 1.5.1 archive matched its checksum and embedded runtime
   activation digest. It reports `evaluation-unqualified`. The Intel/AMD Workbench and installed Jira
   checks are tracked together in [#4449](https://github.com/oscharko-dev/Keiko/issues/4449).
+
+### Knowledge Pods and an additional Chat source
+
+Two empty Pods reported **All chunks embedded** at `0 / 0` vectors. On `3715e8ed1`, a third
+Pod displayed **No indexed chunks yet** and **Not indexed**. After connecting its folder and
+indexing, the display showed one document, one vector, no failed or skipped files, and
+**All chunks embedded**.
+
+The three fixture folders each contained a different `facts.txt`. In the Windows Edge Chat,
+Gemma 4 31B through LiteLLM returned `ALDER-481` / Ulm and `BIRCH-672` / Jena from the two-member
+Pod Set. It reported no evidence for Cedar. The UI retained the set when Cedar was connected
+separately. A second turn returned the original facts plus `CEDAR-935` / Passau. All three
+citation actions opened the expected file in its own Editor root. An Edge reload retained both
+connections and both answers. The Activity Log still recorded exactly two Gemma calls.
+
+The three-citation answer initially displayed **0 citations** beside its three Knowledge
+citations and showed folder counters even though no Files source was connected. The focused
+regression exercises the same two-connection answer shape. Its disclosure now uses the
+Knowledge evidence summary, including the reference count and the existing citation actions.

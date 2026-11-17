@@ -102,10 +102,6 @@ type ConnectedGroundedAnswer = Extract<
   { readonly groundingKind: "connected-context" }
 >;
 type HybridGroundedAnswer = Extract<GroundedAnswer, { readonly groundingKind: "hybrid" }>;
-type KnowledgeGroundedAnswer = Extract<
-  GroundedAnswer,
-  { readonly groundingKind: "local-knowledge" }
->;
 
 // Display "—" for Infinity / non-finite caps (the default budget uses Number.POSITIVE_INFINITY
 // for unbounded dimensions like rerankCallsMax when the orchestrator is disabled).
@@ -731,14 +727,18 @@ function connectedEvidenceSummary(answer: ConnectedGroundedAnswer, t: I18nTransl
   return connectedPromptEvidenceSummary(answer.contextPack, citationCount, t);
 }
 
-function knowledgeEvidenceSummary(answer: KnowledgeGroundedAnswer, t: I18nTranslate): string {
+function knowledgeEvidenceSummary(
+  citations: readonly LocalKnowledgeEvidenceCitation[],
+  contextPack: LocalKnowledgeGroundedAnswerContextSummary,
+  t: I18nTranslate,
+): string {
   return citationCountLabel(
     t,
-    uniqueCitationCount(answer.citations),
+    uniqueCitationCount(citations),
     { one: "grounded.summary.knowledge.one", other: "grounded.summary.knowledge.other" },
     {
-      used: formatCount(answer.contextPack.referencesUsed, t.locale),
-      budget: formatCount(answer.contextPack.referenceBudget, t.locale),
+      used: formatCount(contextPack.referencesUsed, t.locale),
+      budget: formatCount(contextPack.referenceBudget, t.locale),
     },
   );
 }
@@ -1998,23 +1998,32 @@ export function GroundedAnswer({
       </div>
     ) : null;
   }
-  if (answer.groundingKind === "local-knowledge") {
+  // Multiple Pod connections use hybrid retrieval even when there is no Files source.
+  if (
+    answer.groundingKind === "local-knowledge" ||
+    (answer.groundingKind === "hybrid" && answer.contextPack.folderSourceCount === 0)
+  ) {
+    const citations =
+      answer.groundingKind === "hybrid" ? answer.knowledgeCitations : answer.citations;
+    const contextPack =
+      answer.groundingKind === "hybrid" ? answer.contextPack.knowledge : answer.contextPack;
     return (
       <div className="grounded-answer">
         <GroundedAnswerWarnings answer={answer} />
         <GroundedEvidenceDisclosure
           title={t("grounded.title.knowledge")}
-          summary={knowledgeEvidenceSummary(answer, t)}
+          summary={knowledgeEvidenceSummary(citations, contextPack, t)}
+          reportInspection={answer.groundingKind === "hybrid"}
         >
           <LocalKnowledgeCitationList
-            citations={answer.citations}
+            citations={citations}
             citationPreview={citationPreview}
             openDocumentationTarget={openDocumentationTarget}
             unverifiedSupport={supportUnverified(answer.uncertainty)}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />
-          <LocalKnowledgeContextPackSummary contextPack={answer.contextPack} />
+          <LocalKnowledgeContextPackSummary contextPack={contextPack} />
         </GroundedEvidenceDisclosure>
       </div>
     );
