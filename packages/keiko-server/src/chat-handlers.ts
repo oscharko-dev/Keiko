@@ -161,6 +161,7 @@ import {
   currentConversationReady,
   currentConversationReadinessObservation,
   currentConversationReadinessPresentation,
+  preferActivatedModels,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentRedactionSecrets,
@@ -402,7 +403,7 @@ function defaultChatModelId(deps: UiHandlerDeps): string {
   return (
     (
       chatModels.find((model) => model.id === DEFAULT_CHAT_MODEL && conversationReady(model)) ??
-      electConversationDefault(chatModels, readinessObservation)
+      electConversationDefault(preferActivatedModels(deps, chatModels), readinessObservation)
     )?.id ?? DEFAULT_CHAT_MODEL
   );
 }

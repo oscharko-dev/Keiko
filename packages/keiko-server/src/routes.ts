@@ -155,7 +155,11 @@ import {
 } from "./memory-autonomy-policy-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleBuildVoiceRecap } from "./voice-recap.js";
-import { handleGatewayReadiness, handleGatewaySelectionCheck } from "./gateway-readiness.js";
+import {
+  handleGatewayDeactivation,
+  handleGatewayReadiness,
+  handleGatewaySelectionCheck,
+} from "./gateway-readiness.js";
 import { handleApplyGatewayVerifiedCapabilities, handleGatewaySetup } from "./gateway-setup.js";
 import {
   handleCodingSidecarGatewayChatCompletions,
@@ -1810,6 +1814,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/gateway/readiness/selection",
     handler: handleGatewaySelectionCheck,
+  },
+  // ADR-0171 D2 (amended 2026-11-16): a person takes an activated chat model out of use again.
+  {
+    method: "POST",
+    pattern: "/api/gateway/readiness/deactivation",
+    handler: handleGatewayDeactivation,
   },
   // #4443: an explicit saved text citation can resolve an ordinary Editor target.
   {

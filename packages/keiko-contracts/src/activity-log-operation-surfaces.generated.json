@@ -346,6 +346,7 @@
   "gateway.readiness.compatibility-retry.failed": "model-gateway",
   "gateway.readiness.compatibility-retry.skipped": "model-gateway",
   "gateway.readiness.completed": "model-gateway",
+  "gateway.readiness.deactivation": "model-gateway",
   "gateway.readiness.scope": "model-gateway",
   "gateway.readiness.selection": "model-gateway",
   "gateway.readiness.started": "model-gateway",

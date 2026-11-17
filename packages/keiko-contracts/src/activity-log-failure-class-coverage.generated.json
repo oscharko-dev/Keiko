@@ -29612,6 +29612,7 @@
           "gateway.readiness.automatic.joined",
           "gateway.readiness.automatic.withheld",
           "gateway.readiness.busy-retained",
+          "gateway.readiness.deactivation",
           "gateway.readiness.scope",
           "gateway.readiness.selection"
         ],
@@ -29649,6 +29650,10 @@
           "mode": "correlation"
         },
         {
+          "op": "gateway.readiness.deactivation",
+          "mode": "correlation"
+        },
+        {
           "op": "gateway.readiness.scope",
           "mode": "correlation"
         },
@@ -29670,6 +29675,7 @@
         "gateway.readiness.automatic.withheld",
         "gateway.readiness.busy-retained",
         "gateway.readiness.completed",
+        "gateway.readiness.deactivation",
         "gateway.readiness.scope",
         "gateway.readiness.selection",
         "gateway.readiness.started"
@@ -30010,6 +30016,30 @@
             "causeChain": false
           },
           "proofIds": ["gateway.readiness.completed.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "gateway.readiness.deactivation",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["gateway.readiness.deactivation.line"],
           "replayReferences": [],
           "missingObligations": []
         },

@@ -59,6 +59,7 @@ import {
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   type ChatMessage,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { initializeConfiguredConversationReadiness } from "./gateway-readiness.js";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -297,6 +298,8 @@ async function creationDuringPendingReadiness(input: {
   try {
     runtime.store.createProject(projectDir, "Concurrent creation");
     runtime.gatewayConfig?.set(customModelConfig(CHAT_MODEL), true, "corr-creation-initialization");
+    // The person activates the model in Settings > Models; creation joins that running check.
+    initializeConfiguredConversationReadiness(runtime, "corr-creation-initialization");
     await restartWithDeps(runtime);
     await vi.waitFor(() => {
       expect(probe.fetch).toHaveBeenCalledTimes(1);

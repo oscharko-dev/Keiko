@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "693b5c151f82cecbe39322de8f7b3c4a75d2eb9383535ac3ce7b36b547fe49f6"
+    "catalogDigest": "84b17bca0cebce399d6334bd6a79c112d60d0328907999c617f194a5059d8dc7"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 707,
-    "proofCount": 730,
-    "resolvedProofCount": 730,
+    "operationCount": 708,
+    "proofCount": 731,
+    "resolvedProofCount": 731,
     "failureClassCount": 404,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -312,6 +312,7 @@
         "gateway.readiness.compatibility-retry.failed",
         "gateway.readiness.compatibility-retry.skipped",
         "gateway.readiness.completed",
+        "gateway.readiness.deactivation",
         "gateway.readiness.scope",
         "gateway.readiness.selection",
         "gateway.readiness.started",
@@ -2402,6 +2403,9 @@
     "gateway.readiness.completed.line": [
       "packages/keiko-server/src/gateway-readiness.native-cancellation.test.ts",
       "packages/keiko-server/src/gateway-readiness.test.ts"
+    ],
+    "gateway.readiness.deactivation.line": [
+      "packages/keiko-server/src/gateway-models-in-use.test.ts"
     ],
     "gateway.readiness.scope.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
     "gateway.readiness.selection.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
