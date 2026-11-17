@@ -1036,6 +1036,7 @@ interface DraftGenerationController {
 
 interface CommitComposerController {
   readonly state: CommitComposerState;
+  readonly previewFresh: boolean;
   readonly summary: string;
   readonly body: string;
   readonly hintId: string;
@@ -1300,6 +1301,7 @@ function useCommitComposerController(
   useCommitPreviewRefresh(props, state);
   return {
     state,
+    previewFresh,
     summary: fields.summary,
     body: fields.body,
     hintId,
@@ -1348,7 +1350,7 @@ function CommitComposerContents({
       />
       <CommitFeedback
         state={controller.state}
-        previewError={props.previewError}
+        previewError={controller.previewFresh ? props.previewError : null}
         previewId={controller.previewId}
         branchName={props.branchName}
         outcome={props.outcome}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import type { GitRepositoryStatusResponse } from "@/lib/types";
 
 // Shared presentational primitives for the Git client staging + commit surface (Issue #1575,
 // Epic #1571). Carried forward in behaviour from the removed GovernedGitFlowCard (contract §2
@@ -21,6 +22,13 @@ const InfoIcon = Icons.info;
 const CheckIcon = Icons.check;
 
 export type PillTone = "neutral" | "accent" | "success" | "warning" | "danger" | "info";
+
+export function hasRepositoryConflicts(status: GitRepositoryStatusResponse | null): boolean {
+  return (
+    status !== null &&
+    (status.conflictedCount > 0 || status.changes.some((change) => change.conflicted))
+  );
+}
 
 function toneColor(tone: PillTone): string {
   switch (tone) {

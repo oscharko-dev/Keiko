@@ -17,7 +17,7 @@ import {
 import { Icons } from "../../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 import type { GitMutationOutcome } from "./git-client-seam";
-import { MutationOutcome } from "./git-client-ui";
+import { hasRepositoryConflicts, MutationOutcome } from "./git-client-ui";
 import { HistoryPane } from "./HistoryPane";
 import {
   CHANGES_COUNT_STYLE,
@@ -95,7 +95,6 @@ interface ChangesPaneProps {
   readonly tab: ChangesTab;
   readonly onTabChange: (tab: ChangesTab) => void;
   readonly status: GitRepositoryStatusResponse | null;
-  readonly hasConflicts: boolean;
   readonly statusLoading: boolean;
   readonly statusError: string | null;
   readonly onRetryStatus: () => void;
@@ -132,7 +131,6 @@ export function ChangesPane({
   tab,
   onTabChange,
   status,
-  hasConflicts,
   statusLoading,
   statusError,
   onRetryStatus,
@@ -228,7 +226,6 @@ export function ChangesPane({
       >
         <ChangesList
           status={status}
-          hasConflicts={hasConflicts}
           statusLoading={statusLoading}
           statusError={statusError}
           onRetryStatus={onRetryStatus}
@@ -274,7 +271,6 @@ export function ChangesPane({
 
 function ChangesList({
   status,
-  hasConflicts,
   statusLoading,
   statusError,
   onRetryStatus,
@@ -289,7 +285,6 @@ function ChangesList({
   stagingError,
 }: {
   readonly status: GitRepositoryStatusResponse | null;
-  readonly hasConflicts: boolean;
   readonly statusLoading: boolean;
   readonly statusError: string | null;
   readonly onRetryStatus: () => void;
@@ -316,11 +311,12 @@ function ChangesList({
   if (status === null) return null;
 
   const hasChanges = !status.clean && status.changes.length > 0;
+  const hasConflicts = hasRepositoryConflicts(status);
   const stagedCount = status.changes.filter((change) => change.staged && !change.conflicted).length;
   const stagingBlocked = stagingBusy || hasConflicts;
   const bulkActionsBlocked = stagingBlocked || status.truncated;
-  const hasStaged = stagedCount > 0 && !status.truncated;
-  const hasUnstaged = (status.unstagedCount > 0 || status.untrackedCount > 0) && !status.truncated;
+  const hasStaged = stagedCount > 0;
+  const hasUnstaged = status.unstagedCount > 0 || status.untrackedCount > 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>

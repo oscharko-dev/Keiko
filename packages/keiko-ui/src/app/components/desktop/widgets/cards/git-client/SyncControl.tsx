@@ -42,7 +42,7 @@ function englishSyncTranslate(
   return template.replace(/\{(\w+)\}/gu, (_m, name: string) => String(values?.[name] ?? ""));
 }
 
-export function conflictedSyncView(t: OptionalWidgetTranslate): GitSyncView {
+function conflictedSyncView(t: OptionalWidgetTranslate): GitSyncView {
   return {
     action: "blocked",
     label: t("gitClientWindow.sync.conflicts"),
@@ -55,7 +55,9 @@ export function deriveSyncView(
   summary: GitRepositorySummary | null,
   loading: boolean,
   t: OptionalWidgetTranslate = englishSyncTranslate,
+  hasActiveConflicts = false,
 ): GitSyncView {
+  if (hasActiveConflicts) return conflictedSyncView(t);
   if (loading && summary === null) {
     return {
       action: "blocked",

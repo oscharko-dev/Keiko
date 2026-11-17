@@ -53,7 +53,7 @@ import type { WindowCfgValue } from "../../../windows/types";
 import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
-import { MutationOutcome } from "./git-client-ui";
+import { hasRepositoryConflicts, MutationOutcome } from "./git-client-ui";
 import {
   reportGitClientOperationDiagnostic,
   reportGitClientRetryAttempt,
@@ -74,7 +74,7 @@ import {
   WorktreeMutationConfirmDialog,
   type WorktreeMutationConfirmation,
 } from "./WorktreeMutationConfirmDialog";
-import { conflictedSyncView, deriveSyncView } from "./SyncControl";
+import { deriveSyncView } from "./SyncControl";
 import {
   pushOutcomePresentation,
   syncOutcomePresentation,
@@ -753,8 +753,9 @@ function syncViewForDisplay(
   syncView: SyncView,
   summaryError: string | null,
   t: I18nTranslate,
+  hasActiveConflicts: boolean,
 ): SyncView {
-  if (summaryError === null) return syncView;
+  if (summaryError === null || hasActiveConflicts) return syncView;
   return {
     action: "blocked",
     label: t("gitClientWindow.sync.unavailable"),
@@ -1773,9 +1774,7 @@ export function GitClientWindow({
     history,
   });
   const activeStatus = active.status;
-  const hasActiveConflicts =
-    activeStatus !== null &&
-    (activeStatus.conflictedCount > 0 || activeStatus.changes.some((change) => change.conflicted));
+  const hasActiveConflicts = hasRepositoryConflicts(activeStatus);
   const reportedConflictRoot = useRef<string | null>(null);
   useEffect((): void => {
     const conflictRoot = hasActiveConflicts ? selectedPath : null;
@@ -1989,9 +1988,7 @@ export function GitClientWindow({
     ],
   );
 
-  const syncView = hasActiveConflicts
-    ? conflictedSyncView(t)
-    : deriveSyncView(activeSummary, summaryRead.loading, t);
+  const syncView = deriveSyncView(activeSummary, summaryRead.loading, t, hasActiveConflicts);
   const toolbarRepositories = repositoryToolbarList(
     repositories,
     selectedPath,
@@ -2129,9 +2126,7 @@ export function GitClientWindow({
       preview={commit.preview}
       previewDraft={commit.previewDraft}
       previewRequestRevision={commit.previewRequestRevision}
-      previewError={
-        commit.previewRequestRevision === commitPreviewRevision ? commit.previewError : null
-      }
+      previewError={commit.previewError}
       previewRevision={commitPreviewRevision}
       layout={useCommitWorkspace ? "workspace" : "sidebar"}
       summaryValue={commitSummary}
@@ -2173,7 +2168,7 @@ export function GitClientWindow({
         branchesError={readErrorForDisplay(branchesRead.error, activeStatus)}
         status={activeStatus}
         branchBusy={branchActions.flow.busy}
-        syncView={syncViewForDisplay(syncView, hasActiveConflicts ? null : visibleSummaryError, t)}
+        syncView={syncViewForDisplay(syncView, visibleSummaryError, t, hasActiveConflicts)}
         syncBusy={syncBusy}
         syncOutcome={syncOutcome}
         syncError={syncError}
@@ -2218,7 +2213,6 @@ export function GitClientWindow({
                 tab={tab}
                 onTabChange={setTab}
                 status={activeStatus}
-                hasConflicts={hasActiveConflicts}
                 statusLoading={statusRead.loading}
                 statusError={statusRead.error}
                 onRetryStatus={statusRead.retry}
