@@ -130,6 +130,17 @@ This shapes the product _and_ how you work on it:
 - Desktop layout restoration is bound to the current UI database's existing persisted installation
   identity. Preserve the same-store restart path; never replay unowned browser window references
   into another data store or clear chats and files to hide a broken restoration (ADR-0027).
+- **Standalone folder package (owner decision, 2026-11-17):** for workplaces where nothing may be
+  installed, Keiko ships as one folder: the portable payload, byte for byte, with start and stop
+  files around it (`scripts/build-standalone-package.mjs`, ADR-0121 D9). It starts with
+  `keiko portable launch --in-place`: no managed setup, no registration, state in
+  `~/.keiko-standalone`, nothing downloaded at start. It declares itself managed outside the app
+  (`KEIKO_PORTABLE_MANAGEMENT`), so the app reports the existing `portable-it-managed` disposition
+  and never offers the portable setup. Never modify the payload inside a package, never let the
+  folder form perform or suggest an installation, and never weaken the operating system's download
+  checks to make a package start: an administrator removes the download mark before internal
+  distribution. A team's `keiko.config.json` beside the start files is an administrator-owned
+  input; Keiko adopts it and seals its key, and never writes to it (ADR-0046 D5).
 - Portable updates must not require an Apple Developer subscription (ADR-0121 D7). Verify macOS
   handoff copies against the exact current artifact digests in the validated plan after managed
   registration admission; preserve candidate authenticity, containment and process ownership.
@@ -1087,6 +1098,16 @@ Expected Memory capability states and salience extraction/capture summaries use 
 (#4247). Producers explicitly declare `diagnosticOutcome: "routine"`; unclassified diagnostics and
 real model, vault or vector-index failures retain the failure channel. Shutdown start is info even
 with work in flight; faulted cleanup retains its warning and failure evidence.
+
+`cli.lifecycle.provisioned-config` records what `keiko start --provisioned-config` did with an
+administrator's gateway configuration (ADR-0121 D9), under the start's correlation: `adopted` (new
+or changed since the last adoption; it replaces the configuration as a whole), `unchanged`,
+`deferred-running` (a running Keiko is never written under), `overridden` (an explicit
+`KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR` wins), `absent`, or at warn `invalid`, `too-large`,
+`refused-link`, `read-failed` and `write-failed` with the error class. Never the path, a digest of
+the content or the content. `portable launch` hands its sink to `keiko start` on every platform,
+so a macOS or Linux launch records its health, browser handoff, failure and adoption lines like a
+Windows one.
 
 `client.citation.activated` records a citation click and its source selection under the
 activation correlation. `reason` describes the source fingerprint: `matched` (one root),

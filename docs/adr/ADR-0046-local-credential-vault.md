@@ -10,7 +10,7 @@ Accepted (Issue #1320, Epic #1319, 2026-06-20). Extends the encryption-at-rest p
 
 ## Version
 
-0.2.0
+0.3.0 (2026-11-17: D5, an administrator-provisioned config is an input outside Keiko's custody)
 
 ## Context
 
@@ -88,6 +88,27 @@ at the provider as well.
 ### D4 — Crash-aware, idempotent one-time migration
 
 On `keiko ui` bootstrap, an existing plaintext `keiko.config.json` is migrated once: secrets are sealed into their vaults **first**, then the config is atomically rewritten without plaintext. If the process dies between the two steps, the old plaintext config remains and the next start re-runs the migration idempotently (vault writes overwrite). Migration is best-effort and never throws into bootstrap. `keiko repair` adds a `Credential storage` diagnostic that flags any lingering plaintext `apiKey`/`figma.accessToken` as an incomplete migration requiring action.
+
+### D5 — An administrator-provisioned config is an input, not Keiko's custody
+
+A standalone folder package may ship a `keiko.config.json` that an administrator prepared for a
+team (ADR-0121 D9). That file may carry a plaintext `apiKey`: one key is shared by the team, and a
+person who starts the package is not meant to enter anything. D1 to D4 govern what Keiko persists;
+they do not govern this file. It is an administrator-owned input outside Keiko's custody, like a
+key in the environment, and Keiko never writes to it.
+
+What Keiko persists stays under D2 to D4. `keiko start --provisioned-config` copies the file into
+the state directory with private permissions, and the D4 migration seals the key into the person's
+vault and rewrites the adopted copy without plaintext on that same start. The marker beside it
+(`ui/provisioned-config.json`) holds the SHA-256 of the adopted file and no content. The adoption
+logs the closed outcome and an error class, never the path or the bytes.
+
+The residual risk is the package itself: everyone who can read the file share, or a copy of the
+package, can read the key. Encrypting the file would not remove it, because the package would have
+to carry its own key. The control is outside Keiko: a share limited to the team and a key issued
+for that team only, with a budget and an expiry, that the administrator can replace. The operator
+guide states this, and the builder names a package that holds credentials `-team.zip` and refuses
+a config whose providers still refer to a key sealed on the administrator's computer.
 
 ## Consequences
 

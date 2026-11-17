@@ -28,6 +28,10 @@ terminal commands, restart by hand, manually verify the running version, or use 
 path for portable delivery; see
 [ADR-0122](../adr/ADR-0122-portable-first-browser-install-suppression.md).
 
+A workplace where nothing may be installed uses the
+[standalone folder package](standalone-folder-package.md) instead: the same payload, started in
+place without managed setup (ADR-0121 D9).
+
 ## Platform Artifacts
 
 Every stable portable release that advertises portable delivery must provide exactly four

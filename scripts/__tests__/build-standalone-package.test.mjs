@@ -217,6 +217,57 @@ describe("an administrator's package", () => {
     expect(JSON.parse(built.get("Keiko/system/standalone.json")).provisionedConfig).toBe(true);
   });
 
+  it("turns the references Gateway Setup left into the team's key", () => {
+    const root = tempRoot();
+    const sealed = JSON.stringify({
+      schemaVersion: 2,
+      providers: [
+        { modelId: "chat", baseUrl: "https://gateway.example.test", apiKeySecretRef: "cred:chat" },
+        { modelId: "embed", apiKeySecretRef: "cred:embed" },
+        { modelId: "own-key", apiKey: "sk-kept" },
+      ],
+    });
+    const { result } = build("windows-x64", {
+      options: {
+        config: configFile(root, sealed),
+        apiKeyEnv: "KEIKO_TEAM_KEY",
+        env: { KEIKO_TEAM_KEY: "sk-team" },
+      },
+    });
+
+    expect(JSON.parse(entriesByName(result.outputPath).get("Keiko/keiko.config.json"))).toEqual({
+      schemaVersion: 2,
+      providers: [
+        { modelId: "chat", baseUrl: "https://gateway.example.test", apiKey: "sk-team" },
+        { modelId: "embed", apiKey: "sk-team" },
+        { modelId: "own-key", apiKey: "sk-kept" },
+      ],
+    });
+  });
+
+  it("refuses a config that still refers to a key sealed on the administrator's computer", () => {
+    const root = tempRoot();
+    const sealed = '{"providers":[{"modelId":"chat","apiKeySecretRef":"cred:chat"}]}';
+
+    expect(() => build("macos-arm64", { options: { config: configFile(root, sealed) } })).toThrow(
+      "pass --api-key-env NAME",
+    );
+  });
+
+  it("refuses an unset key variable and a key variable without a config", () => {
+    const root = tempRoot();
+    const sealed = '{"providers":[{"modelId":"chat","apiKeySecretRef":"cred:chat"}]}';
+
+    expect(() =>
+      build("macos-arm64", {
+        options: { config: configFile(root, sealed), apiKeyEnv: "KEIKO_TEAM_KEY", env: {} },
+      }),
+    ).toThrow("the environment variable KEIKO_TEAM_KEY is not set");
+    expect(() => build("macos-arm64", { options: { apiKeyEnv: "KEIKO_TEAM_KEY" } })).toThrow(
+      "--api-key-env needs --config",
+    );
+  });
+
   it.each([
     ["text that is not JSON", "not json", "is not valid JSON"],
     ["a config without providers", "{}", "names no providers"],
@@ -380,6 +431,8 @@ describe("the command line", () => {
         "out",
         "--config",
         "c.json",
+        "--api-key-env",
+        "TEAM_KEY",
         "--keep-folder",
       ]),
     ).toEqual({
@@ -389,6 +442,7 @@ describe("the command line", () => {
       sha256: "abc",
       outDir: "out",
       config: "c.json",
+      apiKeyEnv: "TEAM_KEY",
     });
   });
 

@@ -20,6 +20,7 @@
 // refused. Files this script writes carry no download mark, so the result starts on a machine that
 // received it over an internal share even when the source archive was a browser download.
 
+import { Buffer } from "node:buffer";
 import {
   chmodSync,
   existsSync,
@@ -82,7 +83,8 @@ export const STANDALONE_TARGETS = Object.freeze({
 
 const USAGE = `Usage:
   node scripts/build-standalone-package.mjs --target TARGET --archive PATH
-       (--sha256 HEX | --sha256sums PATH) --out-dir PATH [--config PATH] [--keep-folder]
+       (--sha256 HEX | --sha256sums PATH) --out-dir PATH
+       [--config PATH [--api-key-env NAME]] [--keep-folder]
 
   --target       ${Object.keys(STANDALONE_TARGETS).join(" | ")}
   --archive      the portable release archive for that target (keiko-<target>.zip)
@@ -91,6 +93,9 @@ const USAGE = `Usage:
   --out-dir      where the package is written
   --config       a keiko.config.json to place in the package (administrator's package; it holds
                  credentials and must never be published)
+  --api-key-env  the environment variable that holds the team's API key. Gateway Setup stores a
+                 config without its key ("apiKeySecretRef"); with this flag every such reference
+                 becomes that key, so the config works on another person's computer
   --keep-folder  also keep the assembled folder next to the archive
 `;
 
@@ -107,6 +112,7 @@ const VALUE_FLAGS = Object.freeze({
   "--sha256sums": "sha256sums",
   "--out-dir": "outDir",
   "--config": "config",
+  "--api-key-env": "apiKeyEnv",
 });
 
 function readFlagValue(argv, index) {
@@ -228,8 +234,38 @@ export function inspectPayload(systemRoot, target) {
   return { packageVersion };
 }
 
-/** A provisioned gateway configuration must at least be a config with providers. */
-export function readProvisionedConfig(configPath) {
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Gateway Setup seals a key into the vault of the computer it ran on and leaves a reference in the
+// config. On another person's computer that reference names nothing, so a package may not carry
+// one: it becomes the team's key, or the build is refused.
+function withTeamApiKey(provider, apiKey) {
+  if (!isRecord(provider) || provider.apiKeySecretRef === undefined) return provider;
+  if (apiKey === undefined) {
+    refuse(
+      "the provisioned config refers to a key sealed on this computer (apiKeySecretRef); pass --api-key-env NAME with the team's key",
+    );
+  }
+  const { apiKeySecretRef: _sealed, ...rest } = provider;
+  return { ...rest, apiKey };
+}
+
+function teamApiKey(apiKeyEnv, env) {
+  if (apiKeyEnv === undefined) return undefined;
+  const value = env[apiKeyEnv];
+  if (typeof value !== "string" || value.length === 0) {
+    refuse(`--api-key-env: the environment variable ${apiKeyEnv} is not set`);
+  }
+  return value;
+}
+
+/**
+ * The gateway configuration an administrator's package carries: a config with providers, none of
+ * which refers to a credential that exists only on the administrator's own computer.
+ */
+export function readProvisionedConfig(configPath, apiKeyEnv = undefined, env = process.env) {
   if (!existsSync(configPath) || !statSync(configPath).isFile()) {
     refuse(`config not found: ${configPath}`);
   }
@@ -237,7 +273,13 @@ export function readProvisionedConfig(configPath) {
   if (!Array.isArray(config.providers) || config.providers.length === 0) {
     refuse("the provisioned config names no providers");
   }
-  return readFileSync(configPath);
+  const apiKey = teamApiKey(apiKeyEnv, env);
+  const providers = config.providers.map((provider) => withTeamApiKey(provider, apiKey));
+  // Untouched bytes when nothing was sealed: the file the administrator reviewed is the file shipped.
+  const unchanged = providers.every((provider, index) => provider === config.providers[index]);
+  return unchanged
+    ? readFileSync(configPath)
+    : Buffer.from(`${JSON.stringify({ ...config, providers }, null, 2)}\n`, "utf8");
 }
 
 function templateText(name, layout) {
@@ -308,8 +350,13 @@ function resolveBuildInput(options) {
   const archivePath = resolve(requireOption(options, "archive", "--archive"));
   const outDir = resolve(requireOption(options, "outDir", "--out-dir"));
   const expected = expectedArchiveSha256(options, archivePath);
+  if (options.apiKeyEnv !== undefined && options.config === undefined) {
+    refuse("--api-key-env needs --config");
+  }
   const configBytes =
-    options.config === undefined ? undefined : readProvisionedConfig(resolve(options.config));
+    options.config === undefined
+      ? undefined
+      : readProvisionedConfig(resolve(options.config), options.apiKeyEnv, options.env);
   const keptFolder =
     options.keepFolder === true ? join(outDir, `keiko-${target}-standalone`) : undefined;
   // Before any work: a kept folder is never replaced, and its absence is cheap to check now.
