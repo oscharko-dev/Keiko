@@ -306,6 +306,32 @@ Native Git reported a good signature (`%G? = G`). `git show --stat` reported onl
 ` M change-one.txt`, whose bytes still matched, and the index was empty. The three acceptance
 criteria passed. The finding remains open for verified integration. [#4444](https://github.com/oscharko-dev/Keiko/issues/4444)
 
+#### Git merge conflict (#4445)
+
+On `f3b9a84ff`, a three-file repository with a real pending merge reported `UU conflicted.txt`
+and index stages 1, 2 and 3 for that file. Keiko counted it as staged. The available Unstage
+control and the automatic commit preview both advised checking that the directory was a Git
+repository. Native Git confirmed that HEAD, MERGE_HEAD, the index stages and the file bytes
+survived the refused Unstage. Adding an ordinary staged file made the UI report two staged files
+while Git distinguished one `M` record from the unmerged `U` record.
+
+The mounted regression checks also vary the order of status and summary reads. A previously
+ready Pull remains blocked once the current status shows the conflict. Browser re-pair and
+subsequent status reads invalidate older preview and draft generation results, and the typed
+summary and description survive the conflict. [#4445](https://github.com/oscharko-dev/Keiko/issues/4445)
+
+On Windows candidate `94fe99ad3`, the same mixed index showed **1 staged** with the ordinary
+row checked and the conflict row unchecked. Both languages offered resolving or aborting in Git.
+Stage, Unstage, the bulk actions, generation, Commit and Sync were disabled. The conflict row
+still opened its file view, and the native index and refs remained unchanged. Reopening the
+repository recorded one correlated, body-free `git-conflict-controls-blocked` stage pair.
+
+The operator aborted the pending merge in the isolated repository and refreshed Edge. The
+ordinary file controls returned. **Stage untouched.txt** made that file the sole staged path.
+**Unstage untouched.txt** emptied the index and restored the pre-action status. HEAD and the
+selected file hash matched before and after. All three criteria passed, and the finding remains
+open for verified integration. [#4445](https://github.com/oscharko-dev/Keiko/issues/4445)
+
 ### Chat
 
 - Open a fresh Chat during startup with configured models, switch models and send a
