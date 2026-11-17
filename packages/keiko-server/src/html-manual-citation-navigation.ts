@@ -122,7 +122,7 @@ export async function handleCheckHtmlManualCitation(
     ctx.correlationId,
   );
   if (read.kind === "rejected") return read.response;
-  const target = read.value["target"];
+  const target = read.value.target;
   if (
     typeof target !== "string" ||
     target.length === 0 ||

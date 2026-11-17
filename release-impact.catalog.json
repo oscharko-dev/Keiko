@@ -4507,7 +4507,7 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-11-17",
         "humanApproved": true,
-        "approvalReference": "PENDING-1.5.2-APPROVAL",
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4455#6954262338",
         "rationale": "The repository owner authorized stable Keiko 1.5.2 for the standalone folder package, the bundled #4448 Windows QA follow-up and the fixable Windows user findings in one pull request. The protected dev checks, resolved reviews, and exact-commit release workflow govern publication. Windows Coding package qualification remains tracked in #4068; standalone archives are built locally and are not published with this release."
       }
     }

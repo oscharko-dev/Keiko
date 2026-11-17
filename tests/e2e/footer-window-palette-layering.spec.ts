@@ -54,25 +54,28 @@ async function expectControlOwnsHitPoint(page: Page, name: string): Promise<void
     const x = box.x + box.width / 2;
     const y = box.y + box.height / 2;
     const top = document.elementFromPoint(x, y);
-    const frame = element.closest("fieldset")?.parentElement;
-    const bounds = frame?.getBoundingClientRect();
     return {
       owned: top !== null && element.contains(top),
-      insideWorkspaceFrame:
-        frame != null &&
-        bounds !== undefined &&
-        getComputedStyle(frame).borderTopWidth !== "0px" &&
-        box.left > bounds.left &&
-        box.right < bounds.right &&
-        box.top > bounds.top &&
-        box.bottom < bounds.bottom,
       windowIntercepts: top?.closest(".window") !== null,
       windowUnderControl: document
         .elementsFromPoint(x, y)
         .some((candidate) => candidate.closest(".window") !== null),
     };
   });
-  expect(hit, name).toEqual({
+  // The control sits inside its bordered workspace frame, not on or across the frame's edge.
+  const insideWorkspaceFrame = await control.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const frame = element.closest("fieldset")?.parentElement;
+    if (frame == null || getComputedStyle(frame).borderTopWidth === "0px") return false;
+    const bounds = frame.getBoundingClientRect();
+    return (
+      box.left > bounds.left &&
+      box.right < bounds.right &&
+      box.top > bounds.top &&
+      box.bottom < bounds.bottom
+    );
+  });
+  expect({ ...hit, insideWorkspaceFrame }, name).toEqual({
     owned: true,
     insideWorkspaceFrame: true,
     windowIntercepts: false,

@@ -15,7 +15,8 @@ Ein kleines Fenster zeigt den Start. Sobald Keiko bereit ist, öffnet es sich in
 deinem Browser. Der erste Start kann eine Minute dauern.
 
 Öffne vor deinem ersten Chat nach jedem Start Einstellungen > Modelle und
-klicke beim gewünschten Modell auf "Aktivieren" oder auf "Alle aktivieren".
+klicke beim gewünschten Modell auf "Aktivieren" oder, falls angezeigt, auf
+"Alle aktivieren".
 
 
 Beenden

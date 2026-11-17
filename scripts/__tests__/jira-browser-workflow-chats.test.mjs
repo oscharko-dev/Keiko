@@ -396,6 +396,11 @@ describe("one ordinary browser owner for the three limit-run Chats", () => {
     expect(resumed.windowId).toBe(created.windowId);
     expect(owners.compose).toHaveBeenCalledOnce();
     expect(owners.openBrowser).toHaveBeenCalledOnce();
+    // Activation lives only in the running server process, so a resumed Chat activates again.
+    const activations = page.request.post.mock.calls.filter(
+      ([path]) => path === "/api/gateway/readiness",
+    );
+    expect(activations).toHaveLength(2);
   });
 
   it("refuses a missing saved Chat before UI creation, focusing or any composer write", async () => {

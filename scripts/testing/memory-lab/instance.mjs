@@ -160,14 +160,18 @@ async function activateModel(bff, modelId) {
     throw new Error(`answer model activation failed with HTTP ${String(result.status)}`);
 }
 
+// The settled startup read; a model that reports no readiness is activated the way a person does.
+async function settledStartupModel(bff, modelId) {
+  const model = await startupModel(bff, modelId, "/api/models?settleStartup=1");
+  if (model === undefined || model.conversationReady !== undefined) return model;
+  await activateModel(bff, modelId);
+  return startupModel(bff, modelId, "/api/models");
+}
+
 export async function awaitStartupReadiness(bff, modelId, timing = {}) {
   const { settleMs = STARTUP_SETTLE_MS, pollMs = STARTUP_POLL_MS } = timing;
   const deadline = Date.now() + settleMs;
-  let model = await startupModel(bff, modelId, "/api/models?settleStartup=1");
-  if (model !== undefined && model.conversationReady === undefined) {
-    await activateModel(bff, modelId);
-    model = await startupModel(bff, modelId, "/api/models");
-  }
+  let model = await settledStartupModel(bff, modelId);
   let rereads = 0;
   while (model !== undefined && model.conversationReady === undefined && Date.now() < deadline) {
     await delay(pollMs);
