@@ -226,6 +226,12 @@ describe("macOS runtime activation of an in-place launch", () => {
     const payload = join(home, "Keiko", "system", "Keiko");
     mkdirSync(payload, { recursive: true });
     const resources = writePayload(payload, "macos-arm64");
+    // The activation manager is present, as in a real payload: what refuses a signed payload in
+    // place is the rule that the manager and its folders are root-owned, not a missing file.
+    writeFileSync(
+      join(payload, "Keiko.app", "Contents", "MacOS", "KeikoSystemExtensionManager"),
+      "fixture activation manager\n",
+    );
     const stateDir = join(home, ".keiko-standalone");
     const calls: LifecycleCall[] = [];
     let out = "";

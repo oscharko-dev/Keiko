@@ -33,7 +33,8 @@ The start file runs the Node.js runtime inside `system` and opens Keiko in the b
 its data in `.keiko-standalone` in the person's user folder, not in this folder. Replacing the
 folder with a newer package therefore keeps chats, settings and credentials.
 
-The package folder is not written while Keiko runs. It can be read-only.
+Keiko does not write into the package folder. The qualification started the macOS package from a
+read-only folder and compared the Windows folder after a session; neither changed.
 
 ## Build A Package
 
@@ -80,7 +81,8 @@ sees a setup dialog.
    ```
 
    The builder replaces every sealed reference with the key from the named environment variable
-   and writes `out/keiko-windows-x64-standalone-team.zip`. A configuration that still refers to a
+   and writes `out/keiko-windows-x64-standalone-team.zip`. Every provider in the file must name
+   its `modelId` and `baseUrl`: a package cannot rely on another computer's environment. A configuration that still refers to a
    key sealed on your computer is refused: on another computer that reference names nothing.
 
 3. Put the archive on an internal file share and give the team its path.
@@ -147,8 +149,9 @@ A new version arrives as a new folder: stop Keiko, delete the old folder, use th
 
 ## What This Form Does Not Do
 
-- **No in-app update.** Keiko shows "Updates managed by your organization" and makes no release
-  request. The start files declare the folder as managed outside the app.
+- **No in-app update.** Keiko shows "Updates managed by your organization". An install that is
+  managed outside the app makes no registry or release request (pinned by
+  `update-preflight.test.ts`). The start files declare the folder as managed outside the app.
 - **No managed setup.** Nothing is copied to `/Applications` or `%LOCALAPPDATA%\Programs`, and
   there is no Start Menu, Spotlight or Launchpad entry. Do not start `Keiko.app` or `Keiko.exe`
   inside `system`: those are the launchers of the managed install.

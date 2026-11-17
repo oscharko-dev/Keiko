@@ -155,10 +155,21 @@ export function expectedArchiveSha256(options, archivePath) {
   }
   const name = basename(archivePath);
   for (const line of readFileSync(options.sha256sums, "utf8").split(/\r?\n/u)) {
-    const match = /^([0-9a-fA-F]{64})\s+\*?(.+)$/u.exec(line.trim());
-    if (match !== null && match[2] === name) return match[1].toLowerCase();
+    const entry = sha256sumsEntry(line);
+    if (entry?.name === name) return entry.sha256;
   }
   return refuse(`${basename(options.sha256sums)} does not name ${name}`);
+}
+
+// One line of a SHA256SUMS file: the digest, blanks, an optional `*` (binary mode), the file name.
+// Read by position, not by a pattern: the digest has a fixed width.
+function sha256sumsEntry(line) {
+  const text = line.trim();
+  const sha256 = text.slice(0, 64).toLowerCase();
+  const rest = text.slice(64);
+  if (!SHA256_PATTERN.test(sha256) || rest.trimStart() === rest) return undefined;
+  const name = rest.trimStart();
+  return { sha256, name: name.startsWith("*") ? name.slice(1) : name };
 }
 
 function validSha256(value, label) {
@@ -254,8 +265,8 @@ function withTeamApiKey(provider, apiKey) {
       "the provisioned config refers to a key sealed on this computer (apiKeySecretRef); pass --api-key-env NAME with the team's key",
     );
   }
-  const { apiKeySecretRef: _sealed, ...rest } = provider;
-  return { ...rest, apiKey };
+  const kept = Object.entries(provider).filter(([field]) => field !== "apiKeySecretRef");
+  return { ...Object.fromEntries(kept), apiKey };
 }
 
 function teamApiKey(apiKeyEnv, env) {
@@ -282,7 +293,7 @@ export function readProvisionedConfig(configPath, apiKeyEnv = undefined, env = p
   const apiKey = teamApiKey(apiKeyEnv, env);
   const providers = config.providers.map((provider) => withTeamApiKey(provider, apiKey));
   providers.forEach(assertProviderOutline);
-  // Untouched text when nothing was sealed: the file the administrator reviewed is the file shipped.
+  // The administrator's own text when nothing was sealed (without a byte order mark).
   const unchanged = providers.every((provider, index) => provider === config.providers[index]);
   return Buffer.from(
     unchanged

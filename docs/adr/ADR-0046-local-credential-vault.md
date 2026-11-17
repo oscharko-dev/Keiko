@@ -101,7 +101,16 @@ What Keiko persists stays under D2 to D4. `keiko start --provisioned-config` cop
 the state directory with private permissions, after it loaded through the gateway's config loader,
 and the D4 migration seals the key into the person's vault and rewrites the adopted copy without
 plaintext on that same start. D4 is best effort by design: when the vault cannot be written the
-plaintext stays in the adopted copy until a later start succeeds, and `keiko repair` reports it. The marker beside it
+plaintext stays in the adopted copy until a later start succeeds, and `keiko repair` reports it.
+
+The marker is the unsalted SHA-256 of the provisioned file, and that file contains the key. For
+someone who can read the state directory but not the package, the marker is therefore an offline
+check for a guessed key: every other byte of the file is known to whoever holds a package of the
+same team. A random gateway key cannot be found that way; a short hand-chosen one can. This is
+accepted and not hidden: the same key sits in plain text in the package, which is at least as
+reachable as the state directory, and the operator guide requires a generated key with an expiry.
+A keyed marker would need the vault key at every start, before any vault use. The digest never
+enters the Activity Log, which is the only thing that leaves the machine. The marker beside it
 (`ui/provisioned-config.sha256`) holds the SHA-256 of the adopted file and no content. The adoption
 logs the closed outcome and an error class, never the path or the bytes.
 

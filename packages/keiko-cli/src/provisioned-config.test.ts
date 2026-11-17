@@ -70,16 +70,21 @@ function fixture(content: string | null = configText()): Fixture {
     configPath: join(stateDir, "ui", "keiko.config.json"),
     markerPath: join(stateDir, "ui", "provisioned-config.sha256"),
     events,
-    adopt: async (overrides = {}): Promise<ProvisionedConfigOutcome> =>
-      (
-        await adoptProvisionedConfig({
-          sourcePath: overrides.source ?? source,
-          stateDir,
-          env: overrides.env ?? {},
-          running: overrides.running ?? false,
-          securityLogSink: { write: (event): void => void events.push(event) },
-        })
-      ).outcome,
+    adopt: async (overrides = {}): Promise<ProvisionedConfigOutcome> => {
+      const before = events.length;
+      const { outcome } = await adoptProvisionedConfig({
+        sourcePath: overrides.source ?? source,
+        stateDir,
+        env: overrides.env ?? {},
+        running: overrides.running ?? false,
+        securityLogSink: { write: (event): void => void events.push(event) },
+      });
+      // Every adoption, whatever its outcome, leaves exactly one line that names that outcome:
+      // a decision recorded twice, or not at all, cannot be reconstructed from the log.
+      const recorded = events.slice(before).map((event) => event.extra?.outcome);
+      expect(recorded).toEqual([outcome]);
+      return outcome;
+    },
   };
 }
 

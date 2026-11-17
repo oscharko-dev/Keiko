@@ -137,8 +137,6 @@ export function emitProvisionedConfig(
   );
 }
 
-// Every decision is recorded where it is made, exactly once: a failure leaves its line in the
-// catch that saw it, not one layer up where its cause is no longer in hand.
 function recordOutcome(
   sink: SecurityLogSink | undefined,
   outcome: ProvisionedConfigOutcome,
@@ -149,12 +147,27 @@ function recordOutcome(
   return result;
 }
 
-type ReadResult =
-  | { readonly status: "ok"; readonly bytes: Buffer }
-  | { readonly status: "settled"; readonly result: ProvisionedConfigResult };
+// An adoption that ends anywhere but in a decision ends here: the step that saw the fault names
+// the closed outcome and keeps the cause, and the one place that records writes the line. Thrown
+// rather than returned, so that no step can record a line of its own and a cleanup that fails
+// after a fault cannot add a second one.
+class AdoptionEnded extends Error {
+  readonly outcome: ProvisionedConfigOutcome;
+  readonly fault: unknown;
 
-function settledRead(result: ProvisionedConfigResult): ReadResult {
-  return { status: "settled", result };
+  constructor(outcome: ProvisionedConfigOutcome, fault?: unknown) {
+    super(outcome);
+    this.name = "AdoptionEnded";
+    this.outcome = outcome;
+    this.fault = fault;
+  }
+}
+
+function recordEnded(sink: SecurityLogSink | undefined, error: unknown): ProvisionedConfigResult {
+  return error instanceof AdoptionEnded
+    ? recordOutcome(sink, error.outcome, error.fault)
+    : // A fault of the state directory that no step foresaw: nothing was adopted.
+      recordOutcome(sink, "write-failed", error);
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -162,18 +175,38 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === "string" ? error.code : undefined;
 }
 
-function openFailureOutcome(error: unknown): ProvisionedConfigOutcome {
+function openEnded(error: unknown): AdoptionEnded {
   const code = errorCode(error);
-  if (code === "ENOENT") return "absent";
+  // An absent file is the ordinary case of a package without a configuration, not a fault.
+  if (code === "ENOENT") return new AdoptionEnded("absent");
   // ELOOP is what O_NOFOLLOW answers for a link; a link names bytes outside the package folder.
-  return code === "ELOOP" ? "refused-link" : "read-failed";
+  return new AdoptionEnded(code === "ELOOP" ? "refused-link" : "read-failed", error);
 }
 
-function readDescriptor(fd: number, sink: SecurityLogSink | undefined): ReadResult {
+// O_NOFOLLOW and O_NONBLOCK do not exist on Windows, where the constant is undefined.
+function openFlag(flag: number | undefined): number {
+  return flag ?? 0;
+}
+
+function openProvisionedFile(path: string): number {
+  try {
+    // lstat first: a link must be refused on every platform, and anything that is not a regular
+    // file must be refused before it is opened (opening a FIFO would block the start for good).
+    const entry = lstatSync(path);
+    if (entry.isSymbolicLink()) throw new AdoptionEnded("refused-link");
+    if (!entry.isFile()) throw new AdoptionEnded("invalid");
+    const flags =
+      fsConstants.O_RDONLY | openFlag(fsConstants.O_NOFOLLOW) | openFlag(fsConstants.O_NONBLOCK);
+    return openSync(path, flags);
+  } catch (error) {
+    throw error instanceof AdoptionEnded ? error : openEnded(error);
+  }
+}
+
+function readDescriptor(fd: number): Buffer {
   const stat = fstatSync(fd);
-  if (!stat.isFile()) return settledRead(recordOutcome(sink, "invalid"));
-  if (stat.size > PROVISIONED_CONFIG_MAX_BYTES)
-    return settledRead(recordOutcome(sink, "too-large"));
+  if (!stat.isFile()) throw new AdoptionEnded("invalid");
+  if (stat.size > PROVISIONED_CONFIG_MAX_BYTES) throw new AdoptionEnded("too-large");
   const bytes = Buffer.alloc(stat.size);
   let filled = 0;
   while (filled < bytes.byteLength) {
@@ -182,50 +215,20 @@ function readDescriptor(fd: number, sink: SecurityLogSink | undefined): ReadResu
     filled += read;
   }
   // A file that changed size while it was read is not the file that was measured.
-  return filled === bytes.byteLength
-    ? { status: "ok", bytes }
-    : settledRead(recordOutcome(sink, "read-failed"));
+  if (filled !== bytes.byteLength) throw new AdoptionEnded("read-failed");
+  return bytes;
 }
 
-// O_NOFOLLOW and O_NONBLOCK do not exist on Windows, where the constant is undefined.
-function openFlag(flag: number | undefined): number {
-  return flag ?? 0;
-}
-
-type OpenResult =
-  | { readonly status: "open"; readonly fd: number }
-  | { readonly status: "settled"; readonly result: ProvisionedConfigResult };
-
-function openProvisionedFile(path: string, sink: SecurityLogSink | undefined): OpenResult {
+function readProvisionedFile(path: string): Buffer {
+  const fd = openProvisionedFile(path);
   try {
-    // lstat first: a link must be refused on every platform, and anything that is not a regular
-    // file must be refused before it is opened (opening a FIFO would block the start for good).
-    const entry = lstatSync(path);
-    if (entry.isSymbolicLink())
-      return { status: "settled", result: recordOutcome(sink, "refused-link") };
-    if (!entry.isFile()) return { status: "settled", result: recordOutcome(sink, "invalid") };
-    const flags =
-      fsConstants.O_RDONLY | openFlag(fsConstants.O_NOFOLLOW) | openFlag(fsConstants.O_NONBLOCK);
-    return { status: "open", fd: openSync(path, flags) };
+    try {
+      return readDescriptor(fd);
+    } finally {
+      closeSync(fd);
+    }
   } catch (error) {
-    const outcome = openFailureOutcome(error);
-    // An absent file is the ordinary case of a package without a configuration, not a failure.
-    return {
-      status: "settled",
-      result: recordOutcome(sink, outcome, outcome === "absent" ? undefined : error),
-    };
-  }
-}
-
-function readProvisionedFile(path: string, sink: SecurityLogSink | undefined): ReadResult {
-  const opened = openProvisionedFile(path, sink);
-  if (opened.status === "settled") return opened;
-  try {
-    return readDescriptor(opened.fd, sink);
-  } catch (error) {
-    return settledRead(recordOutcome(sink, "read-failed", error));
-  } finally {
-    closeSync(opened.fd);
+    throw error instanceof AdoptionEnded ? error : new AdoptionEnded("read-failed", error);
   }
 }
 
@@ -299,33 +302,24 @@ export interface ProvisionedConfigInput {
   readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
-// The candidate must load through the loader the UI process reads its configuration with, on the
-// exact bytes it will read. The loader's message would quote file content, so the record is the
-// closed outcome and the error's class.
-async function refusedAsInvalid(
-  candidate: string,
-  input: ProvisionedConfigInput,
-): Promise<ProvisionedConfigResult | undefined> {
-  const { loadConfigFromFile } = await loadModelGateway();
-  try {
-    loadConfigFromFile(candidate, input.env);
-    return undefined;
-  } catch (error) {
-    rmSync(candidate, { force: true });
-    return recordOutcome(input.securityLogSink, "invalid", error);
-  }
-}
-
-function writeCandidate(
-  input: ProvisionedConfigInput,
-  uiDataDir: string,
-  bytes: Buffer,
-): string | ProvisionedConfigResult {
+function writeCandidate(uiDataDir: string, bytes: Buffer): string {
   try {
     ensureUiDataDir(uiDataDir);
     return writeTemporaryFile(join(uiDataDir, GATEWAY_CONFIG_FILENAME), bytes);
   } catch (error) {
-    return recordOutcome(input.securityLogSink, "write-failed", error);
+    throw new AdoptionEnded("write-failed", error);
+  }
+}
+
+// The candidate must load through the loader the UI process reads its configuration with, on the
+// exact bytes it will read. The loader's message would quote file content, so what is kept is the
+// closed outcome and the error's class.
+async function assertLoadsAsGatewayConfig(candidate: string, env: EnvSource): Promise<void> {
+  const { loadConfigFromFile } = await loadModelGateway();
+  try {
+    loadConfigFromFile(candidate, env);
+  } catch (error) {
+    throw new AdoptionEnded("invalid", error);
   }
 }
 
@@ -336,12 +330,12 @@ function publishAdoption(
   candidate: string,
   uiDataDir: string,
   sha256: string,
-): ProvisionedConfigResult {
+): void {
   const sink = input.securityLogSink;
   try {
     publishFile(candidate, join(uiDataDir, GATEWAY_CONFIG_FILENAME), sink);
   } catch (error) {
-    return recordOutcome(sink, "write-failed", error);
+    throw new AdoptionEnded("write-failed", error);
   }
   const markerPath = join(uiDataDir, PROVISIONED_CONFIG_MARKER_FILENAME);
   try {
@@ -350,11 +344,10 @@ function publishAdoption(
       markerPath,
       sink,
     );
-    return recordOutcome(sink, "adopted");
   } catch (error) {
     // The configuration is in force; only the record of it is missing, so the next start adopts
     // the same bytes again.
-    return recordOutcome(sink, "marker-failed", error);
+    throw new AdoptionEnded("marker-failed", error);
   }
 }
 
@@ -363,47 +356,53 @@ async function replaceConfiguration(
   uiDataDir: string,
   bytes: Buffer,
   sha256: string,
-): Promise<ProvisionedConfigResult> {
-  const candidate = writeCandidate(input, uiDataDir, bytes);
-  if (typeof candidate !== "string") return candidate;
-  return (
-    (await refusedAsInvalid(candidate, input)) ??
-    publishAdoption(input, candidate, uiDataDir, sha256)
-  );
+): Promise<void> {
+  const candidate = writeCandidate(uiDataDir, bytes);
+  try {
+    await assertLoadsAsGatewayConfig(candidate, input.env);
+    publishAdoption(input, candidate, uiDataDir, sha256);
+  } finally {
+    // The candidate holds the key in plain text. Once published it no longer exists under this
+    // name; on every other way out, including a loader that could not be loaded at all, it must
+    // not stay behind.
+    rmSync(candidate, { force: true });
+  }
 }
 
-async function decide(input: ProvisionedConfigInput): Promise<ProvisionedConfigResult> {
-  const sink = input.securityLogSink;
+type AdoptionDecision = "adopted" | "unchanged" | "deferred-running" | "overridden";
+
+async function decide(input: ProvisionedConfigInput): Promise<AdoptionDecision> {
   // An explicit config location belongs to whoever set it; the server reads that one, so a file
   // adopted into the state directory would silently not be the configuration in force.
   if (hasEnvValue(input.env.KEIKO_CONFIG_FILE) || hasEnvValue(input.env.KEIKO_UI_DATA_DIR)) {
-    return recordOutcome(sink, "overridden");
+    return "overridden";
   }
-  const read = readProvisionedFile(input.sourcePath, sink);
-  if (read.status === "settled") return read.result;
-  const bytes = withoutByteOrderMark(read.bytes);
+  const bytes = withoutByteOrderMark(readProvisionedFile(input.sourcePath));
   const uiDataDir = defaultUiDataDir(input.stateDir);
   const sha256 = sha256Hex(bytes);
   if (adoptedSha256(join(uiDataDir, PROVISIONED_CONFIG_MARKER_FILENAME)) === sha256) {
-    return recordOutcome(sink, "unchanged");
+    return "unchanged";
   }
-  if (input.running) return recordOutcome(sink, "deferred-running");
-  return replaceConfiguration(input, uiDataDir, bytes, sha256);
+  if (input.running) return "deferred-running";
+  await replaceConfiguration(input, uiDataDir, bytes, sha256);
+  return "adopted";
 }
 
 /**
  * Adopts the provisioned configuration when it is new or changed. Exactly one activity line
- * records the outcome. It never throws into the start: a fault of the state directory that no
- * branch foresaw is recorded as a failed save, and the current configuration stays in force.
+ * records the outcome: the decision when the adoption ran to its end, otherwise the outcome and
+ * cause of the step that ended it. It never throws into the start.
  */
 export async function adoptProvisionedConfig(
   input: ProvisionedConfigInput,
 ): Promise<ProvisionedConfigResult> {
+  let decision: AdoptionDecision;
   try {
-    return await decide(input);
+    decision = await decide(input);
   } catch (error) {
-    return recordOutcome(input.securityLogSink, "write-failed", error);
+    return recordEnded(input.securityLogSink, error);
   }
+  return recordOutcome(input.securityLogSink, decision);
 }
 
 const OUTCOME_MESSAGES: Readonly<Partial<Record<ProvisionedConfigOutcome, string>>> = {

@@ -26,6 +26,8 @@ One of these, after a double-click on `Start Keiko`:
 5. Keiko opens and a chat fails with an error about a missing API key.
 6. Keiko shows "Portable setup required" instead of "Updates managed by your organization".
 7. After a new package, Keiko still uses the old gateway or key.
+8. On macOS the start window prints `keiko portable launch: macOS runtime activation is
+incomplete`, then `Keiko could not start.`
 
 **Root Cause**
 
@@ -49,6 +51,9 @@ One of these, after a double-click on `Start Keiko`:
    managed outside the app.
 7. Keiko was running when the new package was started. A running Keiko holds its configuration in
    memory, so the new file is adopted at the next start (`deferred-running`).
+8. The payload carries an Apple platform signature. A signed payload's runtime monitor must sit in
+   the root-owned application location, which a folder in the user's home can never be, so the
+   in-place launch is refused (ADR-0121 D9). The folder form is for the unsigned payload.
 
 **Diagnostic Steps**
 
@@ -95,7 +100,12 @@ started in place.
    `invalid`, `too-large`, `refused-link`, `read-failed`: the file in the package is not usable;
    the administrator rebuilds the package. `overridden`: `KEIKO_CONFIG_FILE` or
    `KEIKO_UI_DATA_DIR` is set for this account, and that location wins. `write-failed`: start
-   again; if it stays, check that the user folder is writable.
+   again; if it stays, check that the user folder is writable, and delete
+   `ui/provisioned-config.sha256` in the state directory, which makes the next start adopt the
+   file again. `marker-failed`: the configuration is in use; Keiko only could not note that it
+   adopted it and adopts it again at the next start.
 5. The administrator rebuilds the package with `--config` and `--api-key-env`.
 6. Stop Keiko and start it with `Start Keiko`.
 7. Stop Keiko and start it again.
+8. Use the unsigned standalone package, or install the signed build through the
+   [portable managed install](../release/portable-launch-setup-guide.md).

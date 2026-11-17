@@ -1160,8 +1160,9 @@ reviewed archive.
 **Launch.** The start files run the bundled Node.js against the bundled CLI:
 `keiko portable launch --in-place`. In place, the launch validates the payload like every portable
 root (D2) and then starts Keiko from where it is. It performs no managed setup, writes no
-registration and consults no update recovery, which belongs to a managed install. The package
-folder is not written at runtime. State lives in `~/.keiko-standalone`, deliberately not in the
+registration and consults no update recovery, which belongs to a managed install. Keiko does not
+write into the package folder (qualified from a read-only folder on macOS and by comparing the
+folder after a session on Windows). State lives in `~/.keiko-standalone`, deliberately not in the
 `~/.keiko` of a managed install: the two forms then never share a pid file, a registration, an
 update-recovery record or a database schema of a different version, and replacing the folder with
 a newer package keeps the person's data. The start files are scripts on purpose. The only programs
@@ -1176,7 +1177,8 @@ to the UI process. Install-mode detection reads that declaration (closed values 
 `organization-managed`, `machine-managed`; an unreadable value fails closed to
 `organization-managed`) and reports a declared payload through the existing `portable-it-managed`
 disposition before it judges any registration. The app therefore states that the install is
-managed outside the app and makes no release request; it never offers the portable setup, whose
+managed outside the app and makes no registry or release request (`update-preflight.test.ts` pins
+that for this disposition); it never offers the portable setup, whose
 instruction would lead the person to the installation this form exists to avoid. A new version
 arrives as a new folder.
 

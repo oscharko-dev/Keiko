@@ -350,38 +350,53 @@ function managedLaunchOptions(
   };
 }
 
+// macOS asks the runtime activation before every launch. `false` means the launch is refused and
+// its reason is already written and recorded.
+async function macosRuntimeAdmitsLaunch(
+  options: LaunchManagedOptions,
+  activate: MacosRuntimeActivationFn,
+): Promise<boolean> {
+  const { target, layout, io } = options;
+  if (target !== "macos-arm64" && target !== "macos-x64") return true;
+  const activation = await activate(layout, target);
+  if (activation === "unavailable") {
+    io.err("keiko portable launch: macOS runtime activation is incomplete\n");
+    recordLaunchFailure(options.launchFailure, "macos-activation");
+    return false;
+  }
+  if (activation === "waived-unsigned" && options.quietActivationWaiver !== true) {
+    io.out(
+      "Keiko platform runtime containment is waived: this install carries no release signature.\n",
+    );
+  }
+  return true;
+}
+
+function managedStartArguments(options: LaunchManagedOptions): string[] {
+  const args = ["--open", "--state-dir", options.stateDir];
+  if (options.provisionedConfig !== undefined) {
+    args.push("--provisioned-config", options.provisionedConfig);
+  }
+  if (options.recovered !== undefined) {
+    const { host, port } = options.recovered.descriptor;
+    args.push("--host", host, "--port", String(port));
+  }
+  return args;
+}
+
 async function launchManaged(
   options: LaunchManagedOptions,
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
 ): Promise<number> {
-  const { target, layout, io, env, stateDir, securityLogSink, recovered, launchFailure } = options;
-  if (target === "macos-arm64" || target === "macos-x64") {
-    const activation = await deps.activateMacosRuntimeFn(layout, target);
-    if (activation === "unavailable") {
-      io.err("keiko portable launch: macOS runtime activation is incomplete\n");
-      recordLaunchFailure(launchFailure, "macos-activation");
-      return 1;
-    }
-    if (activation === "waived-unsigned" && options.quietActivationWaiver !== true) {
-      io.out(
-        "Keiko platform runtime containment is waived: this install carries no release signature.\n",
-      );
-    }
-  }
-  const args = ["--open", "--state-dir", stateDir];
-  if (options.provisionedConfig !== undefined) {
-    args.push("--provisioned-config", options.provisionedConfig);
-  }
-  if (recovered !== undefined) {
-    args.push("--host", recovered.descriptor.host, "--port", String(recovered.descriptor.port));
-  }
+  const { target, layout, io, env, securityLogSink, recovered, launchFailure } = options;
+  if (!(await macosRuntimeAdmitsLaunch(options, deps.activateMacosRuntimeFn))) return 1;
   const launchEnv =
     recovered === undefined ? env : { ...env, KEIKO_PORTABLE_RECOVERED_LAUNCH: recovered.encoded };
   const nativeUiRuntime =
     target === "linux-x64"
       ? (await import("./native-ui-runtime.js")).nativeUiRuntimeForLayout(layout, securityLogSink)
       : undefined;
-  return deps.lifecycleFn("start", args, io, launchEnv, {
+  return deps.lifecycleFn("start", managedStartArguments(options), io, launchEnv, {
     cwd: layout.appRoot,
     securityLogSink,
     recordFailure: failureRecorderFor(launchFailure),
