@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useEffectEvent,
   useId,
   useCallback,
   useRef,
@@ -80,7 +81,19 @@ const CubeIcon = Icons.cube;
 const MoonIcon = Icons.moon;
 const SunIcon = Icons.sun;
 
-type FormSubmitEvent = { preventDefault: () => void };
+const SUBMIT_INPUT_TYPES = new Set(["text", "url", "email", "number", "password", "search", "tel"]);
+
+function isSubmitInputEnter(event: globalThis.KeyboardEvent): boolean {
+  return (
+    event.key === "Enter" &&
+    !event.defaultPrevented &&
+    !event.isComposing &&
+    event.target instanceof HTMLInputElement &&
+    // Select popups portal into the dialog; their inputs retain their own Enter behavior.
+    event.target.closest(".gw-form")?.parentElement === event.currentTarget &&
+    SUBMIT_INPUT_TYPES.has(event.target.type)
+  );
+}
 
 // Human-readable message first; the machine code (useful for support) is kept
 // separate and rendered as a secondary mono line, never as a raw
@@ -2691,6 +2704,7 @@ function GatewaySetupStatus({
 
 interface GatewaySetupActionsProps {
   readonly onCancel: (() => void) | undefined;
+  readonly onSubmit: () => void;
   readonly busy: boolean;
   readonly success: string | undefined;
   readonly canSubmit: boolean;
@@ -2698,6 +2712,7 @@ interface GatewaySetupActionsProps {
 
 function GatewaySetupActions({
   onCancel,
+  onSubmit,
   busy,
   success,
   canSubmit,
@@ -2717,7 +2732,8 @@ function GatewaySetupActions({
       ) : null}
       <button
         className="gw-submit"
-        type="submit"
+        type="button"
+        onClick={onSubmit}
         disabled={!canSubmit}
         aria-busy={busy}
         aria-describedby="gw-submit-requirements"
@@ -3090,10 +3106,28 @@ export function GatewaySetupDialog({
     };
   }, [preserveExisting]);
 
+  const submitFromInput = useEffectEvent((event: globalThis.KeyboardEvent): void => {
+    if (!isSubmitInputEnter(event)) return;
+    event.preventDefault();
+    void submit();
+  });
+
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog === null) return undefined;
+    let compositionTarget: EventTarget | null = null;
+    let compositionResetFrame: number | undefined;
+    const onCompositionEnd = (event: CompositionEvent): void => {
+      // WebKit can dispatch compositionend before the same keystroke's Enter (bug 324380).
+      compositionTarget = event.target;
+      if (compositionResetFrame !== undefined) window.cancelAnimationFrame(compositionResetFrame);
+      compositionResetFrame = window.requestAnimationFrame(() => {
+        compositionTarget = null;
+        compositionResetFrame = undefined;
+      });
+    };
     const onDialogKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.target !== compositionTarget) submitFromInput(event);
       if (event.key === "Escape") {
         if (busy || success !== undefined || onCancel === undefined) return;
         event.preventDefault();
@@ -3113,8 +3147,13 @@ export function GatewaySetupDialog({
         first.focus();
       }
     };
+    dialog.addEventListener("compositionend", onCompositionEnd);
     dialog.addEventListener("keydown", onDialogKeyDown);
-    return () => dialog.removeEventListener("keydown", onDialogKeyDown);
+    return () => {
+      dialog.removeEventListener("compositionend", onCompositionEnd);
+      dialog.removeEventListener("keydown", onDialogKeyDown);
+      if (compositionResetFrame !== undefined) window.cancelAnimationFrame(compositionResetFrame);
+    };
   }, [busy, onCancel, success]);
 
   // After a failed test the controls are re-enabled but nothing was focused
@@ -3294,9 +3333,8 @@ export function GatewaySetupDialog({
     setImportedVoiceEndpointBaseUrl(fields.voiceBaseUrl.trim());
   }
 
-  async function submit(event: FormSubmitEvent): Promise<void> {
-    event.preventDefault();
-    if (busy) return;
+  async function submit(): Promise<void> {
+    if (!canSubmit) return;
     setBusy(true);
     setError(undefined);
     setErrorCode(undefined);
@@ -3358,6 +3396,7 @@ export function GatewaySetupDialog({
         return;
       }
       setBusy(false);
+      setApiKey("");
       setSuccess(outcome.message);
       // The stored configuration is now a different one. Announce it before the reload window opens:
       // for the ~1s the success message is on screen the Settings panel is still mounted, and every
@@ -3526,7 +3565,8 @@ export function GatewaySetupDialog({
         // area is clicked or all controls are disabled (audit C007/C186).
         tabIndex={-1}
       >
-        <form className="gw-form" onSubmit={(event) => void submit(event)}>
+        {/* Gateway credentials are saved by the explicit action, without a browser login form. */}
+        <div className="gw-form">
           <div className="gw-head">
             <div className={styles["cmp-head-controls"]}>
               <div className="gw-setup-badge">
@@ -3592,11 +3632,12 @@ export function GatewaySetupDialog({
           </span>
           <GatewaySetupActions
             onCancel={onCancel}
+            onSubmit={() => void submit()}
             busy={busy}
             success={success}
             canSubmit={canSubmit}
           />
-        </form>
+        </div>
       </dialog>
     </div>
   );
