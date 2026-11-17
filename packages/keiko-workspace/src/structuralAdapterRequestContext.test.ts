@@ -5,6 +5,7 @@ import {
   buildCodeIntelligenceIndex,
   buildCodeIntelligenceIndexFromCandidates,
   buildCodeIntelligenceIndexFromCandidatesAsync,
+  CODE_INDEX_MAX_PARSED_SOURCE_BYTES,
 } from "./codeIntelligence.js";
 import { endpointContractAdapter } from "./endpointContractAdapter.js";
 import { PathEscapeError } from "./errors.js";
@@ -168,6 +169,40 @@ describe("cooperative code-index construction", () => {
       expect(index.candidateLimitReached).toBe(false);
     }
     expect(context.diagnostics().codeIndexBuildCount).toBe(1);
+  });
+
+  // #4456: the request context records when the parsed source budget ended a code index build, so
+  // the Activity Log can tell a memory-bounded index from a complete one.
+  it("counts code index builds that the parsed source budget truncated", async () => {
+    // A comment-only source costs its full size in the budget but almost nothing to parse.
+    const twoMiB = 2_097_152;
+    const commentSource = `// ${"x".repeat(twoMiB - 3)}`;
+    const perFileCharge = Math.min(
+      twoMiB,
+      Math.max(BOUNDED_REQUEST_LIMITS.maxBytesPerFileScanned, twoMiB),
+    );
+    const fitting = Math.floor(CODE_INDEX_MAX_PARSED_SOURCE_BYTES / perFileCharge);
+    const files = Object.fromEntries(
+      Array.from({ length: fitting + 1 }, (_, index) => [
+        `src/large-${String(index).padStart(2, "0")}.ts`,
+        commentSource,
+      ]),
+    );
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      BOUNDED_REQUEST_LIMITS,
+      memFs(ROOT, files),
+      { nowMs: FIXED_NOW },
+    );
+
+    const index = await context.codeIntelligenceIndex();
+
+    expect(index.filesIndexed).toBe(fitting);
+    expect(index.candidateLimitReached).toBe(true);
+    expect(context.diagnostics()).toMatchObject({
+      codeIndexBuildCount: 1,
+      codeIndexSourceBudgetReachedCount: 1,
+    });
   });
 
   it("observes cancellation delivered by the event loop during source intake", async () => {

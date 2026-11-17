@@ -762,6 +762,8 @@ describe("retrieveConnectedContextPack activity log", () => {
         queryIdentitySha256: started.queryIdentitySha256,
         activityDetailStatus: "complete",
         sourceDescriptorPathCount: 0,
+        // #4456: a healthy small scope never reaches the parsed source budget.
+        structuralCodeIndexSourceBudgetReachedCount: 0,
         completeness: "complete",
         loss: "none",
       });

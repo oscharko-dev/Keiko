@@ -355,7 +355,12 @@ bounds.
 
 Structural AST, import, symbol, endpoint and source/test intake likewise honor the actual caller
 file-scan ceiling. A null ceiling uses all eligible entries in the finite admitted candidate
-inventory. Resolver metadata reservation follows that same ceiling. The request-local AST reader
+inventory. Resolver metadata reservation follows that same ceiling. The code intelligence build
+additionally keeps every parsed syntax tree alive until its last stage, so the source text one build
+parses is bounded (32 MiB, each source charged at most the per-file read cap from its discovered
+size, in the existing preference order). The bound ends the source list as a candidate limit
+(`candidateLimitReached`, `scope-incomplete` uncertainty) instead of exhausting the server heap; the
+existing `evidence-details` line counts such builds (#4456). The request-local AST reader
 fixes its current-source metadata capacity once from the admitted inventory and caller ceiling;
 guarded reading, currentness, cancellation and partial-source uncertainty still apply. Complete-text
 reuse retains the independent bounds stated below, and optional enrichment retains its finite grants.

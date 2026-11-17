@@ -347,7 +347,9 @@ Imported targets retain exact runtime module-export identities. Explicit compile
 reuse already guarded metadata and can address only admitted sources in the owning package.
 Structural AST, import, symbol, endpoint and source/test intake honor the actual caller file
 ceiling. A null ceiling uses the finite admitted candidate inventory, including resolver metadata
-reservation and request-local current-source metadata capacity. Finite enrichment grants and
+reservation and request-local current-source metadata capacity. The code intelligence build also
+bounds the source text it parses (32 MiB) and reports the bound as a candidate limit, counted on
+`evidence-details`, instead of exhausting the heap (#4456). Finite enrichment grants and
 bounded complete-text reuse retain their separate limits.
 Unreadable or partially observed re-export branches retain uncertainty; missing indexed exports
 cannot certify a unique runtime target when a competing branch is unobserved.

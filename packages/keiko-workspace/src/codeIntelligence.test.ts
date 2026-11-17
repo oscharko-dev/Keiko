@@ -5,6 +5,7 @@ import { memFs } from "./_memfs.js";
 import {
   buildCodeIntelligenceIndex,
   buildCodeIntelligenceIndexFromCandidates,
+  CODE_INDEX_MAX_PARSED_SOURCE_BYTES,
   controlledBuild,
   lookupCodeIntelligenceAtoms,
   openApiComponentSchemas,
@@ -891,6 +892,64 @@ describe("buildCodeIntelligenceIndex", () => {
     expect(statCallsPastCeiling).toBe(0);
     expect(index.filesIndexed).toBe(1);
     expect(index.candidateLimitReached).toBe(true);
+  });
+
+  // #4456: the build keeps every parsed syntax tree alive until its last stage. Without a source
+  // byte budget a connected repository of ~9,000 TypeScript files (129 MiB) exhausted the 4 GB
+  // server heap and aborted the process.
+  it("bounds the source text one build parses and reports the bound as a candidate limit", () => {
+    const sourcePaths = Array.from(
+      { length: 20 },
+      (_, index) => `src/module-${String(index).padStart(2, "0")}.ts`,
+    );
+    const { scope, fs } = makeScope(
+      Object.fromEntries(
+        sourcePaths.map((scopePath, index) => [
+          scopePath,
+          `export const value${String(index)} = 1;`,
+        ]),
+      ),
+    );
+    const discovered = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
+    // Discovery sizes drive the budget before any read, so large files are modelled by their size.
+    const threeMiB = 3 * 1024 * 1024;
+    const candidates = {
+      ...discovered,
+      files: discovered.files.map((file) => ({ ...file, sizeBytes: threeMiB })),
+    };
+    const perFileCharge = Math.min(
+      threeMiB,
+      Math.max(DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned, 2_097_152),
+    );
+    const fitting = Math.floor(CODE_INDEX_MAX_PARSED_SOURCE_BYTES / perFileCharge);
+
+    const index = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+      { disableCache: true },
+    );
+
+    expect(fitting).toBeLessThan(sourcePaths.length);
+    expect(index.filesIndexed).toBe(fitting);
+    expect(index.candidateLimitReached).toBe(true);
+    expect(index.parsedSourceBudgetReached).toBe(true);
+  });
+
+  it("indexes every source while the parsed source text stays within the budget", () => {
+    const { scope, fs } = makeScope({
+      "src/a.ts": "export const a = 1;",
+      "src/b.ts": 'import { a } from "./a";\nexport const b = a;',
+    });
+
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+
+    expect(index.filesIndexed).toBe(2);
+    expect(index.candidateLimitReached).toBe(false);
+    expect(index.parsedSourceBudgetReached).toBeUndefined();
   });
 
   it("reserves resolver metadata inside the structural file ceiling", () => {

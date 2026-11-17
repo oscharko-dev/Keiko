@@ -113,6 +113,8 @@ export interface StructuralRequestContextDiagnostics {
   readonly candidateFileCount: number;
   readonly candidateDirectoryCount: number;
   readonly codeIndexBuildCount: number;
+  /** Code index builds whose source list the parsed source budget ended (#4456). */
+  readonly codeIndexSourceBudgetReachedCount: number;
   readonly symbolGraphBuildCount: number;
   readonly importGraphBuildCount: number;
   readonly endpointGraphBuildCount: number;
@@ -265,6 +267,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   private candidateFileCount = 0;
   private candidateDirectoryCount = 0;
   private codeIndexBuildCount = 0;
+  private codeIndexSourceBudgetReachedCount = 0;
   private symbolGraphBuildCount = 0;
   private importGraphBuildCount = 0;
   private endpointGraphBuildCount = 0;
@@ -698,7 +701,10 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
             this.assertSourceAllowed(path);
           },
         },
-      );
+      ).then((index) => {
+        if (index.parsedSourceBudgetReached === true) this.codeIndexSourceBudgetReachedCount += 1;
+        return index;
+      });
     });
     return this.codeIndexPromise;
   }
@@ -918,6 +924,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
       candidateFileCount: this.candidateFileCount,
       candidateDirectoryCount: this.candidateDirectoryCount,
       codeIndexBuildCount: this.codeIndexBuildCount,
+      codeIndexSourceBudgetReachedCount: this.codeIndexSourceBudgetReachedCount,
       symbolGraphBuildCount: this.symbolGraphBuildCount,
       importGraphBuildCount: this.importGraphBuildCount,
       endpointGraphBuildCount: this.endpointGraphBuildCount,

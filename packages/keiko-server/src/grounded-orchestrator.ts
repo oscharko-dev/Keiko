@@ -789,6 +789,12 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
     },
     codeRedactionRevision: { type: "integer", dataClass: "count", required: false },
     sourceDescriptorPathCount: { type: "integer", dataClass: "count", required: false },
+    // #4456: code index builds whose parsed source budget ended the source list.
+    structuralCodeIndexSourceBudgetReachedCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1487,6 +1493,7 @@ function sumContextDiagnostics(
     candidateFileCount: sum("candidateFileCount"),
     candidateDirectoryCount: sum("candidateDirectoryCount"),
     codeIndexBuildCount: sum("codeIndexBuildCount"),
+    codeIndexSourceBudgetReachedCount: sum("codeIndexSourceBudgetReachedCount"),
     symbolGraphBuildCount: sum("symbolGraphBuildCount"),
     importGraphBuildCount: sum("importGraphBuildCount"),
     endpointGraphBuildCount: sum("endpointGraphBuildCount"),
@@ -10166,6 +10173,7 @@ const EMPTY_STRUCTURAL_DIAGNOSTICS: StructuralRequestContextPoolDiagnostics = {
   candidateFileCount: 0,
   candidateDirectoryCount: 0,
   codeIndexBuildCount: 0,
+  codeIndexSourceBudgetReachedCount: 0,
   symbolGraphBuildCount: 0,
   importGraphBuildCount: 0,
   endpointGraphBuildCount: 0,
@@ -11113,10 +11121,10 @@ function excerptSchedulingActivityExtra(
 function logSourceEvidenceDetails(
   logger: ServerLogger,
   identity: ConnectedContextActivityIdentity,
-  status: ConnectedContextCompletionStatus,
+  execution: ConnectedContextExecution,
   correlationId: string,
 ): void {
-  const observed = status.sourceDecision;
+  const observed = execution.status.sourceDecision;
   const observation =
     observed === undefined
       ? { activityDetailStatus: "unavailable" as const }
@@ -11133,6 +11141,8 @@ function logSourceEvidenceDetails(
         scopeIdentitySha256: identity.scopeIdentitySha256,
         queryIdentitySha256: identity.queryIdentitySha256,
         ...observation,
+        structuralCodeIndexSourceBudgetReachedCount:
+          execution.structural.codeIndexSourceBudgetReachedCount,
         completeness: "complete",
         loss: "none",
       },
@@ -11172,7 +11182,7 @@ function logConnectedContextCompletion(
       selectionDetailsActivityExtra(identity, execution.status),
     ),
   );
-  logSourceEvidenceDetails(logger, identity, execution.status, correlationId);
+  logSourceEvidenceDetails(logger, identity, execution, correlationId);
   logger.info(() =>
     activityLogEvent(
       SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION,
