@@ -1749,12 +1749,13 @@ describe("turn port terminal semantics", () => {
     ["a person's stop", "cancelled", false, []],
   ] as const)("settles a turn aborted by %s as %s", async (_cause, expected, deadline, codes) => {
     const records: ServerDiagnosticRecord[] = [];
-    let run: ProductionRuntimeRunRecord | undefined;
+    const holder: { run?: ProductionRuntimeRunRecord } = {};
     const runPort: OpenCodeRunPort = {
       submitTask: () => Promise.resolve(true),
       abortTask: () => Promise.resolve(true),
       // The wait ends as OpenCode's does when the run's controller aborts it.
       waitForTerminal: () => {
+        const run = holder.run;
         if (run === undefined) throw new Error("expected the run record");
         if (deadline) abortAtEnvelopeDeadline(run.controller);
         else run.controller.abort();
@@ -1765,7 +1766,8 @@ describe("turn port terminal semantics", () => {
       rejectQuestion: () => Promise.resolve(false),
       replyPermission: () => Promise.resolve(false),
     };
-    run = record("run-open", createOpenCodeRuntimeTurnPort(runPort));
+    const run = record("run-open", createOpenCodeRuntimeTurnPort(runPort));
+    holder.run = run;
     const dispatcher = createProductionRuntimeTaskDispatcher(new Map([["run-open", run]]), {
       record: (diagnostic): void => void records.push(diagnostic),
     });

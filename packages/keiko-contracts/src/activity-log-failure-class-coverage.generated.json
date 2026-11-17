@@ -45922,16 +45922,40 @@
               "required": false
             },
             {
+              "name": "issueCode",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "issueCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
             },
             {
+              "name": "repeatCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "runDigest",
               "type": "string",
               "dataClass": "digest",
               "required": true
+            },
+            {
+              "name": "sessionEnded",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "severity",
@@ -46901,6 +46925,12 @@
               "required": false
             },
             {
+              "name": "repeatLimitReached",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "runDigest",
               "type": "string",
               "dataClass": "digest",
@@ -47166,6 +47196,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "repeatLimitedPartCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "reviewedFiles",

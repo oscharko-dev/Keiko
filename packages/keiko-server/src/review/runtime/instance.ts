@@ -128,6 +128,12 @@ export type ReviewRuntimeRunResult =
        * and the ones it refused once it was used up (#4130); absent when no session started.
        */
       readonly readCalls?: ReviewReadCallCounts | undefined;
+      /**
+       * The session sent the same report that added nothing `REVIEW_REPORT_REPEAT_LIMIT` times in a
+       * row and Keiko ended it (#4130). It settles on the reports it filed: `completed` with at least
+       * one accepted candidate, `failed` without one.
+       */
+      readonly repeatLimitReached?: true | undefined;
     }
   | {
       readonly ok: false;
@@ -634,6 +640,9 @@ async function runOnInstance(
     live.slot.reads = createReviewReadAllowance(
       context.deps.maxReadCalls ?? REVIEW_RUN_DEFAULT_MAX_READ_CALLS,
     );
+    // The intake ends the session when it repeats one report (#4130); a caller's cancellation still
+    // ends it as before.
+    const repeatStop = new AbortController();
     live.slot.pending = {
       create: (runId): ReviewFindingIntake =>
         createReviewFindingIntake({
@@ -642,12 +651,15 @@ async function runOnInstance(
           headSha: request.headSha,
           runner: context.deps.runner(),
           activityLog: context.deps.activityLog,
+          onRepeatLimit: () => {
+            repeatStop.abort();
+          },
         }),
     };
     const outcome = await driveReviewRun(live.composition, {
       modelId: request.modelId,
       taskText: prepared.taskText,
-      signal: request.signal,
+      signal: sessionSignal(request.signal, repeatStop.signal),
       correlationId: request.correlationId,
     });
     return collected(live, outcome, prepared.rules);
@@ -678,20 +690,47 @@ function cancelledBeforeLaunch(rules: ReviewRulesFileOutcome): ReviewRuntimeRunR
   return { ok: true, outcome: "cancelled", rules, candidates: [], rejections: NO_REJECTIONS };
 }
 
+function sessionSignal(caller: AbortSignal | undefined, repeatStop: AbortSignal): AbortSignal {
+  return caller === undefined ? repeatStop : AbortSignal.any([caller, repeatStop]);
+}
+
+/**
+ * The facts of a session the repeat limit ended (#4130). Keiko stopped it, so the runtime's own
+ * outcome (a cancellation, or a failure where the stop was not proven) does not describe the
+ * Reviewer's work: the reports it filed do. Effort and runtime cleanup stay as the drive saw them.
+ * A caller's cancellation before the limit keeps its own outcome.
+ */
+function repeatLimitFacts(
+  facts: Omit<ReviewRunDriveOutcome, "runId">,
+  candidates: readonly ReviewCandidateFinding[],
+): Omit<ReviewRunDriveOutcome, "runId"> & { readonly repeatLimitReached: true } {
+  const kept = {
+    ...(facts.effort === undefined ? {} : { effort: facts.effort }),
+    ...(facts.runtimeCleanup === undefined ? {} : { runtimeCleanup: facts.runtimeCleanup }),
+    repeatLimitReached: true as const,
+  };
+  return candidates.length > 0
+    ? { ...kept, outcome: "completed" }
+    : { ...kept, outcome: "failed", failureCode: "report-repeat-limit" };
+}
+
 function collected(
   live: LiveInstance,
   outcome: ReviewRunDriveOutcome,
   rules: ReviewRulesFileOutcome,
 ): ReviewRuntimeRunResult {
   const intake = live.slot.intake;
-  // The drive's own facts (outcome, failure code, effort, runtime cleanup) pass through unchanged.
-  const { runId, ...facts } = outcome;
+  const candidates = intake?.candidates() ?? [];
+  // The drive's own facts (outcome, failure code, effort, runtime cleanup) pass through unchanged,
+  // unless the repeat limit ended the session.
+  const { runId, ...drive } = outcome;
+  const facts = intake?.repeatLimitReached() === true ? repeatLimitFacts(drive, candidates) : drive;
   return {
     ok: true,
     ...facts,
     ...(runId === undefined ? {} : { runtimeRunId: runId }),
     rules,
-    candidates: intake?.candidates() ?? [],
+    candidates,
     rejections: intake?.rejections() ?? NO_REJECTIONS,
     ...(live.slot.reads === undefined ? {} : { readCalls: live.slot.reads.counts() }),
   };

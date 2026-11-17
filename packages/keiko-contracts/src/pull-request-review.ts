@@ -7,6 +7,7 @@
 // model or a person, never an instruction to Keiko.
 
 import type { CostClass, LatencyClass } from "./gateway.js";
+import type { ReviewContractIssue } from "./pull-request-review-validation.js";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "./workspace-contract-primitives.js";
 
 /** Version of the `keiko_review_report` argument shape and the records derived from it. */
@@ -646,6 +647,13 @@ export interface ReviewDiffCoverageSummary {
    * and was not allowed to (#4130). Whoever shows a run's result shows this number with it.
    */
   readonly readLimitedPartsWithoutReport?: number | undefined;
+  /**
+   * Diff package parts whose last Reviewer session Keiko ended because it sent the same report that
+   * added nothing `REVIEW_REPORT_REPEAT_LIMIT` times in a row (#4130). Such a part counts as
+   * reviewed when the session had filed an accepted report; without one it failed. Present once the
+   * Reviewer has run; absent on a run recorded before this field.
+   */
+  readonly repeatLimitedParts?: number | undefined;
 }
 
 /** What the package reviewed and what it did not, with closed reason codes (ADR-0184 D6). */
@@ -731,14 +739,53 @@ export const REVIEW_REPORT_REJECTION_REASONS = [
 ] as const;
 export type ReviewReportRejectionReason = (typeof REVIEW_REPORT_REJECTION_REASONS)[number];
 
+/**
+ * Consecutive identical reports that added nothing (the same duplicate, or the same rejection with
+ * the same issues) after which the intake ends the Reviewer session (#4130). In development
+ * iteration 9 two sessions repeated one call until their 20 minutes ran out: one sent 25 duplicates
+ * of an accepted finding, the other 29 reports refused for the same schema issue.
+ */
+export const REVIEW_REPORT_REPEAT_LIMIT = 3;
+
+/** Contract issues a `schema-invalid` acknowledgement names at most. */
+export const REVIEW_REPORT_MAX_ISSUES = 4;
+
+/** Characters of one issue's field path a `schema-invalid` acknowledgement carries at most. */
+export const REVIEW_REPORT_MAX_ISSUE_PATH_LENGTH = 128;
+
+/**
+ * The fixed sentence an acknowledgement that added nothing carries (#4130). The server owns it; it
+ * never repeats the model's text.
+ */
+export const REVIEW_REPORT_GUIDANCE = {
+  duplicate:
+    "This finding is already recorded. Report a different finding, or end your turn if you have none.",
+  rejected:
+    "Nothing was recorded. Correct what the reason and the issues name before you send the report again, or report a different finding.",
+  repeated:
+    "You sent this same report again and nothing was recorded. Do not send it again. Report a different finding or end your turn.",
+  stopped:
+    "You sent the same report several times. The review keeps the findings already recorded and ends this session.",
+} as const;
+export type ReviewReportGuidance =
+  (typeof REVIEW_REPORT_GUIDANCE)[keyof typeof REVIEW_REPORT_GUIDANCE];
+
 /** The model-facing acknowledgement of one `keiko_review_report` call. */
 export type ReviewReportAcknowledgement =
   | { readonly status: "accepted"; readonly accepted: number; readonly remaining: number }
   /** The report repeats an accepted candidate (same fingerprint); nothing was added (R4130-025). */
-  | { readonly status: "duplicate"; readonly accepted: number; readonly remaining: number }
+  | {
+      readonly status: "duplicate";
+      readonly accepted: number;
+      readonly remaining: number;
+      readonly guidance: ReviewReportGuidance;
+    }
   | {
       readonly status: "rejected";
       readonly reason: Exclude<ReviewReportRejectionReason, "limit-reached">;
+      /** For `schema-invalid`: what the contract refused, at most `REVIEW_REPORT_MAX_ISSUES`. */
+      readonly issues?: readonly ReviewContractIssue[];
+      readonly guidance: ReviewReportGuidance;
     }
   | { readonly status: "limit-reached" };
 

@@ -57,7 +57,12 @@ function sessionResult(
   launch: number,
 ): ReviewRuntimeRunResult {
   const end = options.sessions?.[index]?.[launch];
-  const reads = readCallsOf(options, index);
+  const reads = {
+    ...readCallsOf(options, index),
+    ...(options.repeatLimitedParts?.includes(index) === true
+      ? { repeatLimitReached: true as const }
+      : {}),
+  };
   if (end !== undefined && end !== "completed") {
     const candidates = end.candidate === true ? [candidateOf(index)] : [];
     const failed = { outcome: "failed" as const, failureCode: end.failureCode };
@@ -97,6 +102,8 @@ interface PhaseOptions {
   readonly reportingParts?: readonly number[];
   /** How each part's sessions end, in order, by part index; a missing entry completes. */
   readonly sessions?: readonly (readonly SessionEnd[])[];
+  /** The part indexes whose session Keiko ended at the report repeat limit (#4130). */
+  readonly repeatLimitedParts?: readonly number[];
 }
 
 /** A scripted session end: completed, or failed with the runtime's failure code. */
@@ -315,6 +322,22 @@ describe("the Reviewer session's read calls on the part line (Issue #4130)", () 
     expect(state.reviewer).toEqual({ outcome: "failed", reason: "budget-exhausted" });
     expect(state.readLimitedParts).toBe(1);
     expect(state.readLimitedPartsWithoutReport).toBe(0);
+  });
+
+  // #4130: a session that sent the same report again and again was ended by Keiko. Its part
+  // settles on the reports it filed, and the run counts such parts so that the result shows them.
+  it("counts a part whose session the report repeat limit ended and marks its part line", async () => {
+    const { partLines, state, coverageSummaries } = await runPhase({
+      partCount: 2,
+      reportingParts: [0],
+      repeatLimitedParts: [0],
+    });
+
+    expect(state.reviewer).toEqual({ outcome: "completed" });
+    expect(state.repeatLimitedParts).toBe(1);
+    expect(coverageSummaries.at(-1)).toMatchObject({ repeatLimitedParts: 1 });
+    expect(partLines[0]).toMatchObject({ outcome: "completed", repeatLimitReached: true });
+    expect(partLines[1]).not.toHaveProperty("repeatLimitReached");
   });
 
   it("writes no read counts for a session whose result carries none", async () => {

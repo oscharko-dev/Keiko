@@ -10,6 +10,7 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { ReviewContractIssueCode } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
 import type {
   ReviewFindingReport,
   ReviewProfileRefusalReason,
@@ -23,6 +24,30 @@ import type { ReviewRulesReadFailure } from "./rulesFile.js";
 import type { ServerLogSink } from "../../observability/index.js";
 import { correlationIdOrUnknown } from "../../correlation.js";
 import { reviewEvidenceDigest } from "../activity-log.js";
+
+/**
+ * The contract issue codes a `schema-invalid` report line may name (#4130): the contract's own list,
+ * stated here so the operation registry can read it. A test pins it to the contract.
+ */
+export const REVIEW_LOG_ISSUE_CODES = [
+  "not-an-object",
+  "unknown-field",
+  "missing-field",
+  "wrong-type",
+  "too-long",
+  "empty",
+  "control-character",
+  "invalid-path",
+  "invalid-line-range",
+  "invalid-evidence-count",
+  "unknown-enum-value",
+  "invalid-object-id",
+  "invalid-ref-name",
+  "invalid-identifier",
+  "invalid-number",
+  "invalid-fingerprint",
+  "inconsistent-fields",
+] as const satisfies readonly ReviewContractIssueCode[];
 
 /**
  * Why a review instance stopped. `quarantine-replaced` (#4130): a quarantined instance was ended
@@ -348,6 +373,19 @@ const REVIEW_FINDING_REPORTED = defineActivityLogOperation({
     },
     evidenceCount: { type: "integer", dataClass: "count", required: false },
     fingerprintDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // #4130: how often in a row this session sent the report that added nothing, and whether the
+    // repeat limit ended the session with this report.
+    repeatCount: { type: "integer", dataClass: "count", required: false },
+    sessionEnded: { type: "boolean", dataClass: "closed-enum", required: false },
+    // #4130: for `schema-invalid`, the first contract issue the acknowledgement named and how many
+    // it named. The issue's field path goes to the model only.
+    issueCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: REVIEW_LOG_ISSUE_CODES,
+    },
+    issueCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -502,16 +540,35 @@ export function logReviewActionRefused(
   );
 }
 
+/** What `logReviewFindingReported` records beside the acknowledgement itself. */
+interface ReviewFindingReportedFacts {
+  /** The accepted candidate, or for a duplicate the candidate it repeats. */
+  readonly accepted?: { readonly fingerprint: string; readonly report: ReviewFindingReport };
+  readonly duplicateCount?: number;
+  readonly repeatCount?: number;
+  readonly sessionEnded?: boolean;
+}
+
+/** The repeat count, the session's end and the first contract issue, when there are any (#4130). */
+function repeatAndIssueFields(
+  acknowledgement: ReviewReportAcknowledgement,
+  facts: ReviewFindingReportedFacts,
+): Readonly<Record<string, string | number | boolean>> {
+  const issues = acknowledgement.status === "rejected" ? acknowledgement.issues : undefined;
+  const first = issues?.[0];
+  return {
+    ...(facts.repeatCount === undefined ? {} : { repeatCount: facts.repeatCount }),
+    ...(facts.sessionEnded === true ? { sessionEnded: true } : {}),
+    ...(first === undefined ? {} : { issueCode: first.code, issueCount: issues?.length ?? 0 }),
+  };
+}
+
 /** The acknowledged report's body-free facts; prose, paths and line numbers never appear. */
 export function logReviewFindingReported(
   log: ServerLogSink,
   runId: string,
   acknowledgement: ReviewReportAcknowledgement,
-  facts: {
-    /** The accepted candidate, or for a duplicate the candidate it repeats. */
-    readonly accepted?: { readonly fingerprint: string; readonly report: ReviewFindingReport };
-    readonly duplicateCount?: number;
-  } = {},
+  facts: ReviewFindingReportedFacts = {},
 ): void {
   const { accepted, duplicateCount } = facts;
   const counted = acknowledgement.status === "accepted" || acknowledgement.status === "duplicate";
@@ -528,6 +585,7 @@ export function logReviewFindingReported(
           acknowledgement.status === "rejected" ? acknowledgement.reason : acknowledgement.status,
         ...(counted ? { acceptedCount: acknowledgement.accepted } : {}),
         ...(duplicateCount === undefined ? {} : { duplicateCount }),
+        ...repeatAndIssueFields(acknowledgement, facts),
         ...(accepted === undefined
           ? {}
           : {

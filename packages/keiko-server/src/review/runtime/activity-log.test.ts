@@ -3,7 +3,11 @@
 // path, code, prompt, model output, rules text or finding prose.
 
 import { describe, expect, it } from "vitest";
-import type { ReviewFindingReport } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import {
+  REVIEW_REPORT_GUIDANCE,
+  type ReviewFindingReport,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import { REVIEW_CONTRACT_ISSUE_CODES } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
 
 import {
   expectActivityLogProof,
@@ -17,6 +21,7 @@ import {
   logReviewRulesFile,
   logReviewRuntimeStarted,
   logReviewRuntimeStopped,
+  REVIEW_LOG_ISSUE_CODES,
 } from "./activity-log.js";
 
 const RUN_ID = "review-run-proof-1";
@@ -223,7 +228,12 @@ describe("review runtime Activity Log proofs", () => {
       logReviewFindingReported(
         sink,
         RUN_ID,
-        { status: "duplicate", accepted: 1, remaining: 7 },
+        {
+          status: "duplicate",
+          accepted: 1,
+          remaining: 7,
+          guidance: REVIEW_REPORT_GUIDANCE.duplicate,
+        },
         { accepted: { fingerprint: "f".repeat(64), report: REPORT }, duplicateCount: 2 },
       );
     });
@@ -237,10 +247,47 @@ describe("review runtime Activity Log proofs", () => {
 
   it("records a rejection by its closed reason only", () => {
     const line = onlyLine((sink) => {
-      logReviewFindingReported(sink, RUN_ID, { status: "rejected", reason: "range-invalid" });
+      logReviewFindingReported(sink, RUN_ID, {
+        status: "rejected",
+        reason: "range-invalid",
+        guidance: REVIEW_REPORT_GUIDANCE.rejected,
+      });
     });
     expect(expectActivityLogProof("review.finding.reported.line", line)).toMatchObject({
       outcome: "range-invalid",
     });
+  });
+
+  // #4130: a repeated report that ended the session names its first contract issue by closed code,
+  // never the field path the model sees, and says that the session ended.
+  it("proves a repeated schema-invalid report that ended the session, without its field path", () => {
+    const line = onlyLine((sink) => {
+      logReviewFindingReported(
+        sink,
+        RUN_ID,
+        {
+          status: "rejected",
+          reason: "schema-invalid",
+          issues: [
+            { code: "unknown-field", path: "Leaked-field-name" },
+            { code: "missing-field", path: "title" },
+          ],
+          guidance: REVIEW_REPORT_GUIDANCE.stopped,
+        },
+        { duplicateCount: 0, repeatCount: 3, sessionEnded: true },
+      );
+    });
+    expect(line).not.toContain("title");
+    expect(expectActivityLogProof("review.finding.reported.line", line)).toMatchObject({
+      outcome: "schema-invalid",
+      issueCode: "unknown-field",
+      issueCount: 2,
+      repeatCount: 3,
+      sessionEnded: true,
+    });
+  });
+
+  it("states every contract issue code the report line may name", () => {
+    expect([...REVIEW_LOG_ISSUE_CODES]).toEqual([...REVIEW_CONTRACT_ISSUE_CODES]);
   });
 });

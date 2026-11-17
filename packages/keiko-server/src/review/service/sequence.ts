@@ -124,6 +124,7 @@ export interface ReviewRunState {
    */
   readLimitedParts: number;
   readLimitedPartsWithoutReport: number;
+  repeatLimitedParts: number;
   /** `diffBaseSha` is the merge base the diff starts at; `baseSha` is the base the rules come from. */
   target: ReviewRunTarget | undefined;
   worktreeRoot: string | undefined;
@@ -157,6 +158,7 @@ export function newReviewRunState(): ReviewRunState {
     partCount: 0,
     readLimitedParts: 0,
     readLimitedPartsWithoutReport: 0,
+    repeatLimitedParts: 0,
     target: undefined,
     worktreeRoot: undefined,
     candidates: [],
@@ -413,6 +415,17 @@ type RuntimeResult = Awaited<ReturnType<ReviewRuntimeService["run"]>>;
 /** The sessions one part can get: the first, and one more after a model failure (#4130). */
 type ReviewerSessionAttempt = 1 | 2;
 
+/** What a started session's result adds to its part line, when it carries it. */
+function sessionFacts(
+  result: Extract<RuntimeResult, { readonly ok: true }>,
+): Pick<ReviewRunPartLine, "runtimeRunId" | "readCalls" | "repeatLimitReached"> {
+  return {
+    ...(result.runtimeRunId === undefined ? {} : { runtimeRunId: result.runtimeRunId }),
+    ...(result.readCalls === undefined ? {} : { readCalls: result.readCalls }),
+    ...(result.repeatLimitReached === true ? { repeatLimitReached: true as const } : {}),
+  };
+}
+
 function partLine(
   ctx: ReviewRunContext,
   input: ReviewerPart & { readonly attempt: ReviewerSessionAttempt },
@@ -428,10 +441,7 @@ function partLine(
     usedTokens: input.part.usedTokens,
     candidateCount: result.ok ? result.candidates.length : 0,
     totals,
-    ...(result.ok && result.runtimeRunId !== undefined
-      ? { runtimeRunId: result.runtimeRunId }
-      : {}),
-    ...(result.ok && result.readCalls !== undefined ? { readCalls: result.readCalls } : {}),
+    ...(result.ok ? sessionFacts(result) : {}),
     ...(input.attempt > 1 ? { attempt: input.attempt } : {}),
   };
   if (step.kind === "stop") return { ...base, outcome: "refused", reason: step.settlement.reason };
@@ -498,6 +508,7 @@ async function runReviewerSession(
     step,
     failedWithoutCandidate: failedWithoutCandidate(result, step),
     readLimit: result.ok ? reviewerReadLimit(result) : "none",
+    repeatLimitReached: result.ok && result.repeatLimitReached === true,
   };
 }
 
@@ -506,6 +517,8 @@ interface ReviewerSessionEnd {
   readonly step: ReviewerPartStep;
   readonly failedWithoutCandidate: boolean;
   readonly readLimit: ReviewerReadLimit;
+  /** Keiko ended the session at the report repeat limit (#4130). */
+  readonly repeatLimitReached: boolean;
 }
 
 /** Counts a part's last session in the run's read-limit numbers. */
@@ -535,6 +548,7 @@ async function runReviewerPart(
     ? await runReviewerSession(deps, runtime, ctx, state, { ...input, attempt: 2 })
     : first;
   countReadLimit(state, last);
+  if (last.repeatLimitReached) state.repeatLimitedParts += 1;
   return last.step;
 }
 
@@ -603,6 +617,7 @@ function recordReadLimits(
     ...state.coverageSummary,
     readLimitedParts: state.readLimitedParts,
     readLimitedPartsWithoutReport: state.readLimitedPartsWithoutReport,
+    repeatLimitedParts: state.repeatLimitedParts,
   };
   deps.store.setCoverageSummary(ctx.runId, state.coverageSummary);
 }

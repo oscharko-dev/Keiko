@@ -187,6 +187,20 @@ describe("review run Activity Log proofs", () => {
       outcome: "completed",
       attempt: 2,
     });
+    expect(JSON.parse(second)).not.toHaveProperty("repeatLimitReached");
+    // #4130: a session Keiko ended at the report repeat limit completes its part, as a warning.
+    const repeated = onlyLine((sink) => {
+      logReviewRunPart(sink, CORRELATION, {
+        ...part,
+        outcome: "completed",
+        repeatLimitReached: true,
+      });
+    });
+    expect(expectActivityLogProof("review.run.part.line", repeated)).toMatchObject({
+      level: "warn",
+      outcome: "completed",
+      repeatLimitReached: true,
+    });
   });
 
   it("proves review.run.settled with settlement, verdict counts and role totals", () => {
@@ -246,6 +260,40 @@ describe("review run Activity Log proofs", () => {
 
   // #4130: a part whose Reviewer reached its read allowance counts as reviewed. The settled line
   // counts such parts, and a silent one makes the line a warning although the run is complete.
+  // #4130: a part whose session Keiko ended at the report repeat limit counts as reviewed when it
+  // filed a report; the run's line counts it and is a warning, as the part's own line is.
+  it("proves review.run.settled with its repeat-limited parts as a warning", () => {
+    const capture = captureActivityLog();
+    logReviewRunSettled(capture.sink, CORRELATION, {
+      runId: "review-run-1",
+      settlement: { kind: "complete" },
+      coverage: {
+        changedFiles: 3,
+        reviewedFiles: 3,
+        partiallyReviewedFiles: 0,
+        unprocessedFiles: 0,
+        addedLines: 10,
+        removedLines: 2,
+        budgetTokens: 13_832,
+        usedTokens: 900,
+        readLimitedParts: 0,
+        readLimitedPartsWithoutReport: 0,
+        repeatLimitedParts: 1,
+      },
+      verdicts: { candidates: 1, confirmed: 1, refuted: 0, undecided: 0, presented: 1 },
+      reviewer: TOTALS,
+      counterChecker: TOTALS,
+      durationMs: 9_000,
+      stale: false,
+    });
+    const [event] = capture.events;
+    if (event === undefined) throw new TypeError("expected one event");
+    expect(event.level).toBe("warn");
+    expect(
+      expectActivityLogProof("review.run.settled.line", formatActivityLogProofLine(event)),
+    ).toMatchObject({ settlement: "complete", repeatLimitedPartCount: 1 });
+  });
+
   it("proves review.run.settled with its read-limited parts, a warning when one was silent", () => {
     const settledWith = (silent: number | undefined): ReturnType<typeof captureActivityLog> => {
       const capture = captureActivityLog();

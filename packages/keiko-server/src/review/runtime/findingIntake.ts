@@ -10,15 +10,24 @@
 // At most `REVIEW_RUN_MAX_CANDIDATE_REPORTS` reports are accepted per run.
 
 import {
+  REVIEW_REPORT_GUIDANCE,
+  REVIEW_REPORT_MAX_ISSUE_PATH_LENGTH,
+  REVIEW_REPORT_MAX_ISSUES,
+  REVIEW_REPORT_REPEAT_LIMIT,
   REVIEW_RUN_MAX_CANDIDATE_REPORTS,
   REVIEW_WORKTREE_DEFAULT_BLOB_LIMIT_BYTES,
   type ReviewCodeLocation,
   type ReviewFindingReport,
   type ReviewReportAcknowledgement,
+  type ReviewReportGuidance,
   type ReviewReportRejectionReason,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { reviewDefectExcerptOccurrence } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-rules";
-import { validateReviewFindingReport } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
+import {
+  validateReviewFindingReport,
+  type ReviewContractIssue,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { computeReviewFindingFingerprint } from "@oscharko-dev/keiko-security/review-finding-fingerprint";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import {
@@ -51,6 +60,11 @@ export interface ReviewFindingIntakeInput {
   readonly runner: GitProcessRunner;
   readonly activityLog: ServerLogSink;
   readonly maxCandidates?: number | undefined;
+  /**
+   * Called once, when the session sent the same report that added nothing
+   * `REVIEW_REPORT_REPEAT_LIMIT` times in a row (#4130). The caller ends the session.
+   */
+  readonly onRepeatLimit?: (() => void) | undefined;
 }
 
 export interface ReviewFindingIntake {
@@ -61,6 +75,8 @@ export interface ReviewFindingIntake {
   candidates(): readonly ReviewCandidateFinding[];
   /** Body-free counts of the refused reports by closed reason. */
   rejections(): Readonly<Record<ReviewReportRejectionReason, number>>;
+  /** Whether the session reached the repeat limit, so the intake asked for its end (#4130). */
+  repeatLimitReached(): boolean;
 }
 
 type HeadFile =
@@ -84,7 +100,11 @@ const TRANSIENT_RANGE: HeadFile = { kind: "refused", reason: "range-invalid", tr
 
 type Verdict =
   | { readonly ok: true; readonly candidate: ReviewCandidateFinding }
-  | { readonly ok: false; readonly reason: Exclude<ReviewReportRejectionReason, "limit-reached"> };
+  | {
+      readonly ok: false;
+      readonly reason: Exclude<ReviewReportRejectionReason, "limit-reached">;
+      readonly issues?: readonly ReviewContractIssue[];
+    };
 
 function emptyRejections(): Record<ReviewReportRejectionReason, number> {
   return {
@@ -165,6 +185,18 @@ async function checkLocations(
   return undefined;
 }
 
+/**
+ * The contract issues a `schema-invalid` acknowledgement names (#4130): the first few, each with its
+ * closed code and its field path cut to a bound. A path names the model's own field, so it goes back
+ * to the model only; the Activity Log records the codes.
+ */
+function modelFacingIssues(issues: readonly ReviewContractIssue[]): readonly ReviewContractIssue[] {
+  return issues.slice(0, REVIEW_REPORT_MAX_ISSUES).map((issue) => ({
+    code: issue.code,
+    path: issue.path.slice(0, REVIEW_REPORT_MAX_ISSUE_PATH_LENGTH),
+  }));
+}
+
 /** The `defect` evidence that backs the report's own location: same file, overlapping lines. */
 function backingDefect(report: ReviewFindingReport): ReviewCodeLocation | undefined {
   return report.evidence.find(
@@ -182,7 +214,9 @@ async function judge(
   signal: AbortSignal | undefined,
 ): Promise<Verdict> {
   const validated = validateReviewFindingReport(value);
-  if (!validated.ok) return { ok: false, reason: "schema-invalid" };
+  if (!validated.ok) {
+    return { ok: false, reason: "schema-invalid", issues: modelFacingIssues(validated.issues) };
+  }
   const report = validated.value;
   const refused = await checkLocations(reader, report, signal);
   if (refused !== undefined) return { ok: false, reason: refused };
@@ -205,6 +239,9 @@ interface IntakeState {
   readonly max: number;
   reserved: number;
   duplicates: number;
+  /** The identity of the last report that added nothing, and how often it came in a row. */
+  repeat: { key: string; count: number } | undefined;
+  repeatLimitReached: boolean;
 }
 
 function record(
@@ -215,8 +252,39 @@ function record(
   logReviewFindingReported(state.input.activityLog, state.input.runId, acknowledgement, {
     ...(candidate === undefined ? {} : { accepted: candidate }),
     duplicateCount: state.duplicates,
+    ...(state.repeat === undefined ? {} : { repeatCount: state.repeat.count }),
+    ...(state.repeatLimitReached ? { sessionEnded: true } : {}),
   });
   return acknowledgement;
+}
+
+/**
+ * Counts a report that added nothing (#4130). The same report again is a repeat; the
+ * `REVIEW_REPORT_REPEAT_LIMIT`-th one in a row ends the session once. An accepted report, or a
+ * different report, starts the count again. Answers the guidance for the count reached.
+ */
+function countRepeat(
+  state: IntakeState,
+  key: string,
+  first: ReviewReportGuidance,
+): ReviewReportGuidance {
+  const count = state.repeat?.key === key ? state.repeat.count + 1 : 1;
+  state.repeat = { key, count };
+  if (count < 2) return first;
+  if (count < REVIEW_REPORT_REPEAT_LIMIT) return REVIEW_REPORT_GUIDANCE.repeated;
+  if (!state.repeatLimitReached) {
+    state.repeatLimitReached = true;
+    state.input.onRepeatLimit?.();
+  }
+  return REVIEW_REPORT_GUIDANCE.stopped;
+}
+
+/**
+ * The identity of a refused report: its reason and a digest of the arguments as sent. The arguments
+ * arrive as parsed JSON, so they always encode; wrapped, an absent value does too.
+ */
+function rejectedReportKey(reason: ReviewReportRejectionReason, value: unknown): string {
+  return `rejected:${reason}:${sha256Hex(JSON.stringify({ value }))}`;
 }
 
 /**
@@ -229,15 +297,33 @@ function acknowledgeCandidate(
   candidate: ReviewCandidateFinding,
 ): ReviewReportAcknowledgement {
   const known = state.accepted.find((entry) => entry.fingerprint === candidate.fingerprint);
-  if (known === undefined) state.accepted.push(candidate);
-  else state.duplicates += 1;
+  if (known === undefined) {
+    state.accepted.push(candidate);
+    state.repeat = undefined;
+  } else state.duplicates += 1;
   const counts = {
     accepted: state.accepted.length,
     remaining: Math.max(0, state.max - state.accepted.length),
   };
-  return known === undefined
-    ? record(state, { status: "accepted", ...counts }, candidate)
-    : record(state, { status: "duplicate", ...counts }, known);
+  if (known === undefined) return record(state, { status: "accepted", ...counts }, candidate);
+  const guidance = countRepeat(
+    state,
+    `duplicate:${known.fingerprint}`,
+    REVIEW_REPORT_GUIDANCE.duplicate,
+  );
+  return record(state, { status: "duplicate", ...counts, guidance }, known);
+}
+
+function acknowledgeRejection(
+  state: IntakeState,
+  value: unknown,
+  verdict: Extract<Verdict, { readonly ok: false }>,
+): ReviewReportAcknowledgement {
+  state.rejected[verdict.reason] += 1;
+  const key = rejectedReportKey(verdict.reason, value);
+  const guidance = countRepeat(state, key, REVIEW_REPORT_GUIDANCE.rejected);
+  const issues = verdict.issues === undefined ? {} : { issues: verdict.issues };
+  return record(state, { status: "rejected", reason: verdict.reason, ...issues, guidance });
 }
 
 async function submitReport(
@@ -251,6 +337,8 @@ async function submitReport(
   // released once the judgement settles; an accepted candidate then occupies it.
   if (state.accepted.length + state.reserved >= state.max) {
     state.rejected["limit-reached"] += 1;
+    // Every report past the cap is the same answer, so further reports repeat it.
+    countRepeat(state, "limit-reached", REVIEW_REPORT_GUIDANCE.rejected);
     return record(state, { status: "limit-reached" });
   }
   state.reserved += 1;
@@ -260,9 +348,9 @@ async function submitReport(
   } finally {
     state.reserved -= 1;
   }
-  if (verdict.ok) return acknowledgeCandidate(state, verdict.candidate);
-  state.rejected[verdict.reason] += 1;
-  return record(state, { status: "rejected", reason: verdict.reason });
+  return verdict.ok
+    ? acknowledgeCandidate(state, verdict.candidate)
+    : acknowledgeRejection(state, value, verdict);
 }
 
 /** Creates the intake of one review run. */
@@ -275,12 +363,15 @@ export function createReviewFindingIntake(input: ReviewFindingIntakeInput): Revi
     max: input.maxCandidates ?? REVIEW_RUN_MAX_CANDIDATE_REPORTS,
     reserved: 0,
     duplicates: 0,
+    repeat: undefined,
+    repeatLimitReached: false,
   };
   return {
     runId: input.runId,
     submit: (value, signal) => submitReport(state, reader, value, signal),
     candidates: () => [...state.accepted],
     rejections: () => ({ ...state.rejected }),
+    repeatLimitReached: () => state.repeatLimitReached,
   };
 }
 
