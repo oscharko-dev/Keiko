@@ -285,6 +285,9 @@ async function installSeededWorkspace(
   connections: readonly SeedConnection[] = seedConnections(),
 ): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 860 });
+  // Agent windows open an existing run since the preset launcher was retired (#4448), so each
+  // seeded window names a synthetic run and this answers its report read. The group keeps the
+  // run id one path segment, the shape `check:e2e-suite-wiring` resolves against `/api/runs/:id`.
   await page.route(/\/api\/runs\/(?:run-perf-\d+)$/u, (route) =>
     route.fulfill({ json: { report: { status: "completed" } } }),
   );

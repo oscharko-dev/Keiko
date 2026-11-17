@@ -139,9 +139,11 @@ async function labEnvironment(dir, options, source = process.env) {
 // failed ends the instance here with a reason instead of failing every turn of the run.
 //
 // An older subject still checks at start and may answer the settling read while catalog
-// discovery's renewed check runs (seen on dev 4e1f07ea0, ready two seconds later); the explicit
-// activation is harmless there. A model that still reports no readiness is read again for a
-// bounded time; an answer of not ready still ends the instance at once.
+// discovery's renewed check runs (seen on dev 4e1f07ea0, ready two seconds later); there the
+// explicit activation joins that check or repeats it once, which costs at most one more model
+// request and changes no verdict. A model that still reports no readiness is read again for a
+// bounded time; an answer of not ready still ends the instance at once. The activation request has
+// no lab deadline of its own: it ends when the product's bounded check ends.
 const STARTUP_SETTLE_MS = 60_000;
 const STARTUP_POLL_MS = 1000;
 

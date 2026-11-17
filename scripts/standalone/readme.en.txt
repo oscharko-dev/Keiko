@@ -13,6 +13,9 @@ Windows: double-click "Start Keiko.cmd"
 A small window shows the start. When Keiko is ready, it opens in your browser.
 The first start can take a minute.
 
+Before your first chat after each start, open Settings > Models and click
+"Activate" next to the model you want to use, or "Activate all".
+
 
 Stop
 ----

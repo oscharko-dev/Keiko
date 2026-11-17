@@ -133,7 +133,11 @@ the Coding Workbench with a registered repository requires no separate Code setu
 The selected root is the native real path the route resolved; it matches a registration by its
 exact spelling or by the same device and file id, because Windows keeps the spelling a person typed
 or a dialog returned (drive-letter case, 8.3 names, mapped drives, junctions). Only that resolved
-path may match by identity, and it must still be canonical (#4404). A failed checkout whose closed
+path may match by identity, and it must still be canonical (#4404). A filesystem that reports a
+zero device or file id matches only by spelling, and an unreadable registration matches nothing.
+Residual risk, accepted: a registration spelled through a link or junction stands for the directory
+it names at selection time, so retargeting that link moves what the registration admits; the person
+still selects the root, and the selected root itself must contain no link. A failed checkout whose closed
 code has one plain cause (`MISSING_REPOSITORY`, `REPOSITORY_UNREACHABLE`) names that cause beside
 the selector instead of the generic sentence.
 **Folder mode (owner decision, 2026-10-30):** a registered folder whose branch read answers

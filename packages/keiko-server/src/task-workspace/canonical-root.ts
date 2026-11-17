@@ -20,8 +20,8 @@ export function isCanonicalLocalRoot(root: string): boolean {
   return statSync(root).isDirectory();
 }
 
-// The closed results that say a registered path does not name a reachable directory right now.
-// Any other failure is not an answer about this registration and propagates.
+// The closed results that say the selected root does not name a reachable directory right now.
+// Any other failure is not an answer about that root and propagates.
 const UNREACHABLE_PATH_CODES: ReadonlySet<string> = new Set([
   "ENOENT",
   "ENOTDIR",
@@ -36,11 +36,22 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === "string" ? error.code : undefined;
 }
 
-function directoryIdentity(path: string): BigIntStats | undefined {
+/**
+ * The selected root propagates an unexpected failure. A registration never does: an offline
+ * network drive or a removed folder among the person's registrations is not this request's
+ * directory, so it matches nothing and the request is decided by the others. The outcome stays
+ * closed either way, because an unreadable registration can only fail to match.
+ */
+type IdentityFailure = "propagate" | "no-match";
+
+function directoryIdentity(path: string, onFailure: IdentityFailure): BigIntStats | undefined {
   try {
     const stats = statSync(path, { bigint: true });
-    return stats.isDirectory() && stats.ino !== 0n ? stats : undefined;
+    // A zero device or file id is a filesystem that cannot name the directory (FAT, some network
+    // shares on Windows); identity proves nothing there, so only the exact spelling can match.
+    return stats.isDirectory() && stats.dev !== 0n && stats.ino !== 0n ? stats : undefined;
   } catch (error) {
+    if (onFailure === "no-match") return undefined;
     const code = errorCode(error);
     if (code !== undefined && UNREACHABLE_PATH_CODES.has(code)) return undefined;
     throw error;
@@ -62,10 +73,10 @@ export function isRegisteredLocalRoot(store: Pick<UiStore, "listProjects">, root
   // Only the native real path the route resolved may be matched by identity; any other spelling
   // of the selected root stays an unregistered request, exactly as before.
   if (!isAbsolute(root) || normalize(root) !== root) return false;
-  const rootIdentity = directoryIdentity(root);
+  const rootIdentity = directoryIdentity(root, "propagate");
   if (rootIdentity === undefined) return false;
   return projectPaths.some((path) => {
-    const identity = directoryIdentity(path);
+    const identity = directoryIdentity(path, "no-match");
     return identity?.dev === rootIdentity.dev && identity.ino === rootIdentity.ino;
   });
 }

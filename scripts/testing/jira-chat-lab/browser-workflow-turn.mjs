@@ -148,9 +148,11 @@ async function activateWorkflowModel(page, modelId) {
 
 /** The existing ordinary UI creator owns the POST; this owner only observes its identity. */
 export async function openWorkflowChat(page, context, options = {}) {
-  if (options.chatId !== undefined) return focusWorkflowChat(page, context, options.chatId);
+  // Activation lives only in the running server process, so a resumed Chat in a restarted server
+  // needs it as much as a new one.
   await settleModelStartup(page);
   await activateWorkflowModel(page, context.modelId);
+  if (options.chatId !== undefined) return focusWorkflowChat(page, context, options.chatId);
   await options.onPhase?.({ phase: "chat-creation-may-have-started" });
   const [response] = await Promise.all([
     page.waitForResponse(

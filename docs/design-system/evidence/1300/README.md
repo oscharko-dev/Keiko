@@ -393,3 +393,18 @@ All 427 component probes, 160 editor fidelity probes, 14 editor reference captur
 captures passed. The seven accessibility modes reported zero serious or critical violations and
 zero unresolved findings. System-font rasterization and line height differed from the Linux
 captures. The macOS measurements and captures carry their own local run metadata.
+
+## Release 1.5.2 and retired surfaces — 2026-11-17
+
+PR #4448 retires the standalone Documentation Browser and the Agent preset launcher, which changes
+the rendered product. All four original producers were rerun from
+`2a1171e4efa17f14c760ab5856a6a741abf2bcf8` in the isolated Linux arm64 gates container with Node
+26.13.1, npm 11.20.0 and the locked Playwright browsers. All 133 PNGs and four JSON records were
+regenerated. The 29 declared source inputs are unchanged since that run.
+
+Component fidelity passed all 427 probes with zero gated or recorded differences and no missing
+selectors. Editor fidelity passed with all 14 reference captures and no capture errors. All 108
+browser captures have zero page errors, unexpected API requests, missing selectors, crashed
+windows, visible error notices or unavailable workspace-trust states. The seven accessibility modes
+reported zero serious or critical violations and zero unresolved incomplete findings. No producer,
+tolerance, disposition, fixture or budget changed. These remain synthetic fixture proofs.
