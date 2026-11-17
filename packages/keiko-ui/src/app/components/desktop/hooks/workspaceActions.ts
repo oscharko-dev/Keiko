@@ -275,10 +275,7 @@ function makeMinimize(setWins: MutateArgs["setWins"]): WorkspaceApi["minimize"] 
     });
 }
 
-function makeRestore(
-  setWins: MutateArgs["setWins"],
-  zc: MutateArgs["zc"],
-): WorkspaceApi["restore"] {
+function makeRestore({ setWins, zc, worldVP }: MutateArgs): WorkspaceApi["restore"] {
   return (id) =>
     setWins((ws) => {
       if (ws === null) return ws;
@@ -287,7 +284,9 @@ function makeRestore(
       const maxZ = ws.reduce((best, w) => Math.max(best, w.z), Number.NEGATIVE_INFINITY);
       if (target.minimized !== true && target.z >= maxZ) return ws;
       zc.current = Math.max(zc.current + 1, maxZ + 1);
-      return ws.map((w) => (w.id === id ? { ...w, minimized: false, z: zc.current } : w));
+      const viewport = target.max ? worldVP() : null;
+      const restored = { ...target, ...viewport, minimized: false, z: zc.current };
+      return ws.map((w) => (w.id === id ? restored : w));
     });
 }
 
@@ -709,7 +708,7 @@ export function makeMutations(args: MutateArgs): Mutations {
     focus: makeFocus(args.setWins, args.zc),
     close: makeClose(args.setWins),
     minimize: makeMinimize(args.setWins),
-    restore: makeRestore(args.setWins, args.zc),
+    restore: makeRestore(args),
     maximize: makeMaximize(args),
     add: makeAdd(args),
     openEditorFile: makeOpenEditorFile(args),

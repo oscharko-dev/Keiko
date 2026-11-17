@@ -1364,7 +1364,10 @@ describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)"
     expect(stageBlock).toContain("gap: 0");
     expect(stageBlock).toContain("padding: var(--space-4)");
 
-    const workspaceBlock = cssBlock(".workspace {");
+    const controlsStyle = readStylesheet(
+      resolve(here, "components/desktop/WorkspaceControls.module.css"),
+    );
+    const workspaceBlock = cssBlockFrom(controlsStyle, ".cmpWorkspaceLayout {");
     expect(workspaceBlock).toContain("border-radius: var(--radius-surface)");
     // AC2: the canvas surface routes through the warm-neutral --background-primary token.
     expect(workspaceBlock).toContain("var(--background-primary)");

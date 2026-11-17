@@ -211,20 +211,28 @@ describe("Workspace card connections", () => {
     ).toBeNull();
   });
 
-  it("marks canvas overlays hidden when a visible window is maximized", () => {
+  it("keeps the workspace controls and window launcher available when a window is maximized", () => {
     const wins = [appWindow({ id: "agents-1", type: "agents", max: true })];
-    const { container } = render(
+    const zoomTo = vi.fn();
+    const openPalette = vi.fn();
+    render(
       <Workspace
-        ws={workspace({ wins })}
+        ws={workspace({ wins, api: api({ zoomTo }) })}
         wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
+        openPalette={openPalette}
+        palette={<div role="dialog" aria-label="New window" />}
       />,
     );
 
-    expect(container.querySelector(".workspace")).toHaveAttribute(
-      "data-canvas-overlays-hidden",
+    expect(screen.getByRole("main", { name: "Workspace surface" })).toHaveAttribute(
+      "data-window-maxed",
       "true",
     );
+    expect(screen.getByRole("dialog", { name: "New window" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    fireEvent.click(screen.getByRole("button", { name: "New window" }));
+    expect(zoomTo).toHaveBeenCalledWith(1.2);
+    expect(openPalette).toHaveBeenCalledOnce();
   });
 
   it("confirms a valid target even when a target child stops pointer bubbling", async () => {
